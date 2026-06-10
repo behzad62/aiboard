@@ -201,7 +201,7 @@ export default function HomePage() {
         styleNote: styleNote.trim() || undefined,
         reasoningEffort,
       });
-      router.push(`/discussion/${result.id}`);
+      router.push(`/discussion?id=${result.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start discussion");
     } finally {

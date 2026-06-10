@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useParams } from "next/navigation";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  Suspense,
+} from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   DiscussionTimeline,
@@ -51,9 +58,9 @@ interface DiscussionData {
 
 const ACTIVE_STATUSES = new Set(["completed", "failed"]);
 
-export default function DiscussionPage() {
-  const params = useParams();
-  const id = params.id as string;
+function DiscussionPageInner() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id") ?? "";
   const [discussion, setDiscussion] = useState<Discussion | null>(null);
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
@@ -512,4 +519,12 @@ function statusMeta(status: string): {
         pulse: true,
       };
   }
+}
+
+export default function DiscussionPage() {
+  return (
+    <Suspense>
+      <DiscussionPageInner />
+    </Suspense>
+  );
 }

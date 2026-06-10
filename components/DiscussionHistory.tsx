@@ -56,7 +56,7 @@ export function DiscussionHistory({
           key={d.id}
           className="flex items-center justify-between gap-2 rounded-lg border p-4 transition-colors hover:bg-accent"
         >
-          <Link href={`/discussion/${d.id}`} className="min-w-0 flex-1">
+          <Link href={`/discussion?id=${d.id}`} className="min-w-0 flex-1">
             <p className="truncate font-medium">{d.topic}</p>
             <p className="text-xs text-muted-foreground">
               {formatDate(d.createdAt)} · {d.mode} · {d.effort}
