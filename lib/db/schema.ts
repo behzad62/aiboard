@@ -41,6 +41,12 @@ export interface Discussion {
   status: DiscussionStatus;
   modelIds: string;
   judgeModelId: string | null;
+  /**
+   * Build mode: optional mid-tier model that pre-screens the workers' code
+   * each wave and hands the (expensive) Architect a compact digest instead
+   * of full files.
+   */
+  reviewerModelId?: string | null;
   attachmentIds: string | null;
   /** Build mode: display name of the granted project folder (handle lives in IndexedDB). */
   projectFolderName?: string | null;

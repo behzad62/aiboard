@@ -436,6 +436,43 @@ export function buildArchitectReviewPrompt(input: {
     .join("\n");
 }
 
+/**
+ * The optional mid-tier Reviewer: reads the workers' full output so the
+ * expensive Architect can decide from a compact digest instead.
+ */
+export function buildReviewerPrompt(input: {
+  request: string;
+  treeText: string;
+  executedText: string;
+  architectNotes?: string;
+  userNotes?: string;
+}): string {
+  return [
+    "You are the REVIEWER — a senior engineer pre-screening the worker models' output so the Architect (an expensive model) doesn't have to read every file. The Architect decides approve/fix per task based primarily on YOUR digest, so be precise, concrete, and complete — but compact.",
+    "",
+    "Project request from the user:",
+    input.request,
+    "",
+    treeSection(input.treeText),
+    input.architectNotes?.trim()
+      ? `\nArchitect's conventions:\n${input.architectNotes}`
+      : "",
+    userNotesSection(input.userNotes),
+    "",
+    "Work to review (full files):",
+    input.executedText,
+    "",
+    "Write a review digest in Markdown:",
+    "- Per task: a heading `### <taskId> — RECOMMEND APPROVE` or `### <taskId> — RECOMMEND FIX`, followed by concrete findings (bugs, spec violations, missing requirements), each naming the file path and quoting the offending lines verbatim (short quotes only).",
+    "- Explicitly check cross-file contracts: imports match exports, referenced ids/classes/selectors exist, referenced paths exist in the tree.",
+    "- Flag anything that violates the user's request, the user's notes, or the Architect's conventions.",
+    "- End with `## Must-see` — file paths the Architect should read in full before deciding, or `nothing`.",
+    "Do NOT re-emit whole files. Do NOT output JSON action blocks. Keep the digest compact.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function buildArchitectSummaryPrompt(input: {
   request: string;
   treeText: string;

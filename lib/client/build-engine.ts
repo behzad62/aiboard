@@ -29,6 +29,7 @@ import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
+  buildReviewerPrompt,
   buildWorkerTaskPrompt,
   parseArchitectAction,
   STRICT_RETRY_INSTRUCTION,
@@ -144,6 +145,19 @@ export async function runBuildDiscussion(
     };
   const workers = models.filter((m) => m.modelId !== architect.modelId);
   if (workers.length === 0) workers.push(architect); // solo build
+
+  // Optional mid-tier Reviewer: pre-screens worker output so the expensive
+  // Architect decides from a compact digest instead of reading every file.
+  // Resolved like the Architect (it doesn't have to be a participant).
+  const reviewerId = discussion.reviewerModelId ?? null;
+  const reviewer: SelectedModel | null =
+    reviewerId && reviewerId !== architect.modelId
+      ? models.find((m) => m.modelId === reviewerId) ?? {
+          modelId: reviewerId,
+          providerId: parseModelId(reviewerId).providerId,
+          displayName: resolveModelName(reviewerId),
+        }
+      : null;
 
   // ── Filesystem: virtual always; the real folder when granted ──────────────
   // A folder problem (no permission, moved, or — common on Documents —
@@ -922,6 +936,55 @@ export async function runBuildDiscussion(
       })
       .join("\n\n");
 
+    // Mid-tier Reviewer pass: it reads the FULL files and produces a compact
+    // digest; the Architect then decides from the digest (it can still read/
+    // search to verify), saving the expensive model most of the input tokens.
+    let executedForArchitect = executedText;
+    if (reviewer) {
+      throwIfAborted();
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Reviewer ${reviewer.displayName} is pre-screening wave ${cycle}`,
+      });
+      try {
+        const digest = await streamTurn(
+          reviewer,
+          buildReviewerPrompt({
+            request: discussion.topic,
+            treeText: treeText(),
+            executedText,
+            architectNotes,
+            userNotes: userNotesText(),
+          }),
+          {
+            systemRole:
+              "You are the Reviewer pre-screening the team's code for the Architect. Be precise, concrete, and compact.",
+            maxTokens: workerMaxTokens,
+            label: `Reviewer ${reviewer.displayName} is pre-screening wave ${cycle}`,
+          }
+        );
+        const filesByTask = executed
+          .map(
+            ({ task, files }) =>
+              `${task.id}: ${files.length > 0 ? files.join(", ") : "no files"}`
+          )
+          .join("\n");
+        executedForArchitect = [
+          `Files written this wave, by task:\n${filesByTask}`,
+          `Your Reviewer has read the full files and reports the digest below. Decide from it; use read/search yourself for anything you must verify (especially its "Must-see" items).`,
+          truncate(digest, 16_000),
+        ].join("\n\n");
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `Reviewer failed (${err instanceof Error ? err.message : "error"}) — the Architect will review the full files itself`,
+        });
+      }
+    }
+
     emit({
       type: "diagnostic",
       phase: "judging",
@@ -945,7 +1008,7 @@ export async function runBuildDiscussion(
           // this the Architect forgets file contents between phases and starts
           // inventing replacements for files it has already seen.
           fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
-          executedText: executedText + reviewRunFeedback,
+          executedText: executedForArchitect + reviewRunFeedback,
           maxNewTasks: limits.tasksPerWave,
           cyclesLeft: limits.cycles - cycle,
           readHopsLeft: reviewReadsLeft,
