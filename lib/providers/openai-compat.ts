@@ -91,6 +91,51 @@ export function buildOpenAIUserContent(
   return parts.length === 1 && parts[0].type === "text" ? text : parts;
 }
 
+// OpenRouter caches OpenAI/DeepSeek/Grok-style models automatically, but
+// Anthropic, Gemini, and Qwen models routed through it only cache when the
+// request marks explicit cache_control breakpoints.
+const OPENROUTER_EXPLICIT_CACHE_PREFIXES = ["anthropic/", "google/", "qwen/"];
+
+function needsExplicitCacheControl(providerId: string, model: string): boolean {
+  return (
+    providerId === "openrouter" &&
+    OPENROUTER_EXPLICIT_CACHE_PREFIXES.some((p) => model.startsWith(p))
+  );
+}
+
+/**
+ * Mark the stable prompt prefix of the last user message as ephemeral
+ * cacheable content (mirrors the native Anthropic provider's split at the
+ * transcript marker). Only string contents are transformed — multipart
+ * (image) contents are left untouched.
+ */
+function applyOpenRouterCacheControl(
+  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  const lastUserIndex = messages
+    .map((m, i) => (m.role === "user" ? i : -1))
+    .filter((i) => i >= 0)
+    .at(-1);
+
+  return messages.map((m, index) => {
+    if (index !== lastUserIndex || m.role !== "user" || typeof m.content !== "string") {
+      return m;
+    }
+    const prefix = extractCacheableTextPrefix(m.content);
+    const transcript = m.content.slice(prefix.length);
+    const parts = [
+      { type: "text" as const, text: prefix, cache_control: { type: "ephemeral" } },
+      ...(transcript ? [{ type: "text" as const, text: transcript }] : []),
+    ];
+    // cache_control is an OpenRouter extension the pinned OpenAI SDK types
+    // don't know about.
+    return {
+      ...m,
+      content: parts as OpenAI.Chat.Completions.ChatCompletionContentPartText[],
+    };
+  });
+}
+
 export function buildOpenAIMessages(
   params: ChatParams,
   caps: ModelCapabilities
@@ -168,11 +213,26 @@ export async function* streamOpenAICompatibleChat(
     ? { reasoning_effort: reasoningValue }
     : {};
 
+  // Temperature: omitted for OpenAI (newer models reject the parameter), but
+  // OpenRouter forwards it and silently drops it for models that don't
+  // support it, and local OpenAI-compatible servers (Ollama, LM Studio)
+  // honor it.
+  const temperatureField =
+    providerId !== "openai" && params.temperature != null
+      ? { temperature: params.temperature }
+      : {};
+
+  const baseMessages = buildOpenAIMessages(params, caps);
+  const messages = needsExplicitCacheControl(providerId, params.model)
+    ? applyOpenRouterCacheControl(baseMessages)
+    : baseMessages;
+
   try {
     const stream = await client.chat.completions.create({
       model: params.model,
-      messages: buildOpenAIMessages(params, caps),
+      messages,
       ...tokenField,
+      ...temperatureField,
       ...openAIPromptCaching,
       ...(reasoningField as Record<string, never>),
       stream: true,

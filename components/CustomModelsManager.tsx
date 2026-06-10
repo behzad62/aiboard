@@ -170,8 +170,16 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
         (Ollama, LM Studio) or a hosted server. For local Ollama, base URL{" "}
         <code className="rounded bg-muted px-1">http://localhost:11434/v1</code>{" "}
         and model{" "}
-        <code className="rounded bg-muted px-1">gemma4:12b</code>. Use the
-        Supported inputs toggles to declare which media types the model accepts.
+        <code className="rounded bg-muted px-1">gemma4:12b</code>. Ollama must
+        also allow requests from the browser: set{" "}
+        <code className="rounded bg-muted px-1">OLLAMA_ORIGINS=*</code> before
+        starting it (PowerShell:{" "}
+        <code className="rounded bg-muted px-1">
+          $env:OLLAMA_ORIGINS=&quot;*&quot;; ollama serve
+        </code>
+        ), otherwise the browser blocks the connection with a CORS error. Use
+        the Supported inputs toggles to declare which media types the model
+        accepts.
       </div>
 
       {models.length > 0 && (

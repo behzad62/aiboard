@@ -299,9 +299,11 @@ export default function HomePage() {
                       type="button"
                       onClick={() => setMode(candidateMode)}
                       className={
+                        // flex-col keeps the content top-aligned — buttons
+                        // vertically center it when the grid stretches them.
                         selected
-                          ? "rounded-lg border border-primary bg-primary/5 p-4 text-left ring-2 ring-primary"
-                          : "rounded-lg border border-border p-4 text-left transition-colors hover:bg-accent"
+                          ? "flex flex-col items-start rounded-lg border border-primary bg-primary/5 p-4 text-left ring-2 ring-primary"
+                          : "flex flex-col items-start rounded-lg border border-border p-4 text-left transition-colors hover:bg-accent"
                       }
                     >
                       <div className="flex items-center justify-between gap-3">

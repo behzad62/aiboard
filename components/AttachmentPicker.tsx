@@ -38,6 +38,7 @@ function CategoryIcon({ category }: { category: AttachmentSummary["category"] })
 export function AttachmentPicker({ attachments, onChange }: AttachmentPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const uploadFiles = useCallback(
@@ -78,7 +79,25 @@ export function AttachmentPicker({ attachments, onChange }: AttachmentPickerProp
         Images, documents (PDF, Word, text), audio, and video. Models incompatible with attached types will be disabled.
       </p>
 
-      <div className="flex flex-wrap gap-2">
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          // Ignore leave events fired when moving over child elements.
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          uploadFiles(e.dataTransfer.files);
+        }}
+        className={cn(
+          "flex flex-wrap items-center gap-3 rounded-lg border border-dashed p-3 transition-colors",
+          dragOver ? "border-primary bg-primary/5" : "border-border"
+        )}
+      >
         <Button
           type="button"
           variant="outline"
@@ -89,6 +108,9 @@ export function AttachmentPicker({ attachments, onChange }: AttachmentPickerProp
           <Paperclip className="mr-2 h-4 w-4" />
           {uploading ? "Uploading..." : "Add files"}
         </Button>
+        <span className="text-xs text-muted-foreground">
+          or drag &amp; drop files here
+        </span>
         <input
           ref={inputRef}
           type="file"

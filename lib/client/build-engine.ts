@@ -172,8 +172,9 @@ export async function runBuildDiscussion(
     approvals: number;
     fixes: number;
     failures: number; // threw, or returned no files when files were the deliverable
-    totalMs: number;
-    responses: number; // successful, non-empty responses (for avg time)
+    totalMs: number; // time spent across ALL attempts, including failed ones
+    totalChars: number; // raw output produced by successful responses
+    responses: number; // successful, non-empty responses
     active: boolean;
   }
   const scoreboard: WorkerStat[] = workers.map((w, index) => ({
@@ -184,31 +185,51 @@ export async function runBuildDiscussion(
     fixes: 0,
     failures: 0,
     totalMs: 0,
+    totalChars: 0,
     responses: 0,
     active: true,
   }));
 
+  // Speed is judged by THROUGHPUT (ms per output char) relative to the other
+  // workers, never by raw elapsed time — bigger tasks legitimately take
+  // longer, and best-first assignment gives the strongest workers the bigger
+  // foundational tasks, so an absolute time threshold would punish exactly
+  // the models the build trusts most.
+  const msPerChar = (s: WorkerStat): number | null =>
+    s.totalChars > 0 ? s.totalMs / s.totalChars : null;
+
+  const medianMsPerChar = (): number | null => {
+    const rates = scoreboard
+      .map(msPerChar)
+      .filter((r): r is number => r != null)
+      .sort((a, b) => a - b);
+    if (rates.length < 2) return null; // a relative measure needs a peer
+    const mid = Math.floor(rates.length / 2);
+    return rates.length % 2 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
+  };
+
   const workerScore = (s: WorkerStat): number => {
     let score = s.approvals * 3 - s.fixes * 1 - s.failures * 4;
-    // Light speed tie-breaker: reward sub-20s average, nudge down very slow.
-    if (s.responses > 0) {
-      const avgSec = s.totalMs / s.responses / 1000;
-      if (avgSec < 20) score += 1;
-      else if (avgSec > 90) score -= 1;
+    // Light speed tie-breaker: ±1 only when clearly out of line with peers.
+    const median = medianMsPerChar();
+    const rate = msPerChar(s);
+    if (median != null && rate != null) {
+      if (rate < median * 0.5) score += 1;
+      else if (rate > median * 2) score -= 1;
     }
     return score;
   };
 
-  /** Active workers, best first (score desc, then faster avg, then order). */
+  /** Active workers, best first (score desc, then better throughput, then order). */
   const rankedActiveWorkers = (): WorkerStat[] =>
     scoreboard
       .filter((s) => s.active)
       .sort((a, b) => {
         const ds = workerScore(b) - workerScore(a);
         if (ds !== 0) return ds;
-        const avgA = a.responses > 0 ? a.totalMs / a.responses : Infinity;
-        const avgB = b.responses > 0 ? b.totalMs / b.responses : Infinity;
-        if (avgA !== avgB) return avgA - avgB;
+        const rateA = msPerChar(a) ?? Infinity;
+        const rateB = msPerChar(b) ?? Infinity;
+        if (rateA !== rateB) return rateA - rateB;
         return a.index - b.index;
       });
 
@@ -218,11 +239,30 @@ export async function runBuildDiscussion(
       .sort((a, b) => workerScore(b) - workerScore(a))
       .map((s) => {
         const avg =
-          s.responses > 0 ? ` avg ${Math.round(s.totalMs / s.responses / 1000)}s` : "";
-        const bench = s.active ? "" : " [BENCHED — not responding]";
+          s.attempts > 0 ? ` avg ${Math.round(s.totalMs / s.attempts / 1000)}s` : "";
+        const bench = s.active ? "" : " [BENCHED — not producing output]";
         return `- ${s.name}: score ${workerScore(s)} (${s.approvals} approved, ${s.fixes} fix${s.fixes === 1 ? "" : "es"}, ${s.failures} failed/empty${avg})${bench}`;
       })
       .join("\n");
+
+  // Bench workers that still haven't produced any usable output after more
+  // than one try — a single failure may be a transient provider error, so it
+  // never benches on its own, and the last active worker is never benched.
+  const benchUnresponsiveWorkers = (): void => {
+    for (const stat of scoreboard) {
+      if (!stat.active) continue;
+      const neverProduced = stat.attempts >= 2 && stat.responses === 0;
+      const othersActive = scoreboard.some((s) => s.active && s.index !== stat.index);
+      if (neverProduced && othersActive) {
+        stat.active = false;
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Benching ${stat.name} — it hasn't produced usable output; remaining workers will continue`,
+        });
+      }
+    }
+  };
 
   /** Match an Architect-provided assignTo name to a worker index. */
   const workerIndexByName = (name?: string): number | null => {
@@ -860,6 +900,9 @@ export async function runBuildDiscussion(
 
   // ── 2..n) Implement waves + Architect reviews ──────────────────────────────
   let workerCalls = 0;
+  // Persists across batches and waves so small (even size-1) batches still
+  // spread work over all active workers instead of piling onto the top rank.
+  let assignCursor = 0;
   let done = false;
 
   for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
@@ -869,6 +912,41 @@ export async function runBuildDiscussion(
     if (pending.length === 0) break;
 
     const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
+
+    // A failed attempt (threw, or returned no files) goes back to the pool
+    // once so another — or a better — worker can retry it, instead of the
+    // deliverable silently dying with the wave. The second failure is final.
+    const MAX_TASK_FAILURES = 2;
+    const failTask = (
+      task: BuildTask,
+      stat: WorkerStat,
+      worker: SelectedModel,
+      detail: string
+    ): void => {
+      stat.failures += 1;
+      task.failCount = (task.failCount ?? 0) + 1;
+      if (task.failCount < MAX_TASK_FAILURES) {
+        task.status = "fixing";
+        task.workerIndex = undefined;
+        task.assignTo = undefined;
+        task.instructions = `${task.instructions}\n\nNOTE: a previous attempt produced no usable output (${detail}). Output the complete files for this task.`;
+      } else {
+        task.status = "failed";
+      }
+      emit({
+        type: "task_status",
+        taskId: task.id,
+        title: task.title,
+        status: task.status,
+        worker: worker.displayName,
+        cycle,
+      });
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        message: `${worker.displayName} ${detail} for ${task.id}${task.status === "fixing" ? " — requeued for another attempt" : " — giving up on this task"}`,
+      });
+    };
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const worker = workers[task.workerIndex!];
@@ -918,25 +996,13 @@ export async function runBuildDiscussion(
         // A worker that produced no files contributed nothing usable — count
         // it as a failure for scoring (the deliverable is files).
         if (files.length === 0) {
-          stat.failures += 1;
-          task.status = "failed";
-          emit({
-            type: "task_status",
-            taskId: task.id,
-            title: task.title,
-            status: "failed",
-            worker: worker.displayName,
-            cycle,
-          });
-          emit({
-            type: "diagnostic",
-            phase: "model_failed",
-            message: `${worker.displayName} returned no files for ${task.id}`,
-          });
+          stat.totalMs += Date.now() - startedAt;
+          failTask(task, stat, worker, "returned no files");
           return;
         }
         stat.responses += 1;
         stat.totalMs += Date.now() - startedAt;
+        stat.totalChars += output.length;
         task.status = "review";
         executed.push({ task, worker, files, notes: truncate(prose, 1_500) });
         emit({
@@ -949,21 +1015,13 @@ export async function runBuildDiscussion(
         });
       } catch (err) {
         if (isAbortError(err)) throw err;
-        stat.failures += 1;
-        task.status = "failed";
-        emit({
-          type: "task_status",
-          taskId: task.id,
-          title: task.title,
-          status: "failed",
-          worker: worker.displayName,
-          cycle,
-        });
-        emit({
-          type: "diagnostic",
-          phase: "model_failed",
-          message: `${worker.displayName} failed ${task.id}: ${err instanceof Error ? err.message : "error"}`,
-        });
+        stat.totalMs += Date.now() - startedAt;
+        failTask(
+          task,
+          stat,
+          worker,
+          `failed (${err instanceof Error ? err.message : "error"})`
+        );
       }
     };
 
@@ -1004,7 +1062,6 @@ export async function runBuildDiscussion(
       // the Architect's assignTo, then auto-assignment spreading work across
       // active workers best-first so reliable models get the earlier tasks.
       const ranked = rankedActiveWorkers();
-      let rr = 0;
       for (const task of batch) {
         const pinned =
           task.workerIndex != null && scoreboard[task.workerIndex]?.active
@@ -1013,8 +1070,15 @@ export async function runBuildDiscussion(
         const requested = workerIndexByName(task.assignTo);
         const requestedActive =
           requested != null && scoreboard[requested].active ? requested : null;
+        if (task.assignTo && pinned == null && requestedActive == null) {
+          emit({
+            type: "diagnostic",
+            phase: "round_preparing",
+            message: `Requested worker "${task.assignTo}" for ${task.id} is unknown or benched — auto-assigning instead`,
+          });
+        }
         task.workerIndex =
-          pinned ?? requestedActive ?? ranked[rr++ % ranked.length].index;
+          pinned ?? requestedActive ?? ranked[assignCursor++ % ranked.length].index;
       }
 
       workerCalls += batch.length;
@@ -1034,7 +1098,18 @@ export async function runBuildDiscussion(
       if (rejected) throw rejected.reason;
     }
 
-    if (executed.length === 0) break;
+    if (executed.length === 0) {
+      // Nothing usable this wave. If budget remains and tasks were requeued,
+      // try the next cycle instead of silently ending the build half-done.
+      benchUnresponsiveWorkers();
+      if (workerCalls >= limits.totalWorkerCalls) break;
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `No task produced output in wave ${cycle} — retrying the remaining tasks`,
+      });
+      continue;
+    }
 
     // Architect review of this wave.
     let totalChars = 0;
@@ -1205,23 +1280,7 @@ export async function runBuildDiscussion(
       }
     }
 
-    // Bench workers that failed/returned nothing this wave while others can
-    // carry the load — they won't be assigned tasks until the build ends.
-    // Never bench the last active worker.
-    for (const stat of scoreboard) {
-      if (!stat.active) continue;
-      const failedThisWaveOnly =
-        stat.failures > 0 && stat.responses === 0 && stat.attempts > 0;
-      const others = scoreboard.filter((s) => s.active && s.index !== stat.index);
-      if (failedThisWaveOnly && others.length > 0) {
-        stat.active = false;
-        emit({
-          type: "diagnostic",
-          phase: "round_preparing",
-          message: `Benching ${stat.name} — it hasn't produced usable output; remaining workers will continue`,
-        });
-      }
-    }
+    benchUnresponsiveWorkers();
 
     emit({
       type: "diagnostic",

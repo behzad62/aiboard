@@ -36,6 +36,9 @@ export interface BuildTask {
   dependsOn?: string[];
   /** Architect's preferred worker (display name) for this task, if any. */
   assignTo?: string;
+  /** Failed attempts so far — the engine requeues a failed task once before
+   * giving up on it. */
+  failCount?: number;
 }
 
 // ── Architect action protocol ─────────────────────────────────────────────────
@@ -76,7 +79,7 @@ export interface ReviewAction {
 /** A compact worker-performance line for the prompt scoreboard. */
 export function scoreboardSection(scoreboard?: string): string {
   return scoreboard?.trim()
-    ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts and response times — higher score = more reliable). Assign harder or foundational tasks to higher-scoring workers via each task's "assignTo" (worker display name); benched workers won't be given tasks:\n${scoreboard}`
+    ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts, failures, and output speed relative to the other workers — higher score = more reliable). Assign harder or foundational tasks to higher-scoring workers via each task's "assignTo" (worker display name); benched workers won't be given tasks:\n${scoreboard}`
     : "";
 }
 

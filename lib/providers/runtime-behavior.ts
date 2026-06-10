@@ -40,12 +40,21 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
       };
     case "openrouter":
       return {
-        temperatureLabel: "Temperature is not sent",
+        temperatureLabel: "Temperature is sent",
         temperatureNote:
-          "OpenRouter uses the same OpenAI-compatible request path in this app, without an explicit temperature field.",
-        promptCachingLabel: "Prompt caching not enabled",
+          "The effort-level temperature is forwarded; OpenRouter silently drops it for models that don't support it (e.g. OpenAI reasoning models).",
+        promptCachingLabel: "Prompt caching enabled",
         promptCachingNote:
-          "This app does not currently send provider-specific cache controls through OpenRouter.",
+          "OpenAI, DeepSeek, and Grok models cache automatically through OpenRouter. For Anthropic, Gemini, and Qwen models the app marks the stable prompt prefix as an ephemeral cache_control breakpoint.",
+      };
+    case "custom":
+      return {
+        temperatureLabel: "Temperature is sent",
+        temperatureNote:
+          "Local OpenAI-compatible servers (Ollama, LM Studio) honor the effort-level temperature.",
+        promptCachingLabel: "Prompt caching server-dependent",
+        promptCachingNote:
+          "No cache controls are sent; servers like Ollama reuse their KV cache for repeated prompt prefixes automatically when they can.",
       };
     default:
       return {
