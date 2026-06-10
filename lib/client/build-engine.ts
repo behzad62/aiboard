@@ -137,12 +137,13 @@ export async function runBuildDiscussion(
         diskWarning = "folder access was not granted";
       }
     } catch (err) {
+      // Surface the real error in DevTools so the exact failing operation is
+      // visible if a specific folder/handle misbehaves.
+      console.error("[build] reading the project folder failed:", err);
       diskWarning =
-        err instanceof Error && /not be found|NotFound/i.test(err.message)
-          ? "the folder couldn't be read (cloud/OneDrive folders and moved folders can do this)"
-          : err instanceof Error
-            ? err.message
-            : "the folder couldn't be read";
+        err instanceof Error
+          ? `${err.name}: ${err.message}`
+          : "the folder couldn't be read";
     }
   }
   if (diskWarning) {
@@ -268,11 +269,12 @@ export async function runBuildDiscussion(
       } catch (err) {
         // Stop trying the folder after the first failure (avoids a warning per
         // file) and keep everything in-app for the rest of the build.
+        console.error(`[build] writing ${path} to the project folder failed:`, err);
         diskGranted = false;
         emit({
           type: "diagnostic",
           phase: "model_failed",
-          message: `Couldn't write to the project folder (${err instanceof Error ? err.message : "error"}). Switching to in-app files — download them as a zip when done.`,
+          message: `Couldn't write to the project folder (${err instanceof Error ? `${err.name}: ${err.message}` : "error"}). Switching to in-app files — download them as a zip when done.`,
         });
       }
     }

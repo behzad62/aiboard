@@ -34,6 +34,18 @@ const IGNORED_DIRS = new Set([
   "__pycache__",
   ".venv",
   "venv",
+  // .NET / JVM / other build outputs — large, churn while an IDE is open
+  // (a file vanishing mid-listing throws NotFoundError), and useless as context.
+  "bin",
+  "obj",
+  "target",
+  ".gradle",
+  "packages",
+  "Pods",
+  ".dart_tool",
+  ".turbo",
+  ".cache",
+  "vendor",
 ]);
 
 const BINARY_EXTENSIONS = new Set([
@@ -160,20 +172,31 @@ export async function listProjectTree(
       truncated = true;
       return;
     }
-    for await (const [name, entry] of handle as unknown as AsyncIterable<
-      [string, FileSystemHandle]
-    >) {
-      if (files.length >= MAX_TREE_ENTRIES) {
-        truncated = true;
-        return;
+    try {
+      for await (const [name, entry] of handle as unknown as AsyncIterable<
+        [string, FileSystemHandle]
+      >) {
+        if (files.length >= MAX_TREE_ENTRIES) {
+          truncated = true;
+          return;
+        }
+        const path = prefix ? `${prefix}/${name}` : name;
+        if (entry.kind === "directory") {
+          if (IGNORED_DIRS.has(name) || name.startsWith(".")) continue;
+          // A single unreadable subtree (locked/transient build dir, junction)
+          // must not abort the whole listing.
+          try {
+            await walk(entry as FileSystemDirectoryHandle, path, depth + 1);
+          } catch {
+            truncated = true;
+          }
+        } else {
+          files.push(path);
+        }
       }
-      const path = prefix ? `${prefix}/${name}` : name;
-      if (entry.kind === "directory") {
-        if (IGNORED_DIRS.has(name) || name.startsWith(".")) continue;
-        await walk(entry as FileSystemDirectoryHandle, path, depth + 1);
-      } else {
-        files.push(path);
-      }
+    } catch {
+      // Iteration itself can throw if entries vanish mid-scan; keep what we have.
+      truncated = true;
     }
   }
 
