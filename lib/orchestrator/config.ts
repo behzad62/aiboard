@@ -255,7 +255,9 @@ export function estimateDiscussionCostUsd(
     priced.reduce((sum, p) => sum + p.inputUsdPer1M, 0) / priced.length;
   const avgOutput =
     priced.reduce((sum, p) => sum + p.outputUsdPer1M, 0) / priced.length;
-  const modelCount = modelPricings.length;
+  // Only priced (cloud) models count toward the math — local/custom models are
+  // free and must not change the estimate when added.
+  const modelCount = priced.length;
   const config = EFFORT_CONFIG[effort];
 
   const usdForRounds = (rounds: number): number => {

@@ -2,6 +2,12 @@
 
 import { ModelPricingEditor } from "@/components/ModelPricingEditor";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   getModelPricing,
   type ModelPricingOverride,
 } from "@/lib/providers/pricing";
@@ -25,17 +31,28 @@ export function PricingSettings({
   onSaved,
 }: PricingSettingsProps) {
   return (
-    <div className="space-y-8">
+    <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Built-in reference rates drive the cost estimates on the dashboard.
         Override any model with your own pricing — overrides are stored locally
         and never leave your machine.
       </p>
 
-      {providers.map((provider) => (
-        <section key={provider.providerId} className="space-y-3">
-          <h3 className="font-display text-lg font-semibold">{provider.name}</h3>
-          <div className="space-y-4">
+      <Tabs defaultValue={providers[0]?.providerId}>
+        <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+          {providers.map((provider) => (
+            <TabsTrigger key={provider.providerId} value={provider.providerId}>
+              {provider.name}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {providers.map((provider) => (
+          <TabsContent
+            key={provider.providerId}
+            value={provider.providerId}
+            className="space-y-4"
+          >
             {provider.models.map((model) => {
               const fullId = `${provider.providerId}:${model.id}`;
               return (
@@ -55,9 +72,9 @@ export function PricingSettings({
                 </div>
               );
             })}
-          </div>
-        </section>
-      ))}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }

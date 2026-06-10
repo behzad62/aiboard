@@ -20,6 +20,7 @@ import {
   getDiscussionById,
   getFinalResult,
   getMessagesForDiscussion,
+  getProviderKeys,
   getUserSettings,
   initStore,
   insertDiscussion,
@@ -56,7 +57,22 @@ export interface DashboardData {
 export function loadDashboard(): DashboardData {
   const settings = getUserSettings();
   const enabled = withFullId(getEnabledModels());
-  const defaultSelectedModelIds = enabled.slice(0, 2).map((m) => m.fullId);
+  const enabledIds = new Set(enabled.map((m) => m.fullId));
+
+  // One default model per enabled provider — its chosen "default model", or the
+  // first enabled model for that provider. Mirrors the old server behaviour.
+  const defaultSelectedModelIds = getProviderKeys()
+    .filter((key) => key.enabled)
+    .map((key) => {
+      const preferred = key.defaultModel
+        ? `${key.providerId}:${key.defaultModel}`
+        : null;
+      if (preferred && enabledIds.has(preferred)) return preferred;
+      const fallback = enabled.find((m) => m.providerId === key.providerId);
+      return fallback?.fullId ?? null;
+    })
+    .filter((id): id is string => Boolean(id));
+
   return {
     discussions: listDiscussions(),
     settings,
