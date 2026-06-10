@@ -21,11 +21,15 @@ export interface TimelineMessage {
 interface DiscussionTimelineProps {
   messages: TimelineMessage[];
   accentMap: Map<string, ModelAccent>;
+  emptyTitle?: string;
+  emptyHint?: string;
 }
 
 export function DiscussionTimeline({
   messages,
   accentMap,
+  emptyTitle,
+  emptyHint,
 }: DiscussionTimelineProps) {
   const rounds = useMemo(() => {
     const grouped = new Map<number, TimelineMessage[]>();
@@ -41,10 +45,11 @@ export function DiscussionTimeline({
     return (
       <div className="rounded-2xl border border-dashed bg-card/40 p-12 text-center">
         <p className="font-display text-lg text-foreground">
-          The panel is convening…
+          {emptyTitle ?? "The panel is convening…"}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Each model&apos;s response will stream in here as the discussion unfolds.
+          {emptyHint ??
+            "Each model’s response will stream in here as the discussion unfolds."}
         </p>
       </div>
     );

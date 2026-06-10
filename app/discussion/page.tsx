@@ -434,7 +434,7 @@ function DiscussionPageInner() {
           {participantIds.length > 0 && (
             <div className="mt-6 flex flex-wrap items-center gap-2">
               <span className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
-                Panel
+                {discussion.mode === "build" ? "Team" : "Panel"}
               </span>
               {participantIds.map((modelId) => {
                 const accent = accentFor(accentMap, modelId);
@@ -588,7 +588,18 @@ function DiscussionPageInner() {
           </h2>
           <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
         </div>
-        <DiscussionTimeline messages={messages} accentMap={accentMap} />
+        <DiscussionTimeline
+          messages={messages}
+          accentMap={accentMap}
+          emptyTitle={
+            discussion.mode === "build" ? "The build is starting…" : undefined
+          }
+          emptyHint={
+            discussion.mode === "build"
+              ? "The Architect is planning; tasks and files will appear in the board above and responses stream here."
+              : undefined
+          }
+        />
       </div>
 
       {/* ── Diagnostics, tucked away ────────────────────────────── */}

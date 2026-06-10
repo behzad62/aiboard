@@ -119,13 +119,38 @@ export async function runBuildDiscussion(
   if (workers.length === 0) workers.push(architect); // solo build
 
   // ── Filesystem: virtual always; the real folder when granted ──────────────
+  // A folder problem (no permission, moved, or — common on Documents —
+  // OneDrive "online-only" placeholder files that throw NotFoundError) must
+  // never fail the build. Any error here degrades to in-app/virtual files.
   const dirHandle = await getProjectHandle(discussion.id);
-  const diskGranted = !!dirHandle && (await queryProjectPermission(dirHandle));
   const virtualFs = new Map<string, string>();
   let diskTree: string[] = [];
-  if (diskGranted && dirHandle) {
-    const tree = await listProjectTree(dirHandle);
-    diskTree = tree.files;
+  let diskGranted = false;
+  let diskWarning: string | null = null;
+  if (dirHandle) {
+    try {
+      if (await queryProjectPermission(dirHandle)) {
+        const tree = await listProjectTree(dirHandle);
+        diskTree = tree.files;
+        diskGranted = true;
+      } else {
+        diskWarning = "folder access was not granted";
+      }
+    } catch (err) {
+      diskWarning =
+        err instanceof Error && /not be found|NotFound/i.test(err.message)
+          ? "the folder couldn't be read (cloud/OneDrive folders and moved folders can do this)"
+          : err instanceof Error
+            ? err.message
+            : "the folder couldn't be read";
+    }
+  }
+  if (diskWarning) {
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `Project folder unavailable — ${diskWarning}. Building in the app instead; download the files as a zip when done.`,
+    });
   }
 
   emit({
@@ -241,10 +266,13 @@ export async function runBuildDiscussion(
         bytes = await writeProjectFile(dirHandle, path, content);
         location = "disk";
       } catch (err) {
+        // Stop trying the folder after the first failure (avoids a warning per
+        // file) and keep everything in-app for the rest of the build.
+        diskGranted = false;
         emit({
           type: "diagnostic",
           phase: "model_failed",
-          message: `Could not write ${path} to the project folder: ${err instanceof Error ? err.message : "error"}`,
+          message: `Couldn't write to the project folder (${err instanceof Error ? err.message : "error"}). Switching to in-app files — download them as a zip when done.`,
         });
       }
     }
