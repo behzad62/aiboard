@@ -68,4 +68,24 @@ const multi = extractArtifacts([
 const multiApplied = applyEditOps("one\ntwo\nthree", multi.edits[0].ops);
 check("multiple ops apply", multiApplied.content === "ONE\nTWO\nthree", multiApplied);
 
+// 6. SEARCH/REPLACE ops under a normal language fence (observed in the wild:
+// a worker fenced its edit as ```javascript path=js/main.js) must be treated
+// as an edit — never written into the file as literal conflict markers.
+const mislabeled = extractArtifacts([
+  "```javascript path=js/main.js",
+  "<<<<<<< SEARCH",
+  "restartGame();",
+  "=======",
+  "resetAndStart();",
+  ">>>>>>> REPLACE",
+  "```",
+].join("\n"));
+check(
+  "mislabeled edit fence treated as edit",
+  mislabeled.files.length === 0 &&
+    mislabeled.edits.length === 1 &&
+    mislabeled.edits[0].path === "js/main.js",
+  mislabeled
+);
+
 process.exit(failed === 0 ? 0 : 1);

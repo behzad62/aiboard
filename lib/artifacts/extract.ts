@@ -246,8 +246,12 @@ export function extractArtifacts(text: string): ArtifactExtraction {
     const hadClose = j < lines.length;
 
     // ```edit path=...``` blocks are targeted edits, never whole files.
+    // Models also sometimes emit SEARCH/REPLACE ops under a normal language
+    // fence (```js path=...) — detect those by their first content line so
+    // conflict markers are never written into a file as literal content.
+    const firstContent = body.find((l) => l.trim().length > 0) ?? "";
     const infoFirst = info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-    if (infoFirst === "edit") {
+    if (infoFirst === "edit" || /^<{4,}\s*SEARCH\s*$/.test(firstContent.trim())) {
       const editPath = pathFromInfo(info);
       const ops = parseEditOps(body);
       if (editPath && ops.length > 0) {
