@@ -34,4 +34,28 @@ check("non-file stays prose", t4.files.length, 0);
 const t5 = extractArtifacts(`${FENCE}\npath = not a path line really\ncode\n${FENCE}`);
 check("bogus bare attr ignored", t5.files.length, 0);
 
+// ── Architect action parsing (build protocol) ────────────────────────────────
+import { parseArchitectAction } from "../lib/orchestrator/build";
+
+const a1 = parseArchitectAction(
+  'Let me verify.\n```json\n{"action":"run","command":"npm test","reason":"check"}\n```'
+);
+check("parse run action", a1 && a1.action === "run" && (a1 as { command: string }).command, "npm test");
+
+const a2 = parseArchitectAction('{"action":"run","command":"   "}');
+check("reject empty run command", a2, null);
+
+const a3 = parseArchitectAction(
+  'prose\n```json\n{"action":"plan","tasks":[{"title":"x","instructions":"y"}]}\n```'
+);
+check("parse plan action", a3 && a3.action, "plan");
+
+const a4 = parseArchitectAction(
+  '{"action":"review","results":[{"taskId":"T1","verdict":"approve"}],"done":true}'
+);
+check("parse review action", a4 && a4.action === "review" && (a4 as { done: boolean }).done, true);
+
+const a5 = parseArchitectAction("no json here at all");
+check("no action -> null", a5, null);
+
 process.exit(failures === 0 ? 0 : 1);

@@ -61,7 +61,14 @@ export interface ReviewAction {
   notes?: string;
 }
 
-export type ArchitectAction = ReadAction | PlanAction | ReviewAction;
+/** Run a shell command in the project folder via the user's local runner. */
+export interface RunAction {
+  action: "run";
+  command: string;
+  reason?: string;
+}
+
+export type ArchitectAction = ReadAction | PlanAction | ReviewAction | RunAction;
 
 /** Extract the first balanced top-level {...} starting at each "{". */
 function firstBalancedObject(text: string): string | null {
@@ -123,6 +130,13 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
             done: !!review.done,
           };
         }
+        if (
+          parsed.action === "run" &&
+          typeof (parsed as RunAction).command === "string" &&
+          (parsed as RunAction).command.trim()
+        ) {
+          return parsed as RunAction;
+        }
       }
     } catch {
       // try the next candidate
@@ -142,6 +156,15 @@ function treeSection(treeText: string): string {
     : "The project folder is currently empty.";
 }
 
+function runToolDoc(runsLeft?: number): string {
+  if (!runsLeft || runsLeft <= 0) return "";
+  return [
+    "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
+    '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
+    `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`,
+  ].join("\n");
+}
+
 export function buildArchitectPlanPrompt(input: {
   request: string;
   treeText: string;
@@ -149,6 +172,7 @@ export function buildArchitectPlanPrompt(input: {
   maxTasks: number;
   workerNames: string[];
   readHopsLeft: number;
+  runsLeft?: number;
 }): string {
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). Otherwise, plan now.`
@@ -166,6 +190,7 @@ export function buildArchitectPlanPrompt(input: {
     `Your workers: ${input.workerNames.join(", ")}.`,
     "",
     readOption,
+    runToolDoc(input.runsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
@@ -216,6 +241,7 @@ export function buildArchitectReviewPrompt(input: {
   executedText: string;
   maxNewTasks: number;
   cyclesLeft: number;
+  runsLeft?: number;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -229,6 +255,7 @@ export function buildArchitectReviewPrompt(input: {
     input.executedText,
     "",
     "Review each task's output. You can fix small problems YOURSELF by emitting corrected files as fenced blocks (```lang path=...) before your decision — your files overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    runToolDoc(input.runsLeft),
     "",
     "End with ONE fenced json block:",
     "```json",

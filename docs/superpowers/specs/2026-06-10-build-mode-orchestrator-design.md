@@ -81,6 +81,29 @@ first balanced `{...}`). On a parse failure the engine re-asks once with a
 stricter instruction, then fails the discussion with a clear error. Worker
 file extraction reuses lib/artifacts/extract.ts.
 
+### Tool use — local command runner (opt-in)
+
+The browser cannot reach a terminal, so command execution goes through a small
+local bridge the user starts themselves:
+
+- `scripts/runner.mjs <folder> [--port] [--token]` — zero-dependency Node HTTP
+  server bound to `127.0.0.1`. Token auth (`x-runner-token`), CORS for the app
+  origin, `/health` and `/run` (shell exec in the project folder, 5-min timeout,
+  200 KB output cap). Every command is printed in its terminal.
+- **Opt-in by connecting:** in Build mode the dashboard shows a "Let the
+  Architect run commands" card explaining the model and the `node scripts/...`
+  command; the user enables it, pastes the URL + token, and picks an
+  **access level**: *Ask permission* (approve each command in the UI: Allow once
+  / Allow all this run / Deny) or *Full access* (run without asking). Stored on
+  the discussion (`runnerUrl`/`runnerToken`/`runnerAccess`).
+- The Architect gets a `{"action":"run","command":"...","reason":"..."}` verb in
+  its plan and review phases (capped: 4 runs/phase, 12 total); stdout/stderr/exit
+  come back as a follow-up turn so it can fix-and-rerun. The discussion page
+  shows a live command log; denied commands are reported back to the model.
+
+This is the "run the tests / build it / fix what broke" capability. It is never
+on by default and runs only commands the user's machine + access level allow.
+
 ### Out of scope (v1)
 
 - Mid-turn interactive tool calls for workers (context files are provided

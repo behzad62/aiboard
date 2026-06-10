@@ -86,6 +86,14 @@ export type OrchestratorEvent =
       location: "disk" | "virtual";
       taskId?: string;
     }
+  | {
+      type: "command_run";
+      command: string;
+      exitCode: number;
+      durationMs: number;
+      outputPreview: string;
+      denied?: boolean;
+    }
   | { type: "error"; message: string }
   | { type: "complete" };
 

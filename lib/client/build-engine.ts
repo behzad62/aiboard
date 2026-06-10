@@ -38,6 +38,12 @@ import {
   writeProjectFile,
 } from "./project-fs";
 import {
+  checkRunner,
+  formatCommandResult,
+  runCommand,
+  type RunnerConfig,
+} from "./runner";
+import {
   insertFinalResult,
   insertMessage,
   updateDiscussion,
@@ -45,6 +51,16 @@ import {
 import { collectStream, type OrchestratorEvent } from "./engine";
 
 type EventCallback = (event: OrchestratorEvent) => void;
+
+export type CommandApprovalDecision = "allow" | "allow-all" | "deny";
+
+/** UI hooks injected by the discussion page (e.g. the approval prompt). */
+export interface BuildHooks {
+  requestCommandApproval?: (
+    command: string,
+    reason?: string
+  ) => Promise<CommandApprovalDecision>;
+}
 
 interface BuildLimits {
   cycles: number;
@@ -57,6 +73,9 @@ const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
   medium: { cycles: 4, tasksPerWave: 5, totalWorkerCalls: 16 },
   high: { cycles: 6, tasksPerWave: 8, totalWorkerCalls: 32 },
 };
+
+const RUNS_PER_PHASE = 4;
+const TOTAL_RUNS = 12;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -78,7 +97,8 @@ function truncate(text: string, max: number): string {
 export async function runBuildDiscussion(
   discussion: Discussion,
   models: SelectedModel[],
-  emit: EventCallback
+  emit: EventCallback,
+  hooks?: BuildHooks
 ): Promise<void> {
   const effort = discussion.effort as EffortLevel;
   const limits = BUILD_LIMITS[effort];
@@ -115,6 +135,87 @@ export async function runBuildDiscussion(
       ? `Build mode: Architect ${architect.displayName}, ${workers.length} worker(s), writing to folder "${dirHandle?.name}"`
       : `Build mode: Architect ${architect.displayName}, ${workers.length} worker(s), files kept in the app (download as zip)`,
   });
+
+  // ── Optional local runner (user-started; opt-in by config) ────────────────
+  let runner: RunnerConfig | null = null;
+  let allowAllCommands = discussion.runnerAccess === "full";
+  let totalRuns = 0;
+  if (discussion.runnerUrl && discussion.runnerToken) {
+    const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
+    const health = await checkRunner(config);
+    if (health.ok) {
+      runner = config;
+      emit({
+        type: "diagnostic",
+        phase: "initializing",
+        message: `Local runner connected (folder "${health.dir}") — the Architect can run commands${allowAllCommands ? "" : " with your approval"}`,
+      });
+    } else {
+      emit({
+        type: "diagnostic",
+        phase: "initializing",
+        message: `Local runner not reachable (${health.error}) — continuing without command execution`,
+      });
+    }
+  }
+
+  const runsLeftThisPhase = (): number =>
+    runner ? Math.min(RUNS_PER_PHASE, TOTAL_RUNS - totalRuns) : 0;
+
+  /** Execute one Architect-requested command (with approval when required). */
+  const executeRun = async (
+    command: string,
+    reason?: string
+  ): Promise<string> => {
+    if (!runner) return "No runner is available.";
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(command, reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `$ ${command}\nThe user DENIED this command. Continue without it.`;
+      }
+    }
+    totalRuns += 1;
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `Running command: ${command}`,
+    });
+    try {
+      const result = await runCommand(runner, command);
+      emit({
+        type: "command_run",
+        command,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        outputPreview: truncate(
+          (result.stdout || result.stderr).trim(),
+          400
+        ),
+      });
+      return formatCommandResult(command, result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Runner request failed";
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `$ ${command}\nRunner error: ${message}`;
+    }
+  };
 
   const treeText = (): string => {
     const all = new Set([...diskTree, ...virtualFs.keys()]);
@@ -291,14 +392,16 @@ export async function runBuildDiscussion(
     extraFileContext = `\nKey project files:${extraFileContext}`;
   }
 
+  let runFeedback = "";
   for (;;) {
     const planPrompt = buildArchitectPlanPrompt({
       request: discussion.topic,
       treeText: treeText(),
-      fileContext: extraFileContext,
+      fileContext: extraFileContext + runFeedback,
       maxTasks: limits.tasksPerWave,
       workerNames: workers.map((w) => w.displayName),
       readHopsLeft,
+      runsLeft: runsLeftThisPhase(),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
     if (action.action === "read" && readHopsLeft > 0) {
@@ -311,6 +414,10 @@ export async function runBuildDiscussion(
         );
       }
       extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
+      continue;
+    }
+    if (action.action === "run" && runsLeftThisPhase() > 0) {
+      runFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
       continue;
     }
     if (action.action === "plan") {
@@ -454,16 +561,28 @@ export async function runBuildDiscussion(
       message: `Architect is reviewing wave ${cycle}`,
     });
 
-    const { action, text } = await architectAction(
-      buildArchitectReviewPrompt({
-        request: discussion.topic,
-        treeText: treeText(),
-        executedText,
-        maxNewTasks: limits.tasksPerWave,
-        cyclesLeft: limits.cycles - cycle,
-      }),
-      `Architect is reviewing wave ${cycle}`
-    );
+    // The Architect may run commands (e.g. tests) before deciding the verdict.
+    let reviewRunFeedback = "";
+    let action: ArchitectAction;
+    let text: string;
+    for (;;) {
+      ({ action, text } = await architectAction(
+        buildArchitectReviewPrompt({
+          request: discussion.topic,
+          treeText: treeText(),
+          executedText: executedText + reviewRunFeedback,
+          maxNewTasks: limits.tasksPerWave,
+          cyclesLeft: limits.cycles - cycle,
+          runsLeft: runsLeftThisPhase(),
+        }),
+        `Architect is reviewing wave ${cycle}`
+      ));
+      if (action.action === "run" && runsLeftThisPhase() > 0) {
+        reviewRunFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
+        continue;
+      }
+      break;
+    }
     if (action.action !== "review") {
       throw new Error("Expected a review action from the Architect.");
     }

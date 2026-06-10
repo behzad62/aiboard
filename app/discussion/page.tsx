@@ -41,8 +41,10 @@ import {
 import {
   BuildTaskBoard,
   type BuildTaskView,
+  type CommandRunView,
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
+import type { CommandApprovalDecision } from "@/lib/client/build-engine";
 import {
   accentFor,
   buildAccentMap,
@@ -86,6 +88,12 @@ function DiscussionPageInner() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
+  const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<{
+    command: string;
+    reason?: string;
+    resolve: (decision: CommandApprovalDecision) => void;
+  } | null>(null);
   const [folderGrant, setFolderGrant] = useState<"checking" | "needed" | "ready">(
     "checking"
   );
@@ -198,6 +206,18 @@ function DiscussionPageInner() {
             ];
           });
           break;
+        case "command_run":
+          setCommandRuns((prev) => [
+            ...prev,
+            {
+              command: event.command,
+              exitCode: event.exitCode,
+              durationMs: event.durationMs,
+              outputPreview: event.outputPreview,
+              denied: event.denied,
+            },
+          ]);
+          break;
         case "final_answer":
           setFinalResult({
             answer: event.answer,
@@ -300,6 +320,23 @@ function DiscussionPageInner() {
     }
   };
 
+  // Build-mode command approval: the engine awaits this promise; the UI resolves
+  // it when the user clicks Allow / Allow all / Deny.
+  const requestCommandApproval = (
+    command: string,
+    reason?: string
+  ): Promise<CommandApprovalDecision> =>
+    new Promise((resolve) => {
+      setPendingApproval({
+        command,
+        reason,
+        resolve: (decision) => {
+          setPendingApproval(null);
+          resolve(decision);
+        },
+      });
+    });
+
   // Keep the run callback fresh without restarting the run.
   const handleEventRef = useRef(handleEvent);
   handleEventRef.current = handleEvent;
@@ -314,9 +351,11 @@ function DiscussionPageInner() {
     // The engine runs entirely in this tab; events update state directly.
     startedRef.current = true;
     setStreamConnected(true);
-    runClientDiscussion(id, (event) => handleEventRef.current(event)).finally(
-      () => setStreamConnected(false)
-    );
+    runClientDiscussion(
+      id,
+      (event) => handleEventRef.current(event),
+      { requestCommandApproval }
+    ).finally(() => setStreamConnected(false));
   }, [id, discussion, status, folderGrant]);
 
   const participantIds = useMemo<string[]>(() => {
@@ -473,10 +512,44 @@ function DiscussionPageInner() {
           </div>
         )}
 
+      {pendingApproval && (
+        <div className="rounded-xl border border-primary/40 bg-primary/5 p-4">
+          <p className="text-sm font-medium">The Architect wants to run a command</p>
+          {pendingApproval.reason && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {pendingApproval.reason}
+            </p>
+          )}
+          <pre className="mt-2 overflow-x-auto rounded bg-background/80 p-2 font-mono text-xs">
+            $ {pendingApproval.command}
+          </pre>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => pendingApproval.resolve("allow")}>
+              Allow once
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => pendingApproval.resolve("allow-all")}
+            >
+              Allow all this run
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => pendingApproval.resolve("deny")}
+            >
+              Deny
+            </Button>
+          </div>
+        </div>
+      )}
+
       {discussion.mode === "build" && (
         <BuildTaskBoard
           tasks={buildTasks}
           files={writtenFiles}
+          commands={commandRuns}
           folderName={discussion.projectFolderName}
         />
       )}

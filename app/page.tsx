@@ -41,6 +41,7 @@ import {
 import { createDiscussion, ensureReady, loadDashboard } from "@/lib/client/api";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
 import { ProjectFolderPicker } from "@/components/ProjectFolderPicker";
+import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
@@ -73,6 +74,7 @@ export default function HomePage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [locked, setLocked] = useState(false);
   const [projectFolderName, setProjectFolderName] = useState<string | null>(null);
+  const [runner, setRunner] = useState<RunnerSelection | null>(null);
   const [topic, setTopic] = useState("");
   const [mode, setMode] = useState<DiscussionMode>("panel");
   const [effort, setEffort] = useState<EffortLevel>("medium");
@@ -204,6 +206,9 @@ export default function HomePage() {
         styleNote: styleNote.trim() || undefined,
         reasoningEffort,
         projectFolderName: mode === "build" ? projectFolderName : null,
+        runnerUrl: mode === "build" ? runner?.url ?? null : null,
+        runnerToken: mode === "build" ? runner?.token ?? null : null,
+        runnerAccess: mode === "build" ? runner?.access ?? null : null,
       });
       if (mode === "build") {
         await claimPendingProjectFolder(result.id);
@@ -312,7 +317,10 @@ export default function HomePage() {
             </div>
 
             {mode === "build" && (
-              <ProjectFolderPicker onChange={setProjectFolderName} />
+              <>
+                <ProjectFolderPicker onChange={setProjectFolderName} />
+                <RunnerSetup onChange={setRunner} />
+              </>
             )}
 
             <EffortSlider value={effort} onChange={setEffort} />

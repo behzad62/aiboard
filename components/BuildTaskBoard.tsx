@@ -8,6 +8,7 @@ import {
   Hammer,
   ListTodo,
   SearchCheck,
+  Terminal,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -23,6 +24,14 @@ export interface WrittenFileView {
   path: string;
   bytes: number;
   location: "disk" | "virtual";
+}
+
+export interface CommandRunView {
+  command: string;
+  exitCode: number;
+  durationMs: number;
+  outputPreview: string;
+  denied?: boolean;
 }
 
 const STATUS_META: Record<
@@ -46,13 +55,16 @@ function formatBytes(bytes: number): string {
 export function BuildTaskBoard({
   tasks,
   files,
+  commands = [],
   folderName,
 }: {
   tasks: BuildTaskView[];
   files: WrittenFileView[];
+  commands?: CommandRunView[];
   folderName?: string | null;
 }) {
-  if (tasks.length === 0 && files.length === 0) return null;
+  if (tasks.length === 0 && files.length === 0 && commands.length === 0)
+    return null;
   const doneCount = tasks.filter((t) => t.status === "done").length;
 
   return (
@@ -113,6 +125,43 @@ export function BuildTaskBoard({
                   {formatBytes(file.bytes)}
                   {file.location === "disk" ? "" : " · in-app"}
                 </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {commands.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+            <Terminal className="h-4 w-4 text-primary" />
+            Commands run ({commands.length})
+          </p>
+          <ul className="space-y-1.5">
+            {commands.map((cmd, i) => (
+              <li key={i} className="rounded border bg-muted/20 p-2">
+                <div className="flex items-center justify-between gap-2 font-mono text-xs">
+                  <span className="truncate">$ {cmd.command}</span>
+                  <Badge
+                    variant={
+                      cmd.denied
+                        ? "secondary"
+                        : cmd.exitCode === 0
+                          ? "success"
+                          : "destructive"
+                    }
+                    className="shrink-0"
+                  >
+                    {cmd.denied
+                      ? "denied"
+                      : `exit ${cmd.exitCode} · ${(cmd.durationMs / 1000).toFixed(1)}s`}
+                  </Badge>
+                </div>
+                {cmd.outputPreview && (
+                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-[0.7rem] text-muted-foreground">
+                    {cmd.outputPreview}
+                  </pre>
+                )}
               </li>
             ))}
           </ul>

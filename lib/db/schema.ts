@@ -44,6 +44,11 @@ export interface Discussion {
   attachmentIds: string | null;
   /** Build mode: display name of the granted project folder (handle lives in IndexedDB). */
   projectFolderName?: string | null;
+  /** Build mode: optional local command runner (user-started; opt-in). */
+  runnerUrl?: string | null;
+  runnerToken?: string | null;
+  /** "ask" = approve each command in the UI; "full" = run without asking. */
+  runnerAccess?: "ask" | "full" | null;
   currentRound: number;
   maxRounds: number;
   convergenceScore: number | null;

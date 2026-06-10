@@ -92,6 +92,9 @@ export interface CreateDiscussionInput {
   styleNote?: string;
   attachmentIds?: string[];
   projectFolderName?: string | null;
+  runnerUrl?: string | null;
+  runnerToken?: string | null;
+  runnerAccess?: "ask" | "full" | null;
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -123,6 +126,9 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
       ? JSON.stringify(input.attachmentIds)
       : null,
     projectFolderName: input.projectFolderName ?? null,
+    runnerUrl: input.runnerUrl ?? null,
+    runnerToken: input.runnerToken ?? null,
+    runnerAccess: input.runnerAccess ?? null,
     createdAt: now,
     updatedAt: now,
   });

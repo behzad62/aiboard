@@ -179,7 +179,8 @@ function resolveModels(modelIds: string[]): SelectedModel[] {
 
 export async function runDiscussion(
   discussionId: string,
-  emit: EventCallback
+  emit: EventCallback,
+  hooks?: import("./build-engine").BuildHooks
 ): Promise<void> {
   if (runningDiscussions.has(discussionId)) {
     return;
@@ -203,7 +204,7 @@ export async function runDiscussion(
       // Build runs an Architect-orchestrated task loop, not the round loop.
       // Dynamic import keeps the engine<->build-engine dependency acyclic.
       const { runBuildDiscussion } = await import("./build-engine");
-      await runBuildDiscussion(discussion, models, emit);
+      await runBuildDiscussion(discussion, models, emit, hooks);
       return;
     }
 
