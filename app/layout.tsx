@@ -5,9 +5,9 @@ import { MessageSquare, Settings } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import "./globals.css";
 
-// Applies the saved/preferred theme before paint to avoid a flash of the wrong
-// theme on load.
-const themeScript = `(function(){try{var t=localStorage.getItem('theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+// Applies the saved theme before paint to avoid a flash of the wrong theme on
+// load. Dark is the default — light only when the user explicitly chose it.
+const themeScript = `(function(){try{var t=localStorage.getItem('theme');if(t!=='light')document.documentElement.classList.add('dark');}catch(e){document.documentElement.classList.add('dark');}})();`;
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const fraunces = Fraunces({
