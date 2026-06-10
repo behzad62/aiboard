@@ -346,7 +346,17 @@ export default function HomePage() {
 
             {compatibleJudgeOptions.length > 0 && (
               <div className="space-y-2">
-                <Label>Judge model (final synthesis)</Label>
+                <Label>
+                  {mode === "build"
+                    ? "Architect model (orchestrates: plans tasks, reviews & fixes)"
+                    : "Judge model (final synthesis)"}
+                </Label>
+                {mode === "build" && (
+                  <p className="text-xs text-muted-foreground">
+                    The participating models above are the workers that implement
+                    tasks. Pick your most capable model here to lead them.
+                  </p>
+                )}
                 <Select value={judgeModelId} onValueChange={setJudgeModelId}>
                   <SelectTrigger>
                     <SelectValue />

@@ -15,6 +15,7 @@ import type {
 } from "@/lib/db/schema";
 import type { SelectedModel } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
+import { resolveModelName } from "./providers";
 import { EFFORT_CONFIG, BUILD_ROUND_MIN_TOKENS, BUILD_INTEGRATOR_MIN_TOKENS } from "@/lib/orchestrator/config";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
@@ -114,8 +115,17 @@ export async function runBuildDiscussion(
 
   const modelIds: string[] = JSON.parse(discussion.modelIds);
   const architectId = discussion.judgeModelId ?? modelIds[0];
-  const architect =
-    models.find((m) => m.modelId === architectId) ?? models[0];
+  // The Architect is the JUDGE model — even when it isn't one of the
+  // participating (worker) models. Resolve it on its own so a non-participant
+  // judge (e.g. an expensive GPT-5.5 orchestrating cheap workers) is honored
+  // instead of silently falling back to the first participant.
+  const architect: SelectedModel =
+    models.find((m) => m.modelId === architectId) ??
+    {
+      modelId: architectId,
+      providerId: parseModelId(architectId).providerId,
+      displayName: resolveModelName(architectId),
+    };
   const workers = models.filter((m) => m.modelId !== architect.modelId);
   if (workers.length === 0) workers.push(architect); // solo build
 
