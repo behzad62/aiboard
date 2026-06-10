@@ -12,8 +12,10 @@ import {
   deleteCustomModel,
   listCustomModels,
   testCustomModel,
+  testSavedCustomModel,
   updateCustomModelCapabilities,
 } from "@/lib/client/settings-api";
+import { ensureReady } from "@/lib/client/api";
 
 interface ModelCaps {
   image: boolean;
@@ -56,8 +58,11 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, string>>({});
 
   const load = async () => {
+    await ensureReady();
     setModels(listCustomModels());
   };
 
@@ -109,14 +114,35 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
         apiKey: apiKey || undefined,
       });
       setMessage(
-        data.ok
-          ? `Connection OK: ${data.preview}`
+        data.valid
+          ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
           : `Test failed: ${data.error ?? "unknown error"}`
       );
     } catch {
       setMessage("Test failed: could not reach the endpoint.");
     } finally {
       setTesting(false);
+    }
+  };
+
+  const testSaved = async (id: string) => {
+    setTestingId(id);
+    setTestResults((prev) => ({ ...prev, [id]: "Testing…" }));
+    try {
+      const data = await testSavedCustomModel(id);
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: data.valid
+          ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
+          : `Test failed: ${data.error ?? "unknown error"}`,
+      }));
+    } catch {
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: "Test failed: could not reach the endpoint.",
+      }));
+    } finally {
+      setTestingId(null);
     }
   };
 
@@ -147,10 +173,8 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
       {models.length > 0 && (
         <div className="space-y-2">
           {models.map((m) => (
-            <div
-              key={m.id}
-              className="flex items-center gap-3 rounded-lg border p-3"
-            >
+            <div key={m.id} className="rounded-lg border p-3">
+              <div className="flex items-center gap-3">
               <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium">{m.label}</p>
@@ -182,6 +206,14 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
               </div>
               {m.hasKey && <Badge variant="secondary">key saved</Badge>}
               <Button
+                variant="outline"
+                size="sm"
+                onClick={() => testSaved(m.id)}
+                disabled={testingId === m.id}
+              >
+                {testingId === m.id ? "Testing…" : "Test"}
+              </Button>
+              <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => remove(m.id)}
@@ -189,6 +221,12 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
+              </div>
+              {testResults[m.id] && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {testResults[m.id]}
+                </p>
+              )}
             </div>
           ))}
         </div>

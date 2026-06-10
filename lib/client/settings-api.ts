@@ -8,9 +8,8 @@
 import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai";
 import type { CustomModel, UserSettings } from "@/lib/db/schema";
-import type { ModelInfo } from "@/lib/providers/base";
-import { formatModelId } from "@/lib/providers/base";
-import { getModelCapabilities } from "@/lib/providers/capabilities";
+import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
+import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { AttachmentPayload, AttachmentSummary } from "@/lib/attachments/types";
 import { classifyMimeType } from "@/lib/attachments/classify";
 import { maskApiKey } from "@/lib/utils";
@@ -20,6 +19,7 @@ import {
   deleteAttachmentRecord,
   deleteCustomModel as storeDeleteCustomModel,
   getAttachment,
+  getCustomModelById,
   getCustomModels,
   getProviderKey,
   getProviderKeys,
@@ -29,7 +29,7 @@ import {
   updateUserSettings,
   upsertProviderKey,
 } from "./store";
-import { getAllProviders, getProvider } from "./providers";
+import { CUSTOM_PROVIDER_ID, getAllProviders, getProvider } from "./providers";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -114,53 +114,27 @@ const TEST_IMAGE: AttachmentPayload = {
     "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAcSURBVDhPY7ijpvafEjxqwKgBIDxqwDAwQO0/AEkhJx9IQd3PAAAAAElFTkSuQmCC",
 };
 
-export async function validateProvider(input: {
-  providerId: string;
-  apiKey?: string;
-  modelId?: string;
-}): Promise<{
+const TEST_SYSTEM =
+  "You are validating that this model can answer a short settings test request.";
+const VISION_PROMPT =
+  "Look at the attached test image and reply with only 2 to 4 words describing its color and shape, for example 'red square'. Do not use a full sentence.";
+const TEXT_PROMPT =
+  "Reply with one short sentence confirming this model test works.";
+
+export interface ModelTestResult {
   valid: boolean;
-  modelId?: string;
   usedImage: boolean;
   preview?: string;
   error?: string;
-}> {
-  const provider = getProvider(input.providerId);
-  if (!provider) return { valid: false, usedImage: false, error: "Unknown provider" };
+}
 
-  const saved = getProviderKey(input.providerId);
-  const usingSaved = !input.apiKey;
-  const apiKey = input.apiKey ?? saved?.apiKey ?? null;
-  if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
-
-  const modelId =
-    input.modelId ?? saved?.defaultModel ?? provider.listModels()[0]?.id;
-  if (!modelId) return { valid: false, usedImage: false, error: "No model available" };
-
-  const caps = getModelCapabilities(formatModelId(input.providerId, modelId));
-  const attachments = caps.image ? [TEST_IMAGE] : [];
-  const prompt = caps.image
-    ? "Look at the attached test image and reply with only 2 to 4 words describing its color and shape, for example 'red square'. Do not use a full sentence."
-    : "Reply with one short sentence confirming this model test works.";
-
+async function collectPreview(
+  stream: AsyncIterable<StreamChunk>
+): Promise<{ preview: string; error?: string }> {
   let preview = "";
   let error: string | undefined;
   try {
-    for await (const chunk of provider.streamChat({
-      apiKey,
-      model: modelId,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are validating that this model can answer a short settings test request.",
-        },
-        { role: "user", content: prompt },
-      ],
-      attachments,
-      maxTokens: 80,
-      temperature: 0.2,
-    })) {
+    for await (const chunk of stream) {
       if (chunk.type === "error") {
         error = chunk.error ?? "Validation failed";
         break;
@@ -173,21 +147,73 @@ export async function validateProvider(input: {
   } catch (err) {
     error = err instanceof Error ? err.message : "Validation failed";
   }
+  return { preview: preview.trim(), error };
+}
 
-  const valid = !error && preview.trim().length > 0;
+/**
+ * Unified test used by every provider AND custom models: always try the "red
+ * dot" vision test first (so feedback is consistent — the model describes the
+ * test image), then fall back to a plain text confirmation for models that
+ * can't accept images.
+ */
+type StreamFactory = (
+  prompt: string,
+  attachments: AttachmentPayload[]
+) => AsyncIterable<StreamChunk>;
+
+async function runModelTest(makeStream: StreamFactory): Promise<ModelTestResult> {
+  const vision = await collectPreview(makeStream(VISION_PROMPT, [TEST_IMAGE]));
+  if (!vision.error && vision.preview.length > 0) {
+    return { valid: true, usedImage: true, preview: vision.preview };
+  }
+  const text = await collectPreview(makeStream(TEXT_PROMPT, []));
+  const valid = !text.error && text.preview.length > 0;
+  return {
+    valid,
+    usedImage: false,
+    preview: text.preview || undefined,
+    error: valid ? undefined : text.error ?? "No response received from model",
+  };
+}
+
+export async function validateProvider(input: {
+  providerId: string;
+  apiKey?: string;
+  modelId?: string;
+}): Promise<ModelTestResult & { modelId?: string }> {
+  const provider = getProvider(input.providerId);
+  if (!provider) return { valid: false, usedImage: false, error: "Unknown provider" };
+
+  const saved = getProviderKey(input.providerId);
+  const usingSaved = !input.apiKey;
+  const apiKey = input.apiKey ?? saved?.apiKey ?? null;
+  if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
+
+  const modelId =
+    input.modelId ?? saved?.defaultModel ?? provider.listModels()[0]?.id;
+  if (!modelId) return { valid: false, usedImage: false, error: "No model available" };
+
+  const result = await runModelTest((prompt, attachments) =>
+    provider.streamChat({
+      apiKey,
+      model: modelId,
+      messages: [
+        { role: "system", content: TEST_SYSTEM },
+        { role: "user", content: prompt },
+      ],
+      attachments,
+      maxTokens: 80,
+      temperature: 0.2,
+    })
+  );
+
   if (usingSaved && saved) {
     updateProviderKey(input.providerId, {
-      lastValidationSucceeded: valid,
+      lastValidationSucceeded: result.valid,
       lastValidatedAt: new Date().toISOString(),
     });
   }
-  return {
-    valid,
-    modelId,
-    usedImage: attachments.length > 0,
-    preview: preview.trim() || undefined,
-    error: valid ? undefined : error ?? "No response received from model",
-  };
+  return { ...result, modelId };
 }
 
 // ── Pricing overrides ─────────────────────────────────────────────────────────
@@ -281,23 +307,45 @@ export async function testCustomModel(input: {
   baseURL: string;
   model: string;
   apiKey?: string;
-}): Promise<{ ok: boolean; preview?: string; error?: string }> {
-  try {
-    const client = new OpenAI({
-      apiKey: input.apiKey || "not-needed",
-      baseURL: input.baseURL,
-      dangerouslyAllowBrowser: true,
-    });
-    const completion = await client.chat.completions.create({
-      model: input.model,
-      max_tokens: 32,
-      messages: [{ role: "user", content: "Reply with: ok" }],
-    });
-    const preview = completion.choices[0]?.message?.content ?? "";
-    return { ok: preview.trim().length > 0, preview: preview.trim() };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Test failed" };
-  }
+}): Promise<ModelTestResult> {
+  const client = new OpenAI({
+    apiKey: input.apiKey || "not-needed",
+    baseURL: input.baseURL,
+    dangerouslyAllowBrowser: true,
+  });
+  // Force image capability on so the compat layer attaches the test image; the
+  // text fallback covers endpoints that don't accept images.
+  return runModelTest((prompt, attachments) =>
+    streamOpenAICompatibleChat(
+      client,
+      {
+        apiKey: input.apiKey ?? "",
+        model: input.model,
+        messages: [
+          { role: "system", content: TEST_SYSTEM },
+          { role: "user", content: prompt },
+        ],
+        attachments,
+        maxTokens: 80,
+        temperature: 0.2,
+        capabilities: { image: true, document: false, audio: false, video: false },
+      },
+      CUSTOM_PROVIDER_ID,
+      input.model,
+      "max_tokens"
+    )
+  );
+}
+
+/** Test a saved custom model by id (uses its stored key/base URL). */
+export async function testSavedCustomModel(id: string): Promise<ModelTestResult> {
+  const model = getCustomModelById(id);
+  if (!model) return { valid: false, usedImage: false, error: "Model not found" };
+  return testCustomModel({
+    baseURL: model.baseURL,
+    model: model.model,
+    apiKey: model.apiKey,
+  });
 }
 
 // ── Attachments ───────────────────────────────────────────────────────────────
