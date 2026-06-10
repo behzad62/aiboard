@@ -319,7 +319,10 @@ export default function HomePage() {
             {mode === "build" && (
               <>
                 <ProjectFolderPicker onChange={setProjectFolderName} />
-                <RunnerSetup onChange={setRunner} />
+                <RunnerSetup
+                  onChange={setRunner}
+                  pickedFolderName={projectFolderName}
+                />
               </>
             )}
 

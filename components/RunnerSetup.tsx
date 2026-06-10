@@ -16,6 +16,8 @@ export interface RunnerSelection {
 
 interface RunnerSetupProps {
   onChange?: (selection: RunnerSelection | null) => void;
+  /** Name of the browser-picked project folder, to warn on a mismatch. */
+  pickedFolderName?: string | null;
 }
 
 /**
@@ -24,11 +26,12 @@ interface RunnerSetupProps {
  * access level. Connecting is the opt-in — without it the Architect can't run
  * anything.
  */
-export function RunnerSetup({ onChange }: RunnerSetupProps) {
+export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
   const [enabled, setEnabled] = useState(false);
   const [url, setUrl] = useState(DEFAULT_RUNNER_URL);
   const [token, setToken] = useState("");
   const [access, setAccess] = useState<"ask" | "full">("ask");
+  const [connectedDir, setConnectedDir] = useState<string | null>(null);
   const [status, setStatus] = useState<
     { state: "idle" | "ok" | "error"; message?: string }
   >({ state: "idle" });
@@ -46,6 +49,7 @@ export function RunnerSetup({ onChange }: RunnerSetupProps) {
   const test = async () => {
     setStatus({ state: "idle", message: "Checking…" });
     const result = await checkRunner({ url, token });
+    setConnectedDir(result.ok ? result.dir ?? null : null);
     setStatus(
       result.ok
         ? { state: "ok", message: `Connected to folder "${result.dir}"` }
@@ -53,12 +57,19 @@ export function RunnerSetup({ onChange }: RunnerSetupProps) {
     );
   };
 
+  // Both disk paths configured but pointing at different folders is almost
+  // always a mistake — files get written via the runner into ITS folder.
+  const folderMismatch =
+    !!pickedFolderName &&
+    !!connectedDir &&
+    pickedFolderName.toLowerCase() !== connectedDir.toLowerCase();
+
   return (
     <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
       <div className="flex items-center justify-between gap-2">
         <Label className="flex items-center gap-2">
           <Terminal className="h-4 w-4" />
-          Let the Architect run commands (optional)
+          Local runner — commands, files &amp; MCP tools (optional)
         </Label>
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -74,12 +85,16 @@ export function RunnerSetup({ onChange }: RunnerSetupProps) {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        The Architect can run tests, builds, and installs in your project to
-        verify its work — but a browser can&apos;t reach a terminal on its own.
-        Start the bundled runner in a terminal and connect it here:
+        The runner is a small process you start in your own terminal, pointed at
+        your project. Connecting it gives the team full access to{" "}
+        <strong>the runner&apos;s folder</strong> (read, write, search), lets the
+        Architect run commands like tests and installs, and can bridge MCP tools
+        (e.g. a real browser via Playwright). With a runner connected you
+        don&apos;t need to pick a project folder above.
       </p>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        node scripts/runner.mjs ./your-project
+        {"node scripts/runner.mjs ./your-project\n"}
+        {'node scripts/runner.mjs ./your-project --mcp "playwright=npx @playwright/mcp@latest"'}
       </pre>
 
       {enabled && (
@@ -123,12 +138,12 @@ export function RunnerSetup({ onChange }: RunnerSetupProps) {
                   {
                     value: "ask",
                     title: "Ask permission",
-                    desc: "Approve each command before it runs.",
+                    desc: "Approve each shell command and MCP tool call before it runs. File reads/writes never prompt.",
                   },
                   {
                     value: "full",
                     title: "Full access",
-                    desc: "Run commands without asking. Only on trusted projects.",
+                    desc: "Commands and tool calls run without asking. Only for trusted projects.",
                   },
                 ] as const
               ).map((opt) => (
@@ -168,6 +183,16 @@ export function RunnerSetup({ onChange }: RunnerSetupProps) {
               <span className="text-sm text-muted-foreground">Checking…</span>
             )}
           </div>
+
+          {folderMismatch && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+              Heads up: the folder picked above (&quot;{pickedFolderName}&quot;)
+              and the runner&apos;s folder (&quot;{connectedDir}&quot;) look
+              different. Files are written via the runner into{" "}
+              <strong>&quot;{connectedDir}&quot;</strong> — clear the picked
+              folder or restart the runner on the same project so they match.
+            </p>
+          )}
         </div>
       )}
     </div>

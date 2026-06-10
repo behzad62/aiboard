@@ -55,11 +55,11 @@ export function ProjectFolderPicker({ onChange }: ProjectFolderPickerProps) {
 
   return (
     <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
-      <Label>Project folder (optional)</Label>
+      <Label>Project folder (optional — no terminal needed)</Label>
       <p className="text-xs text-muted-foreground">
         {supported
-          ? "Pick a folder on your computer and the AI team will read and write the project files directly inside it. Without one, files stay in the app and can be downloaded as a zip."
-          : "Folder access isn't supported in this browser — files will stay in the app and can be downloaded as a zip."}
+          ? "Pick a folder and the AI team reads and writes files directly inside it through the browser. Skip this if you connect the local runner below — the runner already gives full access to its own folder. Without either, files stay in the app and can be downloaded as a zip."
+          : "Folder access isn't supported in this browser — connect the local runner below for disk access, or files stay in the app and can be downloaded as a zip."}
       </p>
       {supported && (
         <div className="flex flex-wrap items-center gap-2">
