@@ -67,6 +67,21 @@ export function BuildTaskBoard({
     return null;
   const doneCount = tasks.filter((t) => t.status === "done").length;
 
+  // Reflect where files ACTUALLY went, not just where they were meant to go.
+  const diskCount = files.filter((f) => f.location === "disk").length;
+  const wroteToDisk = diskCount > 0;
+  const folderButInApp = !!folderName && files.length > 0 && diskCount === 0;
+
+  const locationNote = wroteToDisk
+    ? ` · wrote ${diskCount} file${diskCount === 1 ? "" : "s"} to ${folderName ? `"${folderName}"` : "the project folder on disk"}`
+    : folderButInApp
+      ? ` · could NOT write to "${folderName}" — files kept in the app`
+      : files.length > 0
+        ? " · files kept in the app (download below)"
+        : folderName
+          ? ` · target folder "${folderName}"`
+          : "";
+
   return (
     <section className="rounded-2xl border bg-card p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -75,10 +90,18 @@ export function BuildTaskBoard({
           Build plan
         </h2>
         <span className="text-sm text-muted-foreground">
-          {doneCount}/{tasks.length} tasks done
-          {folderName ? ` · writing to "${folderName}"` : " · files kept in-app (zip below)"}
+          {doneCount}/{tasks.length} tasks done{locationNote}
         </span>
       </div>
+
+      {folderButInApp && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          Nothing was written to <strong>{folderName}</strong> — the browser
+          didn&apos;t have write access at run time, so files were kept in the
+          app (download below). Re-run and click <strong>Grant folder access</strong>{" "}
+          when prompted, or check the browser console (F12) for the exact error.
+        </p>
+      )}
 
       {tasks.length > 0 && (
         <ul className="mt-4 space-y-2">

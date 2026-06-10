@@ -41,6 +41,22 @@ export async function checkRunner(
   }
 }
 
+/** Write a file into the runner's project folder (the real disk folder). */
+export async function writeFileViaRunner(
+  config: RunnerConfig,
+  path: string,
+  content: string
+): Promise<number> {
+  const res = await fetch(`${config.url.replace(/\/$/, "")}/write`, {
+    method: "POST",
+    headers: headers(config.token),
+    body: JSON.stringify({ path, content }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `Runner write failed (HTTP ${res.status})`);
+  return data.bytes ?? content.length;
+}
+
 export async function runCommand(
   config: RunnerConfig,
   command: string

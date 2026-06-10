@@ -64,11 +64,30 @@ function readBody(req) {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
-      if (data.length > 64 * 1024) reject(new Error("Body too large"));
+      if (data.length > 16 * 1024 * 1024) reject(new Error("Body too large"));
     });
     req.on("end", () => resolve(data));
     req.on("error", reject);
   });
+}
+
+/** Resolve a relative path strictly inside the project folder (no .. / absolute). */
+function safeResolve(relPath) {
+  if (typeof relPath !== "string" || !relPath.trim()) return null;
+  const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+  if (/^([A-Za-z]:|\/)/.test(normalized)) return null; // absolute
+  const target = path.resolve(projectDir, normalized);
+  const rel = path.relative(projectDir, target);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null; // escaped
+  return target;
+}
+
+function writeFileInProject(relPath, content) {
+  const target = safeResolve(relPath);
+  if (!target) throw new Error(`Refusing path outside the project folder: ${relPath}`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content ?? "", "utf8");
+  return Buffer.byteLength(content ?? "", "utf8");
 }
 
 function runCommand(command) {
@@ -138,7 +157,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/health") {
-    json(res, 200, { ok: true, version: VERSION, dir: path.basename(projectDir) });
+    json(res, 200, {
+      ok: true,
+      version: VERSION,
+      dir: path.basename(projectDir),
+      canWrite: true,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/write") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const bytes = writeFileInProject(body?.path, body?.content);
+      console.log(`[write] ${new Date().toLocaleTimeString()}  ${body.path} (${bytes} B)`);
+      json(res, 200, { ok: true, bytes });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Write failed" });
+    }
     return;
   }
 

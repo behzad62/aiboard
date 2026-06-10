@@ -41,6 +41,7 @@ import {
   checkRunner,
   formatCommandResult,
   runCommand,
+  writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
 import {
@@ -262,7 +263,23 @@ export async function runBuildDiscussion(
     virtualFs.set(path, content);
     let bytes = new TextEncoder().encode(content).length;
     let location: "disk" | "virtual" = "virtual";
-    if (diskGranted && dirHandle) {
+
+    // Prefer the runner: it writes to the REAL project folder over HTTP with no
+    // File System Access permission flakiness. Fall back to the picked folder
+    // (FSA), then to in-app only.
+    if (runner) {
+      try {
+        bytes = await writeFileViaRunner(runner, path, content);
+        location = "disk";
+      } catch (err) {
+        console.error(`[build] writing ${path} via the runner failed:`, err);
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `Couldn't write ${path} via the runner (${err instanceof Error ? err.message : "error"}); kept in the app.`,
+        });
+      }
+    } else if (diskGranted && dirHandle) {
       try {
         bytes = await writeProjectFile(dirHandle, path, content);
         location = "disk";
