@@ -57,6 +57,48 @@ export async function writeFileViaRunner(
   return data.bytes ?? content.length;
 }
 
+/**
+ * List the project folder's files via the runner (runner v2+).
+ * Returns null when the runner doesn't support /ls (old version) or fails —
+ * callers fall back to the File System Access tree.
+ */
+export async function listFilesViaRunner(
+  config: RunnerConfig
+): Promise<string[] | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/ls`, {
+      headers: headers(config.token),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data.files) ? (data.files as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a project file via the runner (runner v2+). Returns null when the file
+ * is missing/binary or the runner doesn't support /read.
+ */
+export async function readFileViaRunner(
+  config: RunnerConfig,
+  path: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/read`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data.content === "string" ? data.content : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runCommand(
   config: RunnerConfig,
   command: string

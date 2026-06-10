@@ -21,9 +21,25 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 1;
+const VERSION = 2;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_READ_BYTES = 512 * 1024;
+const MAX_LIST_ENTRIES = 600;
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  "dist",
+  "build",
+  "out",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "target",
+  ".idea",
+  ".vs",
+]);
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -88,6 +104,42 @@ function writeFileInProject(relPath, content) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content ?? "", "utf8");
   return Buffer.byteLength(content ?? "", "utf8");
+}
+
+/** Relative paths of all project files (skipping dependency/VCS dirs), capped. */
+function listProjectFiles() {
+  const files = [];
+  const walk = (dir, rel) => {
+    if (files.length >= MAX_LIST_ENTRIES) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= MAX_LIST_ENTRIES) return;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+          walk(path.join(dir, entry.name), relPath);
+        }
+      } else if (entry.isFile()) {
+        files.push(relPath);
+      }
+    }
+  };
+  walk(projectDir, "");
+  return files.sort();
+}
+
+function readFileInProject(relPath) {
+  const target = safeResolve(relPath);
+  if (!target) throw new Error(`Refusing path outside the project folder: ${relPath}`);
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return null;
+  const buf = fs.readFileSync(target);
+  if (buf.includes(0)) return null; // binary
+  return buf.toString("utf8").slice(0, MAX_READ_BYTES);
 }
 
 function runCommand(command) {
@@ -163,6 +215,32 @@ const server = http.createServer(async (req, res) => {
       dir: path.basename(projectDir),
       canWrite: true,
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/ls") {
+    try {
+      json(res, 200, { ok: true, files: listProjectFiles() });
+    } catch (err) {
+      json(res, 500, { error: err instanceof Error ? err.message : "List failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/read") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const content = readFileInProject(body?.path);
+      json(res, 200, { ok: true, content }); // content null = missing/binary
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Read failed" });
+    }
     return;
   }
 

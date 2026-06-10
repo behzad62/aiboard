@@ -6,6 +6,7 @@
  */
 
 import type {
+  BuildFileRecord,
   CustomModel,
   Discussion,
   FinalResult,
@@ -36,6 +37,7 @@ export interface ClientStore {
   messages: Message[];
   finalResults: FinalResult[];
   attachments: AttachmentRecord[];
+  buildFiles: BuildFileRecord[];
 }
 
 const DEFAULT_STORE: ClientStore = {
@@ -54,6 +56,7 @@ const DEFAULT_STORE: ClientStore = {
   messages: [],
   finalResults: [],
   attachments: [],
+  buildFiles: [],
 };
 
 let memory: ClientStore | null = null;
@@ -153,6 +156,9 @@ export function getAttachments(ids: string[]): AttachmentRecord[] {
 export function getAttachment(id: string): AttachmentRecord | undefined {
   return store().attachments.find((a) => a.id === id);
 }
+export function getBuildFiles(discussionId: string): BuildFileRecord[] {
+  return store().buildFiles.filter((f) => f.discussionId === discussionId);
+}
 
 // ── Writes (mutate memory, schedule persist) ──────────────────────────────────
 
@@ -173,11 +179,22 @@ export function deleteDiscussion(id: string): void {
   s.discussions = s.discussions.filter((d) => d.id !== id);
   s.messages = s.messages.filter((m) => m.discussionId !== id);
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
+  s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
+  schedulePersist();
+}
+export function upsertBuildFile(rec: BuildFileRecord): void {
+  const s = store();
+  const i = s.buildFiles.findIndex(
+    (f) => f.discussionId === rec.discussionId && f.path === rec.path
+  );
+  if (i >= 0) s.buildFiles[i] = rec;
+  else s.buildFiles.push(rec);
   schedulePersist();
 }
 /**
- * Wipe a discussion's run output (model messages + final result) for a
- * restart. User notes are kept — the next run still has to honor them.
+ * Wipe a discussion's run output (model messages, final result, persisted
+ * build files) for a from-scratch restart. User notes are kept — the next run
+ * still has to honor them. Files already written to disk are untouched.
  */
 export function clearDiscussionRun(id: string): void {
   const s = store();
@@ -185,6 +202,7 @@ export function clearDiscussionRun(id: string): void {
     (m) => m.discussionId !== id || m.role === "user"
   );
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
+  s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
   schedulePersist();
 }
 export function insertMessage(m: Message): void {

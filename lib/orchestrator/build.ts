@@ -235,6 +235,8 @@ export function buildArchitectPlanPrompt(input: {
   readHopsLeft: number;
   runsLeft?: number;
   userNotes?: string;
+  /** Hand-off summary from a previous pass — this is a follow-up build. */
+  previousSummary?: string;
 }): string {
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). Otherwise, plan now.`
@@ -247,6 +249,9 @@ export function buildArchitectPlanPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    input.previousSummary?.trim()
+      ? `\nThis is a FOLLOW-UP pass: a previous build already delivered the project summarized below. Everything delivered is still a requirement — preserve it. Plan ONLY the delta (changes the notes/request ask for), editing existing files where possible instead of rebuilding.\nPrevious hand-off summary:\n${input.previousSummary}`
+      : "",
     input.fileContext,
     userNotesSection(input.userNotes),
     "",

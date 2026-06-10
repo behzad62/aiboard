@@ -41,15 +41,20 @@ import {
 import {
   checkRunner,
   formatCommandResult,
+  listFilesViaRunner,
+  readFileViaRunner,
   runCommand,
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
 import {
+  getBuildFiles,
+  getFinalResult,
   getMessagesForDiscussion,
   insertFinalResult,
   insertMessage,
   updateDiscussion,
+  upsertBuildFile,
 } from "./store";
 import { drainBuildNotes } from "./build-notes";
 import {
@@ -146,6 +151,18 @@ export async function runBuildDiscussion(
   // never fail the build. Any error here degrades to in-app/virtual files.
   const dirHandle = await getProjectHandle(discussion.id);
   const virtualFs = new Map<string, string>();
+  // Seed with everything previous passes built — follow-up passes and resumes
+  // must see the existing files instead of re-planning from an "empty" tree.
+  for (const file of getBuildFiles(discussion.id)) {
+    virtualFs.set(file.path, file.content);
+  }
+  if (virtualFs.size > 0) {
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `Restored ${virtualFs.size} file(s) from the previous build pass`,
+    });
+  }
   let diskTree: string[] = [];
   let diskGranted = false;
   let diskWarning: string | null = null;
@@ -198,6 +215,15 @@ export async function runBuildDiscussion(
         phase: "initializing",
         message: `Local runner connected (folder "${health.dir}") — the Architect can run commands${allowAllCommands ? "" : " with your approval"}`,
       });
+      // The runner sees the REAL folder — use it for the tree so the
+      // Architect is never blind to files it (or the user) put on disk,
+      // even when no File System Access grant is active. Old runners
+      // without /ls return null; the FSA tree then stands.
+      const runnerTree = await listFilesViaRunner(config);
+      if (runnerTree) {
+        diskTree = [...new Set([...diskTree, ...runnerTree])];
+        diskGranted = true;
+      }
     } else {
       emit({
         type: "diagnostic",
@@ -251,6 +277,9 @@ export async function runBuildDiscussion(
           400
         ),
       });
+      // Commands can create files (scaffolders, installs) — refresh the tree.
+      const refreshed = await listFilesViaRunner(runner);
+      if (refreshed) diskTree = [...new Set([...diskTree, ...refreshed])];
       return formatCommandResult(command, result);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Runner request failed";
@@ -272,7 +301,15 @@ export async function runBuildDiscussion(
 
   const readFile = async (path: string): Promise<string | null> => {
     if (virtualFs.has(path)) return virtualFs.get(path)!;
-    if (diskGranted && dirHandle) return readProjectFile(dirHandle, path);
+    if (dirHandle) {
+      try {
+        const content = await readProjectFile(dirHandle, path);
+        if (content != null) return content;
+      } catch {
+        // fall through to the runner
+      }
+    }
+    if (runner) return readFileViaRunner(runner, path);
     return null;
   };
 
@@ -282,6 +319,13 @@ export async function runBuildDiscussion(
     taskId?: string
   ): Promise<void> => {
     virtualFs.set(path, content);
+    // Persist so follow-up passes and resumes still see this file.
+    upsertBuildFile({
+      discussionId: discussion.id,
+      path,
+      content,
+      updatedAt: new Date().toISOString(),
+    });
     let bytes = new TextEncoder().encode(content).length;
     let location: "disk" | "virtual" = "virtual";
 
@@ -329,9 +373,15 @@ export async function runBuildDiscussion(
   const history: Array<{ label: string; text: string }> = [];
 
   // ── User notes: drained at every Architect decision point ─────────────────
-  const userNotes: string[] = [];
+  // Seeded with the notes from previous passes (they persist as user messages)
+  // so a requirement satisfied in pass 2 can't silently fall out of pass 3.
+  const userNotes: string[] = getMessagesForDiscussion(discussion.id)
+    .filter((m) => m.role === "user")
+    .map((m) => m.content);
   const userNotesText = (): string => {
-    const fresh = drainBuildNotes(discussion.id);
+    const fresh = drainBuildNotes(discussion.id).filter(
+      (n) => !userNotes.includes(n)
+    );
     if (fresh.length > 0) {
       userNotes.push(...fresh);
       emit({
@@ -342,6 +392,10 @@ export async function runBuildDiscussion(
     }
     return userNotes.map((n, i) => `${i + 1}. ${n}`).join("\n");
   };
+
+  // The previous pass's hand-off summary (if any) tells the Architect what
+  // already exists and must be preserved when planning a follow-up.
+  const previousSummary = getFinalResult(discussion.id)?.answer ?? "";
 
   const streamTurn = async (
     model: SelectedModel,
@@ -499,6 +553,7 @@ export async function runBuildDiscussion(
       readHopsLeft,
       runsLeft: runsLeftThisPhase(),
       userNotes: userNotesText(),
+      previousSummary: truncate(previousSummary, 6_000),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
     if (action.action === "read" && readHopsLeft > 0) {

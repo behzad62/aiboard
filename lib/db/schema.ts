@@ -105,6 +105,18 @@ export interface FinalResult {
   createdAt: string;
 }
 
+/**
+ * A file produced by a build, persisted per discussion so follow-up passes
+ * and resumes see everything already built (the in-memory virtual FS alone
+ * dies with the run).
+ */
+export interface BuildFileRecord {
+  discussionId: string;
+  path: string;
+  content: string;
+  updatedAt: string;
+}
+
 export type DiscussionStatus =
   | "pending"
   | "running"
