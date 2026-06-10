@@ -166,7 +166,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
         (Ollama, LM Studio) or a hosted server. For local Ollama, base URL{" "}
         <code className="rounded bg-muted px-1">http://localhost:11434/v1</code>{" "}
         and model{" "}
-        <code className="rounded bg-muted px-1">gemma3:4b</code>. Use the
+        <code className="rounded bg-muted px-1">gemma4:12b</code>. Use the
         Supported inputs toggles to declare which media types the model accepts.
       </div>
 
@@ -211,7 +211,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
                 onClick={() => testSaved(m.id)}
                 disabled={testingId === m.id}
               >
-                {testingId === m.id ? "Testing…" : "Test"}
+                {testingId === m.id ? "Testing..." : "Test connection"}
               </Button>
               <Button
                 variant="ghost"
@@ -250,7 +250,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
               id="custom-model"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="gemma3:4b"
+              placeholder="gemma4:12b"
             />
           </div>
         </div>

@@ -120,6 +120,11 @@ const VISION_PROMPT =
   "Look at the attached test image and reply with only 2 to 4 words describing its color and shape, for example 'red square'. Do not use a full sentence.";
 const TEXT_PROMPT =
   "Reply with one short sentence confirming this model test works.";
+// Generous ceiling so "thinking" models (e.g. local Gemma via Ollama, which
+// streams its reasoning before any visible content) have room to finish
+// reasoning AND emit an answer. Cloud models bill per token generated, so a high
+// cap costs nothing for their short replies.
+const TEST_MAX_TOKENS = 1024;
 
 export interface ModelTestResult {
   valid: boolean;
@@ -202,7 +207,7 @@ export async function validateProvider(input: {
         { role: "user", content: prompt },
       ],
       attachments,
-      maxTokens: 80,
+      maxTokens: TEST_MAX_TOKENS,
       temperature: 0.2,
     })
   );
