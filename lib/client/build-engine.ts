@@ -30,6 +30,7 @@ import {
   type ArchitectAction,
   type BuildTask,
   type PlanAction,
+  type ToolAction,
 } from "@/lib/orchestrator/build";
 import {
   getProjectHandle,
@@ -39,9 +40,11 @@ import {
   writeProjectFile,
 } from "./project-fs";
 import {
+  callMcpTool,
   checkRunner,
   formatCommandResult,
   listFilesViaRunner,
+  listMcpServers,
   readFileViaRunner,
   runCommand,
   searchViaRunner,
@@ -92,6 +95,8 @@ const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
 const RUNS_PER_PHASE = 4;
 const TOTAL_RUNS = 12;
 const SEARCHES_PER_PHASE = 4;
+const MCP_CALLS_PER_PHASE = 8;
+const TOTAL_MCP_CALLS = 24;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -207,6 +212,8 @@ export async function runBuildDiscussion(
   let runner: RunnerConfig | null = null;
   let allowAllCommands = discussion.runnerAccess === "full";
   let totalRuns = 0;
+  let mcpToolsDoc = "";
+  let totalMcpCalls = 0;
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -226,6 +233,33 @@ export async function runBuildDiscussion(
         diskTree = [...new Set([...diskTree, ...runnerTree])];
         diskGranted = true;
       }
+      // MCP bridge: tools from stdio MCP servers the runner spawned
+      // (e.g. Playwright to verify the build in a real browser).
+      const servers = (await listMcpServers(config)) ?? [];
+      const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
+      if (ready.length > 0) {
+        mcpToolsDoc = ready
+          .map(
+            (s) =>
+              `Server "${s.name}":\n${s.tools
+                .slice(0, 30)
+                .map((t) => `- ${t.name}: ${truncate(t.description ?? "", 160)}`)
+                .join("\n")}`
+          )
+          .join("\n");
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `MCP bridge connected: ${ready.map((s) => `${s.name} (${s.tools.length} tools)`).join(", ")}`,
+        });
+      }
+      for (const s of servers.filter((x) => x.status === "error")) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
+        });
+      }
     } else {
       emit({
         type: "diagnostic",
@@ -237,6 +271,67 @@ export async function runBuildDiscussion(
 
   const runsLeftThisPhase = (): number =>
     runner ? Math.min(RUNS_PER_PHASE, TOTAL_RUNS - totalRuns) : 0;
+
+  const mcpCallsLeftThisPhase = (): number =>
+    runner && mcpToolsDoc
+      ? Math.min(MCP_CALLS_PER_PHASE, TOTAL_MCP_CALLS - totalMcpCalls)
+      : 0;
+
+  /** Execute one MCP tool call (same approval flow as commands). */
+  const executeTool = async (action: ToolAction): Promise<string> => {
+    if (!runner) return "No runner is available.";
+    const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `${label}\nThe user DENIED this tool call. Continue without it.`;
+      }
+    }
+    totalMcpCalls += 1;
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `MCP tool: ${action.server}.${action.tool}`,
+    });
+    const startedAt = Date.now();
+    try {
+      const result = await callMcpTool(
+        runner,
+        action.server,
+        action.tool,
+        action.args ?? {}
+      );
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: result.isError ? 1 : 0,
+        durationMs: Date.now() - startedAt,
+        outputPreview: truncate(result.text.trim(), 400),
+      });
+      return `MCP ${action.server}.${action.tool} → ${result.isError ? "ERROR" : "ok"}\n${truncate(result.text, 8_000)}`;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "MCP call failed";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: Date.now() - startedAt,
+        outputPreview: message,
+      });
+      return `MCP ${action.server}.${action.tool} failed: ${message}`;
+    }
+  };
 
   /** Execute one Architect-requested command (with approval when required). */
   const executeRun = async (
@@ -614,6 +709,8 @@ export async function runBuildDiscussion(
       readHopsLeft,
       runsLeft: runsLeftThisPhase(),
       searchesLeft: planSearchesLeft,
+      mcpToolsDoc,
+      mcpCallsLeft: mcpCallsLeftThisPhase(),
       userNotes: userNotesText(),
       previousSummary: truncate(previousSummary, 6_000),
     });
@@ -621,6 +718,10 @@ export async function runBuildDiscussion(
     if (action.action === "search" && planSearchesLeft > 0) {
       planSearchesLeft -= 1;
       extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
+      continue;
+    }
+    if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
+      runFeedback += `\n\nTool result:\n${await executeTool(action)}`;
       continue;
     }
     if (action.action === "read" && readHopsLeft > 0) {
@@ -843,6 +944,8 @@ export async function runBuildDiscussion(
           readHopsLeft: reviewReadsLeft,
           runsLeft: runsLeftThisPhase(),
           searchesLeft: reviewSearchesLeft,
+          mcpToolsDoc,
+          mcpCallsLeft: mcpCallsLeftThisPhase(),
           userNotes: userNotesText(),
         }),
         `Architect is reviewing wave ${cycle}`
@@ -850,6 +953,10 @@ export async function runBuildDiscussion(
       if (action.action === "search" && reviewSearchesLeft > 0) {
         reviewSearchesLeft -= 1;
         extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
+        continue;
+      }
+      if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
+        reviewRunFeedback += `\n\nTool result:\n${await executeTool(action)}`;
         continue;
       }
       if (action.action === "read" && reviewReadsLeft > 0) {

@@ -9,6 +9,11 @@
  *
  * Usage:
  *   node scripts/runner.mjs <project-folder> [--port 8787] [--token <secret>]
+ *                           [--mcp "<name>=<command>"]...
+ *
+ * MCP bridge: each --mcp flag spawns a stdio MCP server and exposes its tools
+ * to the Architect (with the same per-call approval as commands), e.g.:
+ *   --mcp "playwright=npx @playwright/mcp@latest"
  *
  * Then paste the printed URL + token into the app (Build mode → Local runner).
  *
@@ -56,6 +61,20 @@ const token = flag("token") ?? randomBytes(12).toString("hex");
 if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
   console.error(`Not a folder: ${projectDir}`);
   process.exit(1);
+}
+
+// "<name>=<command>" specs from repeated --mcp flags.
+const mcpSpecs = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--mcp" && args[i + 1]) {
+    const spec = args[i + 1];
+    const eq = spec.indexOf("=");
+    if (eq > 0) {
+      mcpSpecs.push({ name: spec.slice(0, eq).trim(), command: spec.slice(eq + 1).trim() });
+    } else {
+      console.error(`Ignoring malformed --mcp spec (want name=command): ${spec}`);
+    }
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -217,6 +236,151 @@ function runCommand(command) {
   });
 }
 
+// ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
+const MCP_CALL_TIMEOUT_MS = 120 * 1000;
+const MCP_INIT_TIMEOUT_MS = 60 * 1000;
+
+class McpServer {
+  constructor(name, command) {
+    this.name = name;
+    this.command = command;
+    this.status = "starting"; // starting | ready | error
+    this.error = null;
+    this.tools = [];
+    this.pending = new Map();
+    this.nextId = 1;
+    this.buffer = "";
+
+    this.child = spawn(command, {
+      shell: true,
+      cwd: projectDir,
+      env: process.env,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    this.child.stdout.on("data", (chunk) => this.onData(chunk));
+    this.child.stderr.on("data", (chunk) => {
+      const line = chunk.toString().trim();
+      if (line) console.log(`[mcp:${name}] ${line.slice(0, 300)}`);
+    });
+    this.child.on("close", (code) => {
+      this.status = "error";
+      this.error = `MCP server exited (code ${code})`;
+      for (const [, p] of this.pending) p.reject(new Error(this.error));
+      this.pending.clear();
+    });
+    this.child.on("error", (err) => {
+      this.status = "error";
+      this.error = String(err);
+    });
+  }
+
+  onData(chunk) {
+    this.buffer += chunk.toString();
+    for (;;) {
+      const nl = this.buffer.indexOf("\n");
+      if (nl < 0) break;
+      const line = this.buffer.slice(0, nl).trim();
+      this.buffer = this.buffer.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue; // non-JSON noise on stdout
+      }
+      if (msg.id != null && this.pending.has(msg.id)) {
+        const p = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) p.reject(new Error(msg.error.message ?? "MCP error"));
+        else p.resolve(msg.result);
+      }
+      // Server-initiated requests/notifications are ignored by this bridge.
+    }
+  }
+
+  send(msg) {
+    this.child.stdin.write(`${JSON.stringify(msg)}\n`);
+  }
+
+  request(method, params, timeoutMs) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`MCP request timed out: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
+      this.send({ jsonrpc: "2.0", id, method, params });
+    });
+  }
+
+  async init() {
+    try {
+      await this.request(
+        "initialize",
+        {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "ai-discussion-board-runner", version: String(VERSION) },
+        },
+        MCP_INIT_TIMEOUT_MS
+      );
+      this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      const listed = await this.request("tools/list", {}, MCP_INIT_TIMEOUT_MS);
+      this.tools = Array.isArray(listed?.tools) ? listed.tools : [];
+      this.status = "ready";
+      console.log(`[mcp:${this.name}] ready — ${this.tools.length} tool(s)`);
+    } catch (err) {
+      this.status = "error";
+      this.error = err instanceof Error ? err.message : String(err);
+      console.error(`[mcp:${this.name}] failed to start: ${this.error}`);
+    }
+  }
+
+  async callTool(toolName, toolArgs) {
+    const result = await this.request(
+      "tools/call",
+      { name: toolName, arguments: toolArgs ?? {} },
+      MCP_CALL_TIMEOUT_MS
+    );
+    const content = Array.isArray(result?.content) ? result.content : [];
+    const text = content
+      .map((c) => (c?.type === "text" ? c.text : `[${c?.type ?? "unknown"} content]`))
+      .join("\n");
+    return { text: text.slice(0, 50_000), isError: !!result?.isError };
+  }
+
+  kill() {
+    try {
+      this.child.kill();
+    } catch {
+      // already gone
+    }
+  }
+}
+
+const mcpServers = new Map();
+for (const spec of mcpSpecs) {
+  const proc = new McpServer(spec.name, spec.command);
+  mcpServers.set(spec.name, proc);
+  void proc.init();
+}
+
+process.on("SIGINT", () => {
+  for (const [, s] of mcpServers) s.kill();
+  process.exit(0);
+});
+
 // ── Server ───────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
@@ -247,6 +411,53 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true, files: listProjectFiles() });
     } catch (err) {
       json(res, 500, { error: err instanceof Error ? err.message : "List failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/mcp/servers") {
+    json(res, 200, {
+      ok: true,
+      servers: [...mcpServers.values()].map((s) => ({
+        name: s.name,
+        status: s.status,
+        error: s.error,
+        tools: s.tools.map((t) => ({
+          name: t.name,
+          description: t.description ?? "",
+        })),
+      })),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/mcp/call") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const serverProc = mcpServers.get(String(body?.server ?? ""));
+    if (!serverProc) {
+      json(res, 404, { error: `Unknown MCP server: ${body?.server}` });
+      return;
+    }
+    if (serverProc.status !== "ready") {
+      json(res, 503, { error: serverProc.error ?? "MCP server is not ready" });
+      return;
+    }
+    if (typeof body?.tool !== "string" || !body.tool.trim()) {
+      json(res, 400, { error: "Missing tool name" });
+      return;
+    }
+    console.log(`[mcp:${serverProc.name}] ${new Date().toLocaleTimeString()}  call ${body.tool}`);
+    try {
+      const result = await serverProc.callTool(body.tool, body.args);
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      json(res, 500, { error: err instanceof Error ? err.message : "MCP call failed" });
     }
     return;
   }
@@ -332,6 +543,12 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`Project folder : ${projectDir}`);
   console.log(`URL            : http://127.0.0.1:${port}`);
   console.log(`Token          : ${token}`);
+  console.log("");
+  if (mcpServers.size > 0) {
+    console.log(`MCP servers    : ${[...mcpServers.keys()].join(", ")} (starting…)`);
+  } else {
+    console.log('MCP bridge     : none (add e.g. --mcp "playwright=npx @playwright/mcp@latest")');
+  }
   console.log("");
   console.log("Paste the URL and token into the app (Build mode → Local runner).");
   console.log("Every command the Architect runs is logged here. Ctrl+C to stop.");

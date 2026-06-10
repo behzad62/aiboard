@@ -129,6 +129,55 @@ export async function searchViaRunner(
   }
 }
 
+// ── MCP bridge (runner v2+ with --mcp flags) ─────────────────────────────────
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+}
+
+export interface McpServerInfo {
+  name: string;
+  status: "starting" | "ready" | "error";
+  error?: string | null;
+  tools: McpToolInfo[];
+}
+
+/** MCP servers the runner bridges. Null when unsupported/unreachable. */
+export async function listMcpServers(
+  config: RunnerConfig
+): Promise<McpServerInfo[] | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/mcp/servers`, {
+      headers: headers(config.token),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data.servers) ? (data.servers as McpServerInfo[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Call one MCP tool through the runner bridge. Throws on failure. */
+export async function callMcpTool(
+  config: RunnerConfig,
+  server: string,
+  tool: string,
+  args: unknown
+): Promise<{ text: string; isError: boolean }> {
+  const res = await fetch(`${config.url.replace(/\/$/, "")}/mcp/call`, {
+    method: "POST",
+    headers: headers(config.token),
+    body: JSON.stringify({ server, tool, args }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `MCP call failed (HTTP ${res.status})`);
+  }
+  return { text: data.text ?? "", isError: !!data.isError };
+}
+
 export async function runCommand(
   config: RunnerConfig,
   command: string

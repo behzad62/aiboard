@@ -82,12 +82,22 @@ export interface SearchAction {
   reason?: string;
 }
 
+/** Call an MCP tool exposed by the user's local runner bridge. */
+export interface ToolAction {
+  action: "tool";
+  server: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
   | PlanAction
   | ReviewAction
   | RunAction
-  | SearchAction;
+  | SearchAction
+  | ToolAction;
 
 /** The balanced top-level {...} starting exactly at `start`, or null. */
 function balancedObjectAt(text: string, start: number): string | null {
@@ -211,6 +221,15 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
         ) {
           return parsed as SearchAction;
         }
+        if (
+          parsed.action === "tool" &&
+          typeof (parsed as ToolAction).server === "string" &&
+          (parsed as ToolAction).server.trim() &&
+          typeof (parsed as ToolAction).tool === "string" &&
+          (parsed as ToolAction).tool.trim()
+        ) {
+          return parsed as ToolAction;
+        }
       }
     } catch {
       // try the next candidate
@@ -262,6 +281,16 @@ export const EDIT_BLOCK_INSTRUCTION = [
   "The SEARCH text must match the current file content verbatim. Multiple SEARCH/REPLACE sections are allowed in one block. Use full ```lang path=... blocks only for NEW files or complete rewrites.",
 ].join("\n");
 
+function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
+  if (!mcpToolsDoc?.trim() || !mcpCallsLeft || mcpCallsLeft <= 0) return "";
+  return [
+    "TOOL — MCP tools (via the user's local runner; e.g. drive a real browser to verify your build). To call one, respond with ONLY:",
+    '{"action":"tool","server":"<server>","tool":"<tool name>","args":{ /* per the tool\'s parameters */ },"reason":"why"}',
+    `The result comes back to you as text. ${mcpCallsLeft} tool call${mcpCallsLeft === 1 ? "" : "s"} left in this phase. The user may deny a call — respect that and continue. Available tools:`,
+    mcpToolsDoc,
+  ].join("\n");
+}
+
 function runToolDoc(runsLeft?: number): string {
   if (!runsLeft || runsLeft <= 0) return "";
   return [
@@ -280,6 +309,8 @@ export function buildArchitectPlanPrompt(input: {
   readHopsLeft: number;
   runsLeft?: number;
   searchesLeft?: number;
+  mcpToolsDoc?: string;
+  mcpCallsLeft?: number;
   userNotes?: string;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
@@ -306,6 +337,7 @@ export function buildArchitectPlanPrompt(input: {
     readOption,
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
+    mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
@@ -362,6 +394,8 @@ export function buildArchitectReviewPrompt(input: {
   readHopsLeft?: number;
   runsLeft?: number;
   searchesLeft?: number;
+  mcpToolsDoc?: string;
+  mcpCallsLeft?: number;
   userNotes?: string;
 }): string {
   return [
@@ -386,6 +420,7 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
+    mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     "End with ONE fenced json block:",
     "```json",
