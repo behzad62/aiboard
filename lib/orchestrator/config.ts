@@ -310,7 +310,7 @@ export function getModeInfo(mode: DiscussionMode): DiscussionModeInfo {
         label: "Build",
         summary:
           "The judge acts as Architect: it plans tasks, worker models implement them, and it reviews and fixes until the project is done.",
-        flow: "Architect plans tasks → workers implement each task with focused context → Architect reviews, fixes, and adds tasks → repeat until done, then writes the hand-off summary. Pick a project folder and files are written straight into it.",
+        flow: "Architect plans tasks → workers implement each task with focused context → Architect reviews, fixes, and adds tasks → repeat until done, then writes the hand-off summary. Connect the local runner (or pick a browser folder) and files are written straight into your project.",
         bestFor:
           "Best for building real projects: pair an expensive Architect (judge) with cheap workers, point it at a folder, and let the team iterate.",
       };

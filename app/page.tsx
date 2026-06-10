@@ -40,8 +40,8 @@ import {
 } from "@/lib/orchestrator/config";
 import { createDiscussion, ensureReady, loadDashboard } from "@/lib/client/api";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
-import { ProjectFolderPicker } from "@/components/ProjectFolderPicker";
-import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
+import { ProjectAccessSetup } from "@/components/ProjectAccessSetup";
+import type { RunnerSelection } from "@/components/RunnerSetup";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
@@ -318,10 +318,9 @@ export default function HomePage() {
 
             {mode === "build" && (
               <>
-                <ProjectFolderPicker onChange={setProjectFolderName} />
-                <RunnerSetup
-                  onChange={setRunner}
-                  pickedFolderName={projectFolderName}
+                <ProjectAccessSetup
+                  onFolderChange={setProjectFolderName}
+                  onRunnerChange={setRunner}
                 />
               </>
             )}
