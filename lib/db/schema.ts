@@ -75,6 +75,8 @@ export interface CustomModel {
     audio: boolean;
     video: boolean;
   };
+  lastValidationSucceeded?: boolean | null;
+  lastValidatedAt?: string | null;
   createdAt: string;
 }
 

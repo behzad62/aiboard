@@ -259,6 +259,8 @@ export interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities: { image: boolean; document: boolean; audio: boolean; video: boolean };
+  lastValidationSucceeded?: boolean | null;
+  lastValidatedAt?: string | null;
 }
 
 function redactCustom(m: CustomModel): CustomModelView {
@@ -269,6 +271,8 @@ function redactCustom(m: CustomModel): CustomModelView {
     model: m.model,
     hasKey: !!m.apiKey,
     capabilities: m.capabilities ?? { ...NO_CAPS },
+    lastValidationSucceeded: m.lastValidationSucceeded ?? null,
+    lastValidatedAt: m.lastValidatedAt ?? null,
   };
 }
 
@@ -331,7 +335,8 @@ export async function testCustomModel(input: {
           { role: "user", content: prompt },
         ],
         attachments,
-        maxTokens: 80,
+        // No token cap — local models are free, and "thinking" models need room
+        // to finish reasoning before they emit any content.
         temperature: 0.2,
         capabilities: { image: true, document: false, audio: false, video: false },
       },
@@ -342,15 +347,21 @@ export async function testCustomModel(input: {
   );
 }
 
-/** Test a saved custom model by id (uses its stored key/base URL). */
+/** Test a saved custom model by id (uses its stored key/base URL), and record
+ * the result so the list can show a "Connection verified" badge like providers. */
 export async function testSavedCustomModel(id: string): Promise<ModelTestResult> {
   const model = getCustomModelById(id);
   if (!model) return { valid: false, usedImage: false, error: "Model not found" };
-  return testCustomModel({
+  const result = await testCustomModel({
     baseURL: model.baseURL,
     model: model.model,
     apiKey: model.apiKey,
   });
+  storeUpdateCustomModel(id, {
+    lastValidationSucceeded: result.valid,
+    lastValidatedAt: new Date().toISOString(),
+  });
+  return result;
 }
 
 // ── Attachments ───────────────────────────────────────────────────────────────

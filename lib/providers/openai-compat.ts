@@ -148,11 +148,14 @@ export async function* streamOpenAICompatibleChat(
       : {};
 
   // Local OpenAI-compatible servers (Ollama, LM Studio) expect `max_tokens`,
-  // while OpenAI's newer models require `max_completion_tokens`.
+  // while OpenAI's newer models require `max_completion_tokens`. When no budget
+  // is given (e.g. a free local model), omit the cap entirely.
   const tokenField =
-    tokenParam === "max_tokens"
-      ? { max_tokens: params.maxTokens ?? 1500 }
-      : { max_completion_tokens: params.maxTokens ?? 1500 };
+    params.maxTokens == null
+      ? {}
+      : tokenParam === "max_tokens"
+        ? { max_tokens: params.maxTokens }
+        : { max_completion_tokens: params.maxTokens };
 
   // reasoning_effort only for OpenAI / OpenRouter — custom local endpoints
   // tend to reject unknown params. Cast keeps newer values (e.g. "xhigh") past

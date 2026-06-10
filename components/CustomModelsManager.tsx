@@ -31,6 +31,8 @@ interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities?: ModelCaps;
+  lastValidationSucceeded?: boolean | null;
+  lastValidatedAt?: string | null;
   createdAt?: string;
 }
 
@@ -143,6 +145,8 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
       }));
     } finally {
       setTestingId(null);
+      await load(); // refresh the Connection verified / failed badge
+      onChanged?.();
     }
   };
 
@@ -204,6 +208,21 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
                   })}
                 </div>
               </div>
+              <Badge
+                variant={
+                  m.lastValidationSucceeded == null
+                    ? "secondary"
+                    : m.lastValidationSucceeded
+                      ? "success"
+                      : "destructive"
+                }
+              >
+                {m.lastValidationSucceeded == null
+                  ? "Not tested"
+                  : m.lastValidationSucceeded
+                    ? "Connection verified"
+                    : "Last test failed"}
+              </Badge>
               {m.hasKey && <Badge variant="secondary">key saved</Badge>}
               <Button
                 variant="outline"
