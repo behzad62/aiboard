@@ -72,6 +72,54 @@ export function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
+// ── Transient-error retry ─────────────────────────────────────────────────────
+// Provider hiccups (503 high demand, 429 rate limits, network blips) shouldn't
+// kill a whole run. Retried with backoff — but only while NOTHING has been
+// streamed yet, so the UI never sees duplicated tokens.
+
+const TRANSIENT_ERROR =
+  /\b(408|409|429|500|502|503|504|529)\b|overloaded|rate.?limit|high demand|temporar|timeout|timed out|network|fetch failed|failed to fetch|econn|socket|unavailable|try again/i;
+
+function isTransientError(err: unknown): boolean {
+  return err instanceof Error && TRANSIENT_ERROR.test(err.message);
+}
+
+const RETRY_DELAYS_MS = [2_000, 6_000];
+
+/**
+ * Run `attempt` with retries on transient errors. `hasOutput` guards against
+ * retrying a stream that already emitted tokens (which would duplicate them).
+ */
+async function withTransientRetry<T>(
+  attempt: () => Promise<T>,
+  hasOutput: () => boolean,
+  label: string,
+  signal?: AbortSignal
+): Promise<T> {
+  for (let tryNo = 0; ; tryNo++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      if (
+        isAbortError(err) ||
+        hasOutput() ||
+        tryNo >= RETRY_DELAYS_MS.length ||
+        !isTransientError(err)
+      ) {
+        throw err;
+      }
+      console.warn(
+        `[engine] transient error from ${label} — retrying in ${RETRY_DELAYS_MS[tryNo] / 1000}s (${tryNo + 1}/${RETRY_DELAYS_MS.length}):`,
+        err instanceof Error ? err.message : err
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, RETRY_DELAYS_MS[tryNo])
+      );
+      if (signal?.aborted) throw abortError();
+    }
+  }
+}
+
 export async function collectStream(
   modelId: string,
   providerId: string,
@@ -100,25 +148,32 @@ export async function collectStream(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
     let customContent = "";
-    for await (const chunk of streamCustomChat(customModel, {
-      apiKey: "",
-      model: customModel.model,
-      messages,
-      attachments: customAttachments,
-      maxTokens,
-      temperature,
-      reasoningEffort,
-    })) {
-      if (signal?.aborted) throw abortError();
-      if (chunk.type === "token" && chunk.content) {
-        customContent += chunk.content;
-        onToken?.(chunk.content);
-      }
-      if (chunk.type === "error") {
-        throw new Error(chunk.error ?? "Stream error");
-      }
-    }
-    return customContent;
+    return withTransientRetry(
+      async () => {
+        for await (const chunk of streamCustomChat(customModel, {
+          apiKey: "",
+          model: customModel.model,
+          messages,
+          attachments: customAttachments,
+          maxTokens,
+          temperature,
+          reasoningEffort,
+        })) {
+          if (signal?.aborted) throw abortError();
+          if (chunk.type === "token" && chunk.content) {
+            customContent += chunk.content;
+            onToken?.(chunk.content);
+          }
+          if (chunk.type === "error") {
+            throw new Error(chunk.error ?? "Stream error");
+          }
+        }
+        return customContent;
+      },
+      () => customContent.length > 0,
+      modelId,
+      signal
+    );
   }
 
   const provider = getProvider(providerId);
@@ -133,25 +188,32 @@ export async function collectStream(
   });
 
   let content = "";
-  for await (const chunk of provider.streamChat({
-    apiKey,
-    model,
-    messages,
-    attachments: modelAttachments,
-    maxTokens,
-    temperature,
-    reasoningEffort,
-  })) {
-    if (signal?.aborted) throw abortError();
-    if (chunk.type === "token" && chunk.content) {
-      content += chunk.content;
-      onToken?.(chunk.content);
-    }
-    if (chunk.type === "error") {
-      throw new Error(chunk.error ?? "Stream error");
-    }
-  }
-  return content;
+  return withTransientRetry(
+    async () => {
+      for await (const chunk of provider.streamChat({
+        apiKey,
+        model,
+        messages,
+        attachments: modelAttachments,
+        maxTokens,
+        temperature,
+        reasoningEffort,
+      })) {
+        if (signal?.aborted) throw abortError();
+        if (chunk.type === "token" && chunk.content) {
+          content += chunk.content;
+          onToken?.(chunk.content);
+        }
+        if (chunk.type === "error") {
+          throw new Error(chunk.error ?? "Stream error");
+        }
+      }
+      return content;
+    },
+    () => content.length > 0,
+    modelId,
+    signal
+  );
 }
 
 function parseJsonResponse<T>(text: string): T | null {

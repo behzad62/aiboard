@@ -77,47 +77,95 @@ export interface RunAction {
 
 export type ArchitectAction = ReadAction | PlanAction | ReviewAction | RunAction;
 
-/** Extract the first balanced top-level {...} starting at each "{". */
-function firstBalancedObject(text: string): string | null {
-  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = start; i < text.length; i++) {
-      const ch = text[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escaped = inString;
-        continue;
-      }
-      if (ch === '"') inString = !inString;
-      if (inString) continue;
-      if (ch === "{") depth++;
-      if (ch === "}") {
-        depth--;
-        if (depth === 0) return text.slice(start, i + 1);
-      }
+/** The balanced top-level {...} starting exactly at `start`, or null. */
+function balancedObjectAt(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    if (inString) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
     }
   }
   return null;
 }
 
+/** Every top-level balanced {...} in the text, in document order (capped). */
+function balancedObjects(text: string, max = 20): string[] {
+  const found: string[] = [];
+  let start = text.indexOf("{");
+  while (start >= 0 && found.length < max) {
+    const obj = balancedObjectAt(text, start);
+    if (obj) {
+      found.push(obj);
+      start = text.indexOf("{", start + obj.length);
+    } else {
+      start = text.indexOf("{", start + 1);
+    }
+  }
+  return found;
+}
+
 /**
- * Parse the Architect's action from its (possibly chatty) output. Prefers a
- * fenced ```json block; falls back to the first balanced JSON object that has
- * a recognized "action". Returns null when nothing parseable is found.
+ * All fenced code blocks, scanned line by line so a closing fence can never be
+ * mistaken for an opening one — the failure a regex scan has when other code
+ * blocks precede the action block (it then misses the action entirely).
+ */
+function fencedBlocks(text: string): Array<{ info: string; body: string }> {
+  const lines = text.split("\n");
+  const blocks: Array<{ info: string; body: string }> = [];
+  let i = 0;
+  while (i < lines.length) {
+    const open = /^\s*(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+    if (!open) {
+      i += 1;
+      continue;
+    }
+    const closeRe = open[1][0] === "`" ? /^\s*`{3,}\s*$/ : /^\s*~{3,}\s*$/;
+    const body: string[] = [];
+    let j = i + 1;
+    while (j < lines.length && !closeRe.test(lines[j])) {
+      body.push(lines[j]);
+      j += 1;
+    }
+    blocks.push({ info: (open[2] ?? "").trim(), body: body.join("\n") });
+    i = j + 1;
+  }
+  return blocks;
+}
+
+/**
+ * Parse the Architect's action from its (possibly chatty) output. The prompts
+ * say "END with ONE fenced json block", so candidates are tried LAST first:
+ * json/unlabelled fenced blocks, then any balanced {...} in the text.
+ * Returns null when nothing parseable is found.
  */
 export function parseArchitectAction(text: string): ArchitectAction | null {
   const candidates: string[] = [];
-  const fenced = /```(?:json)?\s*\n([\s\S]*?)```/gi;
-  for (let m = fenced.exec(text); m; m = fenced.exec(text)) {
-    candidates.push(m[1]);
+  const blocks = fencedBlocks(text);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const lang = blocks[i].info.split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (lang === "" || lang === "json" || lang === "jsonc") {
+      candidates.push(blocks[i].body);
+    }
   }
-  const balanced = firstBalancedObject(text);
-  if (balanced) candidates.push(balanced);
+  const balanced = balancedObjects(text);
+  for (let i = balanced.length - 1; i >= 0; i--) {
+    candidates.push(balanced[i]);
+  }
 
   for (const candidate of candidates) {
     try {
@@ -254,9 +302,11 @@ export function buildWorkerTaskPrompt(input: {
 export function buildArchitectReviewPrompt(input: {
   request: string;
   treeText: string;
+  fileContext?: string;
   executedText: string;
   maxNewTasks: number;
   cyclesLeft: number;
+  readHopsLeft?: number;
   runsLeft?: number;
   userNotes?: string;
 }): string {
@@ -267,19 +317,25 @@ export function buildArchitectReviewPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    input.fileContext?.trim()
+      ? `\nFile contents you have already read — ground every decision in these; NEVER invent replacement content for an existing file:${input.fileContext}`
+      : "",
     userNotesSection(input.userNotes),
     "",
     "Work completed since your last review:",
     input.executedText,
     "",
     "Review each task's output. You can fix small problems YOURSELF by emitting corrected files as fenced blocks (```lang path=...) before your decision — your files overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    input.readHopsLeft && input.readHopsLeft > 0
+      ? `If you need to see an existing file's contents before deciding, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). Never guess at a file's contents — read it.`
+      : "",
     runToolDoc(input.runsLeft),
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":[],"dependsOn":[]}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[]}],"done":false,"notes":"updated conventions if any"}`,
     "```",
-    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files.`,
+    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files. Always list the existing files a new task builds on in its contextFiles.`,
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()
       ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'

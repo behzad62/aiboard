@@ -410,6 +410,9 @@ export async function runBuildDiscussion(
     });
     let action = parseArchitectAction(text);
     if (!action) {
+      // Don't lose files the Architect emitted in the unparseable attempt —
+      // the strict retry returns ONLY the json block, without them.
+      await writeEmittedFiles(text);
       text = await streamTurn(
         architect,
         `${prompt}\n\n${STRICT_RETRY_INSTRUCTION}`,
@@ -695,8 +698,10 @@ export async function runBuildDiscussion(
       message: `Architect is reviewing wave ${cycle}`,
     });
 
-    // The Architect may run commands (e.g. tests) before deciding the verdict.
+    // The Architect may read files or run commands (e.g. tests) before
+    // deciding the verdict.
     let reviewRunFeedback = "";
+    let reviewReadsLeft = 2;
     let action: ArchitectAction;
     let text: string;
     for (;;) {
@@ -705,14 +710,32 @@ export async function runBuildDiscussion(
         buildArchitectReviewPrompt({
           request: discussion.topic,
           treeText: treeText(),
+          // Everything read so far (plan-phase manifests + read hops) — without
+          // this the Architect forgets file contents between phases and starts
+          // inventing replacements for files it has already seen.
+          fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
           executedText: executedText + reviewRunFeedback,
           maxNewTasks: limits.tasksPerWave,
           cyclesLeft: limits.cycles - cycle,
+          readHopsLeft: reviewReadsLeft,
           runsLeft: runsLeftThisPhase(),
           userNotes: userNotesText(),
         }),
         `Architect is reviewing wave ${cycle}`
       ));
+      if (action.action === "read" && reviewReadsLeft > 0) {
+        reviewReadsLeft -= 1;
+        const chunks: string[] = [];
+        for (const path of action.paths.slice(0, 8)) {
+          const content = await readFile(path);
+          chunks.push(
+            `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
+          );
+        }
+        // Accumulate so later cycles and the next reviews keep what was read.
+        extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
+        continue;
+      }
       if (action.action === "run" && runsLeftThisPhase() > 0) {
         reviewRunFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
         continue;
@@ -734,6 +757,13 @@ export async function runBuildDiscussion(
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       } else {
         task.status = "fixing";
+        // The fixing worker must see the files it wrote last time.
+        const prior = executed.find((e) => e.task.id === task.id);
+        if (prior && prior.files.length > 0) {
+          task.contextFiles = [
+            ...new Set([...task.contextFiles, ...prior.files]),
+          ].slice(0, MAX_CONTEXT_FILES);
+        }
         task.instructions = `${task.instructions}\n\nFIX (from the Architect's review): ${result.fixInstructions ?? "address the review feedback"}`;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
       }
