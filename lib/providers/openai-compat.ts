@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import crypto from "crypto";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type { ChatParams } from "./base";
@@ -9,6 +8,21 @@ import { formatModelId } from "./base";
 import type { StreamChunk } from "./base";
 import { openAIReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
+
+// Non-cryptographic stable hash (browser-safe — avoids Node's crypto module).
+// Only used to derive a stable OpenAI prompt_cache_key string.
+function stableHash(input: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0xcbf29ce4;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+  }
+  return (
+    h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0")
+  ).slice(0, 24);
+}
 
 function extractCacheableTextPrefix(text: string): string {
   const markerIndex = text.indexOf(DISCUSSION_TRANSCRIPT_MARKER);
@@ -43,16 +57,14 @@ function buildOpenAIPromptCacheKey(
   const attachmentSignature = (params.attachments ?? [])
     .map((attachment) => `${attachment.id}:${attachment.mimeType}:${attachment.category}`)
     .join("|");
-  const hash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({
+  const hash = stableHash(
+    JSON.stringify({
       providerId,
       model: params.model,
       stableMessages,
       attachmentSignature,
-    }))
-    .digest("hex")
-    .slice(0, 24);
+    })
+  );
 
   return `aidb:${providerId}:${params.model}:${hash}`;
 }

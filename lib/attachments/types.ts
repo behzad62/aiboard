@@ -11,7 +11,10 @@ export interface AttachmentRecord {
   category: AttachmentCategory;
   size: number;
   textContent?: string;
-  storagePath: string;
+  /** Server representation: path to the file on disk. */
+  storagePath?: string;
+  /** Client representation: base64 of the file (for non-text attachments). */
+  base64Data?: string;
   createdAt: string;
 }
 

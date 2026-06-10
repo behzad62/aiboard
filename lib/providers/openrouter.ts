@@ -9,6 +9,7 @@ function createOpenRouterClient(apiKey: string) {
   return new OpenAI({
     apiKey,
     baseURL: OPENROUTER_BASE_URL,
+    dangerouslyAllowBrowser: true,
     defaultHeaders: {
       "HTTP-Referer": process.env.APP_URL ?? "http://localhost:3000",
       "X-Title": "AI Discussion Board",

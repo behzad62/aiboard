@@ -124,7 +124,7 @@ export const anthropicProvider: AIProvider = {
 
   async validateApiKey(apiKey: string) {
     try {
-      const client = new Anthropic({ apiKey });
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
       await client.messages.create({
         model: getValidationModelId("anthropic"),
         max_tokens: 16,
@@ -140,7 +140,10 @@ export const anthropicProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
-    const client = new Anthropic({ apiKey: params.apiKey });
+    const client = new Anthropic({
+      apiKey: params.apiKey,
+      dangerouslyAllowBrowser: true,
+    });
     const caps = getModelCapabilities(formatModelId("anthropic", params.model));
     const systemMessage = params.messages.find((m) => m.role === "system");
     const userMessages = params.messages.filter((m) => m.role !== "system");

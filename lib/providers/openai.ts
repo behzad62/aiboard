@@ -15,7 +15,7 @@ export const openaiProvider: AIProvider = {
 
   async validateApiKey(apiKey: string) {
     try {
-      const client = new OpenAI({ apiKey });
+      const client = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
       await client.models.list();
       return true;
     } catch {
@@ -24,7 +24,10 @@ export const openaiProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = new OpenAI({ apiKey: params.apiKey });
+    const client = new OpenAI({
+      apiKey: params.apiKey,
+      dangerouslyAllowBrowser: true,
+    });
     yield* streamOpenAICompatibleChat(client, params, "openai", "OpenAI");
   },
 };

@@ -110,7 +110,11 @@ export function loadAttachmentPayloads(ids: string[]): AttachmentPayload[] {
       textContent: record.textContent,
     };
 
-    if (record.category !== "text_inline" && fs.existsSync(record.storagePath)) {
+    if (
+      record.category !== "text_inline" &&
+      record.storagePath &&
+      fs.existsSync(record.storagePath)
+    ) {
       payload.base64Data = fs.readFileSync(record.storagePath).toString("base64");
     }
 

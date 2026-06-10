@@ -9,7 +9,11 @@ export async function GET(
   const { id } = await params;
   const attachment = getAttachment(id);
 
-  if (!attachment || !fs.existsSync(attachment.storagePath)) {
+  if (
+    !attachment ||
+    !attachment.storagePath ||
+    !fs.existsSync(attachment.storagePath)
+  ) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
