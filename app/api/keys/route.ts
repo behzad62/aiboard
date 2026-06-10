@@ -7,6 +7,9 @@ import { getAllProviders } from "@/lib/providers";
 
 import { PROVIDER_IDS } from "@/lib/providers/constants";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const keySchema = z.object({
   providerId: z.enum(PROVIDER_IDS),
   apiKey: z.string().min(10).optional(),
@@ -16,8 +19,24 @@ const keySchema = z.object({
 
 const settingsSchema = z.object({
   defaultEffort: z.enum(["low", "medium", "high"]).optional(),
-  defaultMode: z.enum(["panel", "debate", "specialist"]).optional(),
+  defaultMode: z.enum(["panel", "debate", "specialist", "build"]).optional(),
   judgeModelId: z.string().optional(),
+  defaultVerbosity: z
+    .enum(["brief", "balanced", "comprehensive", "exhaustive"])
+    .optional(),
+  defaultStyleNote: z.string().max(2000).optional(),
+  defaultReasoningEffort: z
+    .enum(["default", "low", "medium", "high", "max"])
+    .optional(),
+});
+
+const pricingOverrideSchema = z.object({
+  type: z.literal("pricing_override"),
+  fullModelId: z.string().min(1),
+  inputUsdPer1M: z.number().nonnegative().optional(),
+  outputUsdPer1M: z.number().nonnegative().optional(),
+  cachedInputUsdPer1M: z.number().nonnegative().nullable().optional(),
+  clear: z.boolean().optional(),
 });
 
 export async function GET() {
@@ -33,6 +52,8 @@ export async function GET() {
       keyHint: saved?.keyHint,
       defaultModel: saved?.defaultModel,
       enabled: saved?.enabled ?? false,
+      lastValidationSucceeded: saved?.lastValidationSucceeded ?? null,
+      lastValidatedAt: saved?.lastValidatedAt ?? null,
     };
   });
 
@@ -49,6 +70,42 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Invalid settings" }, { status: 400 });
       }
       getDb().updateUserSettings(parsed.data);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.type === "pricing_override") {
+      const parsed = pricingOverrideSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "Invalid pricing override" }, { status: 400 });
+      }
+
+      const settings = getUserSettings();
+      const nextOverrides = {
+        ...(settings.modelPricingOverrides ?? {}),
+      };
+
+      if (parsed.data.clear) {
+        delete nextOverrides[parsed.data.fullModelId];
+      } else {
+        if (
+          parsed.data.inputUsdPer1M === undefined ||
+          parsed.data.outputUsdPer1M === undefined
+        ) {
+          return NextResponse.json(
+            { error: "Input and output pricing are required" },
+            { status: 400 }
+          );
+        }
+
+        nextOverrides[parsed.data.fullModelId] = {
+          inputUsdPer1M: parsed.data.inputUsdPer1M,
+          outputUsdPer1M: parsed.data.outputUsdPer1M,
+          cachedInputUsdPer1M: parsed.data.cachedInputUsdPer1M ?? null,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      getDb().updateUserSettings({ modelPricingOverrides: nextOverrides });
       return NextResponse.json({ ok: true });
     }
 
@@ -75,6 +132,8 @@ export async function POST(request: Request) {
               iv: payload.iv,
               authTag: payload.authTag,
               keyHint: maskApiKey(apiKey!),
+              lastValidationSucceeded: null,
+              lastValidatedAt: null,
             }
           : {}),
         defaultModel: defaultModel ?? existing.defaultModel,
@@ -90,6 +149,8 @@ export async function POST(request: Request) {
         defaultModel: defaultModel ?? null,
         enabled: enabled ?? true,
         keyHint: maskApiKey(apiKey),
+        lastValidationSucceeded: null,
+        lastValidatedAt: null,
         updatedAt: now,
       });
     }

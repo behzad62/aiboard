@@ -34,6 +34,8 @@ A local-first web app where multiple AI models (OpenAI, Anthropic, Google Gemini
    cp .env.example .env.local
    ```
 
+   The template also sets `NEXT_TELEMETRY_DISABLED=1`, which opts this app out of Next.js telemetry.
+
 3. **Run the dev server**
 
    ```bash
@@ -90,6 +92,10 @@ data/                 # Local data store (created at runtime)
 - API keys are encrypted at rest and never returned to the browser after saving
 - Set a strong `ENCRYPTION_SECRET` in production
 - The app runs locally by default; your keys stay on your machine
+
+## Telemetry
+
+- Next.js telemetry is disabled for this project via `NEXT_TELEMETRY_DISABLED=1`
 
 ## License
 

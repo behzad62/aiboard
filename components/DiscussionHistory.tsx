@@ -1,12 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import type { Discussion } from "@/lib/db/schema";
+import { Trash2 } from "lucide-react";
 
 interface DiscussionHistoryProps {
   discussions: Discussion[];
+  onDeleted?: (id: string) => void;
 }
 
 function statusVariant(status: string) {
@@ -22,29 +25,56 @@ function statusVariant(status: string) {
   }
 }
 
-export function DiscussionHistory({ discussions }: DiscussionHistoryProps) {
+export function DiscussionHistory({
+  discussions,
+  onDeleted,
+}: DiscussionHistoryProps) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const remove = async (d: Discussion) => {
+    if (!window.confirm(`Delete this discussion?\n\n"${d.topic.slice(0, 100)}"`)) {
+      return;
+    }
+    setDeletingId(d.id);
+    try {
+      await fetch(`/api/discussions/${d.id}`, { method: "DELETE" });
+      onDeleted?.(d.id);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (discussions.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">No discussions yet.</p>
-    );
+    return <p className="text-sm text-muted-foreground">No discussions yet.</p>;
   }
 
   return (
     <div className="space-y-2">
       {discussions.map((d) => (
-        <Link
+        <div
           key={d.id}
-          href={`/discussion/${d.id}`}
-          className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-accent"
+          className="flex items-center justify-between gap-2 rounded-lg border p-4 transition-colors hover:bg-accent"
         >
-          <div className="min-w-0 flex-1 pr-4">
+          <Link href={`/discussion/${d.id}`} className="min-w-0 flex-1">
             <p className="truncate font-medium">{d.topic}</p>
             <p className="text-xs text-muted-foreground">
               {formatDate(d.createdAt)} · {d.mode} · {d.effort}
             </p>
+          </Link>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Badge variant={statusVariant(d.status)}>{d.status}</Badge>
+            <button
+              type="button"
+              onClick={() => remove(d)}
+              disabled={deletingId === d.id}
+              title="Delete discussion"
+              aria-label="Delete discussion"
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
-          <Badge variant={statusVariant(d.status)}>{d.status}</Badge>
-        </Link>
+        </div>
       ))}
     </div>
   );

@@ -1,22 +1,39 @@
 import { v4 as uuidv4 } from "uuid";
-import type { DiscussionMode, EffortLevel } from "../db/schema";
+import type {
+  DiscussionMode,
+  EffortLevel,
+  ReasoningEffort,
+  Verbosity,
+} from "../db/schema";
 import { getDb, getDiscussionById } from "../db";
 import {
   getDecryptedApiKey,
   getProvider,
 } from "../providers";
 import {
+  CUSTOM_PROVIDER_ID,
+  getCustomModelByFullId,
+  streamCustomChat,
+} from "../providers/custom";
+import {
   parseModelId,
   type ChatMessage,
   type SelectedModel,
 } from "../providers/base";
-import { EFFORT_CONFIG } from "./config";
+import {
+  BUILD_INTEGRATOR_MIN_TOKENS,
+  BUILD_ROUND_MIN_TOKENS,
+  EFFORT_CONFIG,
+} from "./config";
+import { extractJudgeResult } from "./parse";
 import {
   buildConvergencePrompt,
+  buildIntegratorPrompt,
   buildJudgePrompt,
   buildRoundSystemPrompt,
   buildTranscriptFromMessages,
   buildUserPrompt,
+  buildVerbosityInstruction,
 } from "./prompts";
 import { loadAttachmentPayloads } from "../attachments/storage";
 import type { AttachmentPayload } from "../attachments/types";
@@ -25,6 +42,24 @@ import { modelSupportsInputTypes } from "../providers/capabilities";
 
 export type OrchestratorEvent =
   | { type: "status"; status: string; round?: number; maxRounds?: number }
+  | {
+      type: "diagnostic";
+      phase:
+        | "initializing"
+        | "round_preparing"
+        | "model_connecting"
+        | "model_streaming"
+        | "model_completed"
+        | "model_failed"
+        | "convergence_voting"
+        | "judging"
+        | "finished";
+      message: string;
+      modelId?: string;
+      modelName?: string;
+      providerId?: string;
+      round?: number;
+    }
   | { type: "message_start"; messageId: string; modelId: string; modelName: string; round: number; role: string }
   | { type: "message_token"; messageId: string; token: string }
   | { type: "message_complete"; messageId: string; content: string }
@@ -48,9 +83,48 @@ async function collectStream(
   messages: ChatMessage[],
   maxTokens: number,
   temperature: number,
+  reasoningEffort: ReasoningEffort,
   attachments: AttachmentPayload[],
   onToken?: (token: string) => void
 ): Promise<string> {
+  // Custom OpenAI-compatible endpoints stream via their own client (custom
+  // baseURL + optional key). Forward only the media types the user declared the
+  // model supports (text_inline already lives in the prompt).
+  if (providerId === CUSTOM_PROVIDER_ID) {
+    const customModel = getCustomModelByFullId(modelId);
+    if (!customModel) {
+      throw new Error("Custom model not found");
+    }
+    const customCaps = customModel.capabilities ?? {
+      image: false,
+      document: false,
+      audio: false,
+      video: false,
+    };
+    const customAttachments = attachments.filter(
+      (a) => a.category !== "text_inline" && customCaps[a.category]
+    );
+    let customContent = "";
+    for await (const chunk of streamCustomChat(customModel, {
+      apiKey: "",
+      model: customModel.model,
+      messages,
+      attachments: customAttachments,
+      maxTokens,
+      temperature,
+      reasoningEffort,
+    })) {
+      if (chunk.type === "token" && chunk.content) {
+        customContent += chunk.content;
+        onToken?.(chunk.content);
+      }
+      if (chunk.type === "error") {
+        throw new Error(chunk.error ?? "Stream error");
+      }
+    }
+    return customContent;
+  }
+
   const provider = getProvider(providerId);
   const apiKey = getDecryptedApiKey(providerId);
   if (!provider || !apiKey) {
@@ -70,6 +144,7 @@ async function collectStream(
     attachments: modelAttachments,
     maxTokens,
     temperature,
+    reasoningEffort,
   })) {
     if (chunk.type === "token" && chunk.content) {
       content += chunk.content;
@@ -106,6 +181,14 @@ function wordOverlapSimilarity(a: string, b: string): number {
 function resolveModels(modelIds: string[]): SelectedModel[] {
   return modelIds.map((fullId) => {
     const { providerId, model } = parseModelId(fullId);
+    if (providerId === CUSTOM_PROVIDER_ID) {
+      const customModel = getCustomModelByFullId(fullId);
+      return {
+        modelId: fullId,
+        providerId,
+        displayName: customModel?.label ?? model,
+      };
+    }
     const provider = getProvider(providerId);
     const modelInfo = provider?.listModels().find((m) => m.id === model);
     return {
@@ -139,9 +222,33 @@ export async function runDiscussion(
     const effort = discussion.effort as EffortLevel;
     const mode = discussion.mode as DiscussionMode;
     const config = EFFORT_CONFIG[effort];
+    const verbosity = (discussion.verbosity ?? "balanced") as Verbosity;
+    const verbosityInstruction = buildVerbosityInstruction(
+      verbosity,
+      discussion.styleNote
+    );
+    const reasoningEffort = (discussion.reasoningEffort ??
+      "default") as ReasoningEffort;
+    // Generous ceilings only; conciseness is handled in the prompt. Build mode
+    // emits multi-file code, so it gets extra headroom.
+    const roundMaxTokens =
+      mode === "build"
+        ? Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS)
+        : config.maxTokens;
+    const finalMaxTokens =
+      mode === "build"
+        ? Math.max(config.judgeMaxTokens, BUILD_INTEGRATOR_MIN_TOKENS)
+        : config.judgeMaxTokens;
+    const skipConvergenceVote = config.skipConvergenceVote || mode === "build";
     const modelNames = Object.fromEntries(
       models.map((m) => [m.modelId, m.displayName])
     );
+
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `Starting discussion with ${models.length} model${models.length === 1 ? "" : "s"}`,
+    });
 
     const attachmentIds: string[] = discussion.attachmentIds
       ? JSON.parse(discussion.attachmentIds)
@@ -177,6 +284,13 @@ export async function runDiscussion(
     for (let round = 1; round <= config.maxRounds; round++) {
       if (shouldStopEarly) break;
 
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        round,
+        message: `Preparing round ${round} of ${config.maxRounds}`,
+      });
+
       db.updateDiscussion(discussionId, {
         currentRound: round,
         updatedAt: new Date().toISOString(),
@@ -189,96 +303,136 @@ export async function runDiscussion(
         maxRounds: config.maxRounds,
       });
 
-      const transcript = buildTranscriptFromMessages(allMessages, modelNames);
       const leadIndex = (round - 1) % models.length;
       const currentRoundTexts: string[] = [];
 
-      await Promise.all(
-        models.map(async (model, index) => {
-          const isSpecialistReviewer =
-            mode === "specialist" && index !== leadIndex && round > 1;
-          const isSpecialistLead =
-            mode === "specialist" && index === leadIndex;
+      // Sequential within the round: each model sees what earlier speakers said
+      // THIS round (the transcript is rebuilt before each turn), so the
+      // discussion actually builds on itself instead of every model answering
+      // the same frozen transcript in parallel.
+      for (let index = 0; index < models.length; index++) {
+        const model = models[index];
 
-          const systemPrompt = buildRoundSystemPrompt(
-            mode,
-            round,
-            config.maxRounds,
-            models,
-            mode === "specialist" ? leadIndex : undefined
-          );
+        // Specialist round 1: only the lead drafts. Afterwards the lead revises
+        // and everyone else reviews, so all models participate.
+        if (mode === "specialist" && round === 1 && index !== leadIndex) {
+          continue;
+        }
 
-          if (mode === "specialist" && round === 1 && index !== leadIndex) {
-            return;
-          }
-          if (mode === "specialist" && round > 1 && !isSpecialistLead && !isSpecialistReviewer) {
-            return;
-          }
+        const transcript = buildTranscriptFromMessages(allMessages, modelNames);
+        const systemPrompt = buildRoundSystemPrompt(
+          mode,
+          round,
+          config.maxRounds,
+          models,
+          index,
+          leadIndex,
+          verbosityInstruction
+        );
 
-          const messageId = uuidv4();
+        const messageId = uuidv4();
+        emit({
+          type: "message_start",
+          messageId,
+          modelId: model.modelId,
+          modelName: model.displayName,
+          round,
+          role: "assistant",
+        });
+
+        const { providerId, model: modelName } = parseModelId(model.modelId);
+        emit({
+          type: "diagnostic",
+          phase: "model_connecting",
+          round,
+          modelId: model.modelId,
+          modelName: model.displayName,
+          providerId,
+          message: `Connecting to ${model.displayName} via ${providerId}`,
+        });
+
+        const messages: ChatMessage[] = [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: buildUserPrompt(
+              discussion.topic,
+              transcript,
+              inlineAttachmentText
+            ),
+          },
+        ];
+
+        const roundAttachments = round === 1 ? allAttachments : [];
+
+        try {
           emit({
-            type: "message_start",
-            messageId,
+            type: "diagnostic",
+            phase: "model_streaming",
+            round,
             modelId: model.modelId,
             modelName: model.displayName,
-            round,
-            role: "assistant",
+            providerId,
+            message: `${model.displayName} is generating a response`,
           });
 
-          const { providerId, model: modelName } = parseModelId(model.modelId);
-          const messages: ChatMessage[] = [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: buildUserPrompt(
-                discussion.topic,
-                transcript,
-                inlineAttachmentText
-              ),
-            },
-          ];
+          const content = await collectStream(
+            model.modelId,
+            providerId,
+            modelName,
+            messages,
+            roundMaxTokens,
+            config.temperature,
+            reasoningEffort,
+            roundAttachments,
+            (token) => emit({ type: "message_token", messageId, token })
+          );
 
-          const roundAttachments = round === 1 ? allAttachments : [];
+          db.insertMessage({
+            id: messageId,
+            discussionId,
+            round,
+            modelId: model.modelId,
+            role: "assistant",
+            content,
+            createdAt: new Date().toISOString(),
+          });
 
-          try {
-            const content = await collectStream(
-              model.modelId,
-              providerId,
-              modelName,
-              messages,
-              config.maxTokens,
-              config.temperature,
-              roundAttachments,
-              (token) => emit({ type: "message_token", messageId, token })
-            );
+          allMessages.push({
+            id: messageId,
+            round,
+            modelId: model.modelId,
+            content,
+          });
+          currentRoundTexts.push(content);
 
-            db.insertMessage({
-              id: messageId,
-              discussionId,
-              round,
-              modelId: model.modelId,
-              role: "assistant",
-              content,
-              createdAt: new Date().toISOString(),
-            });
+          emit({
+            type: "diagnostic",
+            phase: "model_completed",
+            round,
+            modelId: model.modelId,
+            modelName: model.displayName,
+            providerId,
+            message: `${model.displayName} finished round ${round}`,
+          });
 
-            allMessages.push({
-              id: messageId,
-              round,
-              modelId: model.modelId,
-              content,
-            });
-            currentRoundTexts.push(content);
-
-            emit({ type: "message_complete", messageId, content });
-          } catch (err) {
-            emit({
-              type: "error",
-              message: `${model.displayName}: ${err instanceof Error ? err.message : "Failed"}`,
-            });
-          }
-        })
-      );
+          emit({ type: "message_complete", messageId, content });
+        } catch (err) {
+          emit({
+            type: "diagnostic",
+            phase: "model_failed",
+            round,
+            modelId: model.modelId,
+            modelName: model.displayName,
+            providerId,
+            message: `${model.displayName} failed: ${err instanceof Error ? err.message : "Failed"}`,
+          });
+          emit({
+            type: "error",
+            message: `${model.displayName}: ${err instanceof Error ? err.message : "Failed"}`,
+          });
+        }
+      }
 
       if (previousRoundTexts.length > 0 && currentRoundTexts.length > 0) {
         const prevCombined = previousRoundTexts.join(" ");
@@ -295,9 +449,16 @@ export async function runDiscussion(
       }
       previousRoundTexts = currentRoundTexts;
 
-      if (round >= 2 && !config.skipConvergenceVote && !shouldStopEarly) {
+      if (round >= 2 && !skipConvergenceVote && !shouldStopEarly) {
         const voteTranscript = buildTranscriptFromMessages(allMessages, modelNames);
         const scores: number[] = [];
+
+        emit({
+          type: "diagnostic",
+          phase: "convergence_voting",
+          round,
+          message: "Running convergence vote across participating models",
+        });
 
         for (const model of models) {
           const { providerId, model: modelName } = parseModelId(model.modelId);
@@ -319,6 +480,9 @@ export async function runDiscussion(
               ],
               200,
               0.2,
+              // A short 1-10 rating: keep reasoning low so it isn't consumed by
+              // hidden thinking, which would leave no room for the JSON answer.
+              "low",
               []
             );
             const parsed = parseJsonResponse<{ score: number; reason?: string }>(
@@ -347,7 +511,15 @@ export async function runDiscussion(
       }
     }
 
+    const isBuild = mode === "build";
     emit({ type: "status", status: "judging" });
+    emit({
+      type: "diagnostic",
+      phase: "judging",
+      message: isBuild
+        ? "Integrator is assembling the final project"
+        : "Judge model is synthesizing the final answer",
+    });
 
     const judgeFullId = discussion.judgeModelId ?? modelIds[0];
     const { providerId: judgeProviderId, model: judgeModel } =
@@ -361,28 +533,32 @@ export async function runDiscussion(
       [
         {
           role: "system",
-          content:
-            "You are the final judge. Synthesize the discussion into the best answer. Respond only with JSON.",
+          content: isBuild
+            ? "You are the integrator. Assemble the final, coherent project from the discussion. Output complete files plus build notes."
+            : "You are the final judge. Synthesize the discussion into the single best answer in Markdown.",
         },
         {
           role: "user",
-          content: buildJudgePrompt(discussion.topic, finalTranscript),
+          content: isBuild
+            ? buildIntegratorPrompt(
+                discussion.topic,
+                finalTranscript,
+                verbosityInstruction
+              )
+            : buildJudgePrompt(
+                discussion.topic,
+                finalTranscript,
+                verbosityInstruction
+              ),
         },
       ],
-      config.maxTokens,
+      finalMaxTokens,
       0.3,
+      reasoningEffort,
       allAttachments
     );
 
-    const parsed = parseJsonResponse<{
-      answer: string;
-      confidence: number;
-      dissent?: string[];
-    }>(judgeRaw);
-
-    const answer = parsed?.answer ?? judgeRaw;
-    const confidence = parsed?.confidence ?? 7;
-    const dissent = parsed?.dissent ?? [];
+    const { answer, confidence, dissent } = extractJudgeResult(judgeRaw);
 
     db.insertFinalResult({
       discussionId,
@@ -398,6 +574,11 @@ export async function runDiscussion(
     });
 
     emit({ type: "final_answer", answer, confidence, dissent });
+    emit({
+      type: "diagnostic",
+      phase: "finished",
+      message: "Discussion completed successfully",
+    });
     emit({ type: "complete" });
   } catch (err) {
     db.updateDiscussion(discussionId, {
@@ -407,6 +588,14 @@ export async function runDiscussion(
     emit({
       type: "error",
       message: err instanceof Error ? err.message : "Discussion failed",
+    });
+    emit({
+      type: "diagnostic",
+      phase: "model_failed",
+      message:
+        err instanceof Error
+          ? `Discussion failed: ${err.message}`
+          : "Discussion failed",
     });
   } finally {
     runningDiscussions.delete(discussionId);

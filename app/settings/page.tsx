@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
+import { PricingSettings } from "@/components/PricingSettings";
+import { CustomModelsManager } from "@/components/CustomModelsManager";
+import { StorageSettings } from "@/components/StorageSettings";
+import { DetailControl } from "@/components/DetailControl";
+import { ReasoningControl } from "@/components/ReasoningControl";
 import {
   Card,
   CardContent,
@@ -9,6 +14,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -17,9 +25,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { DiscussionMode, EffortLevel } from "@/lib/db/schema";
-import { getModeLabel } from "@/lib/orchestrator/config";
+import type {
+  DiscussionMode,
+  EffortLevel,
+  ReasoningEffort,
+  Verbosity,
+} from "@/lib/db/schema";
+import { getModeInfo, getModeLabel } from "@/lib/orchestrator/config";
 import type { ModelInfo } from "@/lib/providers/base";
+import type { ModelPricingOverride } from "@/lib/providers/pricing";
+import { AlertTriangle, CheckCircle2, KeyRound } from "lucide-react";
 
 interface ProviderConfig {
   providerId: string;
@@ -29,6 +44,8 @@ interface ProviderConfig {
   keyHint?: string | null;
   defaultModel?: string | null;
   enabled: boolean;
+  lastValidationSucceeded?: boolean | null;
+  lastValidatedAt?: string | null;
 }
 
 interface SettingsData {
@@ -37,39 +54,83 @@ interface SettingsData {
     defaultEffort: EffortLevel;
     defaultMode: DiscussionMode;
     judgeModelId?: string | null;
+    defaultVerbosity?: Verbosity;
+    defaultStyleNote?: string;
+    defaultReasoningEffort?: ReasoningEffort;
+    modelPricingOverrides?: Record<string, ModelPricingOverride>;
   };
 }
 
+const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
+
 export default function SettingsPage() {
   const [data, setData] = useState<SettingsData | null>(null);
+  const [draftEnabled, setDraftEnabled] = useState<Record<string, boolean>>({});
   const [defaultEffort, setDefaultEffort] = useState<EffortLevel>("medium");
   const [defaultMode, setDefaultMode] = useState<DiscussionMode>("panel");
   const [judgeModelId, setJudgeModelId] = useState("");
+  const [defaultVerbosity, setDefaultVerbosity] = useState<Verbosity>("balanced");
+  const [defaultStyleNote, setDefaultStyleNote] = useState("");
+  const [defaultReasoningEffort, setDefaultReasoningEffort] =
+    useState<ReasoningEffort>("default");
   const [saved, setSaved] = useState(false);
 
-  const load = () => {
-    fetch("/api/keys")
-      .then((r) => r.json())
-      .then((d: SettingsData) => {
-        setData(d);
-        setDefaultEffort(d.settings.defaultEffort);
-        setDefaultMode(d.settings.defaultMode);
-        setJudgeModelId(d.settings.judgeModelId ?? "");
-      });
+  const load = async () => {
+    const response = await fetch("/api/keys", { cache: "no-store" });
+    const nextData: SettingsData = await response.json();
+    setData(nextData);
+    setDraftEnabled(
+      Object.fromEntries(
+        nextData.providers.map((provider) => [provider.providerId, provider.enabled])
+      )
+    );
+    setDefaultEffort(nextData.settings.defaultEffort);
+    setDefaultMode(nextData.settings.defaultMode);
+    setJudgeModelId(nextData.settings.judgeModelId ?? "");
+    setDefaultVerbosity(nextData.settings.defaultVerbosity ?? "balanced");
+    setDefaultStyleNote(nextData.settings.defaultStyleNote ?? "");
+    setDefaultReasoningEffort(
+      nextData.settings.defaultReasoningEffort ?? "default"
+    );
   };
 
   useEffect(() => {
-    load();
+    load().catch(() => undefined);
   }, []);
 
-  const enabledModels = (data?.providers ?? [])
+  const effectiveProviders = (data?.providers ?? []).map((provider) => ({
+    ...provider,
+    enabled: draftEnabled[provider.providerId] ?? provider.enabled,
+  }));
+
+  const enabledModels = effectiveProviders
     .filter((p) => p.hasKey && p.enabled)
     .flatMap((p) =>
       p.models.map((m) => ({
         fullId: `${p.providerId}:${m.id}`,
         name: m.name,
+        providerName: p.name,
       }))
     );
+  const validatedModels = effectiveProviders
+    .filter((p) => p.hasKey && p.lastValidationSucceeded)
+    .flatMap((p) =>
+      p.models.map((m) => ({
+        fullId: `${p.providerId}:${m.id}`,
+        name: m.name,
+        providerName: p.name,
+      }))
+    );
+  const configuredProviders = effectiveProviders.filter((provider) => provider.hasKey);
+  const enabledProviders = configuredProviders.filter((provider) => provider.enabled);
+  const validatedProviders = configuredProviders.filter(
+    (provider) => provider.lastValidationSucceeded
+  );
+  const setupReady = enabledModels.length >= 2;
+
+  const handleDraftChange = (providerId: string, patch: { enabled: boolean }) => {
+    setDraftEnabled((prev) => ({ ...prev, [providerId]: patch.enabled }));
+  };
 
   const saveDefaults = async () => {
     await fetch("/api/keys", {
@@ -80,6 +141,9 @@ export default function SettingsPage() {
         defaultEffort,
         defaultMode,
         judgeModelId: judgeModelId || undefined,
+        defaultVerbosity,
+        defaultStyleNote,
+        defaultReasoningEffort,
       }),
     });
     setSaved(true);
@@ -87,102 +151,267 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8">
+    <div className="mx-auto max-w-4xl space-y-8">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight">
+          Settings
+        </h1>
         <p className="mt-2 text-muted-foreground">
-          Configure API keys for OpenAI, Anthropic, Google Gemini, and OpenRouter. Keys are encrypted locally.
+          Provider keys, model pricing, and the defaults used when you start a
+          new discussion. Keys are encrypted locally.
         </p>
       </div>
 
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">API Keys</h2>
-        {data?.providers.map((provider) => (
-          <ApiKeyForm key={provider.providerId} provider={provider} onSaved={load} />
-        ))}
-      </div>
+      <Tabs defaultValue="providers">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5">
+          <TabsTrigger value="providers">Providers</TabsTrigger>
+          <TabsTrigger value="pricing">Pricing</TabsTrigger>
+          <TabsTrigger value="defaults">Defaults</TabsTrigger>
+          <TabsTrigger value="storage">Storage</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
+        </TabsList>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Defaults</CardTitle>
-          <CardDescription>Pre-fill options when starting a new discussion</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Default effort</Label>
-            <Select
-              value={defaultEffort}
-              onValueChange={(v) => setDefaultEffort(v as EffortLevel)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        {/* ── Providers ─────────────────────────────────────────── */}
+        <TabsContent value="providers" className="space-y-6">
+          <Card className="border-primary/20 bg-gradient-to-br from-background via-background to-primary/5 shadow-sm">
+            <CardHeader className="pb-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={setupReady ? "success" : "warning"}>
+                  {setupReady ? "Discussion-ready" : "Setup incomplete"}
+                </Badge>
+                <Badge variant="secondary">
+                  Configured: {configuredProviders.length}
+                </Badge>
+                <Badge variant="secondary">Enabled: {enabledProviders.length}</Badge>
+                <Badge variant="secondary">
+                  Validated: {validatedProviders.length}
+                </Badge>
+              </div>
+              <CardTitle className="text-xl">Provider health</CardTitle>
+              <CardDescription>
+                You need at least two enabled models to run a multi-model
+                discussion cleanly.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border bg-background/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    API keys saved
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {configuredProviders.length}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Providers with stored credentials
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-background/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Enabled models
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {enabledModels.length}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Available on the home screen
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-background/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Tested models
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {validatedModels.length}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Models with a successful connection test
+                  </p>
+                </div>
+              </div>
 
-          <div className="space-y-2">
-            <Label>Default mode</Label>
-            <Select
-              value={defaultMode}
-              onValueChange={(v) => setDefaultMode(v as DiscussionMode)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="panel">{getModeLabel("panel")}</SelectItem>
-                <SelectItem value="debate">{getModeLabel("debate")}</SelectItem>
-                <SelectItem value="specialist">{getModeLabel("specialist")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              {setupReady ? (
+                <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    The app is ready to start discussions. Enabled switches save
+                    immediately; the Save button is only for key and
+                    default-model changes.
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    Add and enable at least two providers, then choose a default
+                    judge model in the Defaults tab.
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-          {enabledModels.length > 0 && (
-            <div className="space-y-2">
-              <Label>Default judge model</Label>
-              <Select value={judgeModelId} onValueChange={setJudgeModelId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select judge model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {enabledModels.map((m) => (
-                    <SelectItem key={m.fullId} value={m.fullId}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold">API keys</h2>
             </div>
-          )}
+            <Tabs
+              defaultValue={effectiveProviders[0]?.providerId ?? "custom"}
+            >
+              <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+                {effectiveProviders.map((provider) => (
+                  <TabsTrigger key={provider.providerId} value={provider.providerId}>
+                    {provider.name}
+                  </TabsTrigger>
+                ))}
+                <TabsTrigger value="custom">Custom</TabsTrigger>
+              </TabsList>
 
-          <button
-            type="button"
-            onClick={saveDefaults}
-            className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            {saved ? "Saved!" : "Save defaults"}
-          </button>
-        </CardContent>
-      </Card>
+              {effectiveProviders.map((provider) => (
+                <TabsContent key={provider.providerId} value={provider.providerId}>
+                  <ApiKeyForm
+                    provider={provider}
+                    onSaved={load}
+                    onDraftChange={handleDraftChange}
+                  />
+                </TabsContent>
+              ))}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Security</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>
-            API keys are encrypted at rest using AES-256-GCM. Set{" "}
-            <code className="rounded bg-muted px-1">ENCRYPTION_SECRET</code> in{" "}
-            <code className="rounded bg-muted px-1">.env.local</code> for production use.
-          </p>
-          <p>Keys are never sent back to the browser after saving.</p>
-        </CardContent>
-      </Card>
+              <TabsContent value="custom">
+                <CustomModelsManager onChanged={load} />
+              </TabsContent>
+            </Tabs>
+          </div>
+        </TabsContent>
+
+        {/* ── Pricing ───────────────────────────────────────────── */}
+        <TabsContent value="pricing">
+          <PricingSettings
+            providers={effectiveProviders}
+            overrides={data?.settings.modelPricingOverrides}
+            onSaved={load}
+          />
+        </TabsContent>
+
+        {/* ── Defaults ──────────────────────────────────────────── */}
+        <TabsContent value="defaults">
+          <Card>
+            <CardHeader>
+              <CardTitle>Discussion defaults</CardTitle>
+              <CardDescription>
+                Pre-fill these options when you start a new discussion.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Default effort</Label>
+                  <Select
+                    value={defaultEffort}
+                    onValueChange={(v) => setDefaultEffort(v as EffortLevel)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Default mode</Label>
+                  <Select
+                    value={defaultMode}
+                    onValueChange={(v) => setDefaultMode(v as DiscussionMode)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODES.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {getModeLabel(m)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <p className="font-medium">{getModeInfo(defaultMode).label}</p>
+                <p className="mt-1 text-muted-foreground">
+                  {getModeInfo(defaultMode).summary}
+                </p>
+              </div>
+
+              {enabledModels.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Default judge model</Label>
+                  <Select value={judgeModelId} onValueChange={setJudgeModelId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select judge model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {enabledModels.map((m) => (
+                        <SelectItem key={m.fullId} value={m.fullId}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="space-y-5 border-t pt-5">
+                <DetailControl
+                  verbosity={defaultVerbosity}
+                  onVerbosityChange={setDefaultVerbosity}
+                  styleNote={defaultStyleNote}
+                  onStyleNoteChange={setDefaultStyleNote}
+                  idPrefix="default"
+                />
+                <ReasoningControl
+                  value={defaultReasoningEffort}
+                  onChange={setDefaultReasoningEffort}
+                />
+              </div>
+
+              <Button type="button" onClick={saveDefaults}>
+                {saved ? "Saved!" : "Save defaults"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Storage ───────────────────────────────────────────── */}
+        <TabsContent value="storage">
+          <StorageSettings />
+        </TabsContent>
+
+        {/* ── Security ──────────────────────────────────────────── */}
+        <TabsContent value="security">
+          <Card>
+            <CardHeader>
+              <CardTitle>Security</CardTitle>
+              <CardDescription>How your credentials are handled.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                API keys are encrypted at rest using AES-256-GCM. Set{" "}
+                <code className="rounded bg-muted px-1">ENCRYPTION_SECRET</code> in{" "}
+                <code className="rounded bg-muted px-1">.env.local</code> for
+                production use.
+              </p>
+              <p>Keys are never sent back to the browser after saving.</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

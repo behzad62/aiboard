@@ -33,6 +33,28 @@ export function modelSupportsInputTypes(
   return required.every((type) => caps[type]);
 }
 
+/**
+ * Capability check against an explicit capabilities object. Used for custom
+ * models, whose capabilities live on the model record / ModelInfo rather than
+ * the static catalog registry.
+ */
+export function supportsInputTypes(
+  caps: ModelCapabilities | undefined,
+  required: CapabilityInputType[]
+): boolean {
+  if (required.length === 0) return true;
+  if (!caps) return false;
+  return required.every((type) => caps[type]);
+}
+
+export function unsupportedInputTypes(
+  caps: ModelCapabilities | undefined,
+  required: CapabilityInputType[]
+): CapabilityInputType[] {
+  const resolved = caps ?? DEFAULT_CAPABILITIES;
+  return required.filter((type) => !resolved[type]);
+}
+
 export function getUnsupportedTypes(
   fullModelId: string,
   required: CapabilityInputType[]

@@ -1,10 +1,25 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
 import { MessageSquare, Settings } from "lucide-react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+// Applies the saved/preferred theme before paint to avoid a flash of the wrong
+// theme on load.
+const themeScript = `(function(){try{var t=localStorage.getItem('theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AI Discussion Board",
@@ -17,16 +32,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
+    <html lang="en" suppressHydrationWarning>
+      <body
+        className={`${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable} ${inter.className}`}
+      >
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <div className="min-h-screen bg-background">
-          <header className="border-b">
+          <header className="border-b bg-background">
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
               <Link href="/" className="flex items-center gap-2 font-semibold">
                 <MessageSquare className="h-5 w-5 text-primary" />
                 AI Discussion Board
               </Link>
-              <nav>
+              <nav className="flex items-center gap-1">
+                <ThemeToggle />
                 <Link
                   href="/settings"
                   className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

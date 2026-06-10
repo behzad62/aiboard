@@ -3,29 +3,62 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { getAttachments } from "@/lib/attachments/storage";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
-import { getDb, listDiscussions, getUserSettings } from "@/lib/db";
+import { getDb, getProviderKeys, listDiscussions, getUserSettings } from "@/lib/db";
 import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
 import type { DiscussionMode, EffortLevel } from "@/lib/db/schema";
 import { getEnabledModels } from "@/lib/providers";
-import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
+import { supportsInputTypes } from "@/lib/providers/capabilities";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const createSchema = z.object({
   topic: z.string().min(10).max(10000),
-  mode: z.enum(["panel", "debate", "specialist"]),
+  mode: z.enum(["panel", "debate", "specialist", "build"]),
   effort: z.enum(["low", "medium", "high"]),
   modelIds: z.array(z.string()).min(2, "Select at least 2 models"),
   judgeModelId: z.string().optional(),
   attachmentIds: z.array(z.string()).optional(),
+  verbosity: z
+    .enum(["brief", "balanced", "comprehensive", "exhaustive"])
+    .optional(),
+  styleNote: z.string().max(2000).optional(),
+  reasoningEffort: z
+    .enum(["default", "low", "medium", "high", "max"])
+    .optional(),
 });
 
 export async function GET() {
   const discussions = listDiscussions();
   const settings = getUserSettings();
   const enabledModels = getEnabledModels();
+  const enabledModelIds = new Set(
+    enabledModels.map((model) => `${model.providerId}:${model.id}`)
+  );
+  const defaultSelectedModelIds = getProviderKeys()
+    .filter((providerKey) => providerKey.enabled)
+    .map((providerKey) => {
+      const preferredModelId = providerKey.defaultModel
+        ? `${providerKey.providerId}:${providerKey.defaultModel}`
+        : null;
+
+      if (preferredModelId && enabledModelIds.has(preferredModelId)) {
+        return preferredModelId;
+      }
+
+      const fallbackModel = enabledModels.find(
+        (model) => model.providerId === providerKey.providerId
+      );
+      return fallbackModel
+        ? `${fallbackModel.providerId}:${fallbackModel.id}`
+        : null;
+    })
+    .filter((modelId): modelId is string => Boolean(modelId));
 
   return NextResponse.json({
     discussions,
     settings,
+    defaultSelectedModelIds,
     enabledModels: enabledModels.map((m) => ({
       ...m,
       fullId: `${m.providerId}:${m.id}`,
@@ -44,8 +77,18 @@ export async function POST(request: Request) {
       );
     }
 
-    const { topic, mode, effort, modelIds, judgeModelId, attachmentIds = [] } =
-      parsed.data;
+    const {
+      topic,
+      mode,
+      effort,
+      modelIds,
+      judgeModelId,
+      attachmentIds = [],
+      verbosity,
+      styleNote,
+      reasoningEffort,
+    } = parsed.data;
+    const userSettings = getUserSettings();
     const enabled = getEnabledModels().map((m) => `${m.providerId}:${m.id}`);
     const invalid = modelIds.filter((id) => !enabled.includes(id));
     if (invalid.length > 0) {
@@ -66,8 +109,13 @@ export async function POST(request: Request) {
     const requiredTypes = getRequiredCapabilityTypes(
       attachments.map((a) => a.category)
     );
+    // Resolve capabilities from the enabled-model list so custom models (whose
+    // capabilities live on the record, not the static catalog) gate correctly.
+    const capabilitiesById = new Map(
+      getEnabledModels().map((m) => [`${m.providerId}:${m.id}`, m.capabilities])
+    );
     const incompatible = modelIds.filter(
-      (id) => !modelSupportsInputTypes(id, requiredTypes)
+      (id) => !supportsInputTypes(capabilitiesById.get(id), requiredTypes)
     );
     if (incompatible.length > 0) {
       return NextResponse.json(
@@ -77,7 +125,7 @@ export async function POST(request: Request) {
     }
 
     const judge = judgeModelId ?? modelIds[0];
-    if (!modelSupportsInputTypes(judge, requiredTypes)) {
+    if (!supportsInputTypes(capabilitiesById.get(judge), requiredTypes)) {
       return NextResponse.json(
         { error: "Judge model does not support all attached file types" },
         { status: 400 }
@@ -101,6 +149,10 @@ export async function POST(request: Request) {
       currentRound: 0,
       maxRounds: config.maxRounds,
       convergenceScore: null,
+      verbosity: verbosity ?? userSettings.defaultVerbosity ?? "balanced",
+      styleNote: styleNote ?? userSettings.defaultStyleNote ?? null,
+      reasoningEffort:
+        reasoningEffort ?? userSettings.defaultReasoningEffort ?? "default",
       createdAt: now,
       updatedAt: now,
     });

@@ -4,6 +4,7 @@ import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type { AIProvider, ChatParams, StreamChunk } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
+import { anthropicEffort } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 
 type AnthropicImageMedia =
@@ -12,8 +13,10 @@ type AnthropicImageMedia =
   | "image/gif"
   | "image/webp";
 
+type AnthropicCacheControl = { type: "ephemeral" };
+
 type AnthropicContentBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: AnthropicCacheControl }
   | {
       type: "image";
       source: { type: "base64"; media_type: AnthropicImageMedia; data: string };
@@ -40,7 +43,9 @@ function buildAnthropicUserContent(
   attachments: AttachmentPayload[] | undefined,
   caps: ReturnType<typeof getModelCapabilities>
 ): string | AnthropicContentBlock[] {
-  if (!attachments?.length) return text;
+  if (!attachments?.length) {
+    return buildCacheableAnthropicTextBlocks(text);
+  }
 
   const blocks: AnthropicContentBlock[] = [];
 
@@ -71,8 +76,40 @@ function buildAnthropicUserContent(
     }
   }
 
-  blocks.push({ type: "text", text: text + buildAttachmentPromptSection(attachments) });
+  blocks.push(
+    ...buildCacheableAnthropicTextBlocks(
+      text + buildAttachmentPromptSection(attachments)
+    )
+  );
   return blocks.length === 1 && blocks[0].type === "text" ? blocks[0].text : blocks;
+}
+
+function buildCacheableAnthropicTextBlocks(text: string): AnthropicContentBlock[] {
+  const transcriptMarker = "\n\n--- Discussion so far ---\n\n";
+  if (!text.includes(transcriptMarker)) {
+    return [
+      {
+        type: "text",
+        text,
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+  }
+
+  const [prefix, ...rest] = text.split(transcriptMarker);
+  const transcript = rest.join(transcriptMarker);
+
+  return [
+    {
+      type: "text",
+      text: `${prefix}${transcriptMarker}`,
+      cache_control: { type: "ephemeral" },
+    },
+    {
+      type: "text",
+      text: transcript,
+    },
+  ];
 }
 
 export const anthropicProvider: AIProvider = {
@@ -116,7 +153,7 @@ export const anthropicProvider: AIProvider = {
       const content =
         m.role === "user" && index === lastUserIndex
           ? buildAnthropicUserContent(m.content, params.attachments, caps)
-          : m.content;
+          : buildCacheableAnthropicTextBlocks(m.content);
 
       return {
         role: m.role as "user" | "assistant",
@@ -124,13 +161,18 @@ export const anthropicProvider: AIProvider = {
       };
     });
 
+    // output_config.effort is newer than the pinned SDK's types; the cast lets
+    // it pass through. Omitted (and skipped for unsupported models) by default.
+    const effort = anthropicEffort(params.model, params.reasoningEffort ?? "default");
+    const effortField = effort ? { output_config: { effort } } : {};
+
     try {
       const stream = await client.messages.stream({
         model: params.model,
         max_tokens: params.maxTokens ?? 1500,
-        temperature: params.temperature ?? 0.7,
         system: systemMessage?.content,
         messages: chatMessages,
+        ...(effortField as Record<string, never>),
       });
 
       for await (const event of stream) {

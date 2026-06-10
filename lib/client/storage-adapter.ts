@@ -1,0 +1,185 @@
+/**
+ * Client-side storage backends for the whole app store (a single JSON blob).
+ * IndexedDB works everywhere (default). File System Access (desktop Chromium)
+ * writes a `store.json` into a user-picked folder so multiple browsers — or a
+ * cloud-synced folder — can share the same state.
+ *
+ * Browser-only: do not import from server code.
+ */
+
+export type StorageKind = "indexeddb" | "filesystem";
+
+export interface StorageAdapter {
+  readonly kind: StorageKind;
+  /** Raw envelope JSON string, or null when nothing is stored yet. */
+  load(): Promise<string | null>;
+  save(blob: string): Promise<void>;
+  label(): string;
+}
+
+// ── Low-level IndexedDB kv (also used to persist the directory handle/config) ─
+
+const DB_NAME = "ai-discussion-board";
+const STORE_KEY = "store";
+const HANDLE_KEY = "dirHandle";
+const CONFIG_KEY = "config";
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await openDb();
+  try {
+    return await new Promise<T | undefined>((resolve, reject) => {
+      const tx = db.transaction("kv", "readonly");
+      const req = tx.objectStore("kv").get(key);
+      req.onsuccess = () => resolve(req.result as T | undefined);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function idbSet(key: string, value: unknown): Promise<void> {
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("kv", "readwrite");
+      tx.objectStore("kv").put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+// ── Adapters ────────────────────────────────────────────────────────────────
+
+export class IndexedDBAdapter implements StorageAdapter {
+  readonly kind = "indexeddb" as const;
+  async load(): Promise<string | null> {
+    return (await idbGet<string>(STORE_KEY)) ?? null;
+  }
+  async save(blob: string): Promise<void> {
+    await idbSet(STORE_KEY, blob);
+  }
+  label(): string {
+    return "This browser (IndexedDB)";
+  }
+}
+
+export class FileSystemAdapter implements StorageAdapter {
+  readonly kind = "filesystem" as const;
+  constructor(private readonly dir: FileSystemDirectoryHandle) {}
+
+  async load(): Promise<string | null> {
+    try {
+      const fileHandle = await this.dir.getFileHandle("store.json");
+      const text = await (await fileHandle.getFile()).text();
+      return text.trim() ? text : null;
+    } catch {
+      return null; // not created yet
+    }
+  }
+
+  async save(blob: string): Promise<void> {
+    const fileHandle = await this.dir.getFileHandle("store.json", {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  }
+
+  label(): string {
+    return `Local folder (${this.dir.name})`;
+  }
+}
+
+// ── File System Access helpers ────────────────────────────────────────────────
+
+interface DirectoryPickerWindow {
+  showDirectoryPicker?: (opts?: {
+    mode?: "read" | "readwrite";
+  }) => Promise<FileSystemDirectoryHandle>;
+}
+
+interface PermissionHandle {
+  queryPermission?: (opts: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
+  requestPermission?: (opts: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
+}
+
+export function fileSystemAccessSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker ===
+      "function"
+  );
+}
+
+export async function pickDirectory(): Promise<FileSystemDirectoryHandle> {
+  const picker = (window as unknown as DirectoryPickerWindow).showDirectoryPicker;
+  if (!picker) throw new Error("File System Access is not supported here.");
+  const handle = await picker({ mode: "readwrite" });
+  await idbSet(HANDLE_KEY, handle);
+  return handle;
+}
+
+export async function getSavedDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  return (await idbGet<FileSystemDirectoryHandle>(HANDLE_KEY)) ?? null;
+}
+
+export async function verifyPermission(
+  handle: FileSystemDirectoryHandle
+): Promise<boolean> {
+  const h = handle as unknown as PermissionHandle;
+  const opts = { mode: "readwrite" as const };
+  if ((await h.queryPermission?.(opts)) === "granted") return true;
+  return (await h.requestPermission?.(opts)) === "granted";
+}
+
+// ── Storage configuration ─────────────────────────────────────────────────────
+
+export interface StorageConfig {
+  kind: StorageKind;
+  encryptionEnabled: boolean;
+  /** Salt (base64) for the passphrase KDF; set when encryption is enabled. */
+  salt?: string;
+}
+
+const DEFAULT_CONFIG: StorageConfig = {
+  kind: "indexeddb",
+  encryptionEnabled: false,
+};
+
+export async function getStorageConfig(): Promise<StorageConfig> {
+  return (await idbGet<StorageConfig>(CONFIG_KEY)) ?? { ...DEFAULT_CONFIG };
+}
+
+export async function setStorageConfig(config: StorageConfig): Promise<void> {
+  await idbSet(CONFIG_KEY, config);
+}
+
+/** Build the adapter for a config, falling back to IndexedDB if a folder is unavailable. */
+export async function createAdapter(
+  config: StorageConfig
+): Promise<StorageAdapter> {
+  if (config.kind === "filesystem") {
+    const dir = await getSavedDirectory();
+    if (dir && (await verifyPermission(dir))) {
+      return new FileSystemAdapter(dir);
+    }
+  }
+  return new IndexedDBAdapter();
+}

@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/lib/providers/base";
 import type { CapabilityInputType } from "@/lib/attachments/types";
-import { getUnsupportedTypes } from "@/lib/providers/capabilities";
+import { unsupportedInputTypes } from "@/lib/providers/capabilities";
 import { Label } from "@/components/ui/label";
 import {
   Tooltip,
@@ -61,7 +61,10 @@ export function ModelSelector({
           {models.map((model) => {
             const fullId = `${model.providerId}:${model.id}`;
             const isSelected = selected.includes(fullId);
-            const unsupported = getUnsupportedTypes(fullId, requiredInputTypes);
+            const unsupported = unsupportedInputTypes(
+              model.capabilities,
+              requiredInputTypes
+            );
             const disabled = unsupported.length > 0;
 
             const button = (

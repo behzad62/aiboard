@@ -61,6 +61,14 @@ export const MODEL_CATALOG: CatalogModel[] = [
 
   // Anthropic — https://platform.claude.com/docs/en/about-claude/models/overview
   {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    providerId: "anthropic",
+    description:
+      "Anthropic's most capable model for demanding reasoning and long-horizon agentic work (1M context)",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
     id: "claude-opus-4-8",
     name: "Claude Opus 4.8",
     providerId: "anthropic",

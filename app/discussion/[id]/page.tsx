@@ -1,18 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { DiscussionTimeline, type TimelineMessage } from "@/components/DiscussionTimeline";
+import {
+  DiscussionTimeline,
+  type TimelineMessage,
+} from "@/components/DiscussionTimeline";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
+import { BuildResultCard } from "@/components/BuildResultCard";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
+import {
+  DiscussionDiagnostics,
+  type DiagnosticEntry,
+} from "@/components/DiscussionDiagnostics";
 import type { AttachmentSummary } from "@/lib/attachments/types";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Bell } from "lucide-react";
+import { ArrowLeft, Bell, Gavel } from "lucide-react";
 import type { Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
-import { getModelDisplayName } from "@/lib/providers/model-names";
+import { getModelDisplayName } from "@/lib/providers/catalog";
+import { getModeLabel } from "@/lib/orchestrator/config";
+import {
+  accentFor,
+  buildAccentMap,
+  modelMonogram,
+} from "@/lib/ui/model-accent";
 
 interface DiscussionData {
   discussion: Discussion;
@@ -23,6 +36,7 @@ interface DiscussionData {
     content: string;
   }>;
   attachments: AttachmentSummary[];
+  modelNames?: Record<string, string>;
   finalResult: {
     answer: string;
     confidence: number;
@@ -30,18 +44,24 @@ interface DiscussionData {
   } | null;
 }
 
+const ACTIVE_STATUSES = new Set(["completed", "failed"]);
+
 export default function DiscussionPage() {
   const params = useParams();
   const id = params.id as string;
   const [discussion, setDiscussion] = useState<Discussion | null>(null);
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
+  const [modelNames, setModelNames] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<TimelineMessage[]>([]);
-  const [finalResult, setFinalResult] = useState<DiscussionData["finalResult"]>(null);
+  const [finalResult, setFinalResult] =
+    useState<DiscussionData["finalResult"]>(null);
   const [currentRound, setCurrentRound] = useState(0);
   const [maxRounds, setMaxRounds] = useState(4);
   const [convergenceScore, setConvergenceScore] = useState<number | null>(null);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
+  const [streamConnected, setStreamConnected] = useState(false);
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
 
@@ -89,7 +109,8 @@ export default function DiscussionPage() {
           ]);
           break;
         case "message_token": {
-          const current = (streamingRef.current.get(event.messageId) ?? "") + event.token;
+          const current =
+            (streamingRef.current.get(event.messageId) ?? "") + event.token;
           streamingRef.current.set(event.messageId, current);
           setMessages((prev) =>
             prev.map((m) =>
@@ -129,6 +150,23 @@ export default function DiscussionPage() {
           setError(event.message);
           setStatus("failed");
           break;
+        case "diagnostic":
+          setDiagnostics((prev) => {
+            const next: DiagnosticEntry[] = [
+              {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                at: new Date().toLocaleTimeString(),
+                phase: event.phase,
+                message: event.message,
+                modelName: event.modelName,
+                providerId: event.providerId,
+                round: event.round,
+              },
+              ...prev,
+            ];
+            return next.slice(0, 40);
+          });
+          break;
       }
     },
     [discussion, notifyComplete]
@@ -142,6 +180,7 @@ export default function DiscussionPage() {
       .then((data: DiscussionData) => {
         setDiscussion(data.discussion);
         setAttachments(data.attachments ?? []);
+        setModelNames(data.modelNames ?? {});
         setCurrentRound(data.discussion.currentRound);
         setMaxRounds(data.discussion.maxRounds);
         setConvergenceScore(data.discussion.convergenceScore);
@@ -151,7 +190,7 @@ export default function DiscussionPage() {
             id: m.id,
             round: m.round,
             modelId: m.modelId,
-            modelName: getModelDisplayName(m.modelId),
+            modelName: data.modelNames?.[m.modelId] ?? getModelDisplayName(m.modelId),
             content: m.content,
           }))
         );
@@ -166,6 +205,7 @@ export default function DiscussionPage() {
     if (!id || status === "completed" || status === "failed") return;
 
     const source = new EventSource(`/api/discussions/${id}/stream`);
+    setStreamConnected(true);
 
     source.onmessage = (e) => {
       try {
@@ -177,77 +217,293 @@ export default function DiscussionPage() {
     };
 
     source.onerror = () => {
+      setStreamConnected(false);
       source.close();
     };
 
-    return () => source.close();
+    return () => {
+      setStreamConnected(false);
+      source.close();
+    };
   }, [id, status, handleEvent]);
+
+  const participantIds = useMemo<string[]>(() => {
+    if (!discussion) return [];
+    try {
+      return JSON.parse(discussion.modelIds) as string[];
+    } catch {
+      return [];
+    }
+  }, [discussion]);
+
+  const accentMap = useMemo(
+    () => buildAccentMap(participantIds),
+    [participantIds]
+  );
+
+  const activeModelNames = messages
+    .filter((m) => m.streaming)
+    .map((m) => m.modelName);
+  const latestDiagnostic = diagnostics[0];
+  const isActive = !ACTIVE_STATUSES.has(status);
+  const liveActivity =
+    activeModelNames.length > 0
+      ? `Generating: ${activeModelNames.join(", ")}`
+      : latestDiagnostic?.message ?? "Orchestrating…";
 
   if (!discussion) {
     return (
-      <div className="py-12 text-center text-muted-foreground">
-        Loading discussion...
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        <p className="mt-4 text-muted-foreground">Loading discussion…</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <Link
-            href="/"
-            className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to dashboard
-          </Link>
-          <h1 className="text-2xl font-bold">{discussion.topic}</h1>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Badge variant="secondary">{discussion.mode}</Badge>
-            <Badge variant="secondary">{discussion.effort} effort</Badge>
-            <Badge
-              variant={
-                status === "completed"
-                  ? "success"
-                  : status === "failed"
-                    ? "destructive"
-                    : "warning"
-              }
+      {/* ── Hero ────────────────────────────────────────────────── */}
+      <header className="relative overflow-hidden rounded-2xl border bg-card shadow-sm">
+        <div
+          className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-amber-500"
+          aria-hidden
+        />
+        <div className="p-6 sm:p-8">
+          <div className="flex items-start justify-between gap-4">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              {status}
-            </Badge>
+              <ArrowLeft className="h-4 w-4" />
+              Back to dashboard
+            </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={requestNotificationPermission}
+            >
+              <Bell className="mr-1 h-4 w-4" />
+              Notify me
+            </Button>
           </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <StatusPill status={status} />
+            <MetaChip>{getModeLabel(discussion.mode)}</MetaChip>
+            <MetaChip>{discussion.effort} effort</MetaChip>
+            {convergenceScore != null && (
+              <MetaChip>Convergence {convergenceScore.toFixed(1)}/10</MetaChip>
+            )}
+          </div>
+
+          <h1 className="mt-4 max-w-4xl font-display text-3xl font-semibold leading-[1.15] tracking-tight text-foreground sm:text-4xl">
+            {discussion.topic}
+          </h1>
+
+          {participantIds.length > 0 && (
+            <div className="mt-6 flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
+                Panel
+              </span>
+              {participantIds.map((modelId) => {
+                const accent = accentFor(accentMap, modelId);
+                const isJudge = discussion.judgeModelId === modelId;
+                return (
+                  <span
+                    key={modelId}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-background/70 py-1 pl-1 pr-2.5"
+                    title={isJudge ? "Final judge" : undefined}
+                  >
+                    <span
+                      className={cnChip(accent.chipBg, accent.text)}
+                    >
+                      {modelMonogram(modelId)}
+                    </span>
+                    <span className="text-xs font-medium">
+                      {modelNames[modelId] ?? getModelDisplayName(modelId)}
+                    </span>
+                    {isJudge && (
+                      <Gavel className="h-3 w-3 text-muted-foreground" />
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {isActive && (
+            <div className="mt-6 space-y-2">
+              <div className="flex items-center justify-between gap-3 font-mono text-[0.7rem] text-muted-foreground">
+                <span>
+                  Round {Math.max(currentRound, 0)} / {maxRounds}
+                </span>
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <span className="relative flex h-1.5 w-1.5 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+                  </span>
+                  <span className="truncate">{liveActivity}</span>
+                </span>
+              </div>
+              <ProgressBar value={currentRound} max={maxRounds} />
+            </div>
+          )}
         </div>
-        <Button variant="outline" size="sm" onClick={requestNotificationPermission}>
-          <Bell className="mr-1 h-4 w-4" />
-          Enable notifications
-        </Button>
-      </div>
+      </header>
 
       {error && (
-        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+        <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
           {error}
         </div>
       )}
 
       <DiscussionAttachments attachments={attachments} />
 
-      <DiscussionTimeline
-        messages={messages}
-        currentRound={currentRound}
-        maxRounds={maxRounds}
-        convergenceScore={convergenceScore}
-      />
+      {/* ── Result first when ready ─────────────────────────────── */}
+      {finalResult &&
+        (discussion.mode === "build" ? (
+          <BuildResultCard
+            answer={finalResult.answer}
+            confidence={finalResult.confidence}
+            dissent={finalResult.dissent}
+            topic={discussion.topic}
+          />
+        ) : (
+          <FinalAnswerCard
+            answer={finalResult.answer}
+            confidence={finalResult.confidence}
+            dissent={finalResult.dissent}
+            topic={discussion.topic}
+          />
+        ))}
 
-      {finalResult && (
-        <FinalAnswerCard
-          answer={finalResult.answer}
-          confidence={finalResult.confidence}
-          dissent={finalResult.dissent}
-          topic={discussion.topic}
-        />
-      )}
+      {/* ── Transcript ──────────────────────────────────────────── */}
+      <div className="space-y-5">
+        <div className="flex items-center gap-3">
+          <h2 className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            {discussion.mode === "build"
+              ? finalResult
+                ? "Build log"
+                : "Live build"
+              : finalResult
+                ? "Discussion transcript"
+                : "Live discussion"}
+          </h2>
+          <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
+        </div>
+        <DiscussionTimeline messages={messages} accentMap={accentMap} />
+      </div>
+
+      {/* ── Diagnostics, tucked away ────────────────────────────── */}
+      <DiscussionDiagnostics
+        entries={diagnostics}
+        connected={streamConnected}
+        active={isActive}
+      />
     </div>
   );
+}
+
+function cnChip(bg: string, text: string): string {
+  return `flex h-5 w-5 items-center justify-center rounded-full font-mono text-[0.6rem] font-bold ${bg} ${text}`;
+}
+
+function MetaChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border bg-background/60 px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function ProgressBar({ value, max }: { value: number; max: number }) {
+  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <div
+        className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-[width] duration-500 ease-out"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const meta = statusMeta(status);
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${meta.bg} ${meta.text}`}
+    >
+      <span className="relative flex h-1.5 w-1.5">
+        {meta.pulse && (
+          <span
+            className={`absolute inline-flex h-full w-full animate-ping rounded-full ${meta.dot} opacity-70`}
+          />
+        )}
+        <span
+          className={`relative inline-flex h-1.5 w-1.5 rounded-full ${meta.dot}`}
+        />
+      </span>
+      {meta.label}
+    </span>
+  );
+}
+
+function statusMeta(status: string): {
+  label: string;
+  bg: string;
+  text: string;
+  dot: string;
+  pulse: boolean;
+} {
+  switch (status) {
+    case "completed":
+      return {
+        label: "Completed",
+        bg: "bg-emerald-500/12",
+        text: "text-emerald-700 dark:text-emerald-300",
+        dot: "bg-emerald-500",
+        pulse: false,
+      };
+    case "failed":
+      return {
+        label: "Failed",
+        bg: "bg-rose-500/12",
+        text: "text-rose-700 dark:text-rose-300",
+        dot: "bg-rose-500",
+        pulse: false,
+      };
+    case "judging":
+      return {
+        label: "Synthesizing verdict",
+        bg: "bg-violet-500/12",
+        text: "text-violet-700 dark:text-violet-300",
+        dot: "bg-violet-500",
+        pulse: true,
+      };
+    case "stagnation_detected":
+      return {
+        label: "Converged early",
+        bg: "bg-sky-500/12",
+        text: "text-sky-700 dark:text-sky-300",
+        dot: "bg-sky-500",
+        pulse: true,
+      };
+    case "running":
+      return {
+        label: "In discussion",
+        bg: "bg-amber-500/12",
+        text: "text-amber-700 dark:text-amber-300",
+        dot: "bg-amber-500",
+        pulse: true,
+      };
+    default:
+      return {
+        label: "Starting",
+        bg: "bg-slate-500/12",
+        text: "text-slate-600 dark:text-slate-300",
+        dot: "bg-slate-400",
+        pulse: true,
+      };
+  }
 }

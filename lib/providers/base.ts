@@ -1,5 +1,6 @@
 import type { AttachmentPayload } from "../attachments/types";
 import type { CapabilityInputType } from "../attachments/types";
+import type { ReasoningEffort } from "../db/schema";
 
 export type ModelCapabilities = Record<CapabilityInputType, boolean>;
 
@@ -23,6 +24,9 @@ export interface ChatParams {
   attachments?: AttachmentPayload[];
   maxTokens?: number;
   temperature?: number;
+  reasoningEffort?: ReasoningEffort;
+  /** Explicit capabilities — used for custom models not in the static catalog. */
+  capabilities?: ModelCapabilities;
 }
 
 export interface StreamChunk {

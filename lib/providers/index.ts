@@ -3,6 +3,8 @@ import { openaiProvider } from "./openai";
 import { anthropicProvider } from "./anthropic";
 import { googleProvider } from "./google";
 import { openrouterProvider } from "./openrouter";
+import { listCustomModelInfos, resolveCustomModelName } from "./custom";
+import { getModelDisplayName } from "./catalog";
 import { decrypt } from "../crypto/keys";
 import { getProviderKey } from "../db";
 
@@ -22,12 +24,25 @@ export function getAllProviders(): AIProvider[] {
 }
 
 export function getAllModels(): ModelInfo[] {
-  return getAllProviders().flatMap((p) => p.listModels());
+  return [
+    ...getAllProviders().flatMap((p) => p.listModels()),
+    ...listCustomModelInfos(),
+  ];
+}
+
+/** Display name for any full model id, including user-defined custom models. */
+export function resolveModelName(fullId: string): string {
+  return resolveCustomModelName(fullId) ?? getModelDisplayName(fullId);
 }
 
 export function getDecryptedApiKey(providerId: string): string | null {
   const row = getProviderKey(providerId);
   if (!row || !row.enabled) return null;
+
+  // Client representation stores the plaintext key (protected by the store-level
+  // passphrase envelope); server representation is AES-encrypted at rest.
+  if (row.apiKey) return row.apiKey;
+  if (!row.encryptedKey || !row.iv || !row.authTag) return null;
 
   try {
     return decrypt({
@@ -41,11 +56,16 @@ export function getDecryptedApiKey(providerId: string): string | null {
 }
 
 export function getEnabledModels(): ModelInfo[] {
-  const keys = getAllProviders()
+  const keyedProviderIds = getAllProviders()
     .map((p) => p.id)
     .filter((id) => getDecryptedApiKey(id) !== null);
 
-  return getAllModels().filter((m) => keys.includes(m.providerId));
+  const builtin = getAllProviders()
+    .flatMap((p) => p.listModels())
+    .filter((m) => keyedProviderIds.includes(m.providerId));
+
+  // Custom endpoints are always available once added (a key is optional).
+  return [...builtin, ...listCustomModelInfos()];
 }
 
 export { providers };

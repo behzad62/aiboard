@@ -1,9 +1,14 @@
-import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
+import {
+  GoogleGenerativeAI,
+  type GenerationConfig,
+  type Part,
+} from "@google/generative-ai";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type { AIProvider, ChatParams, StreamChunk } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
+import { geminiThinkingConfig } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 
 function attachmentToPart(
@@ -78,16 +83,33 @@ export const googleProvider: AIProvider = {
       const lastMessage = history[history.length - 1];
       const prior = history.slice(0, -1);
 
+      // Gemini reasoning control: Gemini 3+ uses thinkingLevel, Gemini 2.5 uses
+      // thinkingBudget (sending both is a 400). At "default", 2.5 still gets a
+      // bounded budget so hidden thinking can't truncate the visible answer.
+      // (thinkingConfig is newer than this SDK's GenerationConfig type.)
+      const thinking = geminiThinkingConfig(
+        params.model,
+        params.reasoningEffort ?? "default",
+        params.maxTokens ?? 1500
+      );
+      const generationConfig = {
+        maxOutputTokens: params.maxTokens ?? 1500,
+        temperature: params.temperature ?? 0.7,
+        ...(thinking ? { thinkingConfig: thinking } : {}),
+      } as GenerationConfig;
+
       const chat = model.startChat({
         history: prior.map((m) => ({
           role: m.role === "assistant" ? "model" : "user",
           parts: [{ text: m.content }],
         })),
-        generationConfig: {
-          maxOutputTokens: params.maxTokens ?? 1500,
-          temperature: params.temperature ?? 0.7,
-        },
-        systemInstruction: systemMessage?.content,
+        generationConfig,
+        systemInstruction: systemMessage
+          ? {
+              role: "system",
+              parts: [{ text: systemMessage.content }],
+            }
+          : undefined,
       });
 
       const parts = buildGeminiParts(

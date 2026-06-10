@@ -1,8 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
-import { Badge } from "@/components/ui/badge";
+import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
+import {
+  accentFor,
+  modelMonogram,
+  type ModelAccent,
+} from "@/lib/ui/model-accent";
 
 export interface TimelineMessage {
   id: string;
@@ -15,37 +20,13 @@ export interface TimelineMessage {
 
 interface DiscussionTimelineProps {
   messages: TimelineMessage[];
-  currentRound?: number;
-  maxRounds?: number;
-  convergenceScore?: number | null;
+  accentMap: Map<string, ModelAccent>;
 }
-
-const MODEL_COLORS = [
-  "border-l-blue-500",
-  "border-l-violet-500",
-  "border-l-emerald-500",
-  "border-l-amber-500",
-  "border-l-rose-500",
-];
 
 export function DiscussionTimeline({
   messages,
-  currentRound,
-  maxRounds,
-  convergenceScore,
+  accentMap,
 }: DiscussionTimelineProps) {
-  const modelColorMap = useMemo(() => {
-    const map = new Map<string, string>();
-    let i = 0;
-    for (const m of messages) {
-      if (!map.has(m.modelId)) {
-        map.set(m.modelId, MODEL_COLORS[i % MODEL_COLORS.length]);
-        i++;
-      }
-    }
-    return map;
-  }, [messages]);
-
   const rounds = useMemo(() => {
     const grouped = new Map<number, TimelineMessage[]>();
     for (const msg of messages) {
@@ -56,60 +37,139 @@ export function DiscussionTimeline({
     return Array.from(grouped.entries()).sort((a, b) => a[0] - b[0]);
   }, [messages]);
 
+  if (rounds.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed bg-card/40 p-12 text-center">
+        <p className="font-display text-lg text-foreground">
+          The panel is convening…
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Each model&apos;s response will stream in here as the discussion unfolds.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      {(currentRound !== undefined || convergenceScore != null) && (
-        <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          {currentRound !== undefined && maxRounds !== undefined && (
-            <span>
-              Round {currentRound} of {maxRounds}
-            </span>
-          )}
-          {convergenceScore != null && (
-            <Badge variant="secondary">
-              Convergence: {convergenceScore.toFixed(1)}/10
-            </Badge>
-          )}
-        </div>
-      )}
-
-      {rounds.length === 0 && (
-        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          Waiting for models to start discussing...
-        </div>
-      )}
-
+    <section className="space-y-10">
       {rounds.map(([round, roundMessages]) => (
-        <div key={round} className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Round {round}
-          </h3>
-          <div className="space-y-3">
+        <div key={round}>
+          <div className="mb-4 flex items-center gap-3">
+            <span className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Round {round}
+            </span>
+            <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
+            <span className="font-mono text-[0.7rem] text-muted-foreground">
+              {roundMessages.length}{" "}
+              {roundMessages.length === 1 ? "voice" : "voices"}
+            </span>
+          </div>
+          <div className="space-y-4">
             {roundMessages.map((msg) => (
-              <div
+              <ContributionCard
                 key={msg.id}
-                className={cn(
-                  "rounded-lg border border-l-4 bg-card p-4",
-                  modelColorMap.get(msg.modelId)
-                )}
-              >
-                <div className="mb-2 flex items-center gap-2">
-                  <span className="font-medium">{msg.modelName}</span>
-                  {msg.streaming && (
-                    <Badge variant="warning">Streaming...</Badge>
-                  )}
-                </div>
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {msg.content}
-                  {msg.streaming && (
-                    <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-primary" />
-                  )}
-                </div>
-              </div>
+                message={msg}
+                accent={accentFor(accentMap, msg.modelId)}
+              />
             ))}
           </div>
         </div>
       ))}
-    </div>
+    </section>
+  );
+}
+
+function ContributionCard({
+  message,
+  accent,
+}: {
+  message: TimelineMessage;
+  accent: ModelAccent;
+}) {
+  return (
+    <article className="group relative animate-fade-rise overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow duration-300 hover:shadow-md">
+      <span
+        className={cn("absolute inset-y-0 left-0 w-1", accent.bar)}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          "pointer-events-none absolute inset-0 bg-gradient-to-r to-transparent opacity-70",
+          accent.tint
+        )}
+        aria-hidden
+      />
+      <div className="relative p-5 pl-6">
+        <header className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-bold",
+              accent.chipBg,
+              accent.text
+            )}
+          >
+            {modelMonogram(message.modelId)}
+          </span>
+          <span className={cn("font-semibold tracking-tight", accent.text)}>
+            {message.modelName}
+          </span>
+          {message.streaming && <StreamingBadge />}
+        </header>
+
+        {message.streaming ? (
+          <StreamingBody content={message.content} />
+        ) : (
+          <Markdown content={message.content} />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function StreamingBadge() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.7rem] font-medium text-amber-700 dark:text-amber-300">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500/70" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+      </span>
+      Streaming
+    </span>
+  );
+}
+
+/**
+ * While streaming we render plain text (not markdown): partial markdown — half
+ * a code fence, an unclosed table — reflows on every token and looks broken.
+ * Once the message completes we switch to the full markdown renderer.
+ */
+function StreamingBody({ content }: { content: string }) {
+  if (!content) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="flex gap-1">
+          <Dot delay="0ms" />
+          <Dot delay="150ms" />
+          <Dot delay="300ms" />
+        </span>
+        Composing response…
+      </p>
+    );
+  }
+
+  return (
+    <p className="whitespace-pre-wrap text-[0.95rem] leading-relaxed text-foreground/90">
+      {content}
+      <span className="ml-0.5 inline-block h-[1.1em] w-[3px] translate-y-[0.15em] animate-pulse rounded-full bg-primary align-middle" />
+    </p>
+  );
+}
+
+function Dot({ delay }: { delay: string }) {
+  return (
+    <span
+      className="inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-current"
+      style={{ animationDelay: delay }}
+    />
   );
 }

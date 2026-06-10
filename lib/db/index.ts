@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type {
+  CustomModel,
   Discussion,
   DiscussionMode,
   DiscussionStatus,
@@ -22,6 +23,7 @@ interface Store {
   discussions: Discussion[];
   messages: Message[];
   finalResults: FinalResult[];
+  customModels?: CustomModel[];
   attachments?: import("../attachments/types").AttachmentRecord[];
 }
 
@@ -31,11 +33,15 @@ const DEFAULT_STORE: Store = {
     defaultEffort: "medium",
     defaultMode: "panel",
     judgeModelId: null,
+    defaultVerbosity: "balanced",
+    defaultStyleNote: "",
+    defaultReasoningEffort: "default",
   },
   providerKeys: [],
   discussions: [],
   messages: [],
   finalResults: [],
+  customModels: [],
   attachments: [],
 };
 
@@ -82,6 +88,13 @@ export function getDb() {
         }
       });
     },
+    deleteDiscussion: (id: string) => {
+      mutate((s) => {
+        s.discussions = s.discussions.filter((d) => d.id !== id);
+        s.messages = s.messages.filter((m) => m.discussionId !== id);
+        s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
+      });
+    },
     insertMessage: (message: Message) => {
       mutate((s) => {
         s.messages.push(message);
@@ -121,7 +134,35 @@ export function getDb() {
         s.userSettings = { ...s.userSettings, ...patch };
       });
     },
+    addCustomModel: (model: CustomModel) => {
+      mutate((s) => {
+        if (!s.customModels) s.customModels = [];
+        s.customModels.push(model);
+      });
+    },
+    updateCustomModel: (id: string, patch: Partial<CustomModel>) => {
+      mutate((s) => {
+        if (!s.customModels) return;
+        const idx = s.customModels.findIndex((m) => m.id === id);
+        if (idx >= 0) {
+          s.customModels[idx] = { ...s.customModels[idx], ...patch };
+        }
+      });
+    },
+    deleteCustomModel: (id: string) => {
+      mutate((s) => {
+        s.customModels = (s.customModels ?? []).filter((m) => m.id !== id);
+      });
+    },
   };
+}
+
+export function getCustomModels(): CustomModel[] {
+  return readStore().customModels ?? [];
+}
+
+export function getCustomModelById(id: string): CustomModel | undefined {
+  return getCustomModels().find((m) => m.id === id);
 }
 
 export function getDiscussionById(id: string): Discussion | undefined {
@@ -156,6 +197,7 @@ export function getProviderKey(providerId: string): ProviderKey | undefined {
 
 // Re-export schema helpers for typed inserts
 export type {
+  CustomModel,
   Discussion,
   DiscussionMode,
   DiscussionStatus,
