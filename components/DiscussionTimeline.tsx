@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Download } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import {
@@ -8,6 +9,7 @@ import {
   modelMonogram,
   type ModelAccent,
 } from "@/lib/ui/model-accent";
+import { downloadMarkdown, fileSlug } from "@/lib/ui/download";
 
 export interface TimelineMessage {
   id: string;
@@ -119,6 +121,22 @@ function ContributionCard({
             {message.modelName}
           </span>
           {message.streaming && <StreamingBadge />}
+          {!message.streaming && message.content && (
+            <button
+              type="button"
+              onClick={() =>
+                downloadMarkdown(
+                  `round-${message.round}-${fileSlug(message.modelName)}.md`,
+                  `# ${message.modelName} — Round ${message.round}\n\n${message.content}\n`
+                )
+              }
+              title="Download this response as Markdown"
+              aria-label={`Download ${message.modelName}'s round ${message.round} response as Markdown`}
+              className="ml-auto rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+          )}
         </header>
 
         {message.streaming ? (

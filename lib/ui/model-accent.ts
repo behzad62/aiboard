@@ -100,6 +100,7 @@ export function accentFor(
 
 /** Two-letter monogram derived from a model's display name. */
 export function modelMonogram(modelId: string): string {
+  if (modelId === "user") return "U"; // user notes in the timeline
   const name = getModelDisplayName(modelId);
   const cleaned = name.replace(/[^A-Za-z0-9 ]/g, " ").trim();
   const words = cleaned.split(/\s+/).filter(Boolean);

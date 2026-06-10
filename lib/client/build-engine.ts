@@ -46,11 +46,18 @@ import {
   type RunnerConfig,
 } from "./runner";
 import {
+  getMessagesForDiscussion,
   insertFinalResult,
   insertMessage,
   updateDiscussion,
 } from "./store";
-import { collectStream, type OrchestratorEvent } from "./engine";
+import { drainBuildNotes } from "./build-notes";
+import {
+  abortError,
+  collectStream,
+  isAbortError,
+  type OrchestratorEvent,
+} from "./engine";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 
@@ -100,8 +107,12 @@ export async function runBuildDiscussion(
   discussion: Discussion,
   models: SelectedModel[],
   emit: EventCallback,
-  hooks?: BuildHooks
+  hooks?: BuildHooks,
+  signal?: AbortSignal
 ): Promise<void> {
+  const throwIfAborted = (): void => {
+    if (signal?.aborted) throw abortError();
+  };
   const effort = discussion.effort as EffortLevel;
   const limits = BUILD_LIMITS[effort];
   const config = EFFORT_CONFIG[effort];
@@ -309,8 +320,28 @@ export async function runBuildDiscussion(
   };
 
   // ── Streaming helpers (persist as messages so the timeline works) ─────────
-  let round = 0;
+  // Continue the round numbering from any previous pass (follow-up builds keep
+  // the earlier transcript) so the timeline stays in chronological order.
+  let round = getMessagesForDiscussion(discussion.id).reduce(
+    (max, m) => Math.max(max, m.round),
+    0
+  );
   const history: Array<{ label: string; text: string }> = [];
+
+  // ── User notes: drained at every Architect decision point ─────────────────
+  const userNotes: string[] = [];
+  const userNotesText = (): string => {
+    const fresh = drainBuildNotes(discussion.id);
+    if (fresh.length > 0) {
+      userNotes.push(...fresh);
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `Handing ${fresh.length} user note${fresh.length === 1 ? "" : "s"} to the Architect`,
+      });
+    }
+    return userNotes.map((n, i) => `${i + 1}. ${n}`).join("\n");
+  };
 
   const streamTurn = async (
     model: SelectedModel,
@@ -349,7 +380,8 @@ export async function runBuildDiscussion(
       0.4,
       reasoningEffort,
       [],
-      (token) => emit({ type: "message_token", messageId, token })
+      (token) => emit({ type: "message_token", messageId, token }),
+      signal
     );
     insertMessage({
       id: messageId,
@@ -419,6 +451,9 @@ export async function runBuildDiscussion(
     contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
     expectedOutputs: raw.expectedOutputs,
     status: "planned",
+    dependsOn: Array.isArray(raw.dependsOn)
+      ? raw.dependsOn.filter((d): d is string => typeof d === "string")
+      : [],
   });
 
   // ── Status bookkeeping ─────────────────────────────────────────────────────
@@ -451,6 +486,7 @@ export async function runBuildDiscussion(
 
   let runFeedback = "";
   for (;;) {
+    throwIfAborted();
     const planPrompt = buildArchitectPlanPrompt({
       request: discussion.topic,
       treeText: treeText(),
@@ -459,6 +495,7 @@ export async function runBuildDiscussion(
       workerNames: workers.map((w) => w.displayName),
       readHopsLeft,
       runsLeft: runsLeftThisPhase(),
+      userNotes: userNotesText(),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
     if (action.action === "read" && readHopsLeft > 0) {
@@ -512,15 +549,7 @@ export async function runBuildDiscussion(
 
     const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
 
-    for (const task of pending) {
-      if (workerCalls >= limits.totalWorkerCalls) {
-        emit({
-          type: "diagnostic",
-          phase: "round_preparing",
-          message: `Worker call budget reached (${limits.totalWorkerCalls}); moving to review`,
-        });
-        break;
-      }
+    const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const workerIndex = task.workerIndex ?? rrIndex++ % workers.length;
       task.workerIndex = workerIndex;
       const worker = workers[workerIndex];
@@ -562,7 +591,6 @@ export async function runBuildDiscussion(
             label: `${worker.displayName} working on ${task.id}: ${task.title}`,
           }
         );
-        workerCalls += 1;
         const files = await writeEmittedFiles(output, task.id);
         const { prose } = extractArtifacts(output);
         task.status = "review";
@@ -576,7 +604,7 @@ export async function runBuildDiscussion(
           cycle,
         });
       } catch (err) {
-        workerCalls += 1;
+        if (isAbortError(err)) throw err;
         task.status = "failed";
         emit({
           type: "task_status",
@@ -592,6 +620,55 @@ export async function runBuildDiscussion(
           message: `${worker.displayName} failed ${task.id}: ${err instanceof Error ? err.message : "error"}`,
         });
       }
+    };
+
+    // A dependency is satisfied once the task has produced output (or can't):
+    // unknown ids and failed tasks count as settled so a typo or a failure
+    // can never deadlock the wave.
+    const dependencySettled = (depId: string): boolean => {
+      const dep = tasks.find((t) => t.id === depId);
+      return (
+        !dep ||
+        dep.status === "review" ||
+        dep.status === "done" ||
+        dep.status === "failed"
+      );
+    };
+
+    // Dispatch every ready task CONCURRENTLY; repeat so dependency chains run
+    // batch by batch (independent tasks never wait on each other).
+    for (;;) {
+      throwIfAborted();
+      if (workerCalls >= limits.totalWorkerCalls) {
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Worker call budget reached (${limits.totalWorkerCalls}); moving to review`,
+        });
+        break;
+      }
+      const ready = tasks.filter(
+        (t) =>
+          (t.status === "planned" || t.status === "fixing") &&
+          (t.dependsOn ?? []).every(dependencySettled)
+      );
+      if (ready.length === 0) break;
+      const batch = ready.slice(0, limits.totalWorkerCalls - workerCalls);
+      workerCalls += batch.length;
+      if (batch.length > 1) {
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Running ${batch.length} independent tasks concurrently: ${batch.map((t) => t.id).join(", ")}`,
+        });
+      }
+      // allSettled so an abort in one task doesn't leave the siblings as
+      // unhandled rejections; runWorkerTask only rethrows abort errors.
+      const settled = await Promise.allSettled(batch.map(runWorkerTask));
+      const rejected = settled.find(
+        (r): r is PromiseRejectedResult => r.status === "rejected"
+      );
+      if (rejected) throw rejected.reason;
     }
 
     if (executed.length === 0) break;
@@ -623,6 +700,7 @@ export async function runBuildDiscussion(
     let action: ArchitectAction;
     let text: string;
     for (;;) {
+      throwIfAborted();
       ({ action, text } = await architectAction(
         buildArchitectReviewPrompt({
           request: discussion.topic,
@@ -631,6 +709,7 @@ export async function runBuildDiscussion(
           maxNewTasks: limits.tasksPerWave,
           cyclesLeft: limits.cycles - cycle,
           runsLeft: runsLeftThisPhase(),
+          userNotes: userNotesText(),
         }),
         `Architect is reviewing wave ${cycle}`
       ));
@@ -677,6 +756,7 @@ export async function runBuildDiscussion(
   }
 
   // ── Final summary ──────────────────────────────────────────────────────────
+  throwIfAborted();
   emit({ type: "status", status: "judging" });
   emit({
     type: "diagnostic",
@@ -695,6 +775,7 @@ export async function runBuildDiscussion(
       treeText: treeText(),
       historyText: truncate(historyText, 60_000),
       verbosityInstruction,
+      userNotes: userNotesText(),
     }),
     {
       systemRole:

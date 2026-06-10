@@ -15,6 +15,7 @@ import type {
 } from "@/lib/db/schema";
 import {
   getDiscussionById,
+  getMessagesForDiscussion,
   insertFinalResult,
   insertMessage,
   updateDiscussion,
@@ -52,9 +53,23 @@ export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 type EventCallback = (event: OrchestratorEvent) => void;
 
 const runningDiscussions = new Set<string>();
+const abortControllers = new Map<string, AbortController>();
 
 export function isDiscussionRunning(id: string): boolean {
   return runningDiscussions.has(id);
+}
+
+/** Stop a running discussion/build. The engine winds down at the next token. */
+export function stopDiscussion(id: string): void {
+  abortControllers.get(id)?.abort();
+}
+
+export function abortError(): DOMException {
+  return new DOMException("Stopped by the user", "AbortError");
+}
+
+export function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
 export async function collectStream(
@@ -66,8 +81,10 @@ export async function collectStream(
   temperature: number,
   reasoningEffort: ReasoningEffort,
   attachments: AttachmentPayload[],
-  onToken?: (token: string) => void
+  onToken?: (token: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
+  if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
     const customModel = getCustomModelByFullId(modelId);
     if (!customModel) {
@@ -92,6 +109,7 @@ export async function collectStream(
       temperature,
       reasoningEffort,
     })) {
+      if (signal?.aborted) throw abortError();
       if (chunk.type === "token" && chunk.content) {
         customContent += chunk.content;
         onToken?.(chunk.content);
@@ -124,6 +142,7 @@ export async function collectStream(
     temperature,
     reasoningEffort,
   })) {
+    if (signal?.aborted) throw abortError();
     if (chunk.type === "token" && chunk.content) {
       content += chunk.content;
       onToken?.(chunk.content);
@@ -187,6 +206,9 @@ export async function runDiscussion(
   }
 
   runningDiscussions.add(discussionId);
+  const controller = new AbortController();
+  abortControllers.set(discussionId, controller);
+  const signal = controller.signal;
 
   try {
     const discussion = getDiscussionById(discussionId);
@@ -204,7 +226,7 @@ export async function runDiscussion(
       // Build runs an Architect-orchestrated task loop, not the round loop.
       // Dynamic import keeps the engine<->build-engine dependency acyclic.
       const { runBuildDiscussion } = await import("./build-engine");
-      await runBuildDiscussion(discussion, models, emit, hooks);
+      await runBuildDiscussion(discussion, models, emit, hooks, signal);
       return;
     }
 
@@ -245,18 +267,38 @@ export async function runDiscussion(
 
     emit({ type: "status", status: "running", round: 0, maxRounds: config.maxRounds });
 
+    // Resume support: responses persist per (round, model), so after a failure
+    // (e.g. a network error during judging) we keep what's already saved, skip
+    // those turns, and continue from the first missing one.
     const allMessages: Array<{
       id: string;
       round: number;
       modelId: string;
       content: string;
-    }> = [];
+    }> = getMessagesForDiscussion(discussionId)
+      .filter((m) => m.role === "assistant")
+      .map((m) => ({
+        id: m.id,
+        round: m.round,
+        modelId: m.modelId,
+        content: m.content,
+      }));
+    const resumeRound = allMessages.reduce((max, m) => Math.max(max, m.round), 0);
+    const startRound = Math.max(1, resumeRound);
+    if (resumeRound > 0) {
+      emit({
+        type: "diagnostic",
+        phase: "initializing",
+        message: `Resuming from round ${resumeRound} — keeping ${allMessages.length} earlier response${allMessages.length === 1 ? "" : "s"}`,
+      });
+    }
 
     let previousRoundTexts: string[] = [];
     let shouldStopEarly = false;
 
-    for (let round = 1; round <= config.maxRounds; round++) {
+    for (let round = startRound; round <= config.maxRounds; round++) {
       if (shouldStopEarly) break;
+      if (signal.aborted) throw abortError();
 
       emit({
         type: "diagnostic",
@@ -282,6 +324,15 @@ export async function runDiscussion(
         const model = models[index];
 
         if (mode === "specialist" && round === 1 && index !== leadIndex) {
+          continue;
+        }
+
+        // Already answered this round before a resume — keep the saved response.
+        if (
+          allMessages.some(
+            (m) => m.round === round && m.modelId === model.modelId
+          )
+        ) {
           continue;
         }
 
@@ -351,7 +402,8 @@ export async function runDiscussion(
             config.temperature,
             reasoningEffort,
             roundAttachments,
-            (token) => emit({ type: "message_token", messageId, token })
+            (token) => emit({ type: "message_token", messageId, token }),
+            signal
           );
 
           insertMessage({
@@ -379,6 +431,7 @@ export async function runDiscussion(
 
           emit({ type: "message_complete", messageId, content });
         } catch (err) {
+          if (isAbortError(err)) throw err;
           emit({
             type: "diagnostic",
             phase: "model_failed",
@@ -409,6 +462,18 @@ export async function runDiscussion(
         }
       }
       previousRoundTexts = currentRoundTexts;
+
+      // A fully-skipped resume round generated nothing new: don't re-vote, but
+      // honor a convergence score the previous run had already reached.
+      if (currentRoundTexts.length === 0) {
+        if (
+          discussion.convergenceScore != null &&
+          discussion.convergenceScore >= config.convergenceThreshold
+        ) {
+          shouldStopEarly = true;
+        }
+        continue;
+      }
 
       if (round >= 2 && !skipConvergenceVote && !shouldStopEarly) {
         const voteTranscript = buildTranscriptFromMessages(allMessages, modelNames);
@@ -470,6 +535,7 @@ export async function runDiscussion(
       }
     }
 
+    if (signal.aborted) throw abortError();
     emit({ type: "status", status: "judging" });
     emit({
       type: "diagnostic",
@@ -505,7 +571,9 @@ export async function runDiscussion(
       finalMaxTokens,
       0.3,
       reasoningEffort,
-      allAttachments
+      allAttachments,
+      undefined,
+      signal
     );
 
     const { answer, confidence, dissent } = extractJudgeResult(judgeRaw);
@@ -531,23 +599,37 @@ export async function runDiscussion(
     });
     emit({ type: "complete" });
   } catch (err) {
-    updateDiscussion(discussionId, {
-      status: "failed",
-      updatedAt: new Date().toISOString(),
-    });
-    emit({
-      type: "error",
-      message: err instanceof Error ? err.message : "Discussion failed",
-    });
-    emit({
-      type: "diagnostic",
-      phase: "model_failed",
-      message:
-        err instanceof Error
-          ? `Discussion failed: ${err.message}`
-          : "Discussion failed",
-    });
+    if (isAbortError(err)) {
+      updateDiscussion(discussionId, {
+        status: "stopped",
+        updatedAt: new Date().toISOString(),
+      });
+      emit({ type: "status", status: "stopped" });
+      emit({
+        type: "diagnostic",
+        phase: "finished",
+        message: "Stopped by the user — restart it whenever you're ready",
+      });
+    } else {
+      updateDiscussion(discussionId, {
+        status: "failed",
+        updatedAt: new Date().toISOString(),
+      });
+      emit({
+        type: "error",
+        message: err instanceof Error ? err.message : "Discussion failed",
+      });
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        message:
+          err instanceof Error
+            ? `Discussion failed: ${err.message}`
+            : "Discussion failed",
+      });
+    }
   } finally {
     runningDiscussions.delete(discussionId);
+    abortControllers.delete(discussionId);
   }
 }

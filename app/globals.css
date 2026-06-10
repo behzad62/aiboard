@@ -78,3 +78,93 @@
       radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 22%);
   }
 }
+
+/* ── Syntax highlighting (highlight.js via rehype-highlight) ──────────────────
+   Code blocks always sit on a dark slate panel (in both themes), so one
+   colorful dark palette works everywhere. */
+.hljs {
+  color: #e2e8f0; /* slate-200 */
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #94a3b8; /* slate-400 */
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-tag,
+.hljs-name,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: #c4b5fd; /* violet-300 */
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: #86efac; /* green-300 */
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #fdba74; /* orange-300 */
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: #93c5fd; /* blue-300 */
+}
+.hljs-title.class_,
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title {
+  color: #fde047; /* yellow-300 */
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-property,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-pseudo {
+  color: #7dd3fc; /* sky-300 */
+}
+.hljs-meta,
+.hljs-params {
+  color: #e2e8f0;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+.hljs-deletion {
+  color: #fda4af; /* rose-300 */
+}
+.hljs-subst,
+.hljs-operator,
+.hljs-punctuation {
+  color: #cbd5e1; /* slate-300 */
+}
+
+/* Thin, unobtrusive scrollbars for the capped-height code panels (WebKit). */
+.prose pre::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.prose pre::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+.prose pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+.prose pre::-webkit-scrollbar-track {
+  background: transparent;
+}

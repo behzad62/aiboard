@@ -15,27 +15,94 @@ import type {
 } from "@/lib/db/schema";
 import type { ModelInfo } from "@/lib/providers/base";
 import {
+  clearDiscussionRun,
   deleteDiscussion as storeDeleteDiscussion,
   getAttachments,
   getDiscussionById,
   getFinalResult,
   getMessagesForDiscussion,
   getProviderKeys,
+  insertMessage,
   getUserSettings,
   initStore,
   insertDiscussion,
   isInitialized,
   listDiscussions,
+  updateDiscussion,
   updateUserSettings,
 } from "./store";
 import {
   getEnabledModels,
   resolveModelName,
 } from "./providers";
-import { runDiscussion as runClientDiscussion } from "./engine";
+import {
+  isDiscussionRunning,
+  runDiscussion as runClientDiscussion,
+  stopDiscussion,
+} from "./engine";
+import { queueBuildNote } from "./build-notes";
 
-export { runClientDiscussion as runDiscussion };
+export { runClientDiscussion as runDiscussion, stopDiscussion };
 export type { OrchestratorEvent } from "./engine";
+
+/**
+ * Reset a stopped/failed discussion so it can run again from the start:
+ * wipes the previous run's messages and final result and re-queues it.
+ */
+export function restartDiscussion(id: string): void {
+  if (isDiscussionRunning(id)) {
+    throw new Error("Stop the run before restarting it.");
+  }
+  clearDiscussionRun(id);
+  updateDiscussion(id, {
+    status: "pending",
+    currentRound: 0,
+    convergenceScore: null,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Queue a user note for the build's Architect (picked up at its next plan,
+ * review, or summary turn) and record it as a timeline message.
+ */
+export function addBuildNote(
+  discussionId: string,
+  note: string
+): { id: string; round: number } {
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error("The note is empty.");
+  queueBuildNote(discussionId, trimmed);
+  // Place the note after the latest message so the timeline reads in order.
+  const round = getMessagesForDiscussion(discussionId).reduce(
+    (max, m) => Math.max(max, m.round),
+    0
+  );
+  const message = {
+    id: uuidv4(),
+    discussionId,
+    round,
+    modelId: "user",
+    role: "user",
+    content: trimmed,
+    createdAt: new Date().toISOString(),
+  };
+  insertMessage(message);
+  return { id: message.id, round };
+}
+
+/**
+ * Re-queue a finished/stopped/failed build for a follow-up pass — the prior
+ * transcript and final result stay; the Architect re-plans over the existing
+ * files (and any queued user notes) and writes a fresh summary.
+ */
+export function continueDiscussion(id: string): void {
+  if (isDiscussionRunning(id)) return;
+  updateDiscussion(id, {
+    status: "pending",
+    updatedAt: new Date().toISOString(),
+  });
+}
 
 /** Load the client store (idempotent). Returns needsPassphrase when locked. */
 export async function ensureReady(): Promise<{ needsPassphrase: boolean }> {

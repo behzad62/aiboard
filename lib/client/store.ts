@@ -175,6 +175,18 @@ export function deleteDiscussion(id: string): void {
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
   schedulePersist();
 }
+/**
+ * Wipe a discussion's run output (model messages + final result) for a
+ * restart. User notes are kept — the next run still has to honor them.
+ */
+export function clearDiscussionRun(id: string): void {
+  const s = store();
+  s.messages = s.messages.filter(
+    (m) => m.discussionId !== id || m.role === "user"
+  );
+  s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
+  schedulePersist();
+}
 export function insertMessage(m: Message): void {
   store().messages.push(m);
   schedulePersist();

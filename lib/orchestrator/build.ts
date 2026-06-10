@@ -28,6 +28,12 @@ export interface BuildTask {
   status: BuildTaskStatus;
   /** Pinned worker index — fix tasks return to the model that did the work. */
   workerIndex?: number;
+  /**
+   * Task ids that must finish before this one starts. Tasks with no pending
+   * dependencies run CONCURRENTLY, so the Architect should only add an edge
+   * when one task genuinely consumes another's output.
+   */
+  dependsOn?: string[];
 }
 
 // ── Architect action protocol ─────────────────────────────────────────────────
@@ -45,6 +51,7 @@ export interface PlanAction {
     instructions: string;
     contextFiles?: string[];
     expectedOutputs?: string;
+    dependsOn?: string[];
   }>;
   notes?: string;
 }
@@ -156,6 +163,12 @@ function treeSection(treeText: string): string {
     : "The project folder is currently empty.";
 }
 
+function userNotesSection(notes?: string): string {
+  return notes?.trim()
+    ? `NOTES FROM THE USER (added while the team was building — treat them as requirements and address every one):\n${notes}`
+    : "";
+}
+
 function runToolDoc(runsLeft?: number): string {
   if (!runsLeft || runsLeft <= 0) return "";
   return [
@@ -173,6 +186,7 @@ export function buildArchitectPlanPrompt(input: {
   workerNames: string[];
   readHopsLeft: number;
   runsLeft?: number;
+  userNotes?: string;
 }): string {
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). Otherwise, plan now.`
@@ -186,6 +200,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     treeSection(input.treeText),
     input.fileContext,
+    userNotesSection(input.userNotes),
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
     "",
@@ -194,9 +209,10 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect"}],"notes":"conventions all workers must follow"}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"]}],"notes":"conventions all workers must follow"}`,
     "```",
-    `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); order tasks so earlier outputs unblock later ones; make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
+    `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
+    `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -242,6 +258,7 @@ export function buildArchitectReviewPrompt(input: {
   maxNewTasks: number;
   cyclesLeft: number;
   runsLeft?: number;
+  userNotes?: string;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -250,6 +267,7 @@ export function buildArchitectReviewPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    userNotesSection(input.userNotes),
     "",
     "Work completed since your last review:",
     input.executedText,
@@ -259,10 +277,16 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":[]}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":[],"dependsOn":[]}],"done":false,"notes":"updated conventions if any"}`,
     "```",
+    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files.`,
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
-  ].join("\n");
+    input.userNotes?.trim()
+      ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function buildArchitectSummaryPrompt(input: {
@@ -270,6 +294,7 @@ export function buildArchitectSummaryPrompt(input: {
   treeText: string;
   historyText: string;
   verbosityInstruction?: string;
+  userNotes?: string;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -284,6 +309,7 @@ export function buildArchitectSummaryPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    userNotesSection(input.userNotes),
     "",
     "Build history (plans, reviews, outcomes):",
     input.historyText,

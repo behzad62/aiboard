@@ -109,6 +109,7 @@ export type DiscussionStatus =
   | "pending"
   | "running"
   | "completed"
+  | "stopped"
   | "failed";
 
 export type DiscussionMode = "panel" | "debate" | "specialist" | "build";

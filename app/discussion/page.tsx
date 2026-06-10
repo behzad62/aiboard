@@ -23,15 +23,28 @@ import {
 } from "@/components/DiscussionDiagnostics";
 import type { AttachmentSummary } from "@/lib/attachments/types";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Bell, Gavel } from "lucide-react";
+import {
+  ArrowLeft,
+  Bell,
+  Download,
+  Gavel,
+  Play,
+  RotateCcw,
+  Square,
+  StickyNote,
+} from "lucide-react";
 import type { Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModeLabel } from "@/lib/orchestrator/config";
 import {
+  addBuildNote,
+  continueDiscussion,
   ensureReady,
   getDiscussionData,
+  restartDiscussion,
   runDiscussion as runClientDiscussion,
+  stopDiscussion,
 } from "@/lib/client/api";
 import {
   getProjectHandle,
@@ -50,6 +63,7 @@ import {
   buildAccentMap,
   modelMonogram,
 } from "@/lib/ui/model-accent";
+import { downloadMarkdown, fileSlug } from "@/lib/ui/download";
 
 interface DiscussionData {
   discussion: Discussion;
@@ -68,7 +82,7 @@ interface DiscussionData {
   } | null;
 }
 
-const ACTIVE_STATUSES = new Set(["completed", "failed"]);
+const ACTIVE_STATUSES = new Set(["completed", "failed", "stopped"]);
 
 function DiscussionPageInner() {
   const searchParams = useSearchParams();
@@ -94,6 +108,7 @@ function DiscussionPageInner() {
     reason?: string;
     resolve: (decision: CommandApprovalDecision) => void;
   } | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
   const [folderGrant, setFolderGrant] = useState<"checking" | "needed" | "ready">(
     "checking"
   );
@@ -123,6 +138,17 @@ function DiscussionPageInner() {
     }
   }, []);
 
+  // A model that errors (or a stopped run) leaves message cards stuck in
+  // their "Streaming…" state — settle them so the UI doesn't pulse forever.
+  const settleStreamingMessages = useCallback(() => {
+    streamingRef.current.clear();
+    setMessages((prev) =>
+      prev.some((m) => m.streaming)
+        ? prev.map((m) => (m.streaming ? { ...m, streaming: false } : m))
+        : prev
+    );
+  }, []);
+
   const handleEvent = useCallback(
     (event: OrchestratorEvent) => {
       switch (event.type) {
@@ -130,6 +156,13 @@ function DiscussionPageInner() {
           setStatus(event.status);
           if (event.round !== undefined) setCurrentRound(event.round);
           if (event.maxRounds !== undefined) setMaxRounds(event.maxRounds);
+          if (
+            event.status === "completed" ||
+            event.status === "failed" ||
+            event.status === "stopped"
+          ) {
+            settleStreamingMessages();
+          }
           break;
         case "message_start":
           streamingRef.current.set(event.messageId, "");
@@ -233,6 +266,7 @@ function DiscussionPageInner() {
         case "error":
           setError(event.message);
           setStatus("failed");
+          settleStreamingMessages();
           break;
         case "diagnostic":
           setDiagnostics((prev) => {
@@ -253,7 +287,7 @@ function DiscussionPageInner() {
           break;
       }
     },
-    [discussion, notifyComplete]
+    [discussion, notifyComplete, settleStreamingMessages]
   );
 
   useEffect(() => {
@@ -283,7 +317,9 @@ function DiscussionPageInner() {
           round: m.round,
           modelId: m.modelId,
           modelName:
-            data.modelNames?.[m.modelId] ?? getModelDisplayName(m.modelId),
+            m.modelId === "user"
+              ? "Your note"
+              : data.modelNames?.[m.modelId] ?? getModelDisplayName(m.modelId),
           content: m.content,
         }))
       );
@@ -344,7 +380,12 @@ function DiscussionPageInner() {
 
   useEffect(() => {
     if (!id || !discussion || startedRef.current) return;
-    if (status === "completed" || status === "failed" || status === "locked")
+    if (
+      status === "completed" ||
+      status === "failed" ||
+      status === "stopped" ||
+      status === "locked"
+    )
       return;
     if (folderGrant !== "ready") return;
 
@@ -357,6 +398,156 @@ function DiscussionPageInner() {
       { requestCommandApproval }
     ).finally(() => setStreamConnected(false));
   }, [id, discussion, status, folderGrant]);
+
+  // Stop: abort the engine (it winds down at the next streamed token). If a
+  // command approval is pending, deny it so the engine isn't stuck awaiting.
+  const handleStop = () => {
+    pendingApproval?.resolve("deny");
+    stopDiscussion(id);
+  };
+
+  // Restart: wipe the previous run's output and re-queue; the run effect
+  // picks the discussion up again as soon as status returns to "pending".
+  const handleRestart = () => {
+    try {
+      restartDiscussion(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't restart");
+      return;
+    }
+    streamingRef.current.clear();
+    notifiedRef.current = false;
+    // The store keeps user notes through a restart — reload what's left.
+    setMessages(
+      (getDiscussionData(id)?.messages ?? []).map((m) => ({
+        id: m.id,
+        round: m.round,
+        modelId: m.modelId,
+        modelName:
+          m.modelId === "user"
+            ? "Your note"
+            : modelNames[m.modelId] ?? getModelDisplayName(m.modelId),
+        content: m.content,
+      }))
+    );
+    setFinalResult(null);
+    setError(null);
+    setBuildTasks([]);
+    setWrittenFiles([]);
+    setCommandRuns([]);
+    setDiagnostics([]);
+    setConvergenceScore(null);
+    setCurrentRound(0);
+    startedRef.current = false;
+    setStatus("pending");
+  };
+
+  // Resume: keep everything already generated and continue from the failure
+  // point. The engine skips rounds/models that already have saved responses
+  // (so a judge-stage network error resumes straight at the judge); a build
+  // re-plans over the kept transcript and the files already on disk.
+  const handleResume = () => {
+    continueDiscussion(id);
+    notifiedRef.current = false;
+    setError(null);
+    setFinalResult(null);
+    startedRef.current = false;
+    setStatus("pending");
+  };
+
+  // Send a note to the Architect: queued for its next plan/review/summary
+  // turn. If the build already finished (or stopped/failed), kick off a
+  // follow-up pass so the note actually gets acted on.
+  const submitNote = () => {
+    const note = noteDraft.trim();
+    if (!note) return;
+    let saved: { id: string; round: number };
+    try {
+      saved = addBuildNote(id, note);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't add the note");
+      return;
+    }
+    setNoteDraft("");
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: saved.id,
+        round: saved.round,
+        modelId: "user",
+        modelName: "Your note",
+        content: note,
+      },
+    ]);
+    if (status === "completed" || status === "stopped" || status === "failed") {
+      continueDiscussion(id);
+      notifiedRef.current = false;
+      setFinalResult(null);
+      setError(null);
+      startedRef.current = false;
+      setStatus("pending");
+    }
+  };
+
+  // Export the whole conversation — meta, every round's responses, and the
+  // final answer — as one Markdown file.
+  const downloadTranscript = () => {
+    if (!discussion) return;
+    const nameOf = (modelId: string) =>
+      modelId === "user"
+        ? "Your note"
+        : modelNames[modelId] ?? getModelDisplayName(modelId);
+
+    const lines: string[] = [`# ${discussion.topic}`, ""];
+    lines.push(`- **Mode:** ${getModeLabel(discussion.mode)}`);
+    lines.push(`- **Effort:** ${discussion.effort}`);
+    lines.push(
+      `- **Date:** ${new Date(discussion.createdAt).toLocaleString()}`
+    );
+    try {
+      const ids = JSON.parse(discussion.modelIds) as string[];
+      lines.push(`- **Participants:** ${ids.map(nameOf).join(", ")}`);
+    } catch {
+      // unreadable participant list — leave it out of the export
+    }
+    if (discussion.judgeModelId) {
+      lines.push(
+        `- **${discussion.mode === "build" ? "Architect" : "Judge"}:** ${nameOf(discussion.judgeModelId)}`
+      );
+    }
+
+    let lastRound: number | null = null;
+    for (const msg of [...messages].sort((a, b) => a.round - b.round)) {
+      if (!msg.content || msg.streaming) continue;
+      if (msg.round !== lastRound) {
+        lastRound = msg.round;
+        lines.push("", `## Round ${msg.round}`);
+      }
+      lines.push("", `### ${msg.modelName}`, "", msg.content);
+    }
+
+    if (finalResult) {
+      lines.push(
+        "",
+        `## Final answer (confidence ${finalResult.confidence}/10)`,
+        "",
+        finalResult.answer
+      );
+      if (finalResult.dissent.length > 0) {
+        lines.push(
+          "",
+          "### Remaining disagreements",
+          "",
+          ...finalResult.dissent.map((d) => `- ${d}`)
+        );
+      }
+    }
+
+    downloadMarkdown(
+      `${fileSlug(discussion.topic)}-transcript.md`,
+      `${lines.join("\n")}\n`
+    );
+  };
 
   const participantIds = useMemo<string[]>(() => {
     if (!discussion) return [];
@@ -408,14 +599,44 @@ function DiscussionPageInner() {
               <ArrowLeft className="h-4 w-4" />
               Back to dashboard
             </Link>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={requestNotificationPermission}
-            >
-              <Bell className="mr-1 h-4 w-4" />
-              Notify me
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {isActive && streamConnected && (
+                <Button variant="destructive" size="sm" onClick={handleStop}>
+                  <Square className="mr-1 h-3.5 w-3.5" />
+                  Stop
+                </Button>
+              )}
+              {(status === "stopped" || status === "failed") &&
+                !streamConnected && (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={handleResume}
+                      title="Continue from where the run failed — already-generated responses are kept"
+                    >
+                      <Play className="mr-1 h-3.5 w-3.5" />
+                      Resume
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleRestart}
+                      title="Start over from scratch — wipes the previous run's output"
+                    >
+                      <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                      Restart
+                    </Button>
+                  </>
+                )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={requestNotificationPermission}
+              >
+                <Bell className="mr-1 h-4 w-4" />
+                Notify me
+              </Button>
+            </div>
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -554,6 +775,41 @@ function DiscussionPageInner() {
         />
       )}
 
+      {discussion.mode === "build" &&
+        status !== "loading" &&
+        status !== "locked" &&
+        status !== "not_found" && (
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
+            <div className="flex items-center gap-2">
+              <StickyNote className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm font-medium">Note to the Architect</p>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {isActive
+                ? "Picked up at the Architect's next planning or review step — use it to steer the build while it runs."
+                : "The build is finished — sending a note starts a follow-up pass in which the Architect addresses it."}
+            </p>
+            <div className="mt-2 flex items-end gap-2">
+              <textarea
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    submitNote();
+                  }
+                }}
+                rows={2}
+                placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle…"
+                className="flex-1 resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <Button size="sm" onClick={submitNote} disabled={!noteDraft.trim()}>
+                Send note
+              </Button>
+            </div>
+          </div>
+        )}
+
       <DiscussionAttachments attachments={attachments} />
 
       {/* ── Result first when ready ─────────────────────────────── */}
@@ -587,6 +843,17 @@ function DiscussionPageInner() {
                 : "Live discussion"}
           </h2>
           <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
+          {messages.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadTranscript}
+              title="Download the whole conversation as one Markdown file"
+            >
+              <Download className="mr-1 h-3.5 w-3.5" />
+              Download .md
+            </Button>
+          )}
         </div>
         <DiscussionTimeline
           messages={messages}
@@ -671,6 +938,14 @@ function statusMeta(status: string): {
         bg: "bg-emerald-500/12",
         text: "text-emerald-700 dark:text-emerald-300",
         dot: "bg-emerald-500",
+        pulse: false,
+      };
+    case "stopped":
+      return {
+        label: "Stopped",
+        bg: "bg-orange-500/12",
+        text: "text-orange-700 dark:text-orange-300",
+        dot: "bg-orange-500",
         pulse: false,
       };
     case "failed":
