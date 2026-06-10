@@ -388,7 +388,7 @@ export default function SettingsPage() {
 
         {/* ── Storage ───────────────────────────────────────────── */}
         <TabsContent value="storage">
-          <StorageSettings />
+          <StorageSettings onChanged={load} />
         </TabsContent>
 
         {/* ── Security ──────────────────────────────────────────── */}

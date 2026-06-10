@@ -32,7 +32,11 @@ import {
 } from "@/lib/client/crypto-box";
 import { FolderOpen, HardDrive, Lock, ShieldCheck } from "lucide-react";
 
-export function StorageSettings() {
+export function StorageSettings({
+  onChanged,
+}: {
+  onChanged?: () => void | Promise<void>;
+}) {
   const [config, setConfig] = useState<StorageConfig | null>(null);
   const [needsPassphrase, setNeedsPassphrase] = useState(false);
   const [passphrase, setPassphraseInput] = useState("");
@@ -72,6 +76,7 @@ export function StorageSettings() {
       await unlock(passphrase, cfg.salt);
       setPassphraseInput("");
       await refresh();
+      await onChanged?.();
       setMessage("Unlocked.");
     });
 
@@ -79,6 +84,7 @@ export function StorageSettings() {
     run(async () => {
       await applyStorageConfig({ ...getConfig(), kind: "indexeddb" });
       await refresh();
+      await onChanged?.();
       setMessage("Now using this browser (IndexedDB).");
     });
 
@@ -87,6 +93,7 @@ export function StorageSettings() {
       await pickDirectory();
       await applyStorageConfig({ ...getConfig(), kind: "filesystem" });
       await refresh();
+      await onChanged?.();
       setMessage(
         "Now using a local folder. Point another browser at the same folder, or sync it via OneDrive/Dropbox, to share state."
       );
@@ -150,6 +157,7 @@ export function StorageSettings() {
       const parsed = JSON.parse(await file.text());
       replaceStore(parsed.store ?? parsed);
       await flush();
+      await onChanged?.();
       setMessage("Imported data from file.");
     });
 
