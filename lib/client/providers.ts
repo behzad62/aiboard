@@ -41,7 +41,7 @@ export function getProvider(id: string): AIProvider | undefined {
   return providers[id];
 }
 
-function getAllProviders(): AIProvider[] {
+export function getAllProviders(): AIProvider[] {
   return Object.values(providers);
 }
 

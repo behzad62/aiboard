@@ -5,6 +5,8 @@ import { ApiKeyForm } from "@/components/ApiKeyForm";
 import { PricingSettings } from "@/components/PricingSettings";
 import { CustomModelsManager } from "@/components/CustomModelsManager";
 import { StorageSettings } from "@/components/StorageSettings";
+import { ensureReady, saveSettings } from "@/lib/client/api";
+import { loadProviders } from "@/lib/client/settings-api";
 import { DetailControl } from "@/components/DetailControl";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import {
@@ -76,8 +78,9 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
 
   const load = async () => {
-    const response = await fetch("/api/keys", { cache: "no-store" });
-    const nextData: SettingsData = await response.json();
+    const { needsPassphrase } = await ensureReady();
+    if (needsPassphrase) return; // unlock via the Storage tab
+    const nextData: SettingsData = loadProviders();
     setData(nextData);
     setDraftEnabled(
       Object.fromEntries(
@@ -133,18 +136,13 @@ export default function SettingsPage() {
   };
 
   const saveDefaults = async () => {
-    await fetch("/api/keys", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "settings",
-        defaultEffort,
-        defaultMode,
-        judgeModelId: judgeModelId || undefined,
-        defaultVerbosity,
-        defaultStyleNote,
-        defaultReasoningEffort,
-      }),
+    saveSettings({
+      defaultEffort,
+      defaultMode,
+      judgeModelId: judgeModelId || undefined,
+      defaultVerbosity,
+      defaultStyleNote,
+      defaultReasoningEffort,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);

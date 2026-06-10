@@ -22,6 +22,11 @@ import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModeLabel } from "@/lib/orchestrator/config";
 import {
+  ensureReady,
+  getDiscussionData,
+  runDiscussion as runClientDiscussion,
+} from "@/lib/client/api";
+import {
   accentFor,
   buildAccentMap,
   modelMonogram,
@@ -175,57 +180,58 @@ export default function DiscussionPage() {
   useEffect(() => {
     requestNotificationPermission();
 
-    fetch(`/api/discussions/${id}`)
-      .then((r) => r.json())
-      .then((data: DiscussionData) => {
-        setDiscussion(data.discussion);
-        setAttachments(data.attachments ?? []);
-        setModelNames(data.modelNames ?? {});
-        setCurrentRound(data.discussion.currentRound);
-        setMaxRounds(data.discussion.maxRounds);
-        setConvergenceScore(data.discussion.convergenceScore);
-        setStatus(data.discussion.status);
-        setMessages(
-          data.messages.map((m) => ({
-            id: m.id,
-            round: m.round,
-            modelId: m.modelId,
-            modelName: data.modelNames?.[m.modelId] ?? getModelDisplayName(m.modelId),
-            content: m.content,
-          }))
-        );
-        setFinalResult(data.finalResult);
-        if (data.discussion.status === "completed" && data.finalResult) {
-          notifyComplete(data.discussion.topic);
-        }
-      });
+    (async () => {
+      const { needsPassphrase } = await ensureReady();
+      if (needsPassphrase) {
+        setStatus("locked");
+        return;
+      }
+      const data = getDiscussionData(id);
+      if (!data) {
+        setStatus("not_found");
+        return;
+      }
+      setDiscussion(data.discussion);
+      setAttachments(data.attachments ?? []);
+      setModelNames(data.modelNames ?? {});
+      setCurrentRound(data.discussion.currentRound);
+      setMaxRounds(data.discussion.maxRounds);
+      setConvergenceScore(data.discussion.convergenceScore);
+      setStatus(data.discussion.status);
+      setMessages(
+        data.messages.map((m) => ({
+          id: m.id,
+          round: m.round,
+          modelId: m.modelId,
+          modelName:
+            data.modelNames?.[m.modelId] ?? getModelDisplayName(m.modelId),
+          content: m.content,
+        }))
+      );
+      setFinalResult(data.finalResult);
+      if (data.discussion.status === "completed" && data.finalResult) {
+        notifyComplete(data.discussion.topic);
+      }
+    })();
   }, [id, requestNotificationPermission, notifyComplete]);
 
+  // Keep the run callback fresh without restarting the run.
+  const handleEventRef = useRef(handleEvent);
+  handleEventRef.current = handleEvent;
+  const startedRef = useRef(false);
+
   useEffect(() => {
-    if (!id || status === "completed" || status === "failed") return;
+    if (!id || !discussion || startedRef.current) return;
+    if (status === "completed" || status === "failed" || status === "locked")
+      return;
 
-    const source = new EventSource(`/api/discussions/${id}/stream`);
+    // The engine runs entirely in this tab; events update state directly.
+    startedRef.current = true;
     setStreamConnected(true);
-
-    source.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data) as OrchestratorEvent;
-        handleEvent(event);
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    source.onerror = () => {
-      setStreamConnected(false);
-      source.close();
-    };
-
-    return () => {
-      setStreamConnected(false);
-      source.close();
-    };
-  }, [id, status, handleEvent]);
+    runClientDiscussion(id, (event) => handleEventRef.current(event)).finally(
+      () => setStreamConnected(false)
+    );
+  }, [id, discussion, status]);
 
   const participantIds = useMemo<string[]>(() => {
     if (!discussion) return [];

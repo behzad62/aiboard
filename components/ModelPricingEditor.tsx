@@ -9,6 +9,7 @@ import {
   formatUsdPerMillion,
   type ModelPricing,
 } from "@/lib/providers/pricing";
+import { savePricingOverride } from "@/lib/client/settings-api";
 
 interface ModelPricingEditorProps {
   fullModelId: string;
@@ -55,19 +56,12 @@ export function ModelPricingEditor({
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "pricing_override",
-          fullModelId,
-          inputUsdPer1M: nextInput,
-          outputUsdPer1M: nextOutput,
-          cachedInputUsdPer1M: nextCached,
-        }),
+      savePricingOverride({
+        fullModelId,
+        inputUsdPer1M: nextInput,
+        outputUsdPer1M: nextOutput,
+        cachedInputUsdPer1M: nextCached,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to save pricing override");
       setMessage("Pricing override saved");
       await onSaved();
     } catch (err) {
@@ -81,17 +75,7 @@ export function ModelPricingEditor({
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "pricing_override",
-          fullModelId,
-          clear: true,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to reset pricing override");
+      savePricingOverride({ fullModelId, clear: true });
       setMessage("Pricing override reset");
       await onSaved();
     } catch (err) {

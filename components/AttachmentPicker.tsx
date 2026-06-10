@@ -9,6 +9,10 @@ import { formatCategoryLabel } from "@/lib/attachments/classify";
 import { MAX_ATTACHMENTS } from "@/lib/attachments/types";
 import { Paperclip, X, FileText, Image as ImageIcon, Music, Video } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  deleteAttachmentFile,
+  saveAttachmentFile,
+} from "@/lib/client/settings-api";
 
 const ACCEPT =
   "image/*,audio/*,video/*,.pdf,.txt,.md,.csv,.json,.html,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.rtf,.xml";
@@ -47,17 +51,11 @@ export function AttachmentPicker({ attachments, onChange }: AttachmentPickerProp
       setUploading(true);
       setError(null);
       try {
-        const formData = new FormData();
-        Array.from(files).forEach((f) => formData.append("files", f));
-
-        const res = await fetch("/api/attachments", {
-          method: "POST",
-          body: formData,
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Upload failed");
-
-        onChange([...attachments, ...data.attachments]);
+        const saved = [];
+        for (const file of Array.from(files)) {
+          saved.push(await saveAttachmentFile(file));
+        }
+        onChange([...attachments, ...saved]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Upload failed");
       } finally {
@@ -69,7 +67,7 @@ export function AttachmentPicker({ attachments, onChange }: AttachmentPickerProp
   );
 
   const remove = async (id: string) => {
-    await fetch(`/api/attachments?id=${id}`, { method: "DELETE" });
+    deleteAttachmentFile(id);
     onChange(attachments.filter((a) => a.id !== id));
   };
 

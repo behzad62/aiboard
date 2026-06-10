@@ -4,6 +4,7 @@ import type { AttachmentSummary } from "@/lib/attachments/types";
 import { formatCategoryLabel } from "@/lib/attachments/classify";
 import { Badge } from "@/components/ui/badge";
 import { FileText, Image as ImageIcon, Music, Video } from "lucide-react";
+import { getAttachmentDataUrl } from "@/lib/client/settings-api";
 
 interface DiscussionAttachmentsProps {
   attachments: AttachmentSummary[];
@@ -29,20 +30,34 @@ export function DiscussionAttachments({ attachments }: DiscussionAttachmentsProp
     <div className="rounded-lg border bg-muted/20 p-4">
       <h3 className="mb-3 text-sm font-semibold">Attached files</h3>
       <ul className="flex flex-wrap gap-2">
-        {attachments.map((file) => (
-          <li key={file.id}>
-            <a
-              href={`/api/attachments/${file.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-accent"
-            >
+        {attachments.map((file) => {
+          const url = getAttachmentDataUrl(file.id);
+          const inner = (
+            <>
               <CategoryIcon category={file.category} />
               <span>{file.filename}</span>
               <Badge variant="secondary">{formatCategoryLabel(file.category)}</Badge>
-            </a>
-          </li>
-        ))}
+            </>
+          );
+          const className =
+            "inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-accent";
+          return (
+            <li key={file.id}>
+              {url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={className}
+                >
+                  {inner}
+                </a>
+              ) : (
+                <span className={className}>{inner}</span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

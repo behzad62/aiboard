@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import {
   applyStorageConfig,
+  exportStore,
   flush,
   getConfig,
   initStore,
@@ -121,24 +122,35 @@ export function StorageSettings() {
       setMessage("Encryption off.");
     });
 
-  const importFromServer = () =>
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const exportToFile = () =>
+    run(async () => {
+      const blob = new Blob([JSON.stringify(exportStore(), null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "ai-discussion-board-store.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage("Exported your data to a JSON file.");
+    });
+
+  const importFromFile = (file: File) =>
     run(async () => {
       if (
         !window.confirm(
-          "Import all data from the server into this browser's storage? This replaces the current client store."
+          "Import this file? It replaces the current data in this browser."
         )
       ) {
         return;
       }
-      const res = await fetch("/api/export");
-      const data = await res.json();
-      if (!data.store) {
-        setMessage("No server data found to import.");
-        return;
-      }
-      replaceStore(data.store);
+      const parsed = JSON.parse(await file.text());
+      replaceStore(parsed.store ?? parsed);
       await flush();
-      setMessage("Imported from the server into client storage.");
+      setMessage("Imported data from file.");
     });
 
   if (needsPassphrase) {
@@ -280,16 +292,34 @@ export function StorageSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Migrate from the server</CardTitle>
+          <CardTitle>Backup &amp; restore</CardTitle>
           <CardDescription>
-            One-time import of your existing discussions, settings, keys, and
-            custom models into client storage.
+            Export everything to a JSON file, or import it into another browser
+            or device — a portable backup without a shared folder.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button variant="outline" onClick={importFromServer} disabled={busy}>
-            Import from server
+        <CardContent className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={exportToFile} disabled={busy}>
+            Export to file
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy}
+          >
+            Import from file
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importFromFile(file);
+              e.target.value = "";
+            }}
+          />
         </CardContent>
       </Card>
 

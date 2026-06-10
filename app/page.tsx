@@ -38,6 +38,7 @@ import {
   estimateDiscussionCostUsd,
   getModeInfo,
 } from "@/lib/orchestrator/config";
+import { createDiscussion, ensureReady, loadDashboard } from "@/lib/client/api";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
@@ -68,6 +69,7 @@ function formatUsd(n: number): string {
 export default function HomePage() {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [locked, setLocked] = useState(false);
   const [topic, setTopic] = useState("");
   const [mode, setMode] = useState<DiscussionMode>("panel");
   const [effort, setEffort] = useState<EffortLevel>("medium");
@@ -95,9 +97,14 @@ export default function HomePage() {
   );
 
   useEffect(() => {
-    fetch("/api/discussions", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d: DashboardData) => {
+    (async () => {
+      const { needsPassphrase } = await ensureReady();
+      if (needsPassphrase) {
+        setLocked(true);
+        return;
+      }
+      const d = loadDashboard();
+      {
         setData(d);
         setMode(d.settings.defaultMode);
         setEffort(d.settings.defaultEffort);
@@ -116,8 +123,8 @@ export default function HomePage() {
             ? d.settings.judgeModelId
             : defaultSelectedModels[0] ?? models[0] ?? ""
         );
-      })
-      .catch(() => setError("Failed to load dashboard"));
+      }
+    })().catch(() => setError("Failed to load dashboard"));
   }, []);
 
   useEffect(() => {
@@ -183,23 +190,17 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/discussions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          topic,
-          mode,
-          effort,
-          modelIds: compatibleSelected,
-          judgeModelId: judgeModelId || compatibleSelected[0],
-          attachmentIds: attachments.map((a) => a.id),
-          verbosity,
-          styleNote: styleNote.trim() || undefined,
-          reasoningEffort,
-        }),
+      const result = createDiscussion({
+        topic,
+        mode,
+        effort,
+        modelIds: compatibleSelected,
+        judgeModelId: judgeModelId || compatibleSelected[0],
+        attachmentIds: attachments.map((a) => a.id),
+        verbosity,
+        styleNote: styleNote.trim() || undefined,
+        reasoningEffort,
       });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error ?? "Failed to start");
       router.push(`/discussion/${result.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start discussion");
@@ -216,6 +217,23 @@ export default function HomePage() {
       description: m.description,
       capabilities: m.capabilities,
     })) ?? [];
+
+  if (locked) {
+    return (
+      <Card className="mx-auto max-w-md">
+        <CardHeader>
+          <CardTitle>Storage is locked</CardTitle>
+          <CardDescription>
+            Your data is encrypted. Open{" "}
+            <a href="/settings" className="underline">
+              Settings → Storage
+            </a>{" "}
+            and enter your passphrase to unlock it.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   return (
     <div className="grid gap-8 lg:grid-cols-5">

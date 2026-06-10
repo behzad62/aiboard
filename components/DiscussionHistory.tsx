@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import type { Discussion } from "@/lib/db/schema";
 import { Trash2 } from "lucide-react";
+import { deleteDiscussion } from "@/lib/client/api";
 
 interface DiscussionHistoryProps {
   discussions: Discussion[];
@@ -37,7 +38,7 @@ export function DiscussionHistory({
     }
     setDeletingId(d.id);
     try {
-      await fetch(`/api/discussions/${d.id}`, { method: "DELETE" });
+      deleteDiscussion(d.id);
       onDeleted?.(d.id);
     } finally {
       setDeletingId(null);

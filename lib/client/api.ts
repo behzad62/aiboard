@@ -118,10 +118,27 @@ export function getDiscussionData(id: string) {
   const attachmentIds: string[] = discussion.attachmentIds
     ? JSON.parse(discussion.attachmentIds)
     : [];
+  const rawFinal = getFinalResult(id);
+  let finalResult: { answer: string; confidence: number; dissent: string[] } | null =
+    null;
+  if (rawFinal) {
+    let dissent: string[] = [];
+    try {
+      dissent = JSON.parse(rawFinal.dissent ?? "[]") as string[];
+    } catch {
+      dissent = [];
+    }
+    finalResult = {
+      answer: rawFinal.answer,
+      confidence: rawFinal.confidence,
+      dissent,
+    };
+  }
+
   return {
     discussion,
     messages: getMessagesForDiscussion(id),
-    finalResult: getFinalResult(id) ?? null,
+    finalResult,
     modelNames: Object.fromEntries(
       modelIds.map((fullId) => [fullId, resolveModelName(fullId)])
     ),

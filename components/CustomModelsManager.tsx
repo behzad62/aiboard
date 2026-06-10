@@ -7,6 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  addCustomModel,
+  deleteCustomModel,
+  listCustomModels,
+  testCustomModel,
+  updateCustomModelCapabilities,
+} from "@/lib/client/settings-api";
 
 interface ModelCaps {
   image: boolean;
@@ -22,7 +29,7 @@ interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities?: ModelCaps;
-  createdAt: string;
+  createdAt?: string;
 }
 
 const CAPABILITY_FIELDS: { key: keyof ModelCaps; label: string }[] = [
@@ -51,9 +58,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
 
   const load = async () => {
-    const res = await fetch("/api/custom-models", { cache: "no-store" });
-    const data = await res.json();
-    setModels(data.customModels ?? []);
+    setModels(listCustomModels());
   };
 
   useEffect(() => {
@@ -76,19 +81,13 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/custom-models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label,
-          baseURL,
-          model,
-          apiKey: apiKey || undefined,
-          capabilities,
-        }),
+      addCustomModel({
+        label,
+        baseURL,
+        model,
+        apiKey: apiKey || undefined,
+        capabilities,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to add model");
       setMessage("Custom model added.");
       reset();
       await load();
@@ -104,19 +103,13 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
     setTesting(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/custom-models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "test",
-          baseURL,
-          model,
-          apiKey: apiKey || undefined,
-        }),
+      const data = await testCustomModel({
+        baseURL,
+        model,
+        apiKey: apiKey || undefined,
       });
-      const data = await res.json();
       setMessage(
-        data.valid
+        data.ok
           ? `Connection OK: ${data.preview}`
           : `Test failed: ${data.error ?? "unknown error"}`
       );
@@ -128,23 +121,14 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
   };
 
   const remove = async (id: string) => {
-    await fetch(`/api/custom-models?id=${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
+    deleteCustomModel(id);
     await load();
     onChanged?.();
   };
 
   const toggleCapability = async (m: CustomModelView, key: keyof ModelCaps) => {
     const current = m.capabilities ?? { ...NO_CAPS };
-    await fetch("/api/custom-models", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: m.id,
-        capabilities: { ...current, [key]: !current[key] },
-      }),
-    });
+    updateCustomModelCapabilities(m.id, { ...current, [key]: !current[key] });
     await load();
     onChanged?.();
   };

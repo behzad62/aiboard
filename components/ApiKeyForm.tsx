@@ -15,6 +15,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import type { ModelInfo } from "@/lib/providers/base";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
+import { saveProviderKey, validateProvider } from "@/lib/client/settings-api";
 
 interface ProviderConfig {
   providerId: string;
@@ -52,18 +53,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setLoading(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          providerId: provider.providerId,
-          apiKey: apiKey || undefined,
-          defaultModel,
-          enabled,
-        }),
+      saveProviderKey({
+        providerId: provider.providerId,
+        apiKey: apiKey || undefined,
+        defaultModel,
+        enabled,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to save");
       setApiKey("");
       setMessage("Saved successfully");
       await onSaved();
@@ -78,16 +73,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setTesting(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/providers/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          providerId: provider.providerId,
-          apiKey: apiKey || undefined,
-          modelId: defaultModel,
-        }),
+      const data = await validateProvider({
+        providerId: provider.providerId,
+        apiKey: apiKey || undefined,
+        modelId: defaultModel,
       });
-      const data = await res.json();
       setMessage(
         data.valid
           ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
@@ -115,17 +105,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
 
     try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          providerId: provider.providerId,
-          defaultModel,
-          enabled: checked,
-        }),
+      saveProviderKey({
+        providerId: provider.providerId,
+        defaultModel,
+        enabled: checked,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to update provider");
       setMessage(checked ? "Provider enabled" : "Provider disabled");
       await onSaved();
     } catch (err) {
