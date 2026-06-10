@@ -648,7 +648,13 @@ function DiscussionPageInner() {
             )}
           </div>
 
-          <h1 className="mt-4 max-w-4xl font-display text-3xl font-semibold leading-[1.15] tracking-tight text-foreground sm:text-4xl">
+          {/* Topics range from a short question to a long build spec — scale
+              the size down as it gets longer so an essay-length prompt doesn't
+              dominate the page. */}
+          <h1
+            className={cnTopic(discussion.topic.length)}
+            title={discussion.topic}
+          >
             {discussion.topic}
           </h1>
 
@@ -882,6 +888,19 @@ function DiscussionPageInner() {
 
 function cnChip(bg: string, text: string): string {
   return `flex h-5 w-5 items-center justify-center rounded-full font-mono text-[0.6rem] font-bold ${bg} ${text}`;
+}
+
+/** Topic heading size: large for short titles, smaller for long build specs. */
+function cnTopic(length: number): string {
+  const base =
+    "mt-4 max-w-4xl font-display font-semibold tracking-tight text-foreground";
+  if (length > 280) {
+    return `${base} text-lg leading-snug sm:text-xl`;
+  }
+  if (length > 120) {
+    return `${base} text-xl leading-snug sm:text-2xl`;
+  }
+  return `${base} text-3xl leading-[1.15] sm:text-4xl`;
 }
 
 function MetaChip({ children }: { children: React.ReactNode }) {

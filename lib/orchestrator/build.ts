@@ -34,6 +34,8 @@ export interface BuildTask {
    * when one task genuinely consumes another's output.
    */
   dependsOn?: string[];
+  /** Architect's preferred worker (display name) for this task, if any. */
+  assignTo?: string;
 }
 
 // ── Architect action protocol ─────────────────────────────────────────────────
@@ -52,6 +54,9 @@ export interface PlanAction {
     contextFiles?: string[];
     expectedOutputs?: string;
     dependsOn?: string[];
+    /** Optional: pin this task to a worker by display name (e.g. the best
+     * performer for a hard task). The engine matches it case-insensitively. */
+    assignTo?: string;
   }>;
   notes?: string;
 }
@@ -66,6 +71,13 @@ export interface ReviewAction {
   newTasks?: PlanAction["tasks"];
   done: boolean;
   notes?: string;
+}
+
+/** A compact worker-performance line for the prompt scoreboard. */
+export function scoreboardSection(scoreboard?: string): string {
+  return scoreboard?.trim()
+    ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts and response times — higher score = more reliable). Assign harder or foundational tasks to higher-scoring workers via each task's "assignTo" (worker display name); benched workers won't be given tasks:\n${scoreboard}`
+    : "";
 }
 
 /** Run a shell command in the project folder via the user's local runner. */
@@ -312,6 +324,7 @@ export function buildArchitectPlanPrompt(input: {
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   userNotes?: string;
+  scoreboard?: string;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -333,6 +346,7 @@ export function buildArchitectPlanPrompt(input: {
     userNotesSection(input.userNotes),
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
+    scoreboardSection(input.scoreboard),
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
@@ -341,7 +355,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"]}],"notes":"conventions all workers must follow"}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow"}`,
     "```",
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
@@ -397,6 +411,7 @@ export function buildArchitectReviewPrompt(input: {
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   userNotes?: string;
+  scoreboard?: string;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -413,6 +428,7 @@ export function buildArchitectReviewPrompt(input: {
     "Work completed since your last review:",
     input.executedText,
     "",
+    scoreboardSection(input.scoreboard),
     "Review each task's output. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     input.readHopsLeft && input.readHopsLeft > 0
@@ -424,7 +440,7 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[]}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[],"assignTo":"optional worker display name"}],"done":false,"notes":"updated conventions if any"}`,
     "```",
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files. Always list the existing files a new task builds on in its contextFiles.`,
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,

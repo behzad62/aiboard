@@ -159,6 +159,79 @@ export async function runBuildDiscussion(
         }
       : null;
 
+  // ── Worker scoreboard ─────────────────────────────────────────────────────
+  // Tracks each worker's performance so the Architect can assign harder tasks
+  // to the reliable ones, and so a model that stops responding gets benched
+  // while others can carry on. Scores are derived objectively from the
+  // Architect's approve/fix verdicts, failures, and response times — no model
+  // is asked to self-report.
+  interface WorkerStat {
+    index: number;
+    name: string;
+    attempts: number;
+    approvals: number;
+    fixes: number;
+    failures: number; // threw, or returned no files when files were the deliverable
+    totalMs: number;
+    responses: number; // successful, non-empty responses (for avg time)
+    active: boolean;
+  }
+  const scoreboard: WorkerStat[] = workers.map((w, index) => ({
+    index,
+    name: w.displayName,
+    attempts: 0,
+    approvals: 0,
+    fixes: 0,
+    failures: 0,
+    totalMs: 0,
+    responses: 0,
+    active: true,
+  }));
+
+  const workerScore = (s: WorkerStat): number => {
+    let score = s.approvals * 3 - s.fixes * 1 - s.failures * 4;
+    // Light speed tie-breaker: reward sub-20s average, nudge down very slow.
+    if (s.responses > 0) {
+      const avgSec = s.totalMs / s.responses / 1000;
+      if (avgSec < 20) score += 1;
+      else if (avgSec > 90) score -= 1;
+    }
+    return score;
+  };
+
+  /** Active workers, best first (score desc, then faster avg, then order). */
+  const rankedActiveWorkers = (): WorkerStat[] =>
+    scoreboard
+      .filter((s) => s.active)
+      .sort((a, b) => {
+        const ds = workerScore(b) - workerScore(a);
+        if (ds !== 0) return ds;
+        const avgA = a.responses > 0 ? a.totalMs / a.responses : Infinity;
+        const avgB = b.responses > 0 ? b.totalMs / b.responses : Infinity;
+        if (avgA !== avgB) return avgA - avgB;
+        return a.index - b.index;
+      });
+
+  const scoreboardText = (): string =>
+    scoreboard
+      .slice()
+      .sort((a, b) => workerScore(b) - workerScore(a))
+      .map((s) => {
+        const avg =
+          s.responses > 0 ? ` avg ${Math.round(s.totalMs / s.responses / 1000)}s` : "";
+        const bench = s.active ? "" : " [BENCHED — not responding]";
+        return `- ${s.name}: score ${workerScore(s)} (${s.approvals} approved, ${s.fixes} fix${s.fixes === 1 ? "" : "es"}, ${s.failures} failed/empty${avg})${bench}`;
+      })
+      .join("\n");
+
+  /** Match an Architect-provided assignTo name to a worker index. */
+  const workerIndexByName = (name?: string): number | null => {
+    if (!name) return null;
+    const lower = name.trim().toLowerCase();
+    const found = scoreboard.find((s) => s.name.toLowerCase() === lower);
+    return found ? found.index : null;
+  };
+
   // ── Filesystem: virtual always; the real folder when granted ──────────────
   // A folder problem (no permission, moved, or — common on Documents —
   // OneDrive "online-only" placeholder files that throw NotFoundError) must
@@ -687,6 +760,7 @@ export async function runBuildDiscussion(
     dependsOn: Array.isArray(raw.dependsOn)
       ? raw.dependsOn.filter((d): d is string => typeof d === "string")
       : [],
+    assignTo: typeof raw.assignTo === "string" ? raw.assignTo : undefined,
   });
 
   // ── Status bookkeeping ─────────────────────────────────────────────────────
@@ -733,6 +807,7 @@ export async function runBuildDiscussion(
       mcpToolsDoc,
       mcpCallsLeft: mcpCallsLeftThisPhase(),
       userNotes: userNotesText(),
+      scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       previousSummary: truncate(previousSummary, 6_000),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
@@ -785,7 +860,6 @@ export async function runBuildDiscussion(
 
   // ── 2..n) Implement waves + Architect reviews ──────────────────────────────
   let workerCalls = 0;
-  let rrIndex = 0;
   let done = false;
 
   for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
@@ -797,9 +871,9 @@ export async function runBuildDiscussion(
     const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
-      const workerIndex = task.workerIndex ?? rrIndex++ % workers.length;
-      task.workerIndex = workerIndex;
-      const worker = workers[workerIndex];
+      const worker = workers[task.workerIndex!];
+      const stat = scoreboard[task.workerIndex!];
+      stat.attempts += 1;
 
       emit({
         type: "task_status",
@@ -818,6 +892,7 @@ export async function runBuildDiscussion(
         }
       }
 
+      const startedAt = Date.now();
       try {
         const output = await streamTurn(
           worker,
@@ -840,6 +915,28 @@ export async function runBuildDiscussion(
         );
         const files = await writeEmittedFiles(output, task.id);
         const { prose } = extractArtifacts(output);
+        // A worker that produced no files contributed nothing usable — count
+        // it as a failure for scoring (the deliverable is files).
+        if (files.length === 0) {
+          stat.failures += 1;
+          task.status = "failed";
+          emit({
+            type: "task_status",
+            taskId: task.id,
+            title: task.title,
+            status: "failed",
+            worker: worker.displayName,
+            cycle,
+          });
+          emit({
+            type: "diagnostic",
+            phase: "model_failed",
+            message: `${worker.displayName} returned no files for ${task.id}`,
+          });
+          return;
+        }
+        stat.responses += 1;
+        stat.totalMs += Date.now() - startedAt;
         task.status = "review";
         executed.push({ task, worker, files, notes: truncate(prose, 1_500) });
         emit({
@@ -852,6 +949,7 @@ export async function runBuildDiscussion(
         });
       } catch (err) {
         if (isAbortError(err)) throw err;
+        stat.failures += 1;
         task.status = "failed";
         emit({
           type: "task_status",
@@ -901,6 +999,24 @@ export async function runBuildDiscussion(
       );
       if (ready.length === 0) break;
       const batch = ready.slice(0, limits.totalWorkerCalls - workerCalls);
+
+      // Assign a worker to each task: a still-active pin (fix tasks) wins, then
+      // the Architect's assignTo, then auto-assignment spreading work across
+      // active workers best-first so reliable models get the earlier tasks.
+      const ranked = rankedActiveWorkers();
+      let rr = 0;
+      for (const task of batch) {
+        const pinned =
+          task.workerIndex != null && scoreboard[task.workerIndex]?.active
+            ? task.workerIndex
+            : null;
+        const requested = workerIndexByName(task.assignTo);
+        const requestedActive =
+          requested != null && scoreboard[requested].active ? requested : null;
+        task.workerIndex =
+          pinned ?? requestedActive ?? ranked[rr++ % ranked.length].index;
+      }
+
       workerCalls += batch.length;
       if (batch.length > 1) {
         emit({
@@ -1017,6 +1133,7 @@ export async function runBuildDiscussion(
           mcpToolsDoc,
           mcpCallsLeft: mcpCallsLeftThisPhase(),
           userNotes: userNotesText(),
+          scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
         }),
         `Architect is reviewing wave ${cycle}`
       ));
@@ -1058,10 +1175,15 @@ export async function runBuildDiscussion(
     for (const result of action.results) {
       const task = tasks.find((t) => t.id === result.taskId);
       if (!task || task.status === "done") continue;
+      // Credit/debit the worker that produced this task's output.
+      const verdictStat =
+        task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (result.verdict === "approve") {
+        if (verdictStat) verdictStat.approvals += 1;
         task.status = "done";
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       } else {
+        if (verdictStat) verdictStat.fixes += 1;
         task.status = "fixing";
         // The fixing worker must see the files it wrote last time.
         const prior = executed.find((e) => e.task.id === task.id);
@@ -1077,10 +1199,35 @@ export async function runBuildDiscussion(
     // Tasks the review didn't mention count as approved.
     for (const { task } of executed) {
       if (task.status === "review") {
+        if (task.workerIndex != null) scoreboard[task.workerIndex].approvals += 1;
         task.status = "done";
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       }
     }
+
+    // Bench workers that failed/returned nothing this wave while others can
+    // carry the load — they won't be assigned tasks until the build ends.
+    // Never bench the last active worker.
+    for (const stat of scoreboard) {
+      if (!stat.active) continue;
+      const failedThisWaveOnly =
+        stat.failures > 0 && stat.responses === 0 && stat.attempts > 0;
+      const others = scoreboard.filter((s) => s.active && s.index !== stat.index);
+      if (failedThisWaveOnly && others.length > 0) {
+        stat.active = false;
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Benching ${stat.name} — it hasn't produced usable output; remaining workers will continue`,
+        });
+      }
+    }
+
+    emit({
+      type: "diagnostic",
+      phase: "judging",
+      message: `Worker scoreboard after wave ${cycle}:\n${scoreboardText()}`,
+    });
 
     for (const raw of (action.newTasks ?? []).slice(0, limits.tasksPerWave)) {
       const task = toTask(raw, tasks.length);
