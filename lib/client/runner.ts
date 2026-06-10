@@ -134,6 +134,11 @@ export async function searchViaRunner(
 export interface McpToolInfo {
   name: string;
   description: string;
+  /** JSON Schema for the tool's arguments (from tools/list), if provided. */
+  inputSchema?: {
+    properties?: Record<string, { type?: string }>;
+    required?: string[];
+  } | null;
 }
 
 export interface McpServerInfo {

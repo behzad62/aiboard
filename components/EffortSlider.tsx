@@ -1,8 +1,8 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { EffortLevel } from "@/lib/db/schema";
-import { getEffortLabel } from "@/lib/orchestrator/config";
+import type { DiscussionMode, EffortLevel } from "@/lib/db/schema";
+import { getBuildEffortLabel, getEffortLabel } from "@/lib/orchestrator/config";
 import { Label } from "@/components/ui/label";
 
 const LEVELS: EffortLevel[] = ["low", "medium", "high"];
@@ -10,9 +10,12 @@ const LEVELS: EffortLevel[] = ["low", "medium", "high"];
 interface EffortSliderProps {
   value: EffortLevel;
   onChange: (value: EffortLevel) => void;
+  /** Build mode shows cycle/task budgets instead of discussion rounds. */
+  mode?: DiscussionMode;
 }
 
-export function EffortSlider({ value, onChange }: EffortSliderProps) {
+export function EffortSlider({ value, onChange, mode }: EffortSliderProps) {
+  const isBuild = mode === "build";
   return (
     <div className="space-y-3">
       <Label>Effort level</Label>
@@ -31,11 +34,18 @@ export function EffortSlider({ value, onChange }: EffortSliderProps) {
           >
             <div className="font-medium capitalize">{level}</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {getEffortLabel(level)}
+              {isBuild ? getBuildEffortLabel(level) : getEffortLabel(level)}
             </div>
           </button>
         ))}
       </div>
+      {isBuild && (
+        <p className="text-xs text-muted-foreground">
+          In Build mode the effort sets the team&apos;s budget: how many
+          plan→implement→review cycles run, how many tasks per wave, and how
+          many worker calls in total.
+        </p>
+      )}
     </div>
   );
 }

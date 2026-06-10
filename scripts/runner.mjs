@@ -425,6 +425,7 @@ const server = http.createServer(async (req, res) => {
         tools: s.tools.map((t) => ({
           name: t.name,
           description: t.description ?? "",
+          inputSchema: t.inputSchema ?? null,
         })),
       })),
     });

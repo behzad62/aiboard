@@ -331,3 +331,22 @@ export function getEffortLabel(effort: EffortLevel): string {
       return "High (6+ rounds)";
   }
 }
+
+/** Build-mode budgets per effort level (used by the build engine and the UI). */
+export interface BuildLimits {
+  cycles: number;
+  tasksPerWave: number;
+  totalWorkerCalls: number;
+}
+
+export const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
+  low: { cycles: 2, tasksPerWave: 3, totalWorkerCalls: 8 },
+  medium: { cycles: 4, tasksPerWave: 5, totalWorkerCalls: 16 },
+  high: { cycles: 6, tasksPerWave: 8, totalWorkerCalls: 32 },
+};
+
+/** What effort means in Build mode — cycles/tasks, not discussion rounds. */
+export function getBuildEffortLabel(effort: EffortLevel): string {
+  const l = BUILD_LIMITS[effort];
+  return `${l.cycles} review cycles · up to ${l.tasksPerWave} tasks/wave · ${l.totalWorkerCalls} worker calls`;
+}

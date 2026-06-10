@@ -285,8 +285,8 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
   if (!mcpToolsDoc?.trim() || !mcpCallsLeft || mcpCallsLeft <= 0) return "";
   return [
     "TOOL — MCP tools (via the user's local runner; e.g. drive a real browser to verify your build). To call one, respond with ONLY:",
-    '{"action":"tool","server":"<server>","tool":"<tool name>","args":{ /* per the tool\'s parameters */ },"reason":"why"}',
-    `The result comes back to you as text. ${mcpCallsLeft} tool call${mcpCallsLeft === 1 ? "" : "s"} left in this phase. The user may deny a call — respect that and continue. Available tools:`,
+    '{"action":"tool","server":"<server>","tool":"<tool name>","args":{ /* per the tool\'s signature */ },"reason":"why"}',
+    `The result comes back to you as text. Each tool below shows its exact argument names as name: type ("?" = optional) — use EXACTLY those names in "args". ${mcpCallsLeft} tool call${mcpCallsLeft === 1 ? "" : "s"} left in this phase. The user may deny a call — respect that and continue. Available tools:`,
     mcpToolsDoc,
   ].join("\n");
 }

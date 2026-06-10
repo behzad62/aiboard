@@ -3,7 +3,7 @@
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VERBOSITY_OPTIONS } from "@/lib/orchestrator/config";
-import type { Verbosity } from "@/lib/db/schema";
+import type { DiscussionMode, Verbosity } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
 
 interface DetailControlProps {
@@ -12,6 +12,8 @@ interface DetailControlProps {
   styleNote: string;
   onStyleNoteChange: (value: string) => void;
   idPrefix?: string;
+  /** Build mode notes that this mainly affects the hand-off summary. */
+  mode?: DiscussionMode;
 }
 
 /**
@@ -25,6 +27,7 @@ export function DetailControl({
   styleNote,
   onStyleNoteChange,
   idPrefix = "detail",
+  mode,
 }: DetailControlProps) {
   const active = VERBOSITY_OPTIONS.find((o) => o.value === verbosity);
 
@@ -54,7 +57,11 @@ export function DetailControl({
           })}
         </div>
         {active && (
-          <p className="text-xs text-muted-foreground">{active.description}</p>
+          <p className="text-xs text-muted-foreground">
+            {active.description}
+            {mode === "build" &&
+              " In Build mode this mainly shapes the workers' notes and the final hand-off summary — emitted code files are always complete."}
+          </p>
         )}
       </div>
 

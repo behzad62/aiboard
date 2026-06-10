@@ -325,13 +325,14 @@ export default function HomePage() {
               </>
             )}
 
-            <EffortSlider value={effort} onChange={setEffort} />
+            <EffortSlider value={effort} onChange={setEffort} mode={mode} />
 
             <DetailControl
               verbosity={verbosity}
               onVerbosityChange={setVerbosity}
               styleNote={styleNote}
               onStyleNoteChange={setStyleNote}
+              mode={mode}
             />
 
             <ReasoningControl

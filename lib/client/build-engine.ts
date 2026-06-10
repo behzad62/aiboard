@@ -16,7 +16,12 @@ import type {
 import type { SelectedModel } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import { resolveModelName } from "./providers";
-import { EFFORT_CONFIG, BUILD_ROUND_MIN_TOKENS, BUILD_INTEGRATOR_MIN_TOKENS } from "@/lib/orchestrator/config";
+import {
+  BUILD_INTEGRATOR_MIN_TOKENS,
+  BUILD_LIMITS,
+  BUILD_ROUND_MIN_TOKENS,
+  EFFORT_CONFIG,
+} from "@/lib/orchestrator/config";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
@@ -79,18 +84,6 @@ export interface BuildHooks {
     reason?: string
   ) => Promise<CommandApprovalDecision>;
 }
-
-interface BuildLimits {
-  cycles: number;
-  tasksPerWave: number;
-  totalWorkerCalls: number;
-}
-
-const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
-  low: { cycles: 2, tasksPerWave: 3, totalWorkerCalls: 8 },
-  medium: { cycles: 4, tasksPerWave: 5, totalWorkerCalls: 16 },
-  high: { cycles: 6, tasksPerWave: 8, totalWorkerCalls: 32 },
-};
 
 const RUNS_PER_PHASE = 4;
 const TOTAL_RUNS = 12;
@@ -234,7 +227,21 @@ export async function runBuildDiscussion(
         diskGranted = true;
       }
       // MCP bridge: tools from stdio MCP servers the runner spawned
-      // (e.g. Playwright to verify the build in a real browser).
+      // (e.g. Playwright to verify the build in a real browser). Each tool is
+      // documented as a call signature from its input schema — without the
+      // exact parameter names models guess them and get validation errors.
+      const toolSignature = (t: {
+        name: string;
+        inputSchema?: { properties?: Record<string, { type?: string }>; required?: string[] } | null;
+      }): string => {
+        const props = t.inputSchema?.properties;
+        if (!props || Object.keys(props).length === 0) return `${t.name}()`;
+        const required = new Set(t.inputSchema?.required ?? []);
+        const params = Object.entries(props)
+          .slice(0, 10)
+          .map(([key, def]) => `${key}${required.has(key) ? "" : "?"}: ${def?.type ?? "any"}`);
+        return `${t.name}({${params.join(", ")}})`;
+      };
       const servers = (await listMcpServers(config)) ?? [];
       const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
       if (ready.length > 0) {
@@ -243,7 +250,7 @@ export async function runBuildDiscussion(
             (s) =>
               `Server "${s.name}":\n${s.tools
                 .slice(0, 30)
-                .map((t) => `- ${t.name}: ${truncate(t.description ?? "", 160)}`)
+                .map((t) => `- ${toolSignature(t)} — ${truncate(t.description ?? "", 160)}`)
                 .join("\n")}`
           )
           .join("\n");
