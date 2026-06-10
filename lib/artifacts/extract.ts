@@ -96,6 +96,24 @@ function pathFromFirstLine(contentLines: string[]): string | null {
   return null;
 }
 
+/**
+ * A BARE attribute line as the first content line, e.g. the model writes
+ * ```html on the fence and `path=index.html` on the next line. Unlike the
+ * comment form, this line is metadata, not file content — the caller strips it.
+ */
+function bareAttrFirstLineIndex(contentLines: string[]): number {
+  const idx = contentLines.findIndex((l) => l.trim().length > 0);
+  if (idx < 0) return -1;
+  const m = /^\s*(?:path|file|filename)\s*[:=]\s*(\S+)\s*$/i.exec(
+    contentLines[idx]
+  );
+  return m && looksLikePath(m[1]) ? idx : -1;
+}
+
+function bareAttrPath(line: string): string {
+  return /^\s*(?:path|file|filename)\s*[:=]\s*(\S+)\s*$/i.exec(line)![1];
+}
+
 function lastNonEmpty(lines: string[]): string | undefined {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].trim().length > 0) return lines[i];
@@ -130,16 +148,23 @@ export function extractArtifacts(text: string): ArtifactExtraction {
     }
     const hadClose = j < lines.length;
 
+    const bareAttrIdx = bareAttrFirstLineIndex(body);
     const path =
       pathFromInfo(info) ??
+      (bareAttrIdx >= 0 ? bareAttrPath(body[bareAttrIdx]) : null) ??
       pathFromFirstLine(body) ??
       pathFromLabel(lastNonEmpty(proseLines));
 
     if (path) {
+      // The bare `path=...` line is metadata, not file content — drop it.
+      const content =
+        bareAttrIdx >= 0 && !pathFromInfo(info)
+          ? body.filter((_, idx) => idx !== bareAttrIdx)
+          : body;
       files.push({
         path: normalizePath(path),
         language: languageFromInfo(info, path),
-        content: body.join("\n"),
+        content: content.join("\n"),
       });
     } else {
       // Not a file — keep the whole block verbatim in the prose.

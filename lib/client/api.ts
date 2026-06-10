@@ -91,6 +91,7 @@ export interface CreateDiscussionInput {
   reasoningEffort?: ReasoningEffort;
   styleNote?: string;
   attachmentIds?: string[];
+  projectFolderName?: string | null;
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -121,6 +122,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     attachmentIds: input.attachmentIds?.length
       ? JSON.stringify(input.attachmentIds)
       : null,
+    projectFolderName: input.projectFolderName ?? null,
     createdAt: now,
     updatedAt: now,
   });

@@ -34,6 +34,16 @@ import {
   runDiscussion as runClientDiscussion,
 } from "@/lib/client/api";
 import {
+  getProjectHandle,
+  queryProjectPermission,
+  requestProjectPermission,
+} from "@/lib/client/project-fs";
+import {
+  BuildTaskBoard,
+  type BuildTaskView,
+  type WrittenFileView,
+} from "@/components/BuildTaskBoard";
+import {
   accentFor,
   buildAccentMap,
   modelMonogram,
@@ -74,6 +84,13 @@ function DiscussionPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
+  const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
+  const [folderGrant, setFolderGrant] = useState<"checking" | "needed" | "ready">(
+    "checking"
+  );
+  const [folderHandle, setFolderHandle] =
+    useState<FileSystemDirectoryHandle | null>(null);
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
 
@@ -145,6 +162,41 @@ function DiscussionPageInner() {
           break;
         case "convergence":
           setConvergenceScore(event.score);
+          break;
+        case "build_plan":
+          setBuildTasks(
+            event.tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status as BuildTaskView["status"],
+            }))
+          );
+          break;
+        case "task_status":
+          setBuildTasks((prev) => {
+            const idx = prev.findIndex((t) => t.id === event.taskId);
+            const next: BuildTaskView = {
+              id: event.taskId,
+              title: event.title,
+              status: event.status,
+              worker: event.worker ?? (idx >= 0 ? prev[idx].worker : undefined),
+            };
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = next;
+              return copy;
+            }
+            return [...prev, next];
+          });
+          break;
+        case "file_written":
+          setWrittenFiles((prev) => {
+            const others = prev.filter((f) => f.path !== event.path);
+            return [
+              ...others,
+              { path: event.path, bytes: event.bytes, location: event.location },
+            ];
+          });
           break;
         case "final_answer":
           setFinalResult({
@@ -222,6 +274,32 @@ function DiscussionPageInner() {
     })();
   }, [id, requestNotificationPermission, notifyComplete]);
 
+  // Build mode with a stored project folder needs a permission check before
+  // the run starts (re-granting requires a user gesture, so we gate on a button).
+  useEffect(() => {
+    if (!discussion) return;
+    if (discussion.mode !== "build") {
+      setFolderGrant("ready");
+      return;
+    }
+    (async () => {
+      const handle = await getProjectHandle(discussion.id);
+      if (!handle) {
+        setFolderGrant("ready");
+        return;
+      }
+      setFolderHandle(handle);
+      setFolderGrant((await queryProjectPermission(handle)) ? "ready" : "needed");
+    })();
+  }, [discussion]);
+
+  const grantFolderAccess = async () => {
+    if (!folderHandle) return;
+    if (await requestProjectPermission(folderHandle)) {
+      setFolderGrant("ready");
+    }
+  };
+
   // Keep the run callback fresh without restarting the run.
   const handleEventRef = useRef(handleEvent);
   handleEventRef.current = handleEvent;
@@ -231,6 +309,7 @@ function DiscussionPageInner() {
     if (!id || !discussion || startedRef.current) return;
     if (status === "completed" || status === "failed" || status === "locked")
       return;
+    if (folderGrant !== "ready") return;
 
     // The engine runs entirely in this tab; events update state directly.
     startedRef.current = true;
@@ -238,7 +317,7 @@ function DiscussionPageInner() {
     runClientDiscussion(id, (event) => handleEventRef.current(event)).finally(
       () => setStreamConnected(false)
     );
-  }, [id, discussion, status]);
+  }, [id, discussion, status, folderGrant]);
 
   const participantIds = useMemo<string[]>(() => {
     if (!discussion) return [];
@@ -368,6 +447,38 @@ function DiscussionPageInner() {
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
           {error}
         </div>
+      )}
+
+      {folderGrant === "needed" &&
+        status !== "completed" &&
+        status !== "failed" && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+            <p className="text-amber-900 dark:text-amber-100">
+              This build writes into the folder{" "}
+              <strong>{folderHandle?.name}</strong>. The browser needs you to
+              re-grant access before the run can start.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={grantFolderAccess}>
+                Grant folder access
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setFolderGrant("ready")}
+              >
+                Continue without folder
+              </Button>
+            </div>
+          </div>
+        )}
+
+      {discussion.mode === "build" && (
+        <BuildTaskBoard
+          tasks={buildTasks}
+          files={writtenFiles}
+          folderName={discussion.projectFolderName}
+        />
       )}
 
       <DiscussionAttachments attachments={attachments} />

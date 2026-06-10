@@ -1,0 +1,550 @@
+/**
+ * Build mode runner: the Architect (judge model) plans tasks, worker models
+ * implement them with focused context, the Architect reviews/fixes and adds
+ * tasks until done. Files are written immediately — always to a virtual FS
+ * (drives the artifact panel / zip), and also to the user's project folder
+ * when one was granted.
+ */
+
+import { v4 as uuidv4 } from "uuid";
+import type {
+  Discussion,
+  EffortLevel,
+  ReasoningEffort,
+  Verbosity,
+} from "@/lib/db/schema";
+import type { SelectedModel } from "@/lib/providers/base";
+import { parseModelId } from "@/lib/providers/base";
+import { EFFORT_CONFIG, BUILD_ROUND_MIN_TOKENS, BUILD_INTEGRATOR_MIN_TOKENS } from "@/lib/orchestrator/config";
+import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
+import { extractJudgeResult } from "@/lib/orchestrator/parse";
+import { extractArtifacts } from "@/lib/artifacts/extract";
+import {
+  buildArchitectPlanPrompt,
+  buildArchitectReviewPrompt,
+  buildArchitectSummaryPrompt,
+  buildWorkerTaskPrompt,
+  parseArchitectAction,
+  STRICT_RETRY_INSTRUCTION,
+  type ArchitectAction,
+  type BuildTask,
+  type PlanAction,
+} from "@/lib/orchestrator/build";
+import {
+  getProjectHandle,
+  listProjectTree,
+  queryProjectPermission,
+  readProjectFile,
+  writeProjectFile,
+} from "./project-fs";
+import {
+  insertFinalResult,
+  insertMessage,
+  updateDiscussion,
+} from "./store";
+import { collectStream, type OrchestratorEvent } from "./engine";
+
+type EventCallback = (event: OrchestratorEvent) => void;
+
+interface BuildLimits {
+  cycles: number;
+  tasksPerWave: number;
+  totalWorkerCalls: number;
+}
+
+const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
+  low: { cycles: 2, tasksPerWave: 3, totalWorkerCalls: 8 },
+  medium: { cycles: 4, tasksPerWave: 5, totalWorkerCalls: 16 },
+  high: { cycles: 6, tasksPerWave: 8, totalWorkerCalls: 32 },
+};
+
+const MANIFEST_CANDIDATES = [
+  "README.md",
+  "package.json",
+  "pyproject.toml",
+  "requirements.txt",
+  "Cargo.toml",
+  "go.mod",
+];
+
+const MAX_CONTEXT_FILES = 8;
+const PER_FILE_REVIEW_CHARS = 6_000;
+const TOTAL_REVIEW_CHARS = 48_000;
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated]`;
+}
+
+export async function runBuildDiscussion(
+  discussion: Discussion,
+  models: SelectedModel[],
+  emit: EventCallback
+): Promise<void> {
+  const effort = discussion.effort as EffortLevel;
+  const limits = BUILD_LIMITS[effort];
+  const config = EFFORT_CONFIG[effort];
+  const reasoningEffort = (discussion.reasoningEffort ?? "default") as ReasoningEffort;
+  const verbosityInstruction = buildVerbosityInstruction(
+    (discussion.verbosity ?? "balanced") as Verbosity,
+    discussion.styleNote
+  );
+  const workerMaxTokens = Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS);
+  const architectMaxTokens = Math.max(config.judgeMaxTokens, BUILD_INTEGRATOR_MIN_TOKENS);
+
+  const modelIds: string[] = JSON.parse(discussion.modelIds);
+  const architectId = discussion.judgeModelId ?? modelIds[0];
+  const architect =
+    models.find((m) => m.modelId === architectId) ?? models[0];
+  const workers = models.filter((m) => m.modelId !== architect.modelId);
+  if (workers.length === 0) workers.push(architect); // solo build
+
+  // ── Filesystem: virtual always; the real folder when granted ──────────────
+  const dirHandle = await getProjectHandle(discussion.id);
+  const diskGranted = !!dirHandle && (await queryProjectPermission(dirHandle));
+  const virtualFs = new Map<string, string>();
+  let diskTree: string[] = [];
+  if (diskGranted && dirHandle) {
+    const tree = await listProjectTree(dirHandle);
+    diskTree = tree.files;
+  }
+
+  emit({
+    type: "diagnostic",
+    phase: "initializing",
+    message: diskGranted
+      ? `Build mode: Architect ${architect.displayName}, ${workers.length} worker(s), writing to folder "${dirHandle?.name}"`
+      : `Build mode: Architect ${architect.displayName}, ${workers.length} worker(s), files kept in the app (download as zip)`,
+  });
+
+  const treeText = (): string => {
+    const all = new Set([...diskTree, ...virtualFs.keys()]);
+    return [...all].sort().slice(0, 400).join("\n");
+  };
+
+  const readFile = async (path: string): Promise<string | null> => {
+    if (virtualFs.has(path)) return virtualFs.get(path)!;
+    if (diskGranted && dirHandle) return readProjectFile(dirHandle, path);
+    return null;
+  };
+
+  const writeFile = async (
+    path: string,
+    content: string,
+    taskId?: string
+  ): Promise<void> => {
+    virtualFs.set(path, content);
+    let bytes = new TextEncoder().encode(content).length;
+    let location: "disk" | "virtual" = "virtual";
+    if (diskGranted && dirHandle) {
+      try {
+        bytes = await writeProjectFile(dirHandle, path, content);
+        location = "disk";
+      } catch (err) {
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `Could not write ${path} to the project folder: ${err instanceof Error ? err.message : "error"}`,
+        });
+      }
+    }
+    emit({ type: "file_written", path, bytes, location, taskId });
+  };
+
+  // ── Streaming helpers (persist as messages so the timeline works) ─────────
+  let round = 0;
+  const history: Array<{ label: string; text: string }> = [];
+
+  const streamTurn = async (
+    model: SelectedModel,
+    prompt: string,
+    opts: { systemRole: string; maxTokens: number; label: string }
+  ): Promise<string> => {
+    round += 1;
+    const messageId = uuidv4();
+    const { providerId, model: rawModel } = parseModelId(model.modelId);
+    emit({
+      type: "message_start",
+      messageId,
+      modelId: model.modelId,
+      modelName: model.displayName,
+      round,
+      role: "assistant",
+    });
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      round,
+      modelId: model.modelId,
+      modelName: model.displayName,
+      providerId,
+      message: opts.label,
+    });
+    const content = await collectStream(
+      model.modelId,
+      providerId,
+      rawModel,
+      [
+        { role: "system", content: opts.systemRole },
+        { role: "user", content: prompt },
+      ],
+      opts.maxTokens,
+      0.4,
+      reasoningEffort,
+      [],
+      (token) => emit({ type: "message_token", messageId, token })
+    );
+    insertMessage({
+      id: messageId,
+      discussionId: discussion.id,
+      round,
+      modelId: model.modelId,
+      role: "assistant",
+      content,
+      createdAt: new Date().toISOString(),
+    });
+    emit({ type: "message_complete", messageId, content });
+    history.push({ label: opts.label, text: content });
+    return content;
+  };
+
+  /** Architect turn that must yield a parseable action (one strict retry). */
+  const architectAction = async (
+    prompt: string,
+    label: string
+  ): Promise<{ action: ArchitectAction; text: string }> => {
+    let text = await streamTurn(architect, prompt, {
+      systemRole:
+        "You are the Architect orchestrating an AI engineering team. Follow the response format exactly.",
+      maxTokens: architectMaxTokens,
+      label,
+    });
+    let action = parseArchitectAction(text);
+    if (!action) {
+      text = await streamTurn(
+        architect,
+        `${prompt}\n\n${STRICT_RETRY_INSTRUCTION}`,
+        {
+          systemRole: "Respond with ONLY the fenced json action block.",
+          maxTokens: architectMaxTokens,
+          label: `${label} (strict retry)`,
+        }
+      );
+      action = parseArchitectAction(text);
+    }
+    if (!action) {
+      throw new Error(
+        "The Architect did not produce a parseable plan/review action."
+      );
+    }
+    return { action, text };
+  };
+
+  /** Write any ```lang path=...``` files contained in a model's output. */
+  const writeEmittedFiles = async (
+    text: string,
+    taskId?: string
+  ): Promise<string[]> => {
+    const { files } = extractArtifacts(text);
+    for (const file of files) {
+      await writeFile(file.path, file.content, taskId);
+    }
+    return files.map((f) => f.path);
+  };
+
+  const toTask = (
+    raw: PlanAction["tasks"][number],
+    index: number
+  ): BuildTask => ({
+    id: raw.id?.trim() || `T${index + 1}`,
+    title: raw.title || `Task ${index + 1}`,
+    instructions: raw.instructions || raw.title || "",
+    contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
+    expectedOutputs: raw.expectedOutputs,
+    status: "planned",
+  });
+
+  // ── Status bookkeeping ─────────────────────────────────────────────────────
+  const totalPhases = limits.cycles * 2 + 2; // plan + waves/reviews + summary
+  updateDiscussion(discussion.id, {
+    status: "running",
+    maxRounds: totalPhases,
+    updatedAt: new Date().toISOString(),
+  });
+  emit({ type: "status", status: "running", round: 0, maxRounds: totalPhases });
+
+  // ── 1) Plan (with up to 2 read hops) ───────────────────────────────────────
+  let architectNotes = "";
+  let extraFileContext = "";
+  let readHopsLeft = 2;
+  let tasks: BuildTask[] = [];
+
+  // Give the Architect the obvious entry points of an existing project up front
+  // so it usually doesn't need to spend a read hop on them.
+  for (const manifest of MANIFEST_CANDIDATES) {
+    if (!diskTree.includes(manifest)) continue;
+    const content = await readFile(manifest);
+    if (content != null) {
+      extraFileContext += `\n--- ${manifest} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`;
+    }
+  }
+  if (extraFileContext) {
+    extraFileContext = `\nKey project files:${extraFileContext}`;
+  }
+
+  for (;;) {
+    const planPrompt = buildArchitectPlanPrompt({
+      request: discussion.topic,
+      treeText: treeText(),
+      fileContext: extraFileContext,
+      maxTasks: limits.tasksPerWave,
+      workerNames: workers.map((w) => w.displayName),
+      readHopsLeft,
+    });
+    const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
+    if (action.action === "read" && readHopsLeft > 0) {
+      readHopsLeft -= 1;
+      const chunks: string[] = [];
+      for (const path of action.paths.slice(0, 8)) {
+        const content = await readFile(path);
+        chunks.push(
+          `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
+        );
+      }
+      extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
+      continue;
+    }
+    if (action.action === "plan") {
+      tasks = action.tasks.slice(0, limits.tasksPerWave).map(toTask);
+      architectNotes = action.notes ?? "";
+      await writeEmittedFiles(text); // architect may scaffold files in the plan
+      break;
+    }
+    throw new Error("The Architect's first action must be a plan.");
+  }
+
+  if (tasks.length === 0) {
+    throw new Error("The Architect produced an empty plan.");
+  }
+
+  emit({
+    type: "build_plan",
+    cycle: 0,
+    tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
+  });
+  for (const task of tasks) {
+    emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned" });
+  }
+
+  // ── 2..n) Implement waves + Architect reviews ──────────────────────────────
+  let workerCalls = 0;
+  let rrIndex = 0;
+  let done = false;
+
+  for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
+    const pending = tasks.filter(
+      (t) => t.status === "planned" || t.status === "fixing"
+    );
+    if (pending.length === 0) break;
+
+    const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
+
+    for (const task of pending) {
+      if (workerCalls >= limits.totalWorkerCalls) {
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Worker call budget reached (${limits.totalWorkerCalls}); moving to review`,
+        });
+        break;
+      }
+      const workerIndex = task.workerIndex ?? rrIndex++ % workers.length;
+      task.workerIndex = workerIndex;
+      const worker = workers[workerIndex];
+
+      emit({
+        type: "task_status",
+        taskId: task.id,
+        title: task.title,
+        status: "in_progress",
+        worker: worker.displayName,
+        cycle,
+      });
+
+      const contextChunks: string[] = [];
+      for (const path of task.contextFiles) {
+        const content = await readFile(path);
+        if (content != null) {
+          contextChunks.push(`\n--- ${path} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`);
+        }
+      }
+
+      try {
+        const output = await streamTurn(
+          worker,
+          buildWorkerTaskPrompt({
+            request: discussion.topic,
+            treeText: treeText(),
+            task,
+            contextFileText: contextChunks.length
+              ? `\nContext files:${contextChunks.join("\n")}`
+              : "",
+            architectNotes,
+            verbosityInstruction,
+          }),
+          {
+            systemRole:
+              "You are an AI engineer completing one assigned task. Output complete files in the required format.",
+            maxTokens: workerMaxTokens,
+            label: `${worker.displayName} working on ${task.id}: ${task.title}`,
+          }
+        );
+        workerCalls += 1;
+        const files = await writeEmittedFiles(output, task.id);
+        const { prose } = extractArtifacts(output);
+        task.status = "review";
+        executed.push({ task, worker, files, notes: truncate(prose, 1_500) });
+        emit({
+          type: "task_status",
+          taskId: task.id,
+          title: task.title,
+          status: "review",
+          worker: worker.displayName,
+          cycle,
+        });
+      } catch (err) {
+        workerCalls += 1;
+        task.status = "failed";
+        emit({
+          type: "task_status",
+          taskId: task.id,
+          title: task.title,
+          status: "failed",
+          worker: worker.displayName,
+          cycle,
+        });
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `${worker.displayName} failed ${task.id}: ${err instanceof Error ? err.message : "error"}`,
+        });
+      }
+    }
+
+    if (executed.length === 0) break;
+
+    // Architect review of this wave.
+    let totalChars = 0;
+    const executedText = executed
+      .map(({ task, worker, files, notes }) => {
+        const fileBlocks = files
+          .map((path) => {
+            const content = virtualFs.get(path) ?? "";
+            const block = `--- ${path} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`;
+            totalChars += block.length;
+            return totalChars > TOTAL_REVIEW_CHARS ? `--- ${path} --- [omitted for length]` : block;
+          })
+          .join("\n");
+        return `### ${task.id}: ${task.title} (worker: ${worker.displayName})\nWorker notes: ${notes || "none"}\nFiles written:\n${fileBlocks || "none"}`;
+      })
+      .join("\n\n");
+
+    emit({
+      type: "diagnostic",
+      phase: "judging",
+      message: `Architect is reviewing wave ${cycle}`,
+    });
+
+    const { action, text } = await architectAction(
+      buildArchitectReviewPrompt({
+        request: discussion.topic,
+        treeText: treeText(),
+        executedText,
+        maxNewTasks: limits.tasksPerWave,
+        cyclesLeft: limits.cycles - cycle,
+      }),
+      `Architect is reviewing wave ${cycle}`
+    );
+    if (action.action !== "review") {
+      throw new Error("Expected a review action from the Architect.");
+    }
+    await writeEmittedFiles(text); // the architect's own fixes
+
+    if (action.notes?.trim()) architectNotes = action.notes;
+
+    for (const result of action.results) {
+      const task = tasks.find((t) => t.id === result.taskId);
+      if (!task || task.status === "done") continue;
+      if (result.verdict === "approve") {
+        task.status = "done";
+        emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
+      } else {
+        task.status = "fixing";
+        task.instructions = `${task.instructions}\n\nFIX (from the Architect's review): ${result.fixInstructions ?? "address the review feedback"}`;
+        emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
+      }
+    }
+    // Tasks the review didn't mention count as approved.
+    for (const { task } of executed) {
+      if (task.status === "review") {
+        task.status = "done";
+        emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
+      }
+    }
+
+    for (const raw of (action.newTasks ?? []).slice(0, limits.tasksPerWave)) {
+      const task = toTask(raw, tasks.length);
+      tasks.push(task);
+      emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
+    }
+
+    done = action.done;
+  }
+
+  // ── Final summary ──────────────────────────────────────────────────────────
+  emit({ type: "status", status: "judging" });
+  emit({
+    type: "diagnostic",
+    phase: "judging",
+    message: "Architect is writing the final build summary",
+  });
+
+  const historyText = history
+    .map((h) => `## ${h.label}\n${truncate(h.text, 2_500)}`)
+    .join("\n\n");
+
+  const summaryRaw = await streamTurn(
+    architect,
+    buildArchitectSummaryPrompt({
+      request: discussion.topic,
+      treeText: treeText(),
+      historyText: truncate(historyText, 60_000),
+      verbosityInstruction,
+    }),
+    {
+      systemRole:
+        "You are the Architect writing the final hand-off summary in Markdown.",
+      maxTokens: architectMaxTokens,
+      label: "Architect is writing the build summary",
+    }
+  );
+
+  const { answer, confidence, dissent } = extractJudgeResult(summaryRaw);
+  insertFinalResult({
+    discussionId: discussion.id,
+    answer,
+    confidence,
+    dissent: JSON.stringify(dissent),
+    createdAt: new Date().toISOString(),
+  });
+  updateDiscussion(discussion.id, {
+    status: "completed",
+    updatedAt: new Date().toISOString(),
+  });
+  emit({ type: "final_answer", answer, confidence, dissent });
+  emit({
+    type: "diagnostic",
+    phase: "finished",
+    message: `Build complete: ${virtualFs.size} file(s) produced${diskGranted ? ` in "${dirHandle?.name}"` : " (download from the artifact panel)"}`,
+  });
+  emit({ type: "complete" });
+}

@@ -65,6 +65,27 @@ export type OrchestratorEvent =
   | { type: "message_complete"; messageId: string; content: string }
   | { type: "convergence"; score: number; reason?: string }
   | { type: "final_answer"; answer: string; confidence: number; dissent: string[] }
+  // Build mode (architect-orchestrated): task board + file writes.
+  | {
+      type: "build_plan";
+      tasks: Array<{ id: string; title: string; status: string }>;
+      cycle: number;
+    }
+  | {
+      type: "task_status";
+      taskId: string;
+      title: string;
+      status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
+      worker?: string;
+      cycle?: number;
+    }
+  | {
+      type: "file_written";
+      path: string;
+      bytes: number;
+      location: "disk" | "virtual";
+      taskId?: string;
+    }
   | { type: "error"; message: string }
   | { type: "complete" };
 

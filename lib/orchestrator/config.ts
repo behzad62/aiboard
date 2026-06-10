@@ -309,10 +309,10 @@ export function getModeInfo(mode: DiscussionMode): DiscussionModeInfo {
       return {
         label: "Build",
         summary:
-          "Models collaborate to design and build a project, producing downloadable files.",
-        flow: "Round 1 plans the architecture; middle rounds write and critique files; an integrator assembles the final project tree plus build notes.",
+          "The judge acts as Architect: it plans tasks, worker models implement them, and it reviews and fixes until the project is done.",
+        flow: "Architect plans tasks → workers implement each task with focused context → Architect reviews, fixes, and adds tasks → repeat until done, then writes the hand-off summary. Pick a project folder and files are written straight into it.",
         bestFor:
-          "Best for software design, scaffolding, specs, and multi-file deliverables you want to save to disk.",
+          "Best for building real projects: pair an expensive Architect (judge) with cheap workers, point it at a folder, and let the team iterate.",
       };
   }
 }

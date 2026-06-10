@@ -73,9 +73,31 @@ This is round ${round} of ${maxRounds}.`;
       body = `Round ${round} — Critique & Refine: Review what other models said so far. Correct errors, add missing details, and build on strong points. Avoid repeating unchanged content.`;
     }
   } else if (mode === "debate") {
-    const myPosition = currentIndex % 2 === 0 ? "PRO" : "CON";
-    body = `Debate mode — You are arguing the ${myPosition} position.
-Round ${round}: Argue your assigned position while engaging fairly with counterpoints. In later rounds, acknowledge valid points from the other side before rebutting.`;
+    // Sides alternate by selection order; with an odd model count one side has
+    // an extra voice, which the prompt acknowledges so models argue on merit.
+    const mySide = currentIndex % 2 === 0 ? "FOR" : "AGAINST";
+    const forSide = models
+      .filter((_, i) => i % 2 === 0)
+      .map((m) => m.displayName)
+      .join(", ");
+    const againstSide = models
+      .filter((_, i) => i % 2 === 1)
+      .map((m) => m.displayName)
+      .join(", ");
+    const sides = `Treat the user's question as a proposition. FOR side: ${forSide || "none"}. AGAINST side: ${againstSide || "none"}. Sides may be uneven — argue on the merits, not by majority.`;
+
+    let roundTask: string;
+    if (round === 1) {
+      roundTask = `Round 1 — Opening: Steelman your side. Make the strongest honest case ${mySide === "FOR" ? "for" : "against"} the proposition, with concrete evidence, examples, and the criteria you think the decision should turn on.`;
+    } else if (round === maxRounds) {
+      roundTask = `Final round — Closing: State your side's strongest surviving argument, concede the points from the other side that are genuinely valid, and name the crux — the specific fact or value judgment on which the decision actually turns.`;
+    } else {
+      roundTask = `Round ${round} — Rebuttal: Engage the other side's specific arguments by name. Refute what is weak, acknowledge what is strong, and sharpen where the real disagreement lies. Do not repeat your opening.`;
+    }
+
+    body = `Debate mode — You are arguing the ${mySide} position.
+${sides}
+${roundTask}`;
   } else if (mode === "specialist") {
     const isLead = currentIndex === (leadIndex ?? 0);
     if (isLead) {
@@ -124,7 +146,7 @@ Rate how complete and accurate the current collective answer is on a scale of 1-
 Respond with ONLY a JSON object: {"score": <number>, "reason": "<brief reason>"}`;
 }
 
-const META_FOOTER_INSTRUCTION = [
+export const META_FOOTER_INSTRUCTION = [
   "After the answer, append EXACTLY this metadata block on its own lines and write nothing after it:",
   "",
   "---",
@@ -135,10 +157,18 @@ const META_FOOTER_INSTRUCTION = [
   "-->",
 ].join("\n");
 
+const JUDGE_MODE_GUIDANCE: Partial<Record<DiscussionMode, string>> = {
+  debate:
+    "This was a structured debate with assigned FOR/AGAINST sides. Weigh the strongest case from each side on its merits (not by how many models argued it), then deliver a clear verdict: what the user should do, why, and under what specific conditions the verdict would flip. Note the cruxes the debaters identified.",
+  specialist:
+    "This was a lead-drafter-plus-reviewers process. The lead's final revision is the primary candidate answer — preserve its structure and voice, and fold in any reviewer corrections it failed to incorporate rather than rewriting from scratch.",
+};
+
 export function buildJudgePrompt(
   topic: string,
   transcript: string,
-  verbosityInstruction = ""
+  verbosityInstruction = "",
+  mode?: DiscussionMode
 ): string {
   return [
     "You are the final judge synthesizing a multi-AI discussion.",
@@ -150,6 +180,7 @@ export function buildJudgePrompt(
     transcript,
     "",
     "Produce the single best answer for the user in GitHub-flavored Markdown. Include the key points, and any formulas, steps, or design decisions that apply, plus important caveats or assumptions.",
+    mode ? JUDGE_MODE_GUIDANCE[mode] ?? "" : "",
     verbosityInstruction,
     "",
     "Do NOT wrap the answer in JSON. Write the answer as normal Markdown.",

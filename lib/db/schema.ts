@@ -42,6 +42,8 @@ export interface Discussion {
   modelIds: string;
   judgeModelId: string | null;
   attachmentIds: string | null;
+  /** Build mode: display name of the granted project folder (handle lives in IndexedDB). */
+  projectFolderName?: string | null;
   currentRound: number;
   maxRounds: number;
   convergenceScore: number | null;

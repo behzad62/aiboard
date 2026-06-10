@@ -31,15 +31,10 @@ import {
   type ChatMessage,
   type SelectedModel,
 } from "@/lib/providers/base";
-import {
-  BUILD_INTEGRATOR_MIN_TOKENS,
-  BUILD_ROUND_MIN_TOKENS,
-  EFFORT_CONFIG,
-} from "@/lib/orchestrator/config";
+import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import {
   buildConvergencePrompt,
-  buildIntegratorPrompt,
   buildJudgePrompt,
   buildRoundSystemPrompt,
   buildTranscriptFromMessages,
@@ -62,7 +57,7 @@ export function isDiscussionRunning(id: string): boolean {
   return runningDiscussions.has(id);
 }
 
-async function collectStream(
+export async function collectStream(
   modelId: string,
   providerId: string,
   model: string,
@@ -203,6 +198,15 @@ export async function runDiscussion(
     const models = resolveModels(modelIds);
     const effort = discussion.effort as EffortLevel;
     const mode = discussion.mode as DiscussionMode;
+
+    if (mode === "build") {
+      // Build runs an Architect-orchestrated task loop, not the round loop.
+      // Dynamic import keeps the engine<->build-engine dependency acyclic.
+      const { runBuildDiscussion } = await import("./build-engine");
+      await runBuildDiscussion(discussion, models, emit);
+      return;
+    }
+
     const config = EFFORT_CONFIG[effort];
     const verbosity = (discussion.verbosity ?? "balanced") as Verbosity;
     const verbosityInstruction = buildVerbosityInstruction(
@@ -211,15 +215,9 @@ export async function runDiscussion(
     );
     const reasoningEffort = (discussion.reasoningEffort ??
       "default") as ReasoningEffort;
-    const roundMaxTokens =
-      mode === "build"
-        ? Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS)
-        : config.maxTokens;
-    const finalMaxTokens =
-      mode === "build"
-        ? Math.max(config.judgeMaxTokens, BUILD_INTEGRATOR_MIN_TOKENS)
-        : config.judgeMaxTokens;
-    const skipConvergenceVote = config.skipConvergenceVote || mode === "build";
+    const roundMaxTokens = config.maxTokens;
+    const finalMaxTokens = config.judgeMaxTokens;
+    const skipConvergenceVote = config.skipConvergenceVote;
     const modelNames = Object.fromEntries(
       models.map((m) => [m.modelId, m.displayName])
     );
@@ -273,7 +271,10 @@ export async function runDiscussion(
 
       emit({ type: "status", status: "running", round, maxRounds: config.maxRounds });
 
-      const leadIndex = (round - 1) % models.length;
+      // The specialist lead is pinned to the first selected model for the whole
+      // discussion — rotating it would tell a different model each round to
+      // "revise your draft" for a draft it never wrote.
+      const leadIndex = 0;
       const currentRoundTexts: string[] = [];
 
       for (let index = 0; index < models.length; index++) {
@@ -468,14 +469,11 @@ export async function runDiscussion(
       }
     }
 
-    const isBuild = mode === "build";
     emit({ type: "status", status: "judging" });
     emit({
       type: "diagnostic",
       phase: "judging",
-      message: isBuild
-        ? "Integrator is assembling the final project"
-        : "Judge model is synthesizing the final answer",
+      message: "Judge model is synthesizing the final answer",
     });
 
     const judgeFullId = discussion.judgeModelId ?? modelIds[0];
@@ -490,15 +488,17 @@ export async function runDiscussion(
       [
         {
           role: "system",
-          content: isBuild
-            ? "You are the integrator. Assemble the final, coherent project from the discussion. Output complete files plus build notes."
-            : "You are the final judge. Synthesize the discussion into the single best answer in Markdown.",
+          content:
+            "You are the final judge. Synthesize the discussion into the single best answer in Markdown.",
         },
         {
           role: "user",
-          content: isBuild
-            ? buildIntegratorPrompt(discussion.topic, finalTranscript, verbosityInstruction)
-            : buildJudgePrompt(discussion.topic, finalTranscript, verbosityInstruction),
+          content: buildJudgePrompt(
+            discussion.topic,
+            finalTranscript,
+            verbosityInstruction,
+            mode
+          ),
         },
       ],
       finalMaxTokens,

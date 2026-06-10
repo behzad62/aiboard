@@ -39,6 +39,8 @@ import {
   getModeInfo,
 } from "@/lib/orchestrator/config";
 import { createDiscussion, ensureReady, loadDashboard } from "@/lib/client/api";
+import { claimPendingProjectFolder } from "@/lib/client/project-fs";
+import { ProjectFolderPicker } from "@/components/ProjectFolderPicker";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
@@ -70,6 +72,7 @@ export default function HomePage() {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [locked, setLocked] = useState(false);
+  const [projectFolderName, setProjectFolderName] = useState<string | null>(null);
   const [topic, setTopic] = useState("");
   const [mode, setMode] = useState<DiscussionMode>("panel");
   const [effort, setEffort] = useState<EffortLevel>("medium");
@@ -200,7 +203,11 @@ export default function HomePage() {
         verbosity,
         styleNote: styleNote.trim() || undefined,
         reasoningEffort,
+        projectFolderName: mode === "build" ? projectFolderName : null,
       });
+      if (mode === "build") {
+        await claimPendingProjectFolder(result.id);
+      }
       router.push(`/discussion?id=${result.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start discussion");
@@ -303,6 +310,10 @@ export default function HomePage() {
                 <p className="mt-1 text-muted-foreground">{modeInfo.flow}</p>
               </div>
             </div>
+
+            {mode === "build" && (
+              <ProjectFolderPicker onChange={setProjectFolderName} />
+            )}
 
             <EffortSlider value={effort} onChange={setEffort} />
 
