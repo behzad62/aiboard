@@ -75,7 +75,19 @@ export interface RunAction {
   reason?: string;
 }
 
-export type ArchitectAction = ReadAction | PlanAction | ReviewAction | RunAction;
+/** Case-insensitive substring search across all project files. */
+export interface SearchAction {
+  action: "search";
+  query: string;
+  reason?: string;
+}
+
+export type ArchitectAction =
+  | ReadAction
+  | PlanAction
+  | ReviewAction
+  | RunAction
+  | SearchAction;
 
 /** The balanced top-level {...} starting exactly at `start`, or null. */
 function balancedObjectAt(text: string, start: number): string | null {
@@ -192,6 +204,13 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
         ) {
           return parsed as RunAction;
         }
+        if (
+          parsed.action === "search" &&
+          typeof (parsed as SearchAction).query === "string" &&
+          (parsed as SearchAction).query.trim()
+        ) {
+          return parsed as SearchAction;
+        }
       }
     } catch {
       // try the next candidate
@@ -217,6 +236,32 @@ function userNotesSection(notes?: string): string {
     : "";
 }
 
+function searchToolDoc(searchesLeft?: number): string {
+  if (!searchesLeft || searchesLeft <= 0) return "";
+  return [
+    "TOOL — search the project: to find where something is defined or used (instead of guessing paths), respond with ONLY:",
+    '{"action":"search","query":"text to find","reason":"why"}',
+    `Case-insensitive substring match across all project files; results come back as path:line: text. ${searchesLeft} search${searchesLeft === 1 ? "" : "es"} left in this phase.`,
+  ].join("\n");
+}
+
+/**
+ * How models modify EXISTING files: targeted SEARCH/REPLACE edit blocks
+ * instead of re-emitting whole files (cheaper, and immune to truncation
+ * corrupting untouched parts of the file).
+ */
+export const EDIT_BLOCK_INSTRUCTION = [
+  "To MODIFY an existing file, emit a targeted edit block instead of re-emitting the whole file:",
+  "```edit path=src/example.js",
+  "<<<<<<< SEARCH",
+  "(copy the exact current lines being replaced — include enough surrounding lines to be unique)",
+  "=======",
+  "(the replacement lines)",
+  ">>>>>>> REPLACE",
+  "```",
+  "The SEARCH text must match the current file content verbatim. Multiple SEARCH/REPLACE sections are allowed in one block. Use full ```lang path=... blocks only for NEW files or complete rewrites.",
+].join("\n");
+
 function runToolDoc(runsLeft?: number): string {
   if (!runsLeft || runsLeft <= 0) return "";
   return [
@@ -234,6 +279,7 @@ export function buildArchitectPlanPrompt(input: {
   workerNames: string[];
   readHopsLeft: number;
   runsLeft?: number;
+  searchesLeft?: number;
   userNotes?: string;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
@@ -258,6 +304,7 @@ export function buildArchitectPlanPrompt(input: {
     `Your workers: ${input.workerNames.join(", ")}.`,
     "",
     readOption,
+    searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
@@ -297,6 +344,7 @@ export function buildWorkerTaskPrompt(input: {
       : "",
     "",
     FILE_OUTPUT_INSTRUCTION,
+    EDIT_BLOCK_INSTRUCTION,
     input.verbosityInstruction ?? "",
     "Keep prose brief — a short note on decisions is enough; the files are the deliverable.",
   ]
@@ -313,6 +361,7 @@ export function buildArchitectReviewPrompt(input: {
   cyclesLeft: number;
   readHopsLeft?: number;
   runsLeft?: number;
+  searchesLeft?: number;
   userNotes?: string;
 }): string {
   return [
@@ -330,10 +379,12 @@ export function buildArchitectReviewPrompt(input: {
     "Work completed since your last review:",
     input.executedText,
     "",
-    "Review each task's output. You can fix small problems YOURSELF by emitting corrected files as fenced blocks (```lang path=...) before your decision — your files overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    "Review each task's output. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    EDIT_BLOCK_INSTRUCTION,
     input.readHopsLeft && input.readHopsLeft > 0
       ? `If you need to see an existing file's contents before deciding, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). Never guess at a file's contents — read it.`
       : "",
+    searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
     "",
     "End with ONE fenced json block:",

@@ -16,8 +16,21 @@ export interface ExtractedFile {
   content: string;
 }
 
+/** One SEARCH/REPLACE operation inside an ```edit path=...``` block. */
+export interface ExtractedEditOp {
+  search: string;
+  replace: string;
+}
+
+export interface ExtractedEdit {
+  path: string;
+  ops: ExtractedEditOp[];
+}
+
 export interface ArtifactExtraction {
   files: ExtractedFile[];
+  /** Targeted edits to existing files (```edit path=...``` blocks). */
+  edits: ExtractedEdit[];
   /** The original text with recognized file blocks removed. */
   prose: string;
 }
@@ -121,9 +134,93 @@ function lastNonEmpty(lines: string[]): string | undefined {
   return undefined;
 }
 
+/** Parse SEARCH/REPLACE operations from an edit block's body. */
+function parseEditOps(body: string[]): ExtractedEditOp[] {
+  const ops: ExtractedEditOp[] = [];
+  let i = 0;
+  while (i < body.length) {
+    if (!/^<{4,}\s*SEARCH\s*$/.test(body[i].trim())) {
+      i += 1;
+      continue;
+    }
+    i += 1;
+    const search: string[] = [];
+    while (i < body.length && !/^={4,}\s*$/.test(body[i].trim())) {
+      search.push(body[i]);
+      i += 1;
+    }
+    i += 1; // skip =======
+    const replace: string[] = [];
+    while (i < body.length && !/^>{4,}\s*REPLACE\s*$/.test(body[i].trim())) {
+      replace.push(body[i]);
+      i += 1;
+    }
+    i += 1; // skip >>>>>>> REPLACE
+    if (search.length > 0) {
+      ops.push({ search: search.join("\n"), replace: replace.join("\n") });
+    }
+  }
+  return ops;
+}
+
+/**
+ * Apply SEARCH/REPLACE ops to a file's content. Exact match first, then a
+ * whitespace-tolerant line-wise fallback. Failed ops are skipped and counted.
+ */
+export function applyEditOps(
+  content: string,
+  ops: ExtractedEditOp[]
+): { content: string; applied: number; failed: number } {
+  let result = content;
+  let applied = 0;
+  let failed = 0;
+  for (const op of ops) {
+    const idx = result.indexOf(op.search);
+    if (idx >= 0) {
+      result =
+        result.slice(0, idx) + op.replace + result.slice(idx + op.search.length);
+      applied += 1;
+      continue;
+    }
+    const fuzzy = fuzzyFindLines(result, op.search);
+    if (fuzzy) {
+      result = result.slice(0, fuzzy.start) + op.replace + result.slice(fuzzy.end);
+      applied += 1;
+    } else {
+      failed += 1;
+    }
+  }
+  return { content: result, applied, failed };
+}
+
+/** Find `needle` in `haystack` comparing lines with trimmed whitespace. */
+function fuzzyFindLines(
+  haystack: string,
+  needle: string
+): { start: number; end: number } | null {
+  const hLines = haystack.split("\n");
+  const nLines = needle.split("\n").map((l) => l.trim());
+  if (nLines.length === 0) return null;
+  for (let i = 0; i + nLines.length <= hLines.length; i++) {
+    let ok = true;
+    for (let k = 0; k < nLines.length; k++) {
+      if (hLines[i + k].trim() !== nLines[k]) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    const start = i === 0 ? 0 : hLines.slice(0, i).join("\n").length + 1;
+    const end = start + hLines.slice(i, i + nLines.length).join("\n").length;
+    return { start, end };
+  }
+  return null;
+}
+
 export function extractArtifacts(text: string): ArtifactExtraction {
   const lines = (text ?? "").split("\n");
   const files: ExtractedFile[] = [];
+  const edits: ExtractedEdit[] = [];
   const proseLines: string[] = [];
 
   let i = 0;
@@ -147,6 +244,22 @@ export function extractArtifacts(text: string): ArtifactExtraction {
       j += 1;
     }
     const hadClose = j < lines.length;
+
+    // ```edit path=...``` blocks are targeted edits, never whole files.
+    const infoFirst = info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (infoFirst === "edit") {
+      const editPath = pathFromInfo(info);
+      const ops = parseEditOps(body);
+      if (editPath && ops.length > 0) {
+        edits.push({ path: normalizePath(editPath), ops });
+      } else {
+        // Malformed edit block — keep it visible as prose.
+        proseLines.push(lines[i], ...body);
+        if (hadClose) proseLines.push(lines[j]);
+      }
+      i = hadClose ? j + 1 : j;
+      continue;
+    }
 
     const bareAttrIdx = bareAttrFirstLineIndex(body);
     const path =
@@ -177,6 +290,7 @@ export function extractArtifacts(text: string): ArtifactExtraction {
 
   return {
     files: dedupeLastWins(files),
+    edits,
     prose: proseLines.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
   };
 }

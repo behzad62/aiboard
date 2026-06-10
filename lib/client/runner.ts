@@ -99,6 +99,36 @@ export async function readFileViaRunner(
   }
 }
 
+export interface RunnerSearchMatch {
+  path: string;
+  line: number;
+  text: string;
+}
+
+/**
+ * Case-insensitive substring search across the project via the runner
+ * (runner v2+). Returns null when unsupported or failed.
+ */
+export async function searchViaRunner(
+  config: RunnerConfig,
+  query: string
+): Promise<RunnerSearchMatch[] | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/search`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data.results)
+      ? (data.results as RunnerSearchMatch[])
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runCommand(
   config: RunnerConfig,
   command: string

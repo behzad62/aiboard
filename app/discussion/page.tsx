@@ -820,6 +820,7 @@ function DiscussionPageInner() {
             confidence={finalResult.confidence}
             dissent={finalResult.dissent}
             topic={discussion.topic}
+            discussionId={discussion.id}
           />
         ) : (
           <FinalAnswerCard

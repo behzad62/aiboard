@@ -133,6 +133,30 @@ function listProjectFiles() {
   return files.sort();
 }
 
+/** Case-insensitive substring search across project files. */
+function searchProjectFiles(query) {
+  const MAX_RESULTS = 200;
+  const results = [];
+  const q = String(query).toLowerCase();
+  if (!q) return results;
+  for (const rel of listProjectFiles()) {
+    if (results.length >= MAX_RESULTS) break;
+    try {
+      const buf = fs.readFileSync(path.join(projectDir, rel));
+      if (buf.includes(0) || buf.length > 1_000_000) continue; // binary/huge
+      const lines = buf.toString("utf8").split("\n");
+      for (let i = 0; i < lines.length && results.length < MAX_RESULTS; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          results.push({ path: rel, line: i + 1, text: lines[i].slice(0, 300) });
+        }
+      }
+    } catch {
+      // unreadable file — skip
+    }
+  }
+  return results;
+}
+
 function readFileInProject(relPath) {
   const target = safeResolve(relPath);
   if (!target) throw new Error(`Refusing path outside the project folder: ${relPath}`);
@@ -224,6 +248,22 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       json(res, 500, { error: err instanceof Error ? err.message : "List failed" });
     }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/search") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    if (typeof body?.query !== "string" || !body.query.trim()) {
+      json(res, 400, { error: "Missing query" });
+      return;
+    }
+    json(res, 200, { ok: true, results: searchProjectFiles(body.query.trim()) });
     return;
   }
 

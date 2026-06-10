@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { extractArtifacts } from "@/lib/artifacts/extract";
+import { extractArtifacts, type ExtractedFile } from "@/lib/artifacts/extract";
+import { getBuildFiles } from "@/lib/client/store";
 import { Markdown } from "@/components/Markdown";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
 import { ConfidenceRing } from "@/components/ConfidenceRing";
@@ -13,14 +14,42 @@ interface BuildResultCardProps {
   confidence: number;
   dissent: string[];
   topic: string;
+  /** When set, the artifact panel shows the build's persisted files. */
+  discussionId?: string;
+}
+
+function languageOf(path: string): string {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(path);
+  return ext ? ext[1].toLowerCase() : "";
 }
 
 export function BuildResultCard({
   answer,
   confidence,
   dissent,
+  discussionId,
 }: BuildResultCardProps) {
-  const { files, prose } = useMemo(() => extractArtifacts(answer), [answer]);
+  const { files: answerFiles, prose } = useMemo(
+    () => extractArtifacts(answer),
+    [answer]
+  );
+  // The real file set lives in the store (every file the build wrote,
+  // including targeted edits) — the summary rarely re-emits files.
+  const files = useMemo<ExtractedFile[]>(() => {
+    const stored = discussionId ? getBuildFiles(discussionId) : [];
+    if (stored.length === 0) return answerFiles;
+    const byPath = new Map<string, ExtractedFile>(
+      answerFiles.map((f) => [f.path, f])
+    );
+    for (const f of stored) {
+      byPath.set(f.path, {
+        path: f.path,
+        language: languageOf(f.path),
+        content: f.content,
+      });
+    }
+    return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [discussionId, answerFiles]);
   const [copied, setCopied] = useState(false);
 
   const copySummary = async () => {

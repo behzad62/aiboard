@@ -19,7 +19,7 @@ import { resolveModelName } from "./providers";
 import { EFFORT_CONFIG, BUILD_ROUND_MIN_TOKENS, BUILD_INTEGRATOR_MIN_TOKENS } from "@/lib/orchestrator/config";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
-import { extractArtifacts } from "@/lib/artifacts/extract";
+import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
 import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
@@ -44,6 +44,7 @@ import {
   listFilesViaRunner,
   readFileViaRunner,
   runCommand,
+  searchViaRunner,
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
@@ -90,6 +91,7 @@ const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
 
 const RUNS_PER_PHASE = 4;
 const TOTAL_RUNS = 12;
+const SEARCHES_PER_PHASE = 4;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -299,6 +301,36 @@ export async function runBuildDiscussion(
     return [...all].sort().slice(0, 400).join("\n");
   };
 
+  /** Case-insensitive substring search over virtual files + the runner. */
+  const searchProject = async (query: string): Promise<string> => {
+    const MAX_MATCHES = 80;
+    const matches: string[] = [];
+    const q = query.toLowerCase();
+    for (const [path, content] of virtualFs) {
+      if (matches.length >= MAX_MATCHES) break;
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length && matches.length < MAX_MATCHES; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          matches.push(`${path}:${i + 1}: ${truncate(lines[i].trim(), 200)}`);
+        }
+      }
+    }
+    if (runner && matches.length < MAX_MATCHES) {
+      const remote = await searchViaRunner(runner, query);
+      for (const m of remote ?? []) {
+        if (matches.length >= MAX_MATCHES) break;
+        const entry = `${m.path}:${m.line}: ${truncate(m.text.trim(), 200)}`;
+        if (!matches.includes(entry)) matches.push(entry);
+      }
+    }
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `Searched the project for "${truncate(query, 60)}" — ${matches.length} match(es)`,
+    });
+    return matches.length > 0 ? matches.join("\n") : "(no matches)";
+  };
+
   const readFile = async (path: string): Promise<string | null> => {
     if (virtualFs.has(path)) return virtualFs.get(path)!;
     if (dirHandle) {
@@ -486,16 +518,44 @@ export async function runBuildDiscussion(
     return { action, text };
   };
 
-  /** Write any ```lang path=...``` files contained in a model's output. */
+  /**
+   * Write any ```lang path=...``` files and apply any ```edit path=...```
+   * SEARCH/REPLACE blocks contained in a model's output.
+   */
   const writeEmittedFiles = async (
     text: string,
     taskId?: string
   ): Promise<string[]> => {
-    const { files } = extractArtifacts(text);
+    const { files, edits } = extractArtifacts(text);
+    const written: string[] = [];
     for (const file of files) {
       await writeFile(file.path, file.content, taskId);
+      written.push(file.path);
     }
-    return files.map((f) => f.path);
+    for (const edit of edits) {
+      const current = await readFile(edit.path);
+      if (current == null) {
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `Edit to ${edit.path} skipped — the file doesn't exist`,
+        });
+        continue;
+      }
+      const { content, applied, failed } = applyEditOps(current, edit.ops);
+      if (applied > 0) {
+        await writeFile(edit.path, content, taskId);
+        written.push(edit.path);
+      }
+      if (failed > 0) {
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `${failed} edit(s) to ${edit.path} didn't match the current content and were skipped`,
+        });
+      }
+    }
+    return written;
   };
 
   const toTask = (
@@ -542,6 +602,7 @@ export async function runBuildDiscussion(
   }
 
   let runFeedback = "";
+  let planSearchesLeft = SEARCHES_PER_PHASE;
   for (;;) {
     throwIfAborted();
     const planPrompt = buildArchitectPlanPrompt({
@@ -552,10 +613,16 @@ export async function runBuildDiscussion(
       workerNames: workers.map((w) => w.displayName),
       readHopsLeft,
       runsLeft: runsLeftThisPhase(),
+      searchesLeft: planSearchesLeft,
       userNotes: userNotesText(),
       previousSummary: truncate(previousSummary, 6_000),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
+    if (action.action === "search" && planSearchesLeft > 0) {
+      planSearchesLeft -= 1;
+      extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
+      continue;
+    }
     if (action.action === "read" && readHopsLeft > 0) {
       readHopsLeft -= 1;
       const chunks: string[] = [];
@@ -757,6 +824,7 @@ export async function runBuildDiscussion(
     // deciding the verdict.
     let reviewRunFeedback = "";
     let reviewReadsLeft = 2;
+    let reviewSearchesLeft = SEARCHES_PER_PHASE;
     let action: ArchitectAction;
     let text: string;
     for (;;) {
@@ -774,10 +842,16 @@ export async function runBuildDiscussion(
           cyclesLeft: limits.cycles - cycle,
           readHopsLeft: reviewReadsLeft,
           runsLeft: runsLeftThisPhase(),
+          searchesLeft: reviewSearchesLeft,
           userNotes: userNotesText(),
         }),
         `Architect is reviewing wave ${cycle}`
       ));
+      if (action.action === "search" && reviewSearchesLeft > 0) {
+        reviewSearchesLeft -= 1;
+        extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
+        continue;
+      }
       if (action.action === "read" && reviewReadsLeft > 0) {
         reviewReadsLeft -= 1;
         const chunks: string[] = [];
