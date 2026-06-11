@@ -61,7 +61,7 @@ export default function RootLayout({
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
               <Link href="/" className="flex items-center gap-2 font-semibold">
                 <MessageSquare className="h-5 w-5 text-primary" />
-                AI Discussion Board
+                {SITE_NAME}
               </Link>
               <nav className="flex items-center gap-1">
                 <Link
