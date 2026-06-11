@@ -84,6 +84,44 @@ interface DiscussionData {
 
 const ACTIVE_STATUSES = new Set(["completed", "failed", "stopped"]);
 
+// Activity-log persistence is tab-session only by design: it survives
+// navigating away and back, but closing the tab clears it (sessionStorage).
+const ACTIVITY_LOG_CAP = 40;
+const activityKey = (discussionId: string) => `activity-log:${discussionId}`;
+
+function loadDiagnostics(discussionId: string): DiagnosticEntry[] {
+  if (!discussionId || typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(activityKey(discussionId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as DiagnosticEntry[];
+    return Array.isArray(parsed) ? parsed.slice(0, ACTIVITY_LOG_CAP) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDiagnostics(discussionId: string, entries: DiagnosticEntry[]) {
+  if (!discussionId || typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      activityKey(discussionId),
+      JSON.stringify(entries)
+    );
+  } catch {
+    // quota exceeded / private mode — never break the page over a log cache.
+  }
+}
+
+function clearDiagnostics(discussionId: string) {
+  if (!discussionId || typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(activityKey(discussionId));
+  } catch {
+    // ignore
+  }
+}
+
 function DiscussionPageInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
@@ -281,13 +319,14 @@ function DiscussionPageInner() {
                 round: event.round,
               },
               ...prev,
-            ];
-            return next.slice(0, 40);
+            ].slice(0, ACTIVITY_LOG_CAP);
+            saveDiagnostics(id, next);
+            return next;
           });
           break;
       }
     },
-    [discussion, notifyComplete, settleStreamingMessages]
+    [id, discussion, notifyComplete, settleStreamingMessages]
   );
 
   useEffect(() => {
@@ -305,6 +344,8 @@ function DiscussionPageInner() {
         return;
       }
       setDiscussion(data.discussion);
+      // Restore the tab-session activity log so it survives navigation.
+      setDiagnostics(loadDiagnostics(id));
       setAttachments(data.attachments ?? []);
       setModelNames(data.modelNames ?? {});
       setCurrentRound(data.discussion.currentRound);
@@ -436,6 +477,7 @@ function DiscussionPageInner() {
     setWrittenFiles([]);
     setCommandRuns([]);
     setDiagnostics([]);
+    clearDiagnostics(id);
     setConvergenceScore(null);
     setCurrentRound(0);
     startedRef.current = false;
@@ -600,7 +642,19 @@ function DiscussionPageInner() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="pb-16 xl:grid xl:grid-cols-[340px_minmax(0,1fr)] xl:items-start xl:gap-6 xl:pb-0">
+      {/* ── Activity log — left sidebar on wide screens (always open) ── */}
+      <aside className="hidden xl:sticky xl:top-6 xl:block xl:self-start">
+        <DiscussionDiagnostics
+          entries={diagnostics}
+          connected={streamConnected}
+          active={isActive}
+          variant="sidebar"
+        />
+      </aside>
+
+      {/* ── Main column ─────────────────────────────────────────── */}
+      <div className="space-y-6">
       {/* ── Hero ────────────────────────────────────────────────── */}
       <header className="relative overflow-hidden rounded-2xl border bg-card shadow-sm">
         <div
@@ -893,12 +947,17 @@ function DiscussionPageInner() {
         />
       </div>
 
-      {/* ── Diagnostics, tucked away ────────────────────────────── */}
-      <DiscussionDiagnostics
-        entries={diagnostics}
-        connected={streamConnected}
-        active={isActive}
-      />
+      </div>
+
+      {/* ── Activity log — fixed footer bar below xl (collapsed by default) ── */}
+      <div className="xl:hidden">
+        <DiscussionDiagnostics
+          entries={diagnostics}
+          connected={streamConnected}
+          active={isActive}
+          variant="footer"
+        />
+      </div>
     </div>
   );
 }

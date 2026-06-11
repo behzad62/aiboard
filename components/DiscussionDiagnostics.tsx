@@ -19,6 +19,11 @@ interface DiscussionDiagnosticsProps {
   entries: DiagnosticEntry[];
   connected: boolean;
   active: boolean;
+  /**
+   * "sidebar" — always-expanded, fits its container (the xl left aside).
+   * "footer" — fixed bottom bar, collapsible, closed by default (below xl).
+   */
+  variant?: "sidebar" | "footer";
 }
 
 function phaseDot(phase: DiagnosticEntry["phase"]): string {
@@ -38,31 +43,123 @@ function phaseDot(phase: DiagnosticEntry["phase"]): string {
   }
 }
 
+function EntriesList({ entries }: { entries: DiagnosticEntry[] }) {
+  if (entries.length === 0) {
+    return (
+      <p className="px-2 py-3 text-sm text-muted-foreground">
+        No orchestration events recorded yet.
+      </p>
+    );
+  }
+  return (
+    <ol className="space-y-0.5">
+      {entries.map((entry) => (
+        <li
+          key={entry.id}
+          className="flex items-start gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40"
+        >
+          <span className="mt-1 font-mono text-[0.65rem] tabular-nums text-muted-foreground">
+            {entry.at}
+          </span>
+          <span
+            className={cn(
+              "mt-[0.4rem] h-1.5 w-1.5 shrink-0 rounded-full",
+              phaseDot(entry.phase)
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-foreground/90">{entry.message}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 font-mono text-[0.65rem] text-muted-foreground">
+              <span>{entry.phase.replaceAll("_", " ")}</span>
+              {entry.modelName && <span>· {entry.modelName}</span>}
+              {entry.providerId && <span>· {entry.providerId}</span>}
+              {entry.round !== undefined && <span>· round {entry.round}</span>}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function LogHeader({ entries }: { entries: DiagnosticEntry[] }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2.5">
+      <Activity className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="font-display text-sm font-semibold">Activity log</span>
+      {entries.length > 0 && (
+        <span className="font-mono text-xs text-muted-foreground">
+          {entries.length}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function DiscussionDiagnostics({
   entries,
   connected,
   active,
+  variant = "footer",
 }: DiscussionDiagnosticsProps) {
-  const [open, setOpen] = useState(false);
+  if (variant === "sidebar") {
+    // Always expanded, glanceable during a run; scrolls inside its aside.
+    return (
+      <section className="flex max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-xl border bg-card/60">
+        <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+          <LogHeader entries={entries} />
+          <ConnectionPill connected={connected} active={active} />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background/40 p-2">
+          <EntriesList entries={entries} />
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <section className="overflow-hidden rounded-xl border bg-card/60">
+    <FooterDiagnostics
+      entries={entries}
+      connected={connected}
+      active={active}
+    />
+  );
+}
+
+function FooterDiagnostics({
+  entries,
+  connected,
+  active,
+}: {
+  entries: DiagnosticEntry[];
+  connected: boolean;
+  active: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const latest = entries[0];
+
+  return (
+    <section className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] backdrop-blur">
+      {open && (
+        <div className="max-h-[50vh] overflow-y-auto border-b bg-background/40 p-2">
+          <EntriesList entries={entries} />
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
       >
-        <span className="flex items-center gap-2.5">
-          <Activity className="h-4 w-4 text-muted-foreground" />
-          <span className="font-display text-sm font-semibold">Activity log</span>
-          {entries.length > 0 && (
-            <span className="font-mono text-xs text-muted-foreground">
-              {entries.length}
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <LogHeader entries={entries} />
+          {!open && latest && (
+            <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+              {latest.message}
             </span>
           )}
         </span>
-        <span className="flex items-center gap-3">
+        <span className="flex shrink-0 items-center gap-3">
           <ConnectionPill connected={connected} active={active} />
           <ChevronDown
             className={cn(
@@ -72,44 +169,6 @@ export function DiscussionDiagnostics({
           />
         </span>
       </button>
-
-      {open && (
-        <div className="max-h-96 overflow-y-auto border-t bg-background/40 p-2">
-          {entries.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-muted-foreground">
-              No orchestration events recorded yet.
-            </p>
-          ) : (
-            <ol className="space-y-0.5">
-              {entries.map((entry) => (
-                <li
-                  key={entry.id}
-                  className="flex items-start gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40"
-                >
-                  <span className="mt-1 font-mono text-[0.65rem] tabular-nums text-muted-foreground">
-                    {entry.at}
-                  </span>
-                  <span
-                    className={cn(
-                      "mt-[0.4rem] h-1.5 w-1.5 shrink-0 rounded-full",
-                      phaseDot(entry.phase)
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-foreground/90">{entry.message}</p>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 font-mono text-[0.65rem] text-muted-foreground">
-                      <span>{entry.phase.replaceAll("_", " ")}</span>
-                      {entry.modelName && <span>· {entry.modelName}</span>}
-                      {entry.providerId && <span>· {entry.providerId}</span>}
-                      {entry.round !== undefined && <span>· round {entry.round}</span>}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
     </section>
   );
 }
