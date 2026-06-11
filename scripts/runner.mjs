@@ -3,9 +3,10 @@
  * AI Discussion Board — local command runner.
  *
  * Lets the Build-mode Architect run commands (tests, builds, installs) in YOUR
- * project folder. You start it, you can stop it any time (Ctrl+C), and every
- * command is printed here before it runs. The web app additionally asks for
- * your approval per command unless you chose "Full access".
+ * project folder, and fetch public http(s) URLs (runner v3+; local/private
+ * addresses are refused). You start it, you can stop it any time (Ctrl+C), and
+ * every command/fetch is printed here before it runs. The web app additionally
+ * asks for your approval per command unless you chose "Full access".
  *
  * Requires Node.js 18+ (https://nodejs.org). Download this file from the app
  * (Build mode → Local runner → "Download runner.mjs") or use it straight from
@@ -30,11 +31,13 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 2;
+const VERSION = 3;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_LIST_ENTRIES = 600;
+const FETCH_TIMEOUT_MS = 30 * 1000;
+const MAX_FETCH_BYTES = 200 * 1024;
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
@@ -178,6 +181,86 @@ function searchProjectFiles(query) {
     }
   }
   return results;
+}
+
+/**
+ * True for hostnames that point at this machine or the local network — the
+ * web-fetch endpoint refuses them so a model can't use it to probe localhost
+ * services or the router (basic SSRF guard; literal-IP/name check only).
+ */
+function isPrivateHost(hostname) {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 brackets
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  if (h === "::1" || h === "0.0.0.0" || h === "::") return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true; // link-local / cloud metadata
+  }
+  if (/^(fe80|fc|fd)/i.test(h)) return true; // IPv6 link-local / ULA
+  return false;
+}
+
+/** Fetch a public HTTP(S) URL; returns capped text + metadata. */
+async function fetchUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Not a valid URL: ${rawUrl}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http and https URLs are allowed");
+  }
+  if (isPrivateHost(parsed.hostname)) {
+    throw new Error("Refusing to fetch local/private addresses");
+  }
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(parsed.href, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: { "user-agent": "ai-discussion-board-runner/" + VERSION },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  let text = "";
+  let truncated = false;
+  if (response.body) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (bytes > MAX_FETCH_BYTES) {
+        truncated = true;
+        const keep = value.length - (bytes - MAX_FETCH_BYTES);
+        text += decoder.decode(value.subarray(0, keep), { stream: true });
+        await reader.cancel().catch(() => {});
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  }
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    finalUrl: response.url,
+    contentType,
+    text,
+    durationMs: Date.now() - startedAt,
+    truncated,
+  };
 }
 
 function readFileInProject(relPath) {
@@ -514,6 +597,30 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true, bytes });
     } catch (err) {
       json(res, 400, { error: err instanceof Error ? err.message : "Write failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/fetch") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    if (typeof body?.url !== "string" || !body.url.trim()) {
+      json(res, 400, { error: "Missing url" });
+      return;
+    }
+    console.log(`[fetch] ${new Date().toLocaleTimeString()}  ${body.url.trim()}`);
+    try {
+      const result = await fetchUrl(body.url.trim());
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      json(res, 400, {
+        error: err instanceof Error ? err.message : "Fetch failed",
+      });
     }
     return;
   }

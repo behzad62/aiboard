@@ -76,8 +76,10 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
         The runner is a small script you start in your own terminal, pointed at
         your project. Connecting it gives the AI team full access to{" "}
         <strong>the runner&apos;s folder</strong> (read, write, search), lets
-        the Architect run commands like tests and installs, and can bridge MCP
-        tools (e.g. a real browser via Playwright). It needs{" "}
+        the Architect run commands like tests and installs, fetch public web
+        pages (docs, references — local addresses are refused), and can bridge
+        MCP tools (e.g. a real browser via Playwright). Commands and fetches
+        are approval-gated unless you pick Full access. It needs{" "}
         <a
           href="https://nodejs.org"
           target="_blank"

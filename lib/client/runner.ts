@@ -183,6 +183,50 @@ export async function callMcpTool(
   return { text: data.text ?? "", isError: !!data.isError };
 }
 
+export interface RunnerFetchResult {
+  status: number;
+  statusText: string;
+  finalUrl: string;
+  contentType: string;
+  text: string;
+  durationMs: number;
+  truncated: boolean;
+}
+
+/**
+ * Fetch a public http(s) URL through the runner (runner v3+). The runner
+ * refuses non-web schemes and local/private addresses, and caps the response.
+ * Throws on runner/validation errors (including older runners without /fetch).
+ */
+export async function fetchViaRunner(
+  config: RunnerConfig,
+  url: string
+): Promise<RunnerFetchResult> {
+  const res = await fetch(`${config.url.replace(/\/$/, "")}/fetch`, {
+    method: "POST",
+    headers: headers(config.token),
+    body: JSON.stringify({ url }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      data.error ??
+        (res.status === 404
+          ? "This runner is too old for web fetch — download the latest runner.mjs"
+          : `Runner fetch failed (HTTP ${res.status})`)
+    );
+  }
+  return {
+    status: typeof data.status === "number" ? data.status : 0,
+    statusText: typeof data.statusText === "string" ? data.statusText : "",
+    finalUrl: typeof data.finalUrl === "string" ? data.finalUrl : url,
+    contentType: typeof data.contentType === "string" ? data.contentType : "",
+    text: typeof data.text === "string" ? data.text : "",
+    durationMs: typeof data.durationMs === "number" ? data.durationMs : 0,
+    truncated: !!data.truncated,
+  };
+}
+
 export async function runCommand(
   config: RunnerConfig,
   command: string

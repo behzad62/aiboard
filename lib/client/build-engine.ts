@@ -35,6 +35,7 @@ import {
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
+  type FetchAction,
   type PlanAction,
   type ToolAction,
 } from "@/lib/orchestrator/build";
@@ -48,6 +49,7 @@ import {
 import {
   callMcpTool,
   checkRunner,
+  fetchViaRunner,
   formatCommandResult,
   listFilesViaRunner,
   listMcpServers,
@@ -91,6 +93,8 @@ const TOTAL_RUNS = 12;
 const SEARCHES_PER_PHASE = 4;
 const MCP_CALLS_PER_PHASE = 8;
 const TOTAL_MCP_CALLS = 24;
+const FETCHES_PER_PHASE = 4;
+const TOTAL_FETCHES = 12;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -278,6 +282,9 @@ export async function runBuildDiscussion(
   // never fail the build. Any error here degrades to in-app/virtual files.
   const dirHandle = await getProjectHandle(discussion.id);
   const virtualFs = new Map<string, string>();
+  // Paths actually written THIS run — grounds the hand-off summary so it can
+  // only describe changes that really happened.
+  const writtenThisRun = new Set<string>();
   // Seed with everything previous passes built — follow-up passes and resumes
   // must see the existing files instead of re-planning from an "empty" tree.
   for (const file of getBuildFiles(discussion.id)) {
@@ -330,8 +337,10 @@ export async function runBuildDiscussion(
 
   // ── Optional local runner (user-started; opt-in by config) ────────────────
   let runner: RunnerConfig | null = null;
+  let runnerDirName: string | null = null;
   let allowAllCommands = discussion.runnerAccess === "full";
   let totalRuns = 0;
+  let totalFetches = 0;
   let mcpToolsDoc = "";
   let totalMcpCalls = 0;
   if (discussion.runnerUrl && discussion.runnerToken) {
@@ -339,6 +348,7 @@ export async function runBuildDiscussion(
     const health = await checkRunner(config);
     if (health.ok) {
       runner = config;
+      runnerDirName = health.dir ?? null;
       emit({
         type: "diagnostic",
         phase: "initializing",
@@ -405,6 +415,9 @@ export async function runBuildDiscussion(
 
   const runsLeftThisPhase = (): number =>
     runner ? Math.min(RUNS_PER_PHASE, TOTAL_RUNS - totalRuns) : 0;
+
+  const fetchesLeftThisPhase = (): number =>
+    runner ? Math.min(FETCHES_PER_PHASE, TOTAL_FETCHES - totalFetches) : 0;
 
   const mcpCallsLeftThisPhase = (): number =>
     runner && mcpToolsDoc
@@ -525,6 +538,60 @@ export async function runBuildDiscussion(
     }
   };
 
+  /** Fetch a public URL via the runner (same approval flow as commands). */
+  const executeFetch = async (action: FetchAction): Promise<string> => {
+    if (!runner) return "No runner is available.";
+    const label = `fetch ${action.url}`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `${label}\nThe user DENIED this fetch. Continue without it.`;
+      }
+    }
+    totalFetches += 1;
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `Fetching ${truncate(action.url, 120)}`,
+    });
+    const startedAt = Date.now();
+    try {
+      const result = await fetchViaRunner(runner, action.url);
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: result.status >= 200 && result.status < 400 ? 0 : 1,
+        durationMs: result.durationMs,
+        outputPreview: `HTTP ${result.status} ${result.statusText}; ${result.contentType || "unknown type"}; ${result.text.length} chars${result.truncated ? " (truncated)" : ""}`,
+      });
+      return [
+        `Fetched ${result.finalUrl} — HTTP ${result.status} ${result.statusText}; content-type: ${result.contentType || "unknown"}; ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? "; TRUNCATED to the size cap" : ""}`,
+        truncate(result.text, 16_000),
+      ].join("\n\n");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Fetch failed";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: Date.now() - startedAt,
+        outputPreview: message,
+      });
+      return `${label}\nFetch failed: ${message}`;
+    }
+  };
+
   const treeText = (): string => {
     const all = new Set([...diskTree, ...virtualFs.keys()]);
     return [...all].sort().slice(0, 400).join("\n");
@@ -580,6 +647,7 @@ export async function runBuildDiscussion(
     taskId?: string
   ): Promise<void> => {
     virtualFs.set(path, content);
+    writtenThisRun.add(path);
     // Persist so follow-up passes and resumes still see this file.
     upsertBuildFile({
       discussionId: discussion.id,
@@ -750,20 +818,53 @@ export async function runBuildDiscussion(
   /**
    * Write any ```lang path=...``` files and apply any ```edit path=...```
    * SEARCH/REPLACE blocks contained in a model's output.
+   *
+   * Returns the paths actually written plus `issues`: writes/edits that were
+   * REJECTED or SKIPPED (truncated output, suspicious shrink rewrites, edits
+   * that didn't match). Callers must surface issues to the Architect's review
+   * — a skipped write the Architect never hears about gets approved blind.
    */
   const writeEmittedFiles = async (
     text: string,
     taskId?: string
-  ): Promise<string[]> => {
-    const { files, edits } = extractArtifacts(text);
+  ): Promise<{ written: string[]; issues: string[] }> => {
+    const { files, edits, truncatedPaths } = extractArtifacts(text);
     const written: string[] = [];
+    const issues: string[] = [];
+
+    for (const path of truncatedPaths) {
+      const issue = `Output was cut off mid-block for ${path} — nothing from the truncated block was written. Re-emit it (complete), or use SEARCH/REPLACE edits.`;
+      issues.push(issue);
+      emit({ type: "diagnostic", phase: "model_failed", message: `Truncated output block for ${path} rejected${taskId ? ` (${taskId})` : ""}` });
+    }
+
     for (const file of files) {
+      // A full-file rewrite that shrinks an existing file drastically is far
+      // more often a truncated/lazy rewrite ("// rest unchanged") than a real
+      // refactor — refuse it and tell the model to use edit blocks instead.
+      const existing = await readFile(file.path);
+      if (
+        existing != null &&
+        existing.length > 2_000 &&
+        file.content.length < existing.length * 0.5
+      ) {
+        const issue = `Rewrite of ${file.path} skipped as suspicious: the existing file is ${existing.length} chars but the replacement is only ${file.content.length}. Use SEARCH/REPLACE edit blocks for changes, or re-emit the COMPLETE file if a smaller rewrite is genuinely intended.`;
+        issues.push(issue);
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message: `Skipped suspicious rewrite of ${file.path} (${existing.length} → ${file.content.length} chars)${taskId ? ` (${taskId})` : ""}`,
+        });
+        continue;
+      }
       await writeFile(file.path, file.content, taskId);
       written.push(file.path);
     }
+
     for (const edit of edits) {
       const current = await readFile(edit.path);
       if (current == null) {
+        issues.push(`Edit to ${edit.path} skipped — the file doesn't exist.`);
         emit({
           type: "diagnostic",
           phase: "model_failed",
@@ -777,6 +878,9 @@ export async function runBuildDiscussion(
         written.push(edit.path);
       }
       if (failed > 0) {
+        issues.push(
+          `${failed} edit(s) to ${edit.path} did NOT match the current file content and were skipped (${applied} applied). The intended change is missing — re-issue it with SEARCH text copied verbatim from the current file.`
+        );
         emit({
           type: "diagnostic",
           phase: "model_failed",
@@ -784,7 +888,7 @@ export async function runBuildDiscussion(
         });
       }
     }
-    return written;
+    return { written, issues };
   };
 
   const toTask = (
@@ -849,6 +953,7 @@ export async function runBuildDiscussion(
       userNotes: userNotesText(),
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       previousSummary: truncate(previousSummary, 6_000),
+      fetchesLeft: fetchesLeftThisPhase(),
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
     if (action.action === "search" && planSearchesLeft > 0) {
@@ -858,6 +963,10 @@ export async function runBuildDiscussion(
     }
     if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
       runFeedback += `\n\nTool result:\n${await executeTool(action)}`;
+      continue;
+    }
+    if (action.action === "fetch" && fetchesLeftThisPhase() > 0) {
+      runFeedback += `\n\nWeb fetch result:\n${await executeFetch(action)}`;
       continue;
     }
     if (action.action === "read" && readHopsLeft > 0) {
@@ -879,7 +988,10 @@ export async function runBuildDiscussion(
     if (action.action === "plan") {
       tasks = action.tasks.slice(0, limits.tasksPerWave).map(toTask);
       architectNotes = action.notes ?? "";
-      await writeEmittedFiles(text); // architect may scaffold files in the plan
+      const { issues } = await writeEmittedFiles(text); // architect may scaffold files in the plan
+      if (issues.length > 0) {
+        extraFileContext += `\nYOUR SCAFFOLD WRITES THAT DID NOT LAND:\n${issues.map((s) => `- ${s}`).join("\n")}`;
+      }
       break;
     }
     throw new Error("The Architect's first action must be a plan.");
@@ -991,20 +1103,39 @@ export async function runBuildDiscussion(
             label: `${worker.displayName} working on ${task.id}: ${task.title}`,
           }
         );
-        const files = await writeEmittedFiles(output, task.id);
+        const { written: files, issues } = await writeEmittedFiles(output, task.id);
         const { prose } = extractArtifacts(output);
         // A worker that produced no files contributed nothing usable — count
         // it as a failure for scoring (the deliverable is files).
         if (files.length === 0) {
           stat.totalMs += Date.now() - startedAt;
-          failTask(task, stat, worker, "returned no files");
+          failTask(
+            task,
+            stat,
+            worker,
+            issues.length > 0
+              ? `produced no usable files (${truncate(issues.join("; "), 300)})`
+              : "returned no files"
+          );
           return;
         }
         stat.responses += 1;
         stat.totalMs += Date.now() - startedAt;
         stat.totalChars += output.length;
         task.status = "review";
-        executed.push({ task, worker, files, notes: truncate(prose, 1_500) });
+        // Issues are appended AFTER the truncation so the Architect always
+        // sees them in the review prompt — a silently skipped write must
+        // never be approved blind.
+        const issueNotes =
+          issues.length > 0
+            ? `\nWRITE ISSUES — these changes did NOT land; act on them in your review:\n${issues.map((s) => `- ${s}`).join("\n")}`
+            : "";
+        executed.push({
+          task,
+          worker,
+          files,
+          notes: truncate(prose, 1_500) + issueNotes,
+        });
         emit({
           type: "task_status",
           taskId: task.id,
@@ -1209,6 +1340,7 @@ export async function runBuildDiscussion(
           mcpCallsLeft: mcpCallsLeftThisPhase(),
           userNotes: userNotesText(),
           scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+          fetchesLeft: fetchesLeftThisPhase(),
         }),
         `Architect is reviewing wave ${cycle}`
       ));
@@ -1219,6 +1351,10 @@ export async function runBuildDiscussion(
       }
       if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
         reviewRunFeedback += `\n\nTool result:\n${await executeTool(action)}`;
+        continue;
+      }
+      if (action.action === "fetch" && fetchesLeftThisPhase() > 0) {
+        reviewRunFeedback += `\n\nWeb fetch result:\n${await executeFetch(action)}`;
         continue;
       }
       if (action.action === "read" && reviewReadsLeft > 0) {
@@ -1243,7 +1379,12 @@ export async function runBuildDiscussion(
     if (action.action !== "review") {
       throw new Error("Expected a review action from the Architect.");
     }
-    await writeEmittedFiles(text); // the architect's own fixes
+    // The architect's own fixes. If any were rejected/skipped, carry that into
+    // the accumulated context so the next phase knows they did not land.
+    const { issues: fixIssues } = await writeEmittedFiles(text);
+    if (fixIssues.length > 0) {
+      extraFileContext += `\nYOUR PREVIOUS FIXES THAT DID NOT LAND:\n${fixIssues.map((s) => `- ${s}`).join("\n")}`;
+    }
 
     if (action.notes?.trim()) architectNotes = action.notes;
 
@@ -1315,6 +1456,7 @@ export async function runBuildDiscussion(
     buildArchitectSummaryPrompt({
       request: discussion.topic,
       treeText: treeText(),
+      filesChanged: [...writtenThisRun].sort().join("\n"),
       historyText: truncate(historyText, 60_000),
       verbosityInstruction,
       userNotes: userNotesText(),
@@ -1340,10 +1482,13 @@ export async function runBuildDiscussion(
     updatedAt: new Date().toISOString(),
   });
   emit({ type: "final_answer", answer, confidence, dissent });
+  // Files land via the runner (its folder), the picked browser folder, or
+  // in-app only — name whichever actually applied.
+  const diskLabel = runner ? runnerDirName : diskGranted ? dirHandle?.name : null;
   emit({
     type: "diagnostic",
     phase: "finished",
-    message: `Build complete: ${virtualFs.size} file(s) produced${diskGranted ? ` in "${dirHandle?.name}"` : " (download from the artifact panel)"}`,
+    message: `Build complete: ${virtualFs.size} file(s) produced${diskLabel ? ` in "${diskLabel}"` : " (download from the artifact panel)"}`,
   });
   emit({ type: "complete" });
 }

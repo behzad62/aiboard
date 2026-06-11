@@ -34,6 +34,33 @@ check("non-file stays prose", t4.files.length, 0);
 const t5 = extractArtifacts(`${FENCE}\npath = not a path line really\ncode\n${FENCE}`);
 check("bogus bare attr ignored", t5.files.length, 0);
 
+// 6. A file block whose closing fence never arrived (stream cut off) is
+// rejected — never written as a half file — and reported as truncated.
+const t6 = extractArtifacts(
+  `Here is the complete corrected file:\n${FENCE}ts path=lib/x.ts\nexport function a() {}\n/**\n * Case`
+);
+check("truncated file rejected", t6.files.length, 0);
+check("truncated file reported", t6.truncatedPaths, ["lib/x.ts"]);
+
+// 7. Closed blocks before a truncated one still extract normally.
+const t7 = extractArtifacts(
+  `${FENCE}ts path=src/ok.ts\nconst ok = 1;\n${FENCE}\n${FENCE}ts path=src/cut.ts\nconst cut =`
+);
+check("closed file kept", t7.files.map((f) => f.path), ["src/ok.ts"]);
+check("only cut one reported", t7.truncatedPaths, ["src/cut.ts"]);
+
+// 8. An edit op whose REPLACE terminator never arrived is dropped; prior
+// terminated ops in the same block survive, and the block is flagged.
+const t8 = extractArtifacts(
+  `${FENCE}edit path=src/e.ts\n<<<<<<< SEARCH\nold1\n=======\nnew1\n>>>>>>> REPLACE\n<<<<<<< SEARCH\nold2\n=======\nnew2 but the stream died`
+);
+check("terminated op kept", t8.edits[0]?.ops.length, 1);
+check("terminated op content", t8.edits[0]?.ops[0]?.replace, "new1");
+check("truncated edit flagged", t8.truncatedPaths, ["src/e.ts"]);
+
+// 9. Well-formed output reports no truncation.
+check("no truncation on clean output", t2.truncatedPaths, []);
+
 // ── Architect action parsing (build protocol) ────────────────────────────────
 import { parseArchitectAction } from "../lib/orchestrator/build";
 
@@ -57,5 +84,13 @@ check("parse review action", a4 && a4.action === "review" && (a4 as { done: bool
 
 const a5 = parseArchitectAction("no json here at all");
 check("no action -> null", a5, null);
+
+const a6 = parseArchitectAction(
+  '```json\n{"action":"fetch","url":"https://example.com/docs","reason":"read the API"}\n```'
+);
+check("parse fetch action", a6 && a6.action === "fetch" && (a6 as { url: string }).url, "https://example.com/docs");
+
+const a7 = parseArchitectAction('{"action":"fetch","url":"file:///etc/passwd"}');
+check("reject non-http fetch", a7, null);
 
 process.exit(failures === 0 ? 0 : 1);

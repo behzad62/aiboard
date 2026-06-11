@@ -33,6 +33,13 @@ export interface ArtifactExtraction {
   edits: ExtractedEdit[];
   /** The original text with recognized file blocks removed. */
   prose: string;
+  /**
+   * Paths of blocks whose closing fence never arrived — the model's output was
+   * cut off mid-block. Truncated FILE blocks are rejected entirely (writing a
+   * half file over a real one destroys it); truncated EDIT blocks keep only
+   * their fully terminated ops. Callers should report these to the reviewer.
+   */
+  truncatedPaths: string[];
 }
 
 const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})(.*)$/;
@@ -151,12 +158,19 @@ function parseEditOps(body: string[]): ExtractedEditOp[] {
     }
     i += 1; // skip =======
     const replace: string[] = [];
-    while (i < body.length && !/^>{4,}\s*REPLACE\s*$/.test(body[i].trim())) {
+    let terminated = false;
+    while (i < body.length) {
+      if (/^>{4,}\s*REPLACE\s*$/.test(body[i].trim())) {
+        terminated = true;
+        break;
+      }
       replace.push(body[i]);
       i += 1;
     }
     i += 1; // skip >>>>>>> REPLACE
-    if (search.length > 0) {
+    // An op whose REPLACE terminator never arrived is a truncated stream —
+    // applying it would write half a replacement into the file.
+    if (search.length > 0 && terminated) {
       ops.push({ search: search.join("\n"), replace: replace.join("\n") });
     }
   }
@@ -221,6 +235,7 @@ export function extractArtifacts(text: string): ArtifactExtraction {
   const lines = (text ?? "").split("\n");
   const files: ExtractedFile[] = [];
   const edits: ExtractedEdit[] = [];
+  const truncatedPaths: string[] = [];
   const proseLines: string[] = [];
 
   let i = 0;
@@ -256,6 +271,12 @@ export function extractArtifacts(text: string): ArtifactExtraction {
       const ops = parseEditOps(body);
       if (editPath && ops.length > 0) {
         edits.push({ path: normalizePath(editPath), ops });
+        // A cut-off edit block: the terminated ops above are safe, but the
+        // tail op was lost — surface it so the reviewer knows.
+        if (!hadClose) truncatedPaths.push(normalizePath(editPath));
+      } else if (editPath && !hadClose) {
+        truncatedPaths.push(normalizePath(editPath));
+        proseLines.push(lines[i], ...body);
       } else {
         // Malformed edit block — keep it visible as prose.
         proseLines.push(lines[i], ...body);
@@ -272,7 +293,13 @@ export function extractArtifacts(text: string): ArtifactExtraction {
       pathFromFirstLine(body) ??
       pathFromLabel(lastNonEmpty(proseLines));
 
-    if (path) {
+    if (path && !hadClose) {
+      // The closing fence never arrived — the stream was cut off mid-file.
+      // Writing a half file over a real one destroys it, so reject the block
+      // and keep it visible as prose.
+      truncatedPaths.push(normalizePath(path));
+      proseLines.push(lines[i], ...body);
+    } else if (path) {
       // The bare `path=...` line is metadata, not file content — drop it.
       const content =
         bareAttrIdx >= 0 && !pathFromInfo(info)
@@ -295,6 +322,7 @@ export function extractArtifacts(text: string): ArtifactExtraction {
   return {
     files: dedupeLastWins(files),
     edits,
+    truncatedPaths: [...new Set(truncatedPaths)],
     prose: proseLines.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
   };
 }

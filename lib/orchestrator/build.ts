@@ -106,13 +106,21 @@ export interface ToolAction {
   reason?: string;
 }
 
+/** Fetch a public http(s) URL via the user's local runner (runner v3+). */
+export interface FetchAction {
+  action: "fetch";
+  url: string;
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
   | PlanAction
   | ReviewAction
   | RunAction
   | SearchAction
-  | ToolAction;
+  | ToolAction
+  | FetchAction;
 
 /** The balanced top-level {...} starting exactly at `start`, or null. */
 function balancedObjectAt(text: string, start: number): string | null {
@@ -245,6 +253,13 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
         ) {
           return parsed as ToolAction;
         }
+        if (
+          parsed.action === "fetch" &&
+          typeof (parsed as FetchAction).url === "string" &&
+          /^https?:\/\//i.test((parsed as FetchAction).url.trim())
+        ) {
+          return { ...(parsed as FetchAction), url: (parsed as FetchAction).url.trim() };
+        }
       }
     } catch {
       // try the next candidate
@@ -306,6 +321,15 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
   ].join("\n");
 }
 
+function fetchToolDoc(fetchesLeft?: number): string {
+  if (!fetchesLeft || fetchesLeft <= 0) return "";
+  return [
+    "TOOL — fetch a web page: the user's local runner can retrieve a PUBLIC http(s) URL for you (docs, READMEs, API references). This fetches a KNOWN URL — it is not a search engine. To fetch, respond with ONLY:",
+    '{"action":"fetch","url":"https://example.com/docs","reason":"why"}',
+    `The page text comes back to you (truncated to a safe size). Local/private addresses are refused. ${fetchesLeft} fetch${fetchesLeft === 1 ? "" : "es"} left in this phase. The user may deny a fetch — respect that and continue.`,
+  ].join("\n");
+}
+
 function runToolDoc(runsLeft?: number): string {
   if (!runsLeft || runsLeft <= 0) return "";
   return [
@@ -324,6 +348,7 @@ export function buildArchitectPlanPrompt(input: {
   readHopsLeft: number;
   runsLeft?: number;
   searchesLeft?: number;
+  fetchesLeft?: number;
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   userNotes?: string;
@@ -354,6 +379,7 @@ export function buildArchitectPlanPrompt(input: {
     readOption,
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
+    fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
@@ -413,6 +439,7 @@ export function buildArchitectReviewPrompt(input: {
   searchesLeft?: number;
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
+  fetchesLeft?: number;
   userNotes?: string;
   scoreboard?: string;
 }): string {
@@ -439,6 +466,7 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft),
+    fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     "End with ONE fenced json block:",
@@ -495,6 +523,8 @@ export function buildReviewerPrompt(input: {
 export function buildArchitectSummaryPrompt(input: {
   request: string;
   treeText: string;
+  /** Paths actually written this run — the summary may only claim these. */
+  filesChanged?: string;
   historyText: string;
   verbosityInstruction?: string;
   userNotes?: string;
@@ -512,6 +542,9 @@ export function buildArchitectSummaryPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    input.filesChanged?.trim()
+      ? `\nFiles actually created or modified in THIS run (the complete list — do NOT claim changes to any file not listed here; if something planned is missing from this list, it did NOT happen and belongs under known gaps):\n${input.filesChanged}`
+      : "\nNo files were created or modified in this run — say so plainly and describe what went wrong instead of describing planned work as done.",
     userNotesSection(input.userNotes),
     "",
     "Build history (plans, reviews, outcomes):",

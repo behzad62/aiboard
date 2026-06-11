@@ -10,6 +10,11 @@ export interface CatalogModel {
   capabilities: ModelCapabilities;
   /** Cheap model used for API key validation */
   validationCandidate?: boolean;
+  /**
+   * Which OpenAI endpoint the model accepts. Codex models reject
+   * v1/chat/completions ("not a chat model") and must use v1/responses.
+   */
+  api?: "chat" | "responses";
 }
 
 /** Single source of truth — API IDs from provider docs. */
@@ -49,6 +54,7 @@ export const MODEL_CATALOG: CatalogModel[] = [
     providerId: "openai",
     description: "Agentic coding model optimized for Codex-style tasks",
     capabilities: { image: false, document: false, audio: false, video: false },
+    api: "responses",
   },
   {
     id: "gpt-5.4-mini",
