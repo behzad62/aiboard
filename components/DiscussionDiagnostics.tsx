@@ -24,6 +24,12 @@ interface DiscussionDiagnosticsProps {
    * "footer" — fixed bottom bar, collapsible, closed by default (below xl).
    */
   variant?: "sidebar" | "footer";
+  /**
+   * Word used for the per-entry counter in the meta line. Defaults to "round";
+   * Build mode passes "turn" since each entry is a single model streaming turn,
+   * not a discussion round (builds count "waves" instead).
+   */
+  roundLabel?: string;
 }
 
 function phaseDot(phase: DiagnosticEntry["phase"]): string {
@@ -43,7 +49,13 @@ function phaseDot(phase: DiagnosticEntry["phase"]): string {
   }
 }
 
-function EntriesList({ entries }: { entries: DiagnosticEntry[] }) {
+function EntriesList({
+  entries,
+  roundLabel = "round",
+}: {
+  entries: DiagnosticEntry[];
+  roundLabel?: string;
+}) {
   if (entries.length === 0) {
     return (
       <p className="px-2 py-3 text-sm text-muted-foreground">
@@ -73,7 +85,11 @@ function EntriesList({ entries }: { entries: DiagnosticEntry[] }) {
               <span>{entry.phase.replaceAll("_", " ")}</span>
               {entry.modelName && <span>· {entry.modelName}</span>}
               {entry.providerId && <span>· {entry.providerId}</span>}
-              {entry.round !== undefined && <span>· round {entry.round}</span>}
+              {entry.round !== undefined && (
+                <span>
+                  · {roundLabel} {entry.round}
+                </span>
+              )}
             </div>
           </div>
         </li>
@@ -101,6 +117,7 @@ export function DiscussionDiagnostics({
   connected,
   active,
   variant = "footer",
+  roundLabel,
 }: DiscussionDiagnosticsProps) {
   if (variant === "sidebar") {
     // Always expanded, glanceable during a run; scrolls inside its aside.
@@ -111,7 +128,7 @@ export function DiscussionDiagnostics({
           <ConnectionPill connected={connected} active={active} />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto bg-background/40 p-2">
-          <EntriesList entries={entries} />
+          <EntriesList entries={entries} roundLabel={roundLabel} />
         </div>
       </section>
     );
@@ -122,6 +139,7 @@ export function DiscussionDiagnostics({
       entries={entries}
       connected={connected}
       active={active}
+      roundLabel={roundLabel}
     />
   );
 }
@@ -130,10 +148,12 @@ function FooterDiagnostics({
   entries,
   connected,
   active,
+  roundLabel,
 }: {
   entries: DiagnosticEntry[];
   connected: boolean;
   active: boolean;
+  roundLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const latest = entries[0];
@@ -142,7 +162,7 @@ function FooterDiagnostics({
     <section className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] backdrop-blur">
       {open && (
         <div className="max-h-[50vh] overflow-y-auto border-b bg-background/40 p-2">
-          <EntriesList entries={entries} />
+          <EntriesList entries={entries} roundLabel={roundLabel} />
         </div>
       )}
       <button

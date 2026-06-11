@@ -1198,6 +1198,15 @@ export async function runBuildDiscussion(
   let done = false;
 
   for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
+    // Drive the hero progress bar one notch per review wave. Builds count
+    // "waves" (review cycles), not panel-style discussion rounds — this
+    // corrects the store's initial maxRounds to the real wave budget.
+    emit({
+      type: "status",
+      status: "running",
+      round: cycle,
+      maxRounds: limits.cycles,
+    });
     const pending = tasks.filter(
       (t) => t.status === "planned" || t.status === "fixing"
     );

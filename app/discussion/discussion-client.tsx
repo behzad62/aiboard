@@ -34,6 +34,7 @@ import {
   Gavel,
   Play,
   RotateCcw,
+  ShieldCheck,
   Square,
   StickyNote,
 } from "lucide-react";
@@ -651,6 +652,44 @@ function DiscussionPageInner() {
     [participantIds]
   );
 
+  // Lead participants (Architect/Judge + Reviewer) that aren't among the
+  // workers in modelIds — they'd otherwise never appear in the Team row even
+  // though they're the most important models. Rendered as standalone chips,
+  // role-labelled, before the workers. If a lead IS in participantIds (the
+  // non-build judge case), it keeps its inline gavel and is skipped here.
+  const leadChips = useMemo<
+    Array<{ modelId: string; role: string; icon: "gavel" | "shield" }>
+  >(() => {
+    if (!discussion) return [];
+    const leads: Array<{
+      modelId: string;
+      role: string;
+      icon: "gavel" | "shield";
+    }> = [];
+    const isBuild = discussion.mode === "build";
+    if (
+      discussion.judgeModelId &&
+      !participantIds.includes(discussion.judgeModelId)
+    ) {
+      leads.push({
+        modelId: discussion.judgeModelId,
+        role: isBuild ? "Architect" : "Judge",
+        icon: "gavel",
+      });
+    }
+    if (
+      discussion.reviewerModelId &&
+      !participantIds.includes(discussion.reviewerModelId)
+    ) {
+      leads.push({
+        modelId: discussion.reviewerModelId,
+        role: "Reviewer",
+        icon: "shield",
+      });
+    }
+    return leads;
+  }, [discussion, participantIds]);
+
   const activeModelNames = messages
     .filter((m) => m.streaming)
     .map((m) => m.modelName);
@@ -696,6 +735,7 @@ function DiscussionPageInner() {
           connected={streamConnected}
           active={isActive}
           variant="sidebar"
+          roundLabel={discussion.mode === "build" ? "turn" : "round"}
         />
       </aside>
 
@@ -782,11 +822,34 @@ function DiscussionPageInner() {
             {discussion.topic}
           </h1>
 
-          {participantIds.length > 0 && (
+          {(participantIds.length > 0 || leadChips.length > 0) && (
             <div className="mt-6 flex flex-wrap items-center gap-2">
               <span className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
                 {discussion.mode === "build" ? "Team" : "Panel"}
               </span>
+              {leadChips.map((lead) => (
+                <span
+                  key={lead.modelId}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 py-1 pl-1 pr-2.5"
+                  title={`${lead.role}: ${modelNames[lead.modelId] ?? getModelDisplayName(lead.modelId)}`}
+                >
+                  <span
+                    className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary"
+                  >
+                    {lead.icon === "gavel" ? (
+                      <Gavel className="h-3 w-3" />
+                    ) : (
+                      <ShieldCheck className="h-3 w-3" />
+                    )}
+                  </span>
+                  <span className="text-xs font-medium">
+                    {modelNames[lead.modelId] ?? getModelDisplayName(lead.modelId)}
+                  </span>
+                  <span className="font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground">
+                    {lead.role}
+                  </span>
+                </span>
+              ))}
               {participantIds.map((modelId) => {
                 const accent = accentFor(accentMap, modelId);
                 const isJudge = discussion.judgeModelId === modelId;
@@ -817,7 +880,11 @@ function DiscussionPageInner() {
             <div className="mt-6 space-y-2">
               <div className="flex items-center justify-between gap-3 font-mono text-[0.7rem] text-muted-foreground">
                 <span>
-                  Round {Math.max(currentRound, 0)} / {maxRounds}
+                  {discussion.mode === "build"
+                    ? currentRound > 0
+                      ? `Wave ${currentRound} / ${maxRounds}`
+                      : "Preparing…"
+                    : `Round ${Math.max(currentRound, 0)} / ${maxRounds}`}
                 </span>
                 <span className="inline-flex min-w-0 items-center gap-1.5">
                   <span className="relative flex h-1.5 w-1.5 shrink-0">
@@ -1060,6 +1127,7 @@ function DiscussionPageInner() {
           connected={streamConnected}
           active={isActive}
           variant="footer"
+          roundLabel={discussion.mode === "build" ? "turn" : "round"}
         />
       </div>
     </div>
