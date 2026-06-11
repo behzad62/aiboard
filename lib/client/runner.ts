@@ -36,7 +36,7 @@ export async function checkRunner(
   } catch {
     return {
       ok: false,
-      error: "Could not reach the runner. Is it started? (node scripts/runner.mjs <folder>)",
+      error: "Could not reach the runner. Is it started? (node runner.mjs <folder> — needs Node.js installed)",
     };
   }
 }

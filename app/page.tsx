@@ -270,7 +270,7 @@ export default function HomePage() {
               Topic
             </CardTitle>
             <CardDescription>
-              e.g. BHPH math formulas in Texas DMS systems, or design a fleet notification system
+              e.g. Compare Postgres vs. MongoDB for a booking app, or build a recipe manager web app
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">

@@ -7,9 +7,13 @@
  * command is printed here before it runs. The web app additionally asks for
  * your approval per command unless you chose "Full access".
  *
+ * Requires Node.js 18+ (https://nodejs.org). Download this file from the app
+ * (Build mode → Local runner → "Download runner.mjs") or use it straight from
+ * the repo's scripts/ folder.
+ *
  * Usage:
- *   node scripts/runner.mjs <project-folder> [--port 8787] [--token <secret>]
- *                           [--mcp "<name>=<command>"]...
+ *   node runner.mjs <project-folder> [--port 8787] [--token <secret>]
+ *                   [--mcp "<name>=<command>"]...
  *
  * MCP bridge: each --mcp flag spawns a stdio MCP server and exposes its tools
  * to the Architect (with the same per-call approval as commands), e.g.:

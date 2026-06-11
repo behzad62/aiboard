@@ -37,6 +37,9 @@ yarn-error.log*
 # database and local uploads
 /data/
 
+# build-time copy of scripts/runner.mjs (the downloadable runner)
+/public/runner.mjs
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

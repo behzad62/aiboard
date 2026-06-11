@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Terminal } from "lucide-react";
+import { Download, Terminal } from "lucide-react";
 import { checkRunner, DEFAULT_RUNNER_URL } from "@/lib/client/runner";
 
 export interface RunnerSelection {
@@ -21,11 +21,13 @@ interface RunnerSetupProps {
 }
 
 /**
- * The primary way to connect a project in Build mode: the user starts
- * `node scripts/runner.mjs <folder>` in their own terminal and pastes its
- * URL + token here. Connecting is the opt-in — pasting the token enables it,
- * clearing the token disconnects. Grants file access to the runner's folder,
- * command execution (gated by the access level), and MCP tools.
+ * The primary way to connect a project in Build mode: the user downloads
+ * runner.mjs (served from /runner.mjs — copied from scripts/runner.mjs at
+ * build time), starts `node runner.mjs <folder>` in their own terminal, and
+ * pastes its URL + token here. Connecting is the opt-in — pasting the token
+ * enables it, clearing the token disconnects. Grants file access to the
+ * runner's folder, command execution (gated by the access level), and MCP
+ * tools.
  */
 export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
   const [url, setUrl] = useState(DEFAULT_RUNNER_URL);
@@ -71,16 +73,37 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
       </Label>
 
       <p className="text-xs text-muted-foreground">
-        The runner is a small process you start in your own terminal, pointed at
+        The runner is a small script you start in your own terminal, pointed at
         your project. Connecting it gives the AI team full access to{" "}
         <strong>the runner&apos;s folder</strong> (read, write, search), lets
         the Architect run commands like tests and installs, and can bridge MCP
-        tools (e.g. a real browser via Playwright). Paste the URL and token it
-        prints to connect; leave the token empty to build in-app instead.
+        tools (e.g. a real browser via Playwright). It needs{" "}
+        <a
+          href="https://nodejs.org"
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2"
+        >
+          Node.js
+        </a>{" "}
+        18+ installed (free) — nothing else. Download it, run it, then paste
+        the URL and token it prints to connect; leave the token empty to build
+        in-app instead.
       </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" asChild>
+          <a href="/runner.mjs" download="runner.mjs">
+            <Download className="mr-2 h-4 w-4" />
+            Download runner.mjs
+          </a>
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          then, in a terminal:
+        </span>
+      </div>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        {"node scripts/runner.mjs ./your-project\n"}
-        {'node scripts/runner.mjs ./your-project --mcp "playwright=npx @playwright/mcp@latest"'}
+        {"node runner.mjs path/to/your-project\n"}
+        {'node runner.mjs path/to/your-project --mcp "playwright=npx @playwright/mcp@latest"'}
       </pre>
 
       <div className="space-y-3">
