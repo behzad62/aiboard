@@ -271,6 +271,14 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <p className="text-xs text-muted-foreground">{runtimeBehavior.temperatureNote}</p>
           <p className="mt-2 text-muted-foreground">{runtimeBehavior.promptCachingLabel}</p>
           <p className="text-xs text-muted-foreground">{runtimeBehavior.promptCachingNote}</p>
+          {runtimeBehavior.concurrencyNote && (
+            <>
+              <p className="mt-2 text-muted-foreground">Concurrency</p>
+              <p className="text-xs text-muted-foreground">
+                {runtimeBehavior.concurrencyNote}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
