@@ -93,4 +93,16 @@ check("parse fetch action", a6 && a6.action === "fetch" && (a6 as { url: string 
 const a7 = parseArchitectAction('{"action":"fetch","url":"file:///etc/passwd"}');
 check("reject non-http fetch", a7, null);
 
+// ── Language-agnostic verify-command detection ────────────────────────────────
+import { detectVerifyCommand } from "../lib/orchestrator/build";
+
+check("detect dotnet", detectVerifyCommand(["src/App.csproj", "Program.cs"]), "dotnet build");
+check("detect go", detectVerifyCommand(["go.mod", "main.go"]), "go build ./...");
+check("detect cargo", detectVerifyCommand(["Cargo.toml", "src/main.rs"]), "cargo check");
+check("detect maven", detectVerifyCommand(["pom.xml", "src/Main.java"]), "mvn -q -DskipTests compile");
+check("detect tsc", detectVerifyCommand(["tsconfig.json", "src/index.ts"]), "npx --yes tsc --noEmit");
+check("compiled wins over tsc", detectVerifyCommand(["tsconfig.json", "api.csproj"]), "dotnet build");
+check("bare package.json -> none", detectVerifyCommand(["package.json", "index.js"]), "");
+check("plain files -> none", detectVerifyCommand(["index.html", "style.css"]), "");
+
 process.exit(failures === 0 ? 0 : 1);

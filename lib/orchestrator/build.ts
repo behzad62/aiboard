@@ -62,6 +62,15 @@ export interface PlanAction {
     assignTo?: string;
   }>;
   notes?: string;
+  /**
+   * Optional shell command that compiles/type-checks the project, run by the
+   * engine automatically each wave (when a runner is connected) as a
+   * mechanical backstop — its output goes into the review so broken code is
+   * caught regardless of language. The Architect knows the stack, so it sets
+   * this (e.g. "dotnet build", "go build ./...", "cargo check",
+   * "npx tsc --noEmit"). Omit / "" when there's nothing meaningful to run.
+   */
+  verifyCommand?: string;
 }
 
 export interface ReviewAction {
@@ -74,6 +83,23 @@ export interface ReviewAction {
   newTasks?: PlanAction["tasks"];
   done: boolean;
   notes?: string;
+}
+
+/**
+ * Best-guess build/check command for a project from its manifest files —
+ * a language-agnostic fallback used when the Architect doesn't declare a
+ * verifyCommand. Returns "" when no confident command applies (e.g. a bare
+ * package.json with no tsconfig has no assured check script). Compiled
+ * languages are checked first; `files` are project-relative paths.
+ */
+export function detectVerifyCommand(files: string[]): string {
+  const has = (re: RegExp) => files.some((f) => re.test(f));
+  if (has(/(^|\/)go\.mod$/)) return "go build ./...";
+  if (has(/(^|\/)Cargo\.toml$/)) return "cargo check";
+  if (has(/\.csproj$/) || has(/\.fsproj$/) || has(/\.sln$/)) return "dotnet build";
+  if (has(/(^|\/)pom\.xml$/)) return "mvn -q -DskipTests compile";
+  if (has(/(^|\/)tsconfig\.json$/)) return "npx --yes tsc --noEmit";
+  return "";
 }
 
 /** A compact worker-performance line for the prompt scoreboard. */
@@ -384,7 +410,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow"}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow","verifyCommand":"a shell command that compiles/type-checks this project (e.g. dotnet build, go build ./..., cargo check, npx tsc --noEmit) — omit if a runner isn't connected or nothing applies"}`,
     "```",
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,

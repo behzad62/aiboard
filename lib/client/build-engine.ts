@@ -31,6 +31,7 @@ import {
   buildArchitectSummaryPrompt,
   buildReviewerPrompt,
   buildWorkerTaskPrompt,
+  detectVerifyCommand,
   parseArchitectAction,
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
@@ -593,6 +594,65 @@ export async function runBuildDiscussion(
     }
   };
 
+  /**
+   * Run the wave build-check command (resolved verifyCommand) and format its
+   * result for the review prompt. Honors command approval like any run, but
+   * uses its OWN budget so it never starves the Architect's discretionary
+   * runs. Returns "" when there's nothing to run.
+   */
+  const runVerify = async (command: string): Promise<string> => {
+    if (!runner || !command) return "";
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(command, "Automated build check")
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return "";
+      }
+    }
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `Build check: ${command}`,
+    });
+    try {
+      const result = await runCommand(runner, command);
+      emit({
+        type: "command_run",
+        command,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        outputPreview: truncate((result.stdout || result.stderr).trim(), 400),
+      });
+      const ok = result.exitCode === 0;
+      return [
+        `AUTOMATED BUILD CHECK — \`${command}\` exited ${result.exitCode} (${ok ? "OK" : "FAILED"})${result.truncated ? " [output truncated]" : ""}.`,
+        ok
+          ? "The project compiles. Approve only what the build and your review both support."
+          : "The project does NOT compile. Treat the errors below as required fixes — do NOT mark done while they remain; send the owning tasks back with precise fix instructions.",
+        truncate((result.stderr || result.stdout).trim() || "(no output)", 6_000),
+      ].join("\n");
+    } catch (err) {
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: err instanceof Error ? err.message : "build check failed",
+      });
+      return `AUTOMATED BUILD CHECK — \`${command}\` could not run: ${err instanceof Error ? err.message : "error"}.`;
+    }
+  };
+
   const treeText = (): string => {
     const all = new Set([...diskTree, ...virtualFs.keys()]);
     return [...all].sort().slice(0, 400).join("\n");
@@ -922,6 +982,7 @@ export async function runBuildDiscussion(
   let extraFileContext = "";
   let readHopsLeft = 2;
   let tasks: BuildTask[] = [];
+  let planVerifyCommand = ""; // build/check command the Architect declared
 
   // Give the Architect the obvious entry points of an existing project up front
   // so it usually doesn't need to spend a read hop on them.
@@ -989,6 +1050,8 @@ export async function runBuildDiscussion(
     if (action.action === "plan") {
       tasks = action.tasks.slice(0, limits.tasksPerWave).map(toTask);
       architectNotes = action.notes ?? "";
+      planVerifyCommand =
+        typeof action.verifyCommand === "string" ? action.verifyCommand.trim() : "";
       const { issues } = await writeEmittedFiles(text); // architect may scaffold files in the plan
       if (issues.length > 0) {
         extraFileContext += `\nYOUR SCAFFOLD WRITES THAT DID NOT LAND:\n${issues.map((s) => `- ${s}`).join("\n")}`;
@@ -1016,6 +1079,20 @@ export async function runBuildDiscussion(
   // Persists across batches and waves so small (even size-1) batches still
   // spread work over all active workers instead of piling onto the top rank.
   let assignCursor = 0;
+  // Mechanical build/check backstop: a project-appropriate command run after
+  // each wave (when a runner is connected) so broken code is caught by the
+  // compiler in ANY language, not only by the reviewer model's reading. The
+  // Architect's declared command wins; otherwise we detect from the manifests.
+  const verifyCommand = runner
+    ? (planVerifyCommand || detectVerifyCommand([...diskTree, ...virtualFs.keys()]))
+    : "";
+  if (verifyCommand) {
+    emit({
+      type: "diagnostic",
+      phase: "round_preparing",
+      message: `Build check each wave: \`${verifyCommand}\``,
+    });
+  }
   let done = false;
 
   for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
@@ -1308,6 +1385,10 @@ export async function runBuildDiscussion(
       }
     }
 
+    // Mechanical backstop: compile/type-check the project now so the verdict
+    // is informed by the actual compiler, not only the models' reading.
+    const verifyFeedback = await runVerify(verifyCommand);
+
     emit({
       type: "diagnostic",
       phase: "judging",
@@ -1315,8 +1396,8 @@ export async function runBuildDiscussion(
     });
 
     // The Architect may read files or run commands (e.g. tests) before
-    // deciding the verdict.
-    let reviewRunFeedback = "";
+    // deciding the verdict. Seed with the build-check result.
+    let reviewRunFeedback = verifyFeedback ? `\n\n${verifyFeedback}` : "";
     let reviewReadsLeft = 2;
     let reviewSearchesLeft = SEARCHES_PER_PHASE;
     let action: ArchitectAction;
