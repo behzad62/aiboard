@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Source for public/og.png. Regenerate with headless Chrome/Edge:
+     chrome --headless=new --screenshot=public/og.png --window-size=1200,630 --hide-scrollbars scripts/og/og.html -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: #0a0a0f;
+    background-image:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(99, 102, 241, 0.25), transparent),
+      radial-gradient(ellipse 700px 400px at 95% 110%, rgba(16, 185, 129, 0.15), transparent);
+    font-family: Georgia, "Times New Roman", serif;
+    color: #f5f5f7;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 0 96px;
+  }
+  .badge {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 22px; letter-spacing: 4px; text-transform: uppercase;
+    color: #a5b4fc; margin-bottom: 28px;
+  }
+  h1 { font-size: 84px; font-weight: 600; letter-spacing: -1px; line-height: 1.05; }
+  p {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 32px; color: #b9b9c4; margin-top: 28px; max-width: 880px; line-height: 1.4;
+  }
+  .dots { position: absolute; right: 96px; top: 88px; display: flex; gap: 18px; }
+  .dot { width: 26px; height: 26px; border-radius: 50%; }
+</style>
+</head>
+<body>
+  <div class="dots">
+    <div class="dot" style="background:#6366f1"></div>
+    <div class="dot" style="background:#10b981"></div>
+    <div class="dot" style="background:#f59e0b"></div>
+  </div>
+  <div class="badge">Local-first · No server</div>
+  <h1>AI Discussion Board</h1>
+  <p>GPT, Claude &amp; Gemini debate your question — a judge model synthesizes the best answer.</p>
+</body>
+</html>
