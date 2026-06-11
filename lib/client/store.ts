@@ -234,7 +234,9 @@ export function accumulateModelStats(input: {
   const now = new Date().toISOString();
   for (const d of input.workers) {
     if (d.attempts <= 0) continue;
-    const verdicts = d.approvals + d.fixes + d.badOutput;
+    // Only Architect approve/fix verdicts count as judge verdicts; engine-
+    // detected bad output and provider denials were never graded by anyone.
+    const verdicts = d.approvals + d.fixes;
     const independent = input.judgeModelId !== d.modelId ? verdicts : 0;
     const prev = s.modelStats.find((m) => m.modelId === d.modelId);
     if (prev) {
@@ -252,8 +254,12 @@ export function accumulateModelStats(input: {
       existing.wBadOutput += d.wBadOutput;
       existing.responseMs += d.responseMs;
       existing.responseChars += d.responseChars;
-      existing.judges[input.judgeModelId] =
-        (existing.judges[input.judgeModelId] ?? 0) + verdicts;
+      // Don't list a judge that contributed no verdicts (e.g. all attempts
+      // were provider denials) — it never actually graded this model.
+      if (verdicts > 0) {
+        existing.judges[input.judgeModelId] =
+          (existing.judges[input.judgeModelId] ?? 0) + verdicts;
+      }
       existing.independentVerdicts += independent;
       existing.updatedAt = now;
       s.modelStats[s.modelStats.indexOf(prev)] = existing;
@@ -261,7 +267,7 @@ export function accumulateModelStats(input: {
       s.modelStats.push({
         ...d,
         builds: 1,
-        judges: { [input.judgeModelId]: verdicts },
+        judges: verdicts > 0 ? { [input.judgeModelId]: verdicts } : {},
         independentVerdicts: independent,
         updatedAt: now,
       });

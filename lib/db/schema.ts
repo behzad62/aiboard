@@ -143,6 +143,8 @@ export interface BuildFileRecord {
  * `judges` records who graded this model (and how many verdicts each made),
  * with independentVerdicts = verdicts by a judge other than this model itself,
  * so a future leaderboard can filter out self-graded / weak-judge noise.
+ * Both count Architect approve/fix verdicts only — engine-detected bad output
+ * and provider denials are not judge verdicts and never appear here.
  */
 export interface ModelBuildStat {
   /** Full namespaced id (providerId:modelId). */
@@ -161,9 +163,9 @@ export interface ModelBuildStat {
   /** Time + output of successful responses only (for clean throughput). */
   responseMs: number;
   responseChars: number;
-  /** judge modelId -> verdicts that judge contributed for this model. */
+  /** judge modelId -> Architect approve/fix verdicts that judge contributed. */
   judges: Record<string, number>;
-  /** Verdicts made by a judge that was NOT this model (independent). */
+  /** Architect approve/fix verdicts made by a judge that was NOT this model. */
   independentVerdicts: number;
   updatedAt: string;
 }
