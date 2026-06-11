@@ -51,6 +51,7 @@ import {
   queryProjectPermission,
   requestProjectPermission,
 } from "@/lib/client/project-fs";
+import { checkRunner } from "@/lib/client/runner";
 import {
   BuildTaskBoard,
   type BuildTaskView,
@@ -717,6 +718,13 @@ function DiscussionPageInner() {
             {convergenceScore != null && (
               <MetaChip>Convergence {convergenceScore.toFixed(1)}/10</MetaChip>
             )}
+            {discussion.mode === "build" && (
+              <RunnerChip
+                url={discussion.runnerUrl ?? null}
+                token={discussion.runnerToken ?? null}
+                isActive={isActive}
+              />
+            )}
           </div>
 
           {/* Topics range from a short question to a long build spec — scale
@@ -983,6 +991,129 @@ function MetaChip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-full border bg-background/60 px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
       {children}
+    </span>
+  );
+}
+
+type RunnerState =
+  | { kind: "none" }
+  | { kind: "checking" }
+  | { kind: "reachable"; dir?: string }
+  | { kind: "unreachable"; error?: string };
+
+/**
+ * Build-mode runner status: is a local runner attached, reachable, and what
+ * folder does it point at? Pings /health and, while a run is active, re-checks
+ * every 30s. The loud case is "unreachable while active" — the build will
+ * silently fall back to in-app files, so the user needs to see it.
+ */
+function RunnerChip({
+  url,
+  token,
+  isActive,
+}: {
+  url: string | null;
+  token: string | null;
+  isActive: boolean;
+}) {
+  const configured = !!url && !!token;
+  const [state, setState] = useState<RunnerState>(
+    configured ? { kind: "checking" } : { kind: "none" }
+  );
+
+  useEffect(() => {
+    if (!url || !token) {
+      setState({ kind: "none" });
+      return;
+    }
+    let cancelled = false;
+    const ping = async () => {
+      const res = await checkRunner({ url, token });
+      if (cancelled) return;
+      setState(
+        res.ok
+          ? { kind: "reachable", dir: res.dir }
+          : { kind: "unreachable", error: res.error }
+      );
+    };
+    ping();
+    // Re-poll only while the run is live; a finished run's runner going offline
+    // is normal and shouldn't trigger background fetches forever.
+    const interval = isActive ? window.setInterval(ping, 30_000) : undefined;
+    return () => {
+      cancelled = true;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [url, token, isActive]);
+
+  const base =
+    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium";
+  const dot = (cls: string, pulse?: boolean) => (
+    <span className="relative flex h-1.5 w-1.5">
+      {pulse && (
+        <span
+          className={`absolute inline-flex h-full w-full animate-ping rounded-full ${cls} opacity-70`}
+        />
+      )}
+      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${cls}`} />
+    </span>
+  );
+
+  if (state.kind === "none") {
+    return (
+      <span
+        className={`${base} bg-background/60 text-muted-foreground`}
+        title="No local runner was attached to this build — files stay in the app (and the browser-picked folder, if any). Attach a runner on the dashboard when creating a build."
+      >
+        {dot("bg-slate-400")}
+        No runner
+      </span>
+    );
+  }
+
+  if (state.kind === "checking") {
+    return (
+      <span
+        className={`${base} bg-background/60 text-muted-foreground`}
+        title={`Checking the local runner at ${url}…`}
+      >
+        {dot("bg-slate-400", true)}
+        Runner: checking…
+      </span>
+    );
+  }
+
+  if (state.kind === "reachable") {
+    return (
+      <span
+        className={`${base} border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300`}
+        title={`Local runner connected at ${url}${state.dir ? ` — ${state.dir}` : ""}`}
+      >
+        {dot("bg-emerald-500")}
+        Runner: {state.dir ?? "connected"}
+      </span>
+    );
+  }
+
+  // unreachable
+  if (isActive) {
+    return (
+      <span
+        className={`${base} border-amber-500/40 bg-amber-500/12 text-amber-700 dark:text-amber-300`}
+        title={`Can't reach the runner at ${url}${state.error ? ` — ${state.error}` : ""}. This build will fall back to in-app files.`}
+      >
+        {dot("bg-amber-500", true)}
+        Runner unreachable
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`${base} bg-background/60 text-muted-foreground`}
+      title={`A local runner was attached at ${url}, but it isn't reachable now. That's normal once a run has finished.`}
+    >
+      {dot("bg-slate-400")}
+      Runner attached (offline now)
     </span>
   );
 }
