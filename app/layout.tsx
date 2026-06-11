@@ -45,6 +45,14 @@ export default function RootLayout({
                 AI Discussion Board
               </Link>
               <nav className="flex items-center gap-1">
+                <a
+                  href="https://paypal.me/behzadashams"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  ☕ Support this project
+                </a>
                 <ThemeToggle />
                 <Link
                   href="/settings"

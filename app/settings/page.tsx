@@ -156,7 +156,7 @@ export default function SettingsPage() {
         </h1>
         <p className="mt-2 text-muted-foreground">
           Provider keys, model pricing, and the defaults used when you start a
-          new discussion. Keys are encrypted locally.
+          new discussion. Everything is stored locally on your device.
         </p>
       </div>
 
@@ -395,17 +395,54 @@ export default function SettingsPage() {
         <TabsContent value="security">
           <Card>
             <CardHeader>
-              <CardTitle>Security</CardTitle>
-              <CardDescription>How your credentials are handled.</CardDescription>
+              <CardTitle>Security &amp; privacy</CardTitle>
+              <CardDescription>
+                Where your data lives and where it goes.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>
-                API keys are encrypted at rest using AES-256-GCM. Set{" "}
-                <code className="rounded bg-muted px-1">ENCRYPTION_SECRET</code> in{" "}
-                <code className="rounded bg-muted px-1">.env.local</code> for
-                production use.
+                <strong className="text-foreground">
+                  Everything stays on your device.
+                </strong>{" "}
+                Discussions, prompts, attachments, settings, and API keys are
+                stored only locally — in this browser (IndexedDB) or in the
+                local folder you pick on the Storage tab. This app has no
+                backend: it is served as static files, and nothing you type or
+                upload is sent to or stored on any server of ours.
               </p>
-              <p>Keys are never sent back to the browser after saving.</p>
+              <p>
+                <strong className="text-foreground">
+                  Prompts go only to the AI providers you configure.
+                </strong>{" "}
+                When you run a discussion, your topic, transcript, and
+                attachments are sent over HTTPS directly from your browser to
+                the providers of the models you selected (e.g. OpenAI,
+                Anthropic, Google, OpenRouter, or your own local endpoint) —
+                nowhere else. Each provider handles that data under its own
+                privacy policy; a local model via Ollama never leaves your
+                machine.
+              </p>
+              <p>
+                <strong className="text-foreground">
+                  API keys never leave your device
+                </strong>{" "}
+                except inside requests to their own provider. To encrypt the
+                whole store at rest — keys included — set a passphrase on the
+                Storage tab (PBKDF2-derived AES-256-GCM via Web Crypto; only
+                you know the passphrase, and there is no recovery if you lose
+                it). Recommended if your store lives in a shared or
+                cloud-synced folder.
+              </p>
+              <p>
+                <strong className="text-foreground">
+                  The local runner is opt-in and visible.
+                </strong>{" "}
+                It binds to 127.0.0.1 on your machine, only touches the folder
+                you point it at, logs every command, and asks your approval per
+                command unless you chose Full access. Stop it any time with
+                Ctrl+C.
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
