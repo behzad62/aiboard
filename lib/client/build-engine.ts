@@ -940,9 +940,12 @@ export async function runBuildDiscussion(
 
     // Record a landed write and flag it LOUDLY when a different writer already
     // touched the same path this wave (a same-writer re-emit or fix is fine).
+    // Architect writes are exempt: its review fixes run AFTER the wave's
+    // workers settle and overwrite their files deliberately — not a race.
     // Paths arrive already normalized by extractArtifacts (forward slash); key
     // on the lowercased form so case-only differences still collide.
     const noteWrite = (path: string): void => {
+      if (taskId == null) return;
       const key = path.toLowerCase();
       const prior = waveWrites.get(key);
       if (prior && prior !== writer) {
