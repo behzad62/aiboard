@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import type { ModelBuildStat } from "@/lib/db/schema";
+import { ensureReady } from "@/lib/client/api";
 import { getModelStats, isInitialized, resetModelStats } from "@/lib/client/store";
 import {
   approvalRate,
@@ -117,6 +118,7 @@ function qualityBadgeVariant(sc: number): "success" | "destructive" | "secondary
 
 export function BenchmarkPage() {
   const [stats, setStats] = useState<ModelBuildStat[] | null>(null);
+  const [locked, setLocked] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("quality");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -125,19 +127,21 @@ export function BenchmarkPage() {
     if (isInitialized()) setStats(getModelStats());
   }, []);
 
-  // The store initializes asynchronously — retry briefly instead of racing it.
+  // This page can be the first one visited, so it must initialize the store
+  // itself (ensureReady is idempotent) rather than wait on another page to.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
-    const tryLoad = () => {
-      if (cancelled) return;
-      if (isInitialized()) setStats(getModelStats());
-      else timer = setTimeout(tryLoad, 400);
-    };
-    tryLoad();
+    void ensureReady()
+      .then(({ needsPassphrase }) => {
+        if (cancelled) return;
+        if (needsPassphrase) setLocked(true);
+        else setStats(getModelStats());
+      })
+      .catch(() => {
+        if (!cancelled) setStats([]);
+      });
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -204,7 +208,26 @@ export function BenchmarkPage() {
     };
   }, [stats]);
 
-  const isEmpty = (stats ?? []).length === 0;
+  // null = store still initializing — don't claim "no data yet" prematurely.
+  const loading = stats === null;
+  const isEmpty = !loading && stats.length === 0;
+
+  if (locked) {
+    return (
+      <Card className="mx-auto max-w-md">
+        <CardHeader>
+          <CardTitle>Storage is locked</CardTitle>
+          <CardDescription>
+            Your data is encrypted. Open{" "}
+            <a href="/settings?tab=storage" className="underline">
+              Settings → Storage
+            </a>{" "}
+            and enter your passphrase to unlock it.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -218,7 +241,7 @@ export function BenchmarkPage() {
             quality, speed, and reliability, accumulated locally in your browser.
           </p>
         </div>
-        {!isEmpty && (
+        {!loading && !isEmpty && (
           <Button type="button" variant="ghost" size="sm" onClick={() => reset()}>
             <RotateCcw className="mr-2 h-3.5 w-3.5" />
             Reset all
@@ -226,7 +249,9 @@ export function BenchmarkPage() {
         )}
       </header>
 
-      {isEmpty ? (
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading stats…</p>
+      ) : isEmpty ? (
         <Card>
           <CardContent className="py-10 text-center">
             <p className="mx-auto max-w-xl text-sm text-muted-foreground">
@@ -364,9 +389,8 @@ function ModelRow({
   onReset: () => void;
 }) {
   const rate = approvalRate(s);
-  // Availability: em-dash when there were no denials (nothing to report);
-  // show 100% only when there are attempts but zero denials would still read
-  // as "—" — keep it honest by only surfacing a number once a denial exists.
+  // A % only appears once a denial exists — zero denials shows "—" (nothing
+  // to report) rather than a 100% that's mostly small-sample noise.
   const availText = s.unavailable > 0 ? pct(avail) : "—";
 
   return (
@@ -376,11 +400,23 @@ function ModelRow({
         onClick={onToggle}
       >
         <td className="py-2 pl-1 text-muted-foreground">
-          {open ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
+          {/* Real button so the breakdown is reachable by keyboard, not just row click. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="rounded p-0.5 hover:text-foreground"
+            aria-expanded={open}
+            aria-label={`${open ? "Hide" : "Show"} ${s.displayName} breakdown`}
+          >
+            {open ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </button>
         </td>
         <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
           {rank}
