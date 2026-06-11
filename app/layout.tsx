@@ -58,7 +58,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <div className="min-h-screen bg-background">
           <header className="border-b bg-background">
-            <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+            <div className="mx-auto flex h-14 max-w-[100rem] items-center justify-between px-4">
               <Link href="/" className="flex items-center gap-2 font-semibold">
                 <MessageSquare className="h-5 w-5 text-primary" />
                 {SITE_NAME}
@@ -96,7 +96,7 @@ export default function RootLayout({
               </nav>
             </div>
           </header>
-          <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+          <main className="mx-auto w-full px-4 py-8">{children}</main>
         </div>
       </body>
     </html>

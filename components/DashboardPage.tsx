@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -476,15 +475,8 @@ export default function DashboardPage() {
       <div className="lg:col-span-2">
         <Card>
           <CardHeader>
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <CardTitle>Recent Discussions</CardTitle>
-                <CardDescription>Click to view live or completed results</CardDescription>
-              </div>
-              <Button asChild variant="ghost" size="sm" className="shrink-0">
-                <Link href="/benchmark">Model benchmark →</Link>
-              </Button>
-            </div>
+            <CardTitle>Recent Discussions</CardTitle>
+            <CardDescription>Click to view live or completed results</CardDescription>
           </CardHeader>
           <CardContent>
             <DiscussionHistory

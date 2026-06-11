@@ -688,7 +688,7 @@ function DiscussionPageInner() {
   }
 
   return (
-    <div className="pb-16 xl:grid xl:grid-cols-[340px_minmax(0,1fr)] xl:items-start xl:gap-6 xl:pb-0">
+    <div className="mx-auto max-w-[100rem] pb-16 xl:grid xl:grid-cols-[380px_minmax(0,1fr)] xl:items-start xl:gap-6 xl:pb-0 2xl:grid-cols-[440px_minmax(0,1fr)]">
       {/* ── Activity log — left sidebar on wide screens (always open) ── */}
       <aside className="hidden xl:sticky xl:top-6 xl:block xl:self-start">
         <DiscussionDiagnostics

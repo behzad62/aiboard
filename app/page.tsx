@@ -25,16 +25,17 @@ export default function HomePage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <div className="mb-8">
-        <h1 className="font-display text-3xl font-semibold tracking-tight">
-          {SITE_NAME}
-        </h1>
-        <p className="mt-1 text-muted-foreground">{SITE_TAGLINE}.</p>
-      </div>
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-8">
+          <h1 className="font-display text-3xl font-semibold tracking-tight">
+            {SITE_NAME}
+          </h1>
+          <p className="mt-1 text-muted-foreground">{SITE_TAGLINE}.</p>
+        </div>
 
-      <DashboardPage />
+        <DashboardPage />
 
-      <section className="mx-auto mt-16 max-w-3xl space-y-4 border-t pt-10 text-sm text-muted-foreground">
+        <section className="mx-auto mt-16 max-w-3xl space-y-4 border-t pt-10 text-sm text-muted-foreground">
         <h2 className="font-display text-xl font-semibold text-foreground">
           What is the AI Discussion Board?
         </h2>
@@ -65,7 +66,8 @@ export default function HomePage() {
           </Link>
           .
         </p>
-      </section>
+        </section>
+      </div>
     </>
   );
 }
