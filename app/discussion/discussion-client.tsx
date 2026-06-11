@@ -161,6 +161,7 @@ function DiscussionPageInner() {
     useState<FileSystemDirectoryHandle | null>(null);
   const [persistedFiles, setPersistedFiles] = useState<ExtractedFile[]>([]);
   const [runnerSectionOpen, setRunnerSectionOpen] = useState(false);
+  const runnerSectionRef = useRef<HTMLDivElement>(null);
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
 
@@ -808,6 +809,20 @@ function DiscussionPageInner() {
                 url={discussion.runnerUrl ?? null}
                 token={discussion.runnerToken ?? null}
                 isActive={isActive}
+                onManage={
+                  !isActive && !streamConnected
+                    ? () => {
+                        setRunnerSectionOpen(true);
+                        // Let the section expand before scrolling it into view.
+                        requestAnimationFrame(() => {
+                          runnerSectionRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                        });
+                      }
+                    : undefined
+                }
               />
             )}
           </div>
@@ -1049,7 +1064,7 @@ function DiscussionPageInner() {
           Runner config is otherwise frozen at creation; let the user wire one
           up after the fact and Resume on disk. Only when not actively running. */}
       {discussion.mode === "build" && !isActive && !streamConnected && (
-        <div className="rounded-xl border bg-card shadow-sm">
+        <div ref={runnerSectionRef} className="rounded-xl border bg-card shadow-sm">
           <button
             type="button"
             onClick={() => setRunnerSectionOpen((o) => !o)}
@@ -1057,7 +1072,10 @@ function DiscussionPageInner() {
             className="flex w-full items-center justify-between gap-3 p-4 text-left"
           >
             <span className="text-sm font-medium">
-              Runner {discussion.runnerUrl ? "(attached)" : "(not attached)"}
+              Local runner{" "}
+              <span className="font-normal text-muted-foreground">
+                {discussion.runnerUrl ? "attached" : "not attached"}
+              </span>
             </span>
             <span className="font-mono text-[0.7rem] text-muted-foreground">
               {runnerSectionOpen ? "Hide" : "Edit"}
@@ -1180,10 +1198,12 @@ function RunnerChip({
   url,
   token,
   isActive,
+  onManage,
 }: {
   url: string | null;
   token: string | null;
   isActive: boolean;
+  onManage?: () => void;
 }) {
   const configured = !!url && !!token;
   const [state, setState] = useState<RunnerState>(
@@ -1217,6 +1237,33 @@ function RunnerChip({
 
   const base =
     "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium";
+  const hint = onManage ? " — click to manage the runner connection" : "";
+  // When onManage is provided, render as an interactive button (with a hover
+  // affordance) so the chip itself is the way into the runner editor; otherwise
+  // a plain, non-interactive span.
+  const Chip = ({
+    className,
+    title,
+    children,
+  }: {
+    className: string;
+    title: string;
+    children: React.ReactNode;
+  }) =>
+    onManage ? (
+      <button
+        type="button"
+        onClick={onManage}
+        className={`${className} hover:bg-accent/40 cursor-pointer transition-colors`}
+        title={`${title}${hint}`}
+      >
+        {children}
+      </button>
+    ) : (
+      <span className={className} title={title}>
+        {children}
+      </span>
+    );
   const dot = (cls: string, pulse?: boolean) => (
     <span className="relative flex h-1.5 w-1.5">
       {pulse && (
@@ -1230,31 +1277,31 @@ function RunnerChip({
 
   if (state.kind === "none") {
     return (
-      <span
+      <Chip
         className={`${base} bg-background/60 text-muted-foreground`}
         title="No local runner was attached to this build — files stay in the app (and the browser-picked folder, if any). Attach a runner on the dashboard when creating a build."
       >
         {dot("bg-slate-400")}
         No runner
-      </span>
+      </Chip>
     );
   }
 
   if (state.kind === "checking") {
     return (
-      <span
+      <Chip
         className={`${base} bg-background/60 text-muted-foreground`}
         title={`Checking the local runner at ${url}…`}
       >
         {dot("bg-slate-400", true)}
         Runner: checking…
-      </span>
+      </Chip>
     );
   }
 
   if (state.kind === "reachable") {
     return (
-      <span
+      <Chip
         className={`${base} border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300`}
         title={`Local runner connected at ${url}${state.dir ? ` — ${state.dir}` : ""}`}
       >
@@ -1263,30 +1310,34 @@ function RunnerChip({
         <span className="max-w-[14rem] truncate">
           Runner: {state.dir ?? "connected"}
         </span>
-      </span>
+      </Chip>
     );
   }
 
   // unreachable
   if (isActive) {
     return (
-      <span
+      <Chip
         className={`${base} border-amber-500/40 bg-amber-500/12 text-amber-700 dark:text-amber-300`}
         title={`Can't reach the runner at ${url}${state.error ? ` — ${state.error}` : ""}. This build will fall back to in-app files.`}
       >
         {dot("bg-amber-500", true)}
         Runner unreachable
-      </span>
+      </Chip>
     );
   }
   return (
-    <span
+    <Chip
       className={`${base} bg-background/60 text-muted-foreground`}
-      title={`A local runner was attached at ${url}, but it isn't reachable now. That's normal once a run has finished.`}
+      title={
+        onManage
+          ? `A local runner was attached at ${url}, but it isn't reachable now. If you restarted the runner it printed a NEW token — paste it here to reconnect and Resume.`
+          : `A local runner was attached at ${url}, but it isn't reachable now. That's normal once a run has finished.`
+      }
     >
       {dot("bg-slate-400")}
-      Runner attached (offline now)
-    </span>
+      {onManage ? "Runner offline — reconnect" : "Runner attached (offline now)"}
+    </Chip>
   );
 }
 
