@@ -240,7 +240,7 @@ export default function HomePage() {
           <CardTitle>Storage is locked</CardTitle>
           <CardDescription>
             Your data is encrypted. Open{" "}
-            <a href="/settings" className="underline">
+            <a href="/settings?tab=storage" className="underline">
               Settings → Storage
             </a>{" "}
             and enter your passphrase to unlock it.

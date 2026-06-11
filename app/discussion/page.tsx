@@ -573,6 +573,23 @@ function DiscussionPageInner() {
       ? `Generating: ${activeModelNames.join(", ")}`
       : latestDiagnostic?.message ?? "Orchestrating…";
 
+  // Locked store: without this the page would sit on the loading spinner
+  // forever (discussion stays null until the store is unlocked).
+  if (status === "locked") {
+    return (
+      <div className="mx-auto max-w-md rounded-xl border bg-card p-6 text-center shadow-sm">
+        <h2 className="font-display text-xl font-semibold">Storage is locked</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your data is encrypted. Open{" "}
+          <a href="/settings?tab=storage" className="underline">
+            Settings → Storage
+          </a>{" "}
+          and enter your passphrase, then return to this discussion.
+        </p>
+      </div>
+    );
+  }
+
   if (!discussion) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">

@@ -65,7 +65,10 @@ interface SettingsData {
 
 const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
 
+const TAB_VALUES = ["providers", "pricing", "defaults", "storage", "security"];
+
 export default function SettingsPage() {
+  const [tab, setTab] = useState("providers");
   const [data, setData] = useState<SettingsData | null>(null);
   const [draftEnabled, setDraftEnabled] = useState<Record<string, boolean>>({});
   const [defaultEffort, setDefaultEffort] = useState<EffortLevel>("medium");
@@ -79,7 +82,12 @@ export default function SettingsPage() {
 
   const load = async () => {
     const { needsPassphrase } = await ensureReady();
-    if (needsPassphrase) return; // unlock via the Storage tab
+    if (needsPassphrase) {
+      // Nothing else is readable until the store is unlocked — jump straight
+      // to the Storage tab, which holds the unlock form.
+      setTab("storage");
+      return;
+    }
     const nextData: SettingsData = loadProviders();
     setData(nextData);
     setDraftEnabled(
@@ -98,6 +106,10 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
+    // Deep link: /settings?tab=storage opens that tab directly (used by the
+    // "storage is locked" prompts). Static export — read the query client-side.
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && TAB_VALUES.includes(requested)) setTab(requested);
     load().catch(() => undefined);
   }, []);
 
@@ -160,7 +172,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="providers">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="pricing">Pricing</TabsTrigger>
