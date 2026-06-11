@@ -102,6 +102,13 @@ check("detect cargo", detectVerifyCommand(["Cargo.toml", "src/main.rs"]), "cargo
 check("detect maven", detectVerifyCommand(["pom.xml", "src/Main.java"]), "mvn -q -DskipTests compile");
 check("detect tsc", detectVerifyCommand(["tsconfig.json", "src/index.ts"]), "npx --yes tsc --noEmit");
 check("compiled wins over tsc", detectVerifyCommand(["tsconfig.json", "api.csproj"]), "dotnet build");
+check("detect cmake", detectVerifyCommand(["CMakeLists.txt", "src/main.cpp"]), "cmake -S . -B .verify-build && cmake --build .verify-build");
+check("detect make", detectVerifyCommand(["Makefile", "src/main.c"]), "make");
+check("cmake wins over make", detectVerifyCommand(["CMakeLists.txt", "Makefile"]), "cmake -S . -B .verify-build && cmake --build .verify-build");
+check("detect mix", detectVerifyCommand(["mix.exs", "lib/app.ex"]), "mix compile");
+check("detect python", detectVerifyCommand(["main.py", "utils.py"]), "python -m compileall -q .");
+check("tsc wins over python", detectVerifyCommand(["tsconfig.json", "scripts/tool.py"]), "npx --yes tsc --noEmit");
+check("php -> none (per-file lint)", detectVerifyCommand(["composer.json", "src/index.php"]), "");
 check("bare package.json -> none", detectVerifyCommand(["package.json", "index.js"]), "");
 check("plain files -> none", detectVerifyCommand(["index.html", "style.css"]), "");
 

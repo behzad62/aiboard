@@ -88,8 +88,10 @@ export interface ReviewAction {
 /**
  * Best-guess build/check command for a project from its manifest files —
  * a language-agnostic fallback used when the Architect doesn't declare a
- * verifyCommand. Returns "" when no confident command applies (e.g. a bare
- * package.json with no tsconfig has no assured check script). Compiled
+ * verifyCommand. Returns "" when no confident command applies: languages
+ * whose check is per-file (PHP `php -l`, Ruby `ruby -c`), build systems with
+ * platform-specific wrappers (gradlew vs gradlew.bat), and bare package.json
+ * projects are left to the Architect's explicit verifyCommand. Compiled
  * languages are checked first; `files` are project-relative paths.
  */
 export function detectVerifyCommand(files: string[]): string {
@@ -98,7 +100,14 @@ export function detectVerifyCommand(files: string[]): string {
   if (has(/(^|\/)Cargo\.toml$/)) return "cargo check";
   if (has(/\.csproj$/) || has(/\.fsproj$/) || has(/\.sln$/)) return "dotnet build";
   if (has(/(^|\/)pom\.xml$/)) return "mvn -q -DskipTests compile";
+  if (has(/(^|\/)mix\.exs$/)) return "mix compile";
+  // C/C++: configure into a scratch dir, then build (&& works in cmd and sh).
+  if (has(/(^|\/)CMakeLists\.txt$/))
+    return "cmake -S . -B .verify-build && cmake --build .verify-build";
+  if (has(/(^|\/)Makefile$/)) return "make";
   if (has(/(^|\/)tsconfig\.json$/)) return "npx --yes tsc --noEmit";
+  // Python: stdlib byte-compile catches syntax errors; no deps assumed.
+  if (has(/\.py$/)) return "python -m compileall -q .";
   return "";
 }
 
@@ -410,7 +419,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow","verifyCommand":"a shell command that compiles/type-checks this project (e.g. dotnet build, go build ./..., cargo check, npx tsc --noEmit) — omit if a runner isn't connected or nothing applies"}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
     "```",
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
