@@ -115,6 +115,26 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated]`;
 }
 
+/**
+ * Parse a task's free-text `expectedOutputs` into normalized path tokens for
+ * wave partitioning. In practice it's a comma-separated list of paths; we split
+ * permissively, keep only tokens that look like file paths, and lowercase with
+ * forward slashes so comparison matches actual-write normalization. Returns []
+ * when nothing looks like a path (no information — never over-block on that).
+ */
+function parseOutputPaths(expectedOutputs?: string): string[] {
+  if (!expectedOutputs) return [];
+  const out: string[] = [];
+  for (const raw of expectedOutputs.split(/[,\s\n]+/)) {
+    const token = raw.trim().replace(/^["'`]+|["'`]+$/g, "");
+    if (!token) continue;
+    // Looks like a path: has a separator or a dot-extension.
+    if (!/[/\\]/.test(token) && !/\.\w+$/.test(token)) continue;
+    out.push(token.replace(/\\/g, "/").toLowerCase());
+  }
+  return out;
+}
+
 export async function runBuildDiscussion(
   discussion: Discussion,
   models: SelectedModel[],
@@ -307,6 +327,10 @@ export async function runBuildDiscussion(
   // Paths actually written THIS run — grounds the hand-off summary so it can
   // only describe changes that really happened.
   const writtenThisRun = new Set<string>();
+  // Normalized path → writer label ("T3"/"Architect") for the CURRENT wave only
+  // (cleared each cycle). Detects two workers writing the same path concurrently
+  // — last-write-wins silently destroys the earlier output otherwise.
+  const waveWrites = new Map<string, string>();
   // Seed with everything previous passes built — follow-up passes and resumes
   // must see the existing files instead of re-planning from an "empty" tree.
   for (const file of getBuildFiles(discussion.id)) {
@@ -912,6 +936,22 @@ export async function runBuildDiscussion(
     const { files, edits, truncatedPaths } = extractArtifacts(text);
     const written: string[] = [];
     const issues: string[] = [];
+    const writer = taskId ?? "Architect";
+
+    // Record a landed write and flag it LOUDLY when a different writer already
+    // touched the same path this wave (a same-writer re-emit or fix is fine).
+    // Paths arrive already normalized by extractArtifacts (forward slash); key
+    // on the lowercased form so case-only differences still collide.
+    const noteWrite = (path: string): void => {
+      const key = path.toLowerCase();
+      const prior = waveWrites.get(key);
+      if (prior && prior !== writer) {
+        const issue = `CONFLICT: ${writer} overwrote ${path}, which ${prior} also wrote in this wave — the earlier version is lost`;
+        issues.push(issue);
+        emit({ type: "diagnostic", phase: "model_failed", message: issue });
+      }
+      waveWrites.set(key, writer);
+    };
 
     for (const path of truncatedPaths) {
       const issue = `Output was cut off mid-block for ${path} — nothing from the truncated block was written. Re-emit it (complete), or use SEARCH/REPLACE edits.`;
@@ -939,6 +979,7 @@ export async function runBuildDiscussion(
         continue;
       }
       await writeFile(file.path, file.content, taskId);
+      noteWrite(file.path);
       written.push(file.path);
     }
 
@@ -956,6 +997,7 @@ export async function runBuildDiscussion(
       const { content, applied, failed } = applyEditOps(current, edit.ops);
       if (applied > 0) {
         await writeFile(edit.path, content, taskId);
+        noteWrite(edit.path);
         written.push(edit.path);
       }
       if (failed > 0) {
@@ -1124,6 +1166,9 @@ export async function runBuildDiscussion(
       (t) => t.status === "planned" || t.status === "fixing"
     );
     if (pending.length === 0) break;
+    // Write-conflict tracking and the deferral-announced set are per wave.
+    waveWrites.clear();
+    const deferAnnounced = new Set<string>();
 
     const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
 
@@ -1306,7 +1351,38 @@ export async function runBuildDiscussion(
           (t.dependsOn ?? []).every(dependencySettled)
       );
       if (ready.length === 0) break;
-      const batch = ready.slice(0, limits.totalWorkerCalls - workerCalls);
+      // Greedily fill the batch, but never run two tasks whose DECLARED outputs
+      // overlap concurrently — that's exactly the silent last-write-wins clobber
+      // we want to prevent. A task with no parseable outputs always joins (we
+      // can't know its writes — don't over-block). Deferred tasks just stay
+      // planned/fixing and get picked up by the next loop iteration.
+      const cap = limits.totalWorkerCalls - workerCalls;
+      const batch: BuildTask[] = [];
+      const claimed = new Set<string>();
+      for (const task of ready) {
+        if (batch.length >= cap) break;
+        const paths = parseOutputPaths(task.expectedOutputs);
+        const clash = paths.find((p) => claimed.has(p));
+        if (clash) {
+          if (!deferAnnounced.has(task.id)) {
+            deferAnnounced.add(task.id);
+            const owner = batch.find((b) =>
+              parseOutputPaths(b.expectedOutputs).includes(clash)
+            );
+            emit({
+              type: "diagnostic",
+              phase: "round_preparing",
+              message: `Deferred ${task.id} to the next batch — its declared outputs overlap ${owner?.id ?? "another task"}'s (${clash})`,
+            });
+          }
+          continue;
+        }
+        for (const p of paths) claimed.add(p);
+        batch.push(task);
+      }
+      // Nothing could be admitted (everything left clashes with itself across
+      // iterations — shouldn't happen since claimed resets, but guard anyway).
+      if (batch.length === 0) break;
 
       // Assign a worker to each task: a still-active pin (fix tasks) wins, then
       // the Architect's assignTo, then auto-assignment spreading work across
