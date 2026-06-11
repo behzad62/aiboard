@@ -1090,7 +1090,10 @@ function RunnerChip({
         title={`Local runner connected at ${url}${state.dir ? ` — ${state.dir}` : ""}`}
       >
         {dot("bg-emerald-500")}
-        Runner: {state.dir ?? "connected"}
+        {/* dir is an absolute path — keep long ones from blowing up the chip */}
+        <span className="max-w-[14rem] truncate">
+          Runner: {state.dir ?? "connected"}
+        </span>
       </span>
     );
   }
