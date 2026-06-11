@@ -23,10 +23,19 @@ import type { CustomModel } from "@/lib/db/schema";
 import { getCustomModelById, getCustomModels, getProviderKey } from "./store";
 
 export const CUSTOM_PROVIDER_ID = "custom";
+export const FOUNDRY_PROVIDER_ID = "foundry";
 
 const TEXT_ONLY = {
   image: false,
   document: false,
+  audio: false,
+  video: false,
+} as const;
+
+// Foundry serves Claude models, which accept image + document inputs.
+const FOUNDRY_CAPABILITIES = {
+  image: true,
+  document: true,
   audio: false,
   video: false,
 } as const;
@@ -61,9 +70,25 @@ export function listCustomModelInfos(): ModelInfo[] {
   return getCustomModels().map(customModelToInfo);
 }
 
+/** User-defined Azure Foundry model ids (from the provider key). */
+export function listFoundryModelInfos(): ModelInfo[] {
+  const ids = getProviderKey(FOUNDRY_PROVIDER_ID)?.models ?? [];
+  return ids
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0)
+    .map((id) => ({
+      id,
+      name: id,
+      providerId: FOUNDRY_PROVIDER_ID,
+      description: "Azure AI Foundry deployment",
+      capabilities: { ...FOUNDRY_CAPABILITIES },
+    }));
+}
+
 export function getAllModels(): ModelInfo[] {
   return [
     ...getAllProviders().flatMap((p) => p.listModels()),
+    ...listFoundryModelInfos(),
     ...listCustomModelInfos(),
   ];
 }
@@ -87,7 +112,10 @@ export function getEnabledModels(): ModelInfo[] {
   const builtin = getAllProviders()
     .flatMap((p) => p.listModels())
     .filter((m) => keyed.includes(m.providerId));
-  return [...builtin, ...listCustomModelInfos()];
+  const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
+    ? listFoundryModelInfos()
+    : [];
+  return [...builtin, ...foundry, ...listCustomModelInfos()];
 }
 
 export function resolveModelName(fullId: string): string {
@@ -95,7 +123,22 @@ export function resolveModelName(fullId: string): string {
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.label ?? model;
   }
+  // Foundry model ids are user-defined (not in the catalog) — show the id.
+  if (providerId === FOUNDRY_PROVIDER_ID) return model;
   return getModelDisplayName(fullId);
+}
+
+/**
+ * Capabilities for a full model id, resolving user-defined gateway models
+ * (Foundry/custom) that aren't in the static catalog.
+ */
+export function resolveModelCapabilities(fullId: string) {
+  const { providerId, model } = parseModelId(fullId);
+  if (providerId === FOUNDRY_PROVIDER_ID) return { ...FOUNDRY_CAPABILITIES };
+  if (providerId === CUSTOM_PROVIDER_ID) {
+    return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
+  }
+  return null; // use the catalog registry
 }
 
 export function getCustomModelByFullId(fullId: string): CustomModel | null {

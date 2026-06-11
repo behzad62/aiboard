@@ -27,6 +27,12 @@ export interface ProviderKey {
   apiKey?: string;
   /** Endpoint override for gateway providers (e.g. Azure AI Foundry). */
   baseURL?: string | null;
+  /**
+   * User-defined model ids for gateway providers whose available models depend
+   * on the user's own deployment (Azure AI Foundry). Empty/absent for providers
+   * with a fixed catalog.
+   */
+  models?: string[] | null;
   defaultModel: string | null;
   enabled: boolean;
   keyHint: string | null;

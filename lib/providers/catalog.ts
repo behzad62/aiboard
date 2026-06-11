@@ -97,31 +97,10 @@ export const MODEL_CATALOG: CatalogModel[] = [
     validationCandidate: true,
   },
 
-  // Azure AI Foundry — Anthropic models behind the user's Foundry resource
-  // (https://<resource>.services.ai.azure.com/anthropic/). Same model ids as
-  // the native Anthropic API; availability depends on the user's deployment.
-  {
-    id: "claude-opus-4-8",
-    name: "Claude Opus 4.8 (Foundry)",
-    providerId: "foundry",
-    description: "Claude Opus 4.8 served from your Azure AI Foundry resource",
-    capabilities: { image: true, document: true, audio: false, video: false },
-  },
-  {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (Foundry)",
-    providerId: "foundry",
-    description: "Claude Sonnet 4.6 served from your Azure AI Foundry resource",
-    capabilities: { image: true, document: true, audio: false, video: false },
-  },
-  {
-    id: "claude-haiku-4-5-20251001",
-    name: "Claude Haiku 4.5 (Foundry)",
-    providerId: "foundry",
-    description: "Claude Haiku 4.5 served from your Azure AI Foundry resource",
-    capabilities: { image: true, document: false, audio: false, video: false },
-    validationCandidate: true,
-  },
+  // Azure AI Foundry — Anthropic models served from the user's own Foundry
+  // resource. Available model ids depend entirely on the user's deployment
+  // (e.g. claude-opus-4-5), so they are user-defined on the Settings page
+  // (ProviderKey.models) rather than listed here.
 
   // Google — https://ai.google.dev/gemini-api/docs/models
   {

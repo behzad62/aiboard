@@ -26,6 +26,7 @@ import {
   getDecryptedApiKey,
   getProvider,
   getProviderBaseURL,
+  resolveModelCapabilities,
   streamCustomChat,
 } from "./providers";
 import {
@@ -183,9 +184,14 @@ export async function collectStream(
     throw new Error(`Provider ${providerId} is not configured`);
   }
 
+  // Foundry models (and any future gateway provider) aren't in the static
+  // capability registry — resolve their caps explicitly.
+  const resolvedCaps = resolveModelCapabilities(modelId);
   const modelAttachments = attachments.filter((a) => {
     if (a.category === "text_inline") return true;
-    return modelSupportsInputTypes(modelId, [a.category]);
+    return resolvedCaps
+      ? resolvedCaps[a.category]
+      : modelSupportsInputTypes(modelId, [a.category]);
   });
 
   let content = "";
@@ -200,6 +206,7 @@ export async function collectStream(
         maxTokens,
         temperature,
         reasoningEffort,
+        ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
         if (signal?.aborted) throw abortError();
         if (chunk.type === "token" && chunk.content) {

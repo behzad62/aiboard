@@ -128,7 +128,11 @@ export async function* streamAnthropicChat(
       ...(params.baseURL ? { baseURL: params.baseURL } : {}),
       dangerouslyAllowBrowser: true,
     });
-    const caps = getModelCapabilities(formatModelId(providerId, params.model));
+    // Gateway providers (Foundry) pass capabilities explicitly — their model
+    // ids aren't in the static catalog registry.
+    const caps =
+      params.capabilities ??
+      getModelCapabilities(formatModelId(providerId, params.model));
     const systemMessage = params.messages.find((m) => m.role === "system");
     const userMessages = params.messages.filter((m) => m.role !== "system");
     const lastUserIndex = userMessages

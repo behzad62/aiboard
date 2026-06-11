@@ -29,7 +29,13 @@ import {
   updateUserSettings,
   upsertProviderKey,
 } from "./store";
-import { CUSTOM_PROVIDER_ID, getAllProviders, getProvider } from "./providers";
+import {
+  CUSTOM_PROVIDER_ID,
+  FOUNDRY_PROVIDER_ID,
+  getAllProviders,
+  getProvider,
+  listFoundryModelInfos,
+} from "./providers";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -40,6 +46,8 @@ export interface ProviderConfig {
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
+  /** User-defined model ids (gateway providers like Foundry). */
+  modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
   lastValidationSucceeded?: boolean | null;
@@ -56,10 +64,12 @@ export function loadProviders(): {
     return {
       providerId: p.id,
       name: p.name,
-      models: p.listModels(),
+      // Foundry models are user-defined (deployment-specific), not catalog.
+      models: p.id === FOUNDRY_PROVIDER_ID ? listFoundryModelInfos() : p.listModels(),
       hasKey: !!saved,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
+      modelIds: saved?.models ?? [],
       defaultModel: saved?.defaultModel,
       enabled: saved?.enabled ?? false,
       lastValidationSucceeded: saved?.lastValidationSucceeded ?? null,
@@ -73,12 +83,16 @@ export function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;
   baseURL?: string;
+  models?: string[];
   defaultModel?: string;
   enabled?: boolean;
 }): void {
   const existing = getProviderKey(input.providerId);
   const now = new Date().toISOString();
   const baseURL = input.baseURL?.trim();
+  const models = input.models
+    ?.map((m) => m.trim())
+    .filter((m) => m.length > 0);
   if (existing) {
     updateProviderKey(input.providerId, {
       ...(input.apiKey
@@ -90,6 +104,7 @@ export function saveProviderKey(input: {
           }
         : {}),
       ...(input.baseURL !== undefined ? { baseURL: baseURL || null } : {}),
+      ...(input.models !== undefined ? { models: models ?? [] } : {}),
       defaultModel: input.defaultModel ?? existing.defaultModel,
       enabled: input.enabled ?? existing.enabled,
       updatedAt: now,
@@ -99,6 +114,7 @@ export function saveProviderKey(input: {
       providerId: input.providerId,
       apiKey: input.apiKey,
       baseURL: baseURL || null,
+      models: models ?? [],
       defaultModel: input.defaultModel ?? null,
       enabled: input.enabled ?? true,
       keyHint: maskApiKey(input.apiKey),
@@ -203,8 +219,21 @@ export async function validateProvider(input: {
   const baseURL = input.baseURL?.trim() || saved?.baseURL || undefined;
 
   const modelId =
-    input.modelId ?? saved?.defaultModel ?? provider.listModels()[0]?.id;
-  if (!modelId) return { valid: false, usedImage: false, error: "No model available" };
+    input.modelId ??
+    saved?.defaultModel ??
+    provider.listModels()[0]?.id ??
+    (input.providerId === FOUNDRY_PROVIDER_ID
+      ? listFoundryModelInfos()[0]?.id
+      : undefined);
+  if (!modelId)
+    return {
+      valid: false,
+      usedImage: false,
+      error:
+        input.providerId === FOUNDRY_PROVIDER_ID
+          ? "Add at least one model id (e.g. claude-opus-4-5) and save first"
+          : "No model available",
+    };
 
   const result = await runModelTest((prompt, attachments) =>
     provider.streamChat({

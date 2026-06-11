@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -24,6 +25,7 @@ interface ProviderConfig {
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
+  modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
   lastValidationSucceeded?: boolean | null;
@@ -39,6 +41,15 @@ const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint:
   },
 };
 
+/** Gateway providers whose model ids are user-defined (deployment-specific). */
+const NEEDS_MODEL_IDS: Record<string, { label: string; placeholder: string; hint: string }> = {
+  foundry: {
+    label: "Model ids (one per line)",
+    placeholder: "claude-opus-4-5",
+    hint: "The Anthropic model ids your Foundry deployment exposes — enter exactly what your resource calls them.",
+  },
+};
+
 interface ApiKeyFormProps {
   provider: ProviderConfig;
   onSaved: () => Promise<void> | void;
@@ -48,6 +59,7 @@ interface ApiKeyFormProps {
 export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps) {
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState(provider.baseURL ?? "");
+  const [modelIdsText, setModelIdsText] = useState((provider.modelIds ?? []).join("\n"));
   const [defaultModel, setDefaultModel] = useState(provider.defaultModel ?? provider.models[0]?.id ?? "");
   const [enabled, setEnabled] = useState(provider.enabled);
   const [loading, setLoading] = useState(false);
@@ -55,12 +67,23 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const baseUrlField = NEEDS_BASE_URL[provider.providerId];
+  const modelIdsField = NEEDS_MODEL_IDS[provider.providerId];
+
+  const parsedModelIds = modelIdsText
+    .split(/[\n,]/)
+    .map((m) => m.trim())
+    .filter((m) => m.length > 0);
+  // For user-defined-model providers the dropdown reflects what's typed now.
+  const selectableModels = modelIdsField
+    ? parsedModelIds.map((id) => ({ id, name: id }))
+    : provider.models;
 
   useEffect(() => {
     setDefaultModel(provider.defaultModel ?? provider.models[0]?.id ?? "");
     setEnabled(provider.enabled);
     setBaseURL(provider.baseURL ?? "");
-  }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL]);
+    setModelIdsText((provider.modelIds ?? []).join("\n"));
+  }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL, provider.modelIds]);
 
   const save = async () => {
     setLoading(true);
@@ -69,11 +92,20 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       if (baseUrlField && !baseURL.trim()) {
         throw new Error("This provider needs its endpoint base URL");
       }
+      if (modelIdsField && parsedModelIds.length === 0) {
+        throw new Error("Add at least one model id");
+      }
+      // Keep a valid default model when the typed list changed.
+      const nextDefault =
+        modelIdsField && !parsedModelIds.includes(defaultModel)
+          ? parsedModelIds[0]
+          : defaultModel;
       saveProviderKey({
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
         baseURL: baseUrlField ? baseURL : undefined,
-        defaultModel,
+        models: modelIdsField ? parsedModelIds : undefined,
+        defaultModel: nextDefault,
         enabled,
       });
       setApiKey("");
@@ -205,14 +237,28 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         />
       </div>
 
+      {modelIdsField && (
+        <div className="space-y-2">
+          <Label htmlFor={`models-${provider.providerId}`}>{modelIdsField.label}</Label>
+          <Textarea
+            id={`models-${provider.providerId}`}
+            rows={3}
+            placeholder={modelIdsField.placeholder}
+            value={modelIdsText}
+            onChange={(e) => setModelIdsText(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">{modelIdsField.hint}</p>
+        </div>
+      )}
+
       <div className="space-y-2">
         <Label>Default model</Label>
         <Select value={defaultModel} onValueChange={setDefaultModel}>
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue placeholder={selectableModels.length ? undefined : "Add a model id above"} />
           </SelectTrigger>
           <SelectContent>
-            {provider.models.map((m) => (
+            {selectableModels.map((m) => (
               <SelectItem key={m.id} value={m.id}>
                 {m.name}
               </SelectItem>
