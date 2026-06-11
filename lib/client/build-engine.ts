@@ -60,6 +60,7 @@ import {
   type RunnerConfig,
 } from "./runner";
 import {
+  accumulateModelStats,
   getBuildFiles,
   getFinalResult,
   getMessagesForDiscussion,
@@ -1437,6 +1438,23 @@ export async function runBuildDiscussion(
 
     done = action.done;
   }
+
+  // Fold this build's scoreboard into the global per-model stats (the
+  // "which models actually perform" view on the dashboard).
+  accumulateModelStats(
+    scoreboard
+      .filter((s) => s.attempts > 0)
+      .map((s) => ({
+        modelId: workers[s.index].modelId,
+        displayName: s.name,
+        attempts: s.attempts,
+        approvals: s.approvals,
+        fixes: s.fixes,
+        failures: s.failures,
+        totalMs: s.totalMs,
+        totalChars: s.totalChars,
+      }))
+  );
 
   // ── Final summary ──────────────────────────────────────────────────────────
   throwIfAborted();

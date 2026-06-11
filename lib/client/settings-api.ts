@@ -39,6 +39,7 @@ export interface ProviderConfig {
   models: ModelInfo[];
   hasKey: boolean;
   keyHint?: string | null;
+  baseURL?: string | null;
   defaultModel?: string | null;
   enabled: boolean;
   lastValidationSucceeded?: boolean | null;
@@ -58,6 +59,7 @@ export function loadProviders(): {
       models: p.listModels(),
       hasKey: !!saved,
       keyHint: saved?.keyHint,
+      baseURL: saved?.baseURL ?? null,
       defaultModel: saved?.defaultModel,
       enabled: saved?.enabled ?? false,
       lastValidationSucceeded: saved?.lastValidationSucceeded ?? null,
@@ -70,11 +72,13 @@ export function loadProviders(): {
 export function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;
+  baseURL?: string;
   defaultModel?: string;
   enabled?: boolean;
 }): void {
   const existing = getProviderKey(input.providerId);
   const now = new Date().toISOString();
+  const baseURL = input.baseURL?.trim();
   if (existing) {
     updateProviderKey(input.providerId, {
       ...(input.apiKey
@@ -85,6 +89,7 @@ export function saveProviderKey(input: {
             lastValidatedAt: null,
           }
         : {}),
+      ...(input.baseURL !== undefined ? { baseURL: baseURL || null } : {}),
       defaultModel: input.defaultModel ?? existing.defaultModel,
       enabled: input.enabled ?? existing.enabled,
       updatedAt: now,
@@ -93,6 +98,7 @@ export function saveProviderKey(input: {
     upsertProviderKey({
       providerId: input.providerId,
       apiKey: input.apiKey,
+      baseURL: baseURL || null,
       defaultModel: input.defaultModel ?? null,
       enabled: input.enabled ?? true,
       keyHint: maskApiKey(input.apiKey),
@@ -184,6 +190,7 @@ async function runModelTest(makeStream: StreamFactory): Promise<ModelTestResult>
 export async function validateProvider(input: {
   providerId: string;
   apiKey?: string;
+  baseURL?: string;
   modelId?: string;
 }): Promise<ModelTestResult & { modelId?: string }> {
   const provider = getProvider(input.providerId);
@@ -193,6 +200,7 @@ export async function validateProvider(input: {
   const usingSaved = !input.apiKey;
   const apiKey = input.apiKey ?? saved?.apiKey ?? null;
   if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
+  const baseURL = input.baseURL?.trim() || saved?.baseURL || undefined;
 
   const modelId =
     input.modelId ?? saved?.defaultModel ?? provider.listModels()[0]?.id;
@@ -201,6 +209,7 @@ export async function validateProvider(input: {
   const result = await runModelTest((prompt, attachments) =>
     provider.streamChat({
       apiKey,
+      baseURL,
       model: modelId,
       messages: [
         { role: "system", content: TEST_SYSTEM },

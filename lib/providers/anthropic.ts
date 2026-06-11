@@ -112,39 +112,23 @@ function buildCacheableAnthropicTextBlocks(text: string): AnthropicContentBlock[
   ];
 }
 
-export const anthropicProvider: AIProvider = {
-  id: "anthropic",
-  name: "Anthropic",
-
-  listModels() {
-    return getCatalogModelsForProvider("anthropic").map(
-      ({ validationCandidate, ...model }) => model
-    );
-  },
-
-  async validateApiKey(apiKey: string) {
-    try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-      await client.messages.create({
-        model: getValidationModelId("anthropic"),
-        max_tokens: 16,
-        messages: [{ role: "user", content: "Hi" }],
-      });
-      return true;
-    } catch (err) {
-      if (err instanceof Anthropic.APIError && err.status === 401) {
-        return false;
-      }
-      return true;
-    }
-  },
-
-  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
+/**
+ * Shared Anthropic-API streaming — used by the native Anthropic provider and
+ * by gateways exposing the same API (Azure AI Foundry via params.baseURL).
+ * `providerId` namespaces the capability lookup and error labels.
+ */
+export async function* streamAnthropicChat(
+  params: ChatParams,
+  providerId: string,
+  errorLabel: string
+): AsyncIterable<StreamChunk> {
+  {
     const client = new Anthropic({
       apiKey: params.apiKey,
+      ...(params.baseURL ? { baseURL: params.baseURL } : {}),
       dangerouslyAllowBrowser: true,
     });
-    const caps = getModelCapabilities(formatModelId("anthropic", params.model));
+    const caps = getModelCapabilities(formatModelId(providerId, params.model));
     const systemMessage = params.messages.find((m) => m.role === "system");
     const userMessages = params.messages.filter((m) => m.role !== "system");
     const lastUserIndex = userMessages
@@ -190,8 +174,40 @@ export const anthropicProvider: AIProvider = {
     } catch (err) {
       yield {
         type: "error",
-        error: err instanceof Error ? err.message : "Anthropic request failed",
+        error: err instanceof Error ? err.message : `${errorLabel} request failed`,
       };
     }
+  }
+}
+
+export const anthropicProvider: AIProvider = {
+  id: "anthropic",
+  name: "Anthropic",
+
+  listModels() {
+    return getCatalogModelsForProvider("anthropic").map(
+      ({ validationCandidate, ...model }) => model
+    );
+  },
+
+  async validateApiKey(apiKey: string) {
+    try {
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      await client.messages.create({
+        model: getValidationModelId("anthropic"),
+        max_tokens: 16,
+        messages: [{ role: "user", content: "Hi" }],
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof Anthropic.APIError && err.status === 401) {
+        return false;
+      }
+      return true;
+    }
+  },
+
+  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
+    yield* streamAnthropicChat(params, "anthropic", "Anthropic");
   },
 };

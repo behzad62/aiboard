@@ -25,6 +25,8 @@ export interface ProviderKey {
   // Client representation: plaintext key, protected by the store-level passphrase
   // envelope (see lib/client/crypto-box.ts). Set after the browser-side migration.
   apiKey?: string;
+  /** Endpoint override for gateway providers (e.g. Azure AI Foundry). */
+  baseURL?: string | null;
   defaultModel: string | null;
   enabled: boolean;
   keyHint: string | null;
@@ -120,6 +122,27 @@ export interface BuildFileRecord {
   discussionId: string;
   path: string;
   content: string;
+  updatedAt: string;
+}
+
+/**
+ * Global, per-model Build-mode performance, accumulated across every build
+ * the user runs (the in-run scoreboard dies with the run; this persists).
+ * Speed is judged by throughput (totalMs/totalChars), never raw time.
+ */
+export interface ModelBuildStat {
+  /** Full namespaced id (providerId:modelId). */
+  modelId: string;
+  displayName: string;
+  builds: number;
+  attempts: number;
+  approvals: number;
+  fixes: number;
+  failures: number;
+  /** Elapsed ms across all attempts, including failed ones. */
+  totalMs: number;
+  /** Raw output chars from successful responses. */
+  totalChars: number;
   updatedAt: string;
 }
 

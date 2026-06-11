@@ -29,6 +29,15 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
         promptCachingNote:
           "The stable Anthropic prompt prefix is marked as ephemeral cacheable content so repeated rounds can reuse it.",
       };
+    case "foundry":
+      return {
+        temperatureLabel: "Temperature is not sent",
+        temperatureNote:
+          "Azure Foundry exposes the native Anthropic API; newer Claude models reject the deprecated temperature parameter.",
+        promptCachingLabel: "Prompt caching enabled",
+        promptCachingNote:
+          "The stable prompt prefix is marked as ephemeral cacheable content, same as the native Anthropic provider; cache billing follows your Foundry deployment.",
+      };
     case "openai":
       return {
         temperatureLabel: "Temperature is not sent",

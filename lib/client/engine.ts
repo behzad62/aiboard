@@ -25,6 +25,7 @@ import {
   getCustomModelByFullId,
   getDecryptedApiKey,
   getProvider,
+  getProviderBaseURL,
   streamCustomChat,
 } from "./providers";
 import {
@@ -192,6 +193,7 @@ export async function collectStream(
     async () => {
       for await (const chunk of provider.streamChat({
         apiKey,
+        baseURL: getProviderBaseURL(providerId),
         model,
         messages,
         attachments: modelAttachments,

@@ -23,11 +23,21 @@ interface ProviderConfig {
   models: ModelInfo[];
   hasKey: boolean;
   keyHint?: string | null;
+  baseURL?: string | null;
   defaultModel?: string | null;
   enabled: boolean;
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
 }
+
+/** Gateway providers that need a per-user endpoint next to the key. */
+const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint: string }> = {
+  foundry: {
+    label: "Foundry endpoint (base URL)",
+    placeholder: "https://<resource>.services.ai.azure.com/anthropic/",
+    hint: "From your Azure AI Foundry resource — the Anthropic-compatible endpoint ending in /anthropic/.",
+  },
+};
 
 interface ApiKeyFormProps {
   provider: ProviderConfig;
@@ -37,25 +47,32 @@ interface ApiKeyFormProps {
 
 export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps) {
   const [apiKey, setApiKey] = useState("");
+  const [baseURL, setBaseURL] = useState(provider.baseURL ?? "");
   const [defaultModel, setDefaultModel] = useState(provider.defaultModel ?? provider.models[0]?.id ?? "");
   const [enabled, setEnabled] = useState(provider.enabled);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const baseUrlField = NEEDS_BASE_URL[provider.providerId];
 
   useEffect(() => {
     setDefaultModel(provider.defaultModel ?? provider.models[0]?.id ?? "");
     setEnabled(provider.enabled);
-  }, [provider.defaultModel, provider.enabled, provider.models]);
+    setBaseURL(provider.baseURL ?? "");
+  }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL]);
 
   const save = async () => {
     setLoading(true);
     setMessage(null);
     try {
+      if (baseUrlField && !baseURL.trim()) {
+        throw new Error("This provider needs its endpoint base URL");
+      }
       saveProviderKey({
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
+        baseURL: baseUrlField ? baseURL : undefined,
         defaultModel,
         enabled,
       });
@@ -76,6 +93,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       const data = await validateProvider({
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
+        baseURL: baseUrlField ? baseURL : undefined,
         modelId: defaultModel,
       });
       setMessage(
@@ -162,6 +180,19 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <span>Last checked {new Date(provider.lastValidatedAt).toLocaleString()}</span>
         )}
       </div>
+
+      {baseUrlField && (
+        <div className="space-y-2">
+          <Label htmlFor={`baseurl-${provider.providerId}`}>{baseUrlField.label}</Label>
+          <Input
+            id={`baseurl-${provider.providerId}`}
+            placeholder={baseUrlField.placeholder}
+            value={baseURL}
+            onChange={(e) => setBaseURL(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">{baseUrlField.hint}</p>
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor={`key-${provider.providerId}`}>API Key</Label>

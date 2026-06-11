@@ -108,6 +108,7 @@ export function providerSupportsReasoning(fullModelId: string): boolean {
   return (
     providerId === "openai" ||
     providerId === "anthropic" ||
+    providerId === "foundry" ||
     providerId === "google" ||
     providerId === "openrouter"
   );

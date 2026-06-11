@@ -1,6 +1,7 @@
 export const PROVIDER_IDS = [
   "openai",
   "anthropic",
+  "foundry",
   "google",
   "openrouter",
 ] as const;

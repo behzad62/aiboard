@@ -14,6 +14,7 @@ import type {
 import { parseModelId } from "@/lib/providers/base";
 import { openaiProvider } from "@/lib/providers/openai";
 import { anthropicProvider } from "@/lib/providers/anthropic";
+import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
 import { getModelDisplayName } from "@/lib/providers/catalog";
@@ -33,6 +34,7 @@ const TEXT_ONLY = {
 const providers: Record<string, AIProvider> = {
   openai: openaiProvider,
   anthropic: anthropicProvider,
+  foundry: foundryProvider,
   google: googleProvider,
   openrouter: openrouterProvider,
 };
@@ -71,6 +73,11 @@ export function getDecryptedApiKey(providerId: string): string | null {
   const row = getProviderKey(providerId);
   if (!row || !row.enabled) return null;
   return row.apiKey ?? null;
+}
+
+/** Endpoint override saved with the key (gateway providers, e.g. Foundry). */
+export function getProviderBaseURL(providerId: string): string | undefined {
+  return getProviderKey(providerId)?.baseURL ?? undefined;
 }
 
 export function getEnabledModels(): ModelInfo[] {

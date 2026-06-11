@@ -161,6 +161,28 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://openrouter.ai/deepseek/deepseek-v4-pro",
     verifiedAt: VERIFIED_AT,
   },
+  [formatModelId("openrouter", "deepseek/deepseek-v4-flash")]: {
+    inputUsdPer1M: 0.0983,
+    outputUsdPer1M: 0.1966,
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/deepseek/deepseek-v4-flash",
+    verifiedAt: "2026-06-12",
+  },
+  [formatModelId("openrouter", "minimax/minimax-m3")]: {
+    inputUsdPer1M: 0.3,
+    outputUsdPer1M: 1.2,
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/minimax/minimax-m3",
+    verifiedAt: "2026-06-12",
+  },
+  [formatModelId("openrouter", "nex-agi/nex-n2-pro:free")]: {
+    inputUsdPer1M: 0,
+    outputUsdPer1M: 0,
+    notes: "Free OpenRouter route; rate limits apply.",
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/nex-agi/nex-n2-pro:free",
+    verifiedAt: "2026-06-12",
+  },
 };
 
 export function getModelPricing(

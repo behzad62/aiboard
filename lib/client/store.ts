@@ -11,6 +11,7 @@ import type {
   Discussion,
   FinalResult,
   Message,
+  ModelBuildStat,
   ProviderKey,
   UserSettings,
 } from "@/lib/db/schema";
@@ -38,6 +39,8 @@ export interface ClientStore {
   finalResults: FinalResult[];
   attachments: AttachmentRecord[];
   buildFiles: BuildFileRecord[];
+  /** Global per-model Build performance, accumulated across all builds. */
+  modelStats: ModelBuildStat[];
 }
 
 const DEFAULT_STORE: ClientStore = {
@@ -57,6 +60,7 @@ const DEFAULT_STORE: ClientStore = {
   finalResults: [],
   attachments: [],
   buildFiles: [],
+  modelStats: [],
 };
 
 let memory: ClientStore | null = null;
@@ -159,6 +163,9 @@ export function getAttachment(id: string): AttachmentRecord | undefined {
 export function getBuildFiles(discussionId: string): BuildFileRecord[] {
   return store().buildFiles.filter((f) => f.discussionId === discussionId);
 }
+export function getModelStats(): ModelBuildStat[] {
+  return store().modelStats ?? [];
+}
 
 // ── Writes (mutate memory, schedule persist) ──────────────────────────────────
 
@@ -182,6 +189,33 @@ export function deleteDiscussion(id: string): void {
   s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
   schedulePersist();
 }
+/** Fold one build's per-worker results into the global per-model stats. */
+export function accumulateModelStats(
+  deltas: Array<Omit<ModelBuildStat, "builds" | "updatedAt">>
+): void {
+  const s = store();
+  if (!s.modelStats) s.modelStats = []; // stores persisted before this field existed
+  const now = new Date().toISOString();
+  for (const d of deltas) {
+    if (d.attempts <= 0) continue;
+    const existing = s.modelStats.find((m) => m.modelId === d.modelId);
+    if (existing) {
+      existing.displayName = d.displayName;
+      existing.builds += 1;
+      existing.attempts += d.attempts;
+      existing.approvals += d.approvals;
+      existing.fixes += d.fixes;
+      existing.failures += d.failures;
+      existing.totalMs += d.totalMs;
+      existing.totalChars += d.totalChars;
+      existing.updatedAt = now;
+    } else {
+      s.modelStats.push({ ...d, builds: 1, updatedAt: now });
+    }
+  }
+  schedulePersist();
+}
+
 export function upsertBuildFile(rec: BuildFileRecord): void {
   const s = store();
   const i = s.buildFiles.findIndex(

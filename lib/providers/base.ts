@@ -27,6 +27,8 @@ export interface ChatParams {
   reasoningEffort?: ReasoningEffort;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
+  /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */
+  baseURL?: string;
 }
 
 export interface StreamChunk {

@@ -97,6 +97,32 @@ export const MODEL_CATALOG: CatalogModel[] = [
     validationCandidate: true,
   },
 
+  // Azure AI Foundry — Anthropic models behind the user's Foundry resource
+  // (https://<resource>.services.ai.azure.com/anthropic/). Same model ids as
+  // the native Anthropic API; availability depends on the user's deployment.
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8 (Foundry)",
+    providerId: "foundry",
+    description: "Claude Opus 4.8 served from your Azure AI Foundry resource",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6 (Foundry)",
+    providerId: "foundry",
+    description: "Claude Sonnet 4.6 served from your Azure AI Foundry resource",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "claude-haiku-4-5-20251001",
+    name: "Claude Haiku 4.5 (Foundry)",
+    providerId: "foundry",
+    description: "Claude Haiku 4.5 served from your Azure AI Foundry resource",
+    capabilities: { image: true, document: false, audio: false, video: false },
+    validationCandidate: true,
+  },
+
   // Google — https://ai.google.dev/gemini-api/docs/models
   {
     id: "gemini-3.5-flash",
@@ -143,6 +169,27 @@ export const MODEL_CATALOG: CatalogModel[] = [
     description: "DeepSeek flagship MoE for reasoning, coding, and agents",
     capabilities: { image: false, document: false, audio: false, video: false },
     validationCandidate: true,
+  },
+  {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    providerId: "openrouter",
+    description: "Efficiency-optimized DeepSeek MoE for fast, cheap inference (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
+    id: "minimax/minimax-m3",
+    name: "MiniMax M3",
+    providerId: "openrouter",
+    description: "Multimodal MoE for long-horizon agentic work, coding, and tool use (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: true },
+  },
+  {
+    id: "nex-agi/nex-n2-pro:free",
+    name: "Nex-N2-Pro (free)",
+    providerId: "openrouter",
+    description: "Free agentic MoE for coding, tool use, and deep research (262K context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
   },
 ];
 
