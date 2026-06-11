@@ -57,6 +57,7 @@ import {
   readFileViaRunner,
   runCommand,
   searchViaRunner,
+  stripAnsi,
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
@@ -113,6 +114,21 @@ const TOTAL_REVIEW_CHARS = 48_000;
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated]`;
+}
+
+/**
+ * One-line shell/OS hint for the Architect's run-command prompt, derived from
+ * the runner's reported platform. Returns "" for unknown/absent platforms (old
+ * runners that don't report one) so no misleading hint is shown.
+ */
+function shellHintForPlatform(platform?: string): string {
+  if (platform === "win32") {
+    return 'SHELL: commands run on Windows via cmd.exe — Unix tools (sed/awk/grep/ls/cat) are NOT available; use `node -e "..."` for file inspection and Windows equivalents (type, dir, findstr) otherwise.';
+  }
+  if (platform === "darwin" || platform === "linux") {
+    return "SHELL: commands run in a POSIX shell (sh) — standard Unix tools (sed/awk/grep/ls/cat) are available.";
+  }
+  return "";
 }
 
 /**
@@ -384,6 +400,10 @@ export async function runBuildDiscussion(
   // ── Optional local runner (user-started; opt-in by config) ────────────────
   let runner: RunnerConfig | null = null;
   let runnerDirName: string | null = null;
+  // One-line note about the runner's shell/OS, fed to the Architect so it stops
+  // emitting Unix-only commands (sed/awk/grep) on a Windows runner. Empty when
+  // the platform is unknown (old runner) — no hint then.
+  let shellHint = "";
   let allowAllCommands = discussion.runnerAccess === "full";
   let totalRuns = 0;
   let totalFetches = 0;
@@ -395,6 +415,7 @@ export async function runBuildDiscussion(
     if (health.ok) {
       runner = config;
       runnerDirName = health.dir ?? null;
+      shellHint = shellHintForPlatform(health.platform);
       emit({
         type: "diagnostic",
         phase: "initializing",
@@ -596,7 +617,7 @@ export async function runBuildDiscussion(
         exitCode: result.exitCode,
         durationMs: result.durationMs,
         outputPreview: truncate(
-          (result.stdout || result.stderr).trim(),
+          stripAnsi(result.stdout || result.stderr).trim(),
           400
         ),
       });
@@ -708,7 +729,7 @@ export async function runBuildDiscussion(
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
-        outputPreview: truncate((result.stdout || result.stderr).trim(), 400),
+        outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 400),
       });
       const ok = result.exitCode === 0;
       return [
@@ -716,7 +737,7 @@ export async function runBuildDiscussion(
         ok
           ? "The project compiles. Approve only what the build and your review both support."
           : "The project does NOT compile. Treat the errors below as required fixes — do NOT mark done while they remain; send the owning tasks back with precise fix instructions.",
-        truncate((result.stderr || result.stdout).trim() || "(no output)", 6_000),
+        truncate(stripAnsi(result.stderr || result.stdout).trim() || "(no output)", 6_000),
       ].join("\n");
     } catch (err) {
       emit({
@@ -1118,6 +1139,7 @@ export async function runBuildDiscussion(
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       previousSummary: truncate(previousSummary, 6_000),
       fetchesLeft: fetchesLeftThisPhase(),
+      shellHint,
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
     if (action.action === "search" && planSearchesLeft > 0) {
@@ -1585,6 +1607,7 @@ export async function runBuildDiscussion(
           userNotes: userNotesText(),
           scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
           fetchesLeft: fetchesLeftThisPhase(),
+          shellHint,
         }),
         `Architect is reviewing wave ${cycle}`
       ));

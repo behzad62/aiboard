@@ -370,13 +370,16 @@ function fetchToolDoc(fetchesLeft?: number): string {
   ].join("\n");
 }
 
-function runToolDoc(runsLeft?: number): string {
+function runToolDoc(runsLeft?: number, shellHint?: string): string {
   if (!runsLeft || runsLeft <= 0) return "";
   return [
     "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
     '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
     `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`,
-  ].join("\n");
+    shellHint?.trim() ? shellHint.trim() : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function buildArchitectPlanPrompt(input: {
@@ -393,6 +396,8 @@ export function buildArchitectPlanPrompt(input: {
   mcpCallsLeft?: number;
   userNotes?: string;
   scoreboard?: string;
+  /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
+  shellHint?: string;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -418,7 +423,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft),
+    runToolDoc(input.runsLeft, input.shellHint),
     fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
@@ -428,6 +433,7 @@ export function buildArchitectPlanPrompt(input: {
     "```",
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
+    `List in every task's "expectedOutputs" ALL files it will create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputs are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
   ]
     .filter(Boolean)
@@ -483,6 +489,8 @@ export function buildArchitectReviewPrompt(input: {
   fetchesLeft?: number;
   userNotes?: string;
   scoreboard?: string;
+  /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
+  shellHint?: string;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -506,7 +514,7 @@ export function buildArchitectReviewPrompt(input: {
       ? `If you need to see an existing file's contents before deciding, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). Never guess at a file's contents — read it.`
       : "",
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft),
+    runToolDoc(input.runsLeft, input.shellHint),
     fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",

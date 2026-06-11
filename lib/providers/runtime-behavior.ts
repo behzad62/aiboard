@@ -54,7 +54,7 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
           "The effort-level temperature is forwarded; OpenRouter silently drops it for models that don't support it (e.g. OpenAI reasoning models).",
         promptCachingLabel: "Prompt caching enabled",
         promptCachingNote:
-          "OpenAI, DeepSeek, and Grok models cache automatically through OpenRouter. For Anthropic, Gemini, and Qwen models the app marks the stable prompt prefix as an ephemeral cache_control breakpoint.",
+          "OpenAI, DeepSeek, and Grok models cache automatically through OpenRouter. For Anthropic, Gemini, and Qwen models the app marks the stable prompt prefix as an ephemeral cache_control breakpoint. Note: OpenRouter may queue concurrent requests server-side per account, so parallel Build tasks on OpenRouter models can appear to stream one at a time — especially on free models or with low account credit. This is account-side throttling, not an app limitation.",
       };
     case "custom":
       return {

@@ -31,7 +31,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 3;
+const VERSION = 4;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_READ_BYTES = 512 * 1024;
@@ -272,6 +272,15 @@ function readFileInProject(relPath) {
   return buf.toString("utf8").slice(0, MAX_READ_BYTES);
 }
 
+// Strip ANSI escape sequences (color codes etc.) so callers get plain text.
+function stripAnsi(text) {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI
+    .replace(/\x1b[@-Z\\-_]/g, "") // two-char escapes
+    .replace(/\x1b/g, ""); // bare ESC
+}
+
 function runCommand(command) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -304,8 +313,8 @@ function runCommand(command) {
       clearTimeout(timer);
       resolve({
         exitCode: code ?? -1,
-        stdout: stdout.slice(0, MAX_OUTPUT_BYTES),
-        stderr: stderr.slice(0, MAX_OUTPUT_BYTES),
+        stdout: stripAnsi(stdout.slice(0, MAX_OUTPUT_BYTES)),
+        stderr: stripAnsi(stderr.slice(0, MAX_OUTPUT_BYTES)),
         durationMs: Date.now() - startedAt,
         truncated,
       });
@@ -488,6 +497,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       version: VERSION,
       dir: path.basename(projectDir),
+      platform: process.platform,
       canWrite: true,
     });
     return;

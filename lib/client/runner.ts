@@ -25,14 +25,18 @@ function headers(token: string): HeadersInit {
 
 export async function checkRunner(
   config: RunnerConfig
-): Promise<{ ok: boolean; dir?: string; error?: string }> {
+): Promise<{ ok: boolean; dir?: string; platform?: string; error?: string }> {
   try {
     const res = await fetch(`${config.url.replace(/\/$/, "")}/health`, {
       headers: headers(config.token),
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data.error ?? `HTTP ${res.status}` };
-    return { ok: true, dir: data.dir };
+    return {
+      ok: true,
+      dir: data.dir,
+      platform: typeof data.platform === "string" ? data.platform : undefined,
+    };
   } catch {
     return {
       ok: false,
@@ -243,17 +247,37 @@ export async function runCommand(
   return (await res.json()) as CommandResult;
 }
 
+/**
+ * Strip ANSI escape sequences (CSI/OSC color codes etc.) from command output
+ * so the Architect — and the UI preview — see plain text, not `\x1b[41m` noise.
+ * Covers CSI (`ESC [ … letter`), OSC (`ESC ] … BEL/ST`), other two-char escapes,
+ * and any stray bare ESC bytes.
+ */
+export function stripAnsi(text: string): string {
+  return text
+    // OSC: ESC ] ... (terminated by BEL or ST = ESC \)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // CSI: ESC [ params intermediates final
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // Other escape sequences: ESC followed by a single byte (e.g. ESC ( B)
+    .replace(/\x1b[@-Z\\-_]/g, "")
+    // Any remaining bare ESC
+    .replace(/\x1b/g, "");
+}
+
 /** Render a command result the way the Architect sees it. */
 export function formatCommandResult(
   command: string,
   result: CommandResult
 ): string {
+  const stdout = stripAnsi(result.stdout).trim();
+  const stderr = stripAnsi(result.stderr).trim();
   const parts = [
     `$ ${command}`,
     `exit ${result.exitCode} (${(result.durationMs / 1000).toFixed(1)}s)${result.truncated ? " — output truncated" : ""}`,
   ];
-  if (result.stdout.trim()) parts.push(`stdout:\n${result.stdout.trim()}`);
-  if (result.stderr.trim()) parts.push(`stderr:\n${result.stderr.trim()}`);
-  if (!result.stdout.trim() && !result.stderr.trim()) parts.push("(no output)");
+  if (stdout) parts.push(`stdout:\n${stdout}`);
+  if (stderr) parts.push(`stderr:\n${stderr}`);
+  if (!stdout && !stderr) parts.push("(no output)");
   return parts.join("\n");
 }
