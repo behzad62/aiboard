@@ -177,9 +177,16 @@ export async function runBuildDiscussion(
     attempts: number;
     approvals: number;
     fixes: number;
-    failures: number; // threw, or returned no files when files were the deliverable
-    totalMs: number; // time spent across ALL attempts, including failed ones
-    totalChars: number; // raw output produced by successful responses
+    // Failures are split: a model's QUALITY is only judged by badOutput.
+    badOutput: number; // responded with no usable files, or a non-infra error
+    unavailable: number; // provider denied/timed out (429/503/quota/network) — NOT quality
+    // Difficulty-weighted tallies (weight = task difficulty / 3, medium = 1)
+    // for the global benchmark; hard-task outcomes count more than trivial ones.
+    wApprovals: number;
+    wFixes: number;
+    wBadOutput: number;
+    responseMs: number; // time of SUCCESSFUL responses only (clean throughput)
+    responseChars: number; // output chars of successful responses only
     responses: number; // successful, non-empty responses
     active: boolean;
   }
@@ -189,20 +196,26 @@ export async function runBuildDiscussion(
     attempts: 0,
     approvals: 0,
     fixes: 0,
-    failures: 0,
-    totalMs: 0,
-    totalChars: 0,
+    badOutput: 0,
+    unavailable: 0,
+    wApprovals: 0,
+    wFixes: 0,
+    wBadOutput: 0,
+    responseMs: 0,
+    responseChars: 0,
     responses: 0,
     active: true,
   }));
 
-  // Speed is judged by THROUGHPUT (ms per output char) relative to the other
-  // workers, never by raw elapsed time — bigger tasks legitimately take
-  // longer, and best-first assignment gives the strongest workers the bigger
-  // foundational tasks, so an absolute time threshold would punish exactly
-  // the models the build trusts most.
+  /** Normalized difficulty weight: medium (3) = 1.0, trivial = 0.33, hard = 1.67. */
+  const difficultyWeight = (task: BuildTask): number =>
+    Math.max(1, Math.min(5, task.difficulty ?? 3)) / 3;
+
+  // Speed is judged by THROUGHPUT (ms per output char) of SUCCESSFUL responses,
+  // relative to the other workers — never raw elapsed time (bigger tasks take
+  // longer) and never polluted by failed attempts.
   const msPerChar = (s: WorkerStat): number | null =>
-    s.totalChars > 0 ? s.totalMs / s.totalChars : null;
+    s.responseChars > 0 ? s.responseMs / s.responseChars : null;
 
   const medianMsPerChar = (): number | null => {
     const rates = scoreboard
@@ -214,9 +227,11 @@ export async function runBuildDiscussion(
     return rates.length % 2 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
   };
 
+  // In-build operational score (drives assignment): raw counts, integer, and
+  // excludes unavailable so a model isn't punished for the provider's outages.
+  // (The global leaderboard uses the difficulty-weighted tallies instead.)
   const workerScore = (s: WorkerStat): number => {
-    let score = s.approvals * 3 - s.fixes * 1 - s.failures * 4;
-    // Light speed tie-breaker: ±1 only when clearly out of line with peers.
+    let score = s.approvals * 3 - s.fixes * 1 - s.badOutput * 4;
     const median = medianMsPerChar();
     const rate = msPerChar(s);
     if (median != null && rate != null) {
@@ -245,15 +260,19 @@ export async function runBuildDiscussion(
       .sort((a, b) => workerScore(b) - workerScore(a))
       .map((s) => {
         const avg =
-          s.attempts > 0 ? ` avg ${Math.round(s.totalMs / s.attempts / 1000)}s` : "";
+          s.responses > 0
+            ? ` avg ${Math.round(s.responseMs / s.responses / 1000)}s`
+            : "";
+        const down = s.unavailable > 0 ? `, ${s.unavailable} unavailable` : "";
         const bench = s.active ? "" : " [BENCHED — not producing output]";
-        return `- ${s.name}: score ${workerScore(s)} (${s.approvals} approved, ${s.fixes} fix${s.fixes === 1 ? "" : "es"}, ${s.failures} failed/empty${avg})${bench}`;
+        return `- ${s.name}: score ${workerScore(s)} (${s.approvals} approved, ${s.fixes} fix${s.fixes === 1 ? "" : "es"}, ${s.badOutput} bad output${down}${avg})${bench}`;
       })
       .join("\n");
 
   // Bench workers that still haven't produced any usable output after more
-  // than one try — a single failure may be a transient provider error, so it
-  // never benches on its own, and the last active worker is never benched.
+  // than one try — never benches on a single attempt, and never the last
+  // active worker. Benching is operational (a model that isn't producing,
+  // for any reason, can't carry the build); it does NOT affect quality score.
   const benchUnresponsiveWorkers = (): void => {
     for (const stat of scoreboard) {
       if (!stat.active) continue;
@@ -261,10 +280,11 @@ export async function runBuildDiscussion(
       const othersActive = scoreboard.some((s) => s.active && s.index !== stat.index);
       if (neverProduced && othersActive) {
         stat.active = false;
+        const why = stat.unavailable >= stat.badOutput ? "the provider keeps denying it" : "it hasn't produced usable output";
         emit({
           type: "diagnostic",
           phase: "round_preparing",
-          message: `Benching ${stat.name} — it hasn't produced usable output; remaining workers will continue`,
+          message: `Benching ${stat.name} — ${why}; remaining workers will continue`,
         });
       }
     }
@@ -966,6 +986,10 @@ export async function runBuildDiscussion(
       ? raw.dependsOn.filter((d): d is string => typeof d === "string")
       : [],
     assignTo: typeof raw.assignTo === "string" ? raw.assignTo : undefined,
+    difficulty:
+      typeof raw.difficulty === "number"
+        ? Math.max(1, Math.min(5, Math.round(raw.difficulty)))
+        : undefined,
   });
 
   // ── Status bookkeeping ─────────────────────────────────────────────────────
@@ -1111,9 +1135,17 @@ export async function runBuildDiscussion(
       task: BuildTask,
       stat: WorkerStat,
       worker: SelectedModel,
-      detail: string
+      detail: string,
+      kind: "bad" | "unavailable"
     ): void => {
-      stat.failures += 1;
+      // "unavailable" = the provider denied/timed out; it's not the model's
+      // fault, so it never dents the quality score (only badOutput does).
+      if (kind === "unavailable") {
+        stat.unavailable += 1;
+      } else {
+        stat.badOutput += 1;
+        stat.wBadOutput += difficultyWeight(task);
+      }
       task.failCount = (task.failCount ?? 0) + 1;
       if (task.failCount < MAX_TASK_FAILURES) {
         task.status = "fixing";
@@ -1137,6 +1169,13 @@ export async function runBuildDiscussion(
         message: `${worker.displayName} ${detail} for ${task.id}${task.status === "fixing" ? " — requeued for another attempt" : " — giving up on this task"}`,
       });
     };
+
+    // Provider-side denials/transience are not a quality signal. Detected from
+    // the error text the providers surface (status codes, "overloaded", quota,
+    // timeouts, network) so a free-tier 429/503 doesn't tank a model's score.
+    const UNAVAILABLE = /\b(429|500|502|503|504|529)\b|rate.?limit|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed/i;
+    const classifyError = (message: string): "bad" | "unavailable" =>
+      UNAVAILABLE.test(message) ? "unavailable" : "bad";
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const worker = workers[task.workerIndex!];
@@ -1183,23 +1222,23 @@ export async function runBuildDiscussion(
         );
         const { written: files, issues } = await writeEmittedFiles(output, task.id);
         const { prose } = extractArtifacts(output);
-        // A worker that produced no files contributed nothing usable — count
-        // it as a failure for scoring (the deliverable is files).
+        // The model DID respond — a no-files result is a quality failure
+        // (bad output), distinct from a provider denial.
         if (files.length === 0) {
-          stat.totalMs += Date.now() - startedAt;
           failTask(
             task,
             stat,
             worker,
             issues.length > 0
               ? `produced no usable files (${truncate(issues.join("; "), 300)})`
-              : "returned no files"
+              : "returned no files",
+            "bad"
           );
           return;
         }
         stat.responses += 1;
-        stat.totalMs += Date.now() - startedAt;
-        stat.totalChars += output.length;
+        stat.responseMs += Date.now() - startedAt;
+        stat.responseChars += output.length;
         task.status = "review";
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
@@ -1224,12 +1263,14 @@ export async function runBuildDiscussion(
         });
       } catch (err) {
         if (isAbortError(err)) throw err;
-        stat.totalMs += Date.now() - startedAt;
+        const message = err instanceof Error ? err.message : "error";
+        const kind = classifyError(message);
         failTask(
           task,
           stat,
           worker,
-          `failed (${err instanceof Error ? err.message : "error"})`
+          kind === "unavailable" ? `was unavailable (${message})` : `failed (${message})`,
+          kind
         );
       }
     };
@@ -1477,11 +1518,17 @@ export async function runBuildDiscussion(
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (result.verdict === "approve") {
-        if (verdictStat) verdictStat.approvals += 1;
+        if (verdictStat) {
+          verdictStat.approvals += 1;
+          verdictStat.wApprovals += difficultyWeight(task);
+        }
         task.status = "done";
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       } else {
-        if (verdictStat) verdictStat.fixes += 1;
+        if (verdictStat) {
+          verdictStat.fixes += 1;
+          verdictStat.wFixes += difficultyWeight(task);
+        }
         task.status = "fixing";
         // The fixing worker must see the files it wrote last time.
         const prior = executed.find((e) => e.task.id === task.id);
@@ -1497,7 +1544,11 @@ export async function runBuildDiscussion(
     // Tasks the review didn't mention count as approved.
     for (const { task } of executed) {
       if (task.status === "review") {
-        if (task.workerIndex != null) scoreboard[task.workerIndex].approvals += 1;
+        if (task.workerIndex != null) {
+          const st = scoreboard[task.workerIndex];
+          st.approvals += 1;
+          st.wApprovals += difficultyWeight(task);
+        }
         task.status = "done";
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       }
@@ -1521,9 +1572,12 @@ export async function runBuildDiscussion(
   }
 
   // Fold this build's scoreboard into the global per-model stats (the
-  // "which models actually perform" view on the dashboard).
-  accumulateModelStats(
-    scoreboard
+  // "which models actually perform" view on the dashboard). The Architect is
+  // the judge of record; a verdict is "independent" when the judge is a
+  // different model from the one being scored (not grading its own work).
+  accumulateModelStats({
+    judgeModelId: architect.modelId,
+    workers: scoreboard
       .filter((s) => s.attempts > 0)
       .map((s) => ({
         modelId: workers[s.index].modelId,
@@ -1531,11 +1585,15 @@ export async function runBuildDiscussion(
         attempts: s.attempts,
         approvals: s.approvals,
         fixes: s.fixes,
-        failures: s.failures,
-        totalMs: s.totalMs,
-        totalChars: s.totalChars,
-      }))
-  );
+        badOutput: s.badOutput,
+        unavailable: s.unavailable,
+        wApprovals: s.wApprovals,
+        wFixes: s.wFixes,
+        wBadOutput: s.wBadOutput,
+        responseMs: s.responseMs,
+        responseChars: s.responseChars,
+      })),
+  });
 
   // ── Final summary ──────────────────────────────────────────────────────────
   throwIfAborted();

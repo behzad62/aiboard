@@ -134,7 +134,15 @@ export interface BuildFileRecord {
 /**
  * Global, per-model Build-mode performance, accumulated across every build
  * the user runs (the in-run scoreboard dies with the run; this persists).
- * Speed is judged by throughput (totalMs/totalChars), never raw time.
+ * Three honest axes are kept separate rather than collapsed into one number:
+ *  - QUALITY: approvals/fixes/badOutput, plus difficulty-weighted (w*) tallies
+ *    so a hard-task approval counts more than a trivial one.
+ *  - SPEED: responseChars / responseMs — successful responses only.
+ *  - RELIABILITY: unavailable (provider denials/timeouts) vs attempts; these
+ *    never touch the quality score (a free-tier 429 isn't the model's fault).
+ * `judges` records who graded this model (and how many verdicts each made),
+ * with independentVerdicts = verdicts by a judge other than this model itself,
+ * so a future leaderboard can filter out self-graded / weak-judge noise.
  */
 export interface ModelBuildStat {
   /** Full namespaced id (providerId:modelId). */
@@ -144,11 +152,19 @@ export interface ModelBuildStat {
   attempts: number;
   approvals: number;
   fixes: number;
-  failures: number;
-  /** Elapsed ms across all attempts, including failed ones. */
-  totalMs: number;
-  /** Raw output chars from successful responses. */
-  totalChars: number;
+  badOutput: number;
+  unavailable: number;
+  /** Difficulty-weighted (weight = difficulty/3) quality tallies. */
+  wApprovals: number;
+  wFixes: number;
+  wBadOutput: number;
+  /** Time + output of successful responses only (for clean throughput). */
+  responseMs: number;
+  responseChars: number;
+  /** judge modelId -> verdicts that judge contributed for this model. */
+  judges: Record<string, number>;
+  /** Verdicts made by a judge that was NOT this model (independent). */
+  independentVerdicts: number;
   updatedAt: string;
 }
 

@@ -36,6 +36,9 @@ export interface BuildTask {
   dependsOn?: string[];
   /** Architect's preferred worker (display name) for this task, if any. */
   assignTo?: string;
+  /** Architect's 1-5 difficulty rating (5 = hardest). Weights the global
+   * model score so a hard-task approval counts more than a trivial one. */
+  difficulty?: number;
   /** Failed attempts so far — the engine requeues a failed task once before
    * giving up on it. */
   failCount?: number;
@@ -60,6 +63,8 @@ export interface PlanAction {
     /** Optional: pin this task to a worker by display name (e.g. the best
      * performer for a hard task). The engine matches it case-insensitively. */
     assignTo?: string;
+    /** Optional 1-5 difficulty rating used to weight model performance. */
+    difficulty?: number;
   }>;
   notes?: string;
   /**
@@ -419,10 +424,11 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)"}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
     "```",
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
+    `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -506,7 +512,7 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[],"assignTo":"optional worker display name"}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"done":false,"notes":"updated conventions if any"}`,
     "```",
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files. Always list the existing files a new task builds on in its contextFiles.`,
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
