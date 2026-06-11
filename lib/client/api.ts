@@ -104,6 +104,34 @@ export function continueDiscussion(id: string): void {
   });
 }
 
+/**
+ * Attach, replace, or clear the local runner for an existing discussion so a
+ * later Resume continues with disk access. Pass null to disconnect. Runner
+ * config is otherwise frozen at creation; this lets the user wire one up after
+ * the fact.
+ */
+export function setDiscussionRunner(
+  id: string,
+  sel: { url: string; token: string; access: "ask" | "full" } | null
+): void {
+  updateDiscussion(
+    id,
+    sel
+      ? {
+          runnerUrl: sel.url,
+          runnerToken: sel.token,
+          runnerAccess: sel.access,
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          runnerUrl: null,
+          runnerToken: null,
+          runnerAccess: null,
+          updatedAt: new Date().toISOString(),
+        }
+  );
+}
+
 /** Load the client store (idempotent). Returns needsPassphrase when locked. */
 export async function ensureReady(): Promise<{ needsPassphrase: boolean }> {
   if (isInitialized()) return { needsPassphrase: false };

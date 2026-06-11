@@ -16,7 +16,11 @@ import {
 } from "@/components/DiscussionTimeline";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
+import { ArtifactPanel } from "@/components/ArtifactPanel";
+import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
+import type { ExtractedFile } from "@/lib/artifacts/extract";
+import { getBuildFiles } from "@/lib/client/store";
 import {
   DiscussionDiagnostics,
   type DiagnosticEntry,
@@ -44,6 +48,7 @@ import {
   getDiscussionData,
   restartDiscussion,
   runDiscussion as runClientDiscussion,
+  setDiscussionRunner,
   stopDiscussion,
 } from "@/lib/client/api";
 import {
@@ -153,6 +158,8 @@ function DiscussionPageInner() {
   );
   const [folderHandle, setFolderHandle] =
     useState<FileSystemDirectoryHandle | null>(null);
+  const [persistedFiles, setPersistedFiles] = useState<ExtractedFile[]>([]);
+  const [runnerSectionOpen, setRunnerSectionOpen] = useState(false);
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
 
@@ -397,6 +404,44 @@ function DiscussionPageInner() {
       setFolderGrant("ready");
     }
   };
+
+  // Re-read the persisted build files whenever the run settles (or starts).
+  // They're written to the store as the build goes; we only show the panel
+  // for an unfinished build, so refresh when status flips and once on load.
+  useEffect(() => {
+    if (!discussion || discussion.mode !== "build") {
+      setPersistedFiles([]);
+      return;
+    }
+    const stored = getBuildFiles(discussion.id);
+    setPersistedFiles(
+      stored.map((f) => ({
+        path: f.path,
+        language: languageOf(f.path),
+        content: f.content,
+      }))
+    );
+  }, [discussion, status]);
+
+  // Attach / replace / disconnect the runner between runs. Persist it and
+  // mirror into local discussion state so the RunnerChip re-pings the new URL.
+  const handleRunnerChange = useCallback(
+    (sel: RunnerSelection | null) => {
+      if (!discussion) return;
+      setDiscussionRunner(discussion.id, sel);
+      setDiscussion((prev) =>
+        prev
+          ? {
+              ...prev,
+              runnerUrl: sel?.url ?? null,
+              runnerToken: sel?.token ?? null,
+              runnerAccess: sel?.access ?? null,
+            }
+          : prev
+      );
+    },
+    [discussion]
+  );
 
   // Build-mode command approval: the engine awaits this promise; the UI resolves
   // it when the user clicks Allow / Allow all / Deny.
@@ -916,6 +961,57 @@ function DiscussionPageInner() {
           />
         ))}
 
+      {/* ── Files from an unfinished build ──────────────────────────
+          No final result yet, the run isn't live, but earlier passes already
+          produced files. Surface them so they aren't stranded — download them,
+          or attach a runner below and Resume. */}
+      {discussion.mode === "build" &&
+        !finalResult &&
+        !streamConnected &&
+        persistedFiles.length > 0 && (
+          <div className="space-y-3">
+            <p className="rounded-lg border border-dashed bg-card/50 px-4 py-3 text-sm text-muted-foreground">
+              Files produced so far — the build didn&apos;t finish. Download them
+              or attach a runner and Resume.
+            </p>
+            <ArtifactPanel files={persistedFiles} />
+          </div>
+        )}
+
+      {/* ── Attach / replace the runner between runs ────────────────
+          Runner config is otherwise frozen at creation; let the user wire one
+          up after the fact and Resume on disk. Only when not actively running. */}
+      {discussion.mode === "build" && !isActive && !streamConnected && (
+        <div className="rounded-xl border bg-card shadow-sm">
+          <button
+            type="button"
+            onClick={() => setRunnerSectionOpen((o) => !o)}
+            aria-expanded={runnerSectionOpen}
+            className="flex w-full items-center justify-between gap-3 p-4 text-left"
+          >
+            <span className="text-sm font-medium">
+              Runner {discussion.runnerUrl ? "(attached)" : "(not attached)"}
+            </span>
+            <span className="font-mono text-[0.7rem] text-muted-foreground">
+              {runnerSectionOpen ? "Hide" : "Edit"}
+            </span>
+          </button>
+          {runnerSectionOpen && (
+            <div className="space-y-3 border-t p-4">
+              <p className="text-xs text-muted-foreground">
+                Attach a runner now and Resume — the build continues with full
+                file access, and already-produced files are synced into the
+                runner&apos;s folder.
+              </p>
+              <RunnerSetup
+                onChange={handleRunnerChange}
+                pickedFolderName={discussion.projectFolderName}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Transcript ──────────────────────────────────────────── */}
       <div className="space-y-5">
         <div className="flex items-center gap-3">
@@ -968,6 +1064,11 @@ function DiscussionPageInner() {
       </div>
     </div>
   );
+}
+
+function languageOf(path: string): string {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(path);
+  return ext ? ext[1].toLowerCase() : "";
 }
 
 function cnChip(bg: string, text: string): string {

@@ -409,6 +409,39 @@ export async function runBuildDiscussion(
         diskTree = [...new Set([...diskTree, ...runnerTree])];
         diskGranted = true;
       }
+      // Sync files restored from previous passes (currently only in virtualFs)
+      // into the runner's folder so a runner attached AFTER an earlier in-app
+      // build pass starts from those files. Never overwrite what's already on
+      // disk — the runner copy may be newer or user-edited; only write paths
+      // the tree doesn't already contain. Same normalization the tree uses
+      // (forward slash, lowercased, no leading "./" or "/").
+      const normTreePath = (p: string): string =>
+        p.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase();
+      const onDisk = new Set((runnerTree ?? []).map(normTreePath));
+      let synced = 0;
+      const syncFailures: string[] = [];
+      for (const [path, content] of virtualFs) {
+        if (onDisk.has(normTreePath(path))) continue;
+        try {
+          await writeFileViaRunner(config, path, content);
+          synced += 1;
+          if (!diskTree.includes(path)) diskTree.push(path);
+        } catch (err) {
+          console.error(`[build] syncing restored file ${path} to the runner failed:`, err);
+          syncFailures.push(path);
+        }
+      }
+      if (synced > 0 || syncFailures.length > 0) {
+        const failNote =
+          syncFailures.length > 0
+            ? ` (${syncFailures.length} failed: ${syncFailures.slice(0, 5).join(", ")}${syncFailures.length > 5 ? "…" : ""})`
+            : "";
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `Synced ${synced} restored file(s) into the runner folder${failNote}`,
+        });
+      }
       // MCP bridge: tools from stdio MCP servers the runner spawned
       // (e.g. Playwright to verify the build in a real browser). Each tool is
       // documented as a call signature from its input schema — without the
