@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import DashboardPage from "@/components/DashboardPage";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/lib/site";
 
@@ -59,9 +60,9 @@ export default function HomePage() {
           server of ours.
         </p>
         <p>
-          <a href="/about" className="underline hover:text-foreground">
+          <Link href="/about" className="underline hover:text-foreground">
             Learn more about how it works
-          </a>
+          </Link>
           .
         </p>
       </section>
