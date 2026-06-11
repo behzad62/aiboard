@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
-import { MessageSquare, Settings } from "lucide-react";
+import { BarChart3, MessageSquare, Settings } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
@@ -79,6 +79,13 @@ export default function RootLayout({
                   ☕ Support this project
                 </a>
                 <ThemeToggle />
+                <Link
+                  href="/benchmark"
+                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  Benchmark
+                </Link>
                 <Link
                   href="/settings"
                   className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

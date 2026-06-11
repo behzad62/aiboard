@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -25,8 +26,6 @@ import { DetailControl } from "@/components/DetailControl";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import { AttachmentPicker, type AttachmentSummary } from "@/components/AttachmentPicker";
 import { DiscussionHistory } from "@/components/DiscussionHistory";
-import { ModelStatsPanel } from "@/components/ModelStatsPanel";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   Discussion,
   DiscussionMode,
@@ -475,48 +474,34 @@ export default function DashboardPage() {
       </div>
 
       <div className="lg:col-span-2">
-        <Tabs defaultValue="recent">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="recent">Recent</TabsTrigger>
-            <TabsTrigger value="model-stats">Model stats</TabsTrigger>
-          </TabsList>
-          <TabsContent value="recent">
-            <Card>
-              <CardHeader>
+        <Card>
+          <CardHeader>
+            <div className="flex items-start justify-between gap-2">
+              <div>
                 <CardTitle>Recent Discussions</CardTitle>
                 <CardDescription>Click to view live or completed results</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DiscussionHistory
-                  discussions={data?.discussions ?? []}
-                  onDeleted={(id) =>
-                    setData((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            discussions: prev.discussions.filter((x) => x.id !== id),
-                          }
-                        : prev
-                    )
-                  }
-                />
-              </CardContent>
-            </Card>
-          </TabsContent>
-          <TabsContent value="model-stats">
-            <Card>
-              <CardHeader>
-                <CardTitle>Model performance</CardTitle>
-                <CardDescription>
-                  How each worker model has performed across all your builds
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ModelStatsPanel />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="shrink-0">
+                <Link href="/benchmark">Model benchmark →</Link>
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <DiscussionHistory
+              discussions={data?.discussions ?? []}
+              onDeleted={(id) =>
+                setData((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        discussions: prev.discussions.filter((x) => x.id !== id),
+                      }
+                    : prev
+                )
+              }
+            />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
