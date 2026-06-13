@@ -12,7 +12,7 @@ function createOpenRouterClient(apiKey: string) {
     dangerouslyAllowBrowser: true,
     defaultHeaders: {
       "HTTP-Referer": process.env.APP_URL ?? "http://localhost:3000",
-      "X-Title": "AI Discussion Board",
+      "X-Title": "AI Board",
     },
   });
 }

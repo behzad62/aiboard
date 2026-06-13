@@ -29,14 +29,24 @@ import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
-  buildReviewerPrompt,
+  buildIncompleteTaskFailure,
+  buildWaveReviewDigest,
+  formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
+  classifyRunCommand,
+  decideBuildTaskFailure,
   detectVerifyCommand,
+  findIncompleteBuildTasks,
+  hasCompleteBuildToolAction,
+  inspectStrictToolActionOutput,
+  outputPathsForTask,
   parseArchitectAction,
+  summarizeFileChange,
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
   type FetchAction,
+  type FileChangeOperation,
   type PlanAction,
   type ToolAction,
 } from "@/lib/orchestrator/build";
@@ -48,12 +58,15 @@ import {
   writeProjectFile,
 } from "./project-fs";
 import {
+  appendFileViaRunner,
   callMcpTool,
   checkRunner,
   fetchViaRunner,
   formatCommandResult,
   listFilesViaRunner,
   listMcpServers,
+  patchFileViaRunner,
+  readFileRangeViaRunner,
   readFileViaRunner,
   runCommand,
   searchViaRunner,
@@ -78,6 +91,7 @@ import {
   isAbortError,
   type OrchestratorEvent,
 } from "./engine";
+import { estimateModelCallUsage } from "./token-usage";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 
@@ -98,6 +112,13 @@ const MCP_CALLS_PER_PHASE = 8;
 const TOTAL_MCP_CALLS = 24;
 const FETCHES_PER_PHASE = 4;
 const TOTAL_FETCHES = 12;
+const WORKER_READS_PER_TASK = 4;
+const WORKER_RANGE_READS_PER_TASK = 8;
+const WORKER_SEARCHES_PER_TASK = 4;
+const WORKER_PATCHES_PER_TASK = 8;
+const WORKER_APPENDS_PER_TASK = 12;
+const WORKER_TOOL_TURNS_PER_TASK = 24;
+const WORKER_BAD_TOOL_CALLS_PER_TASK = 3;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -132,25 +153,9 @@ function shellHintForPlatform(platform?: string): string {
 }
 
 /**
- * Parse a task's free-text `expectedOutputs` into normalized path tokens for
- * wave partitioning. In practice it's a comma-separated list of paths; we split
- * permissively, keep only tokens that look like file paths, and lowercase with
- * forward slashes so comparison matches actual-write normalization. Returns []
- * when nothing looks like a path (no information — never over-block on that).
+ * Run a browser-side Build-mode discussion from planning through worker waves,
+ * Architect review, file persistence, and final hand-off.
  */
-function parseOutputPaths(expectedOutputs?: string): string[] {
-  if (!expectedOutputs) return [];
-  const out: string[] = [];
-  for (const raw of expectedOutputs.split(/[,\s\n]+/)) {
-    const token = raw.trim().replace(/^["'`]+|["'`]+$/g, "");
-    if (!token) continue;
-    // Looks like a path: has a separator or a dot-extension.
-    if (!/[/\\]/.test(token) && !/\.\w+$/.test(token)) continue;
-    out.push(token.replace(/\\/g, "/").toLowerCase());
-  }
-  return out;
-}
-
 export async function runBuildDiscussion(
   discussion: Discussion,
   models: SelectedModel[],
@@ -161,6 +166,26 @@ export async function runBuildDiscussion(
   const throwIfAborted = (): void => {
     if (signal?.aborted) throw abortError();
   };
+  const waitForRetry = (ms: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (ms <= 0) {
+        resolve();
+        return;
+      }
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      const timeout = window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        window.clearTimeout(timeout);
+        reject(abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   const effort = discussion.effort as EffortLevel;
   const limits = BUILD_LIMITS[effort];
   const config = EFFORT_CONFIG[effort];
@@ -187,19 +212,6 @@ export async function runBuildDiscussion(
     };
   const workers = models.filter((m) => m.modelId !== architect.modelId);
   if (workers.length === 0) workers.push(architect); // solo build
-
-  // Optional mid-tier Reviewer: pre-screens worker output so the expensive
-  // Architect decides from a compact digest instead of reading every file.
-  // Resolved like the Architect (it doesn't have to be a participant).
-  const reviewerId = discussion.reviewerModelId ?? null;
-  const reviewer: SelectedModel | null =
-    reviewerId && reviewerId !== architect.modelId
-      ? models.find((m) => m.modelId === reviewerId) ?? {
-          modelId: reviewerId,
-          providerId: parseModelId(reviewerId).providerId,
-          displayName: resolveModelName(reviewerId),
-        }
-      : null;
 
   // ── Worker scoreboard ─────────────────────────────────────────────────────
   // Tracks each worker's performance so the Architect can assign harder tasks
@@ -347,6 +359,9 @@ export async function runBuildDiscussion(
   // (cleared each cycle). Detects two workers writing the same path concurrently
   // — last-write-wins silently destroys the earlier output otherwise.
   const waveWrites = new Map<string, string>();
+  // Task id -> bounded landed-change summaries for the CURRENT wave. The
+  // Architect reviews this digest instead of full rewritten file bodies.
+  let waveChangeSummaries = new Map<string, string[]>();
   // Seed with everything previous passes built — follow-up passes and resumes
   // must see the existing files instead of re-planning from an "empty" tree.
   for (const file of getBuildFiles(discussion.id)) {
@@ -586,6 +601,19 @@ export async function runBuildDiscussion(
     reason?: string
   ): Promise<string> => {
     if (!runner) return "No runner is available.";
+    const safety = classifyRunCommand(command);
+    if (!safety.allowed) {
+      const message = `Command rejected: ${safety.reason} Use patch/append/edit output for file changes, then run tests/build commands only for verification.`;
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return `$ ${command}\nCOMMAND REJECTED: ${message}`;
+    }
     if (!allowAllCommands) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(command, reason)
@@ -700,6 +728,19 @@ export async function runBuildDiscussion(
    */
   const runVerify = async (command: string): Promise<string> => {
     if (!runner || !command) return "";
+    const safety = classifyRunCommand(command);
+    if (!safety.allowed) {
+      const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return `AUTOMATED BUILD CHECK - \`${command}\` was rejected before execution. ${message}`;
+    }
     if (!allowAllCommands) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(command, "Automated build check")
@@ -731,13 +772,56 @@ export async function runBuildDiscussion(
         durationMs: result.durationMs,
         outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 400),
       });
-      const ok = result.exitCode === 0;
+      let finalCommand = command;
+      let finalResult = result;
+      const combinedOutput = stripAnsi(`${result.stdout}\n${result.stderr}`);
+      const tscShimFailure =
+        result.exitCode !== 0 &&
+        detectedVerifyCommand &&
+        detectedVerifyCommand !== command &&
+        /^npx\s+tsc\b/i.test(command.trim()) &&
+        /not the tsc command|Use npm install typescript|To get access to the TypeScript compiler/i.test(
+          combinedOutput
+        );
+      if (tscShimFailure) {
+        if (!allowAllCommands) {
+          const decision = hooks?.requestCommandApproval
+            ? await hooks.requestCommandApproval(
+                detectedVerifyCommand,
+                "Retry automated build check with the detected TypeScript command"
+              )
+            : "deny";
+          if (decision === "allow-all") allowAllCommands = true;
+          if (decision === "deny") {
+            return [
+              `AUTOMATED BUILD CHECK — \`${command}\` exited ${result.exitCode} (FAILED).`,
+              "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
+              truncate(combinedOutput.trim() || "(no output)", 6_000),
+            ].join("\n");
+          }
+        }
+        emit({
+          type: "diagnostic",
+          phase: "model_streaming",
+          message: `Retrying build check with detected command: ${detectedVerifyCommand}`,
+        });
+        finalResult = await runCommand(runner, detectedVerifyCommand);
+        finalCommand = detectedVerifyCommand;
+        emit({
+          type: "command_run",
+          command: detectedVerifyCommand,
+          exitCode: finalResult.exitCode,
+          durationMs: finalResult.durationMs,
+          outputPreview: truncate(stripAnsi(finalResult.stdout || finalResult.stderr).trim(), 400),
+        });
+      }
+      const ok = finalResult.exitCode === 0;
       return [
-        `AUTOMATED BUILD CHECK — \`${command}\` exited ${result.exitCode} (${ok ? "OK" : "FAILED"})${result.truncated ? " [output truncated]" : ""}.`,
+        `AUTOMATED BUILD CHECK — \`${finalCommand}\` exited ${finalResult.exitCode} (${ok ? "OK" : "FAILED"})${finalResult.truncated ? " [output truncated]" : ""}.`,
         ok
           ? "The project compiles. Approve only what the build and your review both support."
           : "The project does NOT compile. Treat the errors below as required fixes — do NOT mark done while they remain; send the owning tasks back with precise fix instructions.",
-        truncate(stripAnsi(result.stderr || result.stdout).trim() || "(no output)", 6_000),
+        truncate(stripAnsi(finalResult.stderr || finalResult.stdout).trim() || "(no output)", 6_000),
       ].join("\n");
     } catch (err) {
       emit({
@@ -800,11 +884,83 @@ export async function runBuildDiscussion(
     return null;
   };
 
+  const emitFileToolDiagnostic = (
+    message: string,
+    model?: SelectedModel
+  ): void => {
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      modelId: model?.modelId,
+      modelName: model?.displayName,
+      providerId: model ? parseModelId(model.modelId).providerId : undefined,
+      message,
+    });
+  };
+
+  const recordFileChange = (
+    taskId: string | undefined,
+    path: string,
+    operation: FileChangeOperation,
+    before: string | null,
+    after: string
+  ): void => {
+    if (!taskId) return;
+    const current = waveChangeSummaries.get(taskId) ?? [];
+    current.push(
+      summarizeFileChange({
+        path,
+        operation,
+        before,
+        after,
+      })
+    );
+    waveChangeSummaries.set(taskId, current);
+  };
+
+  const readFileRange = async (
+    path: string,
+    startLine: number,
+    lineCount: number
+  ): Promise<string> => {
+    const start = Math.max(1, Math.round(startLine || 1));
+    const count = Math.max(1, Math.min(400, Math.round(lineCount || 80)));
+    if (runner) {
+      const remote = await readFileRangeViaRunner(runner, path, start, count);
+      if (remote) {
+        if (remote.content == null) return `--- ${path} ---\n[not found or binary]`;
+        const rangeNote = remote.truncated
+          ? " (request capped to max range size)"
+          : remote.hasMoreBefore || remote.hasMoreAfter
+            ? " (partial range)"
+            : "";
+        return [
+          `--- ${path} lines ${remote.startLine}-${remote.endLine} of ${remote.totalLines}${rangeNote} ---`,
+          remote.content,
+        ].join("\n");
+      }
+    }
+    const content = await readFile(path);
+    if (content == null) return `--- ${path} ---\n[not found or binary]`;
+    const lines = content.split("\n");
+    const startIdx = Math.min(start - 1, lines.length);
+    const selected = lines.slice(startIdx, startIdx + count);
+    const endLine = selected.length > 0 ? startIdx + selected.length : startIdx;
+    const rangeNote = endLine < lines.length || startIdx > 0 ? " (partial range)" : "";
+    return [
+      `--- ${path} lines ${startIdx + 1}-${endLine} of ${lines.length}${rangeNote} ---`,
+      selected.join("\n"),
+    ].join("\n");
+  };
+
   const writeFile = async (
     path: string,
     content: string,
-    taskId?: string
+    taskId?: string,
+    operation: FileChangeOperation = "rewrite",
+    beforeOverride?: string | null
   ): Promise<void> => {
+    const before = beforeOverride !== undefined ? beforeOverride : await readFile(path);
     virtualFs.set(path, content);
     writtenThisRun.add(path);
     // Persist so follow-up passes and resumes still see this file.
@@ -849,6 +1005,13 @@ export async function runBuildDiscussion(
       }
     }
     emit({ type: "file_written", path, bytes, location, taskId });
+    recordFileChange(
+      taskId,
+      path,
+      before == null && operation === "rewrite" ? "create" : operation,
+      before,
+      content
+    );
   };
 
   // ── Streaming helpers (persist as messages so the timeline works) ─────────
@@ -888,7 +1051,12 @@ export async function runBuildDiscussion(
   const streamTurn = async (
     model: SelectedModel,
     prompt: string,
-    opts: { systemRole: string; maxTokens: number; label: string }
+    opts: {
+      systemRole: string;
+      maxTokens: number;
+      label: string;
+      stopWhen?: (content: string) => boolean;
+    }
   ): Promise<string> => {
     round += 1;
     const messageId = uuidv4();
@@ -910,20 +1078,22 @@ export async function runBuildDiscussion(
       providerId,
       message: opts.label,
     });
+    const messages = [
+      { role: "system" as const, content: opts.systemRole },
+      { role: "user" as const, content: prompt },
+    ];
     const content = await collectStream(
       model.modelId,
       providerId,
       rawModel,
-      [
-        { role: "system", content: opts.systemRole },
-        { role: "user", content: prompt },
-      ],
+      messages,
       opts.maxTokens,
       0.4,
       reasoningEffort,
       [],
       (token) => emit({ type: "message_token", messageId, token }),
-      signal
+      signal,
+      opts.stopWhen
     );
     insertMessage({
       id: messageId,
@@ -935,6 +1105,25 @@ export async function runBuildDiscussion(
       createdAt: new Date().toISOString(),
     });
     emit({ type: "message_complete", messageId, content });
+    const usage = estimateModelCallUsage({
+      messages,
+      output: content,
+      maxTokens: opts.maxTokens,
+    });
+    emit({
+      type: "token_usage",
+      messageId,
+      modelId: model.modelId,
+      modelName: model.displayName,
+      providerId,
+      round,
+      label: opts.label,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      maxTokens: usage.maxTokens,
+      estimated: usage.estimated,
+    });
     history.push({ label: opts.label, text: content });
     return content;
   };
@@ -949,6 +1138,7 @@ export async function runBuildDiscussion(
         "You are the Architect orchestrating an AI engineering team. Follow the response format exactly.",
       maxTokens: architectMaxTokens,
       label,
+      stopWhen: hasCompleteBuildToolAction,
     });
     let action = parseArchitectAction(text);
     if (!action) {
@@ -962,6 +1152,7 @@ export async function runBuildDiscussion(
           systemRole: "Respond with ONLY the fenced json action block.",
           maxTokens: architectMaxTokens,
           label: `${label} (strict retry)`,
+          stopWhen: hasCompleteBuildToolAction,
         }
       );
       action = parseArchitectAction(text);
@@ -972,6 +1163,149 @@ export async function runBuildDiscussion(
       );
     }
     return { action, text };
+  };
+
+  const claimWaveWrite = (path: string, taskId?: string): string | null => {
+    if (taskId == null) return null;
+    const writer = taskId;
+    const key = path.toLowerCase();
+    const prior = waveWrites.get(key);
+    if (prior && prior !== writer) {
+      const issue = `CONFLICT: ${writer} attempted to write ${path}, which ${prior} already wrote in this wave — the write was rejected before it could overwrite the earlier version`;
+      emit({ type: "diagnostic", phase: "model_failed", message: issue });
+      return issue;
+    }
+    waveWrites.set(key, writer);
+    return null;
+  };
+
+  const applyPatchAction = async (
+    path: string,
+    ops: Array<{ search: string; replace: string }>,
+    taskId?: string
+  ): Promise<{ written: string[]; issues: string[]; summary: string }> => {
+    const conflict = claimWaveWrite(path, taskId);
+    if (conflict) {
+      return { written: [], issues: [conflict], summary: conflict };
+    }
+
+    const before = await readFile(path);
+    if (runner) {
+      try {
+        const result = await patchFileViaRunner(runner, path, ops);
+        if (result.content != null && result.applied > 0) {
+          virtualFs.set(path, result.content);
+          writtenThisRun.add(path);
+          upsertBuildFile({
+            discussionId: discussion.id,
+            path,
+            content: result.content,
+            updatedAt: new Date().toISOString(),
+          });
+          if (!diskTree.includes(path)) diskTree.push(path);
+          emit({ type: "file_written", path, bytes: result.bytes, location: "disk", taskId });
+          recordFileChange(taskId, path, "patch", before, result.content);
+        }
+        const issues =
+          result.failed > 0
+            ? [
+                `${result.failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${result.applied} applied).`,
+              ]
+            : [];
+        return {
+          written: result.applied > 0 ? [path] : [],
+          issues,
+          summary: `Patch ${path}: ${result.applied} applied, ${result.failed} failed`,
+        };
+      } catch (err) {
+        const issue = `Patch to ${path} via the runner failed (${err instanceof Error ? err.message : "error"}).`;
+        emit({ type: "diagnostic", phase: "model_failed", message: issue });
+        return { written: [], issues: [issue], summary: issue };
+      }
+    }
+
+    const current = before;
+    if (current == null) {
+      const issue = `Patch to ${path} skipped — the file doesn't exist.`;
+      emit({ type: "diagnostic", phase: "model_failed", message: issue });
+      return { written: [], issues: [issue], summary: issue };
+    }
+    const { content, applied, failed } = applyEditOps(current, ops);
+    const issues =
+      failed > 0
+        ? [
+            `${failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${applied} applied).`,
+          ]
+        : [];
+    if (applied > 0) {
+      await writeFile(path, content, taskId, "patch", current);
+    }
+    return {
+      written: applied > 0 ? [path] : [],
+      issues,
+      summary: `Patch ${path}: ${applied} applied, ${failed} failed`,
+    };
+  };
+
+  const applyAppendAction = async (
+    path: string,
+    content: string,
+    reset: boolean,
+    taskId?: string
+  ): Promise<{ written: string[]; issues: string[]; summary: string }> => {
+    const conflict = claimWaveWrite(path, taskId);
+    if (conflict) {
+      return { written: [], issues: [conflict], summary: conflict };
+    }
+
+    const before = await readFile(path);
+    if (runner) {
+      try {
+        const result = await appendFileViaRunner(runner, path, content, reset);
+        if (result.content != null) {
+          virtualFs.set(path, result.content);
+          writtenThisRun.add(path);
+          upsertBuildFile({
+            discussionId: discussion.id,
+            path,
+            content: result.content,
+            updatedAt: new Date().toISOString(),
+          });
+          if (!diskTree.includes(path)) diskTree.push(path);
+          emit({ type: "file_written", path, bytes: result.totalBytes, location: "disk", taskId });
+          recordFileChange(
+            taskId,
+            path,
+            before == null ? "create" : reset ? "rewrite" : "append",
+            before,
+            result.content
+          );
+        }
+        return {
+          written: [path],
+          issues: [],
+          summary: `Append ${path}: +${result.bytes} bytes${reset ? " (reset first)" : ""}`,
+        };
+      } catch (err) {
+        const issue = `Append to ${path} via the runner failed (${err instanceof Error ? err.message : "error"}).`;
+        emit({ type: "diagnostic", phase: "model_failed", message: issue });
+        return { written: [], issues: [issue], summary: issue };
+      }
+    }
+
+    const current = reset ? "" : before ?? "";
+    await writeFile(
+      path,
+      `${current}${content}`,
+      taskId,
+      before == null ? "create" : reset ? "rewrite" : "append",
+      before
+    );
+    return {
+      written: [path],
+      issues: [],
+      summary: `Append ${path}: +${new TextEncoder().encode(content).length} bytes${reset ? " (reset first)" : ""}`,
+    };
   };
 
   /**
@@ -1011,7 +1345,7 @@ export async function runBuildDiscussion(
     };
 
     for (const path of truncatedPaths) {
-      const issue = `Output was cut off mid-block for ${path} — nothing from the truncated block was written. Re-emit it (complete), or use SEARCH/REPLACE edits.`;
+      const issue = `Output was cut off mid-block for ${path} — nothing from the truncated block was written. This file is too large for a single response; use read_range/search plus patch for existing files, or append chunks for large/missing files.`;
       issues.push(issue);
       emit({ type: "diagnostic", phase: "model_failed", message: `Truncated output block for ${path} rejected${taskId ? ` (${taskId})` : ""}` });
     }
@@ -1035,7 +1369,18 @@ export async function runBuildDiscussion(
         });
         continue;
       }
-      await writeFile(file.path, file.content, taskId);
+      const conflict = claimWaveWrite(file.path, taskId);
+      if (conflict) {
+        issues.push(conflict);
+        continue;
+      }
+      await writeFile(
+        file.path,
+        file.content,
+        taskId,
+        existing == null ? "create" : "rewrite",
+        existing
+      );
       noteWrite(file.path);
       written.push(file.path);
     }
@@ -1053,9 +1398,14 @@ export async function runBuildDiscussion(
       }
       const { content, applied, failed } = applyEditOps(current, edit.ops);
       if (applied > 0) {
-        await writeFile(edit.path, content, taskId);
-        noteWrite(edit.path);
-        written.push(edit.path);
+        const conflict = claimWaveWrite(edit.path, taskId);
+        if (conflict) {
+          issues.push(conflict);
+        } else {
+          await writeFile(edit.path, content, taskId, "patch", current);
+          noteWrite(edit.path);
+          written.push(edit.path);
+        }
       }
       if (failed > 0) {
         issues.push(
@@ -1079,6 +1429,7 @@ export async function runBuildDiscussion(
     title: raw.title || `Task ${index + 1}`,
     instructions: raw.instructions || raw.title || "",
     contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
+    outputPaths: outputPathsForTask(raw),
     expectedOutputs: raw.expectedOutputs,
     status: "planned",
     dependsOn: Array.isArray(raw.dependsOn)
@@ -1142,8 +1493,41 @@ export async function runBuildDiscussion(
       shellHint,
     });
     const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
+    const strictTool = inspectStrictToolActionOutput(text);
+    if (strictTool.action && strictTool.feedback && strictTool.valid) {
+      runFeedback += `\n\n${strictTool.feedback}`;
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        modelId: architect.modelId,
+        modelName: architect.displayName,
+        providerId: parseModelId(architect.modelId).providerId,
+        message: `Architect tool-call warning while planning: ${strictTool.feedback}`,
+      });
+    } else if (strictTool.feedback && !strictTool.valid) {
+      const feedback =
+        strictTool.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
+      runFeedback += `\n\n${feedback}\nRe-issue exactly one valid JSON tool action, or produce the plan JSON.`;
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        modelId: architect.modelId,
+        modelName: architect.displayName,
+        providerId: parseModelId(architect.modelId).providerId,
+        message: `Architect made an invalid tool call while planning: ${feedback}`,
+      });
+      continue;
+    }
     if (action.action === "search" && planSearchesLeft > 0) {
       planSearchesLeft -= 1;
+      emitFileToolDiagnostic(
+        formatBuildFileToolDiagnostic({
+          actor: "Architect",
+          action: "search",
+          query: action.query,
+        }),
+        architect
+      );
       extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
       continue;
     }
@@ -1157,8 +1541,17 @@ export async function runBuildDiscussion(
     }
     if (action.action === "read" && readHopsLeft > 0) {
       readHopsLeft -= 1;
+      const paths = action.paths.slice(0, 8);
+      emitFileToolDiagnostic(
+        formatBuildFileToolDiagnostic({
+          actor: "Architect",
+          action: "read",
+          paths,
+        }),
+        architect
+      );
       const chunks: string[] = [];
-      for (const path of action.paths.slice(0, 8)) {
+      for (const path of paths) {
         const content = await readFile(path);
         chunks.push(
           `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
@@ -1205,11 +1598,12 @@ export async function runBuildDiscussion(
   let assignCursor = 0;
   // Mechanical build/check backstop: a project-appropriate command run after
   // each wave (when a runner is connected) so broken code is caught by the
-  // compiler in ANY language, not only by the reviewer model's reading. The
+  // compiler in ANY language, not only by model review. The
   // Architect's declared command wins; otherwise we detect from the manifests.
-  const verifyCommand = runner
-    ? (planVerifyCommand || detectVerifyCommand([...diskTree, ...virtualFs.keys()]))
+  const detectedVerifyCommand = runner
+    ? detectVerifyCommand([...diskTree, ...virtualFs.keys()])
     : "";
+  const verifyCommand = runner ? (planVerifyCommand || detectedVerifyCommand) : "";
   if (verifyCommand) {
     emit({
       type: "diagnostic",
@@ -1235,14 +1629,20 @@ export async function runBuildDiscussion(
     if (pending.length === 0) break;
     // Write-conflict tracking and the deferral-announced set are per wave.
     waveWrites.clear();
+    waveChangeSummaries = new Map<string, string[]>();
     const deferAnnounced = new Set<string>();
 
-    const executed: Array<{ task: BuildTask; worker: SelectedModel; files: string[]; notes: string }> = [];
+    const executed: Array<{
+      task: BuildTask;
+      worker: SelectedModel;
+      files: string[];
+      notes: string;
+      changes: string[];
+    }> = [];
 
     // A failed attempt (threw, or returned no files) goes back to the pool
     // once so another — or a better — worker can retry it, instead of the
     // deliverable silently dying with the wave. The second failure is final.
-    const MAX_TASK_FAILURES = 2;
     const failTask = (
       task: BuildTask,
       stat: WorkerStat,
@@ -1258,14 +1658,18 @@ export async function runBuildDiscussion(
         stat.badOutput += 1;
         stat.wBadOutput += difficultyWeight(task);
       }
-      task.failCount = (task.failCount ?? 0) + 1;
-      if (task.failCount < MAX_TASK_FAILURES) {
-        task.status = "fixing";
+      const decision = decideBuildTaskFailure(task, kind, detail);
+      task.failCount = decision.failCount;
+      task.status = decision.status;
+      if (task.status === "fixing") {
         task.workerIndex = undefined;
         task.assignTo = undefined;
-        task.instructions = `${task.instructions}\n\nNOTE: a previous attempt produced no usable output (${detail}). Output the complete files for this task.`;
+        task.retryAfterMs = decision.retryDelayMs
+          ? Date.now() + decision.retryDelayMs
+          : undefined;
+        task.instructions = `${task.instructions}\n\n${decision.instructionNote}`;
       } else {
-        task.status = "failed";
+        task.retryAfterMs = undefined;
       }
       emit({
         type: "task_status",
@@ -1288,6 +1692,55 @@ export async function runBuildDiscussion(
     const UNAVAILABLE = /\b(429|500|502|503|504|529)\b|rate.?limit|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed/i;
     const classifyError = (message: string): "bad" | "unavailable" =>
       UNAVAILABLE.test(message) ? "unavailable" : "bad";
+
+    const workerToolInstructions = (budget: {
+      reads: number;
+      rangeReads: number;
+      searches: number;
+      patches: number;
+      appends: number;
+    }): string =>
+      [
+        "FILE TOOLS — before your final answer, you may inspect or patch files by responding with ONLY one JSON action:",
+        budget.reads > 0
+          ? `- Read whole small files: {"action":"read","paths":["src/file.ts"]} (${budget.reads} left).`
+          : "",
+        budget.rangeReads > 0
+          ? `- Read part of a file: {"action":"read_range","path":"src/file.ts","startLine":40,"lineCount":80} (${budget.rangeReads} left). Prefer this for large files. If a returned range is partial, continue from endLine + 1 instead of rereading overlapping lines unless you truly need overlap.`
+          : "",
+        budget.searches > 0
+          ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
+          : "",
+        budget.patches > 0
+          ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
+          : "",
+        budget.appends > 0
+          ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
+          : "",
+        "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+    const isWorkerFileAction = (action: ArchitectAction): boolean =>
+      action.action === "read" ||
+      action.action === "read_range" ||
+      action.action === "search" ||
+      action.action === "patch" ||
+      action.action === "append";
+
+    const workerInspectionKey = (action: ArchitectAction): string | null => {
+      if (action.action === "read") {
+        return `read:${action.paths.map((p) => p.trim().toLowerCase()).sort().join("|")}`;
+      }
+      if (action.action === "read_range") {
+        return `read_range:${action.path.trim().toLowerCase()}:${action.startLine}:${action.lineCount}`;
+      }
+      if (action.action === "search") {
+        return `search:${action.query.trim().toLowerCase()}`;
+      }
+      return null;
+    };
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const worker = workers[task.workerIndex!];
@@ -1312,27 +1765,213 @@ export async function runBuildDiscussion(
       }
 
       const startedAt = Date.now();
+      let output = "";
+      const patchedFiles: string[] = [];
+      const toolIssues: string[] = [];
       try {
-        const output = await streamTurn(
-          worker,
-          buildWorkerTaskPrompt({
-            request: discussion.topic,
-            treeText: treeText(),
-            task,
-            contextFileText: contextChunks.length
-              ? `\nContext files:${contextChunks.join("\n")}`
-              : "",
-            architectNotes,
-            verbosityInstruction,
-          }),
-          {
-            systemRole:
-              "You are an AI engineer completing one assigned task. Output complete files in the required format.",
-            maxTokens: workerMaxTokens,
-            label: `${worker.displayName} working on ${task.id}: ${task.title}`,
+        let toolContext = "";
+        let readsLeft = WORKER_READS_PER_TASK;
+        let rangeReadsLeft = WORKER_RANGE_READS_PER_TASK;
+        let searchesLeft = WORKER_SEARCHES_PER_TASK;
+        let patchesLeft = WORKER_PATCHES_PER_TASK;
+        let appendsLeft = WORKER_APPENDS_PER_TASK;
+        let badToolCalls = 0;
+        const seenInspectionCalls = new Set<string>();
+        for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
+          output = await streamTurn(
+            worker,
+            buildWorkerTaskPrompt({
+              request: discussion.topic,
+              treeText: treeText(),
+              task,
+              contextFileText:
+                (contextChunks.length
+                  ? `\nContext files:${contextChunks.join("\n")}`
+                  : "") + truncate(toolContext, 24_000),
+              architectNotes,
+              toolInstructions: workerToolInstructions({
+                reads: readsLeft,
+                rangeReads: rangeReadsLeft,
+                searches: searchesLeft,
+                patches: patchesLeft,
+                appends: appendsLeft,
+              }),
+              verbosityInstruction,
+            }),
+            {
+              systemRole:
+                "You are an AI engineer completing one assigned task. Use file tools when needed, then output the final files or notes.",
+              maxTokens: workerMaxTokens,
+              label:
+                turn === 0
+                  ? `${worker.displayName} working on ${task.id}: ${task.title}`
+                  : `${worker.displayName} continuing ${task.id}: ${task.title}`,
+              stopWhen: hasCompleteBuildToolAction,
+            }
+          );
+          const inspected = inspectStrictToolActionOutput(output);
+          if (inspected.action && inspected.feedback && inspected.valid) {
+            toolContext += `\n\n${inspected.feedback}`;
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} tool-call warning for ${task.id}: ${inspected.feedback}`,
+            });
+          } else if (inspected.feedback && !inspected.valid) {
+            badToolCalls += 1;
+            const feedback =
+              inspected.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
+            toolIssues.push(feedback);
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
+            });
+            toolContext += `\n\n${feedback}\nDo not repeat the same malformed response. Reply with exactly one valid JSON tool action, or stop using tools and provide final file output.`;
+            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+              toolIssues.push(
+                `Too many malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
+              );
+              break;
+            }
+            continue;
           }
-        );
-        const { written: files, issues } = await writeEmittedFiles(output, task.id);
+          const action = inspected.action ?? parseArchitectAction(output);
+          if (!action || !isWorkerFileAction(action)) break;
+
+          const duplicateKey = workerInspectionKey(action);
+          if (duplicateKey && seenInspectionCalls.has(duplicateKey)) {
+            badToolCalls += 1;
+            const feedback =
+              "DUPLICATE TOOL CALL REJECTED: you already received this exact read/search result. Use the previous tool result in your context, request a different range/search if needed, or apply a patch now.";
+            toolIssues.push(feedback);
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} repeated a file inspection call for ${task.id}: ${feedback}`,
+            });
+            toolContext += `\n\n${feedback}`;
+            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+              toolIssues.push(
+                `Too many repeated or malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
+              );
+              break;
+            }
+            continue;
+          }
+          if (duplicateKey) seenInspectionCalls.add(duplicateKey);
+
+          if (action.action === "read" && readsLeft > 0) {
+            readsLeft -= 1;
+            const paths = action.paths.slice(0, 6);
+            emitFileToolDiagnostic(
+              formatBuildFileToolDiagnostic({
+                actor: `${worker.displayName} ${task.id}`,
+                action: "read",
+                paths,
+              }),
+              worker
+            );
+            const chunks: string[] = [];
+            for (const path of paths) {
+              const content = await readFile(path);
+              chunks.push(`\n--- ${path} ---\n${content ?? "[not found or binary]"}`);
+            }
+            toolContext += `\n\nTool result:\n${truncate(chunks.join("\n"), 18_000)}`;
+            continue;
+          }
+          if (action.action === "read_range" && rangeReadsLeft > 0) {
+            rangeReadsLeft -= 1;
+            emitFileToolDiagnostic(
+              formatBuildFileToolDiagnostic({
+                actor: `${worker.displayName} ${task.id}`,
+                action: "read_range",
+                path: action.path,
+                startLine: action.startLine,
+                lineCount: action.lineCount,
+              }),
+              worker
+            );
+            toolContext += `\n\nTool result:\n${await readFileRange(
+              action.path,
+              action.startLine,
+              action.lineCount
+            )}`;
+            continue;
+          }
+          if (action.action === "search" && searchesLeft > 0) {
+            searchesLeft -= 1;
+            emitFileToolDiagnostic(
+              formatBuildFileToolDiagnostic({
+                actor: `${worker.displayName} ${task.id}`,
+                action: "search",
+                query: action.query,
+              }),
+              worker
+            );
+            toolContext += `\n\nTool result:\nSearch results for "${action.query}":\n${await searchProject(
+              action.query
+            )}`;
+            continue;
+          }
+          if (action.action === "patch" && patchesLeft > 0) {
+            patchesLeft -= 1;
+            const result = await applyPatchAction(action.path, action.ops, task.id);
+            emitFileToolDiagnostic(
+              formatBuildFileToolDiagnostic({
+                actor: `${worker.displayName} ${task.id}`,
+                action: "patch",
+                path: action.path,
+                summary: result.summary,
+              }),
+              worker
+            );
+            patchedFiles.push(...result.written);
+            toolIssues.push(...result.issues);
+            toolContext += `\n\nTool result:\n${result.summary}`;
+            continue;
+          }
+          if (action.action === "append" && appendsLeft > 0) {
+            appendsLeft -= 1;
+            const result = await applyAppendAction(
+              action.path,
+              action.content,
+              !!action.reset,
+              task.id
+            );
+            emitFileToolDiagnostic(
+              formatBuildFileToolDiagnostic({
+                actor: `${worker.displayName} ${task.id}`,
+                action: "append",
+                path: action.path,
+                summary: result.summary,
+              }),
+              worker
+            );
+            patchedFiles.push(...result.written);
+            toolIssues.push(...result.issues);
+            toolContext += `\n\nTool result:\n${result.summary}`;
+            continue;
+          }
+
+          toolIssues.push(
+            `Worker requested unavailable file tool action "${action.action}" after its budget was exhausted.`
+          );
+          break;
+        }
+
+        const artifactResult = await writeEmittedFiles(output, task.id);
+        const files = [...new Set([...patchedFiles, ...artifactResult.written])];
+        const issues = [...toolIssues, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
         // The model DID respond — a no-files result is a quality failure
         // (bad output), distinct from a provider denial.
@@ -1351,6 +1990,7 @@ export async function runBuildDiscussion(
         stat.responses += 1;
         stat.responseMs += Date.now() - startedAt;
         stat.responseChars += output.length;
+        task.retryAfterMs = undefined;
         task.status = "review";
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
@@ -1364,6 +2004,7 @@ export async function runBuildDiscussion(
           worker,
           files,
           notes: truncate(prose, 1_500) + issueNotes,
+          changes: waveChangeSummaries.get(task.id) ?? [],
         });
         emit({
           type: "task_status",
@@ -1377,6 +2018,39 @@ export async function runBuildDiscussion(
         if (isAbortError(err)) throw err;
         const message = err instanceof Error ? err.message : "error";
         const kind = classifyError(message);
+        if (kind === "unavailable" && patchedFiles.length > 0) {
+          stat.unavailable += 1;
+          stat.responses += 1;
+          stat.responseMs += Date.now() - startedAt;
+          stat.responseChars += output.length;
+          task.retryAfterMs = undefined;
+          task.status = "review";
+          executed.push({
+            task,
+            worker,
+            files: [...new Set(patchedFiles)],
+            notes:
+              `Provider became unavailable after writing files (${message}). Review the landed files before approving.` +
+              (toolIssues.length > 0
+                ? `\nWRITE ISSUES - these changes did NOT land; act on them in your review:\n${toolIssues.map((s) => `- ${s}`).join("\n")}`
+                : ""),
+            changes: waveChangeSummaries.get(task.id) ?? [],
+          });
+          emit({
+            type: "task_status",
+            taskId: task.id,
+            title: task.title,
+            status: "review",
+            worker: worker.displayName,
+            cycle,
+          });
+          emit({
+            type: "diagnostic",
+            phase: "model_failed",
+            message: `${worker.displayName} was unavailable after writing files for ${task.id} - sending landed files to Architect review instead of failing the task`,
+          });
+          return;
+        }
         failTask(
           task,
           stat,
@@ -1418,6 +2092,21 @@ export async function runBuildDiscussion(
           (t.dependsOn ?? []).every(dependencySettled)
       );
       if (ready.length === 0) break;
+      const now = Date.now();
+      const due = ready.filter((t) => !t.retryAfterMs || t.retryAfterMs <= now);
+      if (due.length === 0) {
+        const waitMs = Math.max(
+          0,
+          Math.min(...ready.map((t) => t.retryAfterMs ?? now)) - now
+        );
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Waiting ${Math.ceil(waitMs / 1000)}s before retrying transiently failed task${ready.length === 1 ? "" : "s"}`,
+        });
+        await waitForRetry(waitMs);
+        continue;
+      }
       // Greedily fill the batch, but never run two tasks whose DECLARED outputs
       // overlap concurrently — that's exactly the silent last-write-wins clobber
       // we want to prevent. A task with no parseable outputs always joins (we
@@ -1426,15 +2115,19 @@ export async function runBuildDiscussion(
       const cap = limits.totalWorkerCalls - workerCalls;
       const batch: BuildTask[] = [];
       const claimed = new Set<string>();
-      for (const task of ready) {
+      for (const task of due) {
         if (batch.length >= cap) break;
-        const paths = parseOutputPaths(task.expectedOutputs);
+        const paths = (task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)).map((p) =>
+          p.toLowerCase()
+        );
         const clash = paths.find((p) => claimed.has(p));
         if (clash) {
           if (!deferAnnounced.has(task.id)) {
             deferAnnounced.add(task.id);
             const owner = batch.find((b) =>
-              parseOutputPaths(b.expectedOutputs).includes(clash)
+              (b.outputPaths?.length ? b.outputPaths : outputPathsForTask(b))
+                .map((p) => p.toLowerCase())
+                .includes(clash)
             );
             emit({
               type: "diagnostic",
@@ -1505,69 +2198,15 @@ export async function runBuildDiscussion(
     }
 
     // Architect review of this wave.
-    let totalChars = 0;
-    const executedText = executed
-      .map(({ task, worker, files, notes }) => {
-        const fileBlocks = files
-          .map((path) => {
-            const content = virtualFs.get(path) ?? "";
-            const block = `--- ${path} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`;
-            totalChars += block.length;
-            return totalChars > TOTAL_REVIEW_CHARS ? `--- ${path} --- [omitted for length]` : block;
-          })
-          .join("\n");
-        return `### ${task.id}: ${task.title} (worker: ${worker.displayName})\nWorker notes: ${notes || "none"}\nFiles written:\n${fileBlocks || "none"}`;
-      })
-      .join("\n\n");
-
-    // Mid-tier Reviewer pass: it reads the FULL files and produces a compact
-    // digest; the Architect then decides from the digest (it can still read/
-    // search to verify), saving the expensive model most of the input tokens.
-    let executedForArchitect = executedText;
-    if (reviewer) {
-      throwIfAborted();
-      emit({
-        type: "diagnostic",
-        phase: "judging",
-        message: `Reviewer ${reviewer.displayName} is pre-screening wave ${cycle}`,
-      });
-      try {
-        const digest = await streamTurn(
-          reviewer,
-          buildReviewerPrompt({
-            request: discussion.topic,
-            treeText: treeText(),
-            executedText,
-            architectNotes,
-            userNotes: userNotesText(),
-          }),
-          {
-            systemRole:
-              "You are the Reviewer pre-screening the team's code for the Architect. Be precise, concrete, and compact.",
-            maxTokens: workerMaxTokens,
-            label: `Reviewer ${reviewer.displayName} is pre-screening wave ${cycle}`,
-          }
-        );
-        const filesByTask = executed
-          .map(
-            ({ task, files }) =>
-              `${task.id}: ${files.length > 0 ? files.join(", ") : "no files"}`
-          )
-          .join("\n");
-        executedForArchitect = [
-          `Files written this wave, by task:\n${filesByTask}`,
-          `Your Reviewer has read the full files and reports the digest below. Decide from it; use read/search yourself for anything you must verify (especially its "Must-see" items).`,
-          truncate(digest, 16_000),
-        ].join("\n\n");
-      } catch (err) {
-        if (isAbortError(err)) throw err;
-        emit({
-          type: "diagnostic",
-          phase: "model_failed",
-          message: `Reviewer failed (${err instanceof Error ? err.message : "error"}) — the Architect will review the full files itself`,
-        });
-      }
-    }
+    const executedText = buildWaveReviewDigest(
+      executed.map(({ task, worker, files, notes, changes }) => ({
+        task,
+        workerName: worker.displayName,
+        files,
+        notes,
+        changes,
+      }))
+    );
 
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
@@ -1583,6 +2222,7 @@ export async function runBuildDiscussion(
     // deciding the verdict. Seed with the build-check result.
     let reviewRunFeedback = verifyFeedback ? `\n\n${verifyFeedback}` : "";
     let reviewReadsLeft = 2;
+    let reviewRangeReadsLeft = 6;
     let reviewSearchesLeft = SEARCHES_PER_PHASE;
     let action: ArchitectAction;
     let text: string;
@@ -1596,10 +2236,11 @@ export async function runBuildDiscussion(
           // this the Architect forgets file contents between phases and starts
           // inventing replacements for files it has already seen.
           fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
-          executedText: executedForArchitect + reviewRunFeedback,
+          executedText: executedText + reviewRunFeedback,
           maxNewTasks: limits.tasksPerWave,
           cyclesLeft: limits.cycles - cycle,
           readHopsLeft: reviewReadsLeft,
+          rangeReadsLeft: reviewRangeReadsLeft,
           runsLeft: runsLeftThisPhase(),
           searchesLeft: reviewSearchesLeft,
           mcpToolsDoc,
@@ -1611,8 +2252,41 @@ export async function runBuildDiscussion(
         }),
         `Architect is reviewing wave ${cycle}`
       ));
+      const strictTool = inspectStrictToolActionOutput(text);
+      if (strictTool.action && strictTool.feedback && strictTool.valid) {
+        reviewRunFeedback += `\n\n${strictTool.feedback}`;
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `Architect tool-call warning while reviewing: ${strictTool.feedback}`,
+        });
+      } else if (strictTool.feedback && !strictTool.valid) {
+        const feedback =
+          strictTool.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
+        reviewRunFeedback += `\n\n${feedback}\nRe-issue exactly one valid JSON tool action, or produce the review JSON.`;
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `Architect made an invalid tool call while reviewing: ${feedback}`,
+        });
+        continue;
+      }
       if (action.action === "search" && reviewSearchesLeft > 0) {
         reviewSearchesLeft -= 1;
+        emitFileToolDiagnostic(
+          formatBuildFileToolDiagnostic({
+            actor: "Architect",
+            action: "search",
+            query: action.query,
+          }),
+          architect
+        );
         extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
         continue;
       }
@@ -1626,8 +2300,17 @@ export async function runBuildDiscussion(
       }
       if (action.action === "read" && reviewReadsLeft > 0) {
         reviewReadsLeft -= 1;
+        const paths = action.paths.slice(0, 8);
+        emitFileToolDiagnostic(
+          formatBuildFileToolDiagnostic({
+            actor: "Architect",
+            action: "read",
+            paths,
+          }),
+          architect
+        );
         const chunks: string[] = [];
-        for (const path of action.paths.slice(0, 8)) {
+        for (const path of paths) {
           const content = await readFile(path);
           chunks.push(
             `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
@@ -1635,6 +2318,25 @@ export async function runBuildDiscussion(
         }
         // Accumulate so later cycles and the next reviews keep what was read.
         extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
+        continue;
+      }
+      if (action.action === "read_range" && reviewRangeReadsLeft > 0) {
+        reviewRangeReadsLeft -= 1;
+        emitFileToolDiagnostic(
+          formatBuildFileToolDiagnostic({
+            actor: "Architect",
+            action: "read_range",
+            path: action.path,
+            startLine: action.startLine,
+            lineCount: action.lineCount,
+          }),
+          architect
+        );
+        extraFileContext += `\nRequested file range:\n${await readFileRange(
+          action.path,
+          action.startLine,
+          action.lineCount
+        )}`;
         continue;
       }
       if (action.action === "run" && runsLeftThisPhase() > 0) {
@@ -1740,6 +2442,17 @@ export async function runBuildDiscussion(
   });
 
   // ── Final summary ──────────────────────────────────────────────────────────
+  const incompleteTasks = findIncompleteBuildTasks(tasks);
+  if (incompleteTasks.length > 0) {
+    const message = buildIncompleteTaskFailure(incompleteTasks);
+    emit({
+      type: "diagnostic",
+      phase: "model_failed",
+      message,
+    });
+    throw new Error(message);
+  }
+
   throwIfAborted();
   emit({ type: "status", status: "judging" });
   emit({

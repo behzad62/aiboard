@@ -49,6 +49,7 @@ import type { AttachmentPayload } from "@/lib/attachments/types";
 import { buildAttachmentPromptSection } from "@/lib/attachments/prompt-text";
 import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
+import { estimateModelCallUsage } from "./token-usage";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -132,7 +133,8 @@ export async function collectStream(
   reasoningEffort: ReasoningEffort,
   attachments: AttachmentPayload[],
   onToken?: (token: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  stopWhen?: (content: string) => boolean
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -165,6 +167,7 @@ export async function collectStream(
           if (chunk.type === "token" && chunk.content) {
             customContent += chunk.content;
             onToken?.(chunk.content);
+            if (stopWhen?.(customContent)) break;
           }
           if (chunk.type === "error") {
             throw new Error(chunk.error ?? "Stream error");
@@ -212,6 +215,7 @@ export async function collectStream(
         if (chunk.type === "token" && chunk.content) {
           content += chunk.content;
           onToken?.(chunk.content);
+          if (stopWhen?.(content)) break;
         }
         if (chunk.type === "error") {
           throw new Error(chunk.error ?? "Stream error");
@@ -315,6 +319,37 @@ export async function runDiscussion(
     const modelNames = Object.fromEntries(
       models.map((m) => [m.modelId, m.displayName])
     );
+    const emitTokenUsage = (input: {
+      messageId: string;
+      modelId: string;
+      modelName: string;
+      providerId: string;
+      round: number;
+      label: string;
+      messages: ChatMessage[];
+      output: string;
+      maxTokens: number;
+    }): void => {
+      const usage = estimateModelCallUsage({
+        messages: input.messages,
+        output: input.output,
+        maxTokens: input.maxTokens,
+      });
+      emit({
+        type: "token_usage",
+        messageId: input.messageId,
+        modelId: input.modelId,
+        modelName: input.modelName,
+        providerId: input.providerId,
+        round: input.round,
+        label: input.label,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        maxTokens: usage.maxTokens,
+        estimated: usage.estimated,
+      });
+    };
 
     emit({
       type: "diagnostic",
@@ -476,6 +511,17 @@ export async function runDiscussion(
             (token) => emit({ type: "message_token", messageId, token }),
             signal
           );
+          emitTokenUsage({
+            messageId,
+            modelId: model.modelId,
+            modelName: model.displayName,
+            providerId,
+            round,
+            label: `${model.displayName} round ${round}`,
+            messages,
+            output: content,
+            maxTokens: roundMaxTokens,
+          });
 
           insertMessage({
             id: messageId,
@@ -560,26 +606,38 @@ export async function runDiscussion(
         for (const model of models) {
           const { providerId, model: modelName } = parseModelId(model.modelId);
           try {
+            const voteMessages: ChatMessage[] = [
+              {
+                role: "system",
+                content:
+                  "You evaluate discussion completeness. Respond only with JSON.",
+              },
+              {
+                role: "user",
+                content: buildConvergencePrompt(discussion.topic, voteTranscript),
+              },
+            ];
             const voteText = await collectStream(
               model.modelId,
               providerId,
               modelName,
-              [
-                {
-                  role: "system",
-                  content:
-                    "You evaluate discussion completeness. Respond only with JSON.",
-                },
-                {
-                  role: "user",
-                  content: buildConvergencePrompt(discussion.topic, voteTranscript),
-                },
-              ],
+              voteMessages,
               200,
               0.2,
               "low",
               []
             );
+            emitTokenUsage({
+              messageId: uuidv4(),
+              modelId: model.modelId,
+              modelName: model.displayName,
+              providerId,
+              round,
+              label: `${model.displayName} convergence vote`,
+              messages: voteMessages,
+              output: voteText,
+              maxTokens: 200,
+            });
             const parsed = parseJsonResponse<{ score: number; reason?: string }>(
               voteText
             );
@@ -618,27 +676,28 @@ export async function runDiscussion(
     const { providerId: judgeProviderId, model: judgeModel } =
       parseModelId(judgeFullId);
     const finalTranscript = buildTranscriptFromMessages(allMessages, modelNames);
+    const judgeMessages: ChatMessage[] = [
+      {
+        role: "system",
+        content:
+          "You are the final judge. Synthesize the discussion into the single best answer in Markdown.",
+      },
+      {
+        role: "user",
+        content: buildJudgePrompt(
+          discussion.topic,
+          finalTranscript,
+          verbosityInstruction,
+          mode
+        ),
+      },
+    ];
 
     const judgeRaw = await collectStream(
       judgeFullId,
       judgeProviderId,
       judgeModel,
-      [
-        {
-          role: "system",
-          content:
-            "You are the final judge. Synthesize the discussion into the single best answer in Markdown.",
-        },
-        {
-          role: "user",
-          content: buildJudgePrompt(
-            discussion.topic,
-            finalTranscript,
-            verbosityInstruction,
-            mode
-          ),
-        },
-      ],
+      judgeMessages,
       finalMaxTokens,
       0.3,
       reasoningEffort,
@@ -646,6 +705,17 @@ export async function runDiscussion(
       undefined,
       signal
     );
+    emitTokenUsage({
+      messageId: uuidv4(),
+      modelId: judgeFullId,
+      modelName: modelNames[judgeFullId] ?? judgeFullId,
+      providerId: judgeProviderId,
+      round: config.maxRounds + 1,
+      label: "Judge synthesis",
+      messages: judgeMessages,
+      output: judgeRaw,
+      maxTokens: finalMaxTokens,
+    });
 
     const { answer, confidence, dissent } = extractJudgeResult(judgeRaw);
 

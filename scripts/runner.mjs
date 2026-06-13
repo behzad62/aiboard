@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AI Discussion Board — local command runner.
+ * AI Board — local command runner.
  *
  * Lets the Build-mode Architect run commands (tests, builds, installs) in YOUR
  * project folder, and fetch public http(s) URLs (runner v3+; local/private
@@ -31,10 +31,12 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 4;
+const VERSION = 5;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_READ_BYTES = 512 * 1024;
+const MAX_PATCH_BYTES = 8 * 1024 * 1024;
+const MAX_RANGE_LINES = 400;
 const MAX_LIST_ENTRIES = 600;
 const FETCH_TIMEOUT_MS = 30 * 1000;
 const MAX_FETCH_BYTES = 200 * 1024;
@@ -270,6 +272,123 @@ function readFileInProject(relPath) {
   const buf = fs.readFileSync(target);
   if (buf.includes(0)) return null; // binary
   return buf.toString("utf8").slice(0, MAX_READ_BYTES);
+}
+
+function readFullTextFileInProject(relPath, maxBytes = MAX_PATCH_BYTES) {
+  const target = safeResolve(relPath);
+  if (!target) throw new Error(`Refusing path outside the project folder: ${relPath}`);
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return null;
+  const stat = fs.statSync(target);
+  if (stat.size > maxBytes) {
+    throw new Error(`File is too large for this operation (${stat.size} bytes; cap is ${maxBytes})`);
+  }
+  const buf = fs.readFileSync(target);
+  if (buf.includes(0)) return null;
+  return buf.toString("utf8");
+}
+
+function readFileRangeInProject(relPath, startLine, lineCount) {
+  const content = readFullTextFileInProject(relPath, MAX_PATCH_BYTES);
+  if (content == null) return null;
+  const lines = content.split("\n");
+  const requested = Math.max(1, Math.round(Number(lineCount) || 80));
+  const start = Math.max(1, Math.round(Number(startLine) || 1));
+  const count = Math.min(MAX_RANGE_LINES, requested);
+  const startIdx = Math.min(start - 1, lines.length);
+  const selected = lines.slice(startIdx, startIdx + count);
+  const endLine = selected.length > 0 ? startIdx + selected.length : startIdx;
+  return {
+    content: selected.join("\n"),
+    startLine: startIdx + 1,
+    endLine,
+    totalLines: lines.length,
+    truncated: requested > count,
+    hasMoreBefore: startIdx > 0,
+    hasMoreAfter: endLine < lines.length,
+  };
+}
+
+function fuzzyFindLines(haystack, needle) {
+  const hLines = haystack.split("\n");
+  const nLines = String(needle).split("\n").map((l) => l.trim());
+  if (nLines.length === 0) return null;
+  for (let i = 0; i + nLines.length <= hLines.length; i++) {
+    let ok = true;
+    for (let k = 0; k < nLines.length; k++) {
+      if (hLines[i + k].trim() !== nLines[k]) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    const start = i === 0 ? 0 : hLines.slice(0, i).join("\n").length + 1;
+    const end = start + hLines.slice(i, i + nLines.length).join("\n").length;
+    return { start, end };
+  }
+  return null;
+}
+
+function applyPatchOps(content, ops) {
+  let result = content;
+  let applied = 0;
+  let failed = 0;
+  for (const op of ops) {
+    const search = String(op.search ?? "");
+    const replace = String(op.replace ?? "");
+    const idx = result.indexOf(search);
+    if (idx >= 0) {
+      result = result.slice(0, idx) + replace + result.slice(idx + search.length);
+      applied += 1;
+      continue;
+    }
+    const fuzzy = fuzzyFindLines(result, search);
+    if (fuzzy) {
+      result = result.slice(0, fuzzy.start) + replace + result.slice(fuzzy.end);
+      applied += 1;
+    } else {
+      failed += 1;
+    }
+  }
+  return { content: result, applied, failed };
+}
+
+function patchFileInProject(relPath, ops) {
+  if (!Array.isArray(ops)) throw new Error("Missing patch ops");
+  const validOps = ops.filter(
+    (op) =>
+      op &&
+      typeof op.search === "string" &&
+      op.search.length > 0 &&
+      typeof op.replace === "string"
+  );
+  if (validOps.length === 0) throw new Error("No valid patch ops");
+  const current = readFullTextFileInProject(relPath, MAX_PATCH_BYTES);
+  if (current == null) {
+    return { content: null, applied: 0, failed: validOps.length, bytes: 0 };
+  }
+  const patched = applyPatchOps(current, validOps);
+  if (patched.applied > 0) {
+    const bytes = writeFileInProject(relPath, patched.content);
+    return { ...patched, bytes };
+  }
+  return { ...patched, bytes: Buffer.byteLength(current, "utf8") };
+}
+
+function appendFileInProject(relPath, content, reset) {
+  const target = safeResolve(relPath);
+  if (!target) throw new Error(`Refusing path outside the project folder: ${relPath}`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (reset) {
+    fs.writeFileSync(target, content ?? "", "utf8");
+  } else {
+    fs.appendFileSync(target, content ?? "", "utf8");
+  }
+  const final = readFullTextFileInProject(relPath, MAX_PATCH_BYTES);
+  return {
+    content: final,
+    bytes: Buffer.byteLength(content ?? "", "utf8"),
+    totalBytes: final == null ? 0 : Buffer.byteLength(final, "utf8"),
+  };
 }
 
 // Strip ANSI escape sequences (color codes etc.) so callers get plain text.
@@ -572,7 +691,11 @@ const server = http.createServer(async (req, res) => {
       json(res, 400, { error: "Missing query" });
       return;
     }
-    json(res, 200, { ok: true, results: searchProjectFiles(body.query.trim()) });
+    const results = searchProjectFiles(body.query.trim());
+    console.log(
+      `[search] ${new Date().toLocaleTimeString()}  "${body.query.trim().slice(0, 120)}" (${results.length} match${results.length === 1 ? "" : "es"})`
+    );
+    json(res, 200, { ok: true, results });
     return;
   }
 
@@ -586,9 +709,36 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const content = readFileInProject(body?.path);
+      const detail =
+        typeof content === "string"
+          ? `${Buffer.byteLength(content, "utf8")} B`
+          : "missing/binary";
+      console.log(`[read] ${new Date().toLocaleTimeString()}  ${body?.path} (${detail})`);
       json(res, 200, { ok: true, content }); // content null = missing/binary
     } catch (err) {
       json(res, 400, { error: err instanceof Error ? err.message : "Read failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/read-range") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = readFileRangeInProject(body?.path, body?.startLine, body?.lineCount);
+      const detail =
+        typeof result.content === "string"
+          ? `lines ${result.startLine}-${result.endLine} of ${result.totalLines}${result.truncated ? ", capped" : result.hasMoreBefore || result.hasMoreAfter ? ", partial" : ""}`
+          : "missing/binary";
+      console.log(`[read-range] ${new Date().toLocaleTimeString()}  ${body?.path} (${detail})`);
+      json(res, 200, { ok: true, ...result }); // null fields mean missing/binary
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Read range failed" });
     }
     return;
   }
@@ -607,6 +757,46 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true, bytes });
     } catch (err) {
       json(res, 400, { error: err instanceof Error ? err.message : "Write failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/patch") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = patchFileInProject(body?.path, body?.ops);
+      console.log(
+        `[patch] ${new Date().toLocaleTimeString()}  ${body.path} (${result.applied} applied, ${result.failed} failed)`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Patch failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/append") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = appendFileInProject(body?.path, body?.content, !!body?.reset);
+      console.log(
+        `[append] ${new Date().toLocaleTimeString()}  ${body.path} (+${result.bytes} B${body?.reset ? ", reset" : ""})`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Append failed" });
     }
     return;
   }
@@ -660,7 +850,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log("AI Discussion Board — local runner");
+  console.log("AI Board — local runner");
   console.log("──────────────────────────────────");
   console.log(`Project folder : ${projectDir}`);
   console.log(`URL            : http://127.0.0.1:${port}`);
@@ -673,5 +863,5 @@ server.listen(port, "127.0.0.1", () => {
   }
   console.log("");
   console.log("Paste the URL and token into the app (Build mode → Local runner).");
-  console.log("Every command the Architect runs is logged here. Ctrl+C to stop.");
+  console.log("Every command and file/tool request is logged here. Ctrl+C to stop.");
 });

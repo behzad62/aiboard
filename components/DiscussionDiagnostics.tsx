@@ -13,6 +13,13 @@ export interface DiagnosticEntry {
   modelName?: string;
   providerId?: string;
   round?: number;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    maxTokens: number;
+    estimated: boolean;
+  };
 }
 
 interface DiscussionDiagnosticsProps {
@@ -47,6 +54,19 @@ function phaseDot(phase: DiagnosticEntry["phase"]): string {
     default:
       return "bg-slate-400";
   }
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  return String(tokens);
+}
+
+function totalTokens(entries: DiagnosticEntry[]): number {
+  return entries.reduce(
+    (sum, entry) => sum + (entry.tokenUsage?.totalTokens ?? 0),
+    0
+  );
 }
 
 function EntriesList({
@@ -90,6 +110,13 @@ function EntriesList({
                   · {roundLabel} {entry.round}
                 </span>
               )}
+              {entry.tokenUsage && (
+                <span>
+                  · ~{formatTokens(entry.tokenUsage.totalTokens)} tokens (
+                  {formatTokens(entry.tokenUsage.inputTokens)} in /{" "}
+                  {formatTokens(entry.tokenUsage.outputTokens)} out)
+                </span>
+              )}
             </div>
           </div>
         </li>
@@ -99,6 +126,7 @@ function EntriesList({
 }
 
 function LogHeader({ entries }: { entries: DiagnosticEntry[] }) {
+  const tokens = totalTokens(entries);
   return (
     <span className="flex min-w-0 items-center gap-2.5">
       <Activity className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -106,6 +134,11 @@ function LogHeader({ entries }: { entries: DiagnosticEntry[] }) {
       {entries.length > 0 && (
         <span className="font-mono text-xs text-muted-foreground">
           {entries.length}
+        </span>
+      )}
+      {tokens > 0 && (
+        <span className="font-mono text-xs text-muted-foreground">
+          ~{formatTokens(tokens)} tok
         </span>
       )}
     </span>
@@ -161,7 +194,7 @@ function FooterDiagnostics({
   return (
     <section className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] backdrop-blur">
       {open && (
-        <div className="max-h-[50vh] overflow-y-auto border-b bg-background/40 p-2">
+        <div className="max-h-[min(18rem,32vh)] overflow-y-auto border-b bg-background/40 p-2">
           <EntriesList entries={entries} roundLabel={roundLabel} />
         </div>
       )}

@@ -103,6 +103,102 @@ export async function readFileViaRunner(
   }
 }
 
+export interface RunnerReadRangeResult {
+  content: string | null;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  truncated: boolean;
+  hasMoreBefore?: boolean;
+  hasMoreAfter?: boolean;
+}
+
+export async function readFileRangeViaRunner(
+  config: RunnerConfig,
+  path: string,
+  startLine: number,
+  lineCount: number
+): Promise<RunnerReadRangeResult | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/read-range`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({ path, startLine, lineCount }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      content: typeof data.content === "string" ? data.content : null,
+      startLine: typeof data.startLine === "number" ? data.startLine : startLine,
+      endLine: typeof data.endLine === "number" ? data.endLine : startLine - 1,
+      totalLines: typeof data.totalLines === "number" ? data.totalLines : 0,
+      truncated: !!data.truncated,
+      hasMoreBefore: !!data.hasMoreBefore,
+      hasMoreAfter: !!data.hasMoreAfter,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface RunnerPatchOp {
+  search: string;
+  replace: string;
+}
+
+export interface RunnerPatchResult {
+  content: string | null;
+  applied: number;
+  failed: number;
+  bytes: number;
+}
+
+export async function patchFileViaRunner(
+  config: RunnerConfig,
+  path: string,
+  ops: RunnerPatchOp[]
+): Promise<RunnerPatchResult> {
+  const res = await fetch(`${config.url.replace(/\/$/, "")}/patch`, {
+    method: "POST",
+    headers: headers(config.token),
+    body: JSON.stringify({ path, ops }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `Runner patch failed (HTTP ${res.status})`);
+  return {
+    content: typeof data.content === "string" ? data.content : null,
+    applied: typeof data.applied === "number" ? data.applied : 0,
+    failed: typeof data.failed === "number" ? data.failed : 0,
+    bytes: typeof data.bytes === "number" ? data.bytes : 0,
+  };
+}
+
+export interface RunnerAppendResult {
+  content: string | null;
+  bytes: number;
+  totalBytes: number;
+}
+
+export async function appendFileViaRunner(
+  config: RunnerConfig,
+  path: string,
+  content: string,
+  reset = false
+): Promise<RunnerAppendResult> {
+  const res = await fetch(`${config.url.replace(/\/$/, "")}/append`, {
+    method: "POST",
+    headers: headers(config.token),
+    body: JSON.stringify({ path, content, reset }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `Runner append failed (HTTP ${res.status})`);
+  return {
+    content: typeof data.content === "string" ? data.content : null,
+    bytes: typeof data.bytes === "number" ? data.bytes : content.length,
+    totalBytes: typeof data.totalBytes === "number" ? data.totalBytes : 0,
+  };
+}
+
 export interface RunnerSearchMatch {
   path: string;
   line: number;

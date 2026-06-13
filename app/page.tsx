@@ -37,10 +37,10 @@ export default function HomePage() {
 
         <section className="mx-auto mt-16 max-w-3xl space-y-4 border-t pt-10 text-sm text-muted-foreground">
         <h2 className="font-display text-xl font-semibold text-foreground">
-          What is the AI Discussion Board?
+          What is AI Board?
         </h2>
         <p>
-          The AI Discussion Board is a free, local-first web app where several
+          AI Board is a free, local-first web app where several
           AI models — GPT, Claude, Gemini, OpenRouter models, or your own
           local/custom endpoints — discuss a question you provide. The models
           critique and refine each other&apos;s answers across structured

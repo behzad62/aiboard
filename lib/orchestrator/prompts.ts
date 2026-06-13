@@ -10,13 +10,13 @@ const FENCE = "```";
  * backticks inside a template literal) by composing from a FENCE constant.
  */
 export const FILE_OUTPUT_INSTRUCTION = [
-  "When you provide a file, output it as a fenced code block whose info line includes the path, for example:",
+  "When you provide a NEW file or a small complete rewrite, output it as a fenced code block whose info line includes the path, for example:",
   "",
   FENCE + "ts path=src/index.ts",
   "// the complete contents of the file go here",
   FENCE,
   "",
-  "Rules: one fenced block per file; give the COMPLETE contents of every file you write (no '...' elisions); use real relative paths (e.g. path=app/page.tsx); keep explanations and discussion OUTSIDE the code blocks.",
+  "Rules: one fenced block per new/small file; no '...' elisions inside code; use real relative paths (e.g. path=app/page.tsx); keep explanations and discussion OUTSIDE the code blocks. To modify existing or large files, use the provided file tools or targeted edit blocks instead of emitting a full-file block.",
 ].join("\n");
 
 const VERBOSITY_GUIDANCE: Record<Verbosity, string> = {

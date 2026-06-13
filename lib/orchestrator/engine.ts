@@ -63,6 +63,20 @@ export type OrchestratorEvent =
   | { type: "message_start"; messageId: string; modelId: string; modelName: string; round: number; role: string }
   | { type: "message_token"; messageId: string; token: string }
   | { type: "message_complete"; messageId: string; content: string }
+  | {
+      type: "token_usage";
+      messageId: string;
+      modelId: string;
+      modelName: string;
+      providerId: string;
+      round: number;
+      label: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      maxTokens: number;
+      estimated: boolean;
+    }
   | { type: "convergence"; score: number; reason?: string }
   | { type: "final_answer"; answer: string; confidence: number; dissent: string[] }
   // Build mode (architect-orchestrated): task board + file writes.

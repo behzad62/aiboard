@@ -23,6 +23,8 @@ export interface BuildTask {
   instructions: string;
   /** Existing files the worker needs to see to do the task. */
   contextFiles: string[];
+  /** Exact files this task is allowed/expected to create or modify. */
+  outputPaths?: string[];
   /** What the Architect expects back (free text, e.g. file paths). */
   expectedOutputs?: string;
   status: BuildTaskStatus;
@@ -42,6 +44,39 @@ export interface BuildTask {
   /** Failed attempts so far — the engine requeues a failed task once before
    * giving up on it. */
   failCount?: number;
+  /** Epoch milliseconds before this task may be retried after transient failure. */
+  retryAfterMs?: number;
+}
+
+export const BUILD_TASK_MAX_FAILURES = 3;
+export const BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS = [15_000, 45_000];
+
+export interface BuildTaskFailureDecision {
+  failCount: number;
+  status: "fixing" | "failed";
+  instructionNote: string;
+  retryDelayMs?: number;
+}
+
+export function decideBuildTaskFailure(
+  task: Pick<BuildTask, "failCount">,
+  kind: "bad" | "unavailable",
+  detail: string
+): BuildTaskFailureDecision {
+  const failCount = (task.failCount ?? 0) + 1;
+  const status = failCount < BUILD_TASK_MAX_FAILURES ? "fixing" : "failed";
+  const retryDelayMs =
+    kind === "unavailable" && status === "fixing"
+      ? BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS[
+          Math.min(failCount - 1, BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS.length - 1)
+        ]
+      : undefined;
+  const instructionNote =
+    kind === "unavailable"
+      ? `NOTE: a previous attempt hit a transient provider failure (${detail}). Retry the task from the current project state, inspect any files that may already exist, and continue with the smallest necessary file tool actions.`
+      : `NOTE: a previous attempt produced no usable output (${detail}). Do not retry by emitting one large full-file block. Use read_range/search plus patch for existing files; use append chunks with reset=true to create or replace a large/missing file.`;
+
+  return { failCount, status, instructionNote, retryDelayMs };
 }
 
 // ── Architect action protocol ─────────────────────────────────────────────────
@@ -51,6 +86,14 @@ export interface ReadAction {
   paths: string[];
 }
 
+/** Read a bounded line range from a single project file. */
+export interface ReadRangeAction {
+  action: "read_range";
+  path: string;
+  startLine: number;
+  lineCount: number;
+}
+
 export interface PlanAction {
   action: "plan";
   tasks: Array<{
@@ -58,6 +101,7 @@ export interface PlanAction {
     title: string;
     instructions: string;
     contextFiles?: string[];
+    outputPaths?: string[];
     expectedOutputs?: string;
     dependsOn?: string[];
     /** Optional: pin this task to a worker by display name (e.g. the best
@@ -130,6 +174,31 @@ export interface RunAction {
   reason?: string;
 }
 
+export interface RunCommandSafety {
+  allowed: boolean;
+  reason?: string;
+}
+
+export function classifyRunCommand(command: string): RunCommandSafety {
+  const trimmed = command.trim();
+  if (!trimmed) return { allowed: false, reason: "Empty commands are not allowed." };
+
+  const checks: Array<[RegExp, string]> = [
+    [/\bfs\.(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|truncate|truncateSync|rm|rmSync|unlink|unlinkSync|rename|renameSync|copyFile|copyFileSync|mkdir|mkdirSync|rmdir|rmdirSync)\b/i, "Node fs write/delete APIs bypass the patch system."],
+    [/\brequire\(["']fs["']\)\.(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|truncate|truncateSync|rm|rmSync|unlink|unlinkSync|rename|renameSync|copyFile|copyFileSync|mkdir|mkdirSync|rmdir|rmdirSync)\b/i, "Node fs write/delete APIs bypass the patch system."],
+    [/(?:^|[\s;|&])(?:set-content|add-content|out-file|new-item|remove-item|move-item|copy-item|rename-item)\b/i, "PowerShell file mutation commands bypass the patch system."],
+    [/(?:^|[\s;|&])(?:rm|del|erase|move|mv|cp|copy|ren|rename|mkdir|rmdir)\b/i, "Shell file mutation commands bypass the patch system."],
+    [/(?:^|[\s;|&])(?:sed\s+-i|perl\s+-pi)\b/i, "In-place editing commands bypass the patch system."],
+    [/(?:^|\s)(?:\d?>|>>)\s*\S/, "Shell redirection writes files outside the patch system."],
+  ];
+
+  for (const [pattern, reason] of checks) {
+    if (pattern.test(trimmed)) return { allowed: false, reason };
+  }
+
+  return { allowed: true };
+}
+
 /** Case-insensitive substring search across all project files. */
 export interface SearchAction {
   action: "search";
@@ -153,14 +222,256 @@ export interface FetchAction {
   reason?: string;
 }
 
+/** Apply exact SEARCH/REPLACE operations to one existing project file. */
+export interface PatchAction {
+  action: "patch";
+  path: string;
+  ops: Array<{ search: string; replace: string }>;
+  reason?: string;
+}
+
+/** Append one bounded content chunk to a project file; reset starts a new file. */
+export interface AppendAction {
+  action: "append";
+  path: string;
+  content: string;
+  reset?: boolean;
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
+  | ReadRangeAction
   | PlanAction
   | ReviewAction
   | RunAction
   | SearchAction
   | ToolAction
-  | FetchAction;
+  | FetchAction
+  | PatchAction
+  | AppendAction;
+
+function looksLikePath(value: string): boolean {
+  const v = value.trim();
+  if (!v || /\s/.test(v)) return false;
+  return v.includes("/") || /\.[A-Za-z0-9]+$/.test(v);
+}
+
+function normalizeOutputPath(raw: string): string | null {
+  const path = raw
+    .trim()
+    .replace(/^["'`([{]+/, "")
+    .replace(/["'`.,;:)\]}]+$/g, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.?\//, "")
+    .replace(/^\/+/, "");
+  if (!looksLikePath(path)) return null;
+  return path;
+}
+
+function normalizeExplicitOutputPath(raw: string): string | null {
+  const path = raw
+    .trim()
+    .replace(/^["'`([{]+/, "")
+    .replace(/["'`.,;:)\]}]+$/g, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.?\//, "")
+    .replace(/^\/+/, "");
+  if (!path || /\s/.test(path)) return null;
+  return path;
+}
+
+function pathsFromExpectedOutputs(expectedOutputs?: string): string[] {
+  if (!expectedOutputs) return [];
+  const paths: string[] = [];
+  for (const token of expectedOutputs.split(/[,\s\n]+/)) {
+    const normalized = normalizeOutputPath(token);
+    if (normalized) paths.push(normalized);
+  }
+  return paths;
+}
+
+export function outputPathsForTask(task: {
+  outputPaths?: unknown;
+  expectedOutputs?: string;
+}): string[] {
+  const explicit = Array.isArray(task.outputPaths)
+    ? task.outputPaths.filter((p): p is string => typeof p === "string")
+    : [];
+  const candidates =
+    explicit.length > 0 ? explicit : pathsFromExpectedOutputs(task.expectedOutputs);
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const raw of candidates) {
+    const path =
+      explicit.length > 0
+        ? normalizeExplicitOutputPath(raw)
+        : normalizeOutputPath(raw);
+    if (!path) continue;
+    const key = path.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(path);
+  }
+  return paths;
+}
+
+export function findIncompleteBuildTasks(tasks: BuildTask[]): BuildTask[] {
+  return tasks.filter((task) => task.status !== "done");
+}
+
+export function buildIncompleteTaskFailure(tasks: BuildTask[]): string {
+  const incomplete = findIncompleteBuildTasks(tasks);
+  if (incomplete.length === 0) return "";
+  const listed = incomplete
+    .map((task) => `${task.id} (${task.status}): ${task.title}`)
+    .join("; ");
+  return `Build incomplete: ${incomplete.length} required task${incomplete.length === 1 ? "" : "s"} did not finish: ${listed}`;
+}
+
+export type FileChangeOperation = "create" | "rewrite" | "patch" | "append";
+
+export interface FileChangeInput {
+  path: string;
+  operation: FileChangeOperation;
+  before: string | null;
+  after: string;
+}
+
+const CHANGE_PREVIEW_CONTEXT = 4;
+const CHANGE_PREVIEW_LINES = 10;
+const CHANGE_LINE_CHARS = 160;
+
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+function compactLine(line: string): string {
+  const singleLine = line.replace(/\t/g, "  ");
+  return singleLine.length <= CHANGE_LINE_CHARS
+    ? singleLine
+    : `${singleLine.slice(0, CHANGE_LINE_CHARS)}...[line truncated]`;
+}
+
+function firstDifferentLine(before: string[], after: string[]): number {
+  const max = Math.max(before.length, after.length);
+  for (let i = 0; i < max; i++) {
+    if ((before[i] ?? "") !== (after[i] ?? "")) return i;
+  }
+  return -1;
+}
+
+function numberedWindow(lines: string[], center: number): string {
+  if (lines.length === 0) return "(empty)";
+  const safeCenter = Math.max(0, Math.min(center, lines.length - 1));
+  const start = Math.max(0, safeCenter - CHANGE_PREVIEW_CONTEXT);
+  const end = Math.min(lines.length, start + CHANGE_PREVIEW_LINES);
+  return lines
+    .slice(start, end)
+    .map((line, i) => `${start + i + 1}: ${compactLine(line)}`)
+    .join("\n");
+}
+
+function signed(n: number): string {
+  return n >= 0 ? `+${n}` : `${n}`;
+}
+
+/**
+ * Compact, bounded summary of one landed file change. This intentionally does
+ * not include whole file contents; the Architect can use read/search/range
+ * tools for exact inspection.
+ */
+export function summarizeFileChange(input: FileChangeInput): string {
+  const before = input.before ?? "";
+  const beforeLines = input.before == null ? [] : before.split("\n");
+  const afterLines = input.after.split("\n");
+  const diffIndex =
+    input.before == null ? 0 : firstDifferentLine(beforeLines, afterLines);
+  const previewCenter =
+    diffIndex >= 0 ? diffIndex : Math.max(0, afterLines.length - 1);
+  const beforeBytes = input.before == null ? 0 : byteLength(before);
+  const afterBytes = byteLength(input.after);
+  const beforeLineCount = input.before == null ? 0 : beforeLines.length;
+  const lines = [
+    `- ${input.operation.toUpperCase()} ${input.path}: ${beforeBytes} -> ${afterBytes} bytes (${signed(afterBytes - beforeBytes)}), ${beforeLineCount} -> ${afterLines.length} lines (${signed(afterLines.length - beforeLineCount)})`,
+  ];
+
+  if (input.before != null && diffIndex >= 0) {
+    lines.push("  Previous near first change:");
+    lines.push(numberedWindow(beforeLines, previewCenter));
+  } else if (input.before != null) {
+    lines.push("  No textual delta detected after write.");
+  }
+
+  lines.push("  Current near first change:");
+  lines.push(numberedWindow(afterLines, previewCenter));
+  return lines.join("\n");
+}
+
+export interface WaveReviewDigestTask {
+  task: Pick<BuildTask, "id" | "title">;
+  workerName: string;
+  files: string[];
+  notes?: string;
+  changes: string[];
+}
+
+export function buildWaveReviewDigest(items: WaveReviewDigestTask[]): string {
+  if (items.length === 0) return "No worker output landed in this wave.";
+  return items
+    .map((item) => {
+      const changes =
+        item.changes.length > 0
+          ? item.changes.join("\n")
+          : "- No landed file-change summary was recorded.";
+      return [
+        `### ${item.task.id}: ${item.task.title} (worker: ${item.workerName})`,
+        `Files touched: ${item.files.length > 0 ? item.files.join(", ") : "none"}`,
+        `Worker notes: ${item.notes?.trim() ? item.notes.trim() : "none"}`,
+        "Landed change summaries:",
+        changes,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+export type BuildFileToolAction =
+  | "read"
+  | "read_range"
+  | "search"
+  | "patch"
+  | "append";
+
+export function formatBuildFileToolDiagnostic(input: {
+  actor: string;
+  action: BuildFileToolAction;
+  path?: string;
+  paths?: string[];
+  query?: string;
+  startLine?: number;
+  lineCount?: number;
+  summary?: string;
+}): string {
+  const actor = input.actor.trim() || "Model";
+  if (input.action === "read") {
+    const paths = (input.paths ?? []).filter(Boolean);
+    const listed = paths.length > 0 ? paths.join(", ") : "requested files";
+    return `${actor} read ${paths.length || 1} file${paths.length === 1 ? "" : "s"}: ${listed}`;
+  }
+  if (input.action === "read_range") {
+    const start = Math.max(1, Math.round(input.startLine ?? 1));
+    const count = Math.max(1, Math.round(input.lineCount ?? 1));
+    const end = start + count - 1;
+    return `${actor} read ${input.path ?? "file"} lines ${start}-${end}`;
+  }
+  if (input.action === "search") {
+    return `${actor} searched the project for "${input.query ?? ""}"`;
+  }
+  if (input.action === "patch") {
+    return `${actor} patched ${input.path ?? "file"}${input.summary ? ` - ${input.summary}` : ""}`;
+  }
+  return `${actor} appended ${input.path ?? "file"}${input.summary ? ` - ${input.summary}` : ""}`;
+}
 
 /** The balanced top-level {...} starting exactly at `start`, or null. */
 function balancedObjectAt(text: string, start: number): string | null {
@@ -204,6 +515,50 @@ function balancedObjects(text: string, max = 20): string[] {
   return found;
 }
 
+function uniqueActionCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string): void => {
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    candidates.push(trimmed);
+  };
+  const blocks = fencedBlocks(text);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const lang = blocks[i].info.split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (lang === "" || lang === "json" || lang === "jsonc") {
+      add(blocks[i].body);
+    }
+  }
+  const balanced = balancedObjects(text);
+  for (let i = balanced.length - 1; i >= 0; i--) {
+    add(balanced[i]);
+  }
+  return candidates;
+}
+
+function uniqueActionCandidatesInDocumentOrder(text: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string): void => {
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    candidates.push(trimmed);
+  };
+  for (const block of fencedBlocks(text)) {
+    const lang = block.info.split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (lang === "" || lang === "json" || lang === "jsonc") {
+      add(block.body);
+    }
+  }
+  for (const candidate of balancedObjects(text)) {
+    add(candidate);
+  }
+  return candidates;
+}
+
 /**
  * All fenced code blocks, scanned line by line so a closing fence can never be
  * mistaken for an opening one — the failure a regex scan has when other code
@@ -232,6 +587,218 @@ function fencedBlocks(text: string): Array<{ info: string; body: string }> {
   return blocks;
 }
 
+function parseActionCandidate(candidate: string): ArchitectAction | null {
+  try {
+    const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
+    if (parsed && typeof parsed === "object" && "action" in parsed) {
+      const actionName = (parsed as { action?: unknown }).action;
+      if (parsed.action === "read" && Array.isArray((parsed as ReadAction).paths)) {
+        return parsed as ReadAction;
+      }
+      if (
+        parsed.action === "read_range" &&
+        typeof (parsed as ReadRangeAction).path === "string" &&
+        Number.isFinite((parsed as ReadRangeAction).startLine) &&
+        Number.isFinite((parsed as ReadRangeAction).lineCount)
+      ) {
+        const action = parsed as ReadRangeAction;
+        return {
+          ...action,
+          path: action.path.trim(),
+          startLine: Math.max(1, Math.round(action.startLine)),
+          lineCount: Math.max(1, Math.round(action.lineCount)),
+        };
+      }
+      if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
+        return parsed as PlanAction;
+      }
+      if (parsed.action === "review") {
+        const review = parsed as ReviewAction;
+        return {
+          ...review,
+          results: Array.isArray(review.results) ? review.results : [],
+          done: !!review.done,
+        };
+      }
+      if (
+        parsed.action === "run" &&
+        typeof (parsed as RunAction).command === "string" &&
+        (parsed as RunAction).command.trim()
+      ) {
+        const action = parsed as RunAction;
+        return { ...action, command: action.command.trim() };
+      }
+      if (actionName === "shell") {
+        const shell = parsed as Partial<RunAction> & { cmd?: unknown };
+        const command =
+          typeof shell.command === "string"
+            ? shell.command
+            : typeof shell.cmd === "string"
+              ? shell.cmd
+              : "";
+        if (command.trim()) {
+          return {
+            action: "run",
+            command: command.trim(),
+            reason: typeof shell.reason === "string" ? shell.reason : undefined,
+          };
+        }
+      }
+      if (
+        parsed.action === "search" &&
+        typeof (parsed as SearchAction).query === "string" &&
+        (parsed as SearchAction).query.trim()
+      ) {
+        return parsed as SearchAction;
+      }
+      if (
+        parsed.action === "tool" &&
+        typeof (parsed as ToolAction).server === "string" &&
+        (parsed as ToolAction).server.trim() &&
+        typeof (parsed as ToolAction).tool === "string" &&
+        (parsed as ToolAction).tool.trim()
+      ) {
+        return parsed as ToolAction;
+      }
+      if (
+        parsed.action === "fetch" &&
+        typeof (parsed as FetchAction).url === "string" &&
+        /^https?:\/\//i.test((parsed as FetchAction).url.trim())
+      ) {
+        return { ...(parsed as FetchAction), url: (parsed as FetchAction).url.trim() };
+      }
+      if (
+        parsed.action === "patch" &&
+        typeof (parsed as PatchAction).path === "string" &&
+        Array.isArray((parsed as PatchAction).ops)
+      ) {
+        const action = parsed as PatchAction;
+        const ops = action.ops.filter(
+          (op) =>
+            op &&
+            typeof op.search === "string" &&
+            op.search.length > 0 &&
+            typeof op.replace === "string"
+        );
+        if (ops.length > 0) {
+          return { ...action, path: action.path.trim(), ops };
+        }
+      }
+      if (
+        parsed.action === "append" &&
+        typeof (parsed as AppendAction).path === "string" &&
+        typeof (parsed as AppendAction).content === "string"
+      ) {
+        const action = parsed as AppendAction;
+        return {
+          ...action,
+          path: action.path.trim(),
+          reset: !!action.reset,
+        };
+      }
+    }
+  } catch {
+    // not a valid action candidate
+  }
+  return null;
+}
+
+export function isBuildToolAction(action: ArchitectAction): boolean {
+  return (
+    action.action === "read" ||
+    action.action === "read_range" ||
+    action.action === "search" ||
+    action.action === "patch" ||
+    action.action === "append" ||
+    action.action === "run" ||
+    action.action === "tool" ||
+    action.action === "fetch"
+  );
+}
+
+export function hasCompleteBuildToolAction(text: string): boolean {
+  return uniqueActionCandidatesInDocumentOrder(text).some((candidate) => {
+    const action = parseActionCandidate(candidate);
+    return action != null && isBuildToolAction(action);
+  });
+}
+
+function isSafeFirstToolAction(action: ArchitectAction): boolean {
+  return (
+    action.action === "read" ||
+    action.action === "read_range" ||
+    action.action === "search"
+  );
+}
+
+function isSingleFencedJson(text: string, candidate: string): boolean {
+  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `^\\s*(?:\`\`\`|~~~)(?:json|jsonc)?\\s*\\n${escaped}\\s*\\n(?:\`\`\`|~~~)\\s*$`,
+    "s"
+  ).test(text.trim());
+}
+
+export function inspectStrictToolActionOutput(text: string): {
+  action: ArchitectAction | null;
+  valid: boolean;
+  feedback?: string;
+} {
+  const actions = uniqueActionCandidatesInDocumentOrder(text)
+    .map((candidate) => ({ candidate, action: parseActionCandidate(candidate) }))
+    .filter(
+      (item): item is { candidate: string; action: ArchitectAction } =>
+        item.action != null && isBuildToolAction(item.action)
+    );
+  if (actions.length === 0) {
+    if (looksLikeIncompleteToolAction(text)) {
+      return {
+        action: null,
+        valid: false,
+        feedback:
+          "TOOL CALL REJECTED: your JSON tool action looks incomplete or was cut off before it became valid JSON. Reply again with exactly one smaller JSON tool action. For large patches, split the change into smaller patch operations or use append chunks.",
+      };
+    }
+    return { action: null, valid: false };
+  }
+  if (actions.length > 1) {
+    if (isSafeFirstToolAction(actions[0].action)) {
+      return {
+        action: actions[0].action,
+        valid: true,
+        feedback: `TOOL CALL WARNING: you emitted multiple JSON tool actions in one response (${actions.length}). I executed only the first safe inspection action (${actions[0].action.action}) and ignored the remaining action(s). Next time reply with exactly one JSON tool action, then wait for the tool result before deciding the next step.`,
+      };
+    }
+    return {
+      action: actions[0].action,
+      valid: false,
+      feedback: `TOOL CALL REJECTED: you emitted multiple JSON tool actions in one response (${actions.length}). The engine executes at most one tool per turn. Reply again with ONLY the single next JSON action you want executed, with no prose and no second action. After the tool result comes back, decide the next step.`,
+    };
+  }
+  const only = actions[0];
+  const trimmed = text.trim();
+  const isolated =
+    trimmed === only.candidate || isSingleFencedJson(trimmed, only.candidate);
+  if (!isolated) {
+    return {
+      action: only.action,
+      valid: true,
+      feedback:
+        "TOOL CALL WARNING: I executed the single JSON tool action, but tool calls should be the entire response. Next time reply with ONLY one JSON tool action and no prose; wait for the tool result before deciding the next step.",
+    };
+  }
+  return { action: only.action, valid: true };
+}
+
+function looksLikeIncompleteToolAction(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch)"/i.test(trimmed)) {
+    return false;
+  }
+  return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
+}
+
 /**
  * Parse the Architect's action from its (possibly chatty) output. The prompts
  * say "END with ONE fenced json block", so candidates are tried LAST first:
@@ -239,71 +806,11 @@ function fencedBlocks(text: string): Array<{ info: string; body: string }> {
  * Returns null when nothing parseable is found.
  */
 export function parseArchitectAction(text: string): ArchitectAction | null {
-  const candidates: string[] = [];
-  const blocks = fencedBlocks(text);
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const lang = blocks[i].info.split(/\s+/)[0]?.toLowerCase() ?? "";
-    if (lang === "" || lang === "json" || lang === "jsonc") {
-      candidates.push(blocks[i].body);
-    }
-  }
-  const balanced = balancedObjects(text);
-  for (let i = balanced.length - 1; i >= 0; i--) {
-    candidates.push(balanced[i]);
-  }
+  const candidates = uniqueActionCandidates(text);
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
-      if (parsed && typeof parsed === "object" && "action" in parsed) {
-        if (parsed.action === "read" && Array.isArray((parsed as ReadAction).paths)) {
-          return parsed as ReadAction;
-        }
-        if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
-          return parsed as PlanAction;
-        }
-        if (parsed.action === "review") {
-          const review = parsed as ReviewAction;
-          return {
-            ...review,
-            results: Array.isArray(review.results) ? review.results : [],
-            done: !!review.done,
-          };
-        }
-        if (
-          parsed.action === "run" &&
-          typeof (parsed as RunAction).command === "string" &&
-          (parsed as RunAction).command.trim()
-        ) {
-          return parsed as RunAction;
-        }
-        if (
-          parsed.action === "search" &&
-          typeof (parsed as SearchAction).query === "string" &&
-          (parsed as SearchAction).query.trim()
-        ) {
-          return parsed as SearchAction;
-        }
-        if (
-          parsed.action === "tool" &&
-          typeof (parsed as ToolAction).server === "string" &&
-          (parsed as ToolAction).server.trim() &&
-          typeof (parsed as ToolAction).tool === "string" &&
-          (parsed as ToolAction).tool.trim()
-        ) {
-          return parsed as ToolAction;
-        }
-        if (
-          parsed.action === "fetch" &&
-          typeof (parsed as FetchAction).url === "string" &&
-          /^https?:\/\//i.test((parsed as FetchAction).url.trim())
-        ) {
-          return { ...(parsed as FetchAction), url: (parsed as FetchAction).url.trim() };
-        }
-      }
-    } catch {
-      // try the next candidate
-    }
+    const action = parseActionCandidate(candidate);
+    if (action) return action;
   }
   return null;
 }
@@ -334,6 +841,15 @@ function searchToolDoc(searchesLeft?: number): string {
   ].join("\n");
 }
 
+function readRangeToolDoc(rangeReadsLeft?: number): string {
+  if (!rangeReadsLeft || rangeReadsLeft <= 0) return "";
+  return [
+    "TOOL - read part of a file: when the change digest points at a large file and you only need exact nearby lines, respond with ONLY:",
+    '{"action":"read_range","path":"relative/path","startLine":40,"lineCount":80}',
+    `The result is bounded and includes line numbers. Prefer this over whole-file reads for large files. If a returned range is partial, continue from endLine + 1 instead of rereading overlapping lines unless you truly need overlap. After search results, read_range around the matching line numbers, not from the start of the file. ${rangeReadsLeft} range read${rangeReadsLeft === 1 ? "" : "s"} left in this review.`,
+  ].join("\n");
+}
+
 /**
  * How models modify EXISTING files: targeted SEARCH/REPLACE edit blocks
  * instead of re-emitting whole files (cheaper, and immune to truncation
@@ -348,7 +864,7 @@ export const EDIT_BLOCK_INSTRUCTION = [
   "(the replacement lines)",
   ">>>>>>> REPLACE",
   "```",
-  "The SEARCH text must match the current file content verbatim. Multiple SEARCH/REPLACE sections are allowed in one block. Use full ```lang path=... blocks only for NEW files or complete rewrites.",
+  "The SEARCH text must match the current file content verbatim. Multiple SEARCH/REPLACE sections are allowed in one block. Use full ```lang path=... blocks only for NEW files or small complete rewrites; never use them for large existing files.",
 ].join("\n");
 
 function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
@@ -375,6 +891,7 @@ function runToolDoc(runsLeft?: number, shellHint?: string): string {
   return [
     "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
     '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
+    "Commands must NOT edit project files: do not use fs.writeFileSync, redirection, Set-Content, sed -i, rm/move/copy, or scripts that modify source files. Use patch/append/edit output for file changes, then run commands only to verify or inspect.",
     `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`,
     shellHint?.trim() ? shellHint.trim() : "",
   ]
@@ -429,11 +946,12 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"expectedOutputs":"files or outcomes you expect","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
+    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
     "```",
+    `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
-    `List in every task's "expectedOutputs" ALL files it will create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputs are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
+    `List in every task's "outputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
   ]
     .filter(Boolean)
@@ -446,6 +964,7 @@ export function buildWorkerTaskPrompt(input: {
   task: BuildTask;
   contextFileText: string;
   architectNotes: string;
+  toolInstructions?: string;
   verbosityInstruction?: string;
 }): string {
   return [
@@ -460,11 +979,18 @@ export function buildWorkerTaskPrompt(input: {
     "",
     `YOUR TASK — ${input.task.id}: ${input.task.title}`,
     input.task.instructions,
+    input.task.outputPaths?.length
+      ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
+      : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
     input.task.status === "fixing"
-      ? "This is a FIX round: the Architect reviewed your previous output and the instructions above tell you what to correct. Re-emit the complete corrected files."
+      ? "This is a FIX round: the Architect reviewed previous output and the instructions above tell you what to correct. Use read_range/search plus patch for existing files. If a file is missing or too large for one response, use append chunks. Do not emit full-file blocks for existing files."
       : "",
     "",
+    input.toolInstructions ?? "",
+    input.toolInstructions?.trim()
+      ? "STRICT TOOL CALL RULE: if you use a file tool, your entire response must be exactly ONE JSON object for ONE tool action. No prose before/after it. No multiple JSON actions. Do not claim what a tool returned until the next turn after the engine sends the tool result."
+      : "",
     FILE_OUTPUT_INSTRUCTION,
     EDIT_BLOCK_INSTRUCTION,
     input.verbosityInstruction ?? "",
@@ -482,6 +1008,7 @@ export function buildArchitectReviewPrompt(input: {
   maxNewTasks: number;
   cyclesLeft: number;
   readHopsLeft?: number;
+  rangeReadsLeft?: number;
   runsLeft?: number;
   searchesLeft?: number;
   mcpToolsDoc?: string;
@@ -504,15 +1031,16 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     userNotesSection(input.userNotes),
     "",
-    "Work completed since your last review:",
+    "Work completed since your last review (compact landed-change digest, not full file contents):",
     input.executedText,
     "",
     scoreboardSection(input.scoreboard),
-    "Review each task's output. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     input.readHopsLeft && input.readHopsLeft > 0
       ? `If you need to see an existing file's contents before deciding, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). Never guess at a file's contents — read it.`
       : "",
+    readRangeToolDoc(input.rangeReadsLeft),
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint),
     fetchToolDoc(input.fetchesLeft),
@@ -520,50 +1048,13 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"done":false,"notes":"updated conventions if any"}`,
     "```",
-    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files. Always list the existing files a new task builds on in its contextFiles.`,
+    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles.`,
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()
       ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'
       : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-/**
- * The optional mid-tier Reviewer: reads the workers' full output so the
- * expensive Architect can decide from a compact digest instead.
- */
-export function buildReviewerPrompt(input: {
-  request: string;
-  treeText: string;
-  executedText: string;
-  architectNotes?: string;
-  userNotes?: string;
-}): string {
-  return [
-    "You are the REVIEWER — a senior engineer pre-screening the worker models' output so the Architect (an expensive model) doesn't have to read every file. The Architect decides approve/fix per task based primarily on YOUR digest, so be precise, concrete, and complete — but compact.",
-    "",
-    "Project request from the user:",
-    input.request,
-    "",
-    treeSection(input.treeText),
-    input.architectNotes?.trim()
-      ? `\nArchitect's conventions:\n${input.architectNotes}`
-      : "",
-    userNotesSection(input.userNotes),
-    "",
-    "Work to review (full files):",
-    input.executedText,
-    "",
-    "Write a review digest in Markdown:",
-    "- Per task: a heading `### <taskId> — RECOMMEND APPROVE` or `### <taskId> — RECOMMEND FIX`, followed by concrete findings (bugs, spec violations, missing requirements), each naming the file path and quoting the offending lines verbatim (short quotes only).",
-    "- Explicitly check cross-file contracts: imports match exports, referenced ids/classes/selectors exist, referenced paths exist in the tree.",
-    "- Flag anything that violates the user's request, the user's notes, or the Architect's conventions.",
-    "- End with `## Must-see` — file paths the Architect should read in full before deciding, or `nothing`.",
-    "Do NOT re-emit whole files. Do NOT output JSON action blocks. Keep the digest compact.",
   ]
     .filter(Boolean)
     .join("\n");

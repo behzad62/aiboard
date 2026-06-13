@@ -1,4 +1,4 @@
-# AI Discussion Board
+# AI Board
 
 A local-first web app where multiple AI models (OpenAI, Anthropic, Google Gemini) discuss a topic you provide, critique each other in structured rounds, and deliver a synthesized final answer—with live streaming and browser notifications when complete.
 

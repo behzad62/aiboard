@@ -5,7 +5,7 @@ import { SITE_NAME } from "@/lib/site";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "How the AI Discussion Board works: multi-model panel, debate, specialist, and build modes; judge synthesis; and a local-first design where your API keys never leave your browser.",
+    "How AI Board works: multi-model panel, debate, specialist, and build modes; judge synthesis; and a local-first design where your API keys never leave your browser.",
   alternates: { canonical: "/about" },
 };
 

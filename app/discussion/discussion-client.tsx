@@ -34,7 +34,6 @@ import {
   Gavel,
   Play,
   RotateCcw,
-  ShieldCheck,
   Square,
   StickyNote,
 } from "lucide-react";
@@ -298,6 +297,32 @@ function DiscussionPageInner() {
               denied: event.denied,
             },
           ]);
+          break;
+        case "token_usage":
+          setDiagnostics((prev) => {
+            const entry: DiagnosticEntry = {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              at: new Date().toLocaleTimeString(),
+              phase: "model_completed",
+              message: `${event.modelName}: estimated ${event.totalTokens.toLocaleString()} tokens (${event.inputTokens.toLocaleString()} in / ${event.outputTokens.toLocaleString()} out)`,
+              modelName: event.modelName,
+              providerId: event.providerId,
+              round: event.round,
+              tokenUsage: {
+                inputTokens: event.inputTokens,
+                outputTokens: event.outputTokens,
+                totalTokens: event.totalTokens,
+                maxTokens: event.maxTokens,
+                estimated: event.estimated,
+              },
+            };
+            const next: DiagnosticEntry[] = [
+              entry,
+              ...prev,
+            ].slice(0, ACTIVITY_LOG_CAP);
+            saveDiagnostics(id, next);
+            return next;
+          });
           break;
         case "final_answer":
           setFinalResult({
@@ -653,19 +678,18 @@ function DiscussionPageInner() {
     [participantIds]
   );
 
-  // Lead participants (Architect/Judge + Reviewer) that aren't among the
+  // Lead participants (Architect/Judge) that aren't among the
   // workers in modelIds — they'd otherwise never appear in the Team row even
   // though they're the most important models. Rendered as standalone chips,
   // role-labelled, before the workers. If a lead IS in participantIds (the
   // non-build judge case), it keeps its inline gavel and is skipped here.
   const leadChips = useMemo<
-    Array<{ modelId: string; role: string; icon: "gavel" | "shield" }>
+    Array<{ modelId: string; role: string }>
   >(() => {
     if (!discussion) return [];
     const leads: Array<{
       modelId: string;
       role: string;
-      icon: "gavel" | "shield";
     }> = [];
     const isBuild = discussion.mode === "build";
     if (
@@ -675,17 +699,6 @@ function DiscussionPageInner() {
       leads.push({
         modelId: discussion.judgeModelId,
         role: isBuild ? "Architect" : "Judge",
-        icon: "gavel",
-      });
-    }
-    if (
-      discussion.reviewerModelId &&
-      !participantIds.includes(discussion.reviewerModelId)
-    ) {
-      leads.push({
-        modelId: discussion.reviewerModelId,
-        role: "Reviewer",
-        icon: "shield",
       });
     }
     return leads;
@@ -851,11 +864,7 @@ function DiscussionPageInner() {
                   <span
                     className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary"
                   >
-                    {lead.icon === "gavel" ? (
-                      <Gavel className="h-3 w-3" />
-                    ) : (
-                      <ShieldCheck className="h-3 w-3" />
-                    )}
+                    <Gavel className="h-3 w-3" />
                   </span>
                   <span className="text-xs font-medium">
                     {modelNames[lead.modelId] ?? getModelDisplayName(lead.modelId)}

@@ -80,7 +80,6 @@ export default function DashboardPage() {
   const [effort, setEffort] = useState<EffortLevel>("medium");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [judgeModelId, setJudgeModelId] = useState<string>("");
-  const [reviewerModelId, setReviewerModelId] = useState<string>("");
   const [verbosity, setVerbosity] = useState<Verbosity>("balanced");
   const [styleNote, setStyleNote] = useState("");
   const [reasoningEffort, setReasoningEffort] =
@@ -202,8 +201,6 @@ export default function DashboardPage() {
         effort,
         modelIds: compatibleSelected,
         judgeModelId: judgeModelId || compatibleSelected[0],
-        reviewerModelId:
-          mode === "build" && reviewerModelId ? reviewerModelId : null,
         attachmentIds: attachments.map((a) => a.id),
         verbosity,
         styleNote: styleNote.trim() || undefined,
@@ -379,46 +376,6 @@ export default function DashboardPage() {
                     })}
                   </SelectContent>
                 </Select>
-
-                {mode === "build" && (
-                  <div className="space-y-2 pt-1">
-                    <Label>
-                      Reviewer model{" "}
-                      <span className="font-normal text-muted-foreground">
-                        (optional cost saver)
-                      </span>
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      A mid-tier model that reads all the workers&apos; code
-                      each wave and hands the Architect a compact digest — so
-                      your expensive Architect doesn&apos;t pay to read every
-                      file. The Architect still makes all decisions and can
-                      read files itself when needed.
-                    </p>
-                    <Select
-                      value={reviewerModelId || "none"}
-                      onValueChange={(v) =>
-                        setReviewerModelId(v === "none" ? "" : v)
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">
-                          None — the Architect reviews all code itself
-                        </SelectItem>
-                        {compatibleJudgeOptions
-                          .filter((m) => m.fullId !== judgeModelId)
-                          .map((model) => (
-                            <SelectItem key={model.fullId} value={model.fullId}>
-                              {model.name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
               </div>
             )}
 
