@@ -179,6 +179,9 @@ export interface RunCommandSafety {
   reason?: string;
 }
 
+export const RUNS_PER_PHASE = 8;
+export const TOTAL_RUNS = 24;
+
 export function classifyRunCommand(command: string): RunCommandSafety {
   const trimmed = command.trim();
   if (!trimmed) return { allowed: false, reason: "Empty commands are not allowed." };
@@ -197,6 +200,52 @@ export function classifyRunCommand(command: string): RunCommandSafety {
   }
 
   return { allowed: true };
+}
+
+export function isGitHubWorkflowCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!/^(?:gh|git)(?:\s|$)/i.test(trimmed)) return false;
+  // Keep the unlimited path to one direct command, not shell pipelines/chains.
+  return !/(?:[;&|]|\d?>|>>)/.test(trimmed);
+}
+
+export function githubWorkflowRequested(request: string): boolean {
+  const text = request.trim();
+  const hasRepoAddress =
+    /github\.com[/:][A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/i.test(text) ||
+    /\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/.test(text);
+  const asksForGitHubWork =
+    /\b(github|issue|issues|pull request|pull requests|pr|prs|branch)\b/i.test(text);
+  return hasRepoAddress && asksForGitHubWork;
+}
+
+export function runBudgetStatus(input: {
+  runnerAvailable: boolean;
+  totalRuns: number;
+  githubWorkflow: boolean;
+}): {
+  normalRunsLeft: number;
+  totalNormalRunsLeft: number;
+  githubCommandsUnlimited: boolean;
+  toolAvailable: boolean;
+} {
+  if (!input.runnerAvailable) {
+    return {
+      normalRunsLeft: 0,
+      totalNormalRunsLeft: 0,
+      githubCommandsUnlimited: false,
+      toolAvailable: false,
+    };
+  }
+  const totalNormalRunsLeft = Math.max(0, TOTAL_RUNS - input.totalRuns);
+  const normalRunsLeft = Math.min(RUNS_PER_PHASE, totalNormalRunsLeft);
+  const githubCommandsUnlimited = input.githubWorkflow;
+  return {
+    normalRunsLeft,
+    totalNormalRunsLeft,
+    githubCommandsUnlimited,
+    toolAvailable: normalRunsLeft > 0 || githubCommandsUnlimited,
+  };
 }
 
 /** Case-insensitive substring search across all project files. */
@@ -886,13 +935,33 @@ function fetchToolDoc(fetchesLeft?: number): string {
   ].join("\n");
 }
 
-function runToolDoc(runsLeft?: number, shellHint?: string): string {
-  if (!runsLeft || runsLeft <= 0) return "";
+function githubWorkflowDoc(enabled?: boolean): string {
+  if (!enabled) return "";
+  return [
+    "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
+    "Assume `gh` is installed and authenticated. Use non-interactive `gh` and `git` commands through the runner.",
+    "Issue selection: list open issues, prefer an issue whose title/body/comments contain `#aoboard` or `@aiboard`; if none exists, automatically choose the most actionable open issue.",
+    "Before assigning worker tasks, create and switch to a feature branch for the chosen issue. Use a clear branch name that includes the issue number when available.",
+    "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end, commit the intended changes, push the feature branch, and create a PR that references the issue.",
+    "There are no in-app approval gates for this workflow; human approval happens on GitHub when reviewing and merging the PR.",
+    "GitHub workflow commands beginning with `gh` or `git` do not count against the normal command budget, but still run one command at a time and must be non-interactive.",
+  ].join("\n");
+}
+
+function runToolDoc(
+  runsLeft?: number,
+  shellHint?: string,
+  githubWorkflow?: boolean
+): string {
+  if ((!runsLeft || runsLeft <= 0) && !githubWorkflow) return "";
   return [
     "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
     '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
     "Commands must NOT edit project files: do not use fs.writeFileSync, redirection, Set-Content, sed -i, rm/move/copy, or scripts that modify source files. Use patch/append/edit output for file changes, then run commands only to verify or inspect.",
-    `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`,
+    githubWorkflowDoc(githubWorkflow),
+    runsLeft && runsLeft > 0
+      ? `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} normal run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`
+      : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
     shellHint?.trim() ? shellHint.trim() : "",
   ]
     .filter(Boolean)
@@ -915,6 +984,7 @@ export function buildArchitectPlanPrompt(input: {
   scoreboard?: string;
   /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
   shellHint?: string;
+  githubWorkflow?: boolean;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -940,7 +1010,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
     fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
@@ -1018,6 +1088,7 @@ export function buildArchitectReviewPrompt(input: {
   scoreboard?: string;
   /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
   shellHint?: string;
+  githubWorkflow?: boolean;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -1042,7 +1113,7 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     readRangeToolDoc(input.rangeReadsLeft),
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
     fetchToolDoc(input.fetchesLeft),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",

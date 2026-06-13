@@ -37,10 +37,13 @@ import {
   decideBuildTaskFailure,
   detectVerifyCommand,
   findIncompleteBuildTasks,
+  githubWorkflowRequested,
   hasCompleteBuildToolAction,
   inspectStrictToolActionOutput,
+  isGitHubWorkflowCommand,
   outputPathsForTask,
   parseArchitectAction,
+  runBudgetStatus,
   summarizeFileChange,
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
@@ -105,8 +108,6 @@ export interface BuildHooks {
   ) => Promise<CommandApprovalDecision>;
 }
 
-const RUNS_PER_PHASE = 4;
-const TOTAL_RUNS = 12;
 const SEARCHES_PER_PHASE = 4;
 const MCP_CALLS_PER_PHASE = 8;
 const TOTAL_MCP_CALLS = 24;
@@ -412,6 +413,8 @@ export async function runBuildDiscussion(
       : `Build mode: Architect ${architect.displayName}, ${workers.length} worker(s), files kept in the app (download as zip)`,
   });
 
+  const githubWorkflow = githubWorkflowRequested(discussion.topic);
+
   // ── Optional local runner (user-started; opt-in by config) ────────────────
   let runner: RunnerConfig | null = null;
   let runnerDirName: string | null = null;
@@ -528,8 +531,22 @@ export async function runBuildDiscussion(
     }
   }
 
-  const runsLeftThisPhase = (): number =>
-    runner ? Math.min(RUNS_PER_PHASE, TOTAL_RUNS - totalRuns) : 0;
+  const currentRunBudget = () =>
+    runBudgetStatus({
+      runnerAvailable: !!runner,
+      totalRuns,
+      githubWorkflow: githubWorkflow && !!runner,
+    });
+
+  const runsLeftThisPhase = (): number => currentRunBudget().normalRunsLeft;
+
+  const canExecuteRunAction = (command: string): boolean => {
+    const budget = currentRunBudget();
+    return (
+      budget.normalRunsLeft > 0 ||
+      (budget.githubCommandsUnlimited && isGitHubWorkflowCommand(command))
+    );
+  };
 
   const fetchesLeftThisPhase = (): number =>
     runner ? Math.min(FETCHES_PER_PHASE, TOTAL_FETCHES - totalFetches) : 0;
@@ -631,7 +648,9 @@ export async function runBuildDiscussion(
         return `$ ${command}\nThe user DENIED this command. Continue without it.`;
       }
     }
-    totalRuns += 1;
+    const githubBudgetExempt =
+      githubWorkflow && isGitHubWorkflowCommand(command);
+    if (!githubBudgetExempt) totalRuns += 1;
     emit({
       type: "diagnostic",
       phase: "model_streaming",
@@ -1483,6 +1502,7 @@ export async function runBuildDiscussion(
       workerNames: workers.map((w) => w.displayName),
       readHopsLeft,
       runsLeft: runsLeftThisPhase(),
+      githubWorkflow: githubWorkflow && !!runner,
       searchesLeft: planSearchesLeft,
       mcpToolsDoc,
       mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -1560,7 +1580,7 @@ export async function runBuildDiscussion(
       extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
       continue;
     }
-    if (action.action === "run" && runsLeftThisPhase() > 0) {
+    if (action.action === "run" && canExecuteRunAction(action.command)) {
       runFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
       continue;
     }
@@ -2242,6 +2262,7 @@ export async function runBuildDiscussion(
           readHopsLeft: reviewReadsLeft,
           rangeReadsLeft: reviewRangeReadsLeft,
           runsLeft: runsLeftThisPhase(),
+          githubWorkflow: githubWorkflow && !!runner,
           searchesLeft: reviewSearchesLeft,
           mcpToolsDoc,
           mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -2339,7 +2360,7 @@ export async function runBuildDiscussion(
         )}`;
         continue;
       }
-      if (action.action === "run" && runsLeftThisPhase() > 0) {
+      if (action.action === "run" && canExecuteRunAction(action.command)) {
         reviewRunFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
         continue;
       }
