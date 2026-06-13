@@ -2,6 +2,7 @@
 // and JSON-LD. SITE_URL is the only thing to change after deployment.
 export const SITE_URL = "https://aiboard.me";
 export const SITE_NAME = "AI Board";
+export const SITE_CONTACT_EMAIL = "mail@aiboard.me";
 export const SITE_TAGLINE =
   "Multi-model AI discussions that synthesize the best answer";
 export const SITE_DESCRIPTION =

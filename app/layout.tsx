@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
-import { BarChart3, MessageSquare, Settings } from "lucide-react";
+import { BarChart3, Mail, MessageSquare, Settings } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
+import {
+  SITE_CONTACT_EMAIL,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_URL,
+} from "@/lib/site";
 import "./globals.css";
 
 // Applies the saved theme before paint to avoid a flash of the wrong theme on
@@ -70,6 +75,13 @@ export default function RootLayout({
                 >
                   About
                 </Link>
+                <a
+                  href={`mailto:${SITE_CONTACT_EMAIL}`}
+                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Mail className="h-4 w-4" />
+                  Contact
+                </a>
                 <a
                   href="https://paypal.me/behzadashams"
                   target="_blank"

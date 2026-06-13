@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_NAME } from "@/lib/site";
+import { SITE_CONTACT_EMAIL, SITE_NAME } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "About",
@@ -79,6 +79,21 @@ export default function AboutPage() {
           or in a local folder you pick — optionally encrypted with a
           passphrase using AES-256-GCM. Nothing is ever uploaded to a server
           of ours, because there isn&apos;t one.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Contact</h2>
+        <p>
+          For feedback, bug reports, privacy questions, or collaboration,
+          email{" "}
+          <a
+            href={`mailto:${SITE_CONTACT_EMAIL}`}
+            className="underline hover:text-foreground"
+          >
+            {SITE_CONTACT_EMAIL}
+          </a>
+          .
         </p>
       </section>
 
