@@ -32,6 +32,7 @@ export interface CommandRunView {
   durationMs: number;
   outputPreview: string;
   denied?: boolean;
+  background?: boolean;
 }
 
 const STATUS_META: Record<
@@ -169,6 +170,8 @@ export function BuildTaskBoard({
                     variant={
                       cmd.denied
                         ? "secondary"
+                        : cmd.background
+                          ? "warning"
                         : cmd.exitCode === 0
                           ? "success"
                           : "destructive"
@@ -177,6 +180,8 @@ export function BuildTaskBoard({
                   >
                     {cmd.denied
                       ? "denied"
+                      : cmd.background
+                        ? `background · ${(cmd.durationMs / 1000).toFixed(1)}s`
                       : `exit ${cmd.exitCode} · ${(cmd.durationMs / 1000).toFixed(1)}s`}
                   </Badge>
                 </div>

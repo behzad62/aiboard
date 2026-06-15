@@ -26,14 +26,15 @@
  */
 
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 5;
+const VERSION = 6;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const BACKGROUND_STARTUP_MS = 2_000;
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
 const MAX_RANGE_LINES = 400;
@@ -54,6 +55,8 @@ const SKIP_DIRS = new Set([
   ".idea",
   ".vs",
 ]);
+
+const backgroundProcesses = new Map();
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -405,10 +408,105 @@ function stripAnsi(text) {
     .replace(/\x1b/g, ""); // bare ESC
 }
 
-function runCommand(command) {
+function parseBackgroundCommand(command) {
+  const trimmed = command.trim();
+  if (!trimmed.endsWith("&") || trimmed.endsWith("&&")) {
+    return { background: false, command: trimmed };
+  }
+  const withoutAmp = trimmed.slice(0, -1).trim();
+  return {
+    background: withoutAmp.length > 0,
+    command: withoutAmp,
+  };
+}
+
+function startBackgroundCommand(command) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const child = spawn(command, {
+      shell: true,
+      cwd: projectDir,
+      env: process.env,
+      windowsHide: true,
+      detached: true,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let truncated = false;
+    let settled = false;
+    const cap = (current, chunk) => {
+      if (current.length >= MAX_OUTPUT_BYTES) {
+        truncated = true;
+        return current;
+      }
+      return current + chunk.toString();
+    };
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        ...result,
+        stdout: stripAnsi(result.stdout.slice(0, MAX_OUTPUT_BYTES)),
+        stderr: stripAnsi(result.stderr.slice(0, MAX_OUTPUT_BYTES)),
+        durationMs: Date.now() - startedAt,
+        truncated,
+        background: true,
+      });
+    };
+
+    child.stdout.on("data", (c) => (stdout = cap(stdout, c)));
+    child.stderr.on("data", (c) => (stderr = cap(stderr, c)));
+    child.on("close", (code) => {
+      backgroundProcesses.delete(child.pid);
+      finish({
+        exitCode: code ?? -1,
+        stdout,
+        stderr,
+      });
+    });
+    child.on("error", (err) => {
+      backgroundProcesses.delete(child.pid);
+      finish({
+        exitCode: -1,
+        stdout: "",
+        stderr: String(err),
+      });
+    });
+
+    if (child.pid) {
+      backgroundProcesses.set(child.pid, { child, command });
+    }
+    child.unref();
+
+    const timer = setTimeout(() => {
+      const pid = child.pid ?? "unknown";
+      finish({
+        exitCode: 0,
+        stdout: [
+          `Started background command (pid ${pid}).`,
+          "The runner will keep it alive until the runner exits.",
+          stdout.trim() ? `Startup stdout:\n${stdout.trim()}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        stderr: stderr.trim() ? `Startup stderr:\n${stderr.trim()}` : "",
+      });
+    }, BACKGROUND_STARTUP_MS);
+  });
+}
+
+function runCommand(command) {
+  return new Promise((resolve) => {
+    const parsed = parseBackgroundCommand(command);
+    if (parsed.background) {
+      resolve(startBackgroundCommand(parsed.command));
+      return;
+    }
+    const startedAt = Date.now();
+    const child = spawn(parsed.command, {
       shell: true,
       cwd: projectDir,
       env: process.env,
@@ -596,7 +694,36 @@ for (const spec of mcpSpecs) {
   void proc.init();
 }
 
+function killBackgroundProcesses() {
+  for (const [pid, proc] of backgroundProcesses) {
+    try {
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch {
+          proc.child.kill();
+        }
+      }
+    } catch {
+      // already gone
+    }
+    backgroundProcesses.delete(pid);
+  }
+}
+
 process.on("SIGINT", () => {
+  killBackgroundProcesses();
+  for (const [, s] of mcpServers) s.kill();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  killBackgroundProcesses();
   for (const [, s] of mcpServers) s.kill();
   process.exit(0);
 });

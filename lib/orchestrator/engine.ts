@@ -107,6 +107,7 @@ export type OrchestratorEvent =
       durationMs: number;
       outputPreview: string;
       denied?: boolean;
+      background?: boolean;
     }
   | { type: "error"; message: string }
   | { type: "complete" };

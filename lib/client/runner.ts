@@ -15,6 +15,7 @@ export interface CommandResult {
   stderr: string;
   durationMs: number;
   truncated: boolean;
+  background?: boolean;
 }
 
 export const DEFAULT_RUNNER_URL = "http://127.0.0.1:8787";
@@ -382,7 +383,9 @@ export function formatCommandResult(
   const stderr = stripAnsi(result.stderr).trim();
   const parts = [
     `$ ${command}`,
-    `exit ${result.exitCode} (${(result.durationMs / 1000).toFixed(1)}s)${result.truncated ? " — output truncated" : ""}`,
+    result.background
+      ? `started in background (${(result.durationMs / 1000).toFixed(1)}s startup window)${result.truncated ? " — output truncated" : ""}`
+      : `exit ${result.exitCode} (${(result.durationMs / 1000).toFixed(1)}s)${result.truncated ? " — output truncated" : ""}`,
   ];
   if (stdout) parts.push(`stdout:\n${stdout}`);
   if (stderr) parts.push(`stderr:\n${stderr}`);

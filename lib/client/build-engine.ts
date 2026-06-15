@@ -665,6 +665,7 @@ export async function runBuildDiscussion(
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        background: result.background,
         outputPreview: truncate(
           stripAnsi(result.stdout || result.stderr).trim(),
           400
@@ -791,6 +792,7 @@ export async function runBuildDiscussion(
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        background: result.background,
         outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 400),
       });
       let finalCommand = command;
@@ -833,6 +835,7 @@ export async function runBuildDiscussion(
           command: detectedVerifyCommand,
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
+          background: finalResult.background,
           outputPreview: truncate(stripAnsi(finalResult.stdout || finalResult.stderr).trim(), 400),
         });
       }

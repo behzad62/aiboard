@@ -304,6 +304,7 @@ function DiscussionPageInner() {
               durationMs: event.durationMs,
               outputPreview: event.outputPreview,
               denied: event.denied,
+              background: event.background,
             },
           ]);
           break;

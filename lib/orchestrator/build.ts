@@ -1021,6 +1021,7 @@ function runToolDoc(
     runsLeft && runsLeft > 0
       ? `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} normal run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`
       : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
+    "Long-lived dev servers/watchers must be intentional background commands: add a single trailing `&` (example: `npx serve . -l 3000 --no-clipboard &`). The runner returns after a short startup window and keeps that process alive until the runner exits. Do not add `&` to normal finite commands like tests/builds.",
     shellHint?.trim() ? shellHint.trim() : "",
   ]
     .filter(Boolean)
