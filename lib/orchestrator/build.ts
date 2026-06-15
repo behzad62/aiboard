@@ -369,6 +369,39 @@ export function findIncompleteBuildTasks(tasks: BuildTask[]): BuildTask[] {
   return tasks.filter((task) => task.status !== "done");
 }
 
+export function isBuildTaskDependencySatisfied(
+  dependency: Pick<BuildTask, "status"> | null | undefined
+): boolean {
+  // Unknown dependency ids are treated as satisfied so a typo cannot deadlock
+  // the build forever. Known tasks must be fully done; "review" is only a
+  // pending verdict, and "failed" must block dependents until the Architect
+  // replans or explicitly replaces the work.
+  return !dependency || dependency.status === "done";
+}
+
+export function buildOutstandingTasksDigest(tasks: BuildTask[]): string {
+  const outstanding = findIncompleteBuildTasks(tasks);
+  if (outstanding.length === 0) return "";
+  return outstanding
+    .map((task) => {
+      const bits = [
+        `- ${task.id} (${task.status}${task.failCount ? `, ${task.failCount} failed attempt${task.failCount === 1 ? "" : "s"}` : ""}): ${task.title}`,
+      ];
+      if (task.dependsOn?.length) {
+        const blockedBy = task.dependsOn.filter((depId) => {
+          const dep = tasks.find((t) => t.id === depId);
+          return !isBuildTaskDependencySatisfied(dep);
+        });
+        if (blockedBy.length > 0) bits.push(`  blocked by: ${blockedBy.join(", ")}`);
+      }
+      if (task.outputPaths?.length) {
+        bits.push(`  outputPaths: ${task.outputPaths.join(", ")}`);
+      }
+      return bits.join("\n");
+    })
+    .join("\n");
+}
+
 export function buildIncompleteTaskFailure(tasks: BuildTask[]): string {
   const incomplete = findIncompleteBuildTasks(tasks);
   if (incomplete.length === 0) return "";
@@ -641,6 +674,15 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
     if (parsed && typeof parsed === "object" && "action" in parsed) {
       const actionName = (parsed as { action?: unknown }).action;
+      if (actionName === "read_file") {
+        const readFile = parsed as { path?: unknown; paths?: unknown };
+        const paths = Array.isArray(readFile.paths)
+          ? readFile.paths.filter((p): p is string => typeof p === "string")
+          : typeof readFile.path === "string"
+            ? [readFile.path]
+            : [];
+        if (paths.length > 0) return { action: "read", paths };
+      }
       if (parsed.action === "read" && Array.isArray((parsed as ReadAction).paths)) {
         return parsed as ReadAction;
       }
@@ -731,6 +773,23 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         );
         if (ops.length > 0) {
           return { ...action, path: action.path.trim(), ops };
+        }
+      }
+      if (
+        actionName === "edit" &&
+        typeof (parsed as PatchAction).path === "string" &&
+        Array.isArray((parsed as PatchAction).ops)
+      ) {
+        const action = parsed as PatchAction;
+        const ops = action.ops.filter(
+          (op) =>
+            op &&
+            typeof op.search === "string" &&
+            op.search.length > 0 &&
+            typeof op.replace === "string"
+        );
+        if (ops.length > 0) {
+          return { ...action, action: "patch", path: action.path.trim(), ops };
         }
       }
       if (
@@ -1075,6 +1134,7 @@ export function buildArchitectReviewPrompt(input: {
   treeText: string;
   fileContext?: string;
   executedText: string;
+  outstandingTasks?: string;
   maxNewTasks: number;
   cyclesLeft: number;
   readHopsLeft?: number;
@@ -1104,6 +1164,9 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "Work completed since your last review (compact landed-change digest, not full file contents):",
     input.executedText,
+    input.outstandingTasks?.trim()
+      ? `\nRequired tasks still not done:\n${input.outstandingTasks}\nDo NOT set "done": true while any required task is listed here. Approve completed outstanding tasks, send unfinished ones back with precise fix instructions, or create replacement tasks that explicitly cover the missing work.`
+      : "",
     "",
     scoreboardSection(input.scoreboard),
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",

@@ -30,6 +30,7 @@ import {
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
   buildIncompleteTaskFailure,
+  buildOutstandingTasksDigest,
   buildWaveReviewDigest,
   formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
@@ -40,6 +41,7 @@ import {
   githubWorkflowRequested,
   hasCompleteBuildToolAction,
   inspectStrictToolActionOutput,
+  isBuildTaskDependencySatisfied,
   isGitHubWorkflowCommand,
   outputPathsForTask,
   parseArchitectAction,
@@ -1036,7 +1038,8 @@ export async function runBuildDiscussion(
   // ── Streaming helpers (persist as messages so the timeline works) ─────────
   // Continue the round numbering from any previous pass (follow-up builds keep
   // the earlier transcript) so the timeline stays in chronological order.
-  let round = getMessagesForDiscussion(discussion.id).reduce(
+  const persistedMessages = getMessagesForDiscussion(discussion.id);
+  let round = persistedMessages.reduce(
     (max, m) => Math.max(max, m.round),
     0
   );
@@ -1045,7 +1048,7 @@ export async function runBuildDiscussion(
   // ── User notes: drained at every Architect decision point ─────────────────
   // Seeded with the notes from previous passes (they persist as user messages)
   // so a requirement satisfied in pass 2 can't silently fall out of pass 3.
-  const userNotes: string[] = getMessagesForDiscussion(discussion.id)
+  const userNotes: string[] = persistedMessages
     .filter((m) => m.role === "user")
     .map((m) => m.content);
   const userNotesText = (): string => {
@@ -1065,7 +1068,23 @@ export async function runBuildDiscussion(
 
   // The previous pass's hand-off summary (if any) tells the Architect what
   // already exists and must be preserved when planning a follow-up.
-  const previousSummary = getFinalResult(discussion.id)?.answer ?? "";
+  const previousBuildContext = persistedMessages
+    .filter((m) => m.role === "assistant" && m.content.trim())
+    .sort((a, b) => a.round - b.round)
+    .slice(-18)
+    .map(
+      (m) =>
+        `Round ${m.round} (${resolveModelName(m.modelId)}):\n${truncate(
+          m.content,
+          1_500
+        )}`
+    )
+    .join("\n\n");
+  const previousSummary =
+    getFinalResult(discussion.id)?.answer ??
+    (previousBuildContext
+      ? `Previous incomplete build transcript excerpt. Use this to resume from the stopped/failed state instead of starting over:\n\n${previousBuildContext}`
+      : "");
 
   const streamTurn = async (
     model: SelectedModel,
@@ -1225,10 +1244,16 @@ export async function runBuildDiscussion(
           emit({ type: "file_written", path, bytes: result.bytes, location: "disk", taskId });
           recordFileChange(taskId, path, "patch", before, result.content);
         }
+        const details =
+          result.failedOps?.length
+            ? ` Missing SEARCH block(s): ${result.failedOps
+                .map((op) => `#${op.index} "${truncate(op.searchPreview, 120)}"`)
+                .join("; ")}.`
+            : "";
         const issues =
           result.failed > 0
             ? [
-                `${result.failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${result.applied} applied).`,
+                `${result.failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${result.applied} applied).${details}`,
               ]
             : [];
         return {
@@ -1249,11 +1274,17 @@ export async function runBuildDiscussion(
       emit({ type: "diagnostic", phase: "model_failed", message: issue });
       return { written: [], issues: [issue], summary: issue };
     }
-    const { content, applied, failed } = applyEditOps(current, ops);
+    const { content, applied, failed, failedOps } = applyEditOps(current, ops);
+    const details =
+      failedOps.length > 0
+        ? ` Missing SEARCH block(s): ${failedOps
+            .map((op) => `#${op.index} "${truncate(op.searchPreview, 120)}"`)
+            .join("; ")}.`
+        : "";
     const issues =
       failed > 0
         ? [
-            `${failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${applied} applied).`,
+            `${failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${applied} applied).${details}`,
           ]
         : [];
     if (applied > 0) {
@@ -1415,7 +1446,10 @@ export async function runBuildDiscussion(
         });
         continue;
       }
-      const { content, applied, failed } = applyEditOps(current, edit.ops);
+      const { content, applied, failed, failedOps } = applyEditOps(
+        current,
+        edit.ops
+      );
       if (applied > 0) {
         const conflict = claimWaveWrite(edit.path, taskId);
         if (conflict) {
@@ -1427,8 +1461,14 @@ export async function runBuildDiscussion(
         }
       }
       if (failed > 0) {
+        const details =
+          failedOps.length > 0
+            ? ` Missing SEARCH block(s): ${failedOps
+                .map((op) => `#${op.index} "${truncate(op.searchPreview, 120)}"`)
+                .join("; ")}.`
+            : "";
         issues.push(
-          `${failed} edit(s) to ${edit.path} did NOT match the current file content and were skipped (${applied} applied). The intended change is missing — re-issue it with SEARCH text copied verbatim from the current file.`
+          `${failed} edit(s) to ${edit.path} did NOT match the current file content and were skipped (${applied} applied).${details} The intended change is missing — re-issue it with SEARCH text copied verbatim from the current file.`
         );
         emit({
           type: "diagnostic",
@@ -1476,6 +1516,40 @@ export async function runBuildDiscussion(
   let readHopsLeft = 2;
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
+  const architectToolKey = (action: ArchitectAction): string | null => {
+    if (action.action === "read") {
+      return `read:${action.paths.map((p) => p.trim().toLowerCase()).sort().join("|")}`;
+    }
+    if (action.action === "read_range") {
+      return `read_range:${action.path.trim().toLowerCase()}:${action.startLine}:${action.lineCount}`;
+    }
+    if (action.action === "search") {
+      return `search:${action.query.trim().toLowerCase()}`;
+    }
+    if (action.action === "run") {
+      return `run:${action.command.trim().toLowerCase()}`;
+    }
+    if (action.action === "fetch") {
+      return `fetch:${action.url.trim().toLowerCase()}`;
+    }
+    if (action.action === "tool") {
+      return `tool:${action.server.trim().toLowerCase()}.${action.tool.trim().toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
+    }
+    return null;
+  };
+
+  const duplicateArchitectToolFeedback = (
+    action: ArchitectAction,
+    seen: Set<string>
+  ): string | null => {
+    const key = architectToolKey(action);
+    if (!key) return null;
+    if (!seen.has(key)) {
+      seen.add(key);
+      return null;
+    }
+    return "DUPLICATE TOOL CALL REJECTED: you already received this exact tool result. Use the previous result in your context, request a different range/search/command if needed, or produce the plan/review JSON now.";
+  };
 
   // Give the Architect the obvious entry points of an existing project up front
   // so it usually doesn't need to spend a read hop on them.
@@ -1492,6 +1566,8 @@ export async function runBuildDiscussion(
 
   let runFeedback = "";
   let planSearchesLeft = SEARCHES_PER_PHASE;
+  const seenPlanToolCalls = new Set<string>();
+  let duplicatePlanToolCalls = 0;
   for (;;) {
     throwIfAborted();
     const planPrompt = buildArchitectPlanPrompt({
@@ -1536,6 +1612,28 @@ export async function runBuildDiscussion(
         providerId: parseModelId(architect.modelId).providerId,
         message: `Architect made an invalid tool call while planning: ${feedback}`,
       });
+      continue;
+    }
+    const duplicateToolFeedback = duplicateArchitectToolFeedback(
+      action,
+      seenPlanToolCalls
+    );
+    if (duplicateToolFeedback) {
+      duplicatePlanToolCalls += 1;
+      runFeedback += `\n\n${duplicateToolFeedback}`;
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        modelId: architect.modelId,
+        modelName: architect.displayName,
+        providerId: parseModelId(architect.modelId).providerId,
+        message: `Architect repeated a planning tool call: ${duplicateToolFeedback}`,
+      });
+      if (duplicatePlanToolCalls >= 3) {
+        throw new Error(
+          "The Architect repeated the same planning tool call too many times; stopping to avoid wasting more tokens."
+        );
+      }
       continue;
     }
     if (action.action === "search" && planSearchesLeft > 0) {
@@ -2081,17 +2179,13 @@ export async function runBuildDiscussion(
       }
     };
 
-    // A dependency is satisfied once the task has produced output (or can't):
-    // unknown ids and failed tasks count as settled so a typo or a failure
-    // can never deadlock the wave.
+    // A dependency is satisfied only after the Architect has approved it.
+    // "review" output is not enough: dependents should not patch files built
+    // by an unreviewed task. Unknown ids are treated as satisfied by the shared
+    // helper so a typo cannot deadlock a run forever.
     const dependencySettled = (depId: string): boolean => {
       const dep = tasks.find((t) => t.id === depId);
-      return (
-        !dep ||
-        dep.status === "review" ||
-        dep.status === "done" ||
-        dep.status === "failed"
-      );
+      return isBuildTaskDependencySatisfied(dep);
     };
 
     // Dispatch every ready task CONCURRENTLY; repeat so dependency chains run
@@ -2195,6 +2289,10 @@ export async function runBuildDiscussion(
           message: `Running ${batch.length} independent tasks concurrently: ${batch.map((t) => t.id).join(", ")}`,
         });
       }
+      // The write guard only protects concurrently-running tasks. A later
+      // batch may intentionally patch the same file after its dependency has
+      // landed and been approved.
+      waveWrites.clear();
       // allSettled so an abort in one task doesn't leave the siblings as
       // unhandled rejections; runWorkerTask only rethrows abort errors.
       const settled = await Promise.allSettled(batch.map(runWorkerTask));
@@ -2244,6 +2342,8 @@ export async function runBuildDiscussion(
     let reviewReadsLeft = 2;
     let reviewRangeReadsLeft = 6;
     let reviewSearchesLeft = SEARCHES_PER_PHASE;
+    const seenReviewToolCalls = new Set<string>();
+    let duplicateReviewToolCalls = 0;
     let action: ArchitectAction;
     let text: string;
     for (;;) {
@@ -2257,6 +2357,7 @@ export async function runBuildDiscussion(
           // inventing replacements for files it has already seen.
           fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
           executedText: executedText + reviewRunFeedback,
+          outstandingTasks: buildOutstandingTasksDigest(tasks),
           maxNewTasks: limits.tasksPerWave,
           cyclesLeft: limits.cycles - cycle,
           readHopsLeft: reviewReadsLeft,
@@ -2296,6 +2397,28 @@ export async function runBuildDiscussion(
           providerId: parseModelId(architect.modelId).providerId,
           message: `Architect made an invalid tool call while reviewing: ${feedback}`,
         });
+        continue;
+      }
+      const duplicateToolFeedback = duplicateArchitectToolFeedback(
+        action,
+        seenReviewToolCalls
+      );
+      if (duplicateToolFeedback) {
+        duplicateReviewToolCalls += 1;
+        reviewRunFeedback += `\n\n${duplicateToolFeedback}`;
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `Architect repeated a review tool call: ${duplicateToolFeedback}`,
+        });
+        if (duplicateReviewToolCalls >= 3) {
+          throw new Error(
+            "The Architect repeated the same review tool call too many times; stopping to avoid wasting more tokens."
+          );
+        }
         continue;
       }
       if (action.action === "search" && reviewSearchesLeft > 0) {
@@ -2435,7 +2558,24 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
     }
 
-    done = action.done;
+    const remainingDigest = buildOutstandingTasksDigest(tasks);
+    if (action.done && remainingDigest) {
+      done = false;
+      architectNotes = [
+        architectNotes,
+        "The previous review tried to finish the build, but the engine found required tasks still unfinished. Resolve these before marking done:",
+        remainingDigest,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Completion deferred: required tasks are still unfinished.\n${remainingDigest}`,
+      });
+    } else {
+      done = action.done;
+    }
   }
 
   // Fold this build's scoreboard into the global per-model stats (the

@@ -184,11 +184,17 @@ function parseEditOps(body: string[]): ExtractedEditOp[] {
 export function applyEditOps(
   content: string,
   ops: ExtractedEditOp[]
-): { content: string; applied: number; failed: number } {
+): {
+  content: string;
+  applied: number;
+  failed: number;
+  failedOps: Array<{ index: number; searchPreview: string }>;
+} {
   let result = content;
   let applied = 0;
   let failed = 0;
-  for (const op of ops) {
+  const failedOps: Array<{ index: number; searchPreview: string }> = [];
+  for (const [index, op] of ops.entries()) {
     const idx = result.indexOf(op.search);
     if (idx >= 0) {
       result =
@@ -202,9 +208,13 @@ export function applyEditOps(
       applied += 1;
     } else {
       failed += 1;
+      failedOps.push({
+        index: index + 1,
+        searchPreview: op.search.trim().slice(0, 180),
+      });
     }
   }
-  return { content: result, applied, failed };
+  return { content: result, applied, failed, failedOps };
 }
 
 /** Find `needle` in `haystack` comparing lines with trimmed whitespace. */

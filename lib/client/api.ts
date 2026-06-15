@@ -132,6 +132,54 @@ export function setDiscussionRunner(
   );
 }
 
+export interface DiscussionConfigInput {
+  effort: EffortLevel;
+  modelIds: string[];
+  judgeModelId?: string | null;
+  verbosity?: Verbosity;
+  reasoningEffort?: ReasoningEffort;
+  styleNote?: string | null;
+}
+
+/**
+ * Update the configuration used by the next Resume/follow-up pass. This keeps
+ * the transcript and produced files intact; it only changes future model calls.
+ */
+export function updateDiscussionConfig(
+  id: string,
+  input: DiscussionConfigInput
+): Discussion {
+  if (isDiscussionRunning(id)) {
+    throw new Error("Stop the discussion before editing its session settings.");
+  }
+  const discussion = getDiscussionById(id);
+  if (!discussion) {
+    throw new Error("Discussion not found.");
+  }
+  const modelIds = Array.from(
+    new Set(input.modelIds.map((m) => m.trim()).filter(Boolean))
+  );
+  if (modelIds.length < 2) {
+    throw new Error("Select at least two participating models.");
+  }
+  const judgeModelId =
+    input.judgeModelId && input.judgeModelId.trim()
+      ? input.judgeModelId.trim()
+      : modelIds[0];
+  const patch: Partial<Discussion> = {
+    effort: input.effort,
+    modelIds: JSON.stringify(modelIds),
+    judgeModelId,
+    verbosity: input.verbosity ?? discussion.verbosity ?? "balanced",
+    reasoningEffort:
+      input.reasoningEffort ?? discussion.reasoningEffort ?? "default",
+    styleNote: input.styleNote ?? "",
+    updatedAt: new Date().toISOString(),
+  };
+  updateDiscussion(id, patch);
+  return { ...discussion, ...patch };
+}
+
 /** Load the client store (idempotent). Returns needsPassphrase when locked. */
 export async function ensureReady(): Promise<{ needsPassphrase: boolean }> {
   if (isInitialized()) return { needsPassphrase: false };

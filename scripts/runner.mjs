@@ -332,7 +332,8 @@ function applyPatchOps(content, ops) {
   let result = content;
   let applied = 0;
   let failed = 0;
-  for (const op of ops) {
+  const failedOps = [];
+  for (const [index, op] of ops.entries()) {
     const search = String(op.search ?? "");
     const replace = String(op.replace ?? "");
     const idx = result.indexOf(search);
@@ -347,9 +348,13 @@ function applyPatchOps(content, ops) {
       applied += 1;
     } else {
       failed += 1;
+      failedOps.push({
+        index: index + 1,
+        searchPreview: search.trim().slice(0, 180),
+      });
     }
   }
-  return { content: result, applied, failed };
+  return { content: result, applied, failed, failedOps };
 }
 
 function patchFileInProject(relPath, ops) {

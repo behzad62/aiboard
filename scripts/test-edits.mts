@@ -49,6 +49,13 @@ check("fuzzy line match applies", sloppy.applied === 1 && sloppy.content.include
 // 4. Non-matching search fails safely without corrupting the file.
 const miss = applyEditOps(original, [{ search: "not in the file at all", replace: "x" }]);
 check("missing search fails safely", miss.applied === 0 && miss.failed === 1 && miss.content === original, miss);
+check(
+  "missing search reports failed op preview",
+  miss.failedOps.length === 1 &&
+    miss.failedOps[0].index === 1 &&
+    miss.failedOps[0].searchPreview === "not in the file at all",
+  miss.failedOps
+);
 
 // 5. Multiple ops in one block, applied in order.
 const multi = extractArtifacts([

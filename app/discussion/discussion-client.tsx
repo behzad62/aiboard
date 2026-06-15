@@ -17,7 +17,11 @@ import {
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
-import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
+import type { RunnerSelection } from "@/components/RunnerSetup";
+import {
+  DiscussionSessionSettings,
+  type DiscussionSessionSettingsValue,
+} from "@/components/DiscussionSessionSettings";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
 import { getBuildFiles } from "@/lib/client/store";
@@ -27,6 +31,7 @@ import {
 } from "@/components/DiscussionDiagnostics";
 import type { AttachmentSummary } from "@/lib/attachments/types";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ArrowLeft,
   Bell,
@@ -46,10 +51,12 @@ import {
   continueDiscussion,
   ensureReady,
   getDiscussionData,
+  loadDashboard,
   restartDiscussion,
   runDiscussion as runClientDiscussion,
   setDiscussionRunner,
   stopDiscussion,
+  updateDiscussionConfig,
 } from "@/lib/client/api";
 import {
   getProjectHandle,
@@ -133,6 +140,9 @@ function DiscussionPageInner() {
   const id = searchParams.get("id") ?? "";
   const [discussion, setDiscussion] = useState<Discussion | null>(null);
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
+  const [enabledModels, setEnabledModels] = useState<
+    ReturnType<typeof loadDashboard>["enabledModels"]
+  >([]);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<TimelineMessage[]>([]);
   const [finalResult, setFinalResult] =
@@ -159,8 +169,7 @@ function DiscussionPageInner() {
   const [folderHandle, setFolderHandle] =
     useState<FileSystemDirectoryHandle | null>(null);
   const [persistedFiles, setPersistedFiles] = useState<ExtractedFile[]>([]);
-  const [runnerSectionOpen, setRunnerSectionOpen] = useState(false);
-  const runnerSectionRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] = useState("activity");
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
 
@@ -179,7 +188,7 @@ function DiscussionPageInner() {
       if (Notification.permission === "granted") {
         new Notification("Discussion complete", {
           body: `Best answer ready: ${topic.slice(0, 80)}${topic.length > 80 ? "..." : ""}`,
-          icon: "/favicon.ico",
+          icon: "/favicon.svg",
         });
       }
     }
@@ -378,6 +387,7 @@ function DiscussionPageInner() {
         setStatus("not_found");
         return;
       }
+      setEnabledModels(loadDashboard().enabledModels);
       setDiscussion(data.discussion);
       // Restore the tab-session activity log so it survives navigation.
       setDiagnostics(loadDiagnostics(id));
@@ -405,6 +415,17 @@ function DiscussionPageInner() {
       }
     })();
   }, [id, requestNotificationPermission, notifyComplete]);
+
+  useEffect(() => {
+    if (activeTab !== "settings" || status === "loading" || status === "locked") {
+      return;
+    }
+    try {
+      setEnabledModels(loadDashboard().enabledModels);
+    } catch {
+      // The encrypted store may still be locked.
+    }
+  }, [activeTab, status]);
 
   // Build mode with a stored project folder needs a permission check before
   // the run starts (re-granting requires a user gesture, so we gate on a button).
@@ -466,6 +487,28 @@ function DiscussionPageInner() {
             }
           : prev
       );
+    },
+    [discussion]
+  );
+
+  const handleSessionSettingsSave = useCallback(
+    (value: DiscussionSessionSettingsValue) => {
+      if (!discussion) return false;
+      try {
+        const updated = updateDiscussionConfig(discussion.id, value);
+        setDiscussion(updated);
+        const fresh = getDiscussionData(discussion.id);
+        setModelNames(fresh?.modelNames ?? {});
+        setError(null);
+        return true;
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Couldn't save session settings";
+        setError(message);
+        return false;
+      }
     },
     [discussion]
   );
@@ -825,14 +868,7 @@ function DiscussionPageInner() {
                 onManage={
                   !isActive && !streamConnected
                     ? () => {
-                        setRunnerSectionOpen(true);
-                        // Let the section expand before scrolling it into view.
-                        requestAnimationFrame(() => {
-                          runnerSectionRef.current?.scrollIntoView({
-                            behavior: "smooth",
-                            block: "center",
-                          });
-                        });
+                        setActiveTab("settings");
                       }
                     : undefined
                 }
@@ -987,6 +1023,13 @@ function DiscussionPageInner() {
         </div>
       )}
 
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="settings">Session settings</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="activity" className="space-y-6">
       {discussion.mode === "build" && (
         <BuildTaskBoard
           tasks={buildTasks}
@@ -1055,7 +1098,7 @@ function DiscussionPageInner() {
       {/* ── Files from an unfinished build ──────────────────────────
           No final result yet, the run isn't live, but earlier passes already
           produced files. Surface them so they aren't stranded — download them,
-          or attach a runner below and Resume. */}
+          or attach a runner in Session settings and Resume. */}
       {discussion.mode === "build" &&
         !finalResult &&
         !streamConnected &&
@@ -1063,48 +1106,11 @@ function DiscussionPageInner() {
           <div className="space-y-3">
             <p className="rounded-lg border border-dashed bg-card/50 px-4 py-3 text-sm text-muted-foreground">
               Files produced so far — the build didn&apos;t finish. Download them
-              or attach a runner and Resume.
+              or attach a runner in Session settings and Resume.
             </p>
             <ArtifactPanel files={persistedFiles} />
           </div>
         )}
-
-      {/* ── Attach / replace the runner between runs ────────────────
-          Runner config is otherwise frozen at creation; let the user wire one
-          up after the fact and Resume on disk. Only when not actively running. */}
-      {discussion.mode === "build" && !isActive && !streamConnected && (
-        <div ref={runnerSectionRef} className="rounded-xl border bg-card shadow-sm">
-          <button
-            type="button"
-            onClick={() => setRunnerSectionOpen((o) => !o)}
-            aria-expanded={runnerSectionOpen}
-            className="flex w-full items-center justify-between gap-3 p-4 text-left"
-          >
-            <span className="text-sm font-medium">
-              Local runner{" "}
-              <span className="font-normal text-muted-foreground">
-                {discussion.runnerUrl ? "attached" : "not attached"}
-              </span>
-            </span>
-            <span className="font-mono text-[0.7rem] text-muted-foreground">
-              {runnerSectionOpen ? "Hide" : "Edit"}
-            </span>
-          </button>
-          {runnerSectionOpen && (
-            <div className="space-y-3 border-t p-4">
-              <p className="text-xs text-muted-foreground">
-                Attach a runner now and Resume — the build continues with full
-                file access, and already-produced files are synced into the
-                runner&apos;s folder.
-              </p>
-              <RunnerSetup
-                onChange={handleRunnerChange}
-                pickedFolderName={discussion.projectFolderName}
-              />
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Transcript ──────────────────────────────────────────── */}
       <div className="space-y-5">
@@ -1144,6 +1150,19 @@ function DiscussionPageInner() {
           }
         />
       </div>
+        </TabsContent>
+
+        <TabsContent value="settings">
+          <DiscussionSessionSettings
+            discussion={discussion}
+            enabledModels={enabledModels}
+            attachments={attachments}
+            canEdit={!isActive && !streamConnected}
+            onSave={handleSessionSettingsSave}
+            onRunnerChange={handleRunnerChange}
+          />
+        </TabsContent>
+      </Tabs>
 
       </div>
 

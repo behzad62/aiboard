@@ -1,5 +1,8 @@
 /** Quick regression check for parseArchitectAction (run: npx tsx scripts/test-parse-action.mts) */
 import {
+  buildArchitectReviewPrompt,
+  buildOutstandingTasksDigest,
+  isBuildTaskDependencySatisfied,
   outputPathsForTask,
   parseArchitectAction,
 } from "../lib/orchestrator/build";
@@ -34,6 +37,7 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
   ["unlabelled fence", '```\n{"action":"run","command":"npm test"}\n```', (a) => a?.action === "run"],
   ["shell alias parses as run", '{"action":"shell","command":"npm test"}', (a) => a?.action === "run" && (a as { command: string }).command === "npm test"],
   ["shell cmd alias parses as run", '{"action":"shell","cmd":"node -e \\"console.log(1)\\""}', (a) => a?.action === "run" && (a as { command: string }).command.includes("console.log")],
+  ["read_file alias parses as read", '{"action":"read_file","path":"src/game.js"}', (a) => a?.action === "read" && (a as { paths: string[] }).paths[0] === "src/game.js"],
   ["last block wins over earlier braces", 'first {not json}\n```json\n{"action":"review","results":[],"done":false}\n```', (a) => a?.action === "review"],
   [
     "read_range action",
@@ -47,6 +51,14 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
   [
     "patch action",
     '{"action":"patch","path":"src/index.ts","ops":[{"search":"old","replace":"new"}],"reason":"targeted edit"}',
+    (a) =>
+      a?.action === "patch" &&
+      (a as { path: string }).path === "src/index.ts" &&
+      (a as { ops: Array<{ search: string; replace: string }> }).ops.length === 1,
+  ],
+  [
+    "edit alias parses as patch",
+    '{"action":"edit","path":"src/index.ts","ops":[{"search":"old","replace":"new"}]}',
     (a) =>
       a?.action === "patch" &&
       (a as { path: string }).path === "src/index.ts" &&
@@ -109,6 +121,85 @@ for (const [name, task, expected] of pathCases) {
   const result = outputPathsForTask(task);
   const ok = JSON.stringify(result) === JSON.stringify(expected);
   console.log(`${ok ? "PASS" : "FAIL"} — ${name}${ok ? "" : ` → got ${JSON.stringify(result)}`}`);
+  if (!ok) failed++;
+}
+
+const dependencyCases: Array<
+  [string, Parameters<typeof isBuildTaskDependencySatisfied>[0], boolean]
+> = [
+  ["missing dependency id does not deadlock", null, true],
+  ["done dependency is satisfied", { status: "done" }, true],
+  ["review dependency waits for Architect verdict", { status: "review" }, false],
+  ["failed dependency blocks dependent task", { status: "failed" }, false],
+  ["fixing dependency blocks dependent task", { status: "fixing" }, false],
+];
+
+for (const [name, dep, expected] of dependencyCases) {
+  const result = isBuildTaskDependencySatisfied(dep);
+  const ok = result === expected;
+  console.log(`${ok ? "PASS" : "FAIL"} â€” ${name}${ok ? "" : ` â†’ got ${result}`}`);
+  if (!ok) failed++;
+}
+
+const outstandingDigest = buildOutstandingTasksDigest([
+  {
+    id: "T1",
+    title: "Already done",
+    instructions: "",
+    contextFiles: [],
+    status: "done",
+  },
+  {
+    id: "T2",
+    title: "Shotgun wiring",
+    instructions: "",
+    contextFiles: [],
+    status: "failed",
+    failCount: 3,
+    dependsOn: ["T1"],
+  },
+  {
+    id: "T3",
+    title: "Weapon help",
+    instructions: "",
+    contextFiles: [],
+    status: "planned",
+    dependsOn: ["T2"],
+  },
+]);
+
+const outstandingChecks: Array<[string, boolean]> = [
+  [
+    "outstanding digest lists failed task",
+    outstandingDigest.includes("T2 (failed") &&
+      outstandingDigest.includes("Shotgun wiring"),
+  ],
+  ["outstanding digest omits done task", !outstandingDigest.includes("Already done")],
+  ["outstanding digest includes blocked dependency", outstandingDigest.includes("blocked by: T2")],
+];
+
+const reviewPrompt = buildArchitectReviewPrompt({
+  request: "build game",
+  treeText: "src/game.js",
+  executedText: "No worker output landed in this wave.",
+  maxNewTasks: 3,
+  cyclesLeft: 1,
+  outstandingTasks: outstandingDigest,
+});
+outstandingChecks.push(
+  [
+    "review prompt includes outstanding tasks",
+    reviewPrompt.includes("Required tasks still not done") &&
+      reviewPrompt.includes("T2 (failed"),
+  ],
+  [
+    "review prompt forbids done with unfinished tasks",
+    reviewPrompt.includes('Do NOT set "done": true'),
+  ]
+);
+
+for (const [name, ok] of outstandingChecks) {
+  console.log(`${ok ? "PASS" : "FAIL"} â€” ${name}`);
   if (!ok) failed++;
 }
 

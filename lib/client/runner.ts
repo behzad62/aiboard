@@ -150,6 +150,7 @@ export interface RunnerPatchResult {
   content: string | null;
   applied: number;
   failed: number;
+  failedOps?: Array<{ index: number; searchPreview: string }>;
   bytes: number;
 }
 
@@ -169,6 +170,17 @@ export async function patchFileViaRunner(
     content: typeof data.content === "string" ? data.content : null,
     applied: typeof data.applied === "number" ? data.applied : 0,
     failed: typeof data.failed === "number" ? data.failed : 0,
+    failedOps: Array.isArray(data.failedOps)
+      ? data.failedOps
+          .filter(
+            (op: unknown): op is { index: number; searchPreview: string } =>
+              !!op &&
+              typeof (op as { index?: unknown }).index === "number" &&
+              typeof (op as { searchPreview?: unknown }).searchPreview ===
+                "string"
+          )
+          .slice(0, 8)
+      : undefined,
     bytes: typeof data.bytes === "number" ? data.bytes : 0,
   };
 }

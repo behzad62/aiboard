@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,8 @@ export interface RunnerSelection {
 
 interface RunnerSetupProps {
   onChange?: (selection: RunnerSelection | null) => void;
+  initialSelection?: RunnerSelection | null;
+  disabled?: boolean;
   /** Name of the browser-picked project folder, to warn on a mismatch. */
   pickedFolderName?: string | null;
 }
@@ -29,16 +31,32 @@ interface RunnerSetupProps {
  * runner's folder, command execution (gated by the access level), and MCP
  * tools.
  */
-export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
-  const [url, setUrl] = useState(DEFAULT_RUNNER_URL);
-  const [token, setToken] = useState("");
-  const [access, setAccess] = useState<"ask" | "full">("ask");
+export function RunnerSetup({
+  onChange,
+  initialSelection,
+  disabled = false,
+  pickedFolderName,
+}: RunnerSetupProps) {
+  const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_URL);
+  const [token, setToken] = useState(initialSelection?.token ?? "");
+  const [access, setAccess] = useState<"ask" | "full">(
+    initialSelection?.access ?? "ask"
+  );
   const [connectedDir, setConnectedDir] = useState<string | null>(null);
   const [status, setStatus] = useState<
     { state: "idle" | "ok" | "error"; message?: string }
   >({ state: "idle" });
 
+  useEffect(() => {
+    setUrl(initialSelection?.url ?? DEFAULT_RUNNER_URL);
+    setToken(initialSelection?.token ?? "");
+    setAccess(initialSelection?.access ?? "ask");
+    setConnectedDir(null);
+    setStatus({ state: "idle" });
+  }, [initialSelection?.access, initialSelection?.token, initialSelection?.url]);
+
   const emit = (next: Partial<RunnerSelection>) => {
+    if (disabled) return;
     const sel = {
       url: next.url ?? url,
       token: next.token ?? token,
@@ -48,6 +66,7 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
   };
 
   const test = async () => {
+    if (disabled) return;
     setStatus({ state: "idle", message: "Checking…" });
     const result = await checkRunner({ url, token });
     setConnectedDir(result.ok ? result.dir ?? null : null);
@@ -117,6 +136,7 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
             <Input
               id="runner-url"
               value={url}
+              disabled={disabled}
               onChange={(e) => {
                 setUrl(e.target.value);
                 emit({ url: e.target.value });
@@ -131,6 +151,7 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
             <Input
               id="runner-token"
               value={token}
+              disabled={disabled}
               onChange={(e) => {
                 setToken(e.target.value);
                 emit({ token: e.target.value });
@@ -161,6 +182,7 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
                 <button
                   key={opt.value}
                   type="button"
+                  disabled={disabled}
                   onClick={() => {
                     setAccess(opt.value);
                     emit({ access: opt.value });
@@ -187,7 +209,7 @@ export function RunnerSetup({ onChange, pickedFolderName }: RunnerSetupProps) {
             variant="outline"
             size="sm"
             onClick={test}
-            disabled={!token.trim()}
+            disabled={disabled || !token.trim()}
           >
             Test connection
           </Button>
