@@ -13,7 +13,7 @@ import type {
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
-import type { SelectedModel } from "@/lib/providers/base";
+import type { ChatMessage, SelectedModel } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import { resolveModelName } from "./providers";
 import {
@@ -32,6 +32,8 @@ import {
   buildIncompleteTaskFailure,
   buildOutstandingTasksDigest,
   buildWaveReviewDigest,
+  compactToolConversation,
+  createToolCallTracker,
   formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
   classifyRunCommand,
@@ -42,17 +44,24 @@ import {
   hasCompleteBuildToolAction,
   inspectStrictToolActionOutput,
   isBuildTaskDependencySatisfied,
+  isBuildToolAction,
   isGitHubWorkflowCommand,
+  isRedundantToolCall,
   outputPathsForTask,
   parseArchitectAction,
+  recordToolCall,
   runBudgetStatus,
   summarizeFileChange,
+  DUPLICATE_TOOL_CALL_FEEDBACK,
+  FORCED_PLAN_INSTRUCTION,
+  FORCED_REVIEW_INSTRUCTION,
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
   type FetchAction,
   type FileChangeOperation,
   type PlanAction,
+  type ReviewAction,
   type ToolAction,
 } from "@/lib/orchestrator/build";
 import {
@@ -895,16 +904,25 @@ export async function runBuildDiscussion(
   };
 
   const readFile = async (path: string): Promise<string | null> => {
+    // Prefer the runner when connected: it reads the REAL file from disk, so the
+    // content is fresh (e.g. after a command touched it), it shows up in the
+    // runner console (`[read]`), and whole-file reads stay consistent with
+    // read_range/search which already hit the runner first. Fall back to the
+    // in-memory virtual FS (in-app-only builds, or a file the runner couldn't
+    // serve — missing/binary/sync failure), then the picked folder.
+    if (runner) {
+      const remote = await readFileViaRunner(runner, path);
+      if (remote != null) return remote;
+    }
     if (virtualFs.has(path)) return virtualFs.get(path)!;
     if (dirHandle) {
       try {
         const content = await readProjectFile(dirHandle, path);
         if (content != null) return content;
       } catch {
-        // fall through to the runner
+        // fall through
       }
     }
-    if (runner) return readFileViaRunner(runner, path);
     return null;
   };
 
@@ -1089,11 +1107,20 @@ export async function runBuildDiscussion(
       ? `Previous incomplete build transcript excerpt. Use this to resume from the stopped/failed state instead of starting over:\n\n${previousBuildContext}`
       : "");
 
-  const streamTurn = async (
+  const ARCHITECT_SYSTEM_ROLE =
+    "You are the Architect orchestrating an AI engineering team. Follow the response format exactly.";
+
+  /**
+   * One model call over a FULL conversation. The agentic tool loops append the
+   * model's turn and the tool result as real messages, so the model always sees
+   * exactly what it already read — instead of the old design that re-injected a
+   * single giant string and front-truncated it (silently dropping the newest
+   * reads, which is what made the Architect re-read the same lines forever).
+   */
+  const streamConversation = async (
     model: SelectedModel,
-    prompt: string,
+    messages: ChatMessage[],
     opts: {
-      systemRole: string;
       maxTokens: number;
       label: string;
       stopWhen?: (content: string) => boolean;
@@ -1119,10 +1146,6 @@ export async function runBuildDiscussion(
       providerId,
       message: opts.label,
     });
-    const messages = [
-      { role: "system" as const, content: opts.systemRole },
-      { role: "user" as const, content: prompt },
-    ];
     const content = await collectStream(
       model.modelId,
       providerId,
@@ -1169,42 +1192,25 @@ export async function runBuildDiscussion(
     return content;
   };
 
-  /** Architect turn that must yield a parseable action (one strict retry). */
-  const architectAction = async (
+  /** Single-shot turn (system + one user prompt) — used for the final summary. */
+  const streamTurn = (
+    model: SelectedModel,
     prompt: string,
-    label: string
-  ): Promise<{ action: ArchitectAction; text: string }> => {
-    let text = await streamTurn(architect, prompt, {
-      systemRole:
-        "You are the Architect orchestrating an AI engineering team. Follow the response format exactly.",
-      maxTokens: architectMaxTokens,
-      label,
-      stopWhen: hasCompleteBuildToolAction,
-    });
-    let action = parseArchitectAction(text);
-    if (!action) {
-      // Don't lose files the Architect emitted in the unparseable attempt —
-      // the strict retry returns ONLY the json block, without them.
-      await writeEmittedFiles(text);
-      text = await streamTurn(
-        architect,
-        `${prompt}\n\n${STRICT_RETRY_INSTRUCTION}`,
-        {
-          systemRole: "Respond with ONLY the fenced json action block.",
-          maxTokens: architectMaxTokens,
-          label: `${label} (strict retry)`,
-          stopWhen: hasCompleteBuildToolAction,
-        }
-      );
-      action = parseArchitectAction(text);
+    opts: {
+      systemRole: string;
+      maxTokens: number;
+      label: string;
+      stopWhen?: (content: string) => boolean;
     }
-    if (!action) {
-      throw new Error(
-        "The Architect did not produce a parseable plan/review action."
-      );
-    }
-    return { action, text };
-  };
+  ): Promise<string> =>
+    streamConversation(
+      model,
+      [
+        { role: "system", content: opts.systemRole },
+        { role: "user", content: prompt },
+      ],
+      { maxTokens: opts.maxTokens, label: opts.label, stopWhen: opts.stopWhen }
+    );
 
   const claimWaveWrite = (path: string, taskId?: string): string | null => {
     if (taskId == null) return null;
@@ -1483,6 +1489,326 @@ export async function runBuildDiscussion(
     return { written, issues };
   };
 
+  // ── Architect agentic inspection loop (shared by plan + review) ────────────
+  // Maintains a real conversation: the Architect's tool call and the tool result
+  // become successive messages, so it never loses what it read. Overlap-aware
+  // dedup stops it re-reading the same lines, and when the inspection budget /
+  // dedup / turn cap is hit we FORCE a final verdict instead of throwing the
+  // whole build away.
+  const kbOf = (text: string): string =>
+    `${(new TextEncoder().encode(text).length / 1024).toFixed(1)} KB`;
+
+  const describeToolAction = (a: ArchitectAction): string => {
+    switch (a.action) {
+      case "read":
+        return `read ${a.paths.join(", ")}`;
+      case "read_range":
+        return `read_range ${a.path}:${a.startLine}+${a.lineCount}`;
+      case "search":
+        return `search "${a.query}"`;
+      case "run":
+        return `run ${a.command}`;
+      case "fetch":
+        return `fetch ${a.url}`;
+      case "tool":
+        return `tool ${a.server}.${a.tool}`;
+      default:
+        return a.action;
+    }
+  };
+
+  /** Parse the "--- path lines X-Y of Z ---" header readFileRange emits. */
+  const parseDeliveredRange = (
+    text: string
+  ): { startLine: number; endLine: number } | undefined => {
+    const m = /lines (\d+)-(\d+) of \d+/.exec(text);
+    if (!m) return undefined;
+    return { startLine: Number(m[1]), endLine: Number(m[2]) };
+  };
+
+  interface InspectionBudgets {
+    reads: number;
+    rangeReads: number;
+    searches: number;
+  }
+
+  interface ArchitectDispatch {
+    result: string;
+    exhausted: boolean;
+    deliveredRange?: { startLine: number; endLine: number };
+  }
+
+  /** Run one Architect tool action against the budgets; returns the result text. */
+  const dispatchArchitectTool = async (
+    action: ArchitectAction,
+    budgets: InspectionBudgets,
+    appendContext: (text: string) => void
+  ): Promise<ArchitectDispatch> => {
+    if (action.action === "search") {
+      if (budgets.searches <= 0)
+        return {
+          result:
+            "No project searches left in this phase. Use a remaining tool, or produce your decision JSON now.",
+          exhausted: true,
+        };
+      budgets.searches -= 1;
+      const out = await searchProject(action.query);
+      appendContext(`\nSearch results for "${action.query}":\n${out}`);
+      emitFileToolDiagnostic(
+        `${formatBuildFileToolDiagnostic({ actor: "Architect", action: "search", query: action.query })} · ${kbOf(out)} · ${budgets.searches} search(es) left`,
+        architect
+      );
+      return { result: `Search results for "${action.query}":\n${out}`, exhausted: false };
+    }
+    if (action.action === "read") {
+      if (budgets.reads <= 0)
+        return {
+          result:
+            "No whole-file reads left in this phase. Use read_range for specific lines, or produce your decision JSON now.",
+          exhausted: true,
+        };
+      budgets.reads -= 1;
+      const paths = action.paths.slice(0, 8);
+      const chunks: string[] = [];
+      for (const path of paths) {
+        const content = await readFile(path);
+        chunks.push(`\n--- ${path} ---\n${content ?? "[not found or binary]"}`);
+      }
+      const joined = chunks.join("\n");
+      appendContext(`\nRequested file contents:${joined}`);
+      emitFileToolDiagnostic(
+        `${formatBuildFileToolDiagnostic({ actor: "Architect", action: "read", paths })} · ${kbOf(joined)} · ${budgets.reads} read(s) left`,
+        architect
+      );
+      return { result: `Requested file contents:${joined}`, exhausted: false };
+    }
+    if (action.action === "read_range") {
+      if (budgets.rangeReads <= 0)
+        return {
+          result:
+            "No range reads left in this phase. Produce your decision JSON now using what you already have.",
+          exhausted: true,
+        };
+      budgets.rangeReads -= 1;
+      const out = await readFileRange(action.path, action.startLine, action.lineCount);
+      appendContext(`\nRequested file range:\n${out}`);
+      const delivered = parseDeliveredRange(out);
+      emitFileToolDiagnostic(
+        `${formatBuildFileToolDiagnostic({ actor: "Architect", action: "read_range", path: action.path, startLine: action.startLine, lineCount: action.lineCount })} · ${kbOf(out)} · ${budgets.rangeReads} range read(s) left`,
+        architect
+      );
+      return { result: out, exhausted: false, deliveredRange: delivered };
+    }
+    if (action.action === "run") {
+      if (!canExecuteRunAction(action.command))
+        return {
+          result:
+            "No command runs left in this phase. Produce your decision JSON now.",
+          exhausted: true,
+        };
+      return { result: await executeRun(action.command, action.reason), exhausted: false };
+    }
+    if (action.action === "tool") {
+      if (mcpCallsLeftThisPhase() <= 0)
+        return {
+          result: "No MCP tool calls left in this phase. Produce your decision JSON now.",
+          exhausted: true,
+        };
+      return { result: await executeTool(action), exhausted: false };
+    }
+    if (action.action === "fetch") {
+      if (fetchesLeftThisPhase() <= 0)
+        return {
+          result: "No web fetches left in this phase. Produce your decision JSON now.",
+          exhausted: true,
+        };
+      return { result: await executeFetch(action), exhausted: false };
+    }
+    return {
+      result: `Action "${action.action}" is not available here. Produce your decision JSON now.`,
+      exhausted: true,
+    };
+  };
+
+  const emitArchitectLoopDiag = (
+    phase: "round_preparing" | "judging" | "model_failed" | "model_streaming",
+    message: string
+  ): void =>
+    emit({
+      type: "diagnostic",
+      phase,
+      modelId: architect.modelId,
+      modelName: architect.displayName,
+      providerId: parseModelId(architect.modelId).providerId,
+      message,
+    });
+
+  const runArchitectInspectionLoop = async (args: {
+    terminal: "plan" | "review";
+    label: string;
+    initialUser: string;
+    budgets: InspectionBudgets;
+    /** Accumulate delivered read/search results for cross-phase memory. */
+    appendContext: (text: string) => void;
+  }): Promise<{ action: ArchitectAction; text: string; forced: boolean }> => {
+    const { terminal } = args;
+    let messages: ChatMessage[] = [
+      { role: "system", content: ARCHITECT_SYSTEM_ROLE },
+      { role: "user", content: args.initialUser },
+    ];
+    const tracker = createToolCallTracker();
+    const budgets = { ...args.budgets };
+    const forcedInstruction =
+      terminal === "review" ? FORCED_REVIEW_INSTRUCTION : FORCED_PLAN_INSTRUCTION;
+    const decisionPhase = terminal === "review" ? "judging" : "round_preparing";
+    const HARD_TURN_CAP = 40;
+    const DUP_LIMIT = 3;
+    const BAD_LIMIT = 3;
+    const EXHAUSTED_LIMIT = 2;
+    let duplicates = 0;
+    let badTurns = 0;
+    let exhaustedStreak = 0;
+    let forced = false;
+    let forcedAttempts = 0;
+
+    const forceNow = (why: string): void => {
+      if (forced) return;
+      forced = true;
+      emitArchitectLoopDiag(
+        decisionPhase,
+        `Architect ${terminal} inspection ended (${why}) — forcing a final ${terminal} verdict with the current context`
+      );
+      messages.push({ role: "user", content: forcedInstruction });
+    };
+
+    const defaultReview = (text: string): { action: ArchitectAction; text: string; forced: boolean } => ({
+      action: { action: "review", results: [], newTasks: [], done: false, notes: "" } as ReviewAction,
+      text,
+      forced: true,
+    });
+
+    for (let turn = 0; turn < HARD_TURN_CAP; turn++) {
+      throwIfAborted();
+      const compacted = compactToolConversation(messages, 120_000, 8);
+      if (compacted.compacted > 0) {
+        messages = compacted.messages;
+        emitArchitectLoopDiag(
+          "model_streaming",
+          `Compacted the Architect's ${terminal} context — folded ${compacted.compacted} older tool exchange(s) to stay within budget`
+        );
+      }
+      const text = await streamConversation(architect, messages, {
+        maxTokens: architectMaxTokens,
+        label: forced ? `${args.label} (final verdict)` : args.label,
+        stopWhen: forced ? undefined : hasCompleteBuildToolAction,
+      });
+      messages.push({ role: "assistant", content: text });
+
+      const parsed = parseArchitectAction(text);
+      if (parsed && parsed.action === terminal) {
+        return { action: parsed, text, forced };
+      }
+      if (forced) {
+        // The forced turn still didn't produce the verdict.
+        if (terminal === "review") {
+          emitArchitectLoopDiag(
+            "judging",
+            "Architect did not return a review verdict even after being forced — defaulting to approve this wave's landed work and continuing"
+          );
+          return defaultReview(text);
+        }
+        // For planning we make one more forced attempt below (bad-turn path).
+      }
+
+      const strict = inspectStrictToolActionOutput(text);
+      if (strict.feedback && !strict.valid) {
+        badTurns += 1;
+        await writeEmittedFiles(text); // never lose files emitted in a bad turn
+        emitArchitectLoopDiag(
+          "model_failed",
+          `Architect ${terminal} tool-call rejected: ${strict.feedback}`
+        );
+        messages.push({
+          role: "user",
+          content: `${strict.feedback}\nReply with exactly one valid JSON tool action, or produce your ${terminal} JSON now.`,
+        });
+        if (badTurns >= BAD_LIMIT) forceNow("too many malformed responses");
+        continue;
+      }
+
+      const toolAction = strict.action;
+      if (!toolAction || !isBuildToolAction(toolAction)) {
+        badTurns += 1;
+        await writeEmittedFiles(text);
+        if (forced && terminal === "plan") {
+          throw new Error(
+            "The Architect did not produce a parseable plan after being forced to."
+          );
+        }
+        messages.push({
+          role: "user",
+          content: `${STRICT_RETRY_INSTRUCTION}\nEmit ONE JSON tool action, or produce your ${terminal} JSON now.`,
+        });
+        if (badTurns >= BAD_LIMIT) forceNow("no parseable action");
+        continue;
+      }
+
+      if (forced) {
+        // Tools are ignored once forced. Nudge once more, then give up rather
+        // than burn turns (review already returned a default above; this only
+        // guards planning, which has no safe default).
+        forcedAttempts += 1;
+        if (forcedAttempts >= 2) {
+          throw new Error(
+            "The Architect kept requesting tools after being told to stop; could not obtain a plan verdict."
+          );
+        }
+        messages.push({ role: "user", content: forcedInstruction });
+        continue;
+      }
+
+      if (isRedundantToolCall(tracker, toolAction)) {
+        duplicates += 1;
+        emitArchitectLoopDiag(
+          "model_failed",
+          `Architect repeated a ${terminal} lookup (${describeToolAction(toolAction)}) — rejected as duplicate`
+        );
+        messages.push({ role: "user", content: DUPLICATE_TOOL_CALL_FEEDBACK });
+        if (duplicates >= DUP_LIMIT) forceNow("repeated the same lookups");
+        continue;
+      }
+
+      const warning = strict.feedback && strict.valid ? `${strict.feedback}\n\n` : "";
+      const dispatch = await dispatchArchitectTool(toolAction, budgets, args.appendContext);
+      if (dispatch.exhausted) {
+        exhaustedStreak += 1;
+        messages.push({ role: "user", content: `${warning}${dispatch.result}` });
+        if (exhaustedStreak >= EXHAUSTED_LIMIT) forceNow("inspection budget exhausted");
+        continue;
+      }
+      exhaustedStreak = 0;
+      badTurns = 0;
+      recordToolCall(tracker, toolAction, dispatch.deliveredRange);
+      const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${terminal} JSON as soon as you have what you need.)`;
+      messages.push({
+        role: "user",
+        content: `${warning}Tool result:\n${dispatch.result}${budgetNote}`,
+      });
+    }
+
+    // Hard turn cap — never let a stuck loop kill a working build.
+    if (terminal === "review") {
+      emitArchitectLoopDiag(
+        "judging",
+        "Architect review hit the turn cap — defaulting to approve this wave's landed work and continuing"
+      );
+      return defaultReview("");
+    }
+    throw new Error(
+      "The Architect did not produce a parseable plan after exhausting its planning turns."
+    );
+  };
+
   const toTask = (
     raw: PlanAction["tasks"][number],
     index: number
@@ -1513,46 +1839,11 @@ export async function runBuildDiscussion(
   });
   emit({ type: "status", status: "running", round: 0, maxRounds: totalPhases });
 
-  // ── 1) Plan (with up to 2 read hops) ───────────────────────────────────────
+  // ── 1) Plan (the Architect inspects files in a real conversation, then plans) ─
   let architectNotes = "";
   let extraFileContext = "";
-  let readHopsLeft = 2;
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
-  const architectToolKey = (action: ArchitectAction): string | null => {
-    if (action.action === "read") {
-      return `read:${action.paths.map((p) => p.trim().toLowerCase()).sort().join("|")}`;
-    }
-    if (action.action === "read_range") {
-      return `read_range:${action.path.trim().toLowerCase()}:${action.startLine}:${action.lineCount}`;
-    }
-    if (action.action === "search") {
-      return `search:${action.query.trim().toLowerCase()}`;
-    }
-    if (action.action === "run") {
-      return `run:${action.command.trim().toLowerCase()}`;
-    }
-    if (action.action === "fetch") {
-      return `fetch:${action.url.trim().toLowerCase()}`;
-    }
-    if (action.action === "tool") {
-      return `tool:${action.server.trim().toLowerCase()}.${action.tool.trim().toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
-    }
-    return null;
-  };
-
-  const duplicateArchitectToolFeedback = (
-    action: ArchitectAction,
-    seen: Set<string>
-  ): string | null => {
-    const key = architectToolKey(action);
-    if (!key) return null;
-    if (!seen.has(key)) {
-      seen.add(key);
-      return null;
-    }
-    return "DUPLICATE TOOL CALL REJECTED: you already received this exact tool result. Use the previous result in your context, request a different range/search/command if needed, or produce the plan/review JSON now.";
-  };
 
   // Give the Architect the obvious entry points of an existing project up front
   // so it usually doesn't need to spend a read hop on them.
@@ -1567,136 +1858,46 @@ export async function runBuildDiscussion(
     extraFileContext = `\nKey project files:${extraFileContext}`;
   }
 
-  let runFeedback = "";
-  let planSearchesLeft = SEARCHES_PER_PHASE;
-  const seenPlanToolCalls = new Set<string>();
-  let duplicatePlanToolCalls = 0;
-  for (;;) {
-    throwIfAborted();
-    const planPrompt = buildArchitectPlanPrompt({
-      request: discussion.topic,
-      treeText: treeText(),
-      fileContext: extraFileContext + runFeedback,
-      maxTasks: limits.tasksPerWave,
-      workerNames: workers.map((w) => w.displayName),
-      readHopsLeft,
-      runsLeft: runsLeftThisPhase(),
-      githubWorkflow: githubWorkflow && !!runner,
-      searchesLeft: planSearchesLeft,
-      mcpToolsDoc,
-      mcpCallsLeft: mcpCallsLeftThisPhase(),
-      userNotes: userNotesText(),
-      scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
-      previousSummary: truncate(previousSummary, 6_000),
-      fetchesLeft: fetchesLeftThisPhase(),
-      shellHint,
+  {
+    const planResult = await runArchitectInspectionLoop({
+      terminal: "plan",
+      label: "Architect is planning the project",
+      initialUser: buildArchitectPlanPrompt({
+        request: discussion.topic,
+        treeText: treeText(),
+        fileContext: extraFileContext,
+        maxTasks: limits.tasksPerWave,
+        workerNames: workers.map((w) => w.displayName),
+        readHopsLeft: 2,
+        runsLeft: runsLeftThisPhase(),
+        githubWorkflow: githubWorkflow && !!runner,
+        searchesLeft: SEARCHES_PER_PHASE,
+        mcpToolsDoc,
+        mcpCallsLeft: mcpCallsLeftThisPhase(),
+        userNotes: userNotesText(),
+        scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+        previousSummary: truncate(previousSummary, 6_000),
+        fetchesLeft: fetchesLeftThisPhase(),
+        shellHint,
+      }),
+      // read_range isn't offered during planning, so reads + searches only.
+      budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
+      appendContext: (text) => {
+        extraFileContext += text;
+      },
     });
-    const { action, text } = await architectAction(planPrompt, "Architect is planning the project");
-    const strictTool = inspectStrictToolActionOutput(text);
-    if (strictTool.action && strictTool.feedback && strictTool.valid) {
-      runFeedback += `\n\n${strictTool.feedback}`;
-      emit({
-        type: "diagnostic",
-        phase: "model_failed",
-        modelId: architect.modelId,
-        modelName: architect.displayName,
-        providerId: parseModelId(architect.modelId).providerId,
-        message: `Architect tool-call warning while planning: ${strictTool.feedback}`,
-      });
-    } else if (strictTool.feedback && !strictTool.valid) {
-      const feedback =
-        strictTool.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
-      runFeedback += `\n\n${feedback}\nRe-issue exactly one valid JSON tool action, or produce the plan JSON.`;
-      emit({
-        type: "diagnostic",
-        phase: "model_failed",
-        modelId: architect.modelId,
-        modelName: architect.displayName,
-        providerId: parseModelId(architect.modelId).providerId,
-        message: `Architect made an invalid tool call while planning: ${feedback}`,
-      });
-      continue;
+    const planAction = planResult.action as PlanAction;
+    tasks = planAction.tasks.slice(0, limits.tasksPerWave).map(toTask);
+    architectNotes = planAction.notes ?? "";
+    planVerifyCommand =
+      typeof planAction.verifyCommand === "string"
+        ? planAction.verifyCommand.trim()
+        : "";
+    // The Architect may scaffold files alongside the plan JSON.
+    const { issues } = await writeEmittedFiles(planResult.text);
+    if (issues.length > 0) {
+      extraFileContext += `\nYOUR SCAFFOLD WRITES THAT DID NOT LAND:\n${issues.map((s) => `- ${s}`).join("\n")}`;
     }
-    const duplicateToolFeedback = duplicateArchitectToolFeedback(
-      action,
-      seenPlanToolCalls
-    );
-    if (duplicateToolFeedback) {
-      duplicatePlanToolCalls += 1;
-      runFeedback += `\n\n${duplicateToolFeedback}`;
-      emit({
-        type: "diagnostic",
-        phase: "model_failed",
-        modelId: architect.modelId,
-        modelName: architect.displayName,
-        providerId: parseModelId(architect.modelId).providerId,
-        message: `Architect repeated a planning tool call: ${duplicateToolFeedback}`,
-      });
-      if (duplicatePlanToolCalls >= 3) {
-        throw new Error(
-          "The Architect repeated the same planning tool call too many times; stopping to avoid wasting more tokens."
-        );
-      }
-      continue;
-    }
-    if (action.action === "search" && planSearchesLeft > 0) {
-      planSearchesLeft -= 1;
-      emitFileToolDiagnostic(
-        formatBuildFileToolDiagnostic({
-          actor: "Architect",
-          action: "search",
-          query: action.query,
-        }),
-        architect
-      );
-      extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
-      continue;
-    }
-    if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
-      runFeedback += `\n\nTool result:\n${await executeTool(action)}`;
-      continue;
-    }
-    if (action.action === "fetch" && fetchesLeftThisPhase() > 0) {
-      runFeedback += `\n\nWeb fetch result:\n${await executeFetch(action)}`;
-      continue;
-    }
-    if (action.action === "read" && readHopsLeft > 0) {
-      readHopsLeft -= 1;
-      const paths = action.paths.slice(0, 8);
-      emitFileToolDiagnostic(
-        formatBuildFileToolDiagnostic({
-          actor: "Architect",
-          action: "read",
-          paths,
-        }),
-        architect
-      );
-      const chunks: string[] = [];
-      for (const path of paths) {
-        const content = await readFile(path);
-        chunks.push(
-          `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
-        );
-      }
-      extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
-      continue;
-    }
-    if (action.action === "run" && canExecuteRunAction(action.command)) {
-      runFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
-      continue;
-    }
-    if (action.action === "plan") {
-      tasks = action.tasks.slice(0, limits.tasksPerWave).map(toTask);
-      architectNotes = action.notes ?? "";
-      planVerifyCommand =
-        typeof action.verifyCommand === "string" ? action.verifyCommand.trim() : "";
-      const { issues } = await writeEmittedFiles(text); // architect may scaffold files in the plan
-      if (issues.length > 0) {
-        extraFileContext += `\nYOUR SCAFFOLD WRITES THAT DID NOT LAND:\n${issues.map((s) => `- ${s}`).join("\n")}`;
-      }
-      break;
-    }
-    throw new Error("The Architect's first action must be a plan.");
   }
 
   if (tasks.length === 0) {
@@ -1850,19 +2051,6 @@ export async function runBuildDiscussion(
       action.action === "patch" ||
       action.action === "append";
 
-    const workerInspectionKey = (action: ArchitectAction): string | null => {
-      if (action.action === "read") {
-        return `read:${action.paths.map((p) => p.trim().toLowerCase()).sort().join("|")}`;
-      }
-      if (action.action === "read_range") {
-        return `read_range:${action.path.trim().toLowerCase()}:${action.startLine}:${action.lineCount}`;
-      }
-      if (action.action === "search") {
-        return `search:${action.query.trim().toLowerCase()}`;
-      }
-      return null;
-    };
-
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const worker = workers[task.workerIndex!];
       const stat = scoreboard[task.workerIndex!];
@@ -1890,58 +2078,66 @@ export async function runBuildDiscussion(
       const patchedFiles: string[] = [];
       const toolIssues: string[] = [];
       try {
-        let toolContext = "";
-        let readsLeft = WORKER_READS_PER_TASK;
-        let rangeReadsLeft = WORKER_RANGE_READS_PER_TASK;
-        let searchesLeft = WORKER_SEARCHES_PER_TASK;
-        let patchesLeft = WORKER_PATCHES_PER_TASK;
-        let appendsLeft = WORKER_APPENDS_PER_TASK;
-        let badToolCalls = 0;
-        const seenInspectionCalls = new Set<string>();
-        for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
-          output = await streamTurn(
-            worker,
-            buildWorkerTaskPrompt({
+        let workerMessages: ChatMessage[] = [
+          {
+            role: "system",
+            content:
+              "You are an AI engineer completing one assigned task. Use file tools when needed, then output the final files or notes.",
+          },
+          {
+            role: "user",
+            content: buildWorkerTaskPrompt({
               request: discussion.topic,
               treeText: treeText(),
               task,
-              contextFileText:
-                (contextChunks.length
-                  ? `\nContext files:${contextChunks.join("\n")}`
-                  : "") + truncate(toolContext, 24_000),
+              contextFileText: contextChunks.length
+                ? `\nContext files:${contextChunks.join("\n")}`
+                : "",
               architectNotes,
               toolInstructions: workerToolInstructions({
-                reads: readsLeft,
-                rangeReads: rangeReadsLeft,
-                searches: searchesLeft,
-                patches: patchesLeft,
-                appends: appendsLeft,
+                reads: WORKER_READS_PER_TASK,
+                rangeReads: WORKER_RANGE_READS_PER_TASK,
+                searches: WORKER_SEARCHES_PER_TASK,
+                patches: WORKER_PATCHES_PER_TASK,
+                appends: WORKER_APPENDS_PER_TASK,
               }),
               verbosityInstruction,
             }),
-            {
-              systemRole:
-                "You are an AI engineer completing one assigned task. Use file tools when needed, then output the final files or notes.",
-              maxTokens: workerMaxTokens,
-              label:
-                turn === 0
-                  ? `${worker.displayName} working on ${task.id}: ${task.title}`
-                  : `${worker.displayName} continuing ${task.id}: ${task.title}`,
-              stopWhen: hasCompleteBuildToolAction,
-            }
-          );
-          const inspected = inspectStrictToolActionOutput(output);
-          if (inspected.action && inspected.feedback && inspected.valid) {
-            toolContext += `\n\n${inspected.feedback}`;
+          },
+        ];
+        const budgets = {
+          reads: WORKER_READS_PER_TASK,
+          rangeReads: WORKER_RANGE_READS_PER_TASK,
+          searches: WORKER_SEARCHES_PER_TASK,
+          patches: WORKER_PATCHES_PER_TASK,
+          appends: WORKER_APPENDS_PER_TASK,
+        };
+        const tracker = createToolCallTracker();
+        let badToolCalls = 0;
+        for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
+          const compacted = compactToolConversation(workerMessages, 80_000, 8);
+          if (compacted.compacted > 0) {
+            workerMessages = compacted.messages;
             emit({
               type: "diagnostic",
-              phase: "model_failed",
+              phase: "model_streaming",
               modelId: worker.modelId,
               modelName: worker.displayName,
               providerId: parseModelId(worker.modelId).providerId,
-              message: `${worker.displayName} tool-call warning for ${task.id}: ${inspected.feedback}`,
+              message: `Compacted ${worker.displayName}'s context for ${task.id} — folded ${compacted.compacted} older tool exchange(s)`,
             });
-          } else if (inspected.feedback && !inspected.valid) {
+          }
+          output = await streamConversation(worker, workerMessages, {
+            maxTokens: workerMaxTokens,
+            label:
+              turn === 0
+                ? `${worker.displayName} working on ${task.id}: ${task.title}`
+                : `${worker.displayName} continuing ${task.id}: ${task.title}`,
+            stopWhen: hasCompleteBuildToolAction,
+          });
+          workerMessages.push({ role: "assistant", content: output });
+          const inspected = inspectStrictToolActionOutput(output);
+          if (inspected.feedback && !inspected.valid) {
             badToolCalls += 1;
             const feedback =
               inspected.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
@@ -1954,7 +2150,10 @@ export async function runBuildDiscussion(
               providerId: parseModelId(worker.modelId).providerId,
               message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
             });
-            toolContext += `\n\n${feedback}\nDo not repeat the same malformed response. Reply with exactly one valid JSON tool action, or stop using tools and provide final file output.`;
+            workerMessages.push({
+              role: "user",
+              content: `${feedback}\nDo not repeat the same malformed response. Reply with exactly one valid JSON tool action, or stop using tools and provide final file output.`,
+            });
             if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
               toolIssues.push(
                 `Too many malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
@@ -1966,21 +2165,18 @@ export async function runBuildDiscussion(
           const action = inspected.action ?? parseArchitectAction(output);
           if (!action || !isWorkerFileAction(action)) break;
 
-          const duplicateKey = workerInspectionKey(action);
-          if (duplicateKey && seenInspectionCalls.has(duplicateKey)) {
+          if (isRedundantToolCall(tracker, action)) {
             badToolCalls += 1;
-            const feedback =
-              "DUPLICATE TOOL CALL REJECTED: you already received this exact read/search result. Use the previous tool result in your context, request a different range/search if needed, or apply a patch now.";
-            toolIssues.push(feedback);
+            toolIssues.push(DUPLICATE_TOOL_CALL_FEEDBACK);
             emit({
               type: "diagnostic",
               phase: "model_failed",
               modelId: worker.modelId,
               modelName: worker.displayName,
               providerId: parseModelId(worker.modelId).providerId,
-              message: `${worker.displayName} repeated a file inspection call for ${task.id}: ${feedback}`,
+              message: `${worker.displayName} repeated a file inspection call for ${task.id} (${describeToolAction(action)}) — rejected as duplicate`,
             });
-            toolContext += `\n\n${feedback}`;
+            workerMessages.push({ role: "user", content: DUPLICATE_TOOL_CALL_FEEDBACK });
             if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
               toolIssues.push(
                 `Too many repeated or malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
@@ -1989,80 +2185,84 @@ export async function runBuildDiscussion(
             }
             continue;
           }
-          if (duplicateKey) seenInspectionCalls.add(duplicateKey);
 
-          if (action.action === "read" && readsLeft > 0) {
-            readsLeft -= 1;
+          const warning =
+            inspected.feedback && inspected.valid ? `${inspected.feedback}\n\n` : "";
+          if (warning) {
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} tool-call warning for ${task.id}: ${inspected.feedback}`,
+            });
+          }
+
+          const actor = `${worker.displayName} ${task.id}`;
+          if (action.action === "read" && budgets.reads > 0) {
+            budgets.reads -= 1;
             const paths = action.paths.slice(0, 6);
-            emitFileToolDiagnostic(
-              formatBuildFileToolDiagnostic({
-                actor: `${worker.displayName} ${task.id}`,
-                action: "read",
-                paths,
-              }),
-              worker
-            );
             const chunks: string[] = [];
             for (const path of paths) {
               const content = await readFile(path);
               chunks.push(`\n--- ${path} ---\n${content ?? "[not found or binary]"}`);
             }
-            toolContext += `\n\nTool result:\n${truncate(chunks.join("\n"), 18_000)}`;
-            continue;
-          }
-          if (action.action === "read_range" && rangeReadsLeft > 0) {
-            rangeReadsLeft -= 1;
+            const joined = chunks.join("\n");
             emitFileToolDiagnostic(
-              formatBuildFileToolDiagnostic({
-                actor: `${worker.displayName} ${task.id}`,
-                action: "read_range",
-                path: action.path,
-                startLine: action.startLine,
-                lineCount: action.lineCount,
-              }),
+              `${formatBuildFileToolDiagnostic({ actor, action: "read", paths })} · ${kbOf(joined)} · ${budgets.reads} read(s) left`,
               worker
             );
-            toolContext += `\n\nTool result:\n${await readFileRange(
+            recordToolCall(tracker, action);
+            workerMessages.push({
+              role: "user",
+              content: `${warning}Tool result:\n${truncate(joined, 18_000)}`,
+            });
+            continue;
+          }
+          if (action.action === "read_range" && budgets.rangeReads > 0) {
+            budgets.rangeReads -= 1;
+            const out = await readFileRange(
               action.path,
               action.startLine,
               action.lineCount
-            )}`;
-            continue;
-          }
-          if (action.action === "search" && searchesLeft > 0) {
-            searchesLeft -= 1;
+            );
             emitFileToolDiagnostic(
-              formatBuildFileToolDiagnostic({
-                actor: `${worker.displayName} ${task.id}`,
-                action: "search",
-                query: action.query,
-              }),
+              `${formatBuildFileToolDiagnostic({ actor, action: "read_range", path: action.path, startLine: action.startLine, lineCount: action.lineCount })} · ${kbOf(out)} · ${budgets.rangeReads} range read(s) left`,
               worker
             );
-            toolContext += `\n\nTool result:\nSearch results for "${action.query}":\n${await searchProject(
-              action.query
-            )}`;
+            recordToolCall(tracker, action, parseDeliveredRange(out));
+            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${out}` });
             continue;
           }
-          if (action.action === "patch" && patchesLeft > 0) {
-            patchesLeft -= 1;
+          if (action.action === "search" && budgets.searches > 0) {
+            budgets.searches -= 1;
+            const out = await searchProject(action.query);
+            emitFileToolDiagnostic(
+              `${formatBuildFileToolDiagnostic({ actor, action: "search", query: action.query })} · ${kbOf(out)} · ${budgets.searches} search(es) left`,
+              worker
+            );
+            recordToolCall(tracker, action);
+            workerMessages.push({
+              role: "user",
+              content: `${warning}Tool result:\nSearch results for "${action.query}":\n${out}`,
+            });
+            continue;
+          }
+          if (action.action === "patch" && budgets.patches > 0) {
+            budgets.patches -= 1;
             const result = await applyPatchAction(action.path, action.ops, task.id);
             emitFileToolDiagnostic(
-              formatBuildFileToolDiagnostic({
-                actor: `${worker.displayName} ${task.id}`,
-                action: "patch",
-                path: action.path,
-                summary: result.summary,
-              }),
+              `${formatBuildFileToolDiagnostic({ actor, action: "patch", path: action.path, summary: result.summary })} · ${budgets.patches} patch(es) left`,
               worker
             );
             patchedFiles.push(...result.written);
             toolIssues.push(...result.issues);
-            toolContext += `\n\nTool result:\n${result.summary}`;
+            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${result.summary}` });
             continue;
           }
-          if (action.action === "append" && appendsLeft > 0) {
-            appendsLeft -= 1;
+          if (action.action === "append" && budgets.appends > 0) {
+            budgets.appends -= 1;
             const result = await applyAppendAction(
               action.path,
               action.content,
@@ -2070,17 +2270,12 @@ export async function runBuildDiscussion(
               task.id
             );
             emitFileToolDiagnostic(
-              formatBuildFileToolDiagnostic({
-                actor: `${worker.displayName} ${task.id}`,
-                action: "append",
-                path: action.path,
-                summary: result.summary,
-              }),
+              `${formatBuildFileToolDiagnostic({ actor, action: "append", path: action.path, summary: result.summary })} · ${budgets.appends} append(s) left`,
               worker
             );
             patchedFiles.push(...result.written);
             toolIssues.push(...result.issues);
-            toolContext += `\n\nTool result:\n${result.summary}`;
+            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${result.summary}` });
             continue;
           }
 
@@ -2339,162 +2534,44 @@ export async function runBuildDiscussion(
       message: `Architect is reviewing wave ${cycle}`,
     });
 
-    // The Architect may read files or run commands (e.g. tests) before
-    // deciding the verdict. Seed with the build-check result.
-    let reviewRunFeedback = verifyFeedback ? `\n\n${verifyFeedback}` : "";
-    let reviewReadsLeft = 2;
-    let reviewRangeReadsLeft = 6;
-    let reviewSearchesLeft = SEARCHES_PER_PHASE;
-    const seenReviewToolCalls = new Set<string>();
-    let duplicateReviewToolCalls = 0;
-    let action: ArchitectAction;
-    let text: string;
-    for (;;) {
-      throwIfAborted();
-      ({ action, text } = await architectAction(
-        buildArchitectReviewPrompt({
-          request: discussion.topic,
-          treeText: treeText(),
-          // Everything read so far (plan-phase manifests + read hops) — without
-          // this the Architect forgets file contents between phases and starts
-          // inventing replacements for files it has already seen.
-          fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
-          executedText: executedText + reviewRunFeedback,
-          outstandingTasks: buildOutstandingTasksDigest(tasks),
-          maxNewTasks: limits.tasksPerWave,
-          cyclesLeft: limits.cycles - cycle,
-          readHopsLeft: reviewReadsLeft,
-          rangeReadsLeft: reviewRangeReadsLeft,
-          runsLeft: runsLeftThisPhase(),
-          githubWorkflow: githubWorkflow && !!runner,
-          searchesLeft: reviewSearchesLeft,
-          mcpToolsDoc,
-          mcpCallsLeft: mcpCallsLeftThisPhase(),
-          userNotes: userNotesText(),
-          scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
-          fetchesLeft: fetchesLeftThisPhase(),
-          shellHint,
-        }),
-        `Architect is reviewing wave ${cycle}`
-      ));
-      const strictTool = inspectStrictToolActionOutput(text);
-      if (strictTool.action && strictTool.feedback && strictTool.valid) {
-        reviewRunFeedback += `\n\n${strictTool.feedback}`;
-        emit({
-          type: "diagnostic",
-          phase: "model_failed",
-          modelId: architect.modelId,
-          modelName: architect.displayName,
-          providerId: parseModelId(architect.modelId).providerId,
-          message: `Architect tool-call warning while reviewing: ${strictTool.feedback}`,
-        });
-      } else if (strictTool.feedback && !strictTool.valid) {
-        const feedback =
-          strictTool.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
-        reviewRunFeedback += `\n\n${feedback}\nRe-issue exactly one valid JSON tool action, or produce the review JSON.`;
-        emit({
-          type: "diagnostic",
-          phase: "model_failed",
-          modelId: architect.modelId,
-          modelName: architect.displayName,
-          providerId: parseModelId(architect.modelId).providerId,
-          message: `Architect made an invalid tool call while reviewing: ${feedback}`,
-        });
-        continue;
-      }
-      const duplicateToolFeedback = duplicateArchitectToolFeedback(
-        action,
-        seenReviewToolCalls
-      );
-      if (duplicateToolFeedback) {
-        duplicateReviewToolCalls += 1;
-        reviewRunFeedback += `\n\n${duplicateToolFeedback}`;
-        emit({
-          type: "diagnostic",
-          phase: "model_failed",
-          modelId: architect.modelId,
-          modelName: architect.displayName,
-          providerId: parseModelId(architect.modelId).providerId,
-          message: `Architect repeated a review tool call: ${duplicateToolFeedback}`,
-        });
-        if (duplicateReviewToolCalls >= 3) {
-          throw new Error(
-            "The Architect repeated the same review tool call too many times; stopping to avoid wasting more tokens."
-          );
-        }
-        continue;
-      }
-      if (action.action === "search" && reviewSearchesLeft > 0) {
-        reviewSearchesLeft -= 1;
-        emitFileToolDiagnostic(
-          formatBuildFileToolDiagnostic({
-            actor: "Architect",
-            action: "search",
-            query: action.query,
-          }),
-          architect
-        );
-        extraFileContext += `\nSearch results for "${action.query}":\n${await searchProject(action.query)}`;
-        continue;
-      }
-      if (action.action === "tool" && mcpCallsLeftThisPhase() > 0) {
-        reviewRunFeedback += `\n\nTool result:\n${await executeTool(action)}`;
-        continue;
-      }
-      if (action.action === "fetch" && fetchesLeftThisPhase() > 0) {
-        reviewRunFeedback += `\n\nWeb fetch result:\n${await executeFetch(action)}`;
-        continue;
-      }
-      if (action.action === "read" && reviewReadsLeft > 0) {
-        reviewReadsLeft -= 1;
-        const paths = action.paths.slice(0, 8);
-        emitFileToolDiagnostic(
-          formatBuildFileToolDiagnostic({
-            actor: "Architect",
-            action: "read",
-            paths,
-          }),
-          architect
-        );
-        const chunks: string[] = [];
-        for (const path of paths) {
-          const content = await readFile(path);
-          chunks.push(
-            `\n--- ${path} ---\n${content ?? "[not found or binary]"}`
-          );
-        }
-        // Accumulate so later cycles and the next reviews keep what was read.
-        extraFileContext += `\nRequested file contents:${chunks.join("\n")}`;
-        continue;
-      }
-      if (action.action === "read_range" && reviewRangeReadsLeft > 0) {
-        reviewRangeReadsLeft -= 1;
-        emitFileToolDiagnostic(
-          formatBuildFileToolDiagnostic({
-            actor: "Architect",
-            action: "read_range",
-            path: action.path,
-            startLine: action.startLine,
-            lineCount: action.lineCount,
-          }),
-          architect
-        );
-        extraFileContext += `\nRequested file range:\n${await readFileRange(
-          action.path,
-          action.startLine,
-          action.lineCount
-        )}`;
-        continue;
-      }
-      if (action.action === "run" && canExecuteRunAction(action.command)) {
-        reviewRunFeedback += `\n\nCommand result:\n${await executeRun(action.command, action.reason)}`;
-        continue;
-      }
-      break;
-    }
-    if (action.action !== "review") {
-      throw new Error("Expected a review action from the Architect.");
-    }
+    // The Architect inspects files / runs commands in a real conversation, then
+    // returns a verdict. If it loops or exhausts its budget the loop FORCES a
+    // verdict (and defaults to approving this wave's landed work) instead of
+    // throwing away the whole build the way it used to.
+    const reviewResult = await runArchitectInspectionLoop({
+      terminal: "review",
+      label: `Architect is reviewing wave ${cycle}`,
+      initialUser: buildArchitectReviewPrompt({
+        request: discussion.topic,
+        treeText: treeText(),
+        // Everything read so far (plan-phase manifests + read hops) — without
+        // this the Architect forgets file contents between phases and starts
+        // inventing replacements for files it has already seen.
+        fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
+        executedText:
+          executedText + (verifyFeedback ? `\n\n${verifyFeedback}` : ""),
+        outstandingTasks: buildOutstandingTasksDigest(tasks),
+        maxNewTasks: limits.tasksPerWave,
+        cyclesLeft: limits.cycles - cycle,
+        readHopsLeft: 2,
+        rangeReadsLeft: 6,
+        runsLeft: runsLeftThisPhase(),
+        githubWorkflow: githubWorkflow && !!runner,
+        searchesLeft: SEARCHES_PER_PHASE,
+        mcpToolsDoc,
+        mcpCallsLeft: mcpCallsLeftThisPhase(),
+        userNotes: userNotesText(),
+        scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+        fetchesLeft: fetchesLeftThisPhase(),
+        shellHint,
+      }),
+      budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
+      appendContext: (textChunk) => {
+        extraFileContext += textChunk;
+      },
+    });
+    const action = reviewResult.action as ReviewAction;
+    const text = reviewResult.text;
     // The architect's own fixes. If any were rejected/skipped, carry that into
     // the accumulated context so the next phase knows they did not land.
     const { issues: fixIssues } = await writeEmittedFiles(text);

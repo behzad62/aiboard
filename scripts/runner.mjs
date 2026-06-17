@@ -14,11 +14,18 @@
  *
  * Usage:
  *   node runner.mjs <project-folder> [--port 8787] [--token <secret>]
- *                   [--mcp "<name>=<command>"]...
+ *                   [--mcp "<name>=<command>"]... [--context7 [--context7-key <key>]]
  *
  * MCP bridge: each --mcp flag spawns a stdio MCP server and exposes its tools
  * to the Architect (with the same per-call approval as commands), e.g.:
  *   --mcp "playwright=npx @playwright/mcp@latest"
+ *
+ * Context7 shortcut: --context7 bridges the Context7 documentation MCP server
+ * (up-to-date library/framework docs) without typing the npx command yourself.
+ * An optional API key (higher rate limits) comes from --context7-key <key> or
+ * the CONTEXT7_API_KEY environment variable:
+ *   node runner.mjs ./my-app --context7
+ *   node runner.mjs ./my-app --context7 --context7-key ctx7sk-...
  *
  * Then paste the printed URL + token into the app (Build mode → Local runner).
  *
@@ -31,7 +38,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 6;
+const VERSION = 7;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
@@ -86,6 +93,24 @@ for (let i = 0; i < args.length; i++) {
     } else {
       console.error(`Ignoring malformed --mcp spec (want name=command): ${spec}`);
     }
+  }
+}
+
+// Convenience: --context7 bridges the Context7 docs MCP server so the Architect
+// can pull current library/framework documentation, without the user having to
+// remember the npx command. The optional API key (higher rate limits) comes
+// from --context7-key <key> or the CONTEXT7_API_KEY env var. Equivalent to
+//   --mcp "context7=npx -y @upstash/context7-mcp [--api-key <key>]"
+if (args.includes("--context7")) {
+  const apiKey = flag("context7-key") ?? process.env.CONTEXT7_API_KEY;
+  const command = `npx -y @upstash/context7-mcp${apiKey ? ` --api-key ${apiKey}` : ""}`;
+  if (mcpSpecs.some((s) => s.name === "context7")) {
+    console.error('--context7 ignored: an --mcp "context7=..." spec is already set');
+  } else {
+    mcpSpecs.push({ name: "context7", command });
+    console.log(
+      `Context7 MCP enabled${apiKey ? " (with API key)" : " (no API key — free-tier rate limits)"}. First start may pause while npx fetches @upstash/context7-mcp.`
+    );
   }
 }
 
@@ -801,12 +826,27 @@ const server = http.createServer(async (req, res) => {
       json(res, 400, { error: "Missing tool name" });
       return;
     }
-    console.log(`[mcp:${serverProc.name}] ${new Date().toLocaleTimeString()}  call ${body.tool}`);
+    let argsPreview = "{}";
+    try {
+      argsPreview = JSON.stringify(body.args ?? {});
+      if (argsPreview.length > 200) argsPreview = `${argsPreview.slice(0, 200)}…`;
+    } catch {
+      argsPreview = "{…unserializable…}";
+    }
+    const mcpStartedAt = Date.now();
+    console.log(
+      `[mcp:${serverProc.name}] ${new Date().toLocaleTimeString()}  call ${body.tool} ${argsPreview}`
+    );
     try {
       const result = await serverProc.callTool(body.tool, body.args);
+      console.log(
+        `      ${result.isError ? "tool ERROR" : "ok"} — ${result.text.length} chars in ${((Date.now() - mcpStartedAt) / 1000).toFixed(1)}s`
+      );
       json(res, 200, { ok: true, ...result });
     } catch (err) {
-      json(res, 500, { error: err instanceof Error ? err.message : "MCP call failed" });
+      const message = err instanceof Error ? err.message : "MCP call failed";
+      console.log(`      FAILED in ${((Date.now() - mcpStartedAt) / 1000).toFixed(1)}s: ${message}`);
+      json(res, 500, { error: message });
     }
     return;
   }
@@ -848,7 +888,9 @@ const server = http.createServer(async (req, res) => {
       console.log(`[read] ${new Date().toLocaleTimeString()}  ${body?.path} (${detail})`);
       json(res, 200, { ok: true, content }); // content null = missing/binary
     } catch (err) {
-      json(res, 400, { error: err instanceof Error ? err.message : "Read failed" });
+      const message = err instanceof Error ? err.message : "Read failed";
+      console.log(`[read:error] ${new Date().toLocaleTimeString()}  ${body?.path}: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -870,7 +912,9 @@ const server = http.createServer(async (req, res) => {
       console.log(`[read-range] ${new Date().toLocaleTimeString()}  ${body?.path} (${detail})`);
       json(res, 200, { ok: true, ...result }); // null fields mean missing/binary
     } catch (err) {
-      json(res, 400, { error: err instanceof Error ? err.message : "Read range failed" });
+      const message = err instanceof Error ? err.message : "Read range failed";
+      console.log(`[read-range:error] ${new Date().toLocaleTimeString()}  ${body?.path}: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -888,7 +932,9 @@ const server = http.createServer(async (req, res) => {
       console.log(`[write] ${new Date().toLocaleTimeString()}  ${body.path} (${bytes} B)`);
       json(res, 200, { ok: true, bytes });
     } catch (err) {
-      json(res, 400, { error: err instanceof Error ? err.message : "Write failed" });
+      const message = err instanceof Error ? err.message : "Write failed";
+      console.log(`[write:error] ${new Date().toLocaleTimeString()}  ${body?.path}: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -908,7 +954,9 @@ const server = http.createServer(async (req, res) => {
       );
       json(res, 200, { ok: true, ...result });
     } catch (err) {
-      json(res, 400, { error: err instanceof Error ? err.message : "Patch failed" });
+      const message = err instanceof Error ? err.message : "Patch failed";
+      console.log(`[patch:error] ${new Date().toLocaleTimeString()}  ${body?.path}: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -928,7 +976,9 @@ const server = http.createServer(async (req, res) => {
       );
       json(res, 200, { ok: true, ...result });
     } catch (err) {
-      json(res, 400, { error: err instanceof Error ? err.message : "Append failed" });
+      const message = err instanceof Error ? err.message : "Append failed";
+      console.log(`[append:error] ${new Date().toLocaleTimeString()}  ${body?.path}: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -948,11 +998,14 @@ const server = http.createServer(async (req, res) => {
     console.log(`[fetch] ${new Date().toLocaleTimeString()}  ${body.url.trim()}`);
     try {
       const result = await fetchUrl(body.url.trim());
+      console.log(
+        `      HTTP ${result.status} ${result.statusText} — ${result.text.length} chars in ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? " (truncated)" : ""}`
+      );
       json(res, 200, { ok: true, ...result });
     } catch (err) {
-      json(res, 400, {
-        error: err instanceof Error ? err.message : "Fetch failed",
-      });
+      const message = err instanceof Error ? err.message : "Fetch failed";
+      console.log(`      FAILED: ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }
@@ -991,7 +1044,7 @@ server.listen(port, "127.0.0.1", () => {
   if (mcpServers.size > 0) {
     console.log(`MCP servers    : ${[...mcpServers.keys()].join(", ")} (starting…)`);
   } else {
-    console.log('MCP bridge     : none (add e.g. --mcp "playwright=npx @playwright/mcp@latest")');
+    console.log('MCP bridge     : none (try --context7 for live docs, or --mcp "playwright=npx @playwright/mcp@latest")');
   }
   console.log("");
   console.log("Paste the URL and token into the app (Build mode → Local runner).");

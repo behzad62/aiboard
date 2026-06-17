@@ -41,10 +41,11 @@ function toAnthropicImageMedia(mimeType: string): AnthropicImageMedia {
 function buildAnthropicUserContent(
   text: string,
   attachments: AttachmentPayload[] | undefined,
-  caps: ReturnType<typeof getModelCapabilities>
+  caps: ReturnType<typeof getModelCapabilities>,
+  cache = true
 ): string | AnthropicContentBlock[] {
   if (!attachments?.length) {
-    return buildCacheableAnthropicTextBlocks(text);
+    return buildCacheableAnthropicTextBlocks(text, cache);
   }
 
   const blocks: AnthropicContentBlock[] = [];
@@ -78,38 +79,51 @@ function buildAnthropicUserContent(
 
   blocks.push(
     ...buildCacheableAnthropicTextBlocks(
-      text + buildAttachmentPromptSection(attachments)
+      text + buildAttachmentPromptSection(attachments),
+      cache
     )
   );
   return blocks.length === 1 && blocks[0].type === "text" ? blocks[0].text : blocks;
 }
 
-function buildCacheableAnthropicTextBlocks(text: string): AnthropicContentBlock[] {
+function buildCacheableAnthropicTextBlocks(
+  text: string,
+  cache = true
+): AnthropicContentBlock[] {
   const transcriptMarker = "\n\n--- Discussion so far ---\n\n";
+  const ephemeral = cache
+    ? { cache_control: { type: "ephemeral" as const } }
+    : {};
   if (!text.includes(transcriptMarker)) {
-    return [
-      {
-        type: "text",
-        text,
-        cache_control: { type: "ephemeral" },
-      },
-    ];
+    return [{ type: "text", text, ...ephemeral }];
   }
 
   const [prefix, ...rest] = text.split(transcriptMarker);
   const transcript = rest.join(transcriptMarker);
 
   return [
-    {
-      type: "text",
-      text: `${prefix}${transcriptMarker}`,
-      cache_control: { type: "ephemeral" },
-    },
-    {
-      type: "text",
-      text: transcript,
-    },
+    { type: "text", text: `${prefix}${transcriptMarker}`, ...ephemeral },
+    { type: "text", text: transcript },
   ];
+}
+
+/**
+ * Anthropic allows at most 4 `cache_control` breakpoints per request. With the
+ * Build engine's multi-turn tool conversations a one-breakpoint-per-message
+ * scheme blows that cap (it hit "Found 5" once a review loop ran a few turns).
+ * Mark only the FIRST user message (the large, stable instruction prefix — a
+ * cache hit on every turn of a loop) and the LAST message (incremental caching
+ * as the conversation grows). Returns indices into the non-system message list.
+ */
+export function anthropicCacheBreakpointIndices(
+  roles: Array<"user" | "assistant">
+): Set<number> {
+  const indices = new Set<number>();
+  if (roles.length === 0) return indices;
+  const firstUser = roles.findIndex((r) => r === "user");
+  if (firstUser >= 0) indices.add(firstUser);
+  indices.add(roles.length - 1); // last message (always sent as a user turn)
+  return indices;
 }
 
 /**
@@ -139,12 +153,18 @@ export async function* streamAnthropicChat(
       .map((m, i) => (m.role === "user" ? i : -1))
       .filter((i) => i >= 0)
       .at(-1);
+    // Bound cache_control to ≤4 breakpoints (Anthropic's hard cap) so a long
+    // multi-turn tool conversation no longer 400s with "Found 5".
+    const cacheIndices = anthropicCacheBreakpointIndices(
+      userMessages.map((m) => m.role as "user" | "assistant")
+    );
 
     const chatMessages = userMessages.map((m, index) => {
+      const cache = cacheIndices.has(index);
       const content =
         m.role === "user" && index === lastUserIndex
-          ? buildAnthropicUserContent(m.content, params.attachments, caps)
-          : buildCacheableAnthropicTextBlocks(m.content);
+          ? buildAnthropicUserContent(m.content, params.attachments, caps, cache)
+          : buildCacheableAnthropicTextBlocks(m.content, cache);
 
       return {
         role: m.role as "user" | "assistant",

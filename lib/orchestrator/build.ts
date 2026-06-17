@@ -923,6 +923,185 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
   return null;
 }
 
+// ── Tool-loop robustness: dedup, forced verdicts, conversation compaction ─────
+//
+// The Architect and workers run an agentic tool loop (read/search/run, then a
+// terminal plan/review/file output). Two things keep that loop from spinning
+// forever the way it used to: overlap-aware dedup (so a model can't dodge the
+// "you already read this" guard by nudging a line range), and forced verdicts
+// (when the inspection budget or dedup limit is hit we make the model commit to
+// an answer instead of throwing the whole build away).
+
+export interface ReadInterval {
+  start: number;
+  end: number;
+}
+
+export interface ToolCallTracker {
+  /** Exact keys for whole-file reads / searches / runs / fetches / mcp calls. */
+  exact: Set<string>;
+  /** path (lowercased) -> merged line intervals already delivered to the model. */
+  ranges: Map<string, ReadInterval[]>;
+}
+
+export function createToolCallTracker(): ToolCallTracker {
+  return { exact: new Set(), ranges: new Map() };
+}
+
+/** Stable key for the non-range tool actions (read/search/run/fetch/tool). */
+export function exactToolKey(action: ArchitectAction): string | null {
+  switch (action.action) {
+    case "read":
+      return `read:${action.paths
+        .map((p) => p.trim().toLowerCase())
+        .sort()
+        .join("|")}`;
+    case "search":
+      return `search:${action.query.trim().toLowerCase()}`;
+    case "run":
+      return `run:${action.command.trim().toLowerCase()}`;
+    case "fetch":
+      return `fetch:${action.url.trim().toLowerCase()}`;
+    case "tool":
+      return `tool:${action.server.trim().toLowerCase()}.${action.tool
+        .trim()
+        .toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
+    default:
+      return null;
+  }
+}
+
+/** A requested range counts as redundant once this fraction is already shown. */
+const RANGE_REDUNDANT_COVERAGE = 0.9;
+
+function mergeInterval(
+  intervals: ReadInterval[],
+  add: ReadInterval
+): ReadInterval[] {
+  const all = [...intervals, add].sort((a, b) => a.start - b.start);
+  const merged: ReadInterval[] = [];
+  for (const iv of all) {
+    const last = merged[merged.length - 1];
+    if (last && iv.start <= last.end + 1) {
+      last.end = Math.max(last.end, iv.end);
+    } else {
+      merged.push({ ...iv });
+    }
+  }
+  return merged;
+}
+
+function coverageFraction(intervals: ReadInterval[], req: ReadInterval): number {
+  const reqLines = req.end - req.start + 1;
+  if (reqLines <= 0) return 1;
+  let covered = 0;
+  for (const iv of intervals) {
+    const lo = Math.max(iv.start, req.start);
+    const hi = Math.min(iv.end, req.end);
+    if (hi >= lo) covered += hi - lo + 1;
+  }
+  return covered / reqLines;
+}
+
+/**
+ * Is this read/read_range action redundant given what the model has already been
+ * shown? For read_range we use line-interval COVERAGE, so a model can't dodge
+ * the guard by nudging startLine/lineCount (e.g. 265/100 then 265/80) — a range
+ * ≥90% already delivered counts as redundant. read/search/run/fetch/tool use an
+ * exact key.
+ */
+export function isRedundantToolCall(
+  tracker: ToolCallTracker,
+  action: ArchitectAction
+): boolean {
+  if (action.action === "read_range") {
+    const path = action.path.trim().toLowerCase();
+    const start = Math.max(1, Math.round(action.startLine));
+    const end = start + Math.max(1, Math.round(action.lineCount)) - 1;
+    const intervals = tracker.ranges.get(path);
+    if (!intervals || intervals.length === 0) return false;
+    return coverageFraction(intervals, { start, end }) >= RANGE_REDUNDANT_COVERAGE;
+  }
+  const key = exactToolKey(action);
+  if (!key) return false;
+  return tracker.exact.has(key);
+}
+
+/**
+ * Record a delivered tool result so future identical/overlapping calls are
+ * caught. For read_range pass the ACTUAL delivered span when known (the runner
+ * may cap or clip the requested range); otherwise the requested span is used.
+ */
+export function recordToolCall(
+  tracker: ToolCallTracker,
+  action: ArchitectAction,
+  delivered?: { startLine: number; endLine: number }
+): void {
+  if (action.action === "read_range") {
+    const path = action.path.trim().toLowerCase();
+    const start = delivered
+      ? delivered.startLine
+      : Math.max(1, Math.round(action.startLine));
+    const end = delivered
+      ? delivered.endLine
+      : start + Math.max(1, Math.round(action.lineCount)) - 1;
+    if (end < start) return;
+    tracker.ranges.set(
+      path,
+      mergeInterval(tracker.ranges.get(path) ?? [], { start, end })
+    );
+    return;
+  }
+  const key = exactToolKey(action);
+  if (key) tracker.exact.add(key);
+}
+
+export const DUPLICATE_TOOL_CALL_FEEDBACK =
+  "DUPLICATE TOOL CALL REJECTED: you already received this exact (or a fully overlapping) read/search/command result — it is already in this conversation above. Do not repeat it. Read a DIFFERENT range/file, search a different term, or produce your decision JSON now.";
+
+export const FORCED_REVIEW_INSTRUCTION = [
+  "STOP USING TOOLS. You have used your inspection budget for this review (or repeated the same lookups). Any further read/search/command requests will be IGNORED.",
+  "Using ONLY the file contents, change digests, and tool results already in this conversation, produce your final review now as exactly ONE fenced ```json block matching the review schema.",
+  "If a detail you wanted to inspect is still unknown, do NOT block on it: approve what demonstrably works and add a precise follow-up fix task (or a `fix` verdict with concrete instructions) for the rest.",
+].join("\n");
+
+export const FORCED_PLAN_INSTRUCTION = [
+  "STOP USING TOOLS. You have used your inspection budget for planning. Any further read/search/command requests will be IGNORED.",
+  "Using only what you already have, produce your plan now as exactly ONE fenced ```json block matching the plan schema.",
+].join("\n");
+
+export interface ConversationMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Bound a tool-loop conversation so it can never grow past a char budget. Keeps
+ * the system + initial instruction (indices 0–1) and the most recent
+ * `keepRecent` messages verbatim; older tool-result turns in between collapse
+ * into a single placeholder. Returns a NEW array (input untouched) plus how many
+ * messages were folded away, so the caller can log it.
+ */
+export function compactToolConversation<T extends ConversationMessage>(
+  messages: T[],
+  maxChars: number,
+  keepRecent = 6
+): { messages: T[]; compacted: number } {
+  const total = messages.reduce((n, m) => n + m.content.length, 0);
+  if (total <= maxChars || messages.length <= keepRecent + 3) {
+    return { messages, compacted: 0 };
+  }
+  const head = messages.slice(0, 2);
+  const tail = messages.slice(messages.length - keepRecent);
+  const omitted = messages.length - head.length - tail.length;
+  if (omitted <= 0) return { messages, compacted: 0 };
+  const placeholder = {
+    role: "user",
+    content: `[${omitted} earlier tool exchange(s) omitted to stay within the context budget — rely on the file contents and results retained above and below; do not re-request them.]`,
+  } as T;
+  return { messages: [...head, placeholder, ...tail], compacted: omitted };
+}
+
 // ── Prompts ──────────────────────────────────────────────────────────────────
 
 const ARCHITECT_ROLE =

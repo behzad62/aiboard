@@ -97,7 +97,8 @@ export function RunnerSetup({
         <strong>the runner&apos;s folder</strong> (read, write, search), lets
         the Architect run commands like tests and installs, fetch public web
         pages (docs, references — local addresses are refused), and can bridge
-        MCP tools (e.g. a real browser via Playwright). Commands and fetches
+        MCP tools — a real browser via Playwright, or up-to-date library docs
+        via Context7 (add <code>--context7</code>). Commands and tool calls
         are approval-gated unless you pick Full access. It needs{" "}
         <a
           href="https://nodejs.org"
@@ -124,8 +125,25 @@ export function RunnerSetup({
       </div>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
         {"node runner.mjs path/to/your-project\n"}
+        {"node runner.mjs path/to/your-project --context7\n"}
         {'node runner.mjs path/to/your-project --mcp "playwright=npx @playwright/mcp@latest"'}
       </pre>
+      <p className="text-xs text-muted-foreground">
+        <code>--context7</code> bridges{" "}
+        <a
+          href="https://context7.com"
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2"
+        >
+          Context7
+        </a>{" "}
+        so the AI team can pull current docs for the libraries it uses. Optional
+        API key for higher rate limits:{" "}
+        <code>--context7 --context7-key &lt;key&gt;</code> (or set{" "}
+        <code>CONTEXT7_API_KEY</code>). The first start pauses briefly while{" "}
+        <code>npx</code> fetches the server.
+      </p>
 
       <div className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
