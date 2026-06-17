@@ -1,5 +1,6 @@
 "use client";
 
+import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { Badge } from "@/components/ui/badge";
 import {
   GitBranch,
@@ -13,32 +14,20 @@ import {
 } from "lucide-react";
 
 /**
- * UI view of repo state, mirroring the `repo_status` event's `status` payload
- * (lib/orchestrator/engine.ts). It intentionally has NO `root` / absolute path
- * and NO `gitAvailable` — the engine omits those.
+ * UI views derived from the event union so they can't drift from the engine's
+ * `repo_status` / `repo_diff` payloads (lib/orchestrator/engine.ts). The status
+ * shape intentionally has NO `root` / absolute path and NO `gitAvailable` — the
+ * engine omits those.
  */
-export interface RepoStatusView {
-  isRepo: boolean;
-  currentBranch: string | null;
-  defaultBranch: string | null;
-  remotes: Array<{ name: string; url: string }>;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  staged: string[];
-  unstaged: string[];
-  untracked: string[];
-  conflicted: string[];
-  clean: boolean;
-  recentCommits: Array<{ hash: string; subject: string }>;
-}
+export type RepoStatusView = Extract<
+  OrchestratorEvent,
+  { type: "repo_status" }
+>["status"];
 
-/** UI view of the bounded `repo_diff` event payload. */
-export interface RepoDiffView {
-  summary: string;
-  files: string[];
-  truncated: boolean;
-}
+export type RepoDiffView = Extract<
+  OrchestratorEvent,
+  { type: "repo_diff" }
+>["diff"];
 
 function CountChip({
   label,

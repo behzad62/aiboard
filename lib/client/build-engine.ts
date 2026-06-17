@@ -2757,9 +2757,9 @@ export async function runBuildDiscussion(
       done = action.done;
     }
 
-    // Refresh repo status + a bounded diff after each wave so the UI reflects
-    // the files just written. The final wave's refresh runs immediately before
-    // the final summary below.
+    // Refresh repo status/diff at the end of each wave so the UI reflects the
+    // files just written; the last wave's refresh is thus the final state
+    // shown before the summary.
     await refreshRepoState();
   }
 
