@@ -109,6 +109,31 @@ export type OrchestratorEvent =
       denied?: boolean;
       background?: boolean;
     }
+  // Repo (Git) state surfaced to Build mode / UI. UI-oriented payloads —
+  // intentionally omit local absolute paths (no `root`) and host details
+  // (no `gitAvailable`).
+  | {
+      type: "repo_status";
+      status: {
+        isRepo: boolean;
+        currentBranch: string | null;
+        defaultBranch: string | null;
+        remotes: Array<{ name: string; url: string }>;
+        upstream: string | null;
+        ahead: number;
+        behind: number;
+        staged: string[];
+        unstaged: string[];
+        untracked: string[];
+        conflicted: string[];
+        clean: boolean;
+        recentCommits: Array<{ hash: string; subject: string }>;
+      };
+    }
+  | {
+      type: "repo_diff";
+      diff: { summary: string; files: string[]; truncated: boolean };
+    }
   | { type: "error"; message: string }
   | { type: "complete" };
 
