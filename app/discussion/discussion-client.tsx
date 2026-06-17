@@ -70,6 +70,11 @@ import {
   type CommandRunView,
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
+import {
+  RepoWorkflowPanel,
+  type RepoStatusView,
+  type RepoDiffView,
+} from "@/components/RepoWorkflowPanel";
 import type { CommandApprovalDecision } from "@/lib/client/build-engine";
 import {
   accentFor,
@@ -157,6 +162,8 @@ function DiscussionPageInner() {
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
+  const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
+  const [repoDiff, setRepoDiff] = useState<RepoDiffView | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
     command: string;
     reason?: string;
@@ -307,6 +314,12 @@ function DiscussionPageInner() {
               background: event.background,
             },
           ]);
+          break;
+        case "repo_status":
+          setRepoStatus(event.status);
+          break;
+        case "repo_diff":
+          setRepoDiff(event.diff);
           break;
         case "token_usage":
           setDiagnostics((prev) => {
@@ -593,6 +606,8 @@ function DiscussionPageInner() {
     setBuildTasks([]);
     setWrittenFiles([]);
     setCommandRuns([]);
+    setRepoStatus(null);
+    setRepoDiff(null);
     setDiagnostics([]);
     clearDiagnostics(id);
     setConvergenceScore(null);
@@ -1038,6 +1053,10 @@ function DiscussionPageInner() {
           commands={commandRuns}
           folderName={discussion.projectFolderName}
         />
+      )}
+
+      {discussion.mode === "build" && (
+        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} />
       )}
 
       {discussion.mode === "build" &&

@@ -72,6 +72,11 @@ import {
   writeProjectFile,
 } from "./project-fs";
 import {
+  getRepoStatusViaRunner,
+  getRepoDiffViaRunner,
+  type RepoStatus,
+} from "./repo-runner";
+import {
   appendFileViaRunner,
   callMcpTool,
   checkRunner,
@@ -162,6 +167,62 @@ function shellHintForPlatform(platform?: string): string {
     return "SHELL: commands run in a POSIX shell (sh) — standard Unix tools (sed/awk/grep/ls/cat) are available.";
   }
   return "";
+}
+
+// How much repo state we surface to the UI. The diff is bounded BEFORE it ever
+// reaches React state — never push a full diff into a `repo_diff` event.
+const REPO_DIFF_FILE_CAP = 40;
+const REPO_DIFF_SUMMARY_CHARS = 4_000;
+
+/**
+ * Map the fuller `RepoStatus` (from the runner client) down to the
+ * `repo_status` event's `status` shape, which intentionally OMITS `root`
+ * (an absolute local path) and `gitAvailable` (a host detail). Keeping this in
+ * the engine means no absolute path can leak into React state.
+ */
+function toRepoStatusEvent(status: RepoStatus): Extract<
+  OrchestratorEvent,
+  { type: "repo_status" }
+>["status"] {
+  return {
+    isRepo: status.isRepo,
+    currentBranch: status.currentBranch,
+    defaultBranch: status.defaultBranch,
+    remotes: status.remotes,
+    upstream: status.upstream,
+    ahead: status.ahead,
+    behind: status.behind,
+    staged: status.staged,
+    unstaged: status.unstaged,
+    untracked: status.untracked,
+    conflicted: status.conflicted,
+    clean: status.clean,
+    recentCommits: status.recentCommits,
+  };
+}
+
+/**
+ * Convert a runner `git diff --stat` into the bounded `repo_diff` event payload.
+ * The summary text is capped and the file list is limited to the first N files
+ * so a huge working-tree diff can't bloat React state.
+ */
+function toRepoDiffEvent(diff: {
+  diff: string;
+  truncated: boolean;
+}): Extract<OrchestratorEvent, { type: "repo_diff" }>["diff"] {
+  const lines = diff.diff.split("\n").filter((l) => l.trim().length > 0);
+  // `git diff --stat` lines look like " path/to/file | 12 +++---"; the final
+  // " N files changed, …" summary line has no "|". Pull the file paths out.
+  const files = lines
+    .filter((l) => l.includes("|"))
+    .map((l) => l.split("|")[0].trim())
+    .filter(Boolean);
+  const truncatedFiles = files.length > REPO_DIFF_FILE_CAP;
+  return {
+    summary: truncate(diff.diff, REPO_DIFF_SUMMARY_CHARS),
+    files: files.slice(0, REPO_DIFF_FILE_CAP),
+    truncated: diff.truncated || truncatedFiles,
+  };
 }
 
 /**
@@ -438,6 +499,9 @@ export async function runBuildDiscussion(
   let totalFetches = 0;
   let mcpToolsDoc = "";
   let totalMcpCalls = 0;
+  // Whether the runner folder is a Git repo, captured once when the runner
+  // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
+  let repoIsGit = false;
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -533,6 +597,17 @@ export async function runBuildDiscussion(
           message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
         });
       }
+      // Capture INITIAL Git state of the runner folder (NRW-003). Surfacing
+      // branch / dirty state in the UI keeps it out of the model transcript.
+      // `getRepoStatusViaRunner` is a soft wrapper — null on an old runner or
+      // failure, in which case we simply show no repo panel. When the folder
+      // is reachable but not a repo, we still emit so the UI can state that
+      // native repo workflow is unavailable.
+      const repoStatus = await getRepoStatusViaRunner(config);
+      if (repoStatus) {
+        repoIsGit = repoStatus.isRepo;
+        emit({ type: "repo_status", status: toRepoStatusEvent(repoStatus) });
+      }
     } else {
       emit({
         type: "diagnostic",
@@ -548,6 +623,31 @@ export async function runBuildDiscussion(
       totalRuns,
       githubWorkflow: githubWorkflow && !!runner,
     });
+
+  /**
+   * Re-read repo status (and a BOUNDED diff summary) and push them to the UI.
+   * Called after each implementation wave so branch / dirty state and the
+   * latest changes stay current as files are written. No-op without a Git
+   * repo. All wrappers are soft — failures are swallowed so a flaky runner
+   * never aborts the build.
+   */
+  const refreshRepoState = async (): Promise<void> => {
+    if (!runner || !repoIsGit) return;
+    try {
+      const repoStatus = await getRepoStatusViaRunner(runner);
+      if (repoStatus) {
+        repoIsGit = repoStatus.isRepo;
+        emit({ type: "repo_status", status: toRepoStatusEvent(repoStatus) });
+      }
+      // `--stat` keeps the payload small; `toRepoDiffEvent` caps it further.
+      const repoDiff = await getRepoDiffViaRunner(runner, { stat: true });
+      if (repoDiff) {
+        emit({ type: "repo_diff", diff: toRepoDiffEvent(repoDiff) });
+      }
+    } catch (err) {
+      console.error("[build] refreshing repo status failed:", err);
+    }
+  };
 
   const runsLeftThisPhase = (): number => currentRunBudget().normalRunsLeft;
 
@@ -2656,6 +2756,11 @@ export async function runBuildDiscussion(
     } else {
       done = action.done;
     }
+
+    // Refresh repo status/diff at the end of each wave so the UI reflects the
+    // files just written; the last wave's refresh is thus the final state
+    // shown before the summary.
+    await refreshRepoState();
   }
 
   // Fold this build's scoreboard into the global per-model stats (the
