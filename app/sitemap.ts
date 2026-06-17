@@ -8,5 +8,16 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: `${SITE_URL}/`, changeFrequency: "monthly", priority: 1 },
     { url: `${SITE_URL}/about`, changeFrequency: "monthly", priority: 0.8 },
+    {
+      url: `${SITE_URL}/multi-model-ai-discussions`,
+      changeFrequency: "monthly",
+      priority: 0.7,
+    },
+    {
+      url: `${SITE_URL}/ai-debate-tool`,
+      changeFrequency: "monthly",
+      priority: 0.7,
+    },
+    { url: `${SITE_URL}/build-mode`, changeFrequency: "monthly", priority: 0.7 },
   ];
 }

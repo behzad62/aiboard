@@ -98,6 +98,34 @@ export default function AboutPage() {
       </section>
 
       <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Learn more</h2>
+        <p className="text-muted-foreground">
+          These short guides explain the main workflows without adding more
+          navigation to the app itself.
+        </p>
+        <ul className="list-disc space-y-2 pl-6">
+          <li>
+            <Link
+              href="/multi-model-ai-discussions"
+              className="underline hover:text-foreground"
+            >
+              Multi-model AI discussions
+            </Link>
+          </li>
+          <li>
+            <Link href="/ai-debate-tool" className="underline hover:text-foreground">
+              AI debate tool
+            </Link>
+          </li>
+          <li>
+            <Link href="/build-mode" className="underline hover:text-foreground">
+              Build mode for AI-assisted coding
+            </Link>
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">FAQ</h2>
         <dl className="space-y-4">
           <div>
