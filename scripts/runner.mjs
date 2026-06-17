@@ -1044,6 +1044,27 @@ function commitRepo({ message, paths }) {
       }
       resolved.push(path.relative(projectDir, target).replace(/\\/g, "/"));
     }
+    const allowed = new Set(resolved.map((p) => p.toLowerCase()));
+    const stagedBefore = runGit(["diff", "--cached", "--name-only"]);
+    if (stagedBefore.exitCode !== 0) {
+      throw new Error(
+        stagedBefore.stderr.trim() ||
+          stagedBefore.stdout.trim() ||
+          "git diff --cached failed."
+      );
+    }
+    const unrelatedStaged = stagedBefore.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((file) => !allowed.has(file.replace(/\\/g, "/").toLowerCase()));
+    if (unrelatedStaged.length > 0) {
+      throw new Error(
+        `Refusing scoped commit because unrelated files are already staged: ${unrelatedStaged
+          .slice(0, 8)
+          .join(", ")}${unrelatedStaged.length > 8 ? ", ..." : ""}. Commit or unstage them first.`
+      );
+    }
     const add = runGit(["add", "--", ...resolved]);
     if (add.exitCode !== 0) {
       throw new Error(add.stderr.trim() || add.stdout.trim() || "git add failed.");

@@ -259,6 +259,17 @@ export function classifyRepoBranchSafety(input: {
   };
 }
 
+export function repoCommitWorkflowEnabledFromStatus(input: {
+  isRepo: boolean;
+  currentBranch: string | null;
+  defaultBranch: string | null;
+  clean: boolean;
+  conflicted: string[];
+}): boolean {
+  const decision = classifyRepoBranchSafety(input);
+  return input.isRepo && decision.safe && !decision.needsBranch;
+}
+
 export interface RepoBranchCreateResult {
   branch: string;
   previousBranch: string | null;

@@ -265,6 +265,38 @@ try {
     runner.child.kill();
   }
 
+  // Scoped commits must reject unrelated pre-staged files. Otherwise the
+  // approval preview can list only action.paths while Git commits extra files
+  // that were already in the index.
+  {
+    const dir = seedFeatureRepo("adb-runner-commit-prestaged-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "included.txt"), "in\n", "utf8");
+    fs.writeFileSync(path.join(dir, "pre-staged.txt"), "pre\n", "utf8");
+    git(dir, ["add", "pre-staged.txt"]);
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    const { res, data } = await post(runner.port, runner.token, "/repo/commit", {
+      message: "feat: only included",
+      paths: ["included.txt"],
+    });
+    check("prestaged: scoped commit is rejected (HTTP 400)", res.status === 400, data);
+    check(
+      "prestaged: error explains unrelated staged files",
+      typeof data.error === "string" && /staged|pre-staged\.txt/i.test(data.error),
+      data
+    );
+    const prestagedLog = git(dir, ["log", "-1", "--pretty=format:%s"]);
+    check("prestaged: no commit landed", prestagedLog.trim() === "initial commit", prestagedLog);
+    const stat = git(dir, ["status", "--porcelain"]).trim();
+    check("prestaged: pre-staged file remains staged", /^A\s+pre-staged\.txt/m.test(stat), stat);
+    check("prestaged: included file remains untracked", /\?\?\s+included\.txt/m.test(stat), stat);
+
+    runner.child.kill();
+  }
+
   // ── 6. Existing endpoints still respond ───────────────────────────────────
   {
     const dir = initRepo("adb-runner-commit-regress-");
