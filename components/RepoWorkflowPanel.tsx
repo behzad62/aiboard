@@ -1,6 +1,7 @@
 "use client";
 
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
+import { classifyRepoBranchSafety } from "@/lib/client/repo-runner";
 import { Badge } from "@/components/ui/badge";
 import {
   GitBranch,
@@ -84,6 +85,18 @@ export function RepoWorkflowPanel({
     status.untracked.length +
     status.conflicted.length;
 
+  // Recompute the branch-safety decision from the status the panel already has
+  // (no new event / engine plumbing needed). Surfaces WHY commit/PR-capable
+  // repo workflow is paused: on the default/main/master branch with no feature
+  // branch, or when conflicts make repo workflow unsafe.
+  const safety = classifyRepoBranchSafety({
+    isRepo: status.isRepo,
+    currentBranch: status.currentBranch,
+    defaultBranch: status.defaultBranch,
+    clean: status.clean,
+    conflicted: status.conflicted,
+  });
+
   return (
     <section className="rounded-2xl border bg-card p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -125,6 +138,31 @@ export function RepoWorkflowPanel({
           </span>
         )}
       </div>
+
+      {safety.needsBranch && (
+        <p className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Commit &amp; PR workflow paused — create a feature branch first
+            (you&apos;re on{" "}
+            <span className="font-mono">
+              {status.currentBranch ?? "(detached)"}
+            </span>
+            ).
+          </span>
+        </p>
+      )}
+
+      {!safety.safe && !safety.needsBranch && status.conflicted.length > 0 && (
+        <p className="mt-3 flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Commit &amp; PR workflow unavailable — {status.conflicted.length}{" "}
+            conflicted file
+            {status.conflicted.length === 1 ? "" : "s"} must be resolved first.
+          </span>
+        </p>
+      )}
 
       {status.remotes.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

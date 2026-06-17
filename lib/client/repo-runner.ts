@@ -7,7 +7,37 @@
  * typed fields out defensively so a malformed or older response degrades
  * gracefully instead of throwing.
  */
+import { isValidGitRefName } from "@/lib/orchestrator/build";
 import { headers, type RunnerConfig } from "./runner";
+
+/**
+ * Max length of the slug portion of a generated `codex/<slug>` branch name.
+ * Keeps auto-derived branch names short enough to stay readable in `git` UIs
+ * and well under Git's ref-name limits even after the `codex/` prefix.
+ */
+const MAX_BRANCH_SLUG_LEN = 40;
+
+/**
+ * Derive a safe feature-branch name `codex/<slug>` from the user's request
+ * (NRW-005). Lowercases, maps non-alphanumerics to `-`, collapses repeats,
+ * trims, and caps the slug length. Falls back to `codex/build` when the request
+ * yields no usable slug OR when the generated name somehow fails
+ * `isValidGitRefName` — so the result is GUARANTEED valid at runtime, not only
+ * by construction. Pure (no runner deps) so the test can import it directly.
+ */
+export function branchNameForTopic(topic: string): string {
+  const slug = (topic || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_BRANCH_SLUG_LEN)
+    .replace(/-+$/g, "");
+  const name = slug ? `codex/${slug}` : "codex/build";
+  // Defensive: enforce the invariant rather than merely asserting it. If the
+  // generated name unexpectedly fails validation, fall back to a known-good one.
+  return isValidGitRefName(name) ? name : "codex/build";
+}
 
 export interface RepoStatus {
   isRepo: boolean;
@@ -145,6 +175,65 @@ export async function getRepoDiffViaRunner(
     diff: typeof data.diff === "string" ? data.diff : "",
     truncated: !!data.truncated,
     bytes: asNumber(data.bytes),
+  };
+}
+
+/**
+ * PURE branch-safety classifier (no fetch / no engine deps) so the test, the
+ * panel, and the engine can all import it. Decides whether native repo workflow
+ * (commit / PR — added in later issues) is SAFE to engage and whether a feature
+ * branch must be created first.
+ *
+ * Rules (NRW-005):
+ * - Non-repo folders are SAFE for ordinary file writing; repo workflow simply
+ *   doesn't apply (`needsBranch: false`).
+ * - Any conflicted files make repo workflow UNSAFE.
+ * - On the default branch — or on `main`/`master` even when the default is
+ *   unknown — repo workflow requires a feature branch (`needsBranch: true`).
+ * - Dirty state does NOT block branch creation; it only colours the reason text.
+ * - Otherwise (feature branch, no conflicts) repo workflow is SAFE.
+ */
+export function classifyRepoBranchSafety(input: {
+  isRepo: boolean;
+  currentBranch: string | null;
+  defaultBranch: string | null;
+  clean: boolean;
+  conflicted: string[];
+}): { safe: boolean; needsBranch: boolean; reason: string } {
+  if (!input.isRepo) {
+    return { safe: true, needsBranch: false, reason: "not a git repo" };
+  }
+  if (input.conflicted.length > 0) {
+    return {
+      safe: false,
+      needsBranch: false,
+      reason: `repo has ${input.conflicted.length} conflicted file(s) — resolve conflicts before repo workflow`,
+    };
+  }
+  const current = input.currentBranch;
+  const onDefault = current != null && current === input.defaultBranch;
+  const onMainOrMaster = current === "main" || current === "master";
+  const dirtyNote = input.clean ? "" : " (working tree is dirty)";
+  if (onDefault || onMainOrMaster) {
+    const which = onDefault ? `default branch "${current}"` : `"${current}"`;
+    return {
+      safe: false,
+      needsBranch: true,
+      reason: `on ${which} — create a feature branch before commit/PR workflow${dirtyNote}`,
+    };
+  }
+  if (current == null) {
+    // Detached HEAD: no feature branch to commit onto. Treat as needing a branch.
+    return {
+      safe: false,
+      needsBranch: true,
+      reason: `detached HEAD — create a feature branch before commit/PR workflow${dirtyNote}`,
+    };
+  }
+  return {
+    safe: true,
+    needsBranch: false,
+    reason: `on feature branch "${current}"${dirtyNote}`,
   };
 }
 
