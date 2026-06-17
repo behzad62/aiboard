@@ -183,6 +183,13 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://openrouter.ai/nex-agi/nex-n2-pro:free",
     verifiedAt: "2026-06-12",
   },
+  [formatModelId("openrouter", "z-ai/glm-5.2")]: {
+    inputUsdPer1M: 1.4,
+    outputUsdPer1M: 4.4,
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/z-ai/glm-5.2",
+    verifiedAt: "2026-06-17",
+  },
 };
 
 export function getModelPricing(

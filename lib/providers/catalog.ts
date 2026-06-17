@@ -164,6 +164,13 @@ export const MODEL_CATALOG: CatalogModel[] = [
     capabilities: { image: true, document: false, audio: false, video: true },
   },
   {
+    id: "z-ai/glm-5.2",
+    name: "GLM 5.2",
+    providerId: "openrouter",
+    description: "Z.ai flagship for coding and tool use across long-running agentic tasks (1M context)",
+    capabilities: { image: false, document: false, audio: false, video: false },
+  },
+  {
     id: "nex-agi/nex-n2-pro:free",
     name: "Nex-N2-Pro (free)",
     providerId: "openrouter",
