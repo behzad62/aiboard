@@ -55,6 +55,12 @@ export interface RepoStatus {
   clean: boolean;
   recentCommits: Array<{ hash: string; subject: string }>;
   gitAvailable: boolean;
+  githubCli: {
+    available: boolean;
+    authenticated: boolean;
+    user: string | null;
+    error?: string;
+  };
   error?: string;
 }
 
@@ -89,6 +95,21 @@ function asRemotes(value: unknown): Array<{ name: string; url: string }> {
         )
         .map((r) => ({ name: r.name, url: r.url }))
     : [];
+}
+
+function asGithubCli(value: unknown): RepoStatus["githubCli"] {
+  const v = (value ?? {}) as {
+    available?: unknown;
+    authenticated?: unknown;
+    user?: unknown;
+    error?: unknown;
+  };
+  return {
+    available: !!v.available,
+    authenticated: !!v.authenticated,
+    user: asString(v.user),
+    error: asString(v.error) ?? undefined,
+  };
 }
 
 function asCommits(value: unknown): Array<{ hash: string; subject: string }> {
@@ -135,6 +156,7 @@ export async function getRepoStatusViaRunner(
       clean: !!data.clean,
       recentCommits: asCommits(data.recentCommits),
       gitAvailable: !!data.gitAvailable,
+      githubCli: asGithubCli(data.githubCli),
       error: asString(data.error) ?? undefined,
     };
   } catch {
@@ -321,5 +343,169 @@ export async function commitViaRunner(
     hash: typeof data.hash === "string" ? data.hash : "",
     subject: typeof data.subject === "string" ? data.subject : input.message,
     committedFiles: asStringArray(data.committedFiles),
+  };
+}
+
+export interface RepoIssue {
+  repo: string;
+  issue: number;
+  title: string;
+  body: string;
+  url: string;
+  comments: Array<{ author: string; body: string; createdAt: string }>;
+}
+
+function asIssueComments(
+  value: unknown
+): Array<{ author: string; body: string; createdAt: string }> {
+  return Array.isArray(value)
+    ? value.map((c) => {
+        const v = (c ?? {}) as {
+          author?: unknown;
+          body?: unknown;
+          createdAt?: unknown;
+        };
+        return {
+          author: typeof v.author === "string" ? v.author : "",
+          body: typeof v.body === "string" ? v.body : "",
+          createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
+        };
+      })
+    : [];
+}
+
+/**
+ * Import a GitHub issue via the runner (NRW-007, gh-backed). Mixed wrapper:
+ * - HTTP 404 (old runner) or network failure → `null` (workflow unavailable);
+ * - any other non-OK response (400 validation, 502 gh/network failure) → throw
+ *   with the runner's message so the caller can surface it to the model / user.
+ */
+export async function readIssueViaRunner(
+  config: RunnerConfig,
+  input: { repo: string; issue: number }
+): Promise<RepoIssue | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/issue-read`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({ repo: input.repo, issue: input.issue }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner issue read failed (HTTP ${res.status})`);
+  }
+  return {
+    repo: typeof data.repo === "string" ? data.repo : input.repo,
+    issue: asNumber(data.issue) || input.issue,
+    title: typeof data.title === "string" ? data.title : "",
+    body: typeof data.body === "string" ? data.body : "",
+    url: typeof data.url === "string" ? data.url : "",
+    comments: asIssueComments(data.comments),
+  };
+}
+
+export interface RepoPushResult {
+  remote: string;
+  branch: string;
+  setUpstream: boolean;
+  output: string;
+}
+
+/**
+ * Push a branch via the runner (NRW-007, explicit git argv — GIT, not gh).
+ * Mixed wrapper, same shape as the other repo wrappers:
+ * - HTTP 404 (old runner) or network failure → `null` (workflow unavailable);
+ * - HTTP 400 validation / git push failure → throw with the runner's message.
+ */
+export async function pushViaRunner(
+  config: RunnerConfig,
+  input: { remote?: string; branch: string; setUpstream?: boolean }
+): Promise<RepoPushResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/push`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        remote: input.remote,
+        branch: input.branch,
+        setUpstream: input.setUpstream,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner push failed (HTTP ${res.status})`);
+  }
+  return {
+    remote: typeof data.remote === "string" ? data.remote : input.remote ?? "origin",
+    branch: typeof data.branch === "string" ? data.branch : input.branch,
+    setUpstream: !!data.setUpstream,
+    output: typeof data.output === "string" ? data.output : "",
+  };
+}
+
+export interface RepoPrResult {
+  url: string;
+  title: string;
+  base: string | null;
+  head: string | null;
+  draft: boolean;
+}
+
+/**
+ * Create a (draft) pull request via the runner (NRW-007, gh-backed). Mixed
+ * wrapper, same shape as `readIssueViaRunner`:
+ * - HTTP 404 (old runner) or network failure → `null` (workflow unavailable);
+ * - any other non-OK response (400 validation, 502 gh failure) → throw with the
+ *   runner's message so the caller can surface it to the model / user.
+ */
+export async function createPrViaRunner(
+  config: RunnerConfig,
+  input: {
+    repo?: string;
+    title: string;
+    body: string;
+    base?: string;
+    head?: string;
+    draft?: boolean;
+  }
+): Promise<RepoPrResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/pr-create`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        repo: input.repo,
+        title: input.title,
+        body: input.body,
+        base: input.base,
+        head: input.head,
+        draft: input.draft,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner PR create failed (HTTP ${res.status})`);
+  }
+  return {
+    url: typeof data.url === "string" ? data.url : "",
+    title: typeof data.title === "string" ? data.title : input.title,
+    base: asString(data.base),
+    head: asString(data.head),
+    draft: !!data.draft,
   };
 }
