@@ -620,6 +620,124 @@ function runGit(args, opts = {}) {
   };
 }
 
+// ── GitHub CLI (gh) — explicit argv, NEVER a shell string ────────────────────
+/**
+ * Resolve the argv prefix used to invoke `gh`. Production returns `["gh"]`
+ * (unchanged, shell-free explicit argv). A test-only env override
+ * `AIBOARD_GH_CMD` (a JSON array, e.g. `["<node>","<fake-gh.js>"]`) lets the
+ * test suite inject a fake `gh` by running the REAL `node` binary against a
+ * canned script — the only cross-platform-reliable way to fake `gh` on Windows
+ * without `shell:true` (a fake `gh.cmd` on PATH can't be spawned by bare name).
+ */
+function ghCommand() {
+  const override = process.env.AIBOARD_GH_CMD;
+  if (override) {
+    try {
+      const arr = JSON.parse(override);
+      if (Array.isArray(arr) && arr.length && arr.every((s) => typeof s === "string")) {
+        return arr;
+      }
+    } catch {
+      // fall through to the real gh
+    }
+  }
+  return ["gh"];
+}
+
+/**
+ * Run `gh` with explicit argv (never a shell string) inside the project folder.
+ * A spawn failure (e.g. gh not installed → ENOENT) surfaces as exitCode -1 so
+ * callers can degrade gracefully instead of throwing.
+ */
+function runGh(args, opts = {}) {
+  const cmd = ghCommand();
+  const result = spawnSync(cmd[0], [...cmd.slice(1), ...args], {
+    cwd: projectDir,
+    encoding: "utf8",
+    timeout: opts.timeoutMs ?? 30_000,
+    maxBuffer: MAX_OUTPUT_BYTES,
+  });
+  return {
+    exitCode: typeof result.status === "number" ? result.status : -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    spawnError: result.error ? String(result.error) : null,
+  };
+}
+
+/**
+ * Caching for GitHub CLI detection. /repo/status is polled many times per build
+ * (initial capture, after each wave, around branch-create/commit, the branch-
+ * safety gate), and each detection spawns `gh` up to twice — `gh auth status`
+ * can even hit the network. So we cache at the runner-process level (reset only
+ * on restart):
+ *   - `gh --version` availability is INVARIANT for the process lifetime (gh
+ *     won't be installed/removed mid-session) → detected once and reused.
+ *   - The full githubCli result is TTL-cached (~60s) so auth state stays
+ *     reasonably fresh while the steady-state double-spawn drops off every poll.
+ */
+const GH_CLI_CACHE_TTL_MS = 60 * 1000;
+let ghAvailabilityCache = null; // { available, error? } — invariant once known.
+let ghCliResultCache = null; // { value, expiresAt } — TTL-cached full result.
+
+/** Detect (and cache) whether `gh` is installed. Invariant for the process. */
+function detectGhAvailability() {
+  if (ghAvailabilityCache) return ghAvailabilityCache;
+  const version = runGh(["--version"]);
+  if (version.exitCode !== 0) {
+    // Not installed / not on PATH (or fake reporting unavailable).
+    const error = version.spawnError || (version.stderr.trim() ? version.stderr.trim() : undefined);
+    ghAvailabilityCache = error ? { available: false, error } : { available: false };
+  } else {
+    ghAvailabilityCache = { available: true };
+  }
+  return ghAvailabilityCache;
+}
+
+/**
+ * Detect GitHub CLI availability/auth state. NEVER throws and NEVER lets a
+ * missing `gh` fail /repo/status — a spawn ENOENT just reports
+ * { available:false, authenticated:false, user:null }. Result is TTL-cached
+ * (see GH_CLI_CACHE_TTL_MS); availability is cached for the process lifetime.
+ * - `gh --version` → availability.
+ * - `gh auth status` → authentication (exit 0 == logged in); parse the
+ *   "Logged in to github.com account <user>" / "as <user>" line when present.
+ */
+function detectGithubCli() {
+  if (ghCliResultCache && Date.now() < ghCliResultCache.expiresAt) {
+    return ghCliResultCache.value;
+  }
+  const result = { available: false, authenticated: false, user: null };
+  try {
+    const availability = detectGhAvailability();
+    if (!availability.available) {
+      if (availability.error) result.error = availability.error;
+      ghCliResultCache = { value: result, expiresAt: Date.now() + GH_CLI_CACHE_TTL_MS };
+      return result;
+    }
+    result.available = true;
+
+    const auth = runGh(["auth", "status"]);
+    if (auth.exitCode === 0) {
+      result.authenticated = true;
+      // gh prints auth info on stderr in some versions and stdout in others.
+      const text = `${auth.stdout}\n${auth.stderr}`;
+      const m =
+        /Logged in to [^\s]+ account ([A-Za-z0-9-]+)/.exec(text) ||
+        /Logged in to [^\s]+ as ([A-Za-z0-9-]+)/.exec(text) ||
+        /account ([A-Za-z0-9-]+) \(/.exec(text);
+      if (m) result.user = m[1];
+    }
+    ghCliResultCache = { value: result, expiresAt: Date.now() + GH_CLI_CACHE_TTL_MS };
+    return result;
+  } catch (err) {
+    // Defensive: never let detection throw out of /repo/status. Don't cache an
+    // unexpected error so the next poll retries.
+    result.error = err instanceof Error ? err.message : String(err);
+    return result;
+  }
+}
+
 /** Resolve the repository's default branch (origin/HEAD → main → master → null). */
 function detectDefaultBranch() {
   const head = runGit(["symbolic-ref", "refs/remotes/origin/HEAD"]);
@@ -723,7 +841,12 @@ function getRepoStatus() {
     clean: true,
     recentCommits: [],
     gitAvailable: true,
+    githubCli: { available: false, authenticated: false, user: null },
   };
+
+  // GitHub CLI capability detection is independent of the git repo state and
+  // must NEVER make /repo/status fail (e.g. when gh is not installed).
+  base.githubCli = detectGithubCli();
 
   const topLevel = runGit(["rev-parse", "--show-toplevel"]);
   if (topLevel.exitCode === -1) {
@@ -959,6 +1082,169 @@ function commitRepo({ message, paths }) {
       : [];
 
   return { hash, subject, committedFiles };
+}
+
+// ── GitHub workflow (issue import / push / draft PR) ─────────────────────────
+/**
+ * Marker for client-side validation failures (bad input) so endpoint handlers
+ * can return HTTP 400, distinct from gh/git execution failures (HTTP 502/400).
+ */
+class ValidationError extends Error {}
+
+const REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const REMOTE_NAME_RE = /^[A-Za-z0-9._/-]+$/;
+const MAX_PR_BODY_BYTES = 20 * 1024; // 20 KB cap on issue/PR body text.
+// Matches build.ts's REPO_COMMIT_MESSAGE_MAX (the runner can't import it).
+const MAX_PR_TITLE_CHARS = 200;
+
+/** Validate an `owner/repo` slug for the gh-backed endpoints. */
+function isValidRepoSlug(repo) {
+  return typeof repo === "string" && REPO_SLUG_RE.test(repo.trim());
+}
+
+/** Validate a remote name for `git push` (simple safe token, no leading dash). */
+function isValidRemoteName(remote) {
+  if (typeof remote !== "string") return false;
+  const value = remote.trim();
+  if (!value || value.startsWith("-")) return false;
+  return REMOTE_NAME_RE.test(value);
+}
+
+/**
+ * Read a GitHub issue via `gh issue view` (explicit argv). Throws on validation
+ * failure (caller maps to HTTP 400) or when gh fails / is unavailable (caller
+ * maps to HTTP 502). Returns { repo, issue, title, body, url, comments }.
+ */
+function readIssue({ repo, issue }) {
+  if (!isValidRepoSlug(repo)) {
+    throw new ValidationError(`Invalid repo "${repo}": expected "owner/name" (letters, digits, ".", "_", "-").`);
+  }
+  if (!Number.isInteger(issue) || issue <= 0) {
+    throw new ValidationError(`Invalid issue number "${issue}": expected a positive integer.`);
+  }
+  const slug = repo.trim();
+
+  const result = runGh([
+    "issue",
+    "view",
+    String(issue),
+    "--repo",
+    slug,
+    "--json",
+    "title,body,url,comments",
+  ]);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh issue view failed.";
+    throw new Error(`GitHub CLI failed to read issue #${issue} from ${slug}: ${detail}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`Could not parse gh issue JSON for #${issue} from ${slug}.`);
+  }
+
+  const comments = Array.isArray(parsed?.comments)
+    ? parsed.comments.map((c) => ({
+        author: typeof c?.author?.login === "string" ? c.author.login : "",
+        body: typeof c?.body === "string" ? c.body : "",
+        createdAt: typeof c?.createdAt === "string" ? c.createdAt : "",
+      }))
+    : [];
+
+  return {
+    repo: slug,
+    issue,
+    title: typeof parsed?.title === "string" ? parsed.title : "",
+    body: typeof parsed?.body === "string" ? parsed.body : "",
+    url: typeof parsed?.url === "string" ? parsed.url : "",
+    comments,
+  };
+}
+
+/**
+ * Push a branch via explicit git argv (this is GIT, not gh — no network mocking
+ * needed beyond a local bare remote). Throws on validation failure (HTTP 400) or
+ * a git push failure (HTTP 400). Returns { remote, branch, setUpstream, output }.
+ */
+function pushRepo({ remote, branch, setUpstream }) {
+  // Validate, then use the TRIMMED value in argv (mirrors trimmedTitle / commitRepo).
+  const remoteRaw = remote === undefined || remote === null || remote === "" ? "origin" : remote;
+  if (!isValidRemoteName(remoteRaw)) {
+    throw new ValidationError(`Invalid remote "${remoteRaw}": use only letters, digits, ".", "_", "/", "-"; no leading "-".`);
+  }
+  if (!isValidGitRefName(branch)) {
+    throw new ValidationError(`Invalid branch name "${branch}": not a valid git ref.`);
+  }
+  const remoteName = remoteRaw.trim();
+  const branchName = branch.trim();
+
+  const topLevel = runGit(["rev-parse", "--show-toplevel"]);
+  if (topLevel.exitCode === -1) throw new Error("git is not installed or not on PATH.");
+  if (topLevel.exitCode !== 0) throw new Error("The runner folder is not a Git repository.");
+
+  const args = ["push"];
+  if (setUpstream) args.push("-u");
+  args.push(remoteName, branchName);
+
+  const result = runGit(args);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || "git push failed.");
+  }
+  // git push reports progress on stderr; echo a trimmed combined output.
+  const output = `${result.stdout}\n${result.stderr}`.trim();
+  return { remote: remoteName, branch: branchName, setUpstream: !!setUpstream, output };
+}
+
+/**
+ * Create a (draft) pull request via `gh pr create` (explicit argv). Throws on
+ * validation failure (HTTP 400) or a gh failure / unavailability (HTTP 502).
+ * Returns { url, title, base, head, draft }.
+ */
+function createPr({ repo, title, body, base, head, draft }) {
+  const trimmedTitle = typeof title === "string" ? title.trim() : "";
+  if (!trimmedTitle) throw new ValidationError("A PR title is required.");
+  if (trimmedTitle.length > MAX_PR_TITLE_CHARS) {
+    throw new ValidationError(
+      `PR title too long (${trimmedTitle.length} chars); keep it to ${MAX_PR_TITLE_CHARS} or fewer.`
+    );
+  }
+  const prBody = typeof body === "string" ? body : "";
+  if (Buffer.byteLength(prBody, "utf8") > MAX_PR_BODY_BYTES) {
+    // Reject (don't silently truncate) so the caller knows the body was too big.
+    throw new ValidationError(`PR body too large (> ${MAX_PR_BODY_BYTES} bytes); shorten it.`);
+  }
+  if (repo !== undefined && repo !== null && !isValidRepoSlug(repo)) {
+    throw new ValidationError(`Invalid repo "${repo}": expected "owner/name".`);
+  }
+  if (base !== undefined && base !== null && !isValidGitRefName(base)) {
+    throw new ValidationError(`Invalid base ref "${base}".`);
+  }
+  if (head !== undefined && head !== null && !isValidGitRefName(head)) {
+    throw new ValidationError(`Invalid head ref "${head}".`);
+  }
+  // Use TRIMMED values in argv (mirrors trimmedTitle); validators already
+  // accept space-padded input, so normalise before handing to gh.
+  const repoSlug = repo ? repo.trim() : null;
+  const baseRef = base ? base.trim() : null;
+  const headRef = head ? head.trim() : null;
+
+  const args = ["pr", "create", "--title", trimmedTitle, "--body", prBody];
+  if (repoSlug) args.push("--repo", repoSlug);
+  if (baseRef) args.push("--base", baseRef);
+  if (headRef) args.push("--head", headRef);
+  if (draft) args.push("--draft");
+
+  const result = runGh(args);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh pr create failed.";
+    throw new Error(`GitHub CLI failed to create the PR: ${detail}`);
+  }
+  // gh prints the created PR URL on stdout (possibly amid other lines).
+  const urlMatch = /(https?:\/\/\S*\/pull\/\d+|https?:\/\/\S+)/.exec(result.stdout.trim());
+  const url = urlMatch ? urlMatch[1] : result.stdout.trim();
+  return { url, title: trimmedTitle, base: baseRef, head: headRef, draft: !!draft };
 }
 
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
@@ -1498,6 +1784,86 @@ const server = http.createServer(async (req, res) => {
       const message = err instanceof Error ? err.message : "Commit failed";
       console.log(`[repo/commit:error] ${new Date().toLocaleTimeString()}  ${message}`);
       json(res, 400, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/issue-read") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = readIssue({ repo: body?.repo, issue: body?.issue });
+      console.log(
+        `[repo/issue-read] ${new Date().toLocaleTimeString()}  ${result.repo}#${result.issue} "${result.title}" (${result.comments.length} comment(s))`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Issue read failed";
+      // Bad input → 400; gh/network failure → 502 (upstream error).
+      const status = err instanceof ValidationError ? 400 : 502;
+      console.log(`[repo/issue-read:error] ${new Date().toLocaleTimeString()}  (${status}) ${message}`);
+      json(res, status, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/push") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = pushRepo({
+        remote: body?.remote,
+        branch: body?.branch,
+        setUpstream: !!body?.setUpstream,
+      });
+      console.log(
+        `[repo/push] ${new Date().toLocaleTimeString()}  ${result.remote} ${result.branch}${result.setUpstream ? " -u" : ""}`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Push failed";
+      console.log(`[repo/push:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 400, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/pr-create") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = createPr({
+        repo: body?.repo,
+        title: body?.title,
+        body: body?.body,
+        base: body?.base,
+        head: body?.head,
+        draft: !!body?.draft,
+      });
+      console.log(
+        `[repo/pr-create] ${new Date().toLocaleTimeString()}  ${result.draft ? "draft " : ""}PR "${result.title}" → ${result.url}`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "PR create failed";
+      const status = err instanceof ValidationError ? 400 : 502;
+      console.log(`[repo/pr-create:error] ${new Date().toLocaleTimeString()}  (${status}) ${message}`);
+      json(res, status, { error: message });
     }
     return;
   }
