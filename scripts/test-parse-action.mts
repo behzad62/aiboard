@@ -139,6 +139,38 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
     '{"action":"repo_branch_create","name":"ok","base":"-bad"}',
     (a) => a === null,
   ],
+  [
+    "repo_commit action with paths",
+    '{"action":"repo_commit","message":"feat: add X","paths":["src/a.ts"],"reason":"land work"}',
+    (a) =>
+      a?.action === "repo_commit" &&
+      (a as { message: string }).message === "feat: add X" &&
+      Array.isArray((a as { paths?: string[] }).paths) &&
+      (a as { paths: string[] }).paths[0] === "src/a.ts",
+  ],
+  [
+    "repo_commit action minimal (message only) trims message",
+    '{"action":"repo_commit","message":"  fix: trim me  "}',
+    (a) =>
+      a?.action === "repo_commit" &&
+      (a as { message: string }).message === "fix: trim me" &&
+      (a as { paths?: string[] }).paths === undefined,
+  ],
+  [
+    "repo_commit rejects empty message",
+    '{"action":"repo_commit","message":"   "}',
+    (a) => a === null,
+  ],
+  [
+    "repo_commit rejects missing message",
+    '{"action":"repo_commit","reason":"oops"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_commit rejects >200-char message",
+    `{"action":"repo_commit","message":"${"x".repeat(201)}"}`,
+    (a) => a === null,
+  ],
   ["nothing parseable", "just prose with { braces } that aren't json", (a) => a === null],
 ];
 
@@ -283,6 +315,10 @@ const safeFirstChecks: Array<[string, boolean]> = [
     "repo_branch_create is NOT safe-first (it mutates)",
     !isSafeFirstToolAction({ action: "repo_branch_create", name: "feature/x" }),
   ],
+  [
+    "repo_commit is NOT safe-first (it mutates)",
+    !isSafeFirstToolAction({ action: "repo_commit", message: "feat: x" }),
+  ],
 ];
 
 for (const [name, ok] of safeFirstChecks) {
@@ -325,6 +361,14 @@ const repoDocChecks: Array<[string, boolean]> = [
   [
     "plan prompt documents repo_branch_create when repoWorkflow is on",
     repoPlanPrompt.includes('"action":"repo_branch_create"'),
+  ],
+  [
+    "plan prompt documents repo_commit when repoWorkflow is on",
+    repoPlanPrompt.includes('"action":"repo_commit"'),
+  ],
+  [
+    "repo_commit doc warns against raw git commit",
+    /git commit/i.test(repoPlanPrompt) && repoPlanPrompt.includes('"action":"repo_commit"'),
   ],
   [
     "repo doc states exactly one JSON action per turn",

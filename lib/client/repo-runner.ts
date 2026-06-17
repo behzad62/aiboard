@@ -281,3 +281,45 @@ export async function createBranchViaRunner(
     checkedOut: !!data.checkedOut,
   };
 }
+
+export interface RepoCommitResult {
+  hash: string;
+  subject: string;
+  committedFiles: string[];
+}
+
+/**
+ * Stage and commit changes via the runner (NRW-006). Mixed wrapper, same shape
+ * as `createBranchViaRunner`:
+ * - HTTP 404 (old runner) or network failure → `null` (workflow unavailable);
+ * - HTTP 400 validation error (empty commit, bad message, unsafe path) → throw
+ *   with the runner's message so the caller can surface it to the model / user.
+ */
+export async function commitViaRunner(
+  config: RunnerConfig,
+  input: { message: string; paths?: string[] }
+): Promise<RepoCommitResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/commit`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        message: input.message,
+        paths: input.paths,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner commit failed (HTTP ${res.status})`);
+  }
+  return {
+    hash: typeof data.hash === "string" ? data.hash : "",
+    subject: typeof data.subject === "string" ? data.subject : input.message,
+    committedFiles: asStringArray(data.committedFiles),
+  };
+}

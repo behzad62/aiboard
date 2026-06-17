@@ -62,6 +62,7 @@ import {
   type FileChangeOperation,
   type PlanAction,
   type RepoBranchCreateAction,
+  type RepoCommitAction,
   type RepoDiffAction,
   type ReviewAction,
   type ToolAction,
@@ -77,6 +78,7 @@ import {
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
   createBranchViaRunner,
+  commitViaRunner,
   classifyRepoBranchSafety,
   branchNameForTopic,
   type RepoStatus,
@@ -172,6 +174,21 @@ function shellHintForPlatform(platform?: string): string {
     return "SHELL: commands run in a POSIX shell (sh) — standard Unix tools (sed/awk/grep/ls/cat) are available.";
   }
   return "";
+}
+
+/**
+ * NRW-006 raw-commit guard: detect a `run` command that is `git commit` (or a
+ * `git add` used to stage for a commit) so the engine can refuse it and steer
+ * the model to the typed, user-approved `repo_commit` action instead. Narrow on
+ * purpose — only `git commit` / `git add`, the first command word (so a chained
+ * pipeline like `npm test && git log` is NOT matched here). This is an
+ * EXECUTION guard only; it does not touch `isGitHubWorkflowCommand` classification.
+ */
+function isRawCommitCommand(command: string): boolean {
+  const trimmed = command.trim();
+  // Match `git commit …` and `git add …` as the leading command. `\b` after the
+  // sub-command keeps `git committer-tool` (hypothetical) from matching.
+  return /^git\s+(?:commit|add)(?:\s|$)/i.test(trimmed);
 }
 
 // How much repo state we surface to the UI. The diff is bounded BEFORE it ever
@@ -516,6 +533,11 @@ export async function runBuildDiscussion(
   // (NRW-006+: commit/push/PR) gate their actions on this flag; ordinary file
   // writes are NEVER blocked by it.
   let repoCommitWorkflowEnabled = false;
+  // Commits landed via the user-approved repo_commit workflow (NRW-006), and the
+  // feature branch they were made on. Surfaced in the final build summary so the
+  // user sees branch + commit hash(es) without digging through the transcript.
+  const repoCommits: Array<{ hash: string; subject: string }> = [];
+  let repoActiveBranch: string | null = null;
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -743,6 +765,22 @@ export async function runBuildDiscussion(
     reason?: string
   ): Promise<string> => {
     if (!runner) return "No runner is available.";
+    // NRW-006: block raw `git commit`/`git add` through the normal run path when
+    // the runner folder is a Git repo. Commits must go through the typed,
+    // user-approved repo_commit action (which gates on a safe feature branch).
+    if (repoIsGit && isRawCommitCommand(command)) {
+      const message =
+        'Refusing a raw "git commit"/"git add" command. Use the typed {"action":"repo_commit","message":"…"} action instead — it stages and commits with the user\'s approval and only after a safe feature branch exists.';
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return `$ ${command}\nCOMMAND REJECTED: ${message}`;
+    }
     const safety = classifyRunCommand(command);
     if (!safety.allowed) {
       const message = `Command rejected: ${safety.reason} Use patch/append/edit output for file changes, then run tests/build commands only for verification.`;
@@ -999,6 +1037,129 @@ export async function runBuildDiscussion(
     }${result.checkedOut ? " and checked it out" : " (not checked out)"}${
       result.previousBranch ? `; previous branch was "${result.previousBranch}"` : ""
     }.`;
+  };
+
+  /**
+   * Commit changes via the typed runner endpoint. MUTATING and user-approved
+   * (NRW-006): mirrors executeRepoBranchCreate's approval gate, command_run
+   * emits, and post-action repo_status refresh. ONLY available once a safe
+   * feature branch exists (repoCommitWorkflowEnabled); the user sees the changed
+   * files AND the message before approving. Never uses runCommand/executeRun.
+   */
+  const executeRepoCommit = async (
+    action: RepoCommitAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    // Require a safe feature branch from the NRW-005 gate. Without it, refuse
+    // to commit (acceptance-critical) — never land work on default/main/master.
+    if (!repoCommitWorkflowEnabled) {
+      return (
+        "Commit is unavailable: a safe feature branch has not been established for this run " +
+        "(you're on the default/main/master branch, conflicts exist, or branch creation was " +
+        "declined). Do not commit. Continue producing file changes; commits can only land on a " +
+        "feature branch."
+      );
+    }
+
+    // Refresh status + diff so the panel shows the pending changes, and build a
+    // compact changed-files preview for the approval prompt.
+    let preStatus: RepoStatus | null = null;
+    try {
+      preStatus = await getRepoStatusViaRunner(runner);
+      if (preStatus) {
+        repoIsGit = preStatus.isRepo;
+        emit({ type: "repo_status", status: toRepoStatusEvent(preStatus) });
+      }
+      const preDiff = await getRepoDiffViaRunner(runner, { stat: true });
+      if (preDiff) emit({ type: "repo_diff", diff: toRepoDiffEvent(preDiff) });
+    } catch {
+      // best-effort refresh; commit still proceeds
+    }
+    const changedFiles = action.paths?.length
+      ? action.paths
+      : preStatus
+        ? [
+            ...preStatus.staged,
+            ...preStatus.unstaged,
+            ...preStatus.untracked,
+          ]
+        : [];
+    const uniqueChanged = [...new Set(changedFiles)];
+    const filesPreview =
+      uniqueChanged.length > 0
+        ? uniqueChanged.slice(0, 20).join(", ") +
+          (uniqueChanged.length > 20 ? `, …(+${uniqueChanged.length - 20} more)` : "")
+        : "(staging all pending changes)";
+
+    const firstLine = action.message.split("\n")[0];
+    const label = `git commit: ${firstLine}`;
+    const approvalReason = `Commit message: "${action.message}". Changed files: ${filesPreview}.${
+      action.reason ? ` Reason: ${action.reason}` : ""
+    }`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, approvalReason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED the commit "${firstLine}". Continue without it.`;
+      }
+    }
+
+    let result: Awaited<ReturnType<typeof commitViaRunner>>;
+    try {
+      result = await commitViaRunner(runner, {
+        message: action.message,
+        paths: action.paths,
+      });
+    } catch (err) {
+      // e.g. empty commit / validation rejection — surface, don't crash.
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Commit failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+
+    repoCommits.push({ hash: result.hash, subject: result.subject });
+    // Remember the branch the commit landed on (status reflects HEAD's branch).
+    if (preStatus?.currentBranch) repoActiveBranch = preStatus.currentBranch;
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `Committed ${result.hash} ${result.subject}`,
+    });
+    // Refresh repo status so the panel's recentCommits shows the new commit.
+    try {
+      const status = await getRepoStatusViaRunner(runner);
+      if (status) {
+        repoIsGit = status.isRepo;
+        if (status.currentBranch) repoActiveBranch = status.currentBranch;
+        emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+      }
+    } catch {
+      // best-effort refresh
+    }
+    return `Committed ${result.hash} "${result.subject}" (${
+      result.committedFiles.length
+    } file${result.committedFiles.length === 1 ? "" : "s"}: ${result.committedFiles
+      .slice(0, 20)
+      .join(", ")}${result.committedFiles.length > 20 ? ", …" : ""}).`;
   };
 
   /**
@@ -1850,6 +2011,12 @@ export async function runBuildDiscussion(
       return { result: out, exhausted: false, deliveredRange: delivered };
     }
     if (action.action === "run") {
+      // NRW-006: refuse raw commit commands before the budget check so the model
+      // always gets the same redirect to repo_commit regardless of budget state.
+      // executeRun enforces the same guard for any other entry point.
+      if (repoIsGit && isRawCommitCommand(action.command)) {
+        return { result: await executeRun(action.command, action.reason), exhausted: false };
+      }
       if (!canExecuteRunAction(action.command))
         return {
           result:
@@ -1882,6 +2049,9 @@ export async function runBuildDiscussion(
     }
     if (action.action === "repo_branch_create") {
       return { result: await executeRepoBranchCreate(action), exhausted: false };
+    }
+    if (action.action === "repo_commit") {
+      return { result: await executeRepoCommit(action), exhausted: false };
     }
     return {
       result: `Action "${action.action}" is not available here. Produce your decision JSON now.`,
@@ -2269,6 +2439,7 @@ export async function runBuildDiscussion(
         }
         if (created) {
           repoCommitWorkflowEnabled = true;
+          repoActiveBranch = created.branch;
           emit({
             type: "command_run",
             command: label,
@@ -2303,6 +2474,7 @@ export async function runBuildDiscussion(
     } else {
       // Already on a safe feature branch with no conflicts.
       repoCommitWorkflowEnabled = true;
+      repoActiveBranch = status?.currentBranch ?? null;
     }
   }
 
@@ -3104,9 +3276,29 @@ export async function runBuildDiscussion(
   );
 
   const { answer, confidence, dissent } = extractJudgeResult(summaryRaw);
+  // Deterministically append a bounded "Repository workflow" block so the branch
+  // and any user-approved commits ALWAYS appear in the build summary, regardless
+  // of what the Architect chose to write (NRW-006). NRW-008 will formalize this
+  // section with issue/PR — keep this minimal and easy to extend.
+  let finalAnswer = answer;
+  if (runner && repoIsGit && (repoActiveBranch || repoCommits.length > 0)) {
+    const lines = ["", "## Repository workflow", ""];
+    if (repoActiveBranch) lines.push(`- Branch: \`${repoActiveBranch}\``);
+    if (repoCommits.length > 0) {
+      for (const c of repoCommits.slice(0, 20)) {
+        lines.push(`- Commit \`${c.hash}\` ${c.subject}`);
+      }
+      if (repoCommits.length > 20) {
+        lines.push(`- …(+${repoCommits.length - 20} more commit(s))`);
+      }
+    } else {
+      lines.push("- No commits were made this run.");
+    }
+    finalAnswer = `${answer}\n${lines.join("\n")}`;
+  }
   insertFinalResult({
     discussionId: discussion.id,
-    answer,
+    answer: finalAnswer,
     confidence,
     dissent: JSON.stringify(dissent),
     createdAt: new Date().toISOString(),
@@ -3115,16 +3307,21 @@ export async function runBuildDiscussion(
     status: "completed",
     updatedAt: new Date().toISOString(),
   });
-  emit({ type: "final_answer", answer, confidence, dissent });
+  emit({ type: "final_answer", answer: finalAnswer, confidence, dissent });
   // Files land via the runner (its folder), the picked browser folder, or
   // in-app only — name whichever actually applied.
   const diskLabel = runner ? runnerDirName : diskGranted ? dirHandle?.name : null;
   // Note the repo-workflow state for the run so the user knows whether
-  // commit/PR-capable work was active (the gate may have disabled it).
+  // commit/PR-capable work was active (the gate may have disabled it), and how
+  // many commits landed (NRW-006).
+  const commitNote =
+    repoCommits.length > 0
+      ? `, ${repoCommits.length} commit${repoCommits.length === 1 ? "" : "s"} (latest ${repoCommits[repoCommits.length - 1].hash})`
+      : "";
   const repoWorkflowNote =
     runner && repoIsGit
       ? repoCommitWorkflowEnabled
-        ? " — commit & PR workflow was enabled (safe feature branch)"
+        ? ` — commit & PR workflow was enabled (safe feature branch${repoActiveBranch ? ` "${repoActiveBranch}"` : ""})${commitNote}`
         : " — commit & PR workflow stayed disabled (no safe feature branch)"
       : "";
   emit({
