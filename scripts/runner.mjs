@@ -604,6 +604,219 @@ function runCommand(command) {
   });
 }
 
+// ── Git inspection (read-only) ───────────────────────────────────────────────
+/** Run git with explicit argv (never a shell string) inside the project folder. */
+function runGit(args, opts = {}) {
+  const result = spawnSync("git", args, {
+    cwd: projectDir,
+    encoding: "utf8",
+    timeout: opts.timeoutMs ?? 30_000,
+    maxBuffer: MAX_OUTPUT_BYTES,
+  });
+  return {
+    exitCode: typeof result.status === "number" ? result.status : -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+/** Resolve the repository's default branch (origin/HEAD → main → master → null). */
+function detectDefaultBranch() {
+  const head = runGit(["symbolic-ref", "refs/remotes/origin/HEAD"]);
+  if (head.exitCode === 0) {
+    const ref = head.stdout.trim(); // refs/remotes/origin/main
+    const name = ref.replace(/^refs\/remotes\/origin\//, "");
+    if (name) return name;
+  }
+  for (const candidate of ["main", "master"]) {
+    const verify = runGit(["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]);
+    if (verify.exitCode === 0) return candidate;
+  }
+  return null;
+}
+
+/** Parse `git remote -v` into a deduped [{ name, url }] list (fetch URLs). */
+function parseRemotes() {
+  const out = runGit(["remote", "-v"]);
+  if (out.exitCode !== 0) return [];
+  const seen = new Map();
+  for (const line of out.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(trimmed);
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    if (kind === "fetch" || !seen.has(name)) seen.set(name, url);
+  }
+  return [...seen.entries()].map(([name, url]) => ({ name, url }));
+}
+
+/**
+ * Parse `git status --porcelain=v1 --branch` into branch + file groupings.
+ * The first line is the branch header:
+ *   ## main...origin/main [ahead 1, behind 2]
+ * Subsequent lines are XY-coded entries; conflicted entries use the
+ * unmerged codes (DD, AU, UD, UA, DU, AA, UU).
+ */
+function parsePorcelainStatus(text) {
+  const staged = [];
+  const unstaged = [];
+  const untracked = [];
+  const conflicted = [];
+  let upstream = null;
+  let ahead = 0;
+  let behind = 0;
+
+  const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+  for (const rawLine of text.split("\n")) {
+    if (!rawLine) continue;
+    if (rawLine.startsWith("## ")) {
+      const header = rawLine.slice(3);
+      const aheadMatch = /\[.*?ahead (\d+).*?\]/.exec(header);
+      const behindMatch = /\[.*?behind (\d+).*?\]/.exec(header);
+      if (aheadMatch) ahead = Number(aheadMatch[1]);
+      if (behindMatch) behind = Number(behindMatch[1]);
+      // "branch...upstream [ahead/behind]" — pull the upstream ref if present.
+      const branches = header.split(" ")[0];
+      const dots = branches.indexOf("...");
+      if (dots >= 0) upstream = branches.slice(dots + 3) || null;
+      continue;
+    }
+    const x = rawLine[0];
+    const y = rawLine[1];
+    const xy = `${x}${y}`;
+    // Porcelain v1 path field starts at column 3; rename arrow "orig -> new".
+    let file = rawLine.slice(3);
+    const arrow = file.indexOf(" -> ");
+    if (arrow >= 0) file = file.slice(arrow + 4);
+    if (xy === "??") {
+      untracked.push(file);
+      continue;
+    }
+    if (CONFLICT_CODES.has(xy)) {
+      conflicted.push(file);
+      continue;
+    }
+    if (x !== " " && x !== "?") staged.push(file);
+    if (y !== " " && y !== "?") unstaged.push(file);
+  }
+
+  return { staged, unstaged, untracked, conflicted, upstream, ahead, behind };
+}
+
+/** Build the RunnerRepoStatus payload for the project folder. */
+function getRepoStatus() {
+  const base = {
+    isRepo: false,
+    root: null,
+    currentBranch: null,
+    defaultBranch: null,
+    remotes: [],
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    conflicted: [],
+    clean: true,
+    recentCommits: [],
+    gitAvailable: true,
+  };
+
+  const topLevel = runGit(["rev-parse", "--show-toplevel"]);
+  if (topLevel.exitCode === -1) {
+    // git is not installed / not on PATH.
+    return { ...base, gitAvailable: false, clean: false };
+  }
+  if (topLevel.exitCode !== 0) {
+    // git ran but this folder is not inside a repo — not an error.
+    return base;
+  }
+
+  base.isRepo = true;
+  base.root = topLevel.stdout.trim() || null;
+
+  const branch = runGit(["branch", "--show-current"]);
+  base.currentBranch = branch.exitCode === 0 && branch.stdout.trim() ? branch.stdout.trim() : null;
+
+  base.defaultBranch = detectDefaultBranch();
+  base.remotes = parseRemotes();
+
+  const status = runGit(["status", "--porcelain=v1", "--branch"]);
+  if (status.exitCode === 0) {
+    const parsed = parsePorcelainStatus(status.stdout);
+    base.staged = parsed.staged;
+    base.unstaged = parsed.unstaged;
+    base.untracked = parsed.untracked;
+    base.conflicted = parsed.conflicted;
+    base.ahead = parsed.ahead;
+    base.behind = parsed.behind;
+    base.upstream = parsed.upstream;
+  }
+
+  // Prefer the explicit upstream ref when available (more reliable than parsing).
+  const upstream = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  if (upstream.exitCode === 0 && upstream.stdout.trim()) {
+    base.upstream = upstream.stdout.trim();
+  }
+
+  base.clean =
+    base.staged.length === 0 &&
+    base.unstaged.length === 0 &&
+    base.untracked.length === 0 &&
+    base.conflicted.length === 0;
+
+  const log = runGit(["log", "-5", "--pretty=format:%h%x00%s"]);
+  if (log.exitCode === 0 && log.stdout.trim()) {
+    base.recentCommits = log.stdout
+      .split("\n")
+      .map((line) => {
+        const nul = line.indexOf(" ");
+        if (nul < 0) return null;
+        return { hash: line.slice(0, nul), subject: line.slice(nul + 1) };
+      })
+      .filter(Boolean);
+  }
+
+  return base;
+}
+
+/** Build a git diff for the project folder, capped at MAX_OUTPUT_BYTES. */
+function getRepoDiff({ paths, staged, stat }) {
+  const args = ["diff"];
+  if (staged) args.push("--cached");
+  if (stat) args.push("--stat");
+
+  if (Array.isArray(paths) && paths.length > 0) {
+    const resolved = [];
+    for (const rel of paths) {
+      const target = safeResolve(rel);
+      if (!target) {
+        throw new Error(`Refusing path outside the project folder: ${rel}`);
+      }
+      // Pass the sanitized relative form so git scopes to the project folder.
+      resolved.push(path.relative(projectDir, target).replace(/\\/g, "/"));
+    }
+    args.push("--", ...resolved);
+  }
+
+  const result = runGit(args);
+  if (result.exitCode !== 0 && result.stderr.trim()) {
+    throw new Error(result.stderr.trim());
+  }
+  const full = result.stdout ?? "";
+  const bytes = Buffer.byteLength(full, "utf8");
+  let diff = full;
+  let truncated = false;
+  if (bytes > MAX_OUTPUT_BYTES) {
+    diff = Buffer.from(full, "utf8").subarray(0, MAX_OUTPUT_BYTES).toString("utf8");
+    truncated = true;
+  }
+  return { diff, truncated, bytes };
+}
+
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
 const MCP_CALL_TIMEOUT_MS = 120 * 1000;
 const MCP_INIT_TIMEOUT_MS = 60 * 1000;
@@ -1053,6 +1266,47 @@ const server = http.createServer(async (req, res) => {
       `      exit ${result.exitCode} in ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? " (output truncated)" : ""}`
     );
     json(res, 200, result);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/repo/status") {
+    try {
+      const status = getRepoStatus();
+      console.log(
+        `[repo/status] ${new Date().toLocaleTimeString()}  isRepo=${status.isRepo} branch=${status.currentBranch ?? "-"} clean=${status.clean}`
+      );
+      json(res, 200, { ok: true, ...status });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Repo status failed";
+      console.log(`[repo/status:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 500, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/diff") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = getRepoDiff({
+        paths: body?.paths,
+        staged: !!body?.staged,
+        stat: !!body?.stat,
+      });
+      console.log(
+        `[repo/diff] ${new Date().toLocaleTimeString()}  ${body?.staged ? "staged" : "unstaged"}${body?.stat ? " stat" : ""} (${result.bytes} B${result.truncated ? ", truncated" : ""})`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Repo diff failed";
+      console.log(`[repo/diff:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 400, { error: message });
+    }
     return;
   }
 
