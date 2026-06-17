@@ -20,7 +20,8 @@ export interface CommandResult {
 
 export const DEFAULT_RUNNER_URL = "http://127.0.0.1:8787";
 
-function headers(token: string): HeadersInit {
+/** Shared header set for runner requests (JSON + the runner auth token). */
+export function headers(token: string): HeadersInit {
   return { "content-type": "application/json", "x-runner-token": token };
 }
 
