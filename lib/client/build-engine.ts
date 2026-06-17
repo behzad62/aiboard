@@ -46,6 +46,7 @@ import {
   isBuildTaskDependencySatisfied,
   isBuildToolAction,
   isGitHubWorkflowCommand,
+  isRawCommitCommand,
   isRedundantToolCall,
   outputPathsForTask,
   parseArchitectAction,
@@ -174,21 +175,6 @@ function shellHintForPlatform(platform?: string): string {
     return "SHELL: commands run in a POSIX shell (sh) — standard Unix tools (sed/awk/grep/ls/cat) are available.";
   }
   return "";
-}
-
-/**
- * NRW-006 raw-commit guard: detect a `run` command that is `git commit` (or a
- * `git add` used to stage for a commit) so the engine can refuse it and steer
- * the model to the typed, user-approved `repo_commit` action instead. Narrow on
- * purpose — only `git commit` / `git add`, the first command word (so a chained
- * pipeline like `npm test && git log` is NOT matched here). This is an
- * EXECUTION guard only; it does not touch `isGitHubWorkflowCommand` classification.
- */
-function isRawCommitCommand(command: string): boolean {
-  const trimmed = command.trim();
-  // Match `git commit …` and `git add …` as the leading command. `\b` after the
-  // sub-command keeps `git committer-tool` (hypothetical) from matching.
-  return /^git\s+(?:commit|add)(?:\s|$)/i.test(trimmed);
 }
 
 // How much repo state we surface to the UI. The diff is bounded BEFORE it ever

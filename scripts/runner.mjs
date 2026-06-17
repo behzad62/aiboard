@@ -947,7 +947,9 @@ function commitRepo({ message, paths }) {
   const hash = hashOut.exitCode === 0 ? hashOut.stdout.trim() : "";
   const subjectOut = runGit(["log", "-1", "--pretty=format:%s"]);
   const subject = subjectOut.exitCode === 0 ? subjectOut.stdout.trim() : trimmed;
-  const filesOut = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]);
+  // `--root` is required so the FIRST (parentless) commit reports its files;
+  // without it diff-tree prints nothing for a root commit.
+  const filesOut = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "HEAD"]);
   const committedFiles =
     filesOut.exitCode === 0
       ? filesOut.stdout

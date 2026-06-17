@@ -235,6 +235,36 @@ try {
     runner.child.kill();
   }
 
+  // ── 5b. Root (first) commit reports its files ─────────────────────────────
+  // A parentless commit needs `diff-tree --root`; otherwise committedFiles is
+  // empty even though files were committed. Regression guard for that bug.
+  {
+    const dir = initRepo("adb-runner-commit-root-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    // No prior commit at all — the commit below is the repo's root commit.
+    fs.writeFileSync(path.join(dir, "first.txt"), "first\n", "utf8");
+    fs.writeFileSync(path.join(dir, "second.txt"), "second\n", "utf8");
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    const { res, data } = await post(runner.port, runner.token, "/repo/commit", {
+      message: "feat: root commit",
+    });
+    check("root: HTTP 200", res.status === 200, data);
+    check(
+      "root: committedFiles is non-empty for the first commit",
+      Array.isArray(data.committedFiles) &&
+        data.committedFiles.includes("first.txt") &&
+        data.committedFiles.includes("second.txt"),
+      data
+    );
+    const log = git(dir, ["log", "-1", "--pretty=format:%s"]);
+    check("root: git log shows the commit", log.trim() === "feat: root commit", log);
+
+    runner.child.kill();
+  }
+
   // ── 6. Existing endpoints still respond ───────────────────────────────────
   {
     const dir = initRepo("adb-runner-commit-regress-");
