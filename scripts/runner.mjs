@@ -888,6 +888,79 @@ function createRepoBranch({ name, base, checkout }) {
   return { branch: name, previousBranch, checkedOut: shouldCheckout };
 }
 
+/**
+ * Stage and commit changes via explicit argv (never a shell string). Throws on a
+ * validation / empty-commit failure (caller maps to HTTP 400). Returns
+ * { hash, subject, committedFiles }.
+ *
+ * - `message` must be 1–200 chars after trimming.
+ * - When `paths` is provided, each is validated with the same relative-path rules
+ *   as the file tools (safeResolve; absolute / ".." rejected) and only those are
+ *   staged (`git add -- <paths…>`); otherwise everything is staged (`git add -A`).
+ * - Refuses an empty commit (nothing staged after `git add`).
+ */
+function commitRepo({ message, paths }) {
+  const trimmed = typeof message === "string" ? message.trim() : "";
+  if (!trimmed) throw new Error("A commit message is required.");
+  if (trimmed.length > 200) {
+    throw new Error(`Commit message too long (${trimmed.length} chars); keep it to 200 or fewer.`);
+  }
+
+  const topLevel = runGit(["rev-parse", "--show-toplevel"]);
+  if (topLevel.exitCode === -1) throw new Error("git is not installed or not on PATH.");
+  if (topLevel.exitCode !== 0) throw new Error("The runner folder is not a Git repository.");
+
+  // Stage the requested paths (or everything). Validate paths up front so an
+  // unsafe path is rejected before any staging happens.
+  if (Array.isArray(paths) && paths.length > 0) {
+    const resolved = [];
+    for (const rel of paths) {
+      const target = safeResolve(rel);
+      if (!target) {
+        throw new Error(`Refusing path outside the project folder: ${rel}`);
+      }
+      resolved.push(path.relative(projectDir, target).replace(/\\/g, "/"));
+    }
+    const add = runGit(["add", "--", ...resolved]);
+    if (add.exitCode !== 0) {
+      throw new Error(add.stderr.trim() || add.stdout.trim() || "git add failed.");
+    }
+  } else {
+    const add = runGit(["add", "-A"]);
+    if (add.exitCode !== 0) {
+      throw new Error(add.stderr.trim() || add.stdout.trim() || "git add -A failed.");
+    }
+  }
+
+  // Refuse an empty commit: --quiet exits 0 when there's nothing staged.
+  const staged = runGit(["diff", "--cached", "--quiet"]);
+  if (staged.exitCode === 0) {
+    throw new Error("No staged changes to commit (empty commit). Make changes before committing.");
+  }
+
+  const commit = runGit(["commit", "-m", trimmed]);
+  if (commit.exitCode !== 0) {
+    throw new Error(commit.stderr.trim() || commit.stdout.trim() || "git commit failed.");
+  }
+
+  const hashOut = runGit(["rev-parse", "--short", "HEAD"]);
+  const hash = hashOut.exitCode === 0 ? hashOut.stdout.trim() : "";
+  const subjectOut = runGit(["log", "-1", "--pretty=format:%s"]);
+  const subject = subjectOut.exitCode === 0 ? subjectOut.stdout.trim() : trimmed;
+  // `--root` is required so the FIRST (parentless) commit reports its files;
+  // without it diff-tree prints nothing for a root commit.
+  const filesOut = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "HEAD"]);
+  const committedFiles =
+    filesOut.exitCode === 0
+      ? filesOut.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+      : [];
+
+  return { hash, subject, committedFiles };
+}
+
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
 const MCP_CALL_TIMEOUT_MS = 120 * 1000;
 const MCP_INIT_TIMEOUT_MS = 60 * 1000;
@@ -1402,6 +1475,28 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Branch create failed";
       console.log(`[repo/branch-create:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 400, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/commit") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = commitRepo({ message: body?.message, paths: body?.paths });
+      console.log(
+        `[repo/commit] ${new Date().toLocaleTimeString()}  ${result.hash} ${result.subject} (${result.committedFiles.length} file(s))`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Commit failed";
+      console.log(`[repo/commit:error] ${new Date().toLocaleTimeString()}  ${message}`);
       json(res, 400, { error: message });
     }
     return;

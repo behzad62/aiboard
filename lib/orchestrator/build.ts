@@ -209,6 +209,22 @@ export function isGitHubWorkflowCommand(command: string): boolean {
   return !/(?:[;&|]|\d?>|>>)/.test(trimmed);
 }
 
+/**
+ * NRW-006 raw-commit guard: detect a `run` command that is `git commit` (or a
+ * `git add` used to stage for a commit) so the engine can refuse it and steer
+ * the model to the typed, user-approved `repo_commit` action instead. Narrow on
+ * purpose — only `git commit` / `git add` as the leading command word, so
+ * neighbours like `git commit-graph`, `git add-foo`, or `gitk` do NOT match.
+ * This is an EXECUTION guard only; it does NOT affect `isGitHubWorkflowCommand`
+ * classification (which deliberately treats `git commit` as a workflow command).
+ */
+export function isRawCommitCommand(command: string): boolean {
+  const trimmed = command.trim();
+  // `(?:\s|$)` after the sub-command keeps `git commit-graph` / `git add-foo`
+  // from matching: the sub-command must be followed by whitespace or end-of-string.
+  return /^git\s+(?:commit|add)(?:\s|$)/i.test(trimmed);
+}
+
 export function githubWorkflowRequested(request: string): boolean {
   const text = request.trim();
   const hasRepoAddress =
@@ -315,6 +331,26 @@ export interface RepoBranchCreateAction {
   reason?: string;
 }
 
+/**
+ * Max length (after trimming) of a `repo_commit` message. Single source of truth
+ * for the parse-time check and the Architect-facing prompt copy. NOTE: the local
+ * runner (scripts/runner.mjs) enforces the SAME limit independently — it cannot
+ * import from lib/ — so keep its literal `200` in sync with this constant.
+ */
+export const REPO_COMMIT_MESSAGE_MAX = 200;
+
+/**
+ * Stage and commit changes via the runner (mutating, user-approved — NRW-006).
+ * When `paths` is omitted everything pending is staged; otherwise only those
+ * relative paths. `message` is the commit subject (validated ≤REPO_COMMIT_MESSAGE_MAX chars).
+ */
+export interface RepoCommitAction {
+  action: "repo_commit";
+  message: string;
+  paths?: string[];
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
@@ -328,7 +364,8 @@ export type ArchitectAction =
   | AppendAction
   | RepoStatusAction
   | RepoDiffAction
-  | RepoBranchCreateAction;
+  | RepoBranchCreateAction
+  | RepoCommitAction;
 
 function looksLikePath(value: string): boolean {
   const v = value.trim();
@@ -889,6 +926,23 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof branch.reason === "string" ? branch.reason : undefined,
         };
       }
+      if (parsed.action === "repo_commit") {
+        const commit = parsed as RepoCommitAction;
+        // Reject malformed commits outright (mutating action): the message must
+        // be a non-empty string ≤REPO_COMMIT_MESSAGE_MAX chars after trimming.
+        if (typeof commit.message !== "string") return null;
+        const message = commit.message.trim();
+        if (!message || message.length > REPO_COMMIT_MESSAGE_MAX) return null;
+        const paths = Array.isArray(commit.paths)
+          ? commit.paths.filter((p): p is string => typeof p === "string")
+          : undefined;
+        return {
+          action: "repo_commit",
+          message,
+          paths: paths && paths.length > 0 ? paths : undefined,
+          reason: typeof commit.reason === "string" ? commit.reason : undefined,
+        };
+      }
     }
   } catch {
     // not a valid action candidate
@@ -908,7 +962,8 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "fetch" ||
     action.action === "repo_status" ||
     action.action === "repo_diff" ||
-    action.action === "repo_branch_create"
+    action.action === "repo_branch_create" ||
+    action.action === "repo_commit"
   );
 }
 
@@ -993,7 +1048,7 @@ export function inspectStrictToolActionOutput(text: string): {
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1066,6 +1121,13 @@ export function exactToolKey(action: ArchitectAction): string | null {
       // null — repo state legitimately changes between calls, so the Architect
       // must be able to re-query after writes (the loop caps bound runaway looping).
       return `repo_branch_create:${action.name.trim()}`;
+    case "repo_commit":
+      // Key by the (case-sensitive) commit message: re-emitting the identical
+      // commit in the same loop is almost always a duplicate, not a second
+      // intended commit. A genuine follow-up commit uses a different message.
+      // The user approval gate is the real safety net; this just stops an
+      // immediate accidental re-fire of the exact same action.
+      return `repo_commit:${action.message.trim()}`;
     default:
       return null;
   }
@@ -1293,6 +1355,7 @@ function repoToolDoc(repoWorkflow?: boolean): string {
     '- Status: {"action":"repo_status","reason":"why"} — current branch, dirty file counts, and ahead/behind. Non-mutating; re-query freely after writes.',
     '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating.',
     '- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. This MUTATES the repo, so it needs the user\'s approval; the user may deny it — respect that and continue.',
+    `- Commit: {"action":"repo_commit","message":"feat: add X","paths":["optional/scope"],"reason":"why"} — stages and commits. Omit "paths" to commit everything pending, or list relative paths to commit only those. The message must be 1–${REPO_COMMIT_MESSAGE_MAX} chars. This MUTATES the repo, so it needs the user's approval and is ONLY available after a safe feature branch exists; the user sees the changed files and message before approving and may deny it — respect that and continue. Do NOT run \`git commit\`/\`git add\` as a raw command — use this typed action.`,
   ].join("\n");
 }
 

@@ -2,6 +2,7 @@
 import {
   githubWorkflowRequested,
   isGitHubWorkflowCommand,
+  isRawCommitCommand,
   runBudgetStatus,
 } from "../lib/orchestrator/build";
 
@@ -37,6 +38,16 @@ for (const command of [
 
 for (const command of ["npm test", "node scripts/check.mjs", "npx tsc --noEmit"]) {
   check(`does not exempt ${command}`, !isGitHubWorkflowCommand(command));
+}
+
+// NRW-006 raw-commit guard (execution-side; must NOT change the classification
+// above — `git commit` is still a GitHub workflow command). Lock in the
+// boundary cases the reviewer checked.
+for (const command of ["git commit -m x", "git add .", "git  commit"]) {
+  check(`raw-commit guard matches ${JSON.stringify(command)}`, isRawCommitCommand(command), command);
+}
+for (const command of ["git add-foo", "gitk", "git commit-graph write", "git addemup", "npm test"]) {
+  check(`raw-commit guard does NOT match ${JSON.stringify(command)}`, !isRawCommitCommand(command), command);
 }
 
 const budget = runBudgetStatus({
