@@ -773,7 +773,8 @@ function getRepoStatus() {
     base.recentCommits = log.stdout
       .split("\n")
       .map((line) => {
-        const nul = line.indexOf(" ");
+        // git emits "<hash>\x00<subject>" per the %h%x00%s format
+        const nul = line.indexOf("\x00");
         if (nul < 0) return null;
         return { hash: line.slice(0, nul), subject: line.slice(nul + 1) };
       })
