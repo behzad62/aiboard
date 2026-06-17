@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isValidGitRefName } from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -233,7 +234,168 @@ try {
     runner.child.kill();
   }
 
-  // ── 5. Existing endpoints still work ──────────────────────────────────────
+  // ── 5. /repo/branch-create (NRW-004) ──────────────────────────────────────
+  {
+    const dir = initRepo("adb-runner-branch-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n", "utf8");
+    git(dir, ["add", "seed.txt"]);
+    git(dir, ["commit", "-m", "seed"]);
+    const startBranch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    // Create + checkout a new branch (checkout defaults to true).
+    const created = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "feature/new-thing",
+    });
+    check("branch-create: HTTP 200", created.res.status === 200, created.data);
+    check("branch-create: returns branch name", created.data.branch === "feature/new-thing", created.data);
+    check("branch-create: previousBranch is the start branch", created.data.previousBranch === startBranch, created.data);
+    check("branch-create: checkedOut true by default", created.data.checkedOut === true, created.data);
+    const headAfter = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    check("branch-create: HEAD switched to the new branch", headAfter === "feature/new-thing", headAfter);
+    const branchList = git(dir, ["branch", "--list", "feature/new-thing"]);
+    check("branch-create: branch exists in git", branchList.includes("feature/new-thing"), branchList);
+
+    // checkout:false creates the branch without switching.
+    const noSwitch = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "side-branch",
+      checkout: false,
+    });
+    check("branch-create: no-checkout HTTP 200", noSwitch.res.status === 200, noSwitch.data);
+    check("branch-create: no-checkout reports checkedOut false", noSwitch.data.checkedOut === false, noSwitch.data);
+    const headStill = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    check("branch-create: no-checkout leaves HEAD where it was", headStill === "feature/new-thing", headStill);
+    const sideList = git(dir, ["branch", "--list", "side-branch"]);
+    check("branch-create: no-checkout branch still created", sideList.includes("side-branch"), sideList);
+
+    // Bad name is rejected with HTTP 400.
+    const badName = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "-evil",
+    });
+    check("branch-create: rejects leading-dash name (HTTP 400)", badName.res.status === 400 && !!badName.data.error, badName.data);
+
+    const badTraversal = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "a..b",
+    });
+    check("branch-create: rejects '..' name (HTTP 400)", badTraversal.res.status === 400 && !!badTraversal.data.error, badTraversal.data);
+
+    const badSpace = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "foo bar",
+    });
+    check("branch-create: rejects whitespace name (HTTP 400)", badSpace.res.status === 400 && !!badSpace.data.error, badSpace.data);
+
+    const badBase = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "ok-name",
+      base: "-bad",
+    });
+    check("branch-create: rejects malformed base (HTTP 400)", badBase.res.status === 400 && !!badBase.data.error, badBase.data);
+
+    // Git-level rejections (valid format, but git itself refuses) — distinct
+    // from the name-validation 400s above.
+    const missingBase = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "from-missing-base",
+      base: "no-such-branch",
+    });
+    check("branch-create: rejects nonexistent base (HTTP 400)", missingBase.res.status === 400 && !!missingBase.data.error, missingBase.data);
+
+    const dupe = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "feature/new-thing",
+    });
+    check("branch-create: rejects already-existing branch (HTTP 400)", dupe.res.status === 400 && !!dupe.data.error, dupe.data);
+
+    runner.child.kill();
+  }
+
+  // ── 6. /repo/branch-create refuses while the tree has conflicts ────────────
+  {
+    const dir = initRepo("adb-runner-branch-conflict-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    fs.writeFileSync(path.join(dir, "conflict.txt"), "base\n", "utf8");
+    git(dir, ["add", "conflict.txt"]);
+    git(dir, ["commit", "-m", "base"]);
+    const baseBranch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+
+    git(dir, ["checkout", "-b", "feature"]);
+    fs.writeFileSync(path.join(dir, "conflict.txt"), "feature change\n", "utf8");
+    git(dir, ["commit", "-am", "feature edit"]);
+    git(dir, ["checkout", baseBranch]);
+    fs.writeFileSync(path.join(dir, "conflict.txt"), "main change\n", "utf8");
+    git(dir, ["commit", "-am", "main edit"]);
+    const merge = spawnSync("git", ["merge", "feature"], { cwd: dir, encoding: "utf8" });
+    check("branch-create conflict: merge produced a conflict", merge.status !== 0, merge.stderr || merge.stdout);
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    const blocked = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "should-not-happen",
+    });
+    check("branch-create: refuses with unmerged paths (HTTP 400)", blocked.res.status === 400 && !!blocked.data.error, blocked.data);
+
+    runner.child.kill();
+  }
+
+  // ── 6b. Drift guard: client isValidGitRefName ⟺ runner name-validation ─────
+  // The two copies of the ref-name rule (lib/orchestrator/build.ts and
+  // scripts/runner.mjs) are byte-identical today, but nothing fails if one
+  // diverges. Cross-check the client predicate against the runner's actual
+  // HTTP behavior over a shared corpus so any divergence trips a FAIL line.
+  {
+    const dir = initRepo("adb-runner-refname-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n", "utf8");
+    git(dir, ["add", "seed.txt"]);
+    git(dir, ["commit", "-m", "seed"]);
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    // A valid name occupies a distinct branch each time so a successful create
+    // never collides with a previous one (which would be a git-level 400, not a
+    // name-validation one). The runner's name-validation error begins with
+    // "Invalid branch name" / "Invalid base ref" — that string is how we tell a
+    // NAME rejection apart from a git-level rejection.
+    const corpus = [
+      "feature/x",
+      "release-1.2",
+      "feat/ok_1",
+      "-evil",
+      "a..b",
+      "a b",
+      "a/",
+      "a\\b",
+      "a//b",
+      "a@{1}",
+    ];
+    for (const name of corpus) {
+      const clientValid = isValidGitRefName(name);
+      // Create non-checkout branches so a valid create doesn't change HEAD or
+      // interfere with the next case.
+      const { res, data } = await post(runner.port, runner.token, "/repo/branch-create", {
+        name,
+        checkout: false,
+      });
+      const runnerNameRejected =
+        res.status === 400 &&
+        typeof data.error === "string" &&
+        /^Invalid (?:branch name|base ref)/.test(data.error);
+      // The runner accepts the name iff it did NOT reject it on name grounds.
+      const runnerAcceptsName = !runnerNameRejected;
+      check(
+        `refname drift guard: "${name}" — client(${clientValid}) matches runner(${runnerAcceptsName})`,
+        clientValid === runnerAcceptsName,
+        { name, clientValid, status: res.status, error: data.error }
+      );
+    }
+
+    runner.child.kill();
+  }
+
+  // ── 7. Existing endpoints still work ──────────────────────────────────────
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adb-runner-regress-"));
     later(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -1,8 +1,10 @@
 /** Quick regression check for parseArchitectAction (run: npx tsx scripts/test-parse-action.mts) */
 import {
+  buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
   buildOutstandingTasksDigest,
   isBuildTaskDependencySatisfied,
+  isSafeFirstToolAction,
   outputPathsForTask,
   parseArchitectAction,
 } from "../lib/orchestrator/build";
@@ -72,6 +74,70 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { path: string }).path === "tests/run-tests.ts" &&
       (a as { content: string }).content === "first chunk" &&
       (a as { reset: boolean }).reset === true,
+  ],
+  [
+    "repo_status action",
+    '{"action":"repo_status","reason":"check branch"}',
+    (a) => a?.action === "repo_status",
+  ],
+  [
+    "repo_diff action with options",
+    '{"action":"repo_diff","paths":["src/a.ts"],"staged":true,"stat":true,"reason":"see staged changes"}',
+    (a) =>
+      a?.action === "repo_diff" &&
+      Array.isArray((a as { paths?: string[] }).paths) &&
+      (a as { paths: string[] }).paths[0] === "src/a.ts" &&
+      (a as { staged: boolean }).staged === true &&
+      (a as { stat: boolean }).stat === true,
+  ],
+  [
+    "repo_diff action with no options",
+    '{"action":"repo_diff"}',
+    (a) => a?.action === "repo_diff",
+  ],
+  [
+    "repo_branch_create action",
+    '{"action":"repo_branch_create","name":"feature/issue-42","base":"main","checkout":false,"reason":"work on issue 42"}',
+    (a) =>
+      a?.action === "repo_branch_create" &&
+      (a as { name: string }).name === "feature/issue-42" &&
+      (a as { base?: string }).base === "main" &&
+      (a as { checkout?: boolean }).checkout === false,
+  ],
+  [
+    "repo_branch_create minimal (name only)",
+    '{"action":"repo_branch_create","name":"fix-1"}',
+    (a) => a?.action === "repo_branch_create" && (a as { name: string }).name === "fix-1",
+  ],
+  [
+    "repo_branch_create rejects leading-dash name",
+    '{"action":"repo_branch_create","name":"-evil"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_branch_create rejects '..' in name",
+    '{"action":"repo_branch_create","name":"a..b"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_branch_create rejects whitespace in name",
+    '{"action":"repo_branch_create","name":"foo bar"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_branch_create rejects trailing slash",
+    '{"action":"repo_branch_create","name":"a/"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_branch_create rejects backslash in name",
+    '{"action":"repo_branch_create","name":"a\\\\b"}',
+    (a) => a === null,
+  ],
+  [
+    "repo_branch_create rejects malformed base",
+    '{"action":"repo_branch_create","name":"ok","base":"-bad"}',
+    (a) => a === null,
   ],
   ["nothing parseable", "just prose with { braces } that aren't json", (a) => a === null],
 ];
@@ -200,6 +266,87 @@ outstandingChecks.push(
 
 for (const [name, ok] of outstandingChecks) {
   console.log(`${ok ? "PASS" : "FAIL"} â€” ${name}`);
+  if (!ok) failed++;
+}
+
+// ── Typed repo actions: safe-first classification (NRW-004) ─────────────────
+const safeFirstChecks: Array<[string, boolean]> = [
+  [
+    "repo_status is a safe-first inspection action",
+    isSafeFirstToolAction({ action: "repo_status" }),
+  ],
+  [
+    "repo_diff is a safe-first inspection action",
+    isSafeFirstToolAction({ action: "repo_diff" }),
+  ],
+  [
+    "repo_branch_create is NOT safe-first (it mutates)",
+    !isSafeFirstToolAction({ action: "repo_branch_create", name: "feature/x" }),
+  ],
+];
+
+for (const [name, ok] of safeFirstChecks) {
+  console.log(`${ok ? "PASS" : "FAIL"} — ${name}`);
+  if (!ok) failed++;
+}
+
+// ── Typed repo actions: prompt doc gating (NRW-004) ─────────────────────────
+const repoPlanPrompt = buildArchitectPlanPrompt({
+  request: "fix a bug",
+  treeText: "src/index.ts",
+  fileContext: "",
+  maxTasks: 3,
+  workerNames: ["W1"],
+  readHopsLeft: 2,
+  repoWorkflow: true,
+});
+const noRepoPlanPrompt = buildArchitectPlanPrompt({
+  request: "fix a bug",
+  treeText: "src/index.ts",
+  fileContext: "",
+  maxTasks: 3,
+  workerNames: ["W1"],
+  readHopsLeft: 2,
+});
+const repoReviewPrompt = buildArchitectReviewPrompt({
+  request: "fix a bug",
+  treeText: "src/index.ts",
+  executedText: "",
+  maxNewTasks: 3,
+  cyclesLeft: 1,
+  repoWorkflow: true,
+});
+
+const repoDocChecks: Array<[string, boolean]> = [
+  [
+    "plan prompt documents repo_status when repoWorkflow is on",
+    repoPlanPrompt.includes('"action":"repo_status"'),
+  ],
+  [
+    "plan prompt documents repo_branch_create when repoWorkflow is on",
+    repoPlanPrompt.includes('"action":"repo_branch_create"'),
+  ],
+  [
+    "repo doc states exactly one JSON action per turn",
+    /one JSON action per turn/i.test(repoPlanPrompt),
+  ],
+  [
+    "repo doc states branch creation needs user approval",
+    /approval/i.test(repoPlanPrompt) && repoPlanPrompt.includes("repo_branch_create"),
+  ],
+  [
+    "plan prompt omits repo actions when repoWorkflow is off",
+    !noRepoPlanPrompt.includes('"action":"repo_status"'),
+  ],
+  [
+    "review prompt documents repo actions when repoWorkflow is on",
+    repoReviewPrompt.includes('"action":"repo_status"') &&
+      repoReviewPrompt.includes('"action":"repo_diff"'),
+  ],
+];
+
+for (const [name, ok] of repoDocChecks) {
+  console.log(`${ok ? "PASS" : "FAIL"} — ${name}`);
   if (!ok) failed++;
 }
 
