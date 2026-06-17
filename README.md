@@ -67,6 +67,23 @@ For SearXNG-backed web search, point the runner at your own SearXNG instance:
 node runner.mjs <project-folder> --searxng --searxng-url http://127.0.0.1:8080
 ```
 
+### Native repo workflow
+
+When the runner is started on a folder that is a **Git repository**, Build mode shows live repository state (current branch, dirty files, recent commits, latest diff) and the Architect can drive a real Git workflow through typed, app-led actions:
+
+- Create and switch to a feature branch (so work never lands on `main`/`master`).
+- Make commits — each commit is shown to you (message and changed files) and waits for your in-app approval.
+- With an authenticated GitHub CLI on the runner machine, import a GitHub issue for context, push the branch, and open a **draft** pull request — pushing and PR creation also require your in-app approval.
+
+Every external/mutating step happens through the in-app approval gate; you can deny any of them and the build continues. When the run finishes, the final summary lists the branch, commits, imported issue, pushed branch, and pull-request URL.
+
+Requirements:
+
+- A local Git repository (run the runner on the repo folder).
+- Optional, for issue import / push / PR: the [GitHub CLI](https://cli.github.com/) installed **and** authenticated on the runner machine (`gh auth login`).
+
+You never paste tokens or secrets into the app — Git and `gh` use the credentials already configured on the runner machine. Build mode works the same on non-Git folders and without `gh`; the repository features simply don't appear.
+
 ## Checks
 
 There is no bundled test runner. The repository uses focused `tsx` scripts with PASS/FAIL output:
@@ -81,6 +98,15 @@ npx tsx scripts/test-runner-file-tools.mts
 npx tsx scripts/test-runner-background.mts
 npx tsx scripts/test-runner-searxng-shortcut.mts
 npx tsx scripts/test-seo-pages.mts
+```
+
+For the native repo / GitHub workflow (typed Architect actions, prompt gating, and the runner's `/repo/*` endpoints):
+
+```bash
+npx tsx scripts/test-build-repo-workflow.mts
+npx tsx scripts/test-github-workflow.mts
+npx tsx scripts/test-runner-github-workflow.mts
+npx tsx scripts/test-runner-repo-commit.mts
 ```
 
 Additional focused tests live in `scripts/test-*.mts` and `scripts/test-*.ts`.

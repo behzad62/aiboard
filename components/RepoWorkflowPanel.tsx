@@ -30,6 +30,17 @@ export type RepoDiffView = Extract<
   { type: "repo_diff" }
 >["diff"];
 
+/**
+ * Accumulated GitHub workflow milestones (NRW-008): the imported issue number,
+ * the pushed branch, and the opened pull-request URL. The discussion client
+ * merges each `repo_workflow` event's non-null fields into this view.
+ */
+export type RepoWorkflowView = {
+  issue: number | null;
+  pushedBranch: string | null;
+  prUrl: string | null;
+};
+
 function CountChip({
   label,
   count,
@@ -50,9 +61,11 @@ function CountChip({
 export function RepoWorkflowPanel({
   status,
   diff,
+  workflow,
 }: {
   status: RepoStatusView | null;
   diff: RepoDiffView | null;
+  workflow?: RepoWorkflowView | null;
 }) {
   // Nothing captured yet (no runner, old runner, or fetch failed): render
   // nothing rather than an empty shell.
@@ -203,6 +216,41 @@ export function RepoWorkflowPanel({
           </ul>
         </div>
       )}
+
+      {workflow &&
+        (workflow.issue != null || workflow.pushedBranch || workflow.prUrl) && (
+          <div className="mt-4">
+            <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+              <GitPullRequestArrow className="h-4 w-4 text-primary" />
+              GitHub workflow
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {workflow.issue != null && (
+                <Badge variant="secondary" className="gap-1">
+                  <CircleDot className="h-3.5 w-3.5" />
+                  <span className="font-mono">issue #{workflow.issue}</span>
+                </Badge>
+              )}
+              {workflow.pushedBranch && (
+                <Badge variant="secondary" className="gap-1">
+                  <Cloud className="h-3.5 w-3.5" />
+                  <span className="font-mono">pushed {workflow.pushedBranch}</span>
+                </Badge>
+              )}
+              {workflow.prUrl && (
+                <a
+                  href={workflow.prUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+                >
+                  <GitPullRequestArrow className="h-3.5 w-3.5" />
+                  View pull request
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
       {diff && (diff.summary || diff.files.length > 0) && (
         <div className="mt-4">
