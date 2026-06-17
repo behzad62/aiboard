@@ -288,6 +288,33 @@ export interface AppendAction {
   reason?: string;
 }
 
+// ── Typed repo (Git) actions — constrained operations via the runner's
+// /repo/* endpoints instead of raw `git` shell commands (NRW-004). ───────────
+
+/** Re-query the runner's Git working-tree status (non-mutating). */
+export interface RepoStatusAction {
+  action: "repo_status";
+  reason?: string;
+}
+
+/** Request a bounded Git diff via the runner (non-mutating). */
+export interface RepoDiffAction {
+  action: "repo_diff";
+  paths?: string[];
+  staged?: boolean;
+  stat?: boolean;
+  reason?: string;
+}
+
+/** Create (and optionally check out) a Git branch via the runner (mutating). */
+export interface RepoBranchCreateAction {
+  action: "repo_branch_create";
+  name: string;
+  base?: string;
+  checkout?: boolean;
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
@@ -298,7 +325,10 @@ export type ArchitectAction =
   | ToolAction
   | FetchAction
   | PatchAction
-  | AppendAction;
+  | AppendAction
+  | RepoStatusAction
+  | RepoDiffAction
+  | RepoBranchCreateAction;
 
 function looksLikePath(value: string): boolean {
   const v = value.trim();
@@ -669,6 +699,25 @@ function fencedBlocks(text: string): Array<{ info: string; body: string }> {
   return blocks;
 }
 
+/**
+ * Validate a Git ref name (branch or base) for the typed `repo_branch_create`
+ * action — the same constraints the runner enforces, applied client-side so the
+ * parser rejects a malformed branch creation before it is ever dispatched.
+ */
+export function isValidGitRefName(name: unknown): name is string {
+  if (typeof name !== "string") return false;
+  const value = name.trim();
+  if (!value) return false;
+  if (value.startsWith("-")) return false;
+  if (value.endsWith("/")) return false;
+  if (value.includes("..")) return false;
+  if (value.includes("//")) return false;
+  if (value.includes("@{")) return false;
+  if (value.includes("\\")) return false;
+  if (/\s/.test(value)) return false;
+  return /^[A-Za-z0-9._/-]+$/.test(value);
+}
+
 function parseActionCandidate(candidate: string): ArchitectAction | null {
   try {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
@@ -804,6 +853,42 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reset: !!action.reset,
         };
       }
+      if (parsed.action === "repo_status") {
+        return {
+          action: "repo_status",
+          reason:
+            typeof (parsed as RepoStatusAction).reason === "string"
+              ? (parsed as RepoStatusAction).reason
+              : undefined,
+        };
+      }
+      if (parsed.action === "repo_diff") {
+        const diff = parsed as RepoDiffAction;
+        const paths = Array.isArray(diff.paths)
+          ? diff.paths.filter((p): p is string => typeof p === "string")
+          : undefined;
+        return {
+          action: "repo_diff",
+          paths: paths && paths.length > 0 ? paths : undefined,
+          staged: !!diff.staged,
+          stat: !!diff.stat,
+          reason: typeof diff.reason === "string" ? diff.reason : undefined,
+        };
+      }
+      if (parsed.action === "repo_branch_create") {
+        const branch = parsed as RepoBranchCreateAction;
+        // Reject malformed branch creation outright (mutating action).
+        if (!isValidGitRefName(branch.name)) return null;
+        if (branch.base !== undefined && !isValidGitRefName(branch.base)) return null;
+        return {
+          action: "repo_branch_create",
+          name: branch.name.trim(),
+          base: branch.base !== undefined ? branch.base.trim() : undefined,
+          // Defaults to true: the Architect normally wants to switch.
+          checkout: branch.checkout === undefined ? true : !!branch.checkout,
+          reason: typeof branch.reason === "string" ? branch.reason : undefined,
+        };
+      }
     }
   } catch {
     // not a valid action candidate
@@ -820,7 +905,10 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "append" ||
     action.action === "run" ||
     action.action === "tool" ||
-    action.action === "fetch"
+    action.action === "fetch" ||
+    action.action === "repo_status" ||
+    action.action === "repo_diff" ||
+    action.action === "repo_branch_create"
   );
 }
 
@@ -831,11 +919,15 @@ export function hasCompleteBuildToolAction(text: string): boolean {
   });
 }
 
-function isSafeFirstToolAction(action: ArchitectAction): boolean {
+export function isSafeFirstToolAction(action: ArchitectAction): boolean {
   return (
     action.action === "read" ||
     action.action === "read_range" ||
-    action.action === "search"
+    action.action === "search" ||
+    // Non-mutating repo inspection — safe to auto-run as the first action.
+    // repo_branch_create is deliberately excluded (it mutates the repo).
+    action.action === "repo_status" ||
+    action.action === "repo_diff"
   );
 }
 
@@ -901,7 +993,7 @@ export function inspectStrictToolActionOutput(text: string): {
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -966,6 +1058,12 @@ export function exactToolKey(action: ArchitectAction): string | null {
       return `tool:${action.server.trim().toLowerCase()}.${action.tool
         .trim()
         .toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
+    case "repo_branch_create":
+      // Branch creation is idempotent-by-name: re-requesting the same branch is
+      // redundant. repo_status/repo_diff intentionally fall through to null —
+      // repo state legitimately changes between calls, so the Architect must be
+      // able to re-query after writes (the loop caps bound runaway looping).
+      return `repo_branch_create:${action.name.trim().toLowerCase()}`;
     default:
       return null;
   }
@@ -1186,6 +1284,16 @@ function githubWorkflowDoc(enabled?: boolean): string {
   ].join("\n");
 }
 
+function repoToolDoc(repoWorkflow?: boolean): string {
+  if (!repoWorkflow) return "";
+  return [
+    "TOOL — repo (Git): the runner folder is a Git repository. Use these TYPED actions for repo operations instead of running raw `git` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
+    '- Status: {"action":"repo_status","reason":"why"} — current branch, dirty file counts, and ahead/behind. Non-mutating; re-query freely after writes.',
+    '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating.',
+    '- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. This MUTATES the repo, so it needs the user\'s approval; the user may deny it — respect that and continue.',
+  ].join("\n");
+}
+
 function runToolDoc(
   runsLeft?: number,
   shellHint?: string,
@@ -1224,6 +1332,8 @@ export function buildArchitectPlanPrompt(input: {
   /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
   shellHint?: string;
   githubWorkflow?: boolean;
+  /** Whether a runner is connected to a Git repo — gates the typed repo doc. */
+  repoWorkflow?: boolean;
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -1251,6 +1361,7 @@ export function buildArchitectPlanPrompt(input: {
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
     fetchToolDoc(input.fetchesLeft),
+    repoToolDoc(input.repoWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
@@ -1329,6 +1440,8 @@ export function buildArchitectReviewPrompt(input: {
   /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
   shellHint?: string;
   githubWorkflow?: boolean;
+  /** Whether a runner is connected to a Git repo — gates the typed repo doc. */
+  repoWorkflow?: boolean;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -1358,6 +1471,7 @@ export function buildArchitectReviewPrompt(input: {
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
     fetchToolDoc(input.fetchesLeft),
+    repoToolDoc(input.repoWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     "End with ONE fenced json block:",

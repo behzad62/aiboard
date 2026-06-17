@@ -61,6 +61,8 @@ import {
   type FetchAction,
   type FileChangeOperation,
   type PlanAction,
+  type RepoBranchCreateAction,
+  type RepoDiffAction,
   type ReviewAction,
   type ToolAction,
 } from "@/lib/orchestrator/build";
@@ -74,6 +76,7 @@ import {
 import {
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
+  createBranchViaRunner,
   type RepoStatus,
 } from "./repo-runner";
 import {
@@ -849,6 +852,142 @@ export async function runBuildDiscussion(
       });
       return `${label}\nFetch failed: ${message}`;
     }
+  };
+
+  // ── Typed repo (Git) actions (NRW-004) ────────────────────────────────────
+  // These run via the runner's /repo/* endpoints, never `runCommand`. Status
+  // and diff are non-mutating inspection (no approval); branch creation mutates
+  // and requires user approval unless runner access is "full".
+  const repoUnavailable = (): string =>
+    "Repo workflow is unavailable: no local runner is connected to a Git repository. Continue without it.";
+
+  /** Re-query repo status, push it to the UI, and return a compact summary. */
+  const executeRepoStatus = async (): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    let status: RepoStatus | null;
+    try {
+      status = await getRepoStatusViaRunner(runner);
+    } catch (err) {
+      return `Repo status failed: ${err instanceof Error ? err.message : "runner error"}.`;
+    }
+    if (!status) return repoUnavailable();
+    repoIsGit = status.isRepo;
+    emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+    if (!status.isRepo) return repoUnavailable();
+    const dirty =
+      status.staged.length +
+      status.unstaged.length +
+      status.untracked.length +
+      status.conflicted.length;
+    const parts = [
+      `branch: ${status.currentBranch ?? "(detached HEAD)"}`,
+      status.upstream ? `upstream: ${status.upstream} (ahead ${status.ahead}, behind ${status.behind})` : "no upstream",
+      status.clean
+        ? "working tree clean"
+        : `dirty — staged ${status.staged.length}, unstaged ${status.unstaged.length}, untracked ${status.untracked.length}, conflicted ${status.conflicted.length}`,
+    ];
+    emitFileToolDiagnostic(
+      `Architect repo_status · ${status.currentBranch ?? "detached"} · ${dirty} change(s)`,
+      architect
+    );
+    return `Repo status — ${parts.join("; ")}.`;
+  };
+
+  /** Fetch a bounded diff, push it to the UI, and return a bounded summary. */
+  const executeRepoDiff = async (action: RepoDiffAction): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    let diff: Awaited<ReturnType<typeof getRepoDiffViaRunner>>;
+    try {
+      diff = await getRepoDiffViaRunner(runner, {
+        paths: action.paths,
+        staged: action.staged,
+        stat: action.stat,
+      });
+    } catch (err) {
+      return `Repo diff failed: ${err instanceof Error ? err.message : "runner error"}.`;
+    }
+    if (!diff) return repoUnavailable();
+    emit({ type: "repo_diff", diff: toRepoDiffEvent(diff) });
+    const scope = action.paths?.length ? ` for ${action.paths.join(", ")}` : "";
+    const kind = action.staged ? "staged " : "";
+    emitFileToolDiagnostic(
+      `Architect repo_diff${scope ? ` (${action.paths?.length} path(s))` : ""} · ${kbOf(diff.diff)}`,
+      architect
+    );
+    const body = truncate(diff.diff.trim(), 4_000);
+    return [
+      `${kind}diff${scope}${diff.truncated ? " (truncated)" : ""}:`,
+      body || "(no changes)",
+    ].join("\n");
+  };
+
+  /**
+   * Create a branch via the typed runner endpoint. MUTATING — requires user
+   * approval unless runner access is "full". Never uses runCommand/executeRun.
+   */
+  const executeRepoBranchCreate = async (
+    action: RepoBranchCreateAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    const label = `git branch: ${action.name}`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED creating branch "${action.name}". Continue without it.`;
+      }
+    }
+    let result: Awaited<ReturnType<typeof createBranchViaRunner>>;
+    try {
+      result = await createBranchViaRunner(runner, {
+        name: action.name,
+        base: action.base,
+        checkout: action.checkout,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: 1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Branch creation failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `Created ${result.branch}${result.checkedOut ? " (checked out)" : ""}`,
+    });
+    // Branch creation changes HEAD — refresh the repo panel.
+    try {
+      const status = await getRepoStatusViaRunner(runner);
+      if (status) {
+        repoIsGit = status.isRepo;
+        emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+      }
+    } catch {
+      // best-effort refresh
+    }
+    return `Created branch "${result.branch}"${
+      action.base ? ` from ${action.base}` : ""
+    }${result.checkedOut ? " and checked it out" : " (not checked out)"}${
+      result.previousBranch ? `; previous branch was "${result.previousBranch}"` : ""
+    }.`;
   };
 
   /**
@@ -1724,6 +1863,15 @@ export async function runBuildDiscussion(
         };
       return { result: await executeFetch(action), exhausted: false };
     }
+    if (action.action === "repo_status") {
+      return { result: await executeRepoStatus(), exhausted: false };
+    }
+    if (action.action === "repo_diff") {
+      return { result: await executeRepoDiff(action), exhausted: false };
+    }
+    if (action.action === "repo_branch_create") {
+      return { result: await executeRepoBranchCreate(action), exhausted: false };
+    }
     return {
       result: `Action "${action.action}" is not available here. Produce your decision JSON now.`,
       exhausted: true,
@@ -1971,6 +2119,7 @@ export async function runBuildDiscussion(
         readHopsLeft: 2,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
+        repoWorkflow: !!runner && repoIsGit,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -2657,6 +2806,7 @@ export async function runBuildDiscussion(
         rangeReadsLeft: 6,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
+        repoWorkflow: !!runner && repoIsGit,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),

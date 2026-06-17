@@ -147,3 +147,48 @@ export async function getRepoDiffViaRunner(
     bytes: asNumber(data.bytes),
   };
 }
+
+export interface RepoBranchCreateResult {
+  branch: string;
+  previousBranch: string | null;
+  checkedOut: boolean;
+}
+
+/**
+ * Create (and optionally check out) a Git branch via the runner. Mixed wrapper,
+ * same shape as `getRepoDiffViaRunner`:
+ * - HTTP 404 (old runner) or network failure → `null` (workflow unavailable);
+ * - HTTP 400 validation error (bad name, conflicts) → throw with the runner's
+ *   message so the caller can surface it to the model / user.
+ */
+export async function createBranchViaRunner(
+  config: RunnerConfig,
+  input: { name: string; base?: string; checkout?: boolean }
+): Promise<RepoBranchCreateResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/branch-create`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        name: input.name,
+        base: input.base,
+        checkout: input.checkout,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      data.error ?? `Runner branch create failed (HTTP ${res.status})`
+    );
+  }
+  return {
+    branch: typeof data.branch === "string" ? data.branch : input.name,
+    previousBranch: asString(data.previousBranch),
+    checkedOut: !!data.checkedOut,
+  };
+}

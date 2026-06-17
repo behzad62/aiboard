@@ -818,6 +818,76 @@ function getRepoDiff({ paths, staged, stat }) {
   return { diff, truncated, bytes };
 }
 
+/**
+ * Validate a Git ref name (branch / base) for the typed branch-create endpoint.
+ * Mirrors the client-side check in lib/orchestrator/build.ts (isValidGitRefName).
+ */
+function isValidGitRefName(name) {
+  if (typeof name !== "string") return false;
+  const value = name.trim();
+  if (!value) return false;
+  if (value.startsWith("-")) return false;
+  if (value.endsWith("/")) return false;
+  if (value.includes("..")) return false;
+  if (value.includes("//")) return false;
+  if (value.includes("@{")) return false;
+  if (value.includes("\\")) return false;
+  if (/\s/.test(value)) return false;
+  return /^[A-Za-z0-9._/-]+$/.test(value);
+}
+
+/**
+ * Create (and optionally check out) a Git branch via explicit argv. Throws on a
+ * validation failure (caller maps to HTTP 400). Returns
+ * { branch, previousBranch, checkedOut }.
+ */
+function createRepoBranch({ name, base, checkout }) {
+  if (!isValidGitRefName(name)) {
+    throw new Error(
+      `Invalid branch name "${name}": use only letters, digits, ".", "_", "/", "-"; no leading "-", no "..", "//", "@{", backslash, whitespace, or trailing "/".`
+    );
+  }
+  if (base !== undefined && base !== null && !isValidGitRefName(base)) {
+    throw new Error(`Invalid base ref "${base}".`);
+  }
+
+  const topLevel = runGit(["rev-parse", "--show-toplevel"]);
+  if (topLevel.exitCode === -1) throw new Error("git is not installed or not on PATH.");
+  if (topLevel.exitCode !== 0) throw new Error("The runner folder is not a Git repository.");
+
+  // Refuse when the working tree has unmerged (conflicted) paths.
+  const conflicts = runGit(["diff", "--name-only", "--diff-filter=U"]);
+  if (conflicts.exitCode === 0 && conflicts.stdout.trim()) {
+    throw new Error(
+      "The working tree has unmerged paths (conflicts); resolve them before creating a branch."
+    );
+  }
+
+  // Current branch — null on detached HEAD.
+  const current = runGit(["branch", "--show-current"]);
+  const previousBranch =
+    current.exitCode === 0 && current.stdout.trim() ? current.stdout.trim() : null;
+
+  const shouldCheckout = checkout === undefined ? true : !!checkout;
+  if (shouldCheckout) {
+    const args = ["switch", "-c", name];
+    if (base) args.push(base);
+    const created = runGit(args);
+    if (created.exitCode !== 0) {
+      throw new Error(created.stderr.trim() || created.stdout.trim() || "git switch -c failed.");
+    }
+  } else {
+    const args = ["branch", name];
+    if (base) args.push(base);
+    const created = runGit(args);
+    if (created.exitCode !== 0) {
+      throw new Error(created.stderr.trim() || created.stdout.trim() || "git branch failed.");
+    }
+  }
+
+  return { branch: name, previousBranch, checkedOut: shouldCheckout };
+}
+
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
 const MCP_CALL_TIMEOUT_MS = 120 * 1000;
 const MCP_INIT_TIMEOUT_MS = 60 * 1000;
@@ -1306,6 +1376,32 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Repo diff failed";
       console.log(`[repo/diff:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 400, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/branch-create") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = createRepoBranch({
+        name: body?.name,
+        base: body?.base,
+        checkout: body?.checkout,
+      });
+      console.log(
+        `[repo/branch-create] ${new Date().toLocaleTimeString()}  ${result.branch} (from ${result.previousBranch ?? "detached HEAD"})${result.checkedOut ? " [checked out]" : ""}`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Branch create failed";
+      console.log(`[repo/branch-create:error] ${new Date().toLocaleTimeString()}  ${message}`);
       json(res, 400, { error: message });
     }
     return;
