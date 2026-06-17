@@ -176,6 +176,8 @@ function shellHintForPlatform(platform?: string): string {
 // reaches React state — never push a full diff into a `repo_diff` event.
 const REPO_DIFF_FILE_CAP = 40;
 const REPO_DIFF_SUMMARY_CHARS = 4_000;
+/** Char cap for the diff text returned to the Architect from a repo_diff tool call. */
+const REPO_DIFF_RESULT_CHARS = 4_000;
 
 /**
  * Map the fuller `RepoStatus` (from the runner client) down to the
@@ -914,7 +916,7 @@ export async function runBuildDiscussion(
       `Architect repo_diff${scope ? ` (${action.paths?.length} path(s))` : ""} · ${kbOf(diff.diff)}`,
       architect
     );
-    const body = truncate(diff.diff.trim(), 4_000);
+    const body = truncate(diff.diff.trim(), REPO_DIFF_RESULT_CHARS);
     return [
       `${kind}diff${scope}${diff.truncated ? " (truncated)" : ""}:`,
       body || "(no changes)",
@@ -959,7 +961,7 @@ export async function runBuildDiscussion(
       emit({
         type: "command_run",
         command: label,
-        exitCode: 1,
+        exitCode: -1,
         durationMs: 0,
         outputPreview: message,
       });

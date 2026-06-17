@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isValidGitRefName } from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -292,6 +293,19 @@ try {
     });
     check("branch-create: rejects malformed base (HTTP 400)", badBase.res.status === 400 && !!badBase.data.error, badBase.data);
 
+    // Git-level rejections (valid format, but git itself refuses) — distinct
+    // from the name-validation 400s above.
+    const missingBase = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "from-missing-base",
+      base: "no-such-branch",
+    });
+    check("branch-create: rejects nonexistent base (HTTP 400)", missingBase.res.status === 400 && !!missingBase.data.error, missingBase.data);
+
+    const dupe = await post(runner.port, runner.token, "/repo/branch-create", {
+      name: "feature/new-thing",
+    });
+    check("branch-create: rejects already-existing branch (HTTP 400)", dupe.res.status === 400 && !!dupe.data.error, dupe.data);
+
     runner.child.kill();
   }
 
@@ -321,6 +335,62 @@ try {
       name: "should-not-happen",
     });
     check("branch-create: refuses with unmerged paths (HTTP 400)", blocked.res.status === 400 && !!blocked.data.error, blocked.data);
+
+    runner.child.kill();
+  }
+
+  // ── 6b. Drift guard: client isValidGitRefName ⟺ runner name-validation ─────
+  // The two copies of the ref-name rule (lib/orchestrator/build.ts and
+  // scripts/runner.mjs) are byte-identical today, but nothing fails if one
+  // diverges. Cross-check the client predicate against the runner's actual
+  // HTTP behavior over a shared corpus so any divergence trips a FAIL line.
+  {
+    const dir = initRepo("adb-runner-refname-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n", "utf8");
+    git(dir, ["add", "seed.txt"]);
+    git(dir, ["commit", "-m", "seed"]);
+
+    const runner = await startRunner(dir);
+    later(() => runner.child.kill());
+
+    // A valid name occupies a distinct branch each time so a successful create
+    // never collides with a previous one (which would be a git-level 400, not a
+    // name-validation one). The runner's name-validation error begins with
+    // "Invalid branch name" / "Invalid base ref" — that string is how we tell a
+    // NAME rejection apart from a git-level rejection.
+    const corpus = [
+      "feature/x",
+      "release-1.2",
+      "feat/ok_1",
+      "-evil",
+      "a..b",
+      "a b",
+      "a/",
+      "a\\b",
+      "a//b",
+      "a@{1}",
+    ];
+    for (const name of corpus) {
+      const clientValid = isValidGitRefName(name);
+      // Create non-checkout branches so a valid create doesn't change HEAD or
+      // interfere with the next case.
+      const { res, data } = await post(runner.port, runner.token, "/repo/branch-create", {
+        name,
+        checkout: false,
+      });
+      const runnerNameRejected =
+        res.status === 400 &&
+        typeof data.error === "string" &&
+        /^Invalid (?:branch name|base ref)/.test(data.error);
+      // The runner accepts the name iff it did NOT reject it on name grounds.
+      const runnerAcceptsName = !runnerNameRejected;
+      check(
+        `refname drift guard: "${name}" — client(${clientValid}) matches runner(${runnerAcceptsName})`,
+        clientValid === runnerAcceptsName,
+        { name, clientValid, status: res.status, error: data.error }
+      );
+    }
 
     runner.child.kill();
   }

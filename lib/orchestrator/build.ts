@@ -1060,10 +1060,12 @@ export function exactToolKey(action: ArchitectAction): string | null {
         .toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
     case "repo_branch_create":
       // Branch creation is idempotent-by-name: re-requesting the same branch is
-      // redundant. repo_status/repo_diff intentionally fall through to null —
-      // repo state legitimately changes between calls, so the Architect must be
-      // able to re-query after writes (the loop caps bound runaway looping).
-      return `repo_branch_create:${action.name.trim().toLowerCase()}`;
+      // redundant. Git branch names are CASE-SENSITIVE, so do NOT lowercase —
+      // "Feature/X" and "feature/x" are different branches and must not collapse
+      // to one dedup key. repo_status/repo_diff intentionally fall through to
+      // null — repo state legitimately changes between calls, so the Architect
+      // must be able to re-query after writes (the loop caps bound runaway looping).
+      return `repo_branch_create:${action.name.trim()}`;
     default:
       return null;
   }
