@@ -227,19 +227,37 @@ try {
     runner.child.kill();
   }
 
-  // ── 3b. gh truly not on PATH (real ENOENT, no fake) ───────────────────────
+  // ── 3b. node runs but the fake script is missing (exit 1, not ENOENT) ─────
   // Inject a node-running script path that does not exist → spawnSync of node
-  // succeeds but the script fails (exit 1) → available:false. Also covers the
+  // succeeds but the script fails (exit 1) → available:false. Covers the
   // "AIBOARD_GH_CMD points at a missing module" path without a real gh.
   {
-    const dir = initRepo("adb-gh-status-enoent-");
+    const dir = initRepo("adb-gh-status-missing-script-");
     later(() => fs.rmSync(dir, { recursive: true, force: true }));
     const missing = path.join(os.tmpdir(), "adb-no-such-fake-gh-" + Date.now() + ".cjs");
     const runner = await startRunner(dir, { ghCmd: [process.execPath, missing] });
     later(() => runner.child.kill());
     const { res, data } = await get(runner.port, runner.token, "/repo/status");
-    check("status(enoent): HTTP 200", res.status === 200, data);
+    check("status(missing-script): HTTP 200", res.status === 200, data);
+    check("status(missing-script): available false", data.githubCli?.available === false, data.githubCli);
+    runner.child.kill();
+  }
+
+  // ── 3c. true spawn ENOENT: the gh binary itself can't be found ────────────
+  // AIBOARD_GH_CMD points at a non-existent EXECUTABLE (not node), so
+  // spawnSync("definitely-not-a-real-binary-xyz123") fails with ENOENT →
+  // runGh returns exitCode:-1 + spawnError. Exercises the genuine runGh
+  // spawn-error branch (not just a script that exits 1).
+  {
+    const dir = initRepo("adb-gh-status-enoent-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const runner = await startRunner(dir, { ghCmd: ["definitely-not-a-real-binary-xyz123"] });
+    later(() => runner.child.kill());
+    const { res, data } = await get(runner.port, runner.token, "/repo/status");
+    check("status(enoent): HTTP 200 (does NOT fail on spawn ENOENT)", res.status === 200, data);
     check("status(enoent): available false", data.githubCli?.available === false, data.githubCli);
+    check("status(enoent): authenticated false", data.githubCli?.authenticated === false, data.githubCli);
+    check("status(enoent): git info intact", data.gitAvailable === true && data.isRepo === true, data);
     runner.child.kill();
   }
 
@@ -348,6 +366,25 @@ try {
     check("pr-create(minimal): no --draft", !argv2.includes("--draft"), argv2);
     check("pr-create(minimal): no --repo/--base/--head", !argv2.includes("--repo") && !argv2.includes("--base") && !argv2.includes("--head"), argv2);
 
+    // Space-padded refs are accepted (validators trim) and TRIMMED before argv.
+    const padded = await post(runner.port, runner.token, "/repo/pr-create", {
+      repo: "  acme/widget  ",
+      title: "Padded PR",
+      body: "x",
+      base: " main ",
+      head: " codex/x ",
+    });
+    check("pr-create(padded): HTTP 200", padded.res.status === 200, padded.data);
+    check("pr-create(padded): echoes TRIMMED base/head", padded.data.base === "main" && padded.data.head === "codex/x", padded.data);
+    const logged3 = fs.readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const argv3 = logged3[logged3.length - 1];
+    const at = (flag: string) => argv3[argv3.indexOf(flag) + 1];
+    check(
+      "pr-create(padded): argv carries trimmed repo/base/head (no padding)",
+      at("--repo") === "acme/widget" && at("--base") === "main" && at("--head") === "codex/x",
+      argv3
+    );
+
     // Validation (no gh needed).
     const emptyTitle = await post(runner.port, runner.token, "/repo/pr-create", { title: "  ", body: "x" });
     check("pr-create: rejects empty title (HTTP 400)", emptyTitle.res.status === 400 && !!emptyTitle.data.error, emptyTitle.data);
@@ -406,6 +443,22 @@ try {
       encoding: "utf8",
     });
     check("push: bare remote has the pushed branch", remoteRef.status === 0 && remoteRef.stdout.trim().length === 40, remoteRef.stdout || remoteRef.stderr);
+
+    // Space-padded branch/remote are accepted (validators trim) and used trimmed:
+    // a padded " <branch> " must push to the SAME ref, not a padded one.
+    git(dir, ["checkout", "-b", "padded-branch"]);
+    const paddedPush = await post(runner.port, runner.token, "/repo/push", {
+      remote: " origin ",
+      branch: " padded-branch ",
+    });
+    check("push(padded): HTTP 200", paddedPush.res.status === 200, paddedPush.data);
+    check("push(padded): echoes TRIMMED remote/branch", paddedPush.data.remote === "origin" && paddedPush.data.branch === "padded-branch", paddedPush.data);
+    const paddedRef = spawnSync("git", ["--git-dir", bare, "rev-parse", "--verify", "refs/heads/padded-branch"], {
+      cwd: bare,
+      encoding: "utf8",
+    });
+    check("push(padded): bare remote got 'padded-branch' (not space-padded)", paddedRef.status === 0, paddedRef.stdout || paddedRef.stderr);
+    git(dir, ["checkout", branch]);
 
     // Push validation (no network): bad branch + bad remote.
     const badBranch = await post(runner.port, runner.token, "/repo/push", { branch: "-evil" });

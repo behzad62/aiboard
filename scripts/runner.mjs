@@ -666,21 +666,53 @@ function runGh(args, opts = {}) {
 }
 
 /**
+ * Caching for GitHub CLI detection. /repo/status is polled many times per build
+ * (initial capture, after each wave, around branch-create/commit, the branch-
+ * safety gate), and each detection spawns `gh` up to twice — `gh auth status`
+ * can even hit the network. So we cache at the runner-process level (reset only
+ * on restart):
+ *   - `gh --version` availability is INVARIANT for the process lifetime (gh
+ *     won't be installed/removed mid-session) → detected once and reused.
+ *   - The full githubCli result is TTL-cached (~60s) so auth state stays
+ *     reasonably fresh while the steady-state double-spawn drops off every poll.
+ */
+const GH_CLI_CACHE_TTL_MS = 60 * 1000;
+let ghAvailabilityCache = null; // { available, error? } — invariant once known.
+let ghCliResultCache = null; // { value, expiresAt } — TTL-cached full result.
+
+/** Detect (and cache) whether `gh` is installed. Invariant for the process. */
+function detectGhAvailability() {
+  if (ghAvailabilityCache) return ghAvailabilityCache;
+  const version = runGh(["--version"]);
+  if (version.exitCode !== 0) {
+    // Not installed / not on PATH (or fake reporting unavailable).
+    const error = version.spawnError || (version.stderr.trim() ? version.stderr.trim() : undefined);
+    ghAvailabilityCache = error ? { available: false, error } : { available: false };
+  } else {
+    ghAvailabilityCache = { available: true };
+  }
+  return ghAvailabilityCache;
+}
+
+/**
  * Detect GitHub CLI availability/auth state. NEVER throws and NEVER lets a
  * missing `gh` fail /repo/status — a spawn ENOENT just reports
- * { available:false, authenticated:false, user:null }.
+ * { available:false, authenticated:false, user:null }. Result is TTL-cached
+ * (see GH_CLI_CACHE_TTL_MS); availability is cached for the process lifetime.
  * - `gh --version` → availability.
  * - `gh auth status` → authentication (exit 0 == logged in); parse the
  *   "Logged in to github.com account <user>" / "as <user>" line when present.
  */
 function detectGithubCli() {
+  if (ghCliResultCache && Date.now() < ghCliResultCache.expiresAt) {
+    return ghCliResultCache.value;
+  }
   const result = { available: false, authenticated: false, user: null };
   try {
-    const version = runGh(["--version"]);
-    if (version.exitCode !== 0) {
-      // Not installed / not on PATH (or fake reporting unavailable).
-      if (version.spawnError) result.error = version.spawnError;
-      else if (version.stderr.trim()) result.error = version.stderr.trim();
+    const availability = detectGhAvailability();
+    if (!availability.available) {
+      if (availability.error) result.error = availability.error;
+      ghCliResultCache = { value: result, expiresAt: Date.now() + GH_CLI_CACHE_TTL_MS };
       return result;
     }
     result.available = true;
@@ -696,9 +728,11 @@ function detectGithubCli() {
         /account ([A-Za-z0-9-]+) \(/.exec(text);
       if (m) result.user = m[1];
     }
+    ghCliResultCache = { value: result, expiresAt: Date.now() + GH_CLI_CACHE_TTL_MS };
     return result;
   } catch (err) {
-    // Defensive: never let detection throw out of /repo/status.
+    // Defensive: never let detection throw out of /repo/status. Don't cache an
+    // unexpected error so the next poll retries.
     result.error = err instanceof Error ? err.message : String(err);
     return result;
   }
@@ -1060,6 +1094,8 @@ class ValidationError extends Error {}
 const REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const REMOTE_NAME_RE = /^[A-Za-z0-9._/-]+$/;
 const MAX_PR_BODY_BYTES = 20 * 1024; // 20 KB cap on issue/PR body text.
+// Matches build.ts's REPO_COMMIT_MESSAGE_MAX (the runner can't import it).
+const MAX_PR_TITLE_CHARS = 200;
 
 /** Validate an `owner/repo` slug for the gh-backed endpoints. */
 function isValidRepoSlug(repo) {
@@ -1133,13 +1169,16 @@ function readIssue({ repo, issue }) {
  * a git push failure (HTTP 400). Returns { remote, branch, setUpstream, output }.
  */
 function pushRepo({ remote, branch, setUpstream }) {
-  const remoteName = remote === undefined || remote === null || remote === "" ? "origin" : remote;
-  if (!isValidRemoteName(remoteName)) {
-    throw new ValidationError(`Invalid remote "${remoteName}": use only letters, digits, ".", "_", "/", "-"; no leading "-".`);
+  // Validate, then use the TRIMMED value in argv (mirrors trimmedTitle / commitRepo).
+  const remoteRaw = remote === undefined || remote === null || remote === "" ? "origin" : remote;
+  if (!isValidRemoteName(remoteRaw)) {
+    throw new ValidationError(`Invalid remote "${remoteRaw}": use only letters, digits, ".", "_", "/", "-"; no leading "-".`);
   }
   if (!isValidGitRefName(branch)) {
     throw new ValidationError(`Invalid branch name "${branch}": not a valid git ref.`);
   }
+  const remoteName = remoteRaw.trim();
+  const branchName = branch.trim();
 
   const topLevel = runGit(["rev-parse", "--show-toplevel"]);
   if (topLevel.exitCode === -1) throw new Error("git is not installed or not on PATH.");
@@ -1147,7 +1186,7 @@ function pushRepo({ remote, branch, setUpstream }) {
 
   const args = ["push"];
   if (setUpstream) args.push("-u");
-  args.push(remoteName, branch);
+  args.push(remoteName, branchName);
 
   const result = runGit(args);
   if (result.exitCode !== 0) {
@@ -1155,7 +1194,7 @@ function pushRepo({ remote, branch, setUpstream }) {
   }
   // git push reports progress on stderr; echo a trimmed combined output.
   const output = `${result.stdout}\n${result.stderr}`.trim();
-  return { remote: remoteName, branch, setUpstream: !!setUpstream, output };
+  return { remote: remoteName, branch: branchName, setUpstream: !!setUpstream, output };
 }
 
 /**
@@ -1166,8 +1205,10 @@ function pushRepo({ remote, branch, setUpstream }) {
 function createPr({ repo, title, body, base, head, draft }) {
   const trimmedTitle = typeof title === "string" ? title.trim() : "";
   if (!trimmedTitle) throw new ValidationError("A PR title is required.");
-  if (trimmedTitle.length > 200) {
-    throw new ValidationError(`PR title too long (${trimmedTitle.length} chars); keep it to 200 or fewer.`);
+  if (trimmedTitle.length > MAX_PR_TITLE_CHARS) {
+    throw new ValidationError(
+      `PR title too long (${trimmedTitle.length} chars); keep it to ${MAX_PR_TITLE_CHARS} or fewer.`
+    );
   }
   const prBody = typeof body === "string" ? body : "";
   if (Buffer.byteLength(prBody, "utf8") > MAX_PR_BODY_BYTES) {
@@ -1183,11 +1224,16 @@ function createPr({ repo, title, body, base, head, draft }) {
   if (head !== undefined && head !== null && !isValidGitRefName(head)) {
     throw new ValidationError(`Invalid head ref "${head}".`);
   }
+  // Use TRIMMED values in argv (mirrors trimmedTitle); validators already
+  // accept space-padded input, so normalise before handing to gh.
+  const repoSlug = repo ? repo.trim() : null;
+  const baseRef = base ? base.trim() : null;
+  const headRef = head ? head.trim() : null;
 
   const args = ["pr", "create", "--title", trimmedTitle, "--body", prBody];
-  if (repo) args.push("--repo", repo.trim());
-  if (base) args.push("--base", base);
-  if (head) args.push("--head", head);
+  if (repoSlug) args.push("--repo", repoSlug);
+  if (baseRef) args.push("--base", baseRef);
+  if (headRef) args.push("--head", headRef);
   if (draft) args.push("--draft");
 
   const result = runGh(args);
@@ -1198,7 +1244,7 @@ function createPr({ repo, title, body, base, head, draft }) {
   // gh prints the created PR URL on stdout (possibly amid other lines).
   const urlMatch = /(https?:\/\/\S*\/pull\/\d+|https?:\/\/\S+)/.exec(result.stdout.trim());
   const url = urlMatch ? urlMatch[1] : result.stdout.trim();
-  return { url, title: trimmedTitle, base: base ?? null, head: head ?? null, draft: !!draft };
+  return { url, title: trimmedTitle, base: baseRef, head: headRef, draft: !!draft };
 }
 
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
