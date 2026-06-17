@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
-import { BarChart3, Mail, MessageSquare, Settings } from "lucide-react";
+import { BarChart3, Github, Mail, MessageSquare, Settings } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SITE_CONTACT_EMAIL,
   SITE_DESCRIPTION,
+  SITE_GITHUB_URL,
   SITE_NAME,
   SITE_URL,
 } from "@/lib/site";
@@ -79,6 +80,17 @@ export default function RootLayout({
                 >
                   About
                 </Link>
+                <a
+                  href={SITE_GITHUB_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="View source on GitHub"
+                  title="View source on GitHub"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Github className="h-4 w-4" />
+                  <span className="sr-only">View source on GitHub</span>
+                </a>
                 <a
                   href={`mailto:${SITE_CONTACT_EMAIL}`}
                   className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

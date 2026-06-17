@@ -3,6 +3,7 @@
 export const SITE_URL = "https://aiboard.me";
 export const SITE_NAME = "AI Board";
 export const SITE_CONTACT_EMAIL = "mail@aiboard.me";
+export const SITE_GITHUB_URL = "https://github.com/behzad62/aiboard";
 export const SITE_TAGLINE =
   "Multi-model AI discussions that synthesize the best answer";
 export const SITE_DESCRIPTION =

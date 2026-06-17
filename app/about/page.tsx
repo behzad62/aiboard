@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_CONTACT_EMAIL, SITE_NAME } from "@/lib/site";
+import { SITE_CONTACT_EMAIL, SITE_GITHUB_URL, SITE_NAME } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "About",
@@ -92,6 +92,18 @@ export default function AboutPage() {
             className="underline hover:text-foreground"
           >
             {SITE_CONTACT_EMAIL}
+          </a>
+          .
+        </p>
+        <p>
+          Source code is available on{" "}
+          <a
+            href={SITE_GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            GitHub
           </a>
           .
         </p>
