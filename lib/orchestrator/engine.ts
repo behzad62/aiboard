@@ -134,6 +134,15 @@ export type OrchestratorEvent =
       type: "repo_diff";
       diff: { summary: string; files: string[]; truncated: boolean };
     }
+  // GitHub workflow milestones (NRW-008): an imported issue number, a pushed
+  // branch, and/or an opened pull-request URL. Emitted as each milestone lands;
+  // the UI accumulates the non-null fields into the repo workflow panel.
+  | {
+      type: "repo_workflow";
+      issue?: number | null;
+      pushedBranch?: string | null;
+      prUrl?: string | null;
+    }
   | { type: "error"; message: string }
   | { type: "complete" };
 

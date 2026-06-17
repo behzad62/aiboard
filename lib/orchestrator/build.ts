@@ -351,6 +351,49 @@ export interface RepoCommitAction {
   reason?: string;
 }
 
+/** Max length (after trimming) of a `repo_pr_create` title — UI/runner-friendly. */
+export const REPO_PR_TITLE_MAX = 200;
+
+/**
+ * Import a GitHub issue (title + body + comments) via the runner's gh-backed
+ * endpoint (NRW-007/008). NON-MUTATING — read-only context for the Architect.
+ */
+export interface RepoIssueReadAction {
+  action: "repo_issue_read";
+  repo: string;
+  issue: number;
+  reason?: string;
+}
+
+/**
+ * Push a branch to a remote via the runner (NRW-008). MUTATES external state
+ * (the remote), so the engine requires user approval unless runner access is
+ * "full".
+ */
+export interface RepoPushAction {
+  action: "repo_push";
+  remote?: string;
+  branch: string;
+  setUpstream?: boolean;
+  reason?: string;
+}
+
+/**
+ * Open a (draft, by default) pull request via the runner's gh-backed endpoint
+ * (NRW-008). MUTATES external state, so the engine requires user approval and a
+ * commit precondition.
+ */
+export interface RepoPrCreateAction {
+  action: "repo_pr_create";
+  repo?: string;
+  title: string;
+  body: string;
+  base?: string;
+  head?: string;
+  draft?: boolean;
+  reason?: string;
+}
+
 export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
@@ -365,7 +408,10 @@ export type ArchitectAction =
   | RepoStatusAction
   | RepoDiffAction
   | RepoBranchCreateAction
-  | RepoCommitAction;
+  | RepoCommitAction
+  | RepoIssueReadAction
+  | RepoPushAction
+  | RepoPrCreateAction;
 
 function looksLikePath(value: string): boolean {
   const v = value.trim();
@@ -755,6 +801,25 @@ export function isValidGitRefName(name: unknown): name is string {
   return /^[A-Za-z0-9._/-]+$/.test(value);
 }
 
+/**
+ * Validate a GitHub `owner/repo` slug for the typed `repo_issue_read` /
+ * `repo_pr_create` actions — exactly one `/`, with both halves drawn from the
+ * characters GitHub allows in owner and repository names. Applied client-side so
+ * a malformed slug is rejected before it ever reaches the gh-backed endpoint.
+ * MIRRORS the runner's `REPO_SLUG_RE` in scripts/runner.mjs (which enforces the
+ * same rule independently — it cannot import this) — keep the two in lockstep.
+ */
+export function isValidRepoSlug(slug: unknown): slug is string {
+  if (typeof slug !== "string") return false;
+  const value = slug.trim();
+  if (!value) return false;
+  const parts = value.split("/");
+  if (parts.length !== 2) return false;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return false;
+  return /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(repo);
+}
+
 function parseActionCandidate(candidate: string): ArchitectAction | null {
   try {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
@@ -943,6 +1008,58 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof commit.reason === "string" ? commit.reason : undefined,
         };
       }
+      if (parsed.action === "repo_issue_read") {
+        const issueRead = parsed as RepoIssueReadAction;
+        // Reject malformed input: a valid owner/repo slug and a positive integer
+        // issue number are both required (non-mutating, but still validated).
+        if (!isValidRepoSlug(issueRead.repo)) return null;
+        const issue = issueRead.issue;
+        if (typeof issue !== "number" || !Number.isInteger(issue) || issue <= 0) {
+          return null;
+        }
+        return {
+          action: "repo_issue_read",
+          repo: issueRead.repo.trim(),
+          issue,
+          reason: typeof issueRead.reason === "string" ? issueRead.reason : undefined,
+        };
+      }
+      if (parsed.action === "repo_push") {
+        const push = parsed as RepoPushAction;
+        // Reject malformed push outright (mutating): branch must be a valid ref;
+        // remote, when present, must also be a valid ref name.
+        if (!isValidGitRefName(push.branch)) return null;
+        if (push.remote !== undefined && !isValidGitRefName(push.remote)) return null;
+        return {
+          action: "repo_push",
+          remote: push.remote !== undefined ? push.remote.trim() : undefined,
+          branch: push.branch.trim(),
+          setUpstream: push.setUpstream === undefined ? undefined : !!push.setUpstream,
+          reason: typeof push.reason === "string" ? push.reason : undefined,
+        };
+      }
+      if (parsed.action === "repo_pr_create") {
+        const pr = parsed as RepoPrCreateAction;
+        // Reject malformed PR creation outright (mutating): title 1–REPO_PR_TITLE_MAX
+        // chars; repo (when present) a valid slug; base/head (when present) valid refs.
+        if (typeof pr.title !== "string") return null;
+        const title = pr.title.trim();
+        if (!title || title.length > REPO_PR_TITLE_MAX) return null;
+        if (pr.repo !== undefined && !isValidRepoSlug(pr.repo)) return null;
+        if (pr.base !== undefined && !isValidGitRefName(pr.base)) return null;
+        if (pr.head !== undefined && !isValidGitRefName(pr.head)) return null;
+        return {
+          action: "repo_pr_create",
+          repo: pr.repo !== undefined ? pr.repo.trim() : undefined,
+          title,
+          body: typeof pr.body === "string" ? pr.body : "",
+          base: pr.base !== undefined ? pr.base.trim() : undefined,
+          head: pr.head !== undefined ? pr.head.trim() : undefined,
+          // Prefer DRAFT PRs: default to a draft when the model omits the flag.
+          draft: pr.draft === undefined ? true : !!pr.draft,
+          reason: typeof pr.reason === "string" ? pr.reason : undefined,
+        };
+      }
     }
   } catch {
     // not a valid action candidate
@@ -963,7 +1080,10 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "repo_status" ||
     action.action === "repo_diff" ||
     action.action === "repo_branch_create" ||
-    action.action === "repo_commit"
+    action.action === "repo_commit" ||
+    action.action === "repo_issue_read" ||
+    action.action === "repo_push" ||
+    action.action === "repo_pr_create"
   );
 }
 
@@ -982,7 +1102,10 @@ export function isSafeFirstToolAction(action: ArchitectAction): boolean {
     // Non-mutating repo inspection — safe to auto-run as the first action.
     // repo_branch_create is deliberately excluded (it mutates the repo).
     action.action === "repo_status" ||
-    action.action === "repo_diff"
+    action.action === "repo_diff" ||
+    // repo_issue_read is read-only (gh-backed) — safe to auto-run first.
+    // repo_push / repo_pr_create mutate external state and are NOT safe-first.
+    action.action === "repo_issue_read"
   );
 }
 
@@ -1048,7 +1171,7 @@ export function inspectStrictToolActionOutput(text: string): {
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1128,6 +1251,20 @@ export function exactToolKey(action: ArchitectAction): string | null {
       // The user approval gate is the real safety net; this just stops an
       // immediate accidental re-fire of the exact same action.
       return `repo_commit:${action.message.trim()}`;
+    case "repo_issue_read":
+      // Re-reading the same issue in one loop is redundant — its content is
+      // already in context. Key by repo + issue number (repo case-insensitive
+      // per GitHub; the issue number is the discriminator).
+      return `repo_issue_read:${action.repo.trim().toLowerCase()}#${action.issue}`;
+    case "repo_push":
+      // One-shot per branch: re-pushing the same branch in the same loop is
+      // almost always an accidental re-fire (a genuine re-push targets a new
+      // branch). Branch names are case-sensitive — do NOT lowercase.
+      return `repo_push:${(action.remote ?? "origin").trim()}/${action.branch.trim()}`;
+    case "repo_pr_create":
+      // One-shot per (repo, head): a second PR for the same head branch in one
+      // loop is a duplicate. The user approval gate is the real safety net.
+      return `repo_pr_create:${(action.repo ?? "").trim().toLowerCase()}:${(action.head ?? "").trim()}`;
     default:
       return null;
   }
@@ -1335,11 +1472,36 @@ function fetchToolDoc(fetchesLeft?: number): string {
   ].join("\n");
 }
 
-function githubWorkflowDoc(enabled?: boolean): string {
+/**
+ * GitHub issue-to-PR guidance.
+ *
+ * When the runner exposes the typed `/repo/*` endpoints (`typedRepoAvailable`),
+ * the workflow is driven by the TYPED actions (repo_issue_read / repo_commit /
+ * repo_push / repo_pr_create) documented by `repoToolDoc` — so this doc must NOT
+ * instruct the model to run raw `gh pr create` / `git push` commands. It only
+ * sets the high-level strategy (issue selection, branch-per-issue) and points at
+ * the typed actions.
+ *
+ * COMPATIBILITY FALLBACK: for older runners WITHOUT the `/repo/*` endpoints
+ * (`typedRepoAvailable` false), the model has no typed path, so this keeps the
+ * raw-command instructions — non-interactive `gh`/`git` through the run tool,
+ * with the budget exemption — exactly as before.
+ */
+function githubWorkflowDoc(enabled?: boolean, typedRepoAvailable?: boolean): string {
   if (!enabled) return "";
+  if (typedRepoAvailable) {
+    return [
+      "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
+      "Drive the whole workflow through the TYPED repo actions documented above (repo_issue_read, repo_branch_create, repo_commit, repo_push, repo_pr_create) — never raw shell commands for issues, commits, pushing, or opening pull requests.",
+      "Issue selection: use repo_issue_read on the most actionable open issue (prefer one whose title/body mentions `#aiboard` or `@aiboard` when known).",
+      "Before assigning worker tasks, the engine establishes a safe feature branch (or you can request repo_branch_create with an issue-numbered name).",
+      "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end commit via repo_commit, push via repo_push, and open a DRAFT PR via repo_pr_create that references the issue.",
+      "Push and PR creation require the user's in-app approval; the user may deny either — respect that and continue.",
+    ].join("\n");
+  }
   return [
     "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
-    "Assume `gh` is installed and authenticated. Use non-interactive `gh` and `git` commands through the runner.",
+    "This runner does not expose the typed repo endpoints, so use non-interactive `gh` and `git` commands through the run tool. Assume `gh` is installed and authenticated.",
     "Issue selection: list open issues, prefer an issue whose title/body/comments contain `#aoboard` or `@aiboard`; if none exists, automatically choose the most actionable open issue.",
     "Before assigning worker tasks, create and switch to a feature branch for the chosen issue. Use a clear branch name that includes the issue number when available.",
     "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end, commit the intended changes, push the feature branch, and create a PR that references the issue.",
@@ -1348,31 +1510,50 @@ function githubWorkflowDoc(enabled?: boolean): string {
   ].join("\n");
 }
 
-function repoToolDoc(repoWorkflow?: boolean): string {
+function repoToolDoc(
+  repoWorkflow?: boolean,
+  githubCli?: { available: boolean; authenticated: boolean }
+): string {
   if (!repoWorkflow) return "";
-  return [
-    "TOOL — repo (Git): the runner folder is a Git repository. Use these TYPED actions for repo operations instead of running raw `git` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
+  const lines = [
+    "TOOL — repo (Git): the runner folder is a Git repository. Use these TYPED actions for repo operations instead of running raw `git`/`gh` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
     '- Status: {"action":"repo_status","reason":"why"} — current branch, dirty file counts, and ahead/behind. Non-mutating; re-query freely after writes.',
     '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating.',
     '- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. This MUTATES the repo, so it needs the user\'s approval; the user may deny it — respect that and continue.',
     `- Commit: {"action":"repo_commit","message":"feat: add X","paths":["optional/scope"],"reason":"why"} — stages and commits. Omit "paths" to commit everything pending, or list relative paths to commit only those. The message must be 1–${REPO_COMMIT_MESSAGE_MAX} chars. This MUTATES the repo, so it needs the user's approval and is ONLY available after a safe feature branch exists; the user sees the changed files and message before approving and may deny it — respect that and continue. Do NOT run \`git commit\`/\`git add\` as a raw command — use this typed action.`,
-  ].join("\n");
+  ];
+  // The GitHub (issue/push/PR) actions only work when the runner reports an
+  // installed AND authenticated GitHub CLI — advertise them only then, so the
+  // model never attempts a workflow the runner can't fulfil.
+  if (githubCli?.available && githubCli?.authenticated) {
+    lines.push(
+      `- Import issue: {"action":"repo_issue_read","repo":"owner/repo","issue":42,"reason":"why"} — fetches a GitHub issue's title, body, and comments as task context. Non-mutating.`,
+      `- Push branch: {"action":"repo_push","branch":"feature/topic","remote":"origin","setUpstream":true,"reason":"why"} — pushes the branch to the remote. This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue.`,
+      `- Open pull request: {"action":"repo_pr_create","title":"Fix ...","body":"...","base":"main","head":"feature/topic","draft":true,"reason":"why"} — opens a PR. PREFER DRAFT PRs (draft defaults to true). Requires at least one committed change on the feature branch first. This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue. Always use these typed push/PR actions — never raw shell commands for pushing or opening pull requests.`
+    );
+  }
+  return lines.join("\n");
 }
 
 function runToolDoc(
   runsLeft?: number,
   shellHint?: string,
-  githubWorkflow?: boolean
+  githubWorkflow?: boolean,
+  /** Whether the runner exposes the typed /repo/* endpoints — switches the
+   * GitHub workflow doc from raw-command instructions to "use typed actions". */
+  typedRepoAvailable?: boolean
 ): string {
   if ((!runsLeft || runsLeft <= 0) && !githubWorkflow) return "";
   return [
     "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
     '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
     "Commands must NOT edit project files: do not use fs.writeFileSync, redirection, Set-Content, sed -i, rm/move/copy, or scripts that modify source files. Use patch/append/edit output for file changes, then run commands only to verify or inspect.",
-    githubWorkflowDoc(githubWorkflow),
+    githubWorkflowDoc(githubWorkflow, typedRepoAvailable),
     runsLeft && runsLeft > 0
       ? `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} normal run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`
-      : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
+      : typedRepoAvailable
+        ? "Normal command budget is exhausted; continue via the typed repo actions above."
+        : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
     "Long-lived dev servers/watchers must be intentional background commands: add a single trailing `&` (example: `npx serve . -l 3000 --no-clipboard &`). The runner returns after a short startup window and keeps that process alive until the runner exits. Do not add `&` to normal finite commands like tests/builds.",
     shellHint?.trim() ? shellHint.trim() : "",
   ]
@@ -1399,6 +1580,8 @@ export function buildArchitectPlanPrompt(input: {
   githubWorkflow?: boolean;
   /** Whether a runner is connected to a Git repo — gates the typed repo doc. */
   repoWorkflow?: boolean;
+  /** Runner's GitHub CLI state — gates the issue/push/PR typed-action docs. */
+  githubCli?: { available: boolean; authenticated: boolean };
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -1424,9 +1607,9 @@ export function buildArchitectPlanPrompt(input: {
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
     fetchToolDoc(input.fetchesLeft),
-    repoToolDoc(input.repoWorkflow),
+    repoToolDoc(input.repoWorkflow, input.githubCli),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
@@ -1507,6 +1690,8 @@ export function buildArchitectReviewPrompt(input: {
   githubWorkflow?: boolean;
   /** Whether a runner is connected to a Git repo — gates the typed repo doc. */
   repoWorkflow?: boolean;
+  /** Runner's GitHub CLI state — gates the issue/push/PR typed-action docs. */
+  githubCli?: { available: boolean; authenticated: boolean };
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -1534,9 +1719,9 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     readRangeToolDoc(input.rangeReadsLeft),
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
     fetchToolDoc(input.fetchesLeft),
-    repoToolDoc(input.repoWorkflow),
+    repoToolDoc(input.repoWorkflow, input.githubCli),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     "End with ONE fenced json block:",
@@ -1593,3 +1778,73 @@ export function buildArchitectSummaryPrompt(input: {
 
 export const STRICT_RETRY_INSTRUCTION =
   'Your previous response did not contain a parseable JSON action. Respond again with ONLY the fenced json block (no other text), exactly matching the schema you were given, including the "action" field.';
+
+// ── GitHub workflow: PR precondition + final-summary block (NRW-008) ──────────
+
+/**
+ * Whether a pull request may be opened in the current run. PRECONDITION
+ * (acceptance-critical): there must be either a successful commit landed in THIS
+ * run, OR a clean branch that is already ahead of its upstream (so there is real
+ * work to open a PR for). Pure so the test can lock the boundary without a live
+ * runner. Returns null when allowed, or a clear refusal message when not.
+ */
+export function prCreateRefusalReason(input: {
+  commitsThisRun: number;
+  clean: boolean;
+  ahead: number;
+}): string | null {
+  const hasCommit = input.commitsThisRun > 0;
+  const hasAheadCleanBranch = input.clean && input.ahead > 0;
+  if (hasCommit || hasAheadCleanBranch) return null;
+  return (
+    "Cannot open a pull request yet: no commit landed in this run and the branch " +
+    "is not a clean branch with commits ahead of its upstream. Commit your changes " +
+    "first (repo_commit), then open the PR. Continue."
+  );
+}
+
+/**
+ * Build the deterministic `## Repository workflow` summary block appended to the
+ * Architect's final answer (NRW-006/008). Pure + bounded so the engine and the
+ * test both render the exact same shape. Returns "" when there is nothing to
+ * show (no branch, commits, issue, push, or PR). The optional verification line
+ * states the resolved verify command's result when known.
+ */
+export function buildRepoWorkflowSummary(input: {
+  branch?: string | null;
+  commits?: Array<{ hash: string; subject: string }>;
+  issueNumber?: number | null;
+  pushedBranch?: string | null;
+  prUrl?: string | null;
+  verification?: string | null;
+}): string {
+  const commits = input.commits ?? [];
+  const hasAnything =
+    !!input.branch ||
+    commits.length > 0 ||
+    input.issueNumber != null ||
+    !!input.pushedBranch ||
+    !!input.prUrl ||
+    !!input.verification?.trim();
+  if (!hasAnything) return "";
+
+  const lines = ["", "## Repository workflow", ""];
+  if (input.branch) lines.push(`- Branch: \`${input.branch}\``);
+  if (commits.length > 0) {
+    for (const c of commits.slice(0, 20)) {
+      lines.push(`- Commit \`${c.hash}\` ${c.subject}`);
+    }
+    if (commits.length > 20) {
+      lines.push(`- …(+${commits.length - 20} more commit(s))`);
+    }
+  } else if (input.branch) {
+    lines.push("- No commits were made this run.");
+  }
+  if (input.issueNumber != null) lines.push(`- Issue: #${input.issueNumber}`);
+  if (input.pushedBranch) lines.push(`- Pushed: \`${input.pushedBranch}\``);
+  if (input.prUrl) lines.push(`- Pull request: ${input.prUrl}`);
+  if (input.verification?.trim()) {
+    lines.push(`- Verification: ${input.verification.trim()}`);
+  }
+  return lines.join("\n");
+}

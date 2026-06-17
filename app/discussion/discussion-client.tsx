@@ -74,6 +74,7 @@ import {
   RepoWorkflowPanel,
   type RepoStatusView,
   type RepoDiffView,
+  type RepoWorkflowView,
 } from "@/components/RepoWorkflowPanel";
 import type { CommandApprovalDecision } from "@/lib/client/build-engine";
 import {
@@ -164,6 +165,7 @@ function DiscussionPageInner() {
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
   const [repoDiff, setRepoDiff] = useState<RepoDiffView | null>(null);
+  const [repoWorkflow, setRepoWorkflow] = useState<RepoWorkflowView | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
     command: string;
     reason?: string;
@@ -320,6 +322,15 @@ function DiscussionPageInner() {
           break;
         case "repo_diff":
           setRepoDiff(event.diff);
+          break;
+        case "repo_workflow":
+          // Merge each milestone's non-null fields so issue/push/PR accumulate
+          // across separate events (they land at different times).
+          setRepoWorkflow((prev) => ({
+            issue: event.issue ?? prev?.issue ?? null,
+            pushedBranch: event.pushedBranch ?? prev?.pushedBranch ?? null,
+            prUrl: event.prUrl ?? prev?.prUrl ?? null,
+          }));
           break;
         case "token_usage":
           setDiagnostics((prev) => {
@@ -608,6 +619,7 @@ function DiscussionPageInner() {
     setCommandRuns([]);
     setRepoStatus(null);
     setRepoDiff(null);
+    setRepoWorkflow(null);
     setDiagnostics([]);
     clearDiagnostics(id);
     setConvergenceScore(null);
@@ -1056,7 +1068,7 @@ function DiscussionPageInner() {
       )}
 
       {discussion.mode === "build" && (
-        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} />
+        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} workflow={repoWorkflow} />
       )}
 
       {discussion.mode === "build" &&

@@ -50,6 +50,8 @@ import {
   isRedundantToolCall,
   outputPathsForTask,
   parseArchitectAction,
+  prCreateRefusalReason,
+  buildRepoWorkflowSummary,
   recordToolCall,
   runBudgetStatus,
   summarizeFileChange,
@@ -65,6 +67,9 @@ import {
   type RepoBranchCreateAction,
   type RepoCommitAction,
   type RepoDiffAction,
+  type RepoIssueReadAction,
+  type RepoPushAction,
+  type RepoPrCreateAction,
   type ReviewAction,
   type ToolAction,
 } from "@/lib/orchestrator/build";
@@ -80,6 +85,9 @@ import {
   getRepoDiffViaRunner,
   createBranchViaRunner,
   commitViaRunner,
+  readIssueViaRunner,
+  pushViaRunner,
+  createPrViaRunner,
   classifyRepoBranchSafety,
   branchNameForTopic,
   type RepoStatus,
@@ -183,6 +191,10 @@ const REPO_DIFF_FILE_CAP = 40;
 const REPO_DIFF_SUMMARY_CHARS = 4_000;
 /** Char cap for the diff text returned to the Architect from a repo_diff tool call. */
 const REPO_DIFF_RESULT_CHARS = 4_000;
+/** Char caps for the imported GitHub issue context returned to the Architect. */
+const REPO_ISSUE_BODY_CHARS = 4_000;
+const REPO_ISSUE_COMMENT_CHARS = 800;
+const REPO_ISSUE_COMMENT_MAX = 8;
 
 /**
  * Map the fuller `RepoStatus` (from the runner client) down to the
@@ -524,6 +536,18 @@ export async function runBuildDiscussion(
   // user sees branch + commit hash(es) without digging through the transcript.
   const repoCommits: Array<{ hash: string; subject: string }> = [];
   let repoActiveBranch: string | null = null;
+  // GitHub workflow milestones (NRW-008), surfaced in the UI panel + final
+  // summary: the imported issue number, the pushed branch, and the opened PR URL.
+  let repoIssueNumber: number | null = null;
+  let repoPushedBranch: string | null = null;
+  let repoPrUrl: string | null = null;
+  // Last automated build-check outcome (resolved verify command + passed/failed),
+  // surfaced as the Verification line in the Repository workflow summary block.
+  let repoVerification: string | null = null;
+  // Runner's GitHub CLI state, captured from the initial repo status. Gates the
+  // issue/push/PR typed-action docs in the plan/review prompts: only advertised
+  // when gh is installed AND authenticated on the runner machine.
+  let githubCli: RepoStatus["githubCli"] | null = null;
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -628,6 +652,9 @@ export async function runBuildDiscussion(
       const repoStatus = await getRepoStatusViaRunner(config);
       if (repoStatus) {
         repoIsGit = repoStatus.isRepo;
+        // Capture the GitHub CLI state once — gates the issue/push/PR typed
+        // actions in the Architect prompts (only when gh is installed + authed).
+        githubCli = repoStatus.githubCli;
         emit({ type: "repo_status", status: toRepoStatusEvent(repoStatus) });
       }
     } else {
@@ -1149,6 +1176,219 @@ export async function runBuildDiscussion(
   };
 
   /**
+   * Import a GitHub issue via the gh-backed runner endpoint (NRW-008).
+   * NON-MUTATING — no approval gate. Returns bounded issue context (title +
+   * body + comments, truncated) to the Architect and remembers the issue number
+   * for the final summary. When gh is unavailable/unauthenticated or the runner
+   * errors, returns a clear message and continues (no crash).
+   */
+  const executeRepoIssueRead = async (
+    action: RepoIssueReadAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    if (githubCli && (!githubCli.available || !githubCli.authenticated)) {
+      return (
+        "GitHub issue import is unavailable: the runner's GitHub CLI (`gh`) is " +
+        `${githubCli.available ? "not authenticated" : "not installed"}. ` +
+        "Continue without the issue context."
+      );
+    }
+    let issue: Awaited<ReturnType<typeof readIssueViaRunner>>;
+    try {
+      issue = await readIssueViaRunner(runner, {
+        repo: action.repo,
+        issue: action.issue,
+      });
+    } catch (err) {
+      return `Issue import failed: ${err instanceof Error ? err.message : "runner error"}. Continue.`;
+    }
+    if (!issue) return repoUnavailable();
+    repoIssueNumber = issue.issue;
+    emit({ type: "repo_workflow", issue: issue.issue });
+    emitFileToolDiagnostic(
+      `Architect repo_issue_read · ${action.repo}#${issue.issue} · ${issue.comments.length} comment(s)`,
+      architect
+    );
+    const commentLines = issue.comments
+      .slice(0, REPO_ISSUE_COMMENT_MAX)
+      .map(
+        (c) =>
+          `  - ${c.author || "(unknown)"}: ${truncate(c.body.trim(), REPO_ISSUE_COMMENT_CHARS)}`
+      );
+    const moreComments =
+      issue.comments.length > REPO_ISSUE_COMMENT_MAX
+        ? `  - …(+${issue.comments.length - REPO_ISSUE_COMMENT_MAX} more comment(s))`
+        : "";
+    return [
+      `GitHub issue ${action.repo}#${issue.issue}: ${issue.title}`,
+      issue.url ? `URL: ${issue.url}` : "",
+      "",
+      truncate(issue.body.trim(), REPO_ISSUE_BODY_CHARS) || "(no body)",
+      commentLines.length > 0 ? "\nComments:" : "",
+      ...commentLines,
+      moreComments,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
+  /**
+   * Push a branch to the remote via the typed runner endpoint (NRW-008).
+   * MUTATES external state — requires user approval unless runner access is
+   * "full". Mirrors executeRepoBranchCreate's approval gate / command_run emits.
+   * Denial or failure → graceful message, continue.
+   */
+  const executeRepoPush = async (action: RepoPushAction): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    const remote = action.remote ?? "origin";
+    const label = `git push: ${remote} ${action.branch}`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED pushing branch "${action.branch}". Continue without it.`;
+      }
+    }
+    let result: Awaited<ReturnType<typeof pushViaRunner>>;
+    try {
+      result = await pushViaRunner(runner, {
+        remote: action.remote,
+        branch: action.branch,
+        setUpstream: action.setUpstream,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Push failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    repoPushedBranch = result.branch;
+    emit({ type: "repo_workflow", pushedBranch: result.branch });
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `Pushed ${result.branch} to ${result.remote}${result.setUpstream ? " (upstream set)" : ""}`,
+    });
+    await refreshRepoState();
+    return `Pushed branch "${result.branch}" to ${result.remote}${
+      result.setUpstream ? " and set the upstream" : ""
+    }.`;
+  };
+
+  /**
+   * Open a (draft, by default) pull request via the gh-backed runner endpoint
+   * (NRW-008). MUTATES external state — requires user approval unless runner
+   * access is "full". PRECONDITION: a commit landed this run OR a clean branch
+   * ahead of its upstream. When gh is unavailable/unauthenticated, returns a
+   * clear message and continues WITHOUT creating a PR. Denial/failure → graceful.
+   */
+  const executeRepoPrCreate = async (
+    action: RepoPrCreateAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    if (githubCli && (!githubCli.available || !githubCli.authenticated)) {
+      return (
+        "Pull request creation is unavailable: the runner's GitHub CLI (`gh`) is " +
+        `${githubCli.available ? "not authenticated" : "not installed"}. ` +
+        "Continue without opening a PR."
+      );
+    }
+    // PRECONDITION (acceptance-critical): a commit this run, OR a clean branch
+    // already ahead of upstream. Re-read status for the ahead/clean signal.
+    let status: RepoStatus | null = null;
+    try {
+      status = await getRepoStatusViaRunner(runner);
+      if (status) {
+        repoIsGit = status.isRepo;
+        emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+      }
+    } catch {
+      // best-effort; fall back to commit count only
+    }
+    const refusal = prCreateRefusalReason({
+      commitsThisRun: repoCommits.length,
+      clean: status?.clean ?? false,
+      ahead: status?.ahead ?? 0,
+    });
+    if (refusal) return refusal;
+
+    const draft = action.draft === undefined ? true : action.draft;
+    const label = `gh pr create: ${action.title}${draft ? " (draft)" : ""}`;
+    const approvalReason = `Open ${draft ? "a DRAFT " : "a "}pull request titled "${action.title}"${
+      action.base ? ` into ${action.base}` : ""
+    }.${action.reason ? ` Reason: ${action.reason}` : ""}`;
+    if (!allowAllCommands) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, approvalReason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED opening the pull request "${action.title}". Continue without it.`;
+      }
+    }
+    let result: Awaited<ReturnType<typeof createPrViaRunner>>;
+    try {
+      result = await createPrViaRunner(runner, {
+        repo: action.repo,
+        title: action.title,
+        body: action.body,
+        base: action.base,
+        head: action.head,
+        draft,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `PR creation failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    repoPrUrl = result.url || null;
+    if (result.url) emit({ type: "repo_workflow", prUrl: result.url });
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `Opened ${result.draft ? "draft " : ""}PR ${result.url}`,
+    });
+    return `Opened ${result.draft ? "draft " : ""}pull request "${result.title}"${
+      result.url ? ` — ${result.url}` : ""
+    }.`;
+  };
+
+  /**
    * Run the wave build-check command (resolved verifyCommand) and format its
    * result for the review prompt. Honors command approval like any run, but
    * uses its OWN budget so it never starves the Architect's discretionary
@@ -1246,6 +1486,9 @@ export async function runBuildDiscussion(
         });
       }
       const ok = finalResult.exitCode === 0;
+      // Remember the latest resolved build-check outcome for the final summary's
+      // Verification line (bounded; only the command + pass/fail verdict).
+      repoVerification = `${finalCommand} ${ok ? "passed" : "failed"}`;
       return [
         `AUTOMATED BUILD CHECK — \`${finalCommand}\` exited ${finalResult.exitCode} (${ok ? "OK" : "FAILED"})${finalResult.truncated ? " [output truncated]" : ""}.`,
         ok
@@ -2039,6 +2282,15 @@ export async function runBuildDiscussion(
     if (action.action === "repo_commit") {
       return { result: await executeRepoCommit(action), exhausted: false };
     }
+    if (action.action === "repo_issue_read") {
+      return { result: await executeRepoIssueRead(action), exhausted: false };
+    }
+    if (action.action === "repo_push") {
+      return { result: await executeRepoPush(action), exhausted: false };
+    }
+    if (action.action === "repo_pr_create") {
+      return { result: await executeRepoPrCreate(action), exhausted: false };
+    }
     return {
       result: `Action "${action.action}" is not available here. Produce your decision JSON now.`,
       exhausted: true,
@@ -2287,6 +2539,7 @@ export async function runBuildDiscussion(
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner && repoIsGit,
+        githubCli: githubCli ?? undefined,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -3089,6 +3342,7 @@ export async function runBuildDiscussion(
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner && repoIsGit,
+        githubCli: githubCli ?? undefined,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -3262,25 +3516,21 @@ export async function runBuildDiscussion(
   );
 
   const { answer, confidence, dissent } = extractJudgeResult(summaryRaw);
-  // Deterministically append a bounded "Repository workflow" block so the branch
-  // and any user-approved commits ALWAYS appear in the build summary, regardless
-  // of what the Architect chose to write (NRW-006). NRW-008 will formalize this
-  // section with issue/PR — keep this minimal and easy to extend.
+  // Deterministically append a bounded "Repository workflow" block so the branch,
+  // any user-approved commits, the imported issue, the pushed branch, the PR URL,
+  // and the verification result ALWAYS appear in the build summary, regardless of
+  // what the Architect chose to write (NRW-006/008). Pure helper keeps it bounded.
   let finalAnswer = answer;
-  if (runner && repoIsGit && (repoActiveBranch || repoCommits.length > 0)) {
-    const lines = ["", "## Repository workflow", ""];
-    if (repoActiveBranch) lines.push(`- Branch: \`${repoActiveBranch}\``);
-    if (repoCommits.length > 0) {
-      for (const c of repoCommits.slice(0, 20)) {
-        lines.push(`- Commit \`${c.hash}\` ${c.subject}`);
-      }
-      if (repoCommits.length > 20) {
-        lines.push(`- …(+${repoCommits.length - 20} more commit(s))`);
-      }
-    } else {
-      lines.push("- No commits were made this run.");
-    }
-    finalAnswer = `${answer}\n${lines.join("\n")}`;
+  if (runner && repoIsGit) {
+    const block = buildRepoWorkflowSummary({
+      branch: repoActiveBranch,
+      commits: repoCommits,
+      issueNumber: repoIssueNumber,
+      pushedBranch: repoPushedBranch,
+      prUrl: repoPrUrl,
+      verification: repoVerification,
+    });
+    if (block) finalAnswer = `${answer}\n${block}`;
   }
   insertFinalResult({
     discussionId: discussion.id,
@@ -3304,11 +3554,14 @@ export async function runBuildDiscussion(
     repoCommits.length > 0
       ? `, ${repoCommits.length} commit${repoCommits.length === 1 ? "" : "s"} (latest ${repoCommits[repoCommits.length - 1].hash})`
       : "";
+  const ghNote = `${repoIssueNumber != null ? `, issue #${repoIssueNumber}` : ""}${
+    repoPushedBranch ? `, pushed ${repoPushedBranch}` : ""
+  }${repoPrUrl ? `, PR ${repoPrUrl}` : ""}`;
   const repoWorkflowNote =
     runner && repoIsGit
       ? repoCommitWorkflowEnabled
-        ? ` — commit & PR workflow was enabled (safe feature branch${repoActiveBranch ? ` "${repoActiveBranch}"` : ""})${commitNote}`
-        : " — commit & PR workflow stayed disabled (no safe feature branch)"
+        ? ` — commit & PR workflow was enabled (safe feature branch${repoActiveBranch ? ` "${repoActiveBranch}"` : ""})${commitNote}${ghNote}`
+        : ` — commit & PR workflow stayed disabled (no safe feature branch)${ghNote}`
       : "";
   emit({
     type: "diagnostic",
