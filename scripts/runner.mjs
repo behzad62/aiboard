@@ -1091,6 +1091,8 @@ function commitRepo({ message, paths }) {
  */
 class ValidationError extends Error {}
 
+// Mirrors `isValidRepoSlug` in lib/orchestrator/build.ts (the client validates
+// the same rule before dispatch; the runner can't import it) — keep in lockstep.
 const REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const REMOTE_NAME_RE = /^[A-Za-z0-9._/-]+$/;
 const MAX_PR_BODY_BYTES = 20 * 1024; // 20 KB cap on issue/PR body text.

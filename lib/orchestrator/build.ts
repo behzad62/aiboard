@@ -806,6 +806,8 @@ export function isValidGitRefName(name: unknown): name is string {
  * `repo_pr_create` actions — exactly one `/`, with both halves drawn from the
  * characters GitHub allows in owner and repository names. Applied client-side so
  * a malformed slug is rejected before it ever reaches the gh-backed endpoint.
+ * MIRRORS the runner's `REPO_SLUG_RE` in scripts/runner.mjs (which enforces the
+ * same rule independently — it cannot import this) — keep the two in lockstep.
  */
 export function isValidRepoSlug(slug: unknown): slug is string {
   if (typeof slug !== "string") return false;
@@ -1549,7 +1551,9 @@ function runToolDoc(
     githubWorkflowDoc(githubWorkflow, typedRepoAvailable),
     runsLeft && runsLeft > 0
       ? `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} normal run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`
-      : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
+      : typedRepoAvailable
+        ? "Normal command budget is exhausted; continue via the typed repo actions above."
+        : "Only GitHub workflow `gh`/`git` commands are currently available; normal command budget is exhausted.",
     "Long-lived dev servers/watchers must be intentional background commands: add a single trailing `&` (example: `npx serve . -l 3000 --no-clipboard &`). The runner returns after a short startup window and keeps that process alive until the runner exits. Do not add `&` to normal finite commands like tests/builds.",
     shellHint?.trim() ? shellHint.trim() : "",
   ]
