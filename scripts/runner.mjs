@@ -15,6 +15,7 @@
  * Usage:
  *   node runner.mjs <project-folder> [--port 8787] [--token <secret>]
  *                   [--mcp "<name>=<command>"]... [--context7 [--context7-key <key>]]
+ *                   [--searxng [--searxng-url <url>]]
  *
  * MCP bridge: each --mcp flag spawns a stdio MCP server and exposes its tools
  * to the Architect (with the same per-call approval as commands), e.g.:
@@ -27,6 +28,10 @@
  *   node runner.mjs ./my-app --context7
  *   node runner.mjs ./my-app --context7 --context7-key ctx7sk-...
  *
+ * SearXNG shortcut: --searxng bridges the mcp-searxng search server as "search".
+ * Provide your SearXNG instance with --searxng-url <url> or SEARXNG_URL:
+ *   node runner.mjs ./my-app --searxng --searxng-url https://searxng.example
+ *
  * Then paste the printed URL + token into the app (Build mode → Local runner).
  *
  * Zero dependencies; binds to 127.0.0.1 only.
@@ -38,7 +43,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 
-const VERSION = 7;
+const VERSION = 8;
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
@@ -110,6 +115,26 @@ if (args.includes("--context7")) {
     mcpSpecs.push({ name: "context7", command });
     console.log(
       `Context7 MCP enabled${apiKey ? " (with API key)" : " (no API key — free-tier rate limits)"}. First start may pause while npx fetches @upstash/context7-mcp.`
+    );
+  }
+}
+
+// Convenience: --searxng bridges the free/privacy-focused mcp-searxng server
+// as "search", so the Architect can use web search without remembering the npx
+// command. The SearXNG instance URL comes from --searxng-url <url> or the
+// SEARXNG_URL env var. Equivalent to:
+//   SEARXNG_URL=<url> --mcp "search=npx -y mcp-searxng"
+if (args.includes("--searxng")) {
+  const searxngUrl = (flag("searxng-url") ?? process.env.SEARXNG_URL ?? "").trim();
+  if (!searxngUrl) {
+    console.error("--searxng ignored: provide --searxng-url <url> or set SEARXNG_URL");
+  } else if (mcpSpecs.some((s) => s.name === "search")) {
+    console.error('--searxng ignored: an --mcp "search=..." spec is already set');
+  } else {
+    process.env.SEARXNG_URL = searxngUrl;
+    mcpSpecs.push({ name: "search", command: "npx -y mcp-searxng" });
+    console.log(
+      `SearXNG MCP enabled as "search" using ${searxngUrl}. First start may pause while npx fetches mcp-searxng.`
     );
   }
 }

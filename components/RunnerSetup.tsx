@@ -98,7 +98,8 @@ export function RunnerSetup({
         the Architect run commands like tests and installs, fetch public web
         pages (docs, references — local addresses are refused), and can bridge
         MCP tools — a real browser via Playwright, or up-to-date library docs
-        via Context7 (add <code>--context7</code>). Commands and tool calls
+        via Context7 (add <code>--context7</code>), or free web search through
+        SearXNG (add <code>--searxng</code>). Commands and tool calls
         are approval-gated unless you pick Full access. It needs{" "}
         <a
           href="https://nodejs.org"
@@ -126,6 +127,7 @@ export function RunnerSetup({
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
         {"node runner.mjs path/to/your-project\n"}
         {"node runner.mjs path/to/your-project --context7\n"}
+        {"node runner.mjs path/to/your-project --searxng --searxng-url https://your-searxng.example\n"}
         {'node runner.mjs path/to/your-project --mcp "playwright=npx @playwright/mcp@latest"'}
       </pre>
       <p className="text-xs text-muted-foreground">
@@ -143,6 +145,21 @@ export function RunnerSetup({
         <code>--context7 --context7-key &lt;key&gt;</code> (or set{" "}
         <code>CONTEXT7_API_KEY</code>). The first start pauses briefly while{" "}
         <code>npx</code> fetches the server.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        <code>--searxng</code> bridges{" "}
+        <a
+          href="https://github.com/ihor-sokoliuk/mcp-searxng"
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2"
+        >
+          mcp-searxng
+        </a>{" "}
+        as <code>search</code> so the AI team can search the web through your
+        SearXNG instance. Provide the instance with{" "}
+        <code>--searxng-url &lt;url&gt;</code> (or set{" "}
+        <code>SEARXNG_URL</code>).
       </p>
 
       <div className="space-y-3">
