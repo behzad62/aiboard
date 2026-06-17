@@ -78,6 +78,7 @@ import {
   getRepoDiffViaRunner,
   createBranchViaRunner,
   classifyRepoBranchSafety,
+  branchNameForTopic,
   type RepoStatus,
 } from "./repo-runner";
 import {
@@ -156,24 +157,6 @@ const TOTAL_REVIEW_CHARS = 48_000;
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated]`;
-}
-
-/**
- * Derive a safe feature-branch name `codex/<slug>` from the user's request
- * (NRW-005). Lowercases, maps non-alphanumerics to `-`, collapses repeats,
- * trims, and caps the slug length. Falls back to `codex/build` when the request
- * yields no usable slug. The result is guaranteed to satisfy isValidGitRefName
- * (no leading dash / `..` / whitespace / backslash / trailing slash).
- */
-function branchNameForTopic(topic: string): string {
-  const slug = (topic || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .replace(/-+$/g, "");
-  return slug ? `codex/${slug}` : "codex/build";
 }
 
 /**

@@ -1,11 +1,15 @@
 /**
- * Focused tests for classifyRepoBranchSafety — the pure branch-safety gate used
- * by Build mode (NRW-005). Run: npx tsx scripts/test-repo-branch-safety.mts
- *
- * The helper is pure (no runner / fetch / engine deps) so this script imports it
- * directly, like the other tsx PASS/FAIL scripts.
+ * Focused tests for the pure Build-mode repo helpers (NRW-005):
+ * classifyRepoBranchSafety (the branch-safety gate) and branchNameForTopic
+ * (the auto-derived `codex/<slug>` branch name). Both are pure (no runner /
+ * fetch / engine deps) so this script imports them directly, like the other
+ * tsx PASS/FAIL scripts. Run: npx tsx scripts/test-repo-branch-safety.mts
  */
-import { classifyRepoBranchSafety } from "../lib/client/repo-runner";
+import {
+  classifyRepoBranchSafety,
+  branchNameForTopic,
+} from "../lib/client/repo-runner";
+import { isValidGitRefName } from "../lib/orchestrator/build";
 
 type Decision = ReturnType<typeof classifyRepoBranchSafety>;
 
@@ -117,6 +121,51 @@ for (const [name, input, check] of cases) {
   const result = classifyRepoBranchSafety(input);
   const ok = check(result);
   console.log(`${ok ? "PASS" : "FAIL"} — ${name}${ok ? "" : ` → got ${JSON.stringify(result)}`}`);
+  if (!ok) failed++;
+}
+
+// ── branchNameForTopic: the output must ALWAYS be a valid git ref ───────────
+// Adversarial corpus — every generated name must satisfy isValidGitRefName.
+const branchInputs: Array<[string, string]> = [
+  ["empty string", ""],
+  ["whitespace only", "   "],
+  ["all symbols", "!!!@@@"],
+  ["dashes only", "----"],
+  ["leading + trailing dashes", "  --hello world--  "],
+  ["contains ..", "a..b..c"],
+  ["contains //", "a//b"],
+  ["contains @{", "ref@{0}"],
+  ["contains backslash", "a\\b\\c"],
+  ["contains whitespace", "fix the broken thing"],
+  ["emoji only", "💥🎉🚀"],
+  ["CJK unicode", "修复登录错误"],
+  ["accented unicode", "déjà vu accénts ünïcode"],
+  ["200-char string", "a".repeat(200)],
+  ["realistic request", "Fix issue #42: the @{weird} thing\\with/slashes..and dots"],
+];
+
+for (const [name, input] of branchInputs) {
+  const branch = branchNameForTopic(input);
+  const ok = isValidGitRefName(branch);
+  console.log(
+    `${ok ? "PASS" : "FAIL"} — branchNameForTopic(${name}) is a valid git ref${ok ? "" : ` → got ${JSON.stringify(branch)}`}`
+  );
+  if (!ok) failed++;
+}
+
+// Empty / all-symbol inputs must still yield a sensible non-empty fallback name.
+const fallbackInputs: Array<[string, string]> = [
+  ["empty string", ""],
+  ["whitespace only", "   "],
+  ["all symbols", "!!!@@@"],
+  ["dashes only", "----"],
+];
+for (const [name, input] of fallbackInputs) {
+  const branch = branchNameForTopic(input);
+  const ok = branch.startsWith("codex/") && branch.length > "codex/".length;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} — branchNameForTopic(${name}) falls back to a non-empty codex/ name${ok ? "" : ` → got ${JSON.stringify(branch)}`}`
+  );
   if (!ok) failed++;
 }
 

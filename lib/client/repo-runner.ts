@@ -7,7 +7,37 @@
  * typed fields out defensively so a malformed or older response degrades
  * gracefully instead of throwing.
  */
+import { isValidGitRefName } from "@/lib/orchestrator/build";
 import { headers, type RunnerConfig } from "./runner";
+
+/**
+ * Max length of the slug portion of a generated `codex/<slug>` branch name.
+ * Keeps auto-derived branch names short enough to stay readable in `git` UIs
+ * and well under Git's ref-name limits even after the `codex/` prefix.
+ */
+const MAX_BRANCH_SLUG_LEN = 40;
+
+/**
+ * Derive a safe feature-branch name `codex/<slug>` from the user's request
+ * (NRW-005). Lowercases, maps non-alphanumerics to `-`, collapses repeats,
+ * trims, and caps the slug length. Falls back to `codex/build` when the request
+ * yields no usable slug OR when the generated name somehow fails
+ * `isValidGitRefName` — so the result is GUARANTEED valid at runtime, not only
+ * by construction. Pure (no runner deps) so the test can import it directly.
+ */
+export function branchNameForTopic(topic: string): string {
+  const slug = (topic || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_BRANCH_SLUG_LEN)
+    .replace(/-+$/g, "");
+  const name = slug ? `codex/${slug}` : "codex/build";
+  // Defensive: enforce the invariant rather than merely asserting it. If the
+  // generated name unexpectedly fails validation, fall back to a known-good one.
+  return isValidGitRefName(name) ? name : "codex/build";
+}
 
 export interface RepoStatus {
   isRepo: boolean;
