@@ -1,0 +1,55 @@
+name: Deploy AI Board
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy Static Site
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static export
+        run: npm run build
+
+      - name: Upload static export to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATEKEY }}
+          source: out
+          target: aiboard-deploy
+          rm: true
+
+      - name: Publish static export with Nginx
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATEKEY }}
+          script: |
+            set -e
+            echo "${{ secrets.SSH_PASS }}" | sudo -S mkdir -p /var/www/aiboard.me
+            echo "${{ secrets.SSH_PASS }}" | sudo -S rsync -a --delete "$HOME/aiboard-deploy/out/" /var/www/aiboard.me/
+            echo "${{ secrets.SSH_PASS }}" | sudo -S chown -R www-data:www-data /var/www/aiboard.me
+            echo "${{ secrets.SSH_PASS }}" | sudo -S find /var/www/aiboard.me -type d -exec chmod 755 {} \;
+            echo "${{ secrets.SSH_PASS }}" | sudo -S find /var/www/aiboard.me -type f -exec chmod 644 {} \;
+            echo "${{ secrets.SSH_PASS }}" | sudo -S nginx -t
+            echo "${{ secrets.SSH_PASS }}" | sudo -S systemctl reload nginx
