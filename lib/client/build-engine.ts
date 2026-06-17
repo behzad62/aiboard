@@ -77,6 +77,7 @@ import {
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
   createBranchViaRunner,
+  classifyRepoBranchSafety,
   type RepoStatus,
 } from "./repo-runner";
 import {
@@ -155,6 +156,24 @@ const TOTAL_REVIEW_CHARS = 48_000;
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n…[truncated]`;
+}
+
+/**
+ * Derive a safe feature-branch name `codex/<slug>` from the user's request
+ * (NRW-005). Lowercases, maps non-alphanumerics to `-`, collapses repeats,
+ * trims, and caps the slug length. Falls back to `codex/build` when the request
+ * yields no usable slug. The result is guaranteed to satisfy isValidGitRefName
+ * (no leading dash / `..` / whitespace / backslash / trailing slash).
+ */
+function branchNameForTopic(topic: string): string {
+  const slug = (topic || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return slug ? `codex/${slug}` : "codex/build";
 }
 
 /**
@@ -507,6 +526,13 @@ export async function runBuildDiscussion(
   // Whether the runner folder is a Git repo, captured once when the runner
   // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
   let repoIsGit = false;
+  // Run-level gate (NRW-005): commit/PR-capable repo workflow is enabled ONLY
+  // once a safe FEATURE branch is confirmed (engine-led auto-establish below).
+  // It stays false on the default/main/master branch with no branch created,
+  // when conflicts exist, or when the user denied branch creation. Later issues
+  // (NRW-006+: commit/push/PR) gate their actions on this flag; ordinary file
+  // writes are NEVER blocked by it.
+  let repoCommitWorkflowEnabled = false;
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -2184,6 +2210,119 @@ export async function runBuildDiscussion(
       message: `Build check each wave: \`${verifyCommand}\``,
     });
   }
+
+  // ── Branch safety gate (NRW-005) ───────────────────────────────────────────
+  // Before any worker writes files, make sure repo workflow won't accidentally
+  // land commit-capable changes on the default / main / master branch. We
+  // re-read status (it may have changed during planning), classify it, and —
+  // when a feature branch is required — establish one through the SAME
+  // approval-gated path executeRepoBranchCreate uses. Denial or failure simply
+  // disables commit/PR workflow for this run; ordinary file writes continue.
+  if (runner && repoIsGit) {
+    const status = await getRepoStatusViaRunner(runner).catch(() => null);
+    if (status) {
+      repoIsGit = status.isRepo;
+      emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+    }
+    const decision = status
+      ? classifyRepoBranchSafety({
+          isRepo: status.isRepo,
+          currentBranch: status.currentBranch,
+          defaultBranch: status.defaultBranch,
+          clean: status.clean,
+          conflicted: status.conflicted,
+        })
+      : { safe: false, needsBranch: false, reason: "repo status unavailable" };
+
+    if (!decision.safe && !decision.needsBranch) {
+      // Unsafe for a reason a branch can't fix (e.g. unresolved conflicts):
+      // keep commit/PR workflow OFF and tell the user. File writes continue.
+      repoCommitWorkflowEnabled = false;
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `Commit & PR workflow disabled — ${decision.reason}. Worker file writes will still proceed.`,
+      });
+    } else if (decision.needsBranch) {
+      // On default / main / master (or detached): establish a safe feature
+      // branch via the approval-gated runner path before any worker writes.
+      const name = branchNameForTopic(discussion.topic);
+      const label = `git branch: ${name}`;
+      let proceed = true;
+      if (!allowAllCommands) {
+        const approval = hooks?.requestCommandApproval
+          ? await hooks.requestCommandApproval(
+              label,
+              `Repo workflow on ${decision.reason}; a feature branch is required before commit/PR work.`
+            )
+          : "deny";
+        if (approval === "allow-all") allowAllCommands = true;
+        if (approval === "deny") proceed = false;
+      }
+      if (!proceed) {
+        // User denied: disable commit/PR workflow for this run and continue in
+        // ordinary file-write mode. File writes must NOT break.
+        repoCommitWorkflowEnabled = false;
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Commit & PR workflow disabled — you declined to create feature branch "${name}". Worker file writes will still proceed in ordinary mode.`,
+        });
+      } else {
+        let created: Awaited<ReturnType<typeof createBranchViaRunner>> = null;
+        let failure = "";
+        try {
+          created = await createBranchViaRunner(runner, { name, checkout: true });
+        } catch (err) {
+          failure = err instanceof Error ? err.message : "runner error";
+        }
+        if (created) {
+          repoCommitWorkflowEnabled = true;
+          emit({
+            type: "command_run",
+            command: label,
+            exitCode: 0,
+            durationMs: 0,
+            outputPreview: `Created ${created.branch}${created.checkedOut ? " (checked out)" : ""}`,
+          });
+          emit({
+            type: "diagnostic",
+            phase: "round_preparing",
+            message: `Created feature branch "${created.branch}" — commit & PR workflow enabled for this run.`,
+          });
+          await refreshRepoState();
+        } else {
+          // Creation failed (or workflow unavailable): keep commit/PR OFF,
+          // continue in ordinary file-write mode.
+          repoCommitWorkflowEnabled = false;
+          emit({
+            type: "command_run",
+            command: label,
+            exitCode: -1,
+            durationMs: 0,
+            outputPreview: failure || "Branch creation unavailable",
+          });
+          emit({
+            type: "diagnostic",
+            phase: "round_preparing",
+            message: `Commit & PR workflow disabled — could not create feature branch "${name}"${failure ? ` (${failure})` : ""}. Worker file writes will still proceed.`,
+          });
+        }
+      }
+    } else {
+      // Already on a safe feature branch with no conflicts.
+      repoCommitWorkflowEnabled = true;
+    }
+  }
+
   let done = false;
 
   for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
@@ -2997,10 +3136,18 @@ export async function runBuildDiscussion(
   // Files land via the runner (its folder), the picked browser folder, or
   // in-app only — name whichever actually applied.
   const diskLabel = runner ? runnerDirName : diskGranted ? dirHandle?.name : null;
+  // Note the repo-workflow state for the run so the user knows whether
+  // commit/PR-capable work was active (the gate may have disabled it).
+  const repoWorkflowNote =
+    runner && repoIsGit
+      ? repoCommitWorkflowEnabled
+        ? " — commit & PR workflow was enabled (safe feature branch)"
+        : " — commit & PR workflow stayed disabled (no safe feature branch)"
+      : "";
   emit({
     type: "diagnostic",
     phase: "finished",
-    message: `Build complete: ${virtualFs.size} file(s) produced${diskLabel ? ` in "${diskLabel}"` : " (download from the artifact panel)"}`,
+    message: `Build complete: ${virtualFs.size} file(s) produced${diskLabel ? ` in "${diskLabel}"` : " (download from the artifact panel)"}${repoWorkflowNote}`,
   });
   emit({ type: "complete" });
 }
