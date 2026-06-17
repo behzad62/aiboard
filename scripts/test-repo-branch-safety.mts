@@ -8,6 +8,7 @@
 import {
   classifyRepoBranchSafety,
   branchNameForTopic,
+  repoCommitWorkflowEnabledFromStatus,
 } from "../lib/client/repo-runner";
 import { isValidGitRefName } from "../lib/orchestrator/build";
 
@@ -165,6 +166,57 @@ for (const [name, input] of fallbackInputs) {
   const ok = branch.startsWith("codex/") && branch.length > "codex/".length;
   console.log(
     `${ok ? "PASS" : "FAIL"} — branchNameForTopic(${name}) falls back to a non-empty codex/ name${ok ? "" : ` → got ${JSON.stringify(branch)}`}`
+  );
+  if (!ok) failed++;
+}
+
+const commitWorkflowCases: Array<
+  [
+    string,
+    Parameters<typeof repoCommitWorkflowEnabledFromStatus>[0],
+    boolean,
+  ]
+> = [
+  [
+    "enables commit workflow on a safe feature branch",
+    {
+      isRepo: true,
+      currentBranch: "codex/fix-42",
+      defaultBranch: "main",
+      clean: false,
+      conflicted: [],
+    },
+    true,
+  ],
+  [
+    "keeps commit workflow off on main",
+    {
+      isRepo: true,
+      currentBranch: "main",
+      defaultBranch: "main",
+      clean: true,
+      conflicted: [],
+    },
+    false,
+  ],
+  [
+    "keeps commit workflow off with conflicts",
+    {
+      isRepo: true,
+      currentBranch: "codex/fix-42",
+      defaultBranch: "main",
+      clean: false,
+      conflicted: ["app/page.tsx"],
+    },
+    false,
+  ],
+];
+
+for (const [name, input, expected] of commitWorkflowCases) {
+  const actual = repoCommitWorkflowEnabledFromStatus(input);
+  const ok = actual === expected;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} — repoCommitWorkflowEnabledFromStatus ${name}${ok ? "" : ` → got ${actual}`}`
   );
   if (!ok) failed++;
 }

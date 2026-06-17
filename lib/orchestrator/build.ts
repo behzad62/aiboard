@@ -1792,7 +1792,15 @@ export function prCreateRefusalReason(input: {
   commitsThisRun: number;
   clean: boolean;
   ahead: number;
+  repoCommitWorkflowEnabled?: boolean;
 }): string | null {
+  if (input.repoCommitWorkflowEnabled === false) {
+    return (
+      "Cannot open a pull request yet: commit & PR workflow is not enabled on a " +
+      "safe feature branch for this run. Create or switch to a safe feature branch " +
+      "first, then commit and open the PR. Continue."
+    );
+  }
   const hasCommit = input.commitsThisRun > 0;
   const hasAheadCleanBranch = input.clean && input.ahead > 0;
   if (hasCommit || hasAheadCleanBranch) return null;

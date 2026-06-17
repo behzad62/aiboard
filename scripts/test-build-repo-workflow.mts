@@ -255,6 +255,15 @@ check(
   prCreateRefusalReason({ commitsThisRun: 0, clean: true, ahead: 2 }) === null
 );
 check(
+  "PR refused when safe branch workflow is disabled even if branch is clean-ahead",
+  prCreateRefusalReason({
+    commitsThisRun: 0,
+    clean: true,
+    ahead: 2,
+    repoCommitWorkflowEnabled: false,
+  }) !== null
+);
+check(
   "PR refused when no commit and not clean-ahead",
   prCreateRefusalReason({ commitsThisRun: 0, clean: false, ahead: 0 }) !== null
 );

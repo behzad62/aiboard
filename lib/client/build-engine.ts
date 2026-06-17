@@ -90,6 +90,7 @@ import {
   createPrViaRunner,
   classifyRepoBranchSafety,
   branchNameForTopic,
+  repoCommitWorkflowEnabledFromStatus,
   type RepoStatus,
 } from "./repo-runner";
 import {
@@ -1040,6 +1041,10 @@ export async function runBuildDiscussion(
       const status = await getRepoStatusViaRunner(runner);
       if (status) {
         repoIsGit = status.isRepo;
+        repoCommitWorkflowEnabled = repoCommitWorkflowEnabledFromStatus(status);
+        if (repoCommitWorkflowEnabled && status.currentBranch) {
+          repoActiveBranch = status.currentBranch;
+        }
         emit({ type: "repo_status", status: toRepoStatusEvent(status) });
       }
     } catch {
@@ -1327,6 +1332,7 @@ export async function runBuildDiscussion(
       commitsThisRun: repoCommits.length,
       clean: status?.clean ?? false,
       ahead: status?.ahead ?? 0,
+      repoCommitWorkflowEnabled,
     });
     if (refusal) return refusal;
 
