@@ -1,102 +1,100 @@
 # AI Board
 
-A local-first web app where multiple AI models (OpenAI, Anthropic, Google Gemini) discuss a topic you provide, critique each other in structured rounds, and deliver a synthesized final answer—with live streaming and browser notifications when complete.
+[AI Board](https://aiboard.me) is a local-first web app where multiple AI models discuss a question, critique each other over structured rounds, and produce one synthesized final answer. It also includes Build mode, where an architect model plans coding work and worker models implement tasks in parallel.
+
+The app is a static Next.js export. There is no backend service, no API routes, and no account system.
 
 ## Features
 
-- **Multi-model discussions** — Select 2+ models to collaborate on your question
-- **Discussion modes** — Collaborative Panel, Debate, Specialist + Reviewers
-- **Effort levels** — Low (2 rounds), Medium (4 rounds), High (6+ rounds)
-- **Live streaming** — Watch each model's response stream in real time via SSE
-- **Convergence detection** — Consensus voting and stagnation detection stop early when ready
-- **Judge synthesis** — A chosen model produces the final best answer with confidence score
-- **Encrypted API keys** — Keys stored encrypted locally in JSON file store (AES-256-GCM)
-- **Extensible providers** — Plugin architecture for adding more AI providers
+- Multi-model discussions across OpenAI, Anthropic, Google Gemini, OpenRouter, and custom OpenAI-compatible endpoints such as Ollama or LM Studio.
+- Discussion modes for collaborative panels, debates, specialist review, and Build mode.
+- Judge synthesis with confidence and dissent notes.
+- Browser-side storage using IndexedDB or a user-picked local folder.
+- Optional passphrase encryption for local stored data.
+- Runtime provider keys entered in the Settings page, not compiled into the app.
+- Optional local runner for Build mode file access, shell commands, and MCP tools.
+- Optional SearXNG MCP shortcut for web search through a user-provided SearXNG instance.
 
-## Prerequisites
+## Privacy model
 
-- Node.js 20+ and npm
-- API keys from at least two providers (OpenAI, Anthropic, Google Gemini, and/or OpenRouter)
+AI Board runs in your browser tab. API keys, discussions, attachments, and settings stay in browser storage or in a local folder you choose. The app calls AI providers directly from the browser using the keys you enter.
 
-## Setup
+The hosted site at `aiboard.me` serves static files only. It does not receive your provider keys, prompts, files, attachments, or discussion history.
 
-1. **Install dependencies**
+If you enable the local runner, it runs on your own machine, binds to `127.0.0.1`, and requires a token. Runner file, shell, and MCP access are opt-in.
 
-   ```bash
-   npm install
-   ```
+## Requirements
 
-2. **Configure encryption secret**
+- Node.js 20+ for local development.
+- Provider API keys only if you want hosted AI models. Local models through Ollama or LM Studio can be used without provider keys.
 
-   Copy `.env.example` to `.env.local` and set a long random `ENCRYPTION_SECRET`:
+No app runtime environment variables are required.
 
-   ```bash
-   cp .env.example .env.local
-   ```
+## Local development
 
-   The template also sets `NEXT_TELEMETRY_DISABLED=1`, which opts this app out of Next.js telemetry.
-
-3. **Run the dev server**
-
-   ```bash
-   npm run dev
-   ```
-
-4. Open [http://localhost:3000](http://localhost:3000)
-
-5. Go to **Settings** and add your API keys (OpenAI, Anthropic, Google Gemini, OpenRouter).
-
-6. Return to the dashboard, enter a topic, select models and effort level, and click **Start Discussion**.
-
-## Usage Example
-
-**Topic:** "What are the BHPH math formulas used in Texas DMS systems?"
-
-1. Select **Collaborative Panel** mode and **High** effort
-2. Choose GPT-5.5, Claude Sonnet 4.6, and Gemini 3.5 Flash
-3. Watch the live discussion across multiple rounds
-4. Receive a browser notification when the judge delivers the final answer
-
-## Project Structure
-
-```
-app/                  # Next.js pages and API routes
-components/           # UI components
-lib/
-  db/                 # Local JSON file store and types
-  crypto/             # API key encryption
-  providers/          # OpenAI, Anthropic, Google, OpenRouter plugins
-  orchestrator/       # Discussion engine, prompts, events
-data/                 # Local data store (created at runtime)
+```bash
+npm install
+npm run dev
 ```
 
-## API Routes
+Open [http://localhost:3000](http://localhost:3000), go to Settings, and add the providers or custom endpoints you want to use.
 
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/discussions` | GET/POST | List or create discussions |
-| `/api/discussions/[id]` | GET | Get discussion details |
-| `/api/discussions/[id]/stream` | GET | SSE live event stream |
-| `/api/discussions/[id]/start` | POST | Start orchestration |
-| `/api/keys` | GET/POST | Manage encrypted API keys and defaults |
-| `/api/providers/validate` | POST | Test an API key |
+## Production build
 
-## Adding a New Provider
+```bash
+npm run build
+```
 
-1. Create `lib/providers/your-provider.ts` implementing the `AIProvider` interface
-2. Register it in `lib/providers/index.ts`
-3. Add the provider ID to validation schemas in API routes
+The app is exported to `out/` and can be hosted by any static web server. The build also copies `scripts/runner.mjs` to `public/runner.mjs` so the hosted app can offer the optional runner download.
 
-## Security Notes
+## Local runner
 
-- API keys are encrypted at rest and never returned to the browser after saving
-- Set a strong `ENCRYPTION_SECRET` in production
-- The app runs locally by default; your keys stay on your machine
+Build mode works without the runner by keeping generated files in a virtual workspace that can be downloaded as a zip. For real project folder access, start the runner yourself:
 
-## Telemetry
+```bash
+node runner.mjs <project-folder>
+```
 
-- Next.js telemetry is disabled for this project via `NEXT_TELEMETRY_DISABLED=1`
+The runner supports file read/write/search, approved shell commands, and stdio MCP bridges:
+
+```bash
+node runner.mjs <project-folder> --mcp "docs=npx -y @upstash/context7-mcp"
+```
+
+For SearXNG-backed web search, point the runner at your own SearXNG instance:
+
+```bash
+node runner.mjs <project-folder> --searxng --searxng-url http://127.0.0.1:8080
+```
+
+## Checks
+
+There is no bundled test runner. The repository uses focused `tsx` scripts with PASS/FAIL output:
+
+```bash
+npm run build
+npx tsx scripts/test-parse-action.mts
+npx tsx scripts/test-edits.mts
+npx tsx scripts/test-extract.ts
+npx tsx scripts/test-project-fs.ts
+npx tsx scripts/test-runner-file-tools.mts
+npx tsx scripts/test-runner-background.mts
+npx tsx scripts/test-runner-searxng-shortcut.mts
+npx tsx scripts/test-seo-pages.mts
+```
+
+Additional focused tests live in `scripts/test-*.mts` and `scripts/test-*.ts`.
+
+## Security
+
+Do not put real provider keys, runner tokens, SSH keys, or private files in issues, pull requests, screenshots, or logs. See [SECURITY.md](SECURITY.md) for reporting guidance.
+
+## Support
+
+Feedback and security reports: [mail@aiboard.me](mailto:mail@aiboard.me)
+
+Optional donations: [paypal.me/behzadashams](https://paypal.me/behzadashams)
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

@@ -16,7 +16,7 @@ npx tsx scripts/test-extract.ts         # file/edit block extraction from model 
 npx tsx scripts/test-project-fs.ts      # File System Access path sanitization
 ```
 
-No env vars are needed: the app is fully client-side and provider API keys are entered at runtime on the Settings page. (`.env.example` / `ENCRYPTION_SECRET` are leftovers from the server era — see Legacy below.)
+No app runtime env vars are needed: the app is fully client-side and provider API keys are entered at runtime on the Settings page. `.env.example` only disables Next.js telemetry for local development.
 
 Platform: development happens on Windows / PowerShell. Gotcha: running `npm run build` while the dev server is up corrupts the dev server's `.next` (it starts returning 500s) — restart the dev server after a production build.
 
@@ -57,7 +57,7 @@ Each provider implements `AIProvider` from `lib/providers/base.ts` (`listModels`
 - New provider checklist: implement `AIProvider`, register it in `lib/client/providers.ts`, add its id to `PROVIDER_IDS` in `constants.ts`, add catalog entries (and optionally pricing + runtime-behavior copy).
 
 ### Local runner (optional, Build mode)
-`scripts/runner.mjs` — zero-dependency Node 18+ HTTP server the **user** starts (`node runner.mjs <project-folder>`), bound to 127.0.0.1 with a token. Gives the Architect real file read/write/search, shell commands (per-command approval unless "Full access"), and a stdio-MCP bridge (`--mcp "name=command"`, plus a `--context7` convenience flag that auto-registers the Context7 docs MCP server — API key via `--context7-key`/`CONTEXT7_API_KEY`). It is copied to `public/runner.mjs` by `predev`/`prebuild` (the copy is gitignored) so the hosted app serves it for download. Client side: `lib/client/runner.ts`.
+`scripts/runner.mjs` — zero-dependency Node 18+ HTTP server the **user** starts (`node runner.mjs <project-folder>`), bound to 127.0.0.1 with a token. Gives the Architect real file read/write/search, shell commands (per-command approval unless "Full access"), and stdio-MCP bridges (`--mcp "name=command"`), plus convenience registrations for Context7 (`--context7`, API key via `--context7-key`/`CONTEXT7_API_KEY`) and SearXNG (`--searxng --searxng-url <url>`). It is copied to `public/runner.mjs` by `predev`/`prebuild` (the copy is gitignored) so the hosted app serves it for download. Client side: `lib/client/runner.ts`.
 
 ### App layer
 Static pages: dashboard `app/page.tsx`, `app/discussion/page.tsx` (id via `?id=` query param — static export forbids dynamic route segments), `app/settings/page.tsx` (Providers / Pricing / Defaults / Storage / Security tabs), and `app/benchmark/page.tsx` (global Build-mode model leaderboard — detailed/sortable view backed by `lib/client/model-stats.ts` over `getModelStats()`). Header in `app/layout.tsx`. UI uses Radix primitives + Tailwind under `components/ui/`.
