@@ -29,6 +29,12 @@ import {
   normalizeBuildSettings,
   shouldStopForBuildGuardrail,
 } from "@/lib/orchestrator/build-policy";
+import {
+  fingerprintBuildFailure,
+  hasMeaningfulBuildProgress,
+  recordBuildFailure,
+  shouldStopForNoProgress,
+} from "@/lib/orchestrator/build-progress";
 import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
@@ -616,6 +622,15 @@ export async function runBuildDiscussion(
   // surfaced as the Verification line in the Repository workflow summary block.
   let repoVerification: string | null = null;
 
+  // A previously saved checkpoint (resume) is loaded up front so failure history
+  // and recovery notes carry across the stop; the resume restoration below reads
+  // the same record. Failure fingerprints surviving a resume let a blocker that
+  // persists across stops still be caught.
+  const existingCheckpoint = getBuildCheckpoint(discussion.id);
+  let failureFingerprints: Record<string, number> =
+    existingCheckpoint?.failureFingerprints ?? {};
+  const recoveryLog: string[] = existingCheckpoint?.recoveryLog ?? [];
+
   // ── Resumable checkpoint ───────────────────────────────────────────────────
   // Persist the run (task graph, repo refs, current budget window) so a stop by
   // budget, time, blocker, or user can be resumed from where it left off. Repo
@@ -648,8 +663,8 @@ export async function runBuildDiscussion(
         ...(repoIssueNumber == null ? [] : [repoIssueNumber]),
         ...repoCreatedIssues.map((item) => item.issue),
       ],
-      failureFingerprints: input.failureFingerprints ?? {},
-      recoveryLog: input.recoveryLog ?? [],
+      failureFingerprints: input.failureFingerprints ?? failureFingerprints,
+      recoveryLog: input.recoveryLog ?? recoveryLog,
       usageWindow,
     });
   };
@@ -2883,7 +2898,6 @@ export async function runBuildDiscussion(
   // Resume keeps the task graph, Architect notes, verify command, and repo refs,
   // but starts a fresh budget window (usageWindow was created empty above and is
   // deliberately NOT restored from the checkpoint's historical usage).
-  const existingCheckpoint = getBuildCheckpoint(discussion.id);
   let resumedFromCheckpoint = false;
   let wavesRun = 0;
   if (
@@ -3170,6 +3184,11 @@ export async function runBuildDiscussion(
   });
 
   let done = false;
+  // No-progress tracking: a wave that changes nothing increments noProgressWaves;
+  // a failure that keeps recurring with the same fingerprint is counted so the
+  // build stops as "blocked" only after repeated recovery attempts truly stall.
+  let noProgressWaves = 0;
+  let lastFailureFingerprint: string | null = null;
 
   for (let cycle = 1; cycle <= BUILD_MAX_WAVES && !done; cycle++) {
     wavesRun = cycle;
@@ -3808,6 +3827,20 @@ export async function runBuildDiscussion(
     // is informed by the actual compiler, not only the models' reading.
     const verifyFeedback = await runVerify(verifyCommand);
 
+    // Fingerprint a failing build/test so a recurring identical failure counts
+    // toward the no-progress/blocked stop, while a failure that changes shape
+    // after a fix counts as recovery progress (and resets the no-progress run).
+    if (verifyFeedback && /failed|error|exit/i.test(verifyFeedback)) {
+      const fingerprint = fingerprintBuildFailure(verifyCommand, verifyFeedback);
+      const failureChanged =
+        lastFailureFingerprint !== null && lastFailureFingerprint !== fingerprint;
+      lastFailureFingerprint = fingerprint;
+      failureFingerprints = recordBuildFailure(failureFingerprints, fingerprint);
+      if (failureChanged) {
+        recoveryLog.push(`Verification failure changed after wave ${cycle}.`);
+      }
+    }
+
     emit({
       type: "diagnostic",
       phase: "judging",
@@ -3935,6 +3968,17 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
     }
 
+    // Did this wave change anything real? Files written, tasks advanced or added,
+    // a failure that changed shape, or repo/branch/PR state moving all count as
+    // progress and reset the no-progress run.
+    const waveProgressed = hasMeaningfulBuildProgress({
+      filesWritten: executed.reduce((sum, item) => sum + item.files.length, 0),
+      tasksAdvanced: action.results.length + novelTasks.accepted.length,
+      failureChanged: recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),
+      repoAdvanced: !!repoActiveBranch || repoCommits.length > 0 || !!repoPrUrl,
+    });
+    noProgressWaves = waveProgressed ? 0 : noProgressWaves + 1;
+
     const remainingDigest = buildOutstandingTasksDigest(tasks);
     if (action.done && remainingDigest) {
       done = false;
@@ -3952,6 +3996,35 @@ export async function runBuildDiscussion(
       });
     } else {
       done = action.done;
+    }
+
+    // Stop as "blocked" (a resumable state with failure history preserved) when
+    // recovery has genuinely stalled — repeated identical failures or several
+    // waves with no progress — but never override an Architect that just
+    // declared the build done.
+    if (!done) {
+      const repeatedFailureCount =
+        lastFailureFingerprint == null
+          ? 0
+          : failureFingerprints[lastFailureFingerprint] ?? 0;
+      if (shouldStopForNoProgress({ repeatedFailureCount, noProgressWaves })) {
+        recoveryLog.push(
+          `Stopped as blocked after wave ${cycle}: ${repeatedFailureCount} repeated failure(s), ${noProgressWaves} no-progress wave(s).`
+        );
+        saveCheckpoint({
+          status: "blocked",
+          stopReason: "blocked",
+          wave: cycle,
+          tasks,
+          architectNotes,
+          verifyCommand,
+        });
+        markStopped(
+          "blocked",
+          "Build stopped after repeated no-progress recovery attempts. Resume keeps the checkpoint and lets you change settings or add guidance."
+        );
+        return;
+      }
     }
 
     // Refresh repo status/diff at the end of each wave so the UI reflects the
