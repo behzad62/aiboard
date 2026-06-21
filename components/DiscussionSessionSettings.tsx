@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Save, Settings2 } from "lucide-react";
 import { DetailControl } from "@/components/DetailControl";
 import { EffortSlider } from "@/components/EffortSlider";
+import { BuildRunPolicyControl } from "@/components/BuildRunPolicyControl";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
@@ -27,6 +28,7 @@ import {
 import type { AttachmentSummary } from "@/lib/attachments/types";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import type {
+  BuildRunPolicy,
   Discussion,
   EffortLevel,
   ReasoningEffort,
@@ -38,6 +40,11 @@ import {
   hasEnoughParticipatingModels,
   participatingModelRequirementMessage,
 } from "@/lib/client/api";
+import {
+  DEFAULT_BUILD_BUDGET_USD,
+  DEFAULT_BUILD_RUN_POLICY,
+  DEFAULT_BUILD_TIME_LIMIT_MINUTES,
+} from "@/lib/orchestrator/build-policy";
 
 export interface DiscussionSessionSettingsValue {
   effort: EffortLevel;
@@ -46,6 +53,9 @@ export interface DiscussionSessionSettingsValue {
   verbosity: Verbosity;
   styleNote: string;
   reasoningEffort: ReasoningEffort;
+  buildRunPolicy?: BuildRunPolicy;
+  buildBudgetUsd?: number;
+  buildTimeLimitMinutes?: number;
 }
 
 interface DiscussionSessionSettingsProps {
@@ -89,6 +99,15 @@ export function DiscussionSessionSettings({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     discussion.reasoningEffort ?? "default"
   );
+  const [buildRunPolicy, setBuildRunPolicy] = useState<BuildRunPolicy>(
+    discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY
+  );
+  const [buildBudgetUsd, setBuildBudgetUsd] = useState(
+    discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD
+  );
+  const [buildTimeLimitMinutes, setBuildTimeLimitMinutes] = useState(
+    discussion.buildTimeLimitMinutes ?? DEFAULT_BUILD_TIME_LIMIT_MINUTES
+  );
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -98,6 +117,11 @@ export function DiscussionSessionSettings({
     setVerbosity(discussion.verbosity ?? "balanced");
     setStyleNote(discussion.styleNote ?? "");
     setReasoningEffort(discussion.reasoningEffort ?? "default");
+    setBuildRunPolicy(discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY);
+    setBuildBudgetUsd(discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD);
+    setBuildTimeLimitMinutes(
+      discussion.buildTimeLimitMinutes ?? DEFAULT_BUILD_TIME_LIMIT_MINUTES
+    );
     setMessage(null);
   }, [discussion]);
 
@@ -145,6 +169,11 @@ export function DiscussionSessionSettings({
       verbosity,
       styleNote,
       reasoningEffort,
+      buildRunPolicy:
+        discussion.mode === "build" ? buildRunPolicy : undefined,
+      buildBudgetUsd: discussion.mode === "build" ? buildBudgetUsd : undefined,
+      buildTimeLimitMinutes:
+        discussion.mode === "build" ? buildTimeLimitMinutes : undefined,
     });
     if (saved) {
       setMessage("Saved. Resume will use these session settings.");
@@ -186,7 +215,27 @@ export function DiscussionSessionSettings({
             </p>
           </div>
 
-          <EffortSlider value={effort} onChange={setEffort} mode={discussion.mode} />
+          {discussion.mode === "build" ? (
+            <BuildRunPolicyControl
+              value={{
+                runPolicy: buildRunPolicy,
+                budgetUsd: buildBudgetUsd,
+                timeLimitMinutes: buildTimeLimitMinutes,
+              }}
+              onChange={(next) => {
+                setBuildRunPolicy(next.runPolicy);
+                setBuildBudgetUsd(next.budgetUsd);
+                setBuildTimeLimitMinutes(next.timeLimitMinutes);
+              }}
+              disabled={!canEdit || busy}
+            />
+          ) : (
+            <EffortSlider
+              value={effort}
+              onChange={setEffort}
+              mode={discussion.mode}
+            />
+          )}
 
           <DetailControl
             verbosity={verbosity}

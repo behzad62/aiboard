@@ -55,6 +55,9 @@ export const EFFORT_CONFIG: Record<EffortLevel, EffortConfig> = {
 // effort budget. These are ceilings; verbosity still governs prose length.
 export const BUILD_ROUND_MIN_TOKENS = 8192;
 export const BUILD_INTEGRATOR_MIN_TOKENS = 16384;
+export const BUILD_TASKS_PER_WAVE = 8;
+export const BUILD_MAX_WAVES = 50;
+export const BUILD_NO_PROGRESS_WAVES = 4;
 
 export interface VerbosityInfo {
   value: Verbosity;
@@ -347,6 +350,6 @@ export const BUILD_LIMITS: Record<EffortLevel, BuildLimits> = {
 
 /** What effort means in Build mode — cycles/tasks, not discussion rounds. */
 export function getBuildEffortLabel(effort: EffortLevel): string {
-  const l = BUILD_LIMITS[effort];
-  return `${l.cycles} review cycles · up to ${l.tasksPerWave} tasks/wave · ${l.totalWorkerCalls} worker calls`;
+  const config = EFFORT_CONFIG[effort];
+  return `${formatCompactNumber(Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS))} worker response ceiling`;
 }

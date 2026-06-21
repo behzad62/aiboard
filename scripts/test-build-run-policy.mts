@@ -27,6 +27,15 @@ check("invalid policy falls back to finish", clamped.runPolicy === "finish", cla
 check("negative USD budget is unlimited", clamped.budgetUsd === 0, clamped);
 check("negative time limit is unlimited", clamped.timeLimitMinutes === 0, clamped);
 check("zero budget is unlimited", isBuildBudgetUnlimited(0), clamped);
+check("finish label is user-facing", buildRunPolicyLabel("finish") === "Finish job");
+check(
+  "budgeted label is user-facing",
+  buildRunPolicyLabel("budgeted") === "Budgeted run"
+);
+check(
+  "plan_only label is user-facing",
+  buildRunPolicyLabel("plan_only") === "Plan only"
+);
 
 const noStop = shouldStopForBuildGuardrail({
   settings: normalizeBuildSettings({ buildBudgetUsd: 0, buildTimeLimitMinutes: 0 }),

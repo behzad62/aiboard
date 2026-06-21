@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EffortSlider } from "@/components/EffortSlider";
+import { BuildRunPolicyControl } from "@/components/BuildRunPolicyControl";
 import { ModelSelector } from "@/components/ModelSelector";
 import { DetailControl } from "@/components/DetailControl";
 import { ReasoningControl } from "@/components/ReasoningControl";
@@ -29,6 +30,7 @@ import type {
   Discussion,
   DiscussionMode,
   EffortLevel,
+  BuildRunPolicy,
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
@@ -54,6 +56,11 @@ import {
   getModelPricing,
   type ModelPricingOverride,
 } from "@/lib/providers/pricing";
+import {
+  DEFAULT_BUILD_BUDGET_USD,
+  DEFAULT_BUILD_RUN_POLICY,
+  DEFAULT_BUILD_TIME_LIMIT_MINUTES,
+} from "@/lib/orchestrator/build-policy";
 import { AlertTriangle, Sparkles } from "lucide-react";
 
 interface DashboardData {
@@ -65,6 +72,9 @@ interface DashboardData {
     defaultVerbosity?: Verbosity;
     defaultStyleNote?: string;
     defaultReasoningEffort?: ReasoningEffort;
+    defaultBuildRunPolicy?: BuildRunPolicy;
+    defaultBuildBudgetUsd?: number;
+    defaultBuildTimeLimitMinutes?: number;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
   };
   defaultSelectedModelIds: string[];
@@ -90,6 +100,14 @@ export default function DashboardPage() {
   const [styleNote, setStyleNote] = useState("");
   const [reasoningEffort, setReasoningEffort] =
     useState<ReasoningEffort>("default");
+  const [buildRunPolicy, setBuildRunPolicy] =
+    useState<BuildRunPolicy>(DEFAULT_BUILD_RUN_POLICY);
+  const [buildBudgetUsd, setBuildBudgetUsd] = useState(
+    DEFAULT_BUILD_BUDGET_USD
+  );
+  const [buildTimeLimitMinutes, setBuildTimeLimitMinutes] = useState(
+    DEFAULT_BUILD_TIME_LIMIT_MINUTES
+  );
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,6 +140,16 @@ export default function DashboardPage() {
         setVerbosity(d.settings.defaultVerbosity ?? "balanced");
         setStyleNote(d.settings.defaultStyleNote ?? "");
         setReasoningEffort(d.settings.defaultReasoningEffort ?? "default");
+        setBuildRunPolicy(
+          d.settings.defaultBuildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY
+        );
+        setBuildBudgetUsd(
+          d.settings.defaultBuildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD
+        );
+        setBuildTimeLimitMinutes(
+          d.settings.defaultBuildTimeLimitMinutes ??
+            DEFAULT_BUILD_TIME_LIMIT_MINUTES
+        );
         const models = d.enabledModels.map((m) => m.fullId);
         const defaultSelectedModels = d.defaultSelectedModelIds.filter((modelId) =>
           models.includes(modelId)
@@ -163,10 +191,11 @@ export default function DashboardPage() {
     data?.enabledModels.filter((model) =>
       supportsInputTypes(model.capabilities, requiredInputTypes)
     ) ?? [];
+  const effectiveEffort = mode === "build" ? "high" : effort;
 
   const costEstimate =
     compatibleSelected.length > 0
-      ? estimateDiscussionCost(compatibleSelected.length, effort, mode)
+      ? estimateDiscussionCost(compatibleSelected.length, effectiveEffort, mode)
       : null;
   const usdEstimate =
     compatibleSelected.length > 0
@@ -174,7 +203,7 @@ export default function DashboardPage() {
           compatibleSelected.map((id) =>
             getModelPricing(id, data?.settings.modelPricingOverrides)
           ),
-          effort,
+          effectiveEffort,
           mode
         )
       : null;
@@ -207,7 +236,7 @@ export default function DashboardPage() {
       const result = createDiscussion({
         topic,
         mode,
-        effort,
+        effort: mode === "build" ? "high" : effort,
         modelIds: compatibleSelected,
         judgeModelId: judgeModelId || compatibleSelected[0],
         attachmentIds: attachments.map((a) => a.id),
@@ -218,6 +247,10 @@ export default function DashboardPage() {
         runnerUrl: mode === "build" ? runner?.url ?? null : null,
         runnerToken: mode === "build" ? runner?.token ?? null : null,
         runnerAccess: mode === "build" ? runner?.access ?? null : null,
+        buildRunPolicy: mode === "build" ? buildRunPolicy : undefined,
+        buildBudgetUsd: mode === "build" ? buildBudgetUsd : undefined,
+        buildTimeLimitMinutes:
+          mode === "build" ? buildTimeLimitMinutes : undefined,
       });
       if (mode === "build") {
         await claimPendingProjectFolder(result.id);
@@ -336,7 +369,22 @@ export default function DashboardPage() {
               </>
             )}
 
-            <EffortSlider value={effort} onChange={setEffort} mode={mode} />
+            {mode === "build" ? (
+              <BuildRunPolicyControl
+                value={{
+                  runPolicy: buildRunPolicy,
+                  budgetUsd: buildBudgetUsd,
+                  timeLimitMinutes: buildTimeLimitMinutes,
+                }}
+                onChange={(next) => {
+                  setBuildRunPolicy(next.runPolicy);
+                  setBuildBudgetUsd(next.budgetUsd);
+                  setBuildTimeLimitMinutes(next.timeLimitMinutes);
+                }}
+              />
+            ) : (
+              <EffortSlider value={effort} onChange={setEffort} mode={mode} />
+            )}
 
             <DetailControl
               verbosity={verbosity}

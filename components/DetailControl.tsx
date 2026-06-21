@@ -12,7 +12,7 @@ interface DetailControlProps {
   styleNote: string;
   onStyleNoteChange: (value: string) => void;
   idPrefix?: string;
-  /** Build mode notes that this mainly affects the hand-off summary. */
+  /** Build mode notes that this mainly affects worker notes and handoff. */
   mode?: DiscussionMode;
 }
 
@@ -30,11 +30,12 @@ export function DetailControl({
   mode,
 }: DetailControlProps) {
   const active = VERBOSITY_OPTIONS.find((o) => o.value === verbosity);
+  const isBuild = mode === "build";
 
   return (
     <div className="space-y-3">
       <div className="space-y-2">
-        <Label>Answer detail</Label>
+        <Label>{isBuild ? "Handoff detail" : "Answer detail"}</Label>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {VERBOSITY_OPTIONS.map((option) => {
             const selected = option.value === verbosity;
@@ -59,8 +60,8 @@ export function DetailControl({
         {active && (
           <p className="text-xs text-muted-foreground">
             {active.description}
-            {mode === "build" &&
-              " In Build mode this mainly shapes the workers' notes and the final hand-off summary — emitted code files are always complete."}
+            {isBuild &&
+              " In Build mode this shapes the workers' notes and final handoff, not whether files are fully implemented."}
           </p>
         )}
       </div>
