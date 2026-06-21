@@ -1772,6 +1772,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Browsers auto-request the favicon; answer it before the auth gate so it does
+  // not produce a noisy 401 in the panel's console.
+  if (req.method === "GET" && url.pathname === "/favicon.ico") {
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
+
   // SSE log stream — authenticated by a single-use nonce (EventSource cannot send
   // the x-runner-token header), so it is handled BEFORE the token gate.
   if (req.method === "GET" && url.pathname === "/api/logs/stream") {

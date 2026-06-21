@@ -16,7 +16,7 @@
 
 ## Phasing
 
-- **Phase 1 — Secure foundation + folder browser + live logs + minimal panel** (this document, full detail). Self-contained and live-testable: load the panel from the runner, browse/select a folder, watch logs stream, with the security guard in place.
+- **Phase 1 — Secure foundation + folder browser + live logs + minimal panel** ✅ **COMPLETE (2026-06-22)** — committed + live-verified via Playwright (panel loads, fragment token scrubbed, folder browse + re-root, SSE logs stream live, guard checks pass, console clean). Tests: `test-runner-guard`, `test-runner-confine`, `test-runner-log`, `test-runner-panel-build` all green.
 - **Phase 2 — MCP management + version awareness + signed self-update** (planned after Phase 1 lands; own plan doc).
 - **Phase 3 — Network mode (`--host`, LNA UX) + help guide + main/about copy** (planned after Phase 2; own plan doc).
 
