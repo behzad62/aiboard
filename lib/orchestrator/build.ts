@@ -1395,6 +1395,47 @@ export function inspectStrictToolActionOutput(text: string): {
   return { action: only.action, valid: true };
 }
 
+export interface StrictToolActionBatchInspection {
+  valid: boolean;
+  actions: ArchitectAction[];
+  feedback?: string;
+}
+
+/**
+ * Batch-aware tool inspection: parse EVERY tool action the model emitted (in
+ * document order) instead of accepting only the first. The tool scheduler then
+ * decides which can run together (safe reads), which queue (mutations), and
+ * which are skipped — so a model can request a small batch of safe inspections
+ * in one turn. Falls back to single-action inspection when no tool actions are
+ * found, so non-tool (plan/review) turns keep their exact existing behavior.
+ */
+export function inspectStrictToolActionBatchOutput(
+  text: string
+): StrictToolActionBatchInspection {
+  const actions = uniqueActionCandidatesInDocumentOrder(text)
+    .map((candidate) => parseActionCandidate(candidate))
+    .filter(
+      (action): action is ArchitectAction =>
+        action != null && isBuildToolAction(action)
+    );
+  if (actions.length === 0) {
+    const single = inspectStrictToolActionOutput(text);
+    return {
+      valid: !!single.valid && !!single.action,
+      actions: single.action ? [single.action] : [],
+      feedback: single.feedback,
+    };
+  }
+  const chatty = text.trim().replace(/```json|```/g, "").trim();
+  const feedback =
+    actions.length > 1
+      ? "TOOL CALL BATCH: multiple tool actions were requested. The engine will schedule safe actions and report served/skipped results."
+      : chatty.startsWith("{")
+        ? undefined
+        : "TOOL CALL WARNING: tool calls should be JSON actions with no prose.";
+  return { valid: true, actions, feedback };
+}
+
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -1904,7 +1945,7 @@ export function buildWorkerTaskPrompt(input: {
     "",
     input.toolInstructions ?? "",
     input.toolInstructions?.trim()
-      ? "STRICT TOOL CALL RULE: if you use a file tool, your entire response must be exactly ONE JSON object for ONE tool action. No prose before/after it. No multiple JSON actions. Do not claim what a tool returned until the next turn after the engine sends the tool result."
+      ? "STRICT TOOL CALL RULE: if you use file tools, your entire response must be one or more JSON tool actions and nothing else — no prose before or after. The engine runs safe reads/searches together, applies writes in order, and reports which actions were served or skipped. Do not claim what a tool returned until the next turn, after the engine sends the tool result."
       : "",
     FILE_OUTPUT_INSTRUCTION,
     EDIT_BLOCK_INSTRUCTION,

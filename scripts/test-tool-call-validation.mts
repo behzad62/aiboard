@@ -1,6 +1,7 @@
 /** Strict Build tool-call validation checks (run: npx tsx scripts/test-tool-call-validation.mts) */
 import {
   hasCompleteBuildToolAction,
+  inspectStrictToolActionBatchOutput,
   inspectStrictToolActionOutput,
 } from "../lib/orchestrator/build";
 
@@ -37,21 +38,15 @@ const chatty = inspectStrictToolActionOutput(
 check("prose plus one tool action is salvageable", chatty.valid && chatty.action?.action === "patch", chatty);
 check("salvaged chatty tool action gets warning feedback", /only/i.test(chatty.feedback ?? ""), chatty);
 
-const multipleSafeFirst = inspectStrictToolActionOutput(
+const multipleSafe = inspectStrictToolActionBatchOutput(
   [
     '{"action":"read_range","path":"tests/run-tests.ts","startLine":1,"lineCount":100}',
     '{"action":"read_range","path":"tests/run-tests.ts","startLine":100,"lineCount":100}',
     '{"action":"search","query":"coerceValue"}',
   ].join("\n\n")
 );
-check(
-  "multiple tool actions with safe first action execute only first",
-  multipleSafeFirst.valid &&
-    multipleSafeFirst.action?.action === "read_range" &&
-    multipleSafeFirst.action.startLine === 1,
-  multipleSafeFirst
-);
-check("ignored later tool actions get warning feedback", /ignored/i.test(multipleSafeFirst.feedback ?? ""), multipleSafeFirst);
+check("multiple safe tool actions parse as a valid batch", multipleSafe.valid && multipleSafe.actions.length === 3, multipleSafe);
+check("batch parse includes scheduling feedback", /batch/i.test(multipleSafe.feedback ?? ""), multipleSafe);
 
 const readThenPatch = inspectStrictToolActionOutput(
   [

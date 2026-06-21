@@ -41,7 +41,11 @@ check("fix prompt includes patch guidance", prompt.includes('"action":"patch"'))
 check("fix prompt includes append guidance for large/missing files", prompt.includes('"action":"append"'));
 check("fix prompt tells workers to continue partial ranges", /endLine \+ 1/i.test(prompt), prompt);
 check("fix prompt tells workers to read around search matches", /path:line matches/i.test(prompt), prompt);
-check("fix prompt enforces one JSON tool action", /entire response must be exactly ONE JSON object/i.test(prompt), prompt);
+check(
+  "fix prompt allows scheduled JSON tool actions",
+  /one or more JSON tool actions/i.test(prompt),
+  prompt
+);
 check(
   "fix prompt forbids full existing-file rewrites",
   /do not emit full-file blocks for existing files/i.test(prompt),

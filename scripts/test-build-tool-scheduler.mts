@@ -1,0 +1,51 @@
+/** Build tool scheduler checks (run: npx tsx scripts/test-build-tool-scheduler.mts) */
+import {
+  classifyBuildToolActionForScheduling,
+  isSafeQueuedRunCommand,
+  packToolBatchResult,
+  scheduleBuildToolActions,
+} from "../lib/orchestrator/build-tool-scheduler";
+import { inspectStrictToolActionBatchOutput } from "../lib/orchestrator/build";
+
+let failed = 0;
+const check = (name: string, ok: boolean, detail?: unknown) => {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+  if (!ok) failed++;
+};
+
+const inspected = inspectStrictToolActionBatchOutput(
+  [
+    '{"action":"read","paths":["package.json","app/page.tsx"]}',
+    '{"action":"search","query":"BUILD_LIMITS"}',
+  ].join("\n")
+);
+check("multiple safe read actions parse as a batch", inspected.valid && inspected.actions.length === 2, inspected);
+
+check("read action is batch safe", classifyBuildToolActionForScheduling({ action: "read", paths: ["a.ts"] }) === "batch_read");
+check("patch action is queued mutation", classifyBuildToolActionForScheduling({ action: "patch", path: "a.ts", ops: [] }) === "queued_mutation");
+check("npm build is safe queued command", isSafeQueuedRunCommand("npm run build"));
+check("npm install is not safe queued command", !isSafeQueuedRunCommand("npm install"));
+
+const scheduled = scheduleBuildToolActions(inspected.actions, { allowSafeRunQueue: true, maxSafeRuns: 3 });
+check("safe reads are served", scheduled.served.length === 2, scheduled);
+check("no skipped actions for safe batch", scheduled.skipped.length === 0, scheduled);
+
+const mixed = scheduleBuildToolActions(
+  [
+    { action: "run", command: "npm run build" },
+    { action: "run", command: "npm install" },
+  ],
+  { allowSafeRunQueue: true, maxSafeRuns: 3 }
+);
+check("unsafe command is skipped from safe queue", mixed.served.length === 1 && mixed.skipped.length === 1, mixed);
+
+const packed = packToolBatchResult({
+  served: [{ label: "read package.json", result: "x".repeat(100) }],
+  skipped: [{ label: "run npm install", reason: "unsafe command" }],
+  maxChars: 80,
+});
+check("packed result lists served", /Served/.test(packed), packed);
+check("packed result lists skipped", /Skipped/.test(packed), packed);
+check("packed result caps output", packed.length < 500, packed);
+
+process.exit(failed === 0 ? 0 : 1);
