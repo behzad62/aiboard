@@ -349,6 +349,21 @@ function DiscussionPageInner() {
           break;
         case "build_stopped":
           setBuildUsage(event.usage ?? null);
+          // Reflect the stop in live state so the stopped banner, the
+          // BuildRunStats reason, and the Resume affordance appear immediately —
+          // not only after a reload. (markStopped persists these to the store;
+          // mirror them into the page's discussion object here.)
+          setStatus(event.reason === "completed" ? "completed" : "stopped");
+          setDiscussion((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: event.reason === "completed" ? "completed" : "stopped",
+                  buildStopReason: event.reason,
+                  buildStoppedAt: new Date().toISOString(),
+                }
+              : prev
+          );
           setDiagnostics((prev) => {
             const next: DiagnosticEntry[] = [
               {
