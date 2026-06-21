@@ -55,6 +55,10 @@ import {
 } from "./runner-lib.mjs";
 
 const VERSION = 8;
+// Replaced at build time (scripts/build-runner.mjs) with the inlined panel HTML.
+// When running the unbuilt source directly this stays a placeholder; the served
+// runner is always the built public/runner.mjs.
+const PANEL_HTML = "__RUNNER_PANEL_HTML__";
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
@@ -1752,6 +1756,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
+
+  // Unauthenticated static shell — no secrets, no side effects. The panel JS
+  // authenticates its own /api/* calls with the token from the URL fragment.
+  if (req.method === "GET" && url.pathname === "/") {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy":
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      ...CORS_HEADERS,
+    });
+    res.end(PANEL_HTML);
+    return;
+  }
 
   // SSE log stream — authenticated by a single-use nonce (EventSource cannot send
   // the x-runner-token header), so it is handled BEFORE the token gate.

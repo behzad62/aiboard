@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>AI Board · Runner</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #121722;
+    --panel-2: #161c28;
+    --border: #232c3d;
+    --text: #d7dee9;
+    --muted: #8492a6;
+    --accent: #5eead4;
+    --accent-dim: #2dd4bf33;
+    --info: #7dd3fc;
+    --warn: #fbbf24;
+    --error: #f87171;
+    --ok: #34d399;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 15% -10%, #14213033, transparent),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100%;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #121722, #0e131c);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .brand { font-weight: 650; letter-spacing: .2px; display: flex; align-items: center; gap: 9px; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 0 var(--accent-dim); }
+  .brand .dot.on { background: var(--ok); box-shadow: 0 0 10px 1px #34d39977; }
+  .brand .dot.off { background: var(--error); }
+  .chip {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px; background: var(--panel);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .spacer { flex: 1; }
+  .folder { color: var(--muted); font-size: 12.5px; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder b { color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 0; flex: 1; min-height: 0; }
+  section { display: flex; flex-direction: column; min-height: 0; }
+  section.browser { border-right: 1px solid var(--border); }
+  .sec-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); font-size: 12px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted);
+  }
+  .sec-head .spacer { flex: 1; }
+  .crumbs { padding: 10px 16px; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .crumbs a { color: var(--info); cursor: pointer; text-decoration: none; }
+  .crumbs a:hover { text-decoration: underline; }
+  .crumbs span.sep { color: var(--border); }
+  .dirlist { overflow: auto; flex: 1; padding: 4px 8px 16px; }
+  .dir {
+    display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px;
+    cursor: pointer; color: var(--text);
+  }
+  .dir:hover { background: var(--panel-2); }
+  .dir.hidden { opacity: .55; }
+  .dir .ico { color: var(--accent); flex: none; }
+  .empty { color: var(--muted); padding: 14px 18px; font-style: italic; }
+  .btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent-dim); border-color: #2dd4bf66; color: var(--accent); }
+  .use-bar { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
+  .use-bar .here { color: var(--muted); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  select.filter { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; font-size: 12px; }
+  .logs { overflow: auto; flex: 1; padding: 8px 0 24px; font: 12.5px/1.55 ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace; }
+  .log {
+    display: grid; grid-template-columns: 78px 60px 1fr; gap: 10px; padding: 1px 16px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .log:hover { background: #ffffff06; }
+  .log .ts { color: var(--muted); }
+  .log .lvl { text-transform: uppercase; font-size: 10.5px; letter-spacing: .5px; padding-top: 2px; }
+  .log.info .lvl { color: var(--info); }
+  .log.error .lvl, .log.error .msg { color: var(--error); }
+  .log.warn .lvl { color: var(--warn); }
+  .log .msg { color: var(--text); }
+  .stream-state { font-size: 11px; color: var(--muted); }
+  .stream-state.live { color: var(--ok); }
+  .stream-state.poll { color: var(--warn); }
+  /* token gate */
+  .gate { position: fixed; inset: 0; background: #0b0e14e6; display: none; align-items: center; justify-content: center; z-index: 50; }
+  .gate.show { display: flex; }
+  .gate .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 26px; width: min(420px, 90vw); }
+  .gate h2 { margin: 0 0 6px; font-size: 17px; }
+  .gate p { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  .gate input { width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-family: ui-monospace, monospace; }
+  .gate .row { display: flex; gap: 10px; margin-top: 14px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span id="dot" class="dot"></span> AI&nbsp;Board <span style="color:var(--muted);font-weight:500">Runner</span></div>
+    <span class="chip" id="ver">v–</span>
+    <div class="spacer"></div>
+    <div class="folder" id="folder"></div>
+  </header>
+
+  <main>
+    <section class="browser">
+      <div class="sec-head">Project folder <div class="spacer"></div></div>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="dirlist" id="dirlist"></div>
+      <div class="use-bar">
+        <div class="here" id="here"></div>
+        <button class="btn primary" id="useBtn">Use this folder</button>
+      </div>
+    </section>
+
+    <section class="logsec">
+      <div class="sec-head">
+        Activity
+        <span class="stream-state" id="streamState">connecting…</span>
+        <div class="spacer"></div>
+        <select class="filter" id="levelFilter">
+          <option value="all">all levels</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+      </div>
+      <div class="logs" id="logs"></div>
+    </section>
+  </main>
+
+  <div class="gate" id="gate">
+    <div class="card">
+      <h2>Connect to the runner</h2>
+      <p>Paste the token the runner printed in your terminal.</p>
+      <input id="tokenInput" placeholder="runner token" autocomplete="off" spellcheck="false" />
+      <div class="row"><button class="btn primary" id="tokenBtn">Connect</button></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY = "aiboard_runner_token";
+
+  // ── Token: fragment → sessionStorage → scrub; else paste gate ──────────────
+  let token = "";
+  const hash = location.hash.replace(/^#/, "");
+  const m = /(?:^|&)token=([^&]+)/.exec(hash);
+  if (m) {
+    token = decodeURIComponent(m[1]);
+    try { sessionStorage.setItem(KEY, token); } catch {}
+    history.replaceState(null, "", location.pathname + location.search);
+  } else {
+    try { token = sessionStorage.getItem(KEY) || ""; } catch {}
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const gate = $("gate");
+  function showGate() { gate.classList.add("show"); $("tokenInput").focus(); }
+  $("tokenBtn").onclick = () => {
+    const v = $("tokenInput").value.trim();
+    if (!v) return;
+    token = v;
+    try { sessionStorage.setItem(KEY, token); } catch {}
+    gate.classList.remove("show");
+    boot();
+  };
+  $("tokenInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("tokenBtn").click(); });
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      ...opts,
+      headers: { "x-runner-token": token, ...(opts.body ? { "content-type": "application/json" } : {}), ...(opts.headers || {}) },
+    });
+    if (res.status === 401 || res.status === 403) { setDot(false); showGate(); throw new Error("unauthorized"); }
+    return res;
+  }
+
+  function setDot(on) {
+    const d = $("dot");
+    d.className = "dot " + (on ? "on" : "off");
+  }
+
+  // ── Folder browser ─────────────────────────────────────────────────────────
+  let curPath = ".";
+  let curAbsolute = "";
+
+  function renderCrumbs(p) {
+    const c = $("crumbs");
+    c.innerHTML = "";
+    const mk = (label, target) => {
+      const a = document.createElement("a");
+      a.textContent = label;
+      a.onclick = () => loadDir(target);
+      return a;
+    };
+    c.appendChild(mk("root", "."));
+    if (p && p !== ".") {
+      const parts = p.split("/");
+      let acc = "";
+      for (const part of parts) {
+        acc = acc ? acc + "/" + part : part;
+        const sep = document.createElement("span"); sep.className = "sep"; sep.textContent = "›";
+        c.appendChild(sep);
+        c.appendChild(mk(part, acc));
+      }
+    }
+  }
+
+  async function loadDir(p) {
+    let data;
+    try {
+      const res = await api("/api/fs/list?path=" + encodeURIComponent(p || "."));
+      data = await res.json();
+    } catch { return; }
+    if (!data.ok) return;
+    curPath = data.path; curAbsolute = data.absolute;
+    setDot(true);
+    renderCrumbs(curPath);
+    $("here").textContent = curAbsolute;
+    const list = $("dirlist");
+    list.innerHTML = "";
+    if (!data.entries.length) {
+      const e = document.createElement("div"); e.className = "empty"; e.textContent = "No subfolders here.";
+      list.appendChild(e);
+    }
+    for (const ent of data.entries) {
+      const row = document.createElement("div");
+      row.className = "dir" + (ent.hidden ? " hidden" : "");
+      row.innerHTML = '<span class="ico">📁</span>';
+      const name = document.createElement("span"); name.textContent = ent.name;
+      row.appendChild(name);
+      const childPath = curPath === "." ? ent.name : curPath + "/" + ent.name;
+      row.onclick = () => loadDir(childPath);
+      list.appendChild(row);
+    }
+  }
+
+  $("useBtn").onclick = async () => {
+    try {
+      const res = await api("/api/fs/root", { method: "POST", body: JSON.stringify({ path: curPath }) });
+      const data = await res.json();
+      if (data.ok) refreshStatus();
+    } catch {}
+  };
+
+  // ── Status header ──────────────────────────────────────────────────────────
+  async function refreshStatus() {
+    try {
+      const res = await api("/api/status");
+      const s = await res.json();
+      $("ver").textContent = "v" + s.version;
+      $("folder").innerHTML = "working in <b>" + esc(s.activeDir) + "</b>";
+      setDot(true);
+    } catch {}
+  }
+  function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+  // ── Logs (SSE with poll fallback) ───────────────────────────────────────────
+  let levelFilter = "all";
+  $("levelFilter").onchange = (e) => {
+    levelFilter = e.target.value;
+    document.querySelectorAll(".log").forEach((el) => {
+      el.style.display = (levelFilter === "all" || el.dataset.level === levelFilter) ? "" : "none";
+    });
+  };
+
+  function appendLog(ev) {
+    const logs = $("logs");
+    const nearBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 40;
+    const row = document.createElement("div");
+    const level = ev.level || "info";
+    row.className = "log " + level;
+    row.dataset.level = level;
+    if (levelFilter !== "all" && level !== levelFilter) row.style.display = "none";
+    const ts = (ev.ts || "").slice(11, 19);
+    row.innerHTML =
+      '<span class="ts">' + ts + '</span>' +
+      '<span class="lvl">' + level + '</span>' +
+      '<span class="msg">' + esc(ev.msg || "") + '</span>';
+    logs.appendChild(row);
+    while (logs.childElementCount > 1500) logs.removeChild(logs.firstChild);
+    if (nearBottom) logs.scrollTop = logs.scrollHeight;
+  }
+
+  function setStream(state, label) { const el = $("streamState"); el.className = "stream-state " + state; el.textContent = label; }
+
+  let lastSeq = 0;
+  let pollTimer = null;
+  async function startLogs() {
+    let nonce = "";
+    try {
+      const res = await api("/api/logs/nonce", { method: "POST" });
+      nonce = (await res.json()).nonce;
+    } catch { return; }
+    let es;
+    try {
+      es = new EventSource("/api/logs/stream?nonce=" + encodeURIComponent(nonce));
+    } catch { return pollLogs(); }
+    es.onopen = () => setStream("live", "● live");
+    es.onmessage = (e) => {
+      try { const ev = JSON.parse(e.data); lastSeq = Math.max(lastSeq, ev.seq || 0); appendLog(ev); } catch {}
+    };
+    es.onerror = () => { es.close(); setStream("poll", "polling"); pollLogs(); };
+  }
+  async function pollLogs() {
+    if (pollTimer) return;
+    const tick = async () => {
+      try {
+        const res = await api("/api/logs?since=" + lastSeq);
+        const d = await res.json();
+        for (const ev of d.events) { lastSeq = Math.max(lastSeq, ev.seq); appendLog(ev); }
+      } catch {}
+    };
+    await tick();
+    pollTimer = setInterval(tick, 2000);
+  }
+
+  // ── Boot ────────────────────────────────────────────────────────────────────
+  async function boot() {
+    await refreshStatus();
+    await loadDir(".");
+    await startLogs();
+  }
+  if (!token) showGate(); else boot();
+})();
+</script>
+</body>
+</html>

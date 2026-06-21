@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "copy-runner": "node -e \"const fs=require('fs');fs.mkdirSync('public',{recursive:true});fs.copyFileSync('scripts/runner.mjs','public/runner.mjs')\"",
+    "copy-runner": "node scripts/build-runner.mjs",
     "predev": "npm run copy-runner",
     "dev": "next dev --turbopack",
     "prebuild": "npm run copy-runner",
