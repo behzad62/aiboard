@@ -47,6 +47,10 @@ npm run build
 
 The app is exported to `out/` and can be hosted by any static web server. The build also copies `scripts/runner.mjs` to `public/runner.mjs` so the hosted app can offer the optional runner download.
 
+## Build mode run policy
+
+Build mode uses a Build-specific run policy. By default it tries to finish the job; optional USD and time guardrails can stop the run cleanly with a resumable checkpoint. Worker calls are tracked as telemetry, not used as the stopping budget. The activity view shows aggregate per-model token/cost stats and keeps the raw transcript collapsed by default.
+
 ## Local runner
 
 Build mode works without the runner by keeping generated files in a virtual workspace that can be downloaded as a zip. For real project folder access, start the runner yourself:

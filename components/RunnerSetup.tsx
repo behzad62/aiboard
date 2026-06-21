@@ -205,12 +205,12 @@ export function RunnerSetup({
                   {
                     value: "ask",
                     title: "Ask permission",
-                    desc: "Approve each shell command and MCP tool call before it runs. File reads/writes never prompt.",
+                    desc: "Approve each shell command and MCP tool call before it runs. File reads/writes and safe read/search batches never prompt.",
                   },
                   {
                     value: "full",
                     title: "Full access",
-                    desc: "Commands and tool calls run without asking. Only for trusted projects.",
+                    desc: "Commands and safe tool batches run without asking. Risky actions are still constrained by the Build engine and typed repo workflow. Only for trusted projects.",
                   },
                 ] as const
               ).map((opt) => (
