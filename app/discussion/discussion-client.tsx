@@ -14,6 +14,8 @@ import {
   DiscussionTimeline,
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
+import { BuildRunStats } from "@/components/BuildRunStats";
+import { BuildTranscriptPanel } from "@/components/BuildTranscriptPanel";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
@@ -42,10 +44,15 @@ import {
   Square,
   StickyNote,
 } from "lucide-react";
-import type { Discussion } from "@/lib/db/schema";
+import type { BuildUsageWindow, Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
+import { getModelPricing } from "@/lib/providers/pricing";
 import { getModeLabel } from "@/lib/orchestrator/config";
+import {
+  addBuildUsageCall,
+  createBuildUsageWindow,
+} from "@/lib/client/build-usage";
 import {
   addBuildNote,
   continueDiscussion,
@@ -161,6 +168,7 @@ function DiscussionPageInner() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
+  const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
@@ -336,7 +344,70 @@ function DiscussionPageInner() {
             prUrl: event.prUrl ?? prev?.prUrl ?? null,
           }));
           break;
+        case "build_usage":
+          setBuildUsage(event.usage);
+          break;
+        case "build_stopped":
+          setBuildUsage(event.usage ?? null);
+          setDiagnostics((prev) => {
+            const next: DiagnosticEntry[] = [
+              {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                at: new Date().toLocaleTimeString(),
+                phase: "finished" as const,
+                message: event.message,
+              },
+              ...prev,
+            ].slice(0, ACTIVITY_LOG_CAP);
+            saveDiagnostics(id, next);
+            return next;
+          });
+          break;
+        case "tool_batch":
+          setDiagnostics((prev) => {
+            const next: DiagnosticEntry[] = [
+              {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                at: new Date().toLocaleTimeString(),
+                phase: "model_streaming" as const,
+                message: `${event.actor}: ${event.summary}`,
+              },
+              ...prev,
+            ].slice(0, ACTIVITY_LOG_CAP);
+            saveDiagnostics(id, next);
+            return next;
+          });
+          break;
         case "token_usage":
+          if (discussion?.mode === "build") {
+            setBuildUsage((prev) => {
+              const startedAt = prev?.startedAt ?? new Date().toISOString();
+              const base = prev ?? createBuildUsageWindow(startedAt);
+              const elapsedSinceWindowStartMs = Math.max(
+                base.elapsedMs,
+                Date.now() - new Date(startedAt).getTime()
+              );
+              let pricing: ReturnType<typeof getModelPricing> = null;
+              try {
+                pricing = getModelPricing(
+                  event.modelId,
+                  loadDashboard().settings.modelPricingOverrides
+                );
+              } catch {
+                pricing = null;
+              }
+              return addBuildUsageCall(base, {
+                modelId: event.modelId,
+                modelName: event.modelName,
+                providerId: event.providerId,
+                inputTokens: event.inputTokens,
+                outputTokens: event.outputTokens,
+                pricing,
+                elapsedSinceWindowStartMs,
+              });
+            });
+            break;
+          }
           setDiagnostics((prev) => {
             const entry: DiagnosticEntry = {
               id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -418,6 +489,11 @@ function DiscussionPageInner() {
       }
       setEnabledModels(loadDashboard().enabledModels);
       setDiscussion(data.discussion);
+      setBuildUsage(
+        data.discussion.mode === "build"
+          ? createBuildUsageWindow(new Date().toISOString())
+          : null
+      );
       // Restore the tab-session activity log so it survives navigation.
       setDiagnostics(loadDiagnostics(id));
       setAttachments(data.attachments ?? []);
@@ -619,6 +695,11 @@ function DiscussionPageInner() {
     setFinalResult(null);
     setError(null);
     setBuildTasks([]);
+    setBuildUsage(
+      discussion?.mode === "build"
+        ? createBuildUsageWindow(new Date().toISOString())
+        : null
+    );
     setWrittenFiles([]);
     setCommandRuns([]);
     setRepoStatus(null);
@@ -825,6 +906,7 @@ function DiscussionPageInner() {
           active={isActive}
           variant="sidebar"
           roundLabel={discussion.mode === "build" ? "turn" : "round"}
+          showEntryTokenUsage={discussion.mode !== "build"}
         />
       </aside>
 
@@ -1063,6 +1145,19 @@ function DiscussionPageInner() {
 
         <TabsContent value="activity" className="space-y-6">
       {discussion.mode === "build" && (
+        <BuildRunStats
+          status={status}
+          policy={discussion.buildRunPolicy ?? "finish"}
+          budgetUsd={discussion.buildBudgetUsd ?? 0}
+          timeLimitMinutes={discussion.buildTimeLimitMinutes ?? 120}
+          stopReason={discussion.buildStopReason}
+          branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
+          prUrl={repoWorkflow?.prUrl ?? null}
+          usage={buildUsage}
+        />
+      )}
+
+      {discussion.mode === "build" && (
         <BuildTaskBoard
           tasks={buildTasks}
           files={writtenFiles}
@@ -1149,16 +1244,17 @@ function DiscussionPageInner() {
         )}
 
       {/* ── Transcript ──────────────────────────────────────────── */}
+      {discussion.mode === "build" ? (
+        <BuildTranscriptPanel
+          messages={messages}
+          accentMap={accentMap}
+          onDownload={downloadTranscript}
+        />
+      ) : (
       <div className="space-y-5">
         <div className="flex items-center gap-3">
           <h2 className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            {discussion.mode === "build"
-              ? finalResult
-                ? "Build log"
-                : "Live build"
-              : finalResult
-                ? "Discussion transcript"
-                : "Live discussion"}
+            {finalResult ? "Discussion transcript" : "Live discussion"}
           </h2>
           <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
           {messages.length > 0 && (
@@ -1176,16 +1272,9 @@ function DiscussionPageInner() {
         <DiscussionTimeline
           messages={messages}
           accentMap={accentMap}
-          emptyTitle={
-            discussion.mode === "build" ? "The build is starting…" : undefined
-          }
-          emptyHint={
-            discussion.mode === "build"
-              ? "The Architect is planning; tasks and files will appear in the board above and responses stream here."
-              : undefined
-          }
         />
       </div>
+      )}
         </TabsContent>
 
         <TabsContent value="settings">
@@ -1210,6 +1299,7 @@ function DiscussionPageInner() {
           active={isActive}
           variant="footer"
           roundLabel={discussion.mode === "build" ? "turn" : "round"}
+          showEntryTokenUsage={discussion.mode !== "build"}
         />
       </div>
     </div>

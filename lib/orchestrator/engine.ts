@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
+  BuildStopReason,
+  BuildUsageWindow,
   DiscussionMode,
   EffortLevel,
   ReasoningEffort,
@@ -76,6 +78,23 @@ export type OrchestratorEvent =
       totalTokens: number;
       maxTokens: number;
       estimated: boolean;
+    }
+  | {
+      type: "build_usage";
+      usage: BuildUsageWindow;
+    }
+  | {
+      type: "build_stopped";
+      reason: BuildStopReason;
+      message: string;
+      usage?: BuildUsageWindow;
+    }
+  | {
+      type: "tool_batch";
+      actor: string;
+      served: number;
+      skipped: number;
+      summary: string;
     }
   | { type: "convergence"; score: number; reason?: string }
   | { type: "final_answer"; answer: string; confidence: number; dissent: string[] }

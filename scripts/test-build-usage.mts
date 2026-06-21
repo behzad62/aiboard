@@ -6,6 +6,8 @@ import {
 } from "../lib/client/build-usage";
 import type { BuildUsageCallInput } from "../lib/client/build-usage";
 import { formatTokenCount } from "../lib/client/token-usage";
+import { BuildRunStats } from "../components/BuildRunStats";
+import { BuildTranscriptPanel } from "../components/BuildTranscriptPanel";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -17,6 +19,8 @@ const closeEnough = (actual: number | null | undefined, expected: number) =>
 
 check("formats thousands compactly", formatTokenCount(18_734) === "18.7k");
 check("formats millions compactly", formatTokenCount(1_234_567) === "1.2M");
+check("exports Build usage stats component", typeof BuildRunStats === "function");
+check("exports collapsed Build transcript component", typeof BuildTranscriptPanel === "function");
 
 const usd = estimatedUsdForTokens({
   inputTokens: 500_000,
@@ -85,9 +89,11 @@ check(
 check(
   "does not mutate previous model totals",
   previousGemini?.calls === 1 &&
+    previousGemini.providerId === "google" &&
     previousGemini.inputTokens === 18_000 &&
     previousGemini.outputTokens === 700 &&
     previousGemini.totalTokens === 18_700 &&
+    formatTokenCount(previousGemini.totalTokens) === "18.7k" &&
     closeEnough(previousGemini.estimatedUsd, firstGeminiUsd),
   previousGemini
 );

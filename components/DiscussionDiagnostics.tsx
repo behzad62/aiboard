@@ -37,6 +37,7 @@ interface DiscussionDiagnosticsProps {
    * not a discussion round (builds count "waves" instead).
    */
   roundLabel?: string;
+  showEntryTokenUsage?: boolean;
 }
 
 function phaseDot(phase: DiagnosticEntry["phase"]): string {
@@ -72,9 +73,11 @@ function totalTokens(entries: DiagnosticEntry[]): number {
 function EntriesList({
   entries,
   roundLabel = "round",
+  showEntryTokenUsage = true,
 }: {
   entries: DiagnosticEntry[];
   roundLabel?: string;
+  showEntryTokenUsage?: boolean;
 }) {
   if (entries.length === 0) {
     return (
@@ -110,7 +113,7 @@ function EntriesList({
                   · {roundLabel} {entry.round}
                 </span>
               )}
-              {entry.tokenUsage && (
+              {showEntryTokenUsage && entry.tokenUsage && (
                 <span>
                   · ~{formatTokens(entry.tokenUsage.totalTokens)} tokens (
                   {formatTokens(entry.tokenUsage.inputTokens)} in /{" "}
@@ -151,6 +154,7 @@ export function DiscussionDiagnostics({
   active,
   variant = "footer",
   roundLabel,
+  showEntryTokenUsage = true,
 }: DiscussionDiagnosticsProps) {
   if (variant === "sidebar") {
     // Always expanded, glanceable during a run; scrolls inside its aside.
@@ -161,7 +165,11 @@ export function DiscussionDiagnostics({
           <ConnectionPill connected={connected} active={active} />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto bg-background/40 p-2">
-          <EntriesList entries={entries} roundLabel={roundLabel} />
+          <EntriesList
+            entries={entries}
+            roundLabel={roundLabel}
+            showEntryTokenUsage={showEntryTokenUsage}
+          />
         </div>
       </section>
     );
@@ -173,6 +181,7 @@ export function DiscussionDiagnostics({
       connected={connected}
       active={active}
       roundLabel={roundLabel}
+      showEntryTokenUsage={showEntryTokenUsage}
     />
   );
 }
@@ -182,11 +191,13 @@ function FooterDiagnostics({
   connected,
   active,
   roundLabel,
+  showEntryTokenUsage = true,
 }: {
   entries: DiagnosticEntry[];
   connected: boolean;
   active: boolean;
   roundLabel?: string;
+  showEntryTokenUsage?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const latest = entries[0];
@@ -195,7 +206,11 @@ function FooterDiagnostics({
     <section className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] backdrop-blur">
       {open && (
         <div className="max-h-[min(18rem,32vh)] overflow-y-auto border-b bg-background/40 p-2">
-          <EntriesList entries={entries} roundLabel={roundLabel} />
+          <EntriesList
+            entries={entries}
+            roundLabel={roundLabel}
+            showEntryTokenUsage={showEntryTokenUsage}
+          />
         </div>
       )}
       <button
