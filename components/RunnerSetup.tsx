@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Download, Terminal } from "lucide-react";
+import { Download, Terminal, PanelsTopLeft } from "lucide-react";
 import { checkRunner, DEFAULT_RUNNER_URL } from "@/lib/client/runner";
 
 export interface RunnerSelection {
@@ -111,7 +111,9 @@ export function RunnerSetup({
         </a>{" "}
         18+ installed (free) — nothing else. Download it, run it, then paste
         the URL and token it prints to connect; leave the token empty to build
-        in-app instead.
+        in-app instead. Once connected, open the runner&apos;s{" "}
+        <strong>control panel</strong> in your browser to pick the project
+        folder and watch live activity.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" asChild>
@@ -256,6 +258,18 @@ export function RunnerSetup({
           )}
           {status.message === "Checking…" && (
             <span className="text-sm text-muted-foreground">Checking…</span>
+          )}
+          {status.state === "ok" && token.trim() && (
+            <Button type="button" variant="outline" size="sm" asChild>
+              <a
+                href={`${url.replace(/\/$/, "")}/#token=${encodeURIComponent(token.trim())}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <PanelsTopLeft className="mr-2 h-4 w-4" />
+                Open control panel
+              </a>
+            </Button>
           )}
         </div>
 

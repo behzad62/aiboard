@@ -62,7 +62,8 @@ export default function AboutPage() {
             task into work items and worker models implement them in parallel
             waves. Files can be written to a real project folder on your
             machine, downloaded as a zip, or applied through an optional local
-            runner that adds shell access and MCP tools.
+            runner that adds shell access, MCP tools, and a browser control
+            panel for picking the project folder and watching live activity.
           </li>
         </ul>
       </section>
