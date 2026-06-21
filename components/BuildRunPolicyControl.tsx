@@ -88,6 +88,7 @@ export function BuildRunPolicyControl({
           <Label htmlFor="build-budget-usd">USD budget</Label>
           <Input
             id="build-budget-usd"
+            type="number"
             inputMode="decimal"
             min={0}
             step="0.01"
@@ -103,6 +104,7 @@ export function BuildRunPolicyControl({
           <Label htmlFor="build-time-minutes">Time budget, minutes</Label>
           <Input
             id="build-time-minutes"
+            type="number"
             inputMode="numeric"
             min={0}
             step="1"
