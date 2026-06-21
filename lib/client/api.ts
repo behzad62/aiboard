@@ -60,6 +60,8 @@ export function restartDiscussion(id: string): void {
     status: "pending",
     currentRound: 0,
     convergenceScore: null,
+    buildStopReason: null,
+    buildStoppedAt: null,
     updatedAt: new Date().toISOString(),
   });
 }

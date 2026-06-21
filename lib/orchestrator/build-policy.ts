@@ -66,8 +66,13 @@ export function shouldStopForBuildGuardrail(input: {
   return null;
 }
 
-export function buildRunPolicyLabel(policy: BuildRunPolicy): string {
-  switch (policy) {
+export function buildRunPolicyLabel(
+  policy: BuildRunPolicy | string | null | undefined
+): string {
+  const runPolicy = normalizeBuildSettings({
+    buildRunPolicy: policy as BuildRunPolicy,
+  }).runPolicy;
+  switch (runPolicy) {
     case "finish":
       return "Finish job";
     case "budgeted":

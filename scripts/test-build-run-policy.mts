@@ -1,6 +1,7 @@
 /** Build run policy checks (run: npx tsx scripts/test-build-run-policy.mts) */
 import {
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
+  buildRunPolicyLabel,
   isBuildBudgetUnlimited,
   normalizeBuildSettings,
   shouldStopForBuildGuardrail,
@@ -47,5 +48,10 @@ const timeStop = shouldStopForBuildGuardrail({
   elapsedMs: 121 * 60 * 1000,
 });
 check("time budget stops at threshold", timeStop === "time", timeStop);
+
+check(
+  "invalid policy label falls back to finish",
+  buildRunPolicyLabel("not-real") === "Finish job"
+);
 
 process.exit(failed === 0 ? 0 : 1);
