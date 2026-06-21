@@ -9,6 +9,7 @@ import type {
   Discussion,
   DiscussionMode,
   EffortLevel,
+  BuildRunPolicy,
   ReasoningEffort,
   UserSettings,
   Verbosity,
@@ -41,6 +42,7 @@ import {
   stopDiscussion,
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
+import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
 export { runClientDiscussion as runDiscussion, stopDiscussion };
 export type { OrchestratorEvent } from "./engine";
@@ -100,6 +102,8 @@ export function continueDiscussion(id: string): void {
   if (isDiscussionRunning(id)) return;
   updateDiscussion(id, {
     status: "pending",
+    buildStopReason: null,
+    buildStoppedAt: null,
     updatedAt: new Date().toISOString(),
   });
 }
@@ -139,6 +143,9 @@ export interface DiscussionConfigInput {
   verbosity?: Verbosity;
   reasoningEffort?: ReasoningEffort;
   styleNote?: string | null;
+  buildRunPolicy?: BuildRunPolicy;
+  buildBudgetUsd?: number;
+  buildTimeLimitMinutes?: number;
 }
 
 export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
@@ -195,6 +202,17 @@ export function updateDiscussionConfig(
     styleNote: input.styleNote ?? "",
     updatedAt: new Date().toISOString(),
   };
+  if (discussion.mode === "build") {
+    const buildSettings = normalizeBuildSettings({
+      buildRunPolicy: input.buildRunPolicy ?? discussion.buildRunPolicy,
+      buildBudgetUsd: input.buildBudgetUsd ?? discussion.buildBudgetUsd,
+      buildTimeLimitMinutes:
+        input.buildTimeLimitMinutes ?? discussion.buildTimeLimitMinutes,
+    });
+    patch.buildRunPolicy = buildSettings.runPolicy;
+    patch.buildBudgetUsd = buildSettings.budgetUsd;
+    patch.buildTimeLimitMinutes = buildSettings.timeLimitMinutes;
+  }
   updateDiscussion(id, patch);
   return { ...discussion, ...patch };
 }
@@ -258,6 +276,9 @@ export interface CreateDiscussionInput {
   runnerUrl?: string | null;
   runnerToken?: string | null;
   runnerAccess?: "ask" | "full" | null;
+  buildRunPolicy?: BuildRunPolicy;
+  buildBudgetUsd?: number;
+  buildTimeLimitMinutes?: number;
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -268,6 +289,12 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     throw new Error(participatingModelRequirementMessage(input.mode));
   }
   const settings = getUserSettings();
+  const buildSettings = normalizeBuildSettings({
+    buildRunPolicy: input.buildRunPolicy ?? settings.defaultBuildRunPolicy,
+    buildBudgetUsd: input.buildBudgetUsd ?? settings.defaultBuildBudgetUsd,
+    buildTimeLimitMinutes:
+      input.buildTimeLimitMinutes ?? settings.defaultBuildTimeLimitMinutes,
+  });
   const now = new Date().toISOString();
   const id = uuidv4();
   insertDiscussion({
@@ -293,6 +320,12 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerUrl: input.runnerUrl ?? null,
     runnerToken: input.runnerToken ?? null,
     runnerAccess: input.runnerAccess ?? null,
+    buildRunPolicy: input.mode === "build" ? buildSettings.runPolicy : undefined,
+    buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,
+    buildTimeLimitMinutes:
+      input.mode === "build" ? buildSettings.timeLimitMinutes : undefined,
+    buildStopReason: null,
+    buildStoppedAt: null,
     createdAt: now,
     updatedAt: now,
   });

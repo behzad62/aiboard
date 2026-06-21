@@ -5,6 +5,69 @@ export interface ModelPricingOverride {
   updatedAt: string;
 }
 
+export type BuildRunPolicy = "finish" | "budgeted" | "plan_only";
+export type BuildStopReason =
+  | "budget"
+  | "time"
+  | "blocked"
+  | "user"
+  | "completed";
+
+export interface BuildUsageModelTotal {
+  modelId: string;
+  modelName: string;
+  providerId: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedUsd: number | null;
+  priced: boolean;
+}
+
+export interface BuildUsageWindow {
+  startedAt: string;
+  elapsedMs: number;
+  estimatedUsd: number;
+  unknownPricedModelIds: string[];
+  models: BuildUsageModelTotal[];
+}
+
+export interface BuildCheckpointTask {
+  id: string;
+  title: string;
+  instructions: string;
+  contextFiles: string[];
+  outputPaths?: string[];
+  expectedOutputs?: string;
+  status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
+  dependsOn?: string[];
+  assignTo?: string;
+  workerIndex?: number;
+  failCount?: number;
+  retryAfterMs?: number;
+  difficulty?: number;
+}
+
+export interface BuildCheckpoint {
+  discussionId: string;
+  status: "running" | "stopped" | "blocked" | "completed";
+  updatedAt: string;
+  runPolicy: BuildRunPolicy;
+  stopReason?: BuildStopReason | null;
+  wave: number;
+  tasks: BuildCheckpointTask[];
+  architectNotes: string;
+  verifyCommand: string;
+  branch: string | null;
+  prUrl: string | null;
+  milestone: string | null;
+  issueNumbers: number[];
+  failureFingerprints: Record<string, number>;
+  recoveryLog: string[];
+  usageWindow: BuildUsageWindow;
+}
+
 export interface UserSettings {
   id: string;
   defaultEffort: EffortLevel;
@@ -13,6 +76,9 @@ export interface UserSettings {
   defaultVerbosity?: Verbosity;
   defaultStyleNote?: string;
   defaultReasoningEffort?: ReasoningEffort;
+  defaultBuildRunPolicy?: BuildRunPolicy;
+  defaultBuildBudgetUsd?: number;
+  defaultBuildTimeLimitMinutes?: number;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
 }
 
@@ -63,6 +129,11 @@ export interface Discussion {
   runnerToken?: string | null;
   /** "ask" = approve each command in the UI; "full" = run without asking. */
   runnerAccess?: "ask" | "full" | null;
+  buildRunPolicy?: BuildRunPolicy;
+  buildBudgetUsd?: number;
+  buildTimeLimitMinutes?: number;
+  buildStopReason?: BuildStopReason | null;
+  buildStoppedAt?: string | null;
   currentRound: number;
   maxRounds: number;
   convergenceScore: number | null;

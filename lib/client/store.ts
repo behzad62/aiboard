@@ -6,6 +6,7 @@
  */
 
 import type {
+  BuildCheckpoint,
   BuildFileRecord,
   CustomModel,
   Discussion,
@@ -39,6 +40,7 @@ export interface ClientStore {
   finalResults: FinalResult[];
   attachments: AttachmentRecord[];
   buildFiles: BuildFileRecord[];
+  buildCheckpoints: BuildCheckpoint[];
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -60,6 +62,7 @@ const DEFAULT_STORE: ClientStore = {
   finalResults: [],
   attachments: [],
   buildFiles: [],
+  buildCheckpoints: [],
   modelStats: [],
 };
 
@@ -163,6 +166,9 @@ export function getAttachment(id: string): AttachmentRecord | undefined {
 export function getBuildFiles(discussionId: string): BuildFileRecord[] {
   return store().buildFiles.filter((f) => f.discussionId === discussionId);
 }
+export function getBuildCheckpoint(discussionId: string): BuildCheckpoint | undefined {
+  return store().buildCheckpoints?.find((c) => c.discussionId === discussionId);
+}
 export function getModelStats(): ModelBuildStat[] {
   return (store().modelStats ?? []).map(normalizeStat);
 }
@@ -194,6 +200,9 @@ export function deleteDiscussion(id: string): void {
   s.messages = s.messages.filter((m) => m.discussionId !== id);
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
   s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
+  s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
+    (c) => c.discussionId !== id
+  );
   schedulePersist();
 }
 /** One build's per-worker contribution to a model's global stats. */
@@ -285,6 +294,23 @@ export function upsertBuildFile(rec: BuildFileRecord): void {
   else s.buildFiles.push(rec);
   schedulePersist();
 }
+export function upsertBuildCheckpoint(checkpoint: BuildCheckpoint): void {
+  const s = store();
+  if (!s.buildCheckpoints) s.buildCheckpoints = [];
+  const i = s.buildCheckpoints.findIndex(
+    (c) => c.discussionId === checkpoint.discussionId
+  );
+  if (i >= 0) s.buildCheckpoints[i] = checkpoint;
+  else s.buildCheckpoints.push(checkpoint);
+  schedulePersist();
+}
+export function deleteBuildCheckpoint(discussionId: string): void {
+  const s = store();
+  s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
+    (c) => c.discussionId !== discussionId
+  );
+  schedulePersist();
+}
 /**
  * Wipe a discussion's run output (model messages, final result, persisted
  * build files) for a from-scratch restart. User notes are kept — the next run
@@ -297,6 +323,9 @@ export function clearDiscussionRun(id: string): void {
   );
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
   s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
+  s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
+    (c) => c.discussionId !== id
+  );
   schedulePersist();
 }
 export function insertMessage(m: Message): void {
