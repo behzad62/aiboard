@@ -1874,7 +1874,7 @@ export function buildArchitectPlanPrompt(input: {
   previousSummary?: string;
 }): string {
   const readOption = input.readHopsLeft > 0
-    ? `If you need to inspect existing files before planning, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). Otherwise, plan now.`
+    ? `If you need to inspect existing files before planning, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). You may send a few independent reads/searches together; the engine runs the safe ones as a batch and returns a served/skipped report. Otherwise, plan now.`
     : "Plan now — no more file reads are available.";
 
   return [
@@ -2003,7 +2003,7 @@ export function buildArchitectReviewPrompt(input: {
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     input.readHopsLeft && input.readHopsLeft > 0
-      ? `If you need to see an existing file's contents before deciding, respond with ONLY:\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). Never guess at a file's contents — read it.`
+      ? `If you need to see an existing file's contents before deciding, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). You may combine a few independent reads/searches in one turn. Never guess at a file's contents — read it.`
       : "",
     readRangeToolDoc(input.rangeReadsLeft),
     searchToolDoc(input.searchesLeft),

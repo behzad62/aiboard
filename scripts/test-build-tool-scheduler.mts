@@ -39,6 +39,18 @@ const mixed = scheduleBuildToolActions(
 );
 check("unsafe command is skipped from safe queue", mixed.served.length === 1 && mixed.skipped.length === 1, mixed);
 
+// Ask mode (no safe-run queue): a single safe command must still run alone
+// (approval-gated downstream), not be dropped.
+const askModeSingleRun = scheduleBuildToolActions(
+  [{ action: "run", command: "npm test" }],
+  { allowSafeRunQueue: false, maxSafeRuns: 0 }
+);
+check(
+  "single safe command still runs when batching is off",
+  askModeSingleRun.served.length === 1 && askModeSingleRun.skipped.length === 0,
+  askModeSingleRun
+);
+
 const packed = packToolBatchResult({
   served: [{ label: "read package.json", result: "x".repeat(100) }],
   skipped: [{ label: "run npm install", reason: "unsafe command" }],

@@ -35,6 +35,10 @@ import {
   recordBuildFailure,
   shouldStopForNoProgress,
 } from "@/lib/orchestrator/build-progress";
+import {
+  packToolBatchResult,
+  scheduleBuildToolActions,
+} from "@/lib/orchestrator/build-tool-scheduler";
 import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
@@ -57,9 +61,8 @@ import {
   findIncompleteBuildTasks,
   githubWorkflowRequested,
   hasCompleteBuildToolAction,
-  inspectStrictToolActionOutput,
+  inspectStrictToolActionBatchOutput,
   isBuildTaskDependencySatisfied,
-  isBuildToolAction,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
@@ -181,6 +184,12 @@ const WORKER_APPENDS_PER_TASK = 12;
 const WORKER_TOOL_TURNS_PER_TASK = 24;
 const WORKER_BAD_TOOL_CALLS_PER_TASK = 3;
 const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
+
+// Tool batching: one combined tool-result message is capped so it fits common
+// model contexts; in full-access mode the Architect may run a small queue of
+// safe verification commands (read-only git / rg / npm scripts) per batch.
+const TOOL_BATCH_RESULT_CHARS = 24_000;
+const SAFE_RUN_QUEUE_LIMIT = 3;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -2495,24 +2504,6 @@ export async function runBuildDiscussion(
   const kbOf = (text: string): string =>
     `${(new TextEncoder().encode(text).length / 1024).toFixed(1)} KB`;
 
-  const describeToolAction = (a: ArchitectAction): string => {
-    switch (a.action) {
-      case "read":
-        return `read ${a.paths.join(", ")}`;
-      case "read_range":
-        return `read_range ${a.path}:${a.startLine}+${a.lineCount}`;
-      case "search":
-        return `search "${a.query}"`;
-      case "run":
-        return `run ${a.command}`;
-      case "fetch":
-        return `fetch ${a.url}`;
-      case "tool":
-        return `tool ${a.server}.${a.tool}`;
-      default:
-        return a.action;
-    }
-  };
 
   /** Parse the "--- path lines X-Y of Z ---" header readFileRange emits. */
   const parseDeliveredRange = (
@@ -2676,6 +2667,64 @@ export async function runBuildDiscussion(
       message,
     });
 
+  // Dispatch a batch of Architect tool actions in one turn: the scheduler runs
+  // safe reads/searches together, queues mutations in order, and keeps risky
+  // commands single-step; duplicates are skipped (not re-dispatched); each served
+  // action goes through the existing single-action dispatcher; and ONE combined
+  // served/skipped tool-result message is returned for the conversation.
+  const dispatchArchitectToolBatch = async (
+    actions: ArchitectAction[],
+    budgets: InspectionBudgets,
+    appendContext: (text: string) => void,
+    tracker: ReturnType<typeof createToolCallTracker>
+  ): Promise<{ result: string; exhausted: boolean; servedCount: number }> => {
+    const schedule = scheduleBuildToolActions(actions, {
+      allowSafeRunQueue: allowAllCommands,
+      maxSafeRuns: SAFE_RUN_QUEUE_LIMIT,
+    });
+    const served: Array<{ label: string; result: string }> = [];
+    const skipped = schedule.skipped.map((item) => ({
+      label: item.label,
+      reason: item.reason,
+    }));
+    let exhausted = false;
+    for (const item of schedule.served) {
+      if (isRedundantToolCall(tracker, item.action)) {
+        skipped.push({
+          label: item.label,
+          reason: "duplicate tool request (already delivered)",
+        });
+        continue;
+      }
+      const dispatched = await dispatchArchitectTool(
+        item.action,
+        budgets,
+        appendContext
+      );
+      served.push({ label: item.label, result: dispatched.result });
+      // Match the single-action loop: only record (for dedup) a tool that
+      // actually delivered — a budget-exhausted result is not "already read".
+      if (dispatched.exhausted) exhausted = true;
+      else recordToolCall(tracker, item.action, dispatched.deliveredRange);
+    }
+    emit({
+      type: "tool_batch",
+      actor: "Architect",
+      served: served.length,
+      skipped: skipped.length,
+      summary: `${served.length} served, ${skipped.length} skipped`,
+    });
+    return {
+      result: packToolBatchResult({
+        served,
+        skipped,
+        maxChars: TOOL_BATCH_RESULT_CHARS,
+      }),
+      exhausted,
+      servedCount: served.length,
+    };
+  };
+
   const runArchitectInspectionLoop = async (args: {
     terminal: "plan" | "review";
     label: string;
@@ -2753,36 +2802,28 @@ export async function runBuildDiscussion(
         // For planning we make one more forced attempt below (bad-turn path).
       }
 
-      const strict = inspectStrictToolActionOutput(text);
-      if (strict.feedback && !strict.valid) {
+      const strict = inspectStrictToolActionBatchOutput(text);
+      if (strict.actions.length === 0) {
+        // No parseable tool action this turn (malformed JSON, or prose with no
+        // action). Treat as a bad inspection turn and nudge — same recovery the
+        // single-action loop used, now phrased for one-or-more actions.
         badTurns += 1;
         await writeEmittedFiles(text); // never lose files emitted in a bad turn
-        emitArchitectLoopDiag(
-          "model_failed",
-          `Architect ${terminal} tool-call rejected: ${strict.feedback}`
-        );
-        messages.push({
-          role: "user",
-          content: `${strict.feedback}\nReply with exactly one valid JSON tool action, or produce your ${terminal} JSON now.`,
-        });
-        if (badTurns >= BAD_LIMIT) forceNow("too many malformed responses");
-        continue;
-      }
-
-      const toolAction = strict.action;
-      if (!toolAction || !isBuildToolAction(toolAction)) {
-        badTurns += 1;
-        await writeEmittedFiles(text);
         if (forced && terminal === "plan") {
           throw new Error(
             "The Architect did not produce a parseable plan after being forced to."
           );
         }
+        const fb = strict.feedback ?? STRICT_RETRY_INSTRUCTION;
+        emitArchitectLoopDiag(
+          "model_failed",
+          `Architect ${terminal} tool-call rejected: ${fb}`
+        );
         messages.push({
           role: "user",
-          content: `${STRICT_RETRY_INSTRUCTION}\nEmit ONE JSON tool action, or produce your ${terminal} JSON now.`,
+          content: `${fb}\nReply with one or more valid JSON tool actions, or produce your ${terminal} JSON now.`,
         });
-        if (badTurns >= BAD_LIMIT) forceNow("no parseable action");
+        if (badTurns >= BAD_LIMIT) forceNow("too many malformed responses");
         continue;
       }
 
@@ -2800,33 +2841,40 @@ export async function runBuildDiscussion(
         continue;
       }
 
-      if (isRedundantToolCall(tracker, toolAction)) {
+      const warning = strict.feedback ? `${strict.feedback}\n\n` : "";
+      const batch = await dispatchArchitectToolBatch(
+        strict.actions,
+        budgets,
+        args.appendContext,
+        tracker
+      );
+      if (batch.servedCount === 0) {
+        // Every requested action was a duplicate or unsafe/skipped — nothing
+        // ran. Count it like a repeated lookup so a stuck loop still forces.
         duplicates += 1;
         emitArchitectLoopDiag(
           "model_failed",
-          `Architect repeated a ${terminal} lookup (${describeToolAction(toolAction)}) — rejected as duplicate`
+          `Architect ${terminal} batch served nothing (all duplicate or skipped)`
         );
-        messages.push({ role: "user", content: DUPLICATE_TOOL_CALL_FEEDBACK });
+        messages.push({
+          role: "user",
+          content: `${warning}${batch.result}\n\n${DUPLICATE_TOOL_CALL_FEEDBACK}`,
+        });
         if (duplicates >= DUP_LIMIT) forceNow("repeated the same lookups");
         continue;
       }
-
-      const warning = strict.feedback && strict.valid ? `${strict.feedback}\n\n` : "";
-      const dispatch = await dispatchArchitectTool(toolAction, budgets, args.appendContext);
-      if (dispatch.exhausted) {
-        exhaustedStreak += 1;
-        messages.push({ role: "user", content: `${warning}${dispatch.result}` });
-        if (exhaustedStreak >= EXHAUSTED_LIMIT) forceNow("inspection budget exhausted");
-        continue;
-      }
-      exhaustedStreak = 0;
       badTurns = 0;
-      recordToolCall(tracker, toolAction, dispatch.deliveredRange);
       const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${terminal} JSON as soon as you have what you need.)`;
       messages.push({
         role: "user",
-        content: `${warning}Tool result:\n${dispatch.result}${budgetNote}`,
+        content: `${warning}${batch.result}${budgetNote}`,
       });
+      if (batch.exhausted) {
+        exhaustedStreak += 1;
+        if (exhaustedStreak >= EXHAUSTED_LIMIT) forceNow("inspection budget exhausted");
+      } else {
+        exhaustedStreak = 0;
+      }
     }
 
     // Hard turn cap — never let a stuck loop kill a working build.
@@ -3283,7 +3331,7 @@ export async function runBuildDiscussion(
       appends: number;
     }): string =>
       [
-        "FILE TOOLS — before your final answer, you may inspect or patch files by responding with ONLY one JSON action:",
+        "FILE TOOLS — before your final answer, you may inspect or patch files by responding with one or more JSON tool actions (and nothing else). The engine runs safe reads/searches together, applies writes in order, and reports which were served or skipped:",
         budget.reads > 0
           ? `- Read whole small files: {"action":"read","paths":["src/file.ts"]} (${budget.reads} left).`
           : "",
@@ -3374,6 +3422,113 @@ export async function runBuildDiscussion(
         };
         const tracker = createToolCallTracker();
         let badToolCalls = 0;
+
+        // Dispatch a batch of worker file actions in one turn: safe reads run
+        // together; writes (patch/append) apply in order; duplicates and
+        // budget-exhausted/unsupported actions are skipped. Per-action side
+        // effects (recordToolCall, patchedFiles/toolIssues, diagnostics) match
+        // the single-action loop exactly; one combined result is returned.
+        const dispatchWorkerToolBatch = async (
+          actions: ArchitectAction[],
+          actor: string
+        ): Promise<{ message: string; servedCount: number }> => {
+          const schedule = scheduleBuildToolActions(actions, {
+            allowSafeRunQueue: false,
+            maxSafeRuns: 0,
+          });
+          const served: Array<{ label: string; result: string }> = [];
+          const skipped = schedule.skipped.map((item) => ({
+            label: item.label,
+            reason: item.reason,
+          }));
+          for (const item of schedule.served) {
+            const action = item.action;
+            if (!isWorkerFileAction(action)) {
+              skipped.push({ label: item.label, reason: "worker file loop cannot run this action" });
+              continue;
+            }
+            if (isRedundantToolCall(tracker, action)) {
+              skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
+              continue;
+            }
+            if (action.action === "read" && budgets.reads > 0) {
+              budgets.reads -= 1;
+              const paths = action.paths.slice(0, 6);
+              const chunks: string[] = [];
+              for (const path of paths) {
+                const content = await readFile(path);
+                chunks.push(`\n--- ${path} ---\n${content ?? "[not found or binary]"}`);
+              }
+              const joined = chunks.join("\n");
+              emitFileToolDiagnostic(
+                `${formatBuildFileToolDiagnostic({ actor, action: "read", paths })} · ${kbOf(joined)} · ${budgets.reads} read(s) left`,
+                worker
+              );
+              recordToolCall(tracker, action);
+              served.push({ label: item.label, result: truncate(joined, 18_000) });
+              continue;
+            }
+            if (action.action === "read_range" && budgets.rangeReads > 0) {
+              budgets.rangeReads -= 1;
+              const out = await readFileRange(action.path, action.startLine, action.lineCount);
+              emitFileToolDiagnostic(
+                `${formatBuildFileToolDiagnostic({ actor, action: "read_range", path: action.path, startLine: action.startLine, lineCount: action.lineCount })} · ${kbOf(out)} · ${budgets.rangeReads} range read(s) left`,
+                worker
+              );
+              recordToolCall(tracker, action, parseDeliveredRange(out));
+              served.push({ label: item.label, result: out });
+              continue;
+            }
+            if (action.action === "search" && budgets.searches > 0) {
+              budgets.searches -= 1;
+              const out = await searchProject(action.query);
+              emitFileToolDiagnostic(
+                `${formatBuildFileToolDiagnostic({ actor, action: "search", query: action.query })} · ${kbOf(out)} · ${budgets.searches} search(es) left`,
+                worker
+              );
+              recordToolCall(tracker, action);
+              served.push({ label: item.label, result: `Search results for "${action.query}":\n${out}` });
+              continue;
+            }
+            if (action.action === "patch" && budgets.patches > 0) {
+              budgets.patches -= 1;
+              const result = await applyPatchAction(action.path, action.ops, task.id);
+              emitFileToolDiagnostic(
+                `${formatBuildFileToolDiagnostic({ actor, action: "patch", path: action.path, summary: result.summary })} · ${budgets.patches} patch(es) left`,
+                worker
+              );
+              patchedFiles.push(...result.written);
+              toolIssues.push(...result.issues);
+              served.push({ label: item.label, result: result.summary });
+              continue;
+            }
+            if (action.action === "append" && budgets.appends > 0) {
+              budgets.appends -= 1;
+              const result = await applyAppendAction(action.path, action.content, !!action.reset, task.id);
+              emitFileToolDiagnostic(
+                `${formatBuildFileToolDiagnostic({ actor, action: "append", path: action.path, summary: result.summary })} · ${budgets.appends} append(s) left`,
+                worker
+              );
+              patchedFiles.push(...result.written);
+              toolIssues.push(...result.issues);
+              served.push({ label: item.label, result: result.summary });
+              continue;
+            }
+            skipped.push({ label: item.label, reason: `no ${action.action} budget left in this task` });
+          }
+          emit({
+            type: "tool_batch",
+            actor,
+            served: served.length,
+            skipped: skipped.length,
+            summary: `${served.length} served, ${skipped.length} skipped`,
+          });
+          return {
+            message: packToolBatchResult({ served, skipped, maxChars: TOOL_BATCH_RESULT_CHARS }),
+            servedCount: served.length,
+          };
+        };
+
         for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
           const compacted = compactToolConversation(workerMessages, 80_000, 8);
           if (compacted.compacted > 0) {
@@ -3396,58 +3551,39 @@ export async function runBuildDiscussion(
             stopWhen: hasCompleteBuildToolAction,
           });
           workerMessages.push({ role: "assistant", content: output });
-          const inspected = inspectStrictToolActionOutput(output);
-          if (inspected.feedback && !inspected.valid) {
-            badToolCalls += 1;
-            const feedback =
-              inspected.feedback ?? "TOOL CALL REJECTED: invalid tool call.";
-            toolIssues.push(feedback);
-            emit({
-              type: "diagnostic",
-              phase: "model_failed",
-              modelId: worker.modelId,
-              modelName: worker.displayName,
-              providerId: parseModelId(worker.modelId).providerId,
-              message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
-            });
-            workerMessages.push({
-              role: "user",
-              content: `${feedback}\nDo not repeat the same malformed response. Reply with exactly one valid JSON tool action, or stop using tools and provide final file output.`,
-            });
-            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
-              toolIssues.push(
-                `Too many malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
-              );
-              break;
+          const inspected = inspectStrictToolActionBatchOutput(output);
+          if (inspected.actions.length === 0) {
+            if (inspected.feedback && !inspected.valid) {
+              badToolCalls += 1;
+              const feedback = inspected.feedback;
+              toolIssues.push(feedback);
+              emit({
+                type: "diagnostic",
+                phase: "model_failed",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
+              });
+              workerMessages.push({
+                role: "user",
+                content: `${feedback}\nDo not repeat the same malformed response. Reply with one or more valid JSON tool actions, or stop using tools and provide final file output.`,
+              });
+              if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+                toolIssues.push(
+                  `Too many malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
+                );
+                break;
+              }
+              continue;
             }
-            continue;
-          }
-          const action = inspected.action ?? parseArchitectAction(output);
-          if (!action || !isWorkerFileAction(action)) break;
-
-          if (isRedundantToolCall(tracker, action)) {
-            badToolCalls += 1;
-            toolIssues.push(DUPLICATE_TOOL_CALL_FEEDBACK);
-            emit({
-              type: "diagnostic",
-              phase: "model_failed",
-              modelId: worker.modelId,
-              modelName: worker.displayName,
-              providerId: parseModelId(worker.modelId).providerId,
-              message: `${worker.displayName} repeated a file inspection call for ${task.id} (${describeToolAction(action)}) — rejected as duplicate`,
-            });
-            workerMessages.push({ role: "user", content: DUPLICATE_TOOL_CALL_FEEDBACK });
-            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
-              toolIssues.push(
-                `Too many repeated or malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
-              );
-              break;
-            }
-            continue;
+            // No tool action this turn — the worker is done with tools; move on
+            // to its final file output below.
+            break;
           }
 
-          const warning =
-            inspected.feedback && inspected.valid ? `${inspected.feedback}\n\n` : "";
+          const actor = `${worker.displayName} ${task.id}`;
+          const warning = inspected.feedback ? `${inspected.feedback}\n\n` : "";
           if (warning) {
             emit({
               type: "diagnostic",
@@ -3459,90 +3595,28 @@ export async function runBuildDiscussion(
             });
           }
 
-          const actor = `${worker.displayName} ${task.id}`;
-          if (action.action === "read" && budgets.reads > 0) {
-            budgets.reads -= 1;
-            const paths = action.paths.slice(0, 6);
-            const chunks: string[] = [];
-            for (const path of paths) {
-              const content = await readFile(path);
-              chunks.push(`\n--- ${path} ---\n${content ?? "[not found or binary]"}`);
+          const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
+          workerMessages.push({ role: "user", content: `${warning}${batch.message}` });
+          if (batch.servedCount === 0) {
+            // Nothing ran (all duplicate, unsupported, or budget-exhausted).
+            // Count it like a malformed turn so a stuck worker still bails out.
+            badToolCalls += 1;
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} tool batch for ${task.id} served nothing (all duplicate, unsupported, or budget-exhausted)`,
+            });
+            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+              toolIssues.push(
+                `Too many repeated or unusable tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
+              );
+              break;
             }
-            const joined = chunks.join("\n");
-            emitFileToolDiagnostic(
-              `${formatBuildFileToolDiagnostic({ actor, action: "read", paths })} · ${kbOf(joined)} · ${budgets.reads} read(s) left`,
-              worker
-            );
-            recordToolCall(tracker, action);
-            workerMessages.push({
-              role: "user",
-              content: `${warning}Tool result:\n${truncate(joined, 18_000)}`,
-            });
-            continue;
           }
-          if (action.action === "read_range" && budgets.rangeReads > 0) {
-            budgets.rangeReads -= 1;
-            const out = await readFileRange(
-              action.path,
-              action.startLine,
-              action.lineCount
-            );
-            emitFileToolDiagnostic(
-              `${formatBuildFileToolDiagnostic({ actor, action: "read_range", path: action.path, startLine: action.startLine, lineCount: action.lineCount })} · ${kbOf(out)} · ${budgets.rangeReads} range read(s) left`,
-              worker
-            );
-            recordToolCall(tracker, action, parseDeliveredRange(out));
-            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${out}` });
-            continue;
-          }
-          if (action.action === "search" && budgets.searches > 0) {
-            budgets.searches -= 1;
-            const out = await searchProject(action.query);
-            emitFileToolDiagnostic(
-              `${formatBuildFileToolDiagnostic({ actor, action: "search", query: action.query })} · ${kbOf(out)} · ${budgets.searches} search(es) left`,
-              worker
-            );
-            recordToolCall(tracker, action);
-            workerMessages.push({
-              role: "user",
-              content: `${warning}Tool result:\nSearch results for "${action.query}":\n${out}`,
-            });
-            continue;
-          }
-          if (action.action === "patch" && budgets.patches > 0) {
-            budgets.patches -= 1;
-            const result = await applyPatchAction(action.path, action.ops, task.id);
-            emitFileToolDiagnostic(
-              `${formatBuildFileToolDiagnostic({ actor, action: "patch", path: action.path, summary: result.summary })} · ${budgets.patches} patch(es) left`,
-              worker
-            );
-            patchedFiles.push(...result.written);
-            toolIssues.push(...result.issues);
-            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${result.summary}` });
-            continue;
-          }
-          if (action.action === "append" && budgets.appends > 0) {
-            budgets.appends -= 1;
-            const result = await applyAppendAction(
-              action.path,
-              action.content,
-              !!action.reset,
-              task.id
-            );
-            emitFileToolDiagnostic(
-              `${formatBuildFileToolDiagnostic({ actor, action: "append", path: action.path, summary: result.summary })} · ${budgets.appends} append(s) left`,
-              worker
-            );
-            patchedFiles.push(...result.written);
-            toolIssues.push(...result.issues);
-            workerMessages.push({ role: "user", content: `${warning}Tool result:\n${result.summary}` });
-            continue;
-          }
-
-          toolIssues.push(
-            `Worker requested unavailable file tool action "${action.action}" after its budget was exhausted.`
-          );
-          break;
+          continue;
         }
 
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {

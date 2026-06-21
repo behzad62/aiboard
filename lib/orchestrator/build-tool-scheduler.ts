@@ -103,12 +103,19 @@ export function scheduleBuildToolActions(
     const scheduleClass = classifyBuildToolActionForScheduling(action);
     const label = labelFor(action);
     if (scheduleClass === "safe_run") {
-      if (!options.allowSafeRunQueue || safeRuns >= options.maxSafeRuns) {
-        skipped.push({ action, label, reason: "safe command queue is not available" });
+      if (options.allowSafeRunQueue && safeRuns < options.maxSafeRuns) {
+        safeRuns += 1;
+        served.push({ action, label, scheduleClass });
         continue;
       }
-      safeRuns += 1;
-      served.push({ action, label, scheduleClass });
+      // Can't batch it (queue disabled, e.g. ask mode, or queue full). Fall back
+      // to single-step: serve it alone so it still runs through the normal
+      // (approval-gated) command path; skip it only if other actions already ran.
+      if (served.length > 0) {
+        skipped.push({ action, label, reason: "command must run alone — not batched here" });
+        continue;
+      }
+      served.push({ action, label, scheduleClass: "exclusive" });
       continue;
     }
     if (scheduleClass === "queued_mutation") {
