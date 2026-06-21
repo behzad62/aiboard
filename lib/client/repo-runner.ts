@@ -25,15 +25,26 @@ const MAX_BRANCH_SLUG_LEN = 40;
  * `isValidGitRefName` — so the result is GUARANTEED valid at runtime, not only
  * by construction. Pure (no runner deps) so the test can import it directly.
  */
-export function branchNameForTopic(topic: string): string {
-  const slug = (topic || "")
+export function branchNameForTopic(topic: string, issueNumber?: number | null): string {
+  const lowered = (topic || "").toLowerCase();
+  const featureSlug =
+    /\bgames?\b/.test(lowered) && /\bchess\b/.test(lowered)
+      ? "games-chess"
+      : "";
+  const rawSlug = featureSlug || lowered;
+  const slug = rawSlug
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, MAX_BRANCH_SLUG_LEN)
     .replace(/-+$/g, "");
-  const name = slug ? `codex/${slug}` : "codex/build";
+  const prefix =
+    typeof issueNumber === "number" && Number.isInteger(issueNumber) && issueNumber > 0
+      ? `issue-${issueNumber}-`
+      : "";
+  const finalSlug = `${prefix}${slug || "build"}`.slice(0, MAX_BRANCH_SLUG_LEN).replace(/-+$/g, "");
+  const name = `codex/${finalSlug || "build"}`;
   // Defensive: enforce the invariant rather than merely asserting it. If the
   // generated name unexpectedly fails validation, fall back to a known-good one.
   return isValidGitRefName(name) ? name : "codex/build";
@@ -364,6 +375,158 @@ export interface RepoIssue {
   body: string;
   url: string;
   comments: Array<{ author: string; body: string; createdAt: string }>;
+}
+
+export interface RepoIssueListItem {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: string[];
+  updatedAt: string;
+}
+
+export interface RepoIssueListResult {
+  repo: string;
+  issues: RepoIssueListItem[];
+}
+
+function asIssueListItems(value: unknown): RepoIssueListItem[] {
+  return Array.isArray(value)
+    ? value.map((item) => {
+        const v = (item ?? {}) as {
+          number?: unknown;
+          title?: unknown;
+          body?: unknown;
+          url?: unknown;
+          labels?: unknown;
+          updatedAt?: unknown;
+        };
+        return {
+          number: asNumber(v.number),
+          title: typeof v.title === "string" ? v.title : "",
+          body: typeof v.body === "string" ? v.body : "",
+          url: typeof v.url === "string" ? v.url : "",
+          labels: asStringArray(v.labels),
+          updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "",
+        };
+      })
+    : [];
+}
+
+export async function listIssuesViaRunner(
+  config: RunnerConfig,
+  input: { repo: string; labels?: string[]; limit?: number }
+): Promise<RepoIssueListResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/issue-list`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        repo: input.repo,
+        labels: input.labels,
+        limit: input.limit,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner issue list failed (HTTP ${res.status})`);
+  }
+  return {
+    repo: typeof data.repo === "string" ? data.repo : input.repo,
+    issues: asIssueListItems(data.issues),
+  };
+}
+
+export interface RepoMilestoneResult {
+  repo: string;
+  title: string;
+  number: number;
+  url: string;
+  created: boolean;
+}
+
+export async function createMilestoneViaRunner(
+  config: RunnerConfig,
+  input: { repo: string; title: string; description?: string }
+): Promise<RepoMilestoneResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/milestone-create`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        repo: input.repo,
+        title: input.title,
+        description: input.description,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner milestone create failed (HTTP ${res.status})`);
+  }
+  return {
+    repo: typeof data.repo === "string" ? data.repo : input.repo,
+    title: typeof data.title === "string" ? data.title : input.title,
+    number: asNumber(data.number),
+    url: typeof data.url === "string" ? data.url : "",
+    created: !!data.created,
+  };
+}
+
+export interface RepoIssueCreateResult {
+  repo: string;
+  issue: number;
+  title: string;
+  url: string;
+}
+
+export async function createIssueViaRunner(
+  config: RunnerConfig,
+  input: {
+    repo: string;
+    title: string;
+    body: string;
+    milestone?: string;
+    labels?: string[];
+  }
+): Promise<RepoIssueCreateResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/issue-create`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        repo: input.repo,
+        title: input.title,
+        body: input.body,
+        milestone: input.milestone,
+        labels: input.labels,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner issue create failed (HTTP ${res.status})`);
+  }
+  return {
+    repo: typeof data.repo === "string" ? data.repo : input.repo,
+    issue: asNumber(data.issue),
+    title: typeof data.title === "string" ? data.title : input.title,
+    url: typeof data.url === "string" ? data.url : "",
+  };
 }
 
 function asIssueComments(

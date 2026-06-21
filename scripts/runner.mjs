@@ -1119,10 +1119,41 @@ const REMOTE_NAME_RE = /^[A-Za-z0-9._/-]+$/;
 const MAX_PR_BODY_BYTES = 20 * 1024; // 20 KB cap on issue/PR body text.
 // Matches build.ts's REPO_COMMIT_MESSAGE_MAX (the runner can't import it).
 const MAX_PR_TITLE_CHARS = 200;
+const MAX_ISSUE_TITLE_CHARS = 200;
+const MAX_MILESTONE_TITLE_CHARS = 200;
 
 /** Validate an `owner/repo` slug for the gh-backed endpoints. */
 function isValidRepoSlug(repo) {
   return typeof repo === "string" && REPO_SLUG_RE.test(repo.trim());
+}
+
+function cleanLabels(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels
+    .filter((label) => typeof label === "string")
+    .map((label) => label.trim())
+    .filter((label) => label.length > 0 && label.length <= 80)
+    .slice(0, 10);
+}
+
+function validateRepoSlug(repo) {
+  if (!isValidRepoSlug(repo)) {
+    throw new ValidationError(`Invalid repo "${repo}": expected "owner/name" (letters, digits, ".", "_", "-").`);
+  }
+  return repo.trim();
+}
+
+function parseGhJson(stdout, label) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error(`Could not parse GitHub CLI JSON for ${label}.`);
+  }
+}
+
+function parseIssueUrl(url) {
+  const match = /\/issues\/(\d+)(?:\D|$)/.exec(String(url));
+  return match ? Number(match[1]) : 0;
 }
 
 /** Validate a remote name for `git push` (simple safe token, no leading dash). */
@@ -1139,13 +1170,10 @@ function isValidRemoteName(remote) {
  * maps to HTTP 502). Returns { repo, issue, title, body, url, comments }.
  */
 function readIssue({ repo, issue }) {
-  if (!isValidRepoSlug(repo)) {
-    throw new ValidationError(`Invalid repo "${repo}": expected "owner/name" (letters, digits, ".", "_", "-").`);
-  }
+  const slug = validateRepoSlug(repo);
   if (!Number.isInteger(issue) || issue <= 0) {
     throw new ValidationError(`Invalid issue number "${issue}": expected a positive integer.`);
   }
-  const slug = repo.trim();
 
   const result = runGh([
     "issue",
@@ -1183,6 +1211,143 @@ function readIssue({ repo, issue }) {
     body: typeof parsed?.body === "string" ? parsed.body : "",
     url: typeof parsed?.url === "string" ? parsed.url : "",
     comments,
+  };
+}
+
+function listIssues({ repo, labels, limit }) {
+  const slug = validateRepoSlug(repo);
+  const issueLimit = Number.isInteger(limit) ? Math.max(1, Math.min(50, limit)) : 20;
+  const args = [
+    "issue",
+    "list",
+    "--repo",
+    slug,
+    "--state",
+    "open",
+    "--limit",
+    String(issueLimit),
+    "--json",
+    "number,title,body,url,labels,updatedAt",
+  ];
+  for (const label of cleanLabels(labels)) {
+    args.push("--label", label);
+  }
+  const result = runGh(args);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh issue list failed.";
+    throw new Error(`GitHub CLI failed to list issues from ${slug}: ${detail}`);
+  }
+  const parsed = parseGhJson(result.stdout, `issues from ${slug}`);
+  const issues = Array.isArray(parsed)
+    ? parsed.map((item) => ({
+        number: typeof item?.number === "number" ? item.number : 0,
+        title: typeof item?.title === "string" ? item.title : "",
+        body: typeof item?.body === "string" ? item.body : "",
+        url: typeof item?.url === "string" ? item.url : "",
+        updatedAt: typeof item?.updatedAt === "string" ? item.updatedAt : "",
+        labels: Array.isArray(item?.labels)
+          ? item.labels
+              .map((label) => (typeof label?.name === "string" ? label.name : ""))
+              .filter(Boolean)
+          : [],
+      }))
+    : [];
+  return { repo: slug, issues };
+}
+
+function listMilestones(slug) {
+  const result = runGh([
+    "api",
+    `repos/${slug}/milestones`,
+    "-f",
+    "state=all",
+    "-f",
+    "per_page=100",
+  ]);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh api milestones failed.";
+    throw new Error(`GitHub CLI failed to list milestones from ${slug}: ${detail}`);
+  }
+  const parsed = parseGhJson(result.stdout, `milestones from ${slug}`);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function createMilestone({ repo, title, description }) {
+  const slug = validateRepoSlug(repo);
+  const trimmedTitle = typeof title === "string" ? title.trim() : "";
+  if (!trimmedTitle) throw new ValidationError("A milestone title is required.");
+  if (trimmedTitle.length > MAX_MILESTONE_TITLE_CHARS) {
+    throw new ValidationError(
+      `Milestone title too long (${trimmedTitle.length} chars); keep it to ${MAX_MILESTONE_TITLE_CHARS} or fewer.`
+    );
+  }
+  const existing = listMilestones(slug).find(
+    (m) => typeof m?.title === "string" && m.title.toLowerCase() === trimmedTitle.toLowerCase()
+  );
+  if (existing) {
+    return {
+      repo: slug,
+      title: existing.title,
+      number: typeof existing.number === "number" ? existing.number : 0,
+      url: typeof existing.html_url === "string" ? existing.html_url : "",
+      created: false,
+    };
+  }
+  const body = typeof description === "string" ? description : "";
+  const result = runGh([
+    "api",
+    `repos/${slug}/milestones`,
+    "-X",
+    "POST",
+    "-f",
+    `title=${trimmedTitle}`,
+    "-f",
+    `description=${body}`,
+  ]);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh api milestone create failed.";
+    throw new Error(`GitHub CLI failed to create milestone "${trimmedTitle}" in ${slug}: ${detail}`);
+  }
+  const parsed = parseGhJson(result.stdout, `created milestone ${trimmedTitle}`);
+  return {
+    repo: slug,
+    title: typeof parsed?.title === "string" ? parsed.title : trimmedTitle,
+    number: typeof parsed?.number === "number" ? parsed.number : 0,
+    url: typeof parsed?.html_url === "string" ? parsed.html_url : "",
+    created: true,
+  };
+}
+
+function createIssue({ repo, title, body, milestone, labels }) {
+  const slug = validateRepoSlug(repo);
+  const trimmedTitle = typeof title === "string" ? title.trim() : "";
+  if (!trimmedTitle) throw new ValidationError("An issue title is required.");
+  if (trimmedTitle.length > MAX_ISSUE_TITLE_CHARS) {
+    throw new ValidationError(
+      `Issue title too long (${trimmedTitle.length} chars); keep it to ${MAX_ISSUE_TITLE_CHARS} or fewer.`
+    );
+  }
+  const issueBody = typeof body === "string" ? body : "";
+  if (Buffer.byteLength(issueBody, "utf8") > MAX_PR_BODY_BYTES) {
+    throw new ValidationError(`Issue body too large (> ${MAX_PR_BODY_BYTES} bytes); shorten it.`);
+  }
+  const args = ["issue", "create", "--repo", slug, "--title", trimmedTitle, "--body", issueBody];
+  const milestoneTitle = typeof milestone === "string" ? milestone.trim() : "";
+  if (milestoneTitle) args.push("--milestone", milestoneTitle);
+  for (const label of cleanLabels(labels)) {
+    args.push("--label", label);
+  }
+  const result = runGh(args);
+  if (result.exitCode !== 0) {
+    const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh issue create failed.";
+    throw new Error(`GitHub CLI failed to create issue "${trimmedTitle}" in ${slug}: ${detail}`);
+  }
+  const url = result.stdout.trim().split(/\s+/).find((part) => /^https?:\/\//.test(part)) ?? result.stdout.trim();
+  return {
+    repo: slug,
+    issue: parseIssueUrl(url),
+    title: trimmedTitle,
+    url,
   };
 }
 
@@ -1807,6 +1972,89 @@ const server = http.createServer(async (req, res) => {
       const message = err instanceof Error ? err.message : "Commit failed";
       console.log(`[repo/commit:error] ${new Date().toLocaleTimeString()}  ${message}`);
       json(res, 400, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/issue-list") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = listIssues({
+        repo: body?.repo,
+        labels: body?.labels,
+        limit: body?.limit,
+      });
+      console.log(
+        `[repo/issue-list] ${new Date().toLocaleTimeString()}  ${result.repo} (${result.issues.length} issue(s))`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Issue list failed";
+      const status = err instanceof ValidationError ? 400 : 502;
+      console.log(`[repo/issue-list:error] ${new Date().toLocaleTimeString()}  (${status}) ${message}`);
+      json(res, status, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/milestone-create") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = createMilestone({
+        repo: body?.repo,
+        title: body?.title,
+        description: body?.description,
+      });
+      console.log(
+        `[repo/milestone-create] ${new Date().toLocaleTimeString()}  ${result.repo} "${result.title}"${result.created ? "" : " [existing]"}`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Milestone create failed";
+      const status = err instanceof ValidationError ? 400 : 502;
+      console.log(`[repo/milestone-create:error] ${new Date().toLocaleTimeString()}  (${status}) ${message}`);
+      json(res, status, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/issue-create") {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = createIssue({
+        repo: body?.repo,
+        title: body?.title,
+        body: body?.body,
+        milestone: body?.milestone,
+        labels: body?.labels,
+      });
+      console.log(
+        `[repo/issue-create] ${new Date().toLocaleTimeString()}  ${result.repo}#${result.issue || "?"} "${result.title}"`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Issue create failed";
+      const status = err instanceof ValidationError ? 400 : 502;
+      console.log(`[repo/issue-create:error] ${new Date().toLocaleTimeString()}  (${status}) ${message}`);
+      json(res, status, { error: message });
     }
     return;
   }

@@ -328,6 +328,10 @@ function DiscussionPageInner() {
           // across separate events (they land at different times).
           setRepoWorkflow((prev) => ({
             issue: event.issue ?? prev?.issue ?? null,
+            issues: [
+              ...new Set([...(prev?.issues ?? []), ...(event.issues ?? [])]),
+            ],
+            milestone: event.milestone ?? prev?.milestone ?? null,
             pushedBranch: event.pushedBranch ?? prev?.pushedBranch ?? null,
             prUrl: event.prUrl ?? prev?.prUrl ?? null,
           }));

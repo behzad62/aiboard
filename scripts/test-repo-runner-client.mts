@@ -1,7 +1,10 @@
 /** Repo runner client wrappers (run: npx tsx scripts/test-repo-runner-client.mts) */
 import {
+  createIssueViaRunner,
+  createMilestoneViaRunner,
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
+  listIssuesViaRunner,
 } from "../lib/client/repo-runner";
 import type { RunnerConfig } from "../lib/client/runner";
 
@@ -122,6 +125,68 @@ async function main() {
     JSON.parse(String(calls[0]?.init?.body)).staged === true,
     calls[0]?.init?.body
   );
+
+  // 3. GitHub planning wrappers parse payloads and post expected bodies.
+  mockFetch(200, {
+    ok: true,
+    repo: "acme/widget",
+    issues: [
+      {
+        number: 11,
+        title: "Tagged work",
+        body: "body",
+        url: "https://github.com/acme/widget/issues/11",
+        labels: ["aiboard"],
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ],
+  });
+  const issues = await listIssuesViaRunner(config, {
+    repo: "acme/widget",
+    labels: ["aiboard"],
+    limit: 5,
+  });
+  check("issue-list: returns non-null", issues !== null, issues);
+  check("issue-list: issue parsed", issues?.issues[0]?.number === 11, issues);
+  check("issue-list: label parsed", issues?.issues[0]?.labels[0] === "aiboard", issues);
+  check("issue-list: hit endpoint", calls[0]?.url === "http://127.0.0.1:8787/repo/issue-list", calls[0]?.url);
+  check("issue-list: sent labels", JSON.parse(String(calls[0]?.init?.body)).labels[0] === "aiboard", calls[0]?.init?.body);
+
+  mockFetch(200, {
+    ok: true,
+    repo: "acme/widget",
+    title: "Games: Chess",
+    number: 5,
+    url: "https://github.com/acme/widget/milestone/5",
+    created: true,
+  });
+  const milestone = await createMilestoneViaRunner(config, {
+    repo: "acme/widget",
+    title: "Games: Chess",
+    description: "Plan",
+  });
+  check("milestone-create: title parsed", milestone?.title === "Games: Chess", milestone);
+  check("milestone-create: created parsed", milestone?.created === true, milestone);
+  check("milestone-create: hit endpoint", calls[0]?.url === "http://127.0.0.1:8787/repo/milestone-create", calls[0]?.url);
+
+  mockFetch(200, {
+    ok: true,
+    repo: "acme/widget",
+    issue: 12,
+    title: "Add chess board",
+    url: "https://github.com/acme/widget/issues/12",
+  });
+  const createdIssue = await createIssueViaRunner(config, {
+    repo: "acme/widget",
+    title: "Add chess board",
+    body: "Implement it",
+    milestone: "Games: Chess",
+    labels: ["aiboard"],
+  });
+  check("issue-create: issue parsed", createdIssue?.issue === 12, createdIssue);
+  check("issue-create: title parsed", createdIssue?.title === "Add chess board", createdIssue);
+  check("issue-create: hit endpoint", calls[0]?.url === "http://127.0.0.1:8787/repo/issue-create", calls[0]?.url);
+  check("issue-create: sent milestone", JSON.parse(String(calls[0]?.init?.body)).milestone === "Games: Chess", calls[0]?.init?.body);
 
   // 3. HTTP 404 (old runner) → null for both wrappers.
   mockFetch(404, { error: "Not found" });

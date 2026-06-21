@@ -52,8 +52,11 @@ import {
   parseArchitectAction,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
+  buildReviewFixTaskUpdate,
   recordToolCall,
   runBudgetStatus,
+  filterNovelReviewTasks,
+  selectBalancedWorkerIndex,
   summarizeFileChange,
   DUPLICATE_TOOL_CALL_FEEDBACK,
   FORCED_PLAN_INSTRUCTION,
@@ -67,6 +70,9 @@ import {
   type RepoBranchCreateAction,
   type RepoCommitAction,
   type RepoDiffAction,
+  type RepoIssueCreateAction,
+  type RepoIssueListAction,
+  type RepoMilestoneCreateAction,
   type RepoIssueReadAction,
   type RepoPushAction,
   type RepoPrCreateAction,
@@ -85,7 +91,10 @@ import {
   getRepoDiffViaRunner,
   createBranchViaRunner,
   commitViaRunner,
+  createIssueViaRunner,
+  createMilestoneViaRunner,
   readIssueViaRunner,
+  listIssuesViaRunner,
   pushViaRunner,
   createPrViaRunner,
   classifyRepoBranchSafety,
@@ -153,6 +162,7 @@ const WORKER_PATCHES_PER_TASK = 8;
 const WORKER_APPENDS_PER_TASK = 12;
 const WORKER_TOOL_TURNS_PER_TASK = 24;
 const WORKER_BAD_TOOL_CALLS_PER_TASK = 3;
+const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -518,6 +528,7 @@ export async function runBuildDiscussion(
   // the platform is unknown (old runner) — no hint then.
   let shellHint = "";
   let allowAllCommands = discussion.runnerAccess === "full";
+  const shouldRequestRepoMutationApproval = () => !allowAllCommands && !githubWorkflow;
   let totalRuns = 0;
   let totalFetches = 0;
   let mcpToolsDoc = "";
@@ -540,6 +551,8 @@ export async function runBuildDiscussion(
   // GitHub workflow milestones (NRW-008), surfaced in the UI panel + final
   // summary: the imported issue number, the pushed branch, and the opened PR URL.
   let repoIssueNumber: number | null = null;
+  const repoCreatedIssues: Array<{ issue: number; title: string; url: string }> = [];
+  let repoMilestoneTitle: string | null = null;
   let repoPushedBranch: string | null = null;
   let repoPrUrl: string | null = null;
   // Last automated build-check outcome (resolved verify command + passed/failed),
@@ -561,6 +574,14 @@ export async function runBuildDiscussion(
         phase: "initializing",
         message: `Local runner connected (folder "${health.dir}") — the Architect can run commands${allowAllCommands ? "" : " with your approval"}`,
       });
+      if (githubWorkflow && !allowAllCommands) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message:
+            "GitHub workflow requested — typed repo actions can create branches, issues, milestones, commits, pushes, and draft PRs without extra in-app approval prompts; review/merge remains the human gate on GitHub.",
+        });
+      }
       // The runner sees the REAL folder — use it for the tree so the
       // Architect is never blind to files it (or the user) put on disk,
       // even when no File System Access grant is active. Old runners
@@ -919,8 +940,9 @@ export async function runBuildDiscussion(
 
   // ── Typed repo (Git) actions (NRW-004) ────────────────────────────────────
   // These run via the runner's /repo/* endpoints, never `runCommand`. Status
-  // and diff are non-mutating inspection (no approval); branch creation mutates
-  // and requires user approval unless runner access is "full".
+  // and diff are non-mutating inspection (no approval); mutating typed repo
+  // actions prompt in ordinary Ask mode, but auto-run for an explicit GitHub
+  // workflow so PR review/merge is the human gate.
   const repoUnavailable = (): string =>
     "Repo workflow is unavailable: no local runner is connected to a Git repository. Continue without it.";
 
@@ -986,14 +1008,15 @@ export async function runBuildDiscussion(
 
   /**
    * Create a branch via the typed runner endpoint. MUTATING — requires user
-   * approval unless runner access is "full". Never uses runCommand/executeRun.
+   * approval unless runner access is "full" or this is an explicit GitHub
+   * workflow. Never uses runCommand/executeRun.
    */
   const executeRepoBranchCreate = async (
     action: RepoBranchCreateAction
   ): Promise<string> => {
     if (!runner || !repoIsGit) return repoUnavailable();
     const label = `git branch: ${action.name}`;
-    if (!allowAllCommands) {
+    if (shouldRequestRepoMutationApproval()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
         : "deny";
@@ -1058,11 +1081,10 @@ export async function runBuildDiscussion(
   };
 
   /**
-   * Commit changes via the typed runner endpoint. MUTATING and user-approved
-   * (NRW-006): mirrors executeRepoBranchCreate's approval gate, command_run
-   * emits, and post-action repo_status refresh. ONLY available once a safe
-   * feature branch exists (repoCommitWorkflowEnabled); the user sees the changed
-   * files AND the message before approving. Never uses runCommand/executeRun.
+   * Commit changes via the typed runner endpoint. MUTATING; mirrors
+   * executeRepoBranchCreate's approval gate, command_run emits, and post-action
+   * repo_status refresh. ONLY available once a safe feature branch exists
+   * (repoCommitWorkflowEnabled). Never uses runCommand/executeRun.
    */
   const executeRepoCommit = async (
     action: RepoCommitAction
@@ -1114,7 +1136,7 @@ export async function runBuildDiscussion(
     const approvalReason = `Commit message: "${action.message}". Changed files: ${filesPreview}.${
       action.reason ? ` Reason: ${action.reason}` : ""
     }`;
-    if (!allowAllCommands) {
+    if (shouldRequestRepoMutationApproval()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, approvalReason)
         : "deny";
@@ -1180,6 +1202,179 @@ export async function runBuildDiscussion(
       .join(", ")}${result.committedFiles.length > 20 ? ", …" : ""}).`;
   };
 
+  const executeRepoIssueList = async (
+    action: RepoIssueListAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    if (githubCli && (!githubCli.available || !githubCli.authenticated)) {
+      return (
+        "GitHub issue listing is unavailable: the runner's GitHub CLI (`gh`) is " +
+        `${githubCli.available ? "not authenticated" : "not installed"}. Continue without GitHub issue context.`
+      );
+    }
+    let result: Awaited<ReturnType<typeof listIssuesViaRunner>>;
+    try {
+      result = await listIssuesViaRunner(runner, {
+        repo: action.repo,
+        labels: action.labels,
+        limit: action.limit,
+      });
+    } catch (err) {
+      return `Issue listing failed: ${err instanceof Error ? err.message : "runner error"}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    emitFileToolDiagnostic(
+      `Architect repo_issue_list · ${result.repo} · ${result.issues.length} open issue(s)`,
+      architect
+    );
+    if (result.issues.length === 0) {
+      return `Open GitHub issues for ${result.repo}: none found.`;
+    }
+    return [
+      `Open GitHub issues for ${result.repo}:`,
+      ...result.issues.slice(0, 30).map((issue) => {
+        const labels = issue.labels.length ? ` [${issue.labels.join(", ")}]` : "";
+        const body = truncate(issue.body.trim().replace(/\s+/g, " "), 500);
+        return `- #${issue.number}: ${issue.title}${labels}${issue.url ? ` (${issue.url})` : ""}${body ? `\n  ${body}` : ""}`;
+      }),
+    ].join("\n");
+  };
+
+  const executeRepoMilestoneCreate = async (
+    action: RepoMilestoneCreateAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    if (githubCli && (!githubCli.available || !githubCli.authenticated)) {
+      return (
+        "GitHub milestone creation is unavailable: the runner's GitHub CLI (`gh`) is " +
+        `${githubCli.available ? "not authenticated" : "not installed"}. Continue without creating a milestone.`
+      );
+    }
+    const label = `gh milestone create: ${action.title}`;
+    if (shouldRequestRepoMutationApproval()) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED creating milestone "${action.title}". Continue without it.`;
+      }
+    }
+    let result: Awaited<ReturnType<typeof createMilestoneViaRunner>>;
+    try {
+      result = await createMilestoneViaRunner(runner, {
+        repo: action.repo,
+        title: action.title,
+        description: action.description,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Milestone creation failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    repoMilestoneTitle = result.title;
+    emit({ type: "repo_workflow", milestone: result.title });
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `${result.created ? "Created" : "Reused"} milestone ${result.title}`,
+    });
+    return `${result.created ? "Created" : "Reused"} GitHub milestone "${result.title}"${
+      result.url ? ` — ${result.url}` : ""
+    }.`;
+  };
+
+  const executeRepoIssueCreate = async (
+    action: RepoIssueCreateAction
+  ): Promise<string> => {
+    if (!runner || !repoIsGit) return repoUnavailable();
+    if (githubCli && (!githubCli.available || !githubCli.authenticated)) {
+      return (
+        "GitHub issue creation is unavailable: the runner's GitHub CLI (`gh`) is " +
+        `${githubCli.available ? "not authenticated" : "not installed"}. Continue without creating the issue.`
+      );
+    }
+    const label = `gh issue create: ${action.title}`;
+    if (shouldRequestRepoMutationApproval()) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED creating issue "${action.title}". Continue without it.`;
+      }
+    }
+    let result: Awaited<ReturnType<typeof createIssueViaRunner>>;
+    try {
+      result = await createIssueViaRunner(runner, {
+        repo: action.repo,
+        title: action.title,
+        body: action.body,
+        milestone: action.milestone,
+        labels: action.labels,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Issue creation failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    if (result.issue > 0) {
+      repoCreatedIssues.push({
+        issue: result.issue,
+        title: result.title,
+        url: result.url,
+      });
+      if (repoIssueNumber == null) repoIssueNumber = result.issue;
+      emit({
+        type: "repo_workflow",
+        issue: repoIssueNumber,
+        issues: repoCreatedIssues.map((item) => item.issue),
+      });
+    }
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: `Created issue #${result.issue || "?"} ${result.title}`,
+    });
+    return `Created GitHub issue ${result.issue ? `#${result.issue}` : ""} "${result.title}"${
+      result.url ? ` — ${result.url}` : ""
+    }.`;
+  };
+
   /**
    * Import a GitHub issue via the gh-backed runner endpoint (NRW-008).
    * NON-MUTATING — no approval gate. Returns bounded issue context (title +
@@ -1240,14 +1435,14 @@ export async function runBuildDiscussion(
   /**
    * Push a branch to the remote via the typed runner endpoint (NRW-008).
    * MUTATES external state — requires user approval unless runner access is
-   * "full". Mirrors executeRepoBranchCreate's approval gate / command_run emits.
-   * Denial or failure → graceful message, continue.
+   * "full" or this is an explicit GitHub workflow. Mirrors
+   * executeRepoBranchCreate's approval gate / command_run emits.
    */
   const executeRepoPush = async (action: RepoPushAction): Promise<string> => {
     if (!runner || !repoIsGit) return repoUnavailable();
     const remote = action.remote ?? "origin";
     const label = `git push: ${remote} ${action.branch}`;
-    if (!allowAllCommands) {
+    if (shouldRequestRepoMutationApproval()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
         : "deny";
@@ -1301,9 +1496,10 @@ export async function runBuildDiscussion(
   /**
    * Open a (draft, by default) pull request via the gh-backed runner endpoint
    * (NRW-008). MUTATES external state — requires user approval unless runner
-   * access is "full". PRECONDITION: a commit landed this run OR a clean branch
-   * ahead of its upstream. When gh is unavailable/unauthenticated, returns a
-   * clear message and continues WITHOUT creating a PR. Denial/failure → graceful.
+   * access is "full" or this is an explicit GitHub workflow. PRECONDITION: a
+   * commit landed this run OR a clean branch ahead of its upstream. When gh is
+   * unavailable/unauthenticated, returns a clear message and continues WITHOUT
+   * creating a PR. Denial/failure → graceful.
    */
   const executeRepoPrCreate = async (
     action: RepoPrCreateAction
@@ -1341,7 +1537,7 @@ export async function runBuildDiscussion(
     const approvalReason = `Open ${draft ? "a DRAFT " : "a "}pull request titled "${action.title}"${
       action.base ? ` into ${action.base}` : ""
     }.${action.reason ? ` Reason: ${action.reason}` : ""}`;
-    if (!allowAllCommands) {
+    if (shouldRequestRepoMutationApproval()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, approvalReason)
         : "deny";
@@ -2288,6 +2484,15 @@ export async function runBuildDiscussion(
     if (action.action === "repo_commit") {
       return { result: await executeRepoCommit(action), exhausted: false };
     }
+    if (action.action === "repo_issue_list") {
+      return { result: await executeRepoIssueList(action), exhausted: false };
+    }
+    if (action.action === "repo_milestone_create") {
+      return { result: await executeRepoMilestoneCreate(action), exhausted: false };
+    }
+    if (action.action === "repo_issue_create") {
+      return { result: await executeRepoIssueCreate(action), exhausted: false };
+    }
     if (action.action === "repo_issue_read") {
       return { result: await executeRepoIssueRead(action), exhausted: false };
     }
@@ -2593,6 +2798,9 @@ export async function runBuildDiscussion(
   // Persists across batches and waves so small (even size-1) batches still
   // spread work over all active workers instead of piling onto the top rank.
   let assignCursor = 0;
+  const workerAssignmentCounts = new Map<number, number>(
+    workers.map((_, index) => [index, 0])
+  );
   // Mechanical build/check backstop: a project-appropriate command run after
   // each wave (when a runner is connected) so broken code is caught by the
   // compiler in ANY language, not only by model review. The
@@ -2613,9 +2821,10 @@ export async function runBuildDiscussion(
   // Before any worker writes files, make sure repo workflow won't accidentally
   // land commit-capable changes on the default / main / master branch. We
   // re-read status (it may have changed during planning), classify it, and —
-  // when a feature branch is required — establish one through the SAME
-  // approval-gated path executeRepoBranchCreate uses. Denial or failure simply
-  // disables commit/PR workflow for this run; ordinary file writes continue.
+  // when a feature branch is required — establish one through the same typed
+  // repo path executeRepoBranchCreate uses. Denial or failure in ordinary Ask
+  // mode simply disables commit/PR workflow for this run; ordinary file writes
+  // continue.
   if (runner && repoIsGit) {
     const status = await getRepoStatusViaRunner(runner).catch(() => null);
     if (status) {
@@ -2643,11 +2852,11 @@ export async function runBuildDiscussion(
       });
     } else if (decision.needsBranch) {
       // On default / main / master (or detached): establish a safe feature
-      // branch via the approval-gated runner path before any worker writes.
-      const name = branchNameForTopic(discussion.topic);
+      // branch via the typed runner path before any worker writes.
+      const name = branchNameForTopic(discussion.topic, repoIssueNumber);
       const label = `git branch: ${name}`;
       let proceed = true;
-      if (!allowAllCommands) {
+      if (shouldRequestRepoMutationApproval()) {
         const approval = hooks?.requestCommandApproval
           ? await hooks.requestCommandApproval(
               label,
@@ -3075,6 +3284,35 @@ export async function runBuildDiscussion(
           break;
         }
 
+        for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
+          const preview = extractArtifacts(output);
+          if (
+            patchedFiles.length > 0 ||
+            preview.files.length > 0 ||
+            preview.edits.length > 0 ||
+            preview.truncatedPaths.length > 0 ||
+            toolIssues.length === 0
+          ) {
+            break;
+          }
+          const instruction =
+            "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. If creating a new file, emit a fenced file block with path=...";
+          workerMessages.push({ role: "user", content: instruction });
+          emit({
+            type: "diagnostic",
+            phase: "model_streaming",
+            modelId: worker.modelId,
+            modelName: worker.displayName,
+            providerId: parseModelId(worker.modelId).providerId,
+            message: `${worker.displayName} hit repeated tool issues for ${task.id}; requesting final file output without more tools`,
+          });
+          output = await streamConversation(worker, workerMessages, {
+            maxTokens: workerMaxTokens,
+            label: `${worker.displayName} finalizing ${task.id}: ${task.title}`,
+          });
+          workerMessages.push({ role: "assistant", content: output });
+        }
+
         const artifactResult = await writeEmittedFiles(output, task.id);
         const files = [...new Set([...patchedFiles, ...artifactResult.written])];
         const issues = [...toolIssues, ...artifactResult.issues];
@@ -3246,9 +3484,10 @@ export async function runBuildDiscussion(
       // iterations — shouldn't happen since claimed resets, but guard anyway).
       if (batch.length === 0) break;
 
-      // Assign a worker to each task: a still-active pin (fix tasks) wins, then
-      // the Architect's assignTo, then auto-assignment spreading work across
-      // active workers best-first so reliable models get the earlier tasks.
+      // Assign a worker to each task: a still-active in-progress pin wins, then
+      // the Architect's assignTo is treated as a preference, then auto-assignment
+      // spreads work across active workers best-first. This prevents one worker
+      // from monopolizing the run when multiple selected workers are available.
       const ranked = rankedActiveWorkers();
       for (const task of batch) {
         const pinned =
@@ -3265,8 +3504,22 @@ export async function runBuildDiscussion(
             message: `Requested worker "${task.assignTo}" for ${task.id} is unknown or benched — auto-assigning instead`,
           });
         }
-        task.workerIndex =
-          pinned ?? requestedActive ?? ranked[assignCursor++ % ranked.length].index;
+        const selected = selectBalancedWorkerIndex({
+          activeWorkerIndexes: ranked.map((worker) => worker.index),
+          assignmentCounts: workerAssignmentCounts,
+          assignCursor,
+          pinnedIndex: pinned,
+          requestedIndex: requestedActive,
+        });
+        assignCursor = selected.assignCursor;
+        task.workerIndex = selected.index;
+        if (task.assignTo && requestedActive != null && !selected.honoredRequest && pinned == null) {
+          emit({
+            type: "diagnostic",
+            phase: "round_preparing",
+            message: `Balanced ${task.id} away from requested worker "${task.assignTo}" to ${scoreboard[selected.index].name} so selected workers share the build.`,
+          });
+        }
       }
 
       workerCalls += batch.length;
@@ -3391,15 +3644,16 @@ export async function runBuildDiscussion(
           verdictStat.fixes += 1;
           verdictStat.wFixes += difficultyWeight(task);
         }
-        task.status = "fixing";
-        // The fixing worker must see the files it wrote last time.
         const prior = executed.find((e) => e.task.id === task.id);
-        if (prior && prior.files.length > 0) {
-          task.contextFiles = [
-            ...new Set([...task.contextFiles, ...prior.files]),
-          ].slice(0, MAX_CONTEXT_FILES);
-        }
-        task.instructions = `${task.instructions}\n\nFIX (from the Architect's review): ${result.fixInstructions ?? "address the review feedback"}`;
+        Object.assign(
+          task,
+          buildReviewFixTaskUpdate(
+            task,
+            result.fixInstructions,
+            prior?.files ?? [],
+            MAX_CONTEXT_FILES
+          )
+        );
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
       }
     }
@@ -3424,7 +3678,18 @@ export async function runBuildDiscussion(
       message: `Worker scoreboard after wave ${cycle}:\n${scoreboardText()}`,
     });
 
-    for (const raw of (action.newTasks ?? []).slice(0, limits.tasksPerWave)) {
+    const novelTasks = filterNovelReviewTasks(
+      tasks,
+      (action.newTasks ?? []).slice(0, limits.tasksPerWave)
+    );
+    for (const skipped of novelTasks.skipped) {
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Skipped duplicate new task "${skipped.id}" from review — ${skipped.id} already exists (${skipped.existingStatus}: ${skipped.title}). Use a new id for replacement work or mark the existing task as fix.`,
+      });
+    }
+    for (const raw of novelTasks.accepted) {
       const task = toTask(raw, tasks.length);
       tasks.push(task);
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
@@ -3532,6 +3797,8 @@ export async function runBuildDiscussion(
       branch: repoActiveBranch,
       commits: repoCommits,
       issueNumber: repoIssueNumber,
+      issueNumbers: repoCreatedIssues.map((item) => item.issue),
+      milestoneTitle: repoMilestoneTitle,
       pushedBranch: repoPushedBranch,
       prUrl: repoPrUrl,
       verification: repoVerification,
@@ -3560,7 +3827,14 @@ export async function runBuildDiscussion(
     repoCommits.length > 0
       ? `, ${repoCommits.length} commit${repoCommits.length === 1 ? "" : "s"} (latest ${repoCommits[repoCommits.length - 1].hash})`
       : "";
-  const ghNote = `${repoIssueNumber != null ? `, issue #${repoIssueNumber}` : ""}${
+  const createdIssueNote =
+    repoCreatedIssues.length > 0
+      ? `, ${repoCreatedIssues.length} GitHub issue${repoCreatedIssues.length === 1 ? "" : "s"}`
+      : repoIssueNumber != null
+        ? `, issue #${repoIssueNumber}`
+        : "";
+  const milestoneNote = repoMilestoneTitle ? `, milestone "${repoMilestoneTitle}"` : "";
+  const ghNote = `${milestoneNote}${createdIssueNote}${
     repoPushedBranch ? `, pushed ${repoPushedBranch}` : ""
   }${repoPrUrl ? `, PR ${repoPrUrl}` : ""}`;
   const repoWorkflowNote =

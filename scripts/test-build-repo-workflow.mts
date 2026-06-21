@@ -24,6 +24,32 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 // ── 1. The three new actions parse with correct fields ──────────────────────
 const parseCases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>) => boolean]> = [
   [
+    "repo_issue_list parses repo + labels + limit",
+    '{"action":"repo_issue_list","repo":"owner/repo","labels":["bug","aiboard"],"limit":12,"reason":"choose work"}',
+    (a) =>
+      a?.action === "repo_issue_list" &&
+      (a as { repo: string }).repo === "owner/repo" &&
+      (a as { labels?: string[] }).labels?.length === 2 &&
+      (a as { limit?: number }).limit === 12,
+  ],
+  [
+    "repo_milestone_create parses title and description",
+    '{"action":"repo_milestone_create","repo":"owner/repo","title":"Games: Chess","description":"Track chess delivery","reason":"plan"}',
+    (a) =>
+      a?.action === "repo_milestone_create" &&
+      (a as { repo: string }).repo === "owner/repo" &&
+      (a as { title: string }).title === "Games: Chess",
+  ],
+  [
+    "repo_issue_create parses milestone + labels",
+    '{"action":"repo_issue_create","repo":"owner/repo","title":"Add chess board","body":"Implement board","milestone":"Games: Chess","labels":["aiboard"],"reason":"task"}',
+    (a) =>
+      a?.action === "repo_issue_create" &&
+      (a as { repo: string }).repo === "owner/repo" &&
+      (a as { milestone?: string }).milestone === "Games: Chess" &&
+      (a as { labels?: string[] }).labels?.[0] === "aiboard",
+  ],
+  [
     "repo_issue_read parses repo + issue + reason",
     '{"action":"repo_issue_read","repo":"owner/repo","issue":42,"reason":"context"}',
     (a) =>
@@ -78,6 +104,10 @@ const parseCases: Array<[string, string, (a: ReturnType<typeof parseArchitectAct
 
 // ── 2. Malformed input is rejected (null) ───────────────────────────────────
 const rejectCases: Array<[string, string]> = [
+  ["repo_issue_list rejects bad repo slug", '{"action":"repo_issue_list","repo":"not-a-slug"}'],
+  ["repo_milestone_create rejects empty title", '{"action":"repo_milestone_create","repo":"o/r","title":"   "}'],
+  ["repo_issue_create rejects empty title", '{"action":"repo_issue_create","repo":"o/r","title":"   ","body":"x"}'],
+  ["repo_issue_create rejects bad repo slug", '{"action":"repo_issue_create","repo":"bad","title":"X","body":"y"}'],
   ["repo_issue_read rejects bad repo slug", '{"action":"repo_issue_read","repo":"not-a-slug","issue":1}'],
   ["repo_issue_read rejects multi-slash slug", '{"action":"repo_issue_read","repo":"a/b/c","issue":1}'],
   ["repo_issue_read rejects zero issue", '{"action":"repo_issue_read","repo":"o/r","issue":0}'],
@@ -144,8 +174,11 @@ const withMissingGh = promptWith(ghMissing);
 const withoutGhArg = promptWith(undefined);
 
 check(
-  "repoToolDoc advertises issue/push/PR when gh available+authenticated",
-  withGh.includes('"action":"repo_issue_read"') &&
+  "repoToolDoc advertises issue planning/push/PR when gh available+authenticated",
+  withGh.includes('"action":"repo_issue_list"') &&
+    withGh.includes('"action":"repo_milestone_create"') &&
+    withGh.includes('"action":"repo_issue_create"') &&
+    withGh.includes('"action":"repo_issue_read"') &&
     withGh.includes('"action":"repo_push"') &&
     withGh.includes('"action":"repo_pr_create"')
 );
@@ -155,18 +188,24 @@ check(
 );
 check(
   "repoToolDoc hides issue/push/PR when gh unauthenticated",
-  !withUnauthedGh.includes('"action":"repo_issue_read"') &&
+  !withUnauthedGh.includes('"action":"repo_issue_list"') &&
+    !withUnauthedGh.includes('"action":"repo_issue_create"') &&
+    !withUnauthedGh.includes('"action":"repo_issue_read"') &&
     !withUnauthedGh.includes('"action":"repo_push"') &&
     !withUnauthedGh.includes('"action":"repo_pr_create"')
 );
 check(
   "repoToolDoc hides issue/push/PR when gh not installed",
-  !withMissingGh.includes('"action":"repo_issue_read"') &&
+  !withMissingGh.includes('"action":"repo_issue_list"') &&
+    !withMissingGh.includes('"action":"repo_issue_create"') &&
+    !withMissingGh.includes('"action":"repo_issue_read"') &&
     !withMissingGh.includes('"action":"repo_pr_create"')
 );
 check(
   "repoToolDoc hides issue/push/PR when githubCli arg omitted",
-  !withoutGhArg.includes('"action":"repo_issue_read"') &&
+  !withoutGhArg.includes('"action":"repo_issue_list"') &&
+    !withoutGhArg.includes('"action":"repo_issue_create"') &&
+    !withoutGhArg.includes('"action":"repo_issue_read"') &&
     !withoutGhArg.includes('"action":"repo_pr_create"')
 );
 check(
@@ -186,7 +225,9 @@ const reviewWithGh = buildArchitectReviewPrompt({
 });
 check(
   "review prompt advertises issue/push/PR when gh authed",
-  reviewWithGh.includes('"action":"repo_issue_read"') &&
+  reviewWithGh.includes('"action":"repo_issue_list"') &&
+    reviewWithGh.includes('"action":"repo_issue_create"') &&
+    reviewWithGh.includes('"action":"repo_issue_read"') &&
     reviewWithGh.includes('"action":"repo_pr_create"')
 );
 
@@ -218,7 +259,22 @@ check(
 );
 check(
   "typed endpoints available: workflow doc references the typed actions",
-  typedGithubPrompt.includes("repo_pr_create") && typedGithubPrompt.includes("repo_push")
+  typedGithubPrompt.includes("repo_issue_create") &&
+    typedGithubPrompt.includes("repo_milestone_create") &&
+    typedGithubPrompt.includes("repo_pr_create") &&
+    typedGithubPrompt.includes("repo_push")
+);
+check(
+  "typed endpoints available: prompt keeps human gate at PR review/merge",
+  typedGithubPrompt.includes("without an extra in-app approval prompt") &&
+    typedGithubPrompt.includes("PR review/merge is the human gate") &&
+    !typedGithubPrompt.includes("require the user's in-app approval"),
+  typedGithubPrompt
+);
+check(
+  "typed endpoints available: prompt uses the correct #aiboard marker",
+  typedGithubPrompt.includes("#aiboard") && !typedGithubPrompt.includes("#aoboard"),
+  typedGithubPrompt
 );
 
 // When typed endpoints are NOT available but the GitHub workflow IS requested,

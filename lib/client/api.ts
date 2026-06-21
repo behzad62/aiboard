@@ -141,6 +141,25 @@ export interface DiscussionConfigInput {
   styleNote?: string | null;
 }
 
+export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
+  return mode === "build" ? 1 : 2;
+}
+
+export function hasEnoughParticipatingModels(
+  mode: DiscussionMode,
+  modelCount: number
+): boolean {
+  return modelCount >= minimumParticipatingModelsForMode(mode);
+}
+
+export function participatingModelRequirementMessage(
+  mode: DiscussionMode
+): string {
+  const min = minimumParticipatingModelsForMode(mode);
+  const label = min === 1 ? "one" : min === 2 ? "two" : String(min);
+  return `Select at least ${label} participating model${min === 1 ? "" : "s"}.`;
+}
+
 /**
  * Update the configuration used by the next Resume/follow-up pass. This keeps
  * the transcript and produced files intact; it only changes future model calls.
@@ -159,8 +178,8 @@ export function updateDiscussionConfig(
   const modelIds = Array.from(
     new Set(input.modelIds.map((m) => m.trim()).filter(Boolean))
   );
-  if (modelIds.length < 2) {
-    throw new Error("Select at least two participating models.");
+  if (!hasEnoughParticipatingModels(discussion.mode, modelIds.length)) {
+    throw new Error(participatingModelRequirementMessage(discussion.mode));
   }
   const judgeModelId =
     input.judgeModelId && input.judgeModelId.trim()
@@ -245,8 +264,8 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
   if (input.topic.trim().length < 10) {
     throw new Error("Give the discussion a clearer topic (at least 10 characters).");
   }
-  if (input.modelIds.length < 2) {
-    throw new Error("Select at least two models.");
+  if (!hasEnoughParticipatingModels(input.mode, input.modelIds.length)) {
+    throw new Error(participatingModelRequirementMessage(input.mode));
   }
   const settings = getUserSettings();
   const now = new Date().toISOString();

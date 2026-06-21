@@ -37,6 +37,8 @@ export type RepoDiffView = Extract<
  */
 export type RepoWorkflowView = {
   issue: number | null;
+  issues: number[];
+  milestone: string | null;
   pushedBranch: string | null;
   prUrl: string | null;
 };
@@ -218,19 +220,29 @@ export function RepoWorkflowPanel({
       )}
 
       {workflow &&
-        (workflow.issue != null || workflow.pushedBranch || workflow.prUrl) && (
+        (workflow.issue != null ||
+          workflow.issues.length > 0 ||
+          workflow.milestone ||
+          workflow.pushedBranch ||
+          workflow.prUrl) && (
           <div className="mt-4">
             <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
               <GitPullRequestArrow className="h-4 w-4 text-primary" />
               GitHub workflow
             </p>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              {workflow.issue != null && (
+              {workflow.milestone && (
                 <Badge variant="secondary" className="gap-1">
                   <CircleDot className="h-3.5 w-3.5" />
-                  <span className="font-mono">issue #{workflow.issue}</span>
+                  <span className="font-mono">milestone {workflow.milestone}</span>
                 </Badge>
               )}
+              {(workflow.issues.length > 0 ? workflow.issues : workflow.issue != null ? [workflow.issue] : []).map((issue) => (
+                <Badge key={issue} variant="secondary" className="gap-1">
+                  <CircleDot className="h-3.5 w-3.5" />
+                  <span className="font-mono">issue #{issue}</span>
+                </Badge>
+              ))}
               {workflow.pushedBranch && (
                 <Badge variant="secondary" className="gap-1">
                   <Cloud className="h-3.5 w-3.5" />

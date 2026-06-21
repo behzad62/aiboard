@@ -140,6 +140,8 @@ export type OrchestratorEvent =
   | {
       type: "repo_workflow";
       issue?: number | null;
+      issues?: number[] | null;
+      milestone?: string | null;
       pushedBranch?: string | null;
       prUrl?: string | null;
     }

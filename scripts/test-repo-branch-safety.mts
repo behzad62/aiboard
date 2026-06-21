@@ -170,6 +170,17 @@ for (const [name, input] of fallbackInputs) {
   if (!ok) failed++;
 }
 
+const gamesBranch = branchNameForTopic(
+  "I want you to add a Games tab to this app. For start I want you to create a chess game."
+);
+const gamesBranchOk = gamesBranch === "codex/games-chess";
+console.log(
+  `${gamesBranchOk ? "PASS" : "FAIL"} â€” Games chess prompt gets a concise feature branch name${
+    gamesBranchOk ? "" : ` â†’ got ${JSON.stringify(gamesBranch)}`
+  }`
+);
+if (!gamesBranchOk) failed++;
+
 const commitWorkflowCases: Array<
   [
     string,

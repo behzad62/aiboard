@@ -38,7 +38,13 @@ import {
   estimateDiscussionCostUsd,
   getModeInfo,
 } from "@/lib/orchestrator/config";
-import { createDiscussion, ensureReady, loadDashboard } from "@/lib/client/api";
+import {
+  createDiscussion,
+  ensureReady,
+  hasEnoughParticipatingModels,
+  loadDashboard,
+  participatingModelRequirementMessage,
+} from "@/lib/client/api";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
 import { ProjectAccessSetup } from "@/components/ProjectAccessSetup";
 import type { RunnerSelection } from "@/components/RunnerSetup";
@@ -176,14 +182,17 @@ export default function DashboardPage() {
   const modeCards: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
   const totalEnabledModels = data?.enabledModels.length ?? 0;
   const hasTopic = topic.trim().length > 0;
-  const hasEnoughModels = compatibleSelected.length >= 2;
+  const hasEnoughModels = hasEnoughParticipatingModels(
+    mode,
+    compatibleSelected.length
+  );
   const hasJudge = Boolean(judgeModelId || compatibleSelected[0]);
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =
     totalEnabledModels === 0
       ? "Add API keys and enable providers in Settings."
       : !hasEnoughModels
-        ? "Select at least two models."
+        ? participatingModelRequirementMessage(mode)
         : !hasJudge
           ? "Choose a judge model."
           : !hasTopic

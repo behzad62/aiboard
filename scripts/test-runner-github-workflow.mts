@@ -137,6 +137,37 @@ if (args[0] === "issue" && args[1] === "view") {
   }));
   process.exit(0);
 }
+if (args[0] === "issue" && args[1] === "list") {
+  out(JSON.stringify([
+    {
+      number: 11,
+      title: "Tagged work",
+      body: "Please handle #aiboard chess setup.",
+      url: "https://github.com/acme/widget/issues/11",
+      updatedAt: "2026-01-03T00:00:00Z",
+      labels: [{ name: "aiboard" }],
+    },
+  ]));
+  process.exit(0);
+}
+if (args[0] === "api" && /\\/milestones$/.test(args[1]) && !args.includes("-X")) {
+  out(JSON.stringify([]));
+  process.exit(0);
+}
+if (args[0] === "api" && /\\/milestones$/.test(args[1]) && args.includes("-X") && args.includes("POST")) {
+  out(JSON.stringify({
+    title: "Games: Chess",
+    number: 5,
+    html_url: "https://github.com/acme/widget/milestone/5",
+  }));
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "create") {
+  const logPath = process.env.AIBOARD_GH_LOG;
+  if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
+  out("https://github.com/acme/widget/issues/12\\n");
+  process.exit(0);
+}
 if (args[0] === "pr" && args[1] === "create") {
   const logPath = process.env.AIBOARD_GH_LOG;
   if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
@@ -312,6 +343,67 @@ try {
     later(() => runner.child.kill());
     const { res, data } = await post(runner.port, runner.token, "/repo/issue-read", { repo: "acme/widget", issue: 1 });
     check("issue-read(absent): HTTP 502 (gh failure, not 200/crash)", res.status === 502 && !!data.error, data);
+    runner.child.kill();
+  }
+
+  // ── 4c. issue list / milestone create / issue create use gh with explicit argv ─
+  {
+    const dir = initRepo("adb-gh-planning-");
+    later(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "adb-gh-planning-log-"));
+    later(() => fs.rmSync(logDir, { recursive: true, force: true }));
+    const logPath = path.join(logDir, "gh-argv.log");
+    const fake = writeFakeGh("adb-gh-planning-fake-", FAKE_GH_AUTHED);
+    const runner = await startRunner(dir, { ghCmd: [process.execPath, fake], ghLogPath: logPath });
+    later(() => runner.child.kill());
+
+    const listed = await post(runner.port, runner.token, "/repo/issue-list", {
+      repo: "acme/widget",
+      labels: ["aiboard"],
+      limit: 5,
+    });
+    check("issue-list: HTTP 200", listed.res.status === 200, listed.data);
+    check("issue-list: returns open issue", listed.data.issues?.[0]?.number === 11, listed.data);
+    check("issue-list: maps label names", listed.data.issues?.[0]?.labels?.[0] === "aiboard", listed.data);
+
+    const milestone = await post(runner.port, runner.token, "/repo/milestone-create", {
+      repo: "acme/widget",
+      title: "Games: Chess",
+      description: "Plan chess delivery",
+    });
+    check("milestone-create: HTTP 200", milestone.res.status === 200, milestone.data);
+    check("milestone-create: returns milestone number", milestone.data.number === 5, milestone.data);
+    check("milestone-create: created true", milestone.data.created === true, milestone.data);
+
+    const issue = await post(runner.port, runner.token, "/repo/issue-create", {
+      repo: "acme/widget",
+      title: "Add chess board",
+      body: "Implement the board",
+      milestone: "Games: Chess",
+      labels: ["aiboard"],
+    });
+    check("issue-create: HTTP 200", issue.res.status === 200, issue.data);
+    check("issue-create: parses issue number from URL", issue.data.issue === 12, issue.data);
+    check("issue-create: echoes title", issue.data.title === "Add chess board", issue.data);
+
+    const logged = fs.readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const issueCreateArgv = logged.find((argv) => argv[0] === "issue" && argv[1] === "create") ?? [];
+    const argAfter = (flag: string) => issueCreateArgv[issueCreateArgv.indexOf(flag) + 1];
+    check("issue-create: argv has --repo", argAfter("--repo") === "acme/widget", issueCreateArgv);
+    check("issue-create: argv has --milestone", argAfter("--milestone") === "Games: Chess", issueCreateArgv);
+    check("issue-create: argv has --label", argAfter("--label") === "aiboard", issueCreateArgv);
+
+    const badMilestone = await post(runner.port, runner.token, "/repo/milestone-create", {
+      repo: "acme/widget",
+      title: " ",
+    });
+    check("milestone-create: rejects empty title (HTTP 400)", badMilestone.res.status === 400 && !!badMilestone.data.error, badMilestone.data);
+    const badIssue = await post(runner.port, runner.token, "/repo/issue-create", {
+      repo: "bad slug",
+      title: "x",
+      body: "",
+    });
+    check("issue-create: rejects bad repo (HTTP 400)", badIssue.res.status === 400 && !!badIssue.data.error, badIssue.data);
     runner.child.kill();
   }
 

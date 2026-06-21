@@ -1,5 +1,9 @@
 /** Build prompt regression checks (run: npx tsx scripts/test-build-prompts.mts) */
-import { buildWorkerTaskPrompt, type BuildTask } from "../lib/orchestrator/build";
+import {
+  buildWorkerTaskPrompt,
+  scoreboardSection,
+  type BuildTask,
+} from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -52,6 +56,13 @@ check(
   "fix prompt no longer has unconditional complete-contents rule",
   !/give the COMPLETE contents of every file you write/i.test(prompt),
   prompt
+);
+
+const scoreboard = scoreboardSection("- claude-opus-4-5: score 3\n- Gemini 3.5 Flash: score 0");
+check(
+  "scoreboard prompt tells Architect assignTo is a sparse preference",
+  /assignTo sparingly/i.test(scoreboard) && /engine balances/i.test(scoreboard),
+  scoreboard
 );
 
 process.exit(failed === 0 ? 0 : 1);

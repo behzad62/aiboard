@@ -28,7 +28,7 @@ export interface BuildTask {
   /** What the Architect expects back (free text, e.g. file paths). */
   expectedOutputs?: string;
   status: BuildTaskStatus;
-  /** Pinned worker index — fix tasks return to the model that did the work. */
+  /** Pinned worker index — in-progress/review bookkeeping for the last worker. */
   workerIndex?: number;
   /**
    * Task ids that must finish before this one starts. Tasks with no pending
@@ -77,6 +77,130 @@ export function decideBuildTaskFailure(
       : `NOTE: a previous attempt produced no usable output (${detail}). Do not retry by emitting one large full-file block. Use read_range/search plus patch for existing files; use append chunks with reset=true to create or replace a large/missing file.`;
 
   return { failCount, status, instructionNote, retryDelayMs };
+}
+
+export interface ReviewTaskFilterResult {
+  accepted: PlanAction["tasks"];
+  skipped: Array<{
+    id: string;
+    title: string;
+    existingStatus: BuildTaskStatus;
+  }>;
+}
+
+export function filterNovelReviewTasks(
+  existingTasks: Pick<BuildTask, "id" | "title" | "status">[],
+  candidates: PlanAction["tasks"]
+): ReviewTaskFilterResult {
+  const existing = new Map(
+    existingTasks.map((task) => [
+      task.id.trim().toLowerCase(),
+      { title: task.title, status: task.status },
+    ])
+  );
+  const accepted: PlanAction["tasks"] = [];
+  const skipped: ReviewTaskFilterResult["skipped"] = [];
+  for (const candidate of candidates) {
+    const id = candidate.id?.trim();
+    const key = id?.toLowerCase();
+    const prior = key ? existing.get(key) : undefined;
+    if (id && prior) {
+      skipped.push({
+        id,
+        title: prior.title,
+        existingStatus: prior.status,
+      });
+      continue;
+    }
+    accepted.push(candidate);
+    if (id && key) {
+      existing.set(key, {
+        title: candidate.title,
+        status: "planned",
+      });
+    }
+  }
+  return { accepted, skipped };
+}
+
+export interface BalancedWorkerSelectionInput {
+  activeWorkerIndexes: number[];
+  assignmentCounts: Map<number, number>;
+  assignCursor: number;
+  pinnedIndex?: number | null;
+  requestedIndex?: number | null;
+}
+
+export interface BalancedWorkerSelectionResult {
+  index: number;
+  assignCursor: number;
+  honoredPinned: boolean;
+  honoredRequest: boolean;
+}
+
+export function selectBalancedWorkerIndex(
+  input: BalancedWorkerSelectionInput
+): BalancedWorkerSelectionResult {
+  const active = input.activeWorkerIndexes;
+  if (active.length === 0) {
+    throw new Error("Cannot assign a build task without an active worker.");
+  }
+  const activeSet = new Set(active);
+  const assign = (
+    index: number,
+    assignCursor: number,
+    honoredPinned: boolean,
+    honoredRequest: boolean
+  ): BalancedWorkerSelectionResult => {
+    input.assignmentCounts.set(index, (input.assignmentCounts.get(index) ?? 0) + 1);
+    return { index, assignCursor, honoredPinned, honoredRequest };
+  };
+
+  if (input.pinnedIndex != null && activeSet.has(input.pinnedIndex)) {
+    return assign(input.pinnedIndex, input.assignCursor, true, false);
+  }
+
+  const minAssigned = Math.min(
+    ...active.map((index) => input.assignmentCounts.get(index) ?? 0)
+  );
+  const requestedCount =
+    input.requestedIndex != null
+      ? input.assignmentCounts.get(input.requestedIndex) ?? 0
+      : Number.POSITIVE_INFINITY;
+  if (
+    input.requestedIndex != null &&
+    activeSet.has(input.requestedIndex) &&
+    requestedCount <= minAssigned
+  ) {
+    return assign(input.requestedIndex, input.assignCursor, false, true);
+  }
+
+  const eligible = active.filter(
+    (index) => (input.assignmentCounts.get(index) ?? 0) === minAssigned
+  );
+  const chosen = eligible[input.assignCursor % eligible.length] ?? active[0];
+  return assign(chosen, input.assignCursor + 1, false, false);
+}
+
+export function buildReviewFixTaskUpdate(
+  task: BuildTask,
+  fixInstructions: string | undefined,
+  priorFiles: string[],
+  maxContextFiles: number
+): BuildTask {
+  const contextFiles = [
+    ...new Set([...task.contextFiles, ...priorFiles]),
+  ].slice(0, maxContextFiles);
+  return {
+    ...task,
+    status: "fixing",
+    workerIndex: undefined,
+    assignTo: undefined,
+    contextFiles,
+    instructions: `${task.instructions}\n\nFIX (from the Architect's review): ${
+      fixInstructions ?? "address the review feedback"
+    }`,
+  };
 }
 
 // ── Architect action protocol ─────────────────────────────────────────────────
@@ -163,7 +287,7 @@ export function detectVerifyCommand(files: string[]): string {
 /** A compact worker-performance line for the prompt scoreboard. */
 export function scoreboardSection(scoreboard?: string): string {
   return scoreboard?.trim()
-    ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts, failures, and output speed relative to the other workers — higher score = more reliable). Assign harder or foundational tasks to higher-scoring workers via each task's "assignTo" (worker display name); benched workers won't be given tasks:\n${scoreboard}`
+    ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts, failures, and output speed relative to the other workers — higher score = more reliable). Use assignTo sparingly as a worker preference only when a task truly needs that model; otherwise omit it so the engine balances work across the selected workers. Benched workers won't be given tasks:\n${scoreboard}`
     : "";
 }
 
@@ -353,6 +477,37 @@ export interface RepoCommitAction {
 
 /** Max length (after trimming) of a `repo_pr_create` title — UI/runner-friendly. */
 export const REPO_PR_TITLE_MAX = 200;
+export const REPO_ISSUE_TITLE_MAX = 200;
+export const REPO_MILESTONE_TITLE_MAX = 200;
+
+/** List open GitHub issues so the Architect can choose tagged work. */
+export interface RepoIssueListAction {
+  action: "repo_issue_list";
+  repo: string;
+  labels?: string[];
+  limit?: number;
+  reason?: string;
+}
+
+/** Create a GitHub milestone for a planned feature/work stream. */
+export interface RepoMilestoneCreateAction {
+  action: "repo_milestone_create";
+  repo: string;
+  title: string;
+  description?: string;
+  reason?: string;
+}
+
+/** Create a GitHub issue from an Architect task. */
+export interface RepoIssueCreateAction {
+  action: "repo_issue_create";
+  repo: string;
+  title: string;
+  body: string;
+  milestone?: string;
+  labels?: string[];
+  reason?: string;
+}
 
 /**
  * Import a GitHub issue (title + body + comments) via the runner's gh-backed
@@ -367,8 +522,8 @@ export interface RepoIssueReadAction {
 
 /**
  * Push a branch to a remote via the runner (NRW-008). MUTATES external state
- * (the remote), so the engine requires user approval unless runner access is
- * "full".
+ * (the remote). In ordinary Ask mode the engine requests approval; in an
+ * explicit GitHub workflow, the typed repo path can run without an extra prompt.
  */
 export interface RepoPushAction {
   action: "repo_push";
@@ -380,8 +535,8 @@ export interface RepoPushAction {
 
 /**
  * Open a (draft, by default) pull request via the runner's gh-backed endpoint
- * (NRW-008). MUTATES external state, so the engine requires user approval and a
- * commit precondition.
+ * (NRW-008). MUTATES external state and requires a commit precondition. In an
+ * explicit GitHub workflow, PR review/merge is the human approval gate.
  */
 export interface RepoPrCreateAction {
   action: "repo_pr_create";
@@ -409,6 +564,9 @@ export type ArchitectAction =
   | RepoDiffAction
   | RepoBranchCreateAction
   | RepoCommitAction
+  | RepoIssueListAction
+  | RepoMilestoneCreateAction
+  | RepoIssueCreateAction
   | RepoIssueReadAction
   | RepoPushAction
   | RepoPrCreateAction;
@@ -820,6 +978,16 @@ export function isValidRepoSlug(slug: unknown): slug is string {
   return /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(repo);
 }
 
+function cleanRepoLabels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const labels = value
+    .filter((label): label is string => typeof label === "string")
+    .map((label) => label.trim())
+    .filter((label) => label.length > 0 && label.length <= 80)
+    .slice(0, 10);
+  return labels.length > 0 ? labels : undefined;
+}
+
 function parseActionCandidate(candidate: string): ArchitectAction | null {
   try {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
@@ -1008,6 +1176,60 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof commit.reason === "string" ? commit.reason : undefined,
         };
       }
+      if (parsed.action === "repo_issue_list") {
+        const list = parsed as RepoIssueListAction;
+        if (!isValidRepoSlug(list.repo)) return null;
+        const limit =
+          typeof list.limit === "number" && Number.isFinite(list.limit)
+            ? Math.max(1, Math.min(50, Math.round(list.limit)))
+            : undefined;
+        return {
+          action: "repo_issue_list",
+          repo: list.repo.trim(),
+          labels: cleanRepoLabels(list.labels),
+          limit,
+          reason: typeof list.reason === "string" ? list.reason : undefined,
+        };
+      }
+      if (parsed.action === "repo_milestone_create") {
+        const milestone = parsed as RepoMilestoneCreateAction;
+        if (!isValidRepoSlug(milestone.repo)) return null;
+        if (typeof milestone.title !== "string") return null;
+        const title = milestone.title.trim();
+        if (!title || title.length > REPO_MILESTONE_TITLE_MAX) return null;
+        return {
+          action: "repo_milestone_create",
+          repo: milestone.repo.trim(),
+          title,
+          description:
+            typeof milestone.description === "string"
+              ? milestone.description
+              : undefined,
+          reason:
+            typeof milestone.reason === "string" ? milestone.reason : undefined,
+        };
+      }
+      if (parsed.action === "repo_issue_create") {
+        const issueCreate = parsed as RepoIssueCreateAction;
+        if (!isValidRepoSlug(issueCreate.repo)) return null;
+        if (typeof issueCreate.title !== "string") return null;
+        const title = issueCreate.title.trim();
+        if (!title || title.length > REPO_ISSUE_TITLE_MAX) return null;
+        return {
+          action: "repo_issue_create",
+          repo: issueCreate.repo.trim(),
+          title,
+          body: typeof issueCreate.body === "string" ? issueCreate.body : "",
+          milestone:
+            typeof issueCreate.milestone === "string" &&
+            issueCreate.milestone.trim()
+              ? issueCreate.milestone.trim()
+              : undefined,
+          labels: cleanRepoLabels(issueCreate.labels),
+          reason:
+            typeof issueCreate.reason === "string" ? issueCreate.reason : undefined,
+        };
+      }
       if (parsed.action === "repo_issue_read") {
         const issueRead = parsed as RepoIssueReadAction;
         // Reject malformed input: a valid owner/repo slug and a positive integer
@@ -1081,6 +1303,9 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "repo_diff" ||
     action.action === "repo_branch_create" ||
     action.action === "repo_commit" ||
+    action.action === "repo_issue_list" ||
+    action.action === "repo_milestone_create" ||
+    action.action === "repo_issue_create" ||
     action.action === "repo_issue_read" ||
     action.action === "repo_push" ||
     action.action === "repo_pr_create"
@@ -1104,7 +1329,9 @@ export function isSafeFirstToolAction(action: ArchitectAction): boolean {
     action.action === "repo_status" ||
     action.action === "repo_diff" ||
     // repo_issue_read is read-only (gh-backed) — safe to auto-run first.
-    // repo_push / repo_pr_create mutate external state and are NOT safe-first.
+    // repo_milestone_create / repo_issue_create / repo_push / repo_pr_create
+    // mutate external state and are NOT safe-first.
+    action.action === "repo_issue_list" ||
     action.action === "repo_issue_read"
   );
 }
@@ -1171,7 +1398,7 @@ export function inspectStrictToolActionOutput(text: string): {
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1256,6 +1483,15 @@ export function exactToolKey(action: ArchitectAction): string | null {
       // already in context. Key by repo + issue number (repo case-insensitive
       // per GitHub; the issue number is the discriminator).
       return `repo_issue_read:${action.repo.trim().toLowerCase()}#${action.issue}`;
+    case "repo_issue_list":
+      return `repo_issue_list:${action.repo.trim().toLowerCase()}:${(action.labels ?? [])
+        .map((label) => label.trim().toLowerCase())
+        .sort()
+        .join(",")}`;
+    case "repo_milestone_create":
+      return `repo_milestone_create:${action.repo.trim().toLowerCase()}:${action.title.trim().toLowerCase()}`;
+    case "repo_issue_create":
+      return `repo_issue_create:${action.repo.trim().toLowerCase()}:${action.title.trim().toLowerCase()}`;
     case "repo_push":
       // One-shot per branch: re-pushing the same branch in the same loop is
       // almost always an accidental re-fire (a genuine re-push targets a new
@@ -1492,44 +1728,55 @@ function githubWorkflowDoc(enabled?: boolean, typedRepoAvailable?: boolean): str
   if (typedRepoAvailable) {
     return [
       "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
-      "Drive the whole workflow through the TYPED repo actions documented above (repo_issue_read, repo_branch_create, repo_commit, repo_push, repo_pr_create) — never raw shell commands for issues, commits, pushing, or opening pull requests.",
-      "Issue selection: use repo_issue_read on the most actionable open issue (prefer one whose title/body mentions `#aiboard` or `@aiboard` when known).",
+      "Drive the whole workflow through the TYPED repo actions documented above (repo_issue_list, repo_milestone_create, repo_issue_create, repo_issue_read, repo_branch_create, repo_commit, repo_push, repo_pr_create) — never raw shell commands for issues, milestones, commits, pushing, or opening pull requests.",
+      "If the user asks to create milestones/issues, create REAL GitHub milestones/issues with repo_milestone_create and repo_issue_create; do not substitute local roadmap markdown files.",
+      "Issue selection: first use repo_issue_list on the provided repo. Prefer an open issue whose title/body mentions `#aiboard` or `@aiboard`; if none exists and the request is new feature work, create a milestone and task issues, then use the primary created issue as the implementation target.",
       "Before assigning worker tasks, the engine establishes a safe feature branch (or you can request repo_branch_create with an issue-numbered name).",
       "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end commit via repo_commit, push via repo_push, and open a DRAFT PR via repo_pr_create that references the issue.",
-      "Push and PR creation require the user's in-app approval; the user may deny either — respect that and continue.",
+      "For this explicit GitHub workflow, typed repo mutations can run without extra in-app approval prompts; human approval happens by reviewing and merging the draft PR on GitHub.",
     ].join("\n");
   }
   return [
     "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
     "This runner does not expose the typed repo endpoints, so use non-interactive `gh` and `git` commands through the run tool. Assume `gh` is installed and authenticated.",
-    "Issue selection: list open issues, prefer an issue whose title/body/comments contain `#aoboard` or `@aiboard`; if none exists, automatically choose the most actionable open issue.",
+    "Issue selection: list open issues, prefer an issue whose title/body/comments contain `#aiboard` or `@aiboard`; if none exists and the user asks for new planning artifacts, create real GitHub milestones/issues with `gh`, then use the primary created issue as the implementation target.",
     "Before assigning worker tasks, create and switch to a feature branch for the chosen issue. Use a clear branch name that includes the issue number when available.",
     "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end, commit the intended changes, push the feature branch, and create a PR that references the issue.",
-    "There are no in-app approval gates for this workflow; human approval happens on GitHub when reviewing and merging the PR.",
+    "When typed repo endpoints are unavailable, raw shell commands may still follow the runner's command-approval mode; human approval for the completed work happens on GitHub when reviewing and merging the PR.",
     "GitHub workflow commands beginning with `gh` or `git` do not count against the normal command budget, but still run one command at a time and must be non-interactive.",
   ].join("\n");
 }
 
 function repoToolDoc(
   repoWorkflow?: boolean,
-  githubCli?: { available: boolean; authenticated: boolean }
+  githubCli?: { available: boolean; authenticated: boolean },
+  githubWorkflow?: boolean
 ): string {
   if (!repoWorkflow) return "";
+  const repoMutationNote = githubWorkflow
+    ? "This MUTATES repo state. Because this is an explicit GitHub workflow, this typed action can run without an extra in-app approval prompt; PR review/merge is the human gate."
+    : "This MUTATES the repo, so it needs the user's approval; the user may deny it — respect that and continue.";
+  const githubMutationNote = githubWorkflow
+    ? "This MUTATES external GitHub state. Because this is an explicit GitHub workflow, this typed action can run without an extra in-app approval prompt; PR review/merge is the human gate."
+    : "This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue.";
   const lines = [
     "TOOL — repo (Git): the runner folder is a Git repository. Use these TYPED actions for repo operations instead of running raw `git`/`gh` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
     '- Status: {"action":"repo_status","reason":"why"} — current branch, dirty file counts, and ahead/behind. Non-mutating; re-query freely after writes.',
     '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating.',
-    '- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. This MUTATES the repo, so it needs the user\'s approval; the user may deny it — respect that and continue.',
-    `- Commit: {"action":"repo_commit","message":"feat: add X","paths":["optional/scope"],"reason":"why"} — stages and commits. Omit "paths" to commit everything pending, or list relative paths to commit only those. The message must be 1–${REPO_COMMIT_MESSAGE_MAX} chars. This MUTATES the repo, so it needs the user's approval and is ONLY available after a safe feature branch exists; the user sees the changed files and message before approving and may deny it — respect that and continue. Do NOT run \`git commit\`/\`git add\` as a raw command — use this typed action.`,
+    `- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. ${repoMutationNote}`,
+    `- Commit: {"action":"repo_commit","message":"feat: add X","paths":["optional/scope"],"reason":"why"} — stages and commits. Omit "paths" to commit everything pending, or list relative paths to commit only those. The message must be 1–${REPO_COMMIT_MESSAGE_MAX} chars. ${repoMutationNote} ONLY available after a safe feature branch exists. Do NOT run \`git commit\`/\`git add\` as a raw command — use this typed action.`,
   ];
   // The GitHub (issue/push/PR) actions only work when the runner reports an
   // installed AND authenticated GitHub CLI — advertise them only then, so the
   // model never attempts a workflow the runner can't fulfil.
   if (githubCli?.available && githubCli?.authenticated) {
     lines.push(
+      `- List issues: {"action":"repo_issue_list","repo":"owner/repo","labels":["optional"],"limit":20,"reason":"why"} — lists open issues with title/body snippets. Non-mutating. Use this before selecting work; prefer issues mentioning #aiboard or @aiboard.`,
+      `- Create milestone: {"action":"repo_milestone_create","repo":"owner/repo","title":"Milestone title","description":"optional","reason":"why"} — creates or reuses a GitHub milestone. ${githubMutationNote}`,
+      `- Create issue: {"action":"repo_issue_create","repo":"owner/repo","title":"Issue title","body":"task details","milestone":"optional milestone title","labels":["optional"],"reason":"why"} — creates a GitHub issue. ${githubMutationNote}`,
       `- Import issue: {"action":"repo_issue_read","repo":"owner/repo","issue":42,"reason":"why"} — fetches a GitHub issue's title, body, and comments as task context. Non-mutating.`,
-      `- Push branch: {"action":"repo_push","branch":"feature/topic","remote":"origin","setUpstream":true,"reason":"why"} — pushes the branch to the remote. This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue.`,
-      `- Open pull request: {"action":"repo_pr_create","title":"Fix ...","body":"...","base":"main","head":"feature/topic","draft":true,"reason":"why"} — opens a PR. PREFER DRAFT PRs (draft defaults to true). Requires at least one committed change on the feature branch first. This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue. Always use these typed push/PR actions — never raw shell commands for pushing or opening pull requests.`
+      `- Push branch: {"action":"repo_push","branch":"feature/topic","remote":"origin","setUpstream":true,"reason":"why"} — pushes the branch to the remote. ${githubMutationNote}`,
+      `- Open pull request: {"action":"repo_pr_create","title":"Fix ...","body":"...","base":"main","head":"feature/topic","draft":true,"reason":"why"} — opens a PR. PREFER DRAFT PRs (draft defaults to true). Requires at least one committed change on the feature branch first. ${githubMutationNote} Always use these typed push/PR actions — never raw shell commands for pushing or opening pull requests.`
     );
   }
   return lines.join("\n");
@@ -1609,7 +1856,7 @@ export function buildArchitectPlanPrompt(input: {
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
     fetchToolDoc(input.fetchesLeft),
-    repoToolDoc(input.repoWorkflow, input.githubCli),
+    repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
@@ -1721,7 +1968,7 @@ export function buildArchitectReviewPrompt(input: {
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
     fetchToolDoc(input.fetchesLeft),
-    repoToolDoc(input.repoWorkflow, input.githubCli),
+    repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
     "End with ONE fenced json block:",
@@ -1822,15 +2069,26 @@ export function buildRepoWorkflowSummary(input: {
   branch?: string | null;
   commits?: Array<{ hash: string; subject: string }>;
   issueNumber?: number | null;
+  issueNumbers?: number[];
+  milestoneTitle?: string | null;
   pushedBranch?: string | null;
   prUrl?: string | null;
   verification?: string | null;
 }): string {
   const commits = input.commits ?? [];
+  const issueNumbers = [
+    ...new Set(
+      [
+        ...(input.issueNumbers ?? []),
+        ...(input.issueNumber != null ? [input.issueNumber] : []),
+      ].filter((issue) => Number.isInteger(issue) && issue > 0)
+    ),
+  ];
   const hasAnything =
     !!input.branch ||
     commits.length > 0 ||
-    input.issueNumber != null ||
+    issueNumbers.length > 0 ||
+    !!input.milestoneTitle?.trim() ||
     !!input.pushedBranch ||
     !!input.prUrl ||
     !!input.verification?.trim();
@@ -1848,7 +2106,13 @@ export function buildRepoWorkflowSummary(input: {
   } else if (input.branch) {
     lines.push("- No commits were made this run.");
   }
-  if (input.issueNumber != null) lines.push(`- Issue: #${input.issueNumber}`);
+  if (input.milestoneTitle?.trim()) {
+    lines.push(`- Milestone: ${input.milestoneTitle.trim()}`);
+  }
+  if (issueNumbers.length === 1) lines.push(`- Issue: #${issueNumbers[0]}`);
+  if (issueNumbers.length > 1) {
+    lines.push(`- Issues: ${issueNumbers.map((issue) => `#${issue}`).join(", ")}`);
+  }
   if (input.pushedBranch) lines.push(`- Pushed: \`${input.pushedBranch}\``);
   if (input.prUrl) lines.push(`- Pull request: ${input.prUrl}`);
   if (input.verification?.trim()) {
@@ -1856,3 +2120,4 @@ export function buildRepoWorkflowSummary(input: {
   }
   return lines.join("\n");
 }
+

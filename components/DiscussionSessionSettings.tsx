@@ -34,6 +34,10 @@ import type {
 } from "@/lib/db/schema";
 import type { ModelInfo } from "@/lib/providers/base";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
+import {
+  hasEnoughParticipatingModels,
+  participatingModelRequirementMessage,
+} from "@/lib/client/api";
 
 export interface DiscussionSessionSettingsValue {
   effort: EffortLevel;
@@ -126,7 +130,11 @@ export function DiscussionSessionSettings({
           access: discussion.runnerAccess ?? "ask",
         }
       : null;
-  const canSave = canEdit && !busy && compatibleSelected.length >= 2;
+  const hasEnoughModels = hasEnoughParticipatingModels(
+    discussion.mode,
+    compatibleSelected.length
+  );
+  const canSave = canEdit && !busy && hasEnoughModels;
 
   const save = () => {
     if (!canSave) return;
@@ -233,9 +241,12 @@ export function DiscussionSessionSettings({
           )}
         </fieldset>
 
-        {compatibleSelected.length < 2 && (
+        {!hasEnoughModels && (
           <p className="text-sm text-destructive">
-            Select at least two compatible participating models.
+            {participatingModelRequirementMessage(discussion.mode).replace(
+              "participating",
+              "compatible participating"
+            )}
           </p>
         )}
         {message && <p className="text-sm text-emerald-600">{message}</p>}
