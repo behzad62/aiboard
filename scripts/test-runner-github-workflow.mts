@@ -154,6 +154,16 @@ if (args[0] === "api" && args.includes("GET") && args.some((a) => /\\/milestones
   out(JSON.stringify([]));
   process.exit(0);
 }
+if (args[0] === "api" && args.includes("GET") && args.some((a) => /\\/labels(\\?|$)/.test(a))) {
+  out(JSON.stringify([{ name: "bug" }, { name: "enhancement" }]));
+  process.exit(0);
+}
+if (args[0] === "label" && args[1] === "create") {
+  const logPath = process.env.AIBOARD_GH_LOG;
+  if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
+  out("https://github.com/acme/widget/labels/" + encodeURIComponent(args[2] || "") + "\\n");
+  process.exit(0);
+}
 if (args[0] === "api" && /\\/milestones$/.test(args[1]) && args.includes("-X") && args.includes("POST")) {
   out(JSON.stringify({
     title: "Games: Chess",
@@ -421,6 +431,37 @@ try {
       "issue-create: retried exactly once without labels",
       retryArgvs.length === 2 && !retryArgvs[1].includes("--label"),
       retryArgvs
+    );
+
+    // Label auto-create: a brand-new label is created in the repo, then attached.
+    const freshLabel = await post(runner.port, runner.token, "/repo/issue-create", {
+      repo: "acme/widget",
+      title: "Issue with a fresh label",
+      body: "",
+      labels: ["feature"],
+    });
+    check(
+      "issue-create: creates the issue with a brand-new label",
+      freshLabel.res.status === 200 && freshLabel.data.issue === 12,
+      freshLabel.data
+    );
+    const freshLogs = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as string[]);
+    check(
+      "issue-create: auto-created the missing 'feature' label",
+      freshLogs.some((argv) => argv[0] === "label" && argv[1] === "create" && argv.includes("feature")),
+      freshLogs.filter((a) => a[0] === "label")
+    );
+    const featureIssueArgv = freshLogs.find(
+      (argv) => argv[0] === "issue" && argv[1] === "create" && argv.includes("Issue with a fresh label")
+    );
+    check(
+      "issue-create: attached the new label to the issue",
+      !!featureIssueArgv && featureIssueArgv.includes("--label") && featureIssueArgv.includes("feature"),
+      featureIssueArgv
     );
 
     const badMilestone = await post(runner.port, runner.token, "/repo/milestone-create", {

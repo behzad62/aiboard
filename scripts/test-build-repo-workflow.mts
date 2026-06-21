@@ -8,6 +8,7 @@
 import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
+  buildArchitectSummaryPrompt,
   buildRepoWorkflowSummary,
   isSafeFirstToolAction,
   parseArchitectAction,
@@ -364,6 +365,71 @@ const issueOnly = buildRepoWorkflowSummary({ issueNumber: 9 });
 check(
   "summary renders an issue even without a branch",
   issueOnly.includes("## Repository workflow") && issueOnly.includes("- Issue: #9")
+);
+
+// ── 8. Anti-hallucination: incomplete-PR flag + GitHub-aware summary prompt ──
+const incompleteSummary = buildRepoWorkflowSummary({
+  branch: "codex/x",
+  commits: [{ hash: "a1", subject: "work" }],
+  expectedPr: true, // a PR was requested but none was opened
+});
+check(
+  "summary flags an INCOMPLETE workflow when a PR was requested but not opened",
+  /INCOMPLETE/.test(incompleteSummary) &&
+    /pull request was requested but none was opened/i.test(incompleteSummary),
+  incompleteSummary
+);
+const completeSummary = buildRepoWorkflowSummary({
+  branch: "codex/x",
+  commits: [{ hash: "a1", subject: "work" }],
+  prUrl: "https://github.com/o/r/pull/7",
+  expectedPr: true,
+});
+check("no INCOMPLETE flag once the PR actually exists", !/INCOMPLETE/.test(completeSummary), completeSummary);
+check(
+  "no INCOMPLETE flag when a PR was not requested",
+  !/INCOMPLETE/.test(buildRepoWorkflowSummary({ branch: "codex/x", commits: [{ hash: "a", subject: "x" }] }))
+);
+
+const ghSummaryPrompt = buildArchitectSummaryPrompt({
+  request: "owner/repo PR work",
+  treeText: "a.ts",
+  historyText: "h",
+  githubWorkflow: true,
+});
+check(
+  "GitHub summary prompt forbids claiming GitHub outcomes",
+  /GITHUB OUTCOMES/.test(ghSummaryPrompt) &&
+    /Never assert a GitHub action succeeded/i.test(ghSummaryPrompt),
+  ghSummaryPrompt
+);
+check(
+  "non-GitHub summary prompt omits the GitHub-outcomes guard",
+  !/GITHUB OUTCOMES/.test(buildArchitectSummaryPrompt({ request: "x", treeText: "a", historyText: "h" }))
+);
+
+// ── 9. Label awareness in the Architect prompt ──────────────────────────────
+const labelPrompt = buildArchitectPlanPrompt({
+  request: "Work on owner/repo and open a PR",
+  treeText: "a.ts",
+  fileContext: "",
+  maxTasks: 4,
+  workerNames: ["w"],
+  readHopsLeft: 2,
+  githubWorkflow: true,
+  repoWorkflow: true,
+  githubCli: { available: true, authenticated: true },
+  githubLabels: ["bug", "enhancement"],
+});
+check(
+  "plan prompt lists the repo's existing labels",
+  /this repo already has these labels — bug, enhancement/i.test(labelPrompt),
+  labelPrompt
+);
+check(
+  "plan prompt asks to prefer existing labels and not over-populate",
+  /Prefer an existing label/i.test(labelPrompt) && /do not over-populate/i.test(labelPrompt),
+  labelPrompt
 );
 
 process.exit(failed === 0 ? 0 : 1);

@@ -591,6 +591,12 @@ export async function runBuildDiscussion(
   });
 
   const githubWorkflow = githubWorkflowRequested(discussion.topic);
+  // A pull request is an expected deliverable only when the request explicitly
+  // asks for one — used to gate "done" and to flag an incomplete GitHub workflow
+  // so a model can't "finish" (or claim success) without actually opening the PR.
+  const prExpected =
+    githubWorkflow && /(pull request|pull-request|\bpr\b)/i.test(discussion.topic);
+  let githubCompletionDeferrals = 0;
 
   // ── Optional local runner (user-started; opt-in by config) ────────────────
   let runner: RunnerConfig | null = null;
@@ -712,6 +718,9 @@ export async function runBuildDiscussion(
   // issue/push/PR typed-action docs in the plan/review prompts: only advertised
   // when gh is installed AND authenticated on the runner machine.
   let githubCli: RepoStatus["githubCli"] | null = null;
+  // Existing GitHub label names — surfaced to the Architect so it prefers them
+  // over inventing new ones (the runner still auto-creates any truly-new label).
+  let repoLabels: string[] = [];
   if (discussion.runnerUrl && discussion.runnerToken) {
     const config = { url: discussion.runnerUrl, token: discussion.runnerToken };
     const health = await checkRunner(config);
@@ -827,6 +836,7 @@ export async function runBuildDiscussion(
         // Capture the GitHub CLI state once — gates the issue/push/PR typed
         // actions in the Architect prompts (only when gh is installed + authed).
         githubCli = repoStatus.githubCli;
+        repoLabels = repoStatus.labels ?? [];
         emit({ type: "repo_status", status: toRepoStatusEvent(repoStatus) });
       }
     } else {
@@ -3019,6 +3029,7 @@ export async function runBuildDiscussion(
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner && repoIsGit,
         githubCli: githubCli ?? undefined,
+        githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -3949,6 +3960,7 @@ export async function runBuildDiscussion(
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner && repoIsGit,
         githubCli: githubCli ?? undefined,
+        githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
@@ -4072,6 +4084,28 @@ export async function runBuildDiscussion(
       done = action.done;
     }
 
+    // GitHub-completion gate: if the request explicitly asked for a pull request
+    // and the Architect marked done WITHOUT one actually being opened, do not
+    // accept "done" — push it to finish the workflow (commit → push → open PR)
+    // instead of letting it "finish" (or hallucinate success). Bounded so a model
+    // that genuinely cannot complete it still terminates (and the deterministic
+    // summary block then flags the workflow INCOMPLETE).
+    if (done && prExpected && !repoPrUrl && githubCompletionDeferrals < 2) {
+      githubCompletionDeferrals += 1;
+      done = false;
+      architectNotes = [
+        architectNotes,
+        "You marked the build done, but the requested GitHub PULL REQUEST has NOT been opened (the engine has no record of repo_pr_create succeeding). Before you may finish, actually emit the typed repo actions: create any requested milestone/issues (repo_milestone_create / repo_issue_create), then repo_commit, repo_push, and repo_pr_create (draft). Do NOT claim these happened — emit the actions and let the tool results confirm them.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Completion deferred: a pull request was requested but none was opened (attempt ${githubCompletionDeferrals}/2).`,
+      });
+    }
+
     // Stop as "blocked" (a resumable state with failure history preserved) when
     // recovery has genuinely stalled — repeated identical failures or several
     // waves with no progress — but never override an Architect that just
@@ -4182,6 +4216,7 @@ export async function runBuildDiscussion(
       historyText: truncate(historyText, 60_000),
       verbosityInstruction,
       userNotes: userNotesText(),
+      githubWorkflow,
     }),
     {
       systemRole:
@@ -4207,6 +4242,7 @@ export async function runBuildDiscussion(
       pushedBranch: repoPushedBranch,
       prUrl: repoPrUrl,
       verification: repoVerification,
+      expectedPr: prExpected,
     });
     if (block) finalAnswer = `${answer}\n${block}`;
   }

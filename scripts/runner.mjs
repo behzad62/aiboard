@@ -823,6 +823,49 @@ function parsePorcelainStatus(text) {
   return { staged, unstaged, untracked, conflicted, upstream, ahead, behind };
 }
 
+/** Derive an "owner/repo" GitHub slug from the repo's remotes (origin first). */
+function originSlugFromRemotes(remotes) {
+  const list = Array.isArray(remotes) ? remotes : [];
+  const origin = list.find((r) => r && r.name === "origin") || list[0];
+  if (!origin || typeof origin.url !== "string") return null;
+  const m = origin.url.match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?$/i);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+// Existing label names for a repo, TTL-cached (~60s) so adding it to the
+// frequently-polled status payload does not spam the GitHub API.
+let labelsCache = { slug: "", at: 0, labels: [] };
+function listLabelNames(slug) {
+  const result = runGh(["api", "-X", "GET", `repos/${slug}/labels?per_page=100`]);
+  if (result.exitCode !== 0) return null;
+  const parsed = parseGhJson(result.stdout, `labels from ${slug}`);
+  return Array.isArray(parsed)
+    ? parsed.map((l) => (typeof l?.name === "string" ? l.name : "")).filter(Boolean)
+    : [];
+}
+function getRepoLabels(slug) {
+  const now = Date.now();
+  if (labelsCache.slug === slug && now - labelsCache.at < 60_000) return labelsCache.labels;
+  const labels = listLabelNames(slug) ?? [];
+  labelsCache = { slug, at: now, labels };
+  return labels;
+}
+
+/** Ensure each requested label exists in the repo, creating any that are
+ *  missing — so a model can attach a sensible new label without `gh` rejecting
+ *  the whole issue. Best-effort: label-create failures (incl. races) are
+ *  ignored and the caller's own fallback still applies. */
+function ensureLabelsExist(slug, wanted) {
+  if (!wanted.length) return;
+  const existing = new Set((listLabelNames(slug) ?? []).map((n) => n.toLowerCase()));
+  for (const label of wanted) {
+    if (existing.has(label.toLowerCase())) continue;
+    runGh(["label", "create", label, "--repo", slug, "--color", "ededed"]);
+    existing.add(label.toLowerCase());
+  }
+  labelsCache = { slug: "", at: 0, labels: [] }; // invalidate the status cache
+}
+
 /** Build the RunnerRepoStatus payload for the project folder. */
 function getRepoStatus() {
   const base = {
@@ -842,6 +885,7 @@ function getRepoStatus() {
     recentCommits: [],
     gitAvailable: true,
     githubCli: { available: false, authenticated: false, user: null },
+    labels: [],
   };
 
   // GitHub CLI capability detection is independent of the git repo state and
@@ -902,6 +946,13 @@ function getRepoStatus() {
         return { hash: line.slice(0, nul), subject: line.slice(nul + 1) };
       })
       .filter(Boolean);
+  }
+
+  // Existing GitHub labels, so the Architect can prefer them over inventing new
+  // ones. Only when gh is authenticated and the origin is a GitHub repo.
+  if (base.githubCli.available && base.githubCli.authenticated) {
+    const slug = originSlugFromRemotes(base.remotes);
+    if (slug) base.labels = getRepoLabels(slug);
   }
 
   return base;
@@ -1335,15 +1386,19 @@ function createIssue({ repo, title, body, milestone, labels }) {
   const args = ["issue", "create", "--repo", slug, "--title", trimmedTitle, "--body", issueBody];
   const milestoneTitle = typeof milestone === "string" ? milestone.trim() : "";
   if (milestoneTitle) args.push("--milestone", milestoneTitle);
+  // Auto-create any requested labels that don't exist yet, so a model can attach
+  // a sensible new label without `gh` rejecting the whole issue. The model is
+  // told the existing labels (via repo status) and asked to prefer them.
+  const wanted = cleanLabels(labels);
+  if (wanted.length > 0) ensureLabelsExist(slug, wanted);
   const labelArgs = [];
-  for (const label of cleanLabels(labels)) {
+  for (const label of wanted) {
     labelArgs.push("--label", label);
   }
   let result = runGh([...args, ...labelArgs]);
-  // Models frequently invent labels that don't exist in the repo, and
-  // `gh issue create --label <missing>` then fails outright ("could not add
-  // label: ... not found"). Don't lose the whole issue over a label — retry
-  // once without any labels so the issue (and its milestone link) still lands.
+  // Safety net: if a label still can't be applied (e.g. creation raced/failed),
+  // don't lose the whole issue — retry once without any labels so the issue
+  // (and its milestone link) still lands.
   if (
     result.exitCode !== 0 &&
     labelArgs.length > 0 &&

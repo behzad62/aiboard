@@ -1764,13 +1764,22 @@ function fetchToolDoc(fetchesLeft?: number): string {
  * raw-command instructions — non-interactive `gh`/`git` through the run tool,
  * with the budget exemption — exactly as before.
  */
-function githubWorkflowDoc(enabled?: boolean, typedRepoAvailable?: boolean): string {
+function githubWorkflowDoc(
+  enabled?: boolean,
+  typedRepoAvailable?: boolean,
+  labels?: string[]
+): string {
   if (!enabled) return "";
+  const labelLine =
+    labels && labels.length > 0
+      ? `Labels: this repo already has these labels — ${labels.join(", ")}. Prefer an existing label when one fits. You MAY attach a brand-new label via the issue "labels" field (the engine creates it automatically), but keep the label set small: reuse labels across related issues and do not over-populate it with near-duplicates.`
+      : `Labels: you may attach labels via the issue "labels" field; missing labels are created automatically, but keep the set small and reuse labels across related issues rather than inventing many.`;
   if (typedRepoAvailable) {
     return [
       "GITHUB WORKFLOW SKILL - the user asked you to handle GitHub issue-to-PR work for the provided repository.",
       "Drive the whole workflow through the TYPED repo actions documented above (repo_issue_list, repo_milestone_create, repo_issue_create, repo_issue_read, repo_branch_create, repo_commit, repo_push, repo_pr_create) — never raw shell commands for issues, milestones, commits, pushing, or opening pull requests.",
       "If the user asks to create milestones/issues, create REAL GitHub milestones/issues with repo_milestone_create and repo_issue_create; do not substitute local roadmap markdown files.",
+      labelLine,
       "Issue selection: first use repo_issue_list on the provided repo. Prefer an open issue whose title/body mentions `#aiboard` or `@aiboard`; if none exists and the request is new feature work, create a milestone and task issues, then use the primary created issue as the implementation target.",
       "Before assigning worker tasks, the engine establishes a safe feature branch (or you can request repo_branch_create with an issue-numbered name).",
       "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end commit via repo_commit, push via repo_push, and open a DRAFT PR via repo_pr_create that references the issue.",
@@ -1784,6 +1793,7 @@ function githubWorkflowDoc(enabled?: boolean, typedRepoAvailable?: boolean): str
     "Before assigning worker tasks, create and switch to a feature branch for the chosen issue. Use a clear branch name that includes the issue number when available.",
     "Turn the selected issue into focused worker tasks, then review/fix/verify normally. At the end, commit the intended changes, push the feature branch, and create a PR that references the issue.",
     "When typed repo endpoints are unavailable, raw shell commands may still follow the runner's command-approval mode; human approval for the completed work happens on GitHub when reviewing and merging the PR.",
+    labelLine,
     "GitHub workflow commands beginning with `gh` or `git` do not count against the normal command budget, but still run one command at a time and must be non-interactive.",
   ].join("\n");
 }
@@ -1829,14 +1839,16 @@ function runToolDoc(
   githubWorkflow?: boolean,
   /** Whether the runner exposes the typed /repo/* endpoints — switches the
    * GitHub workflow doc from raw-command instructions to "use typed actions". */
-  typedRepoAvailable?: boolean
+  typedRepoAvailable?: boolean,
+  /** Existing GitHub label names so the model can prefer them. */
+  githubLabels?: string[]
 ): string {
   if ((!runsLeft || runsLeft <= 0) && !githubWorkflow) return "";
   return [
     "TOOL — run commands: the user granted you a local runner that executes shell commands in the project folder. Use it to install dependencies, run tests, build, or inspect the environment. To run a command, respond with ONLY:",
     '{"action":"run","command":"npm test","reason":"verify the suite passes"}',
     "Commands must NOT edit project files: do not use fs.writeFileSync, redirection, Set-Content, sed -i, rm/move/copy, or scripts that modify source files. Use patch/append/edit output for file changes, then run commands only to verify or inspect.",
-    githubWorkflowDoc(githubWorkflow, typedRepoAvailable),
+    githubWorkflowDoc(githubWorkflow, typedRepoAvailable, githubLabels),
     runsLeft && runsLeft > 0
       ? `One non-interactive command at a time (no editors/watch modes/prompts); stdout, stderr, and the exit code come back to you. ${runsLeft} normal run${runsLeft === 1 ? "" : "s"} left in this phase. The user may deny a command — respect that and continue without it.`
       : typedRepoAvailable
@@ -1870,6 +1882,8 @@ export function buildArchitectPlanPrompt(input: {
   repoWorkflow?: boolean;
   /** Runner's GitHub CLI state — gates the issue/push/PR typed-action docs. */
   githubCli?: { available: boolean; authenticated: boolean };
+  /** Existing GitHub label names so the model can prefer them over new ones. */
+  githubLabels?: string[];
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
 }): string {
@@ -1895,7 +1909,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
     repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
@@ -1980,6 +1994,8 @@ export function buildArchitectReviewPrompt(input: {
   repoWorkflow?: boolean;
   /** Runner's GitHub CLI state — gates the issue/push/PR typed-action docs. */
   githubCli?: { available: boolean; authenticated: boolean };
+  /** Existing GitHub label names so the model can prefer them over new ones. */
+  githubLabels?: string[];
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -2007,7 +2023,7 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     readRangeToolDoc(input.rangeReadsLeft),
     searchToolDoc(input.searchesLeft),
-    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
     repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
@@ -2034,6 +2050,9 @@ export function buildArchitectSummaryPrompt(input: {
   historyText: string;
   verbosityInstruction?: string;
   userNotes?: string;
+  /** When the run was a GitHub workflow, forbid claiming GitHub outcomes —
+   * the engine appends an authoritative Repository-workflow section. */
+  githubWorkflow?: boolean;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -2057,6 +2076,9 @@ export function buildArchitectSummaryPrompt(input: {
     input.historyText,
     "",
     input.verbosityInstruction ?? "",
+    input.githubWorkflow
+      ? "GITHUB OUTCOMES: do NOT state whether any GitHub milestone, issue, branch, commit, push, or pull request was created, nor its status — the engine appends an authoritative \"Repository workflow\" section below your summary with the REAL outcomes. Never assert a GitHub action succeeded; if you didn't see the engine confirm it via a tool result, it may not have happened."
+      : "",
     "Do not re-emit file contents. Do NOT wrap the summary in JSON.",
     META_FOOTER_INSTRUCTION,
   ]
@@ -2115,8 +2137,12 @@ export function buildRepoWorkflowSummary(input: {
   pushedBranch?: string | null;
   prUrl?: string | null;
   verification?: string | null;
+  /** The request asked for a pull request — used to flag an incomplete workflow
+   * when none was actually opened (guards against the Architect claiming it). */
+  expectedPr?: boolean;
 }): string {
   const commits = input.commits ?? [];
+  const incompletePr = !!input.expectedPr && !input.prUrl;
   const issueNumbers = [
     ...new Set(
       [
@@ -2132,7 +2158,8 @@ export function buildRepoWorkflowSummary(input: {
     !!input.milestoneTitle?.trim() ||
     !!input.pushedBranch ||
     !!input.prUrl ||
-    !!input.verification?.trim();
+    !!input.verification?.trim() ||
+    incompletePr;
   if (!hasAnything) return "";
 
   const lines = ["", "## Repository workflow", ""];
@@ -2158,6 +2185,11 @@ export function buildRepoWorkflowSummary(input: {
   if (input.prUrl) lines.push(`- Pull request: ${input.prUrl}`);
   if (input.verification?.trim()) {
     lines.push(`- Verification: ${input.verification.trim()}`);
+  }
+  if (incompletePr) {
+    lines.push(
+      "- ⚠️ INCOMPLETE: a pull request was requested but none was opened on GitHub this run. This section is authoritative — disregard any claim above that a PR (or milestone/issues) was created if it is not listed here."
+    );
   }
   return lines.join("\n");
 }

@@ -72,6 +72,8 @@ export interface RepoStatus {
     user: string | null;
     error?: string;
   };
+  /** Existing GitHub label names (so the Architect can prefer them). */
+  labels: string[];
   error?: string;
 }
 
@@ -168,6 +170,7 @@ export async function getRepoStatusViaRunner(
       recentCommits: asCommits(data.recentCommits),
       gitAvailable: !!data.gitAvailable,
       githubCli: asGithubCli(data.githubCli),
+      labels: asStringArray(data.labels),
       error: asString(data.error) ?? undefined,
     };
   } catch {
