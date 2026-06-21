@@ -8,6 +8,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import type {
+  BuildCheckpoint,
   BuildStopReason,
   Discussion,
   EffortLevel,
@@ -129,6 +130,7 @@ import {
 } from "./runner";
 import {
   accumulateModelStats,
+  getBuildCheckpoint,
   getBuildFiles,
   getFinalResult,
   getMessagesForDiscussion,
@@ -136,6 +138,7 @@ import {
   insertFinalResult,
   insertMessage,
   updateDiscussion,
+  upsertBuildCheckpoint,
   upsertBuildFile,
 } from "./store";
 import { drainBuildNotes } from "./build-notes";
@@ -342,19 +345,13 @@ export async function runBuildDiscussion(
     });
   };
 
-  // Checked only at safe boundaries (never mid-stream). Returns true when the
-  // active USD/time window is consumed so the caller can stop cleanly.
-  const stoppedForGuardrail = (): boolean => {
-    const reason = currentGuardrailStop();
-    if (reason !== "budget" && reason !== "time") return false;
-    markStopped(
-      reason,
-      reason === "budget"
-        ? "Build stopped because the active USD budget window was reached. Resume starts a fresh budget window."
-        : "Build stopped because the active time budget window was reached. Resume starts a fresh time window."
-    );
-    return true;
-  };
+  // Human-facing reason text for a guardrail stop (shared by the stop helper).
+  const guardrailStopMessage = (reason: "budget" | "time"): string =>
+    reason === "budget"
+      ? "Build stopped because the active USD budget window was reached. Resume starts a fresh budget window."
+      : "Build stopped because the active time budget window was reached. Resume starts a fresh time window.";
+  // `stopForGuardrail` (the boundary check that also saves a checkpoint) is
+  // defined later, once the repo refs it captures are in scope.
   const reasoningEffort = (discussion.reasoningEffort ?? "default") as ReasoningEffort;
   const verbosityInstruction = buildVerbosityInstruction(
     (discussion.verbosity ?? "balanced") as Verbosity,
@@ -618,6 +615,75 @@ export async function runBuildDiscussion(
   // Last automated build-check outcome (resolved verify command + passed/failed),
   // surfaced as the Verification line in the Repository workflow summary block.
   let repoVerification: string | null = null;
+
+  // ── Resumable checkpoint ───────────────────────────────────────────────────
+  // Persist the run (task graph, repo refs, current budget window) so a stop by
+  // budget, time, blocker, or user can be resumed from where it left off. Repo
+  // refs are read live (closure) so the checkpoint always reflects the latest
+  // branch/PR/milestone/issue state.
+  const saveCheckpoint = (input: {
+    status: BuildCheckpoint["status"];
+    stopReason?: BuildStopReason | null;
+    wave: number;
+    tasks: BuildTask[];
+    architectNotes: string;
+    verifyCommand: string;
+    failureFingerprints?: Record<string, number>;
+    recoveryLog?: string[];
+  }): void => {
+    upsertBuildCheckpoint({
+      discussionId: discussion.id,
+      status: input.status,
+      updatedAt: new Date().toISOString(),
+      runPolicy: buildSettings.runPolicy,
+      stopReason: input.stopReason ?? null,
+      wave: input.wave,
+      tasks: input.tasks.map((task) => ({ ...task })),
+      architectNotes: input.architectNotes,
+      verifyCommand: input.verifyCommand,
+      branch: repoActiveBranch,
+      prUrl: repoPrUrl,
+      milestone: repoMilestoneTitle,
+      issueNumbers: [
+        ...(repoIssueNumber == null ? [] : [repoIssueNumber]),
+        ...repoCreatedIssues.map((item) => item.issue),
+      ],
+      failureFingerprints: input.failureFingerprints ?? {},
+      recoveryLog: input.recoveryLog ?? [],
+      usageWindow,
+    });
+  };
+
+  // Boundary guardrail check: when the active USD/time window is consumed, save a
+  // resumable "stopped" checkpoint (when run state is available) and mark the run
+  // stopped. Returns true so the caller can `return` cleanly — never thrown, so a
+  // budget/time stop is never reclassified as a failed build.
+  const stopForGuardrail = (
+    snapshot:
+      | {
+          wave: number;
+          tasks: BuildTask[];
+          architectNotes: string;
+          verifyCommand: string;
+        }
+      | null
+  ): boolean => {
+    const reason = currentGuardrailStop();
+    if (reason !== "budget" && reason !== "time") return false;
+    if (snapshot) {
+      saveCheckpoint({
+        status: "stopped",
+        stopReason: reason,
+        wave: snapshot.wave,
+        tasks: snapshot.tasks,
+        architectNotes: snapshot.architectNotes,
+        verifyCommand: snapshot.verifyCommand,
+      });
+    }
+    markStopped(reason, guardrailStopMessage(reason));
+    return true;
+  };
+
   // Runner's GitHub CLI state, captured from the initial repo status. Gates the
   // issue/push/PR typed-action docs in the plan/review prompts: only advertised
   // when gh is installed AND authenticated on the runner machine.
@@ -2813,10 +2879,70 @@ export async function runBuildDiscussion(
     extraFileContext = `\nKey project files:${extraFileContext}`;
   }
 
-  // Guardrail check before the (potentially expensive) planning call.
-  if (stoppedForGuardrail()) return;
+  // ── Resume from a saved checkpoint, if one survived a prior stop ───────────
+  // Resume keeps the task graph, Architect notes, verify command, and repo refs,
+  // but starts a fresh budget window (usageWindow was created empty above and is
+  // deliberately NOT restored from the checkpoint's historical usage).
+  const existingCheckpoint = getBuildCheckpoint(discussion.id);
+  let resumedFromCheckpoint = false;
+  let wavesRun = 0;
+  if (
+    existingCheckpoint &&
+    existingCheckpoint.status !== "completed" &&
+    existingCheckpoint.tasks.length > 0
+  ) {
+    tasks = existingCheckpoint.tasks.map((task) => ({
+      ...task,
+      // "in_progress"/"review" are transient mid-wave states. If the run stopped
+      // while a task was being implemented or awaiting review, re-queue it as
+      // "planned" so the resumed run re-dispatches and re-reviews it — otherwise
+      // it is never picked up again (dispatch only takes planned/fixing) and the
+      // build would end with a spurious "incomplete tasks" failure.
+      status:
+        task.status === "in_progress" || task.status === "review"
+          ? "planned"
+          : task.status,
+    }));
+    architectNotes = existingCheckpoint.architectNotes;
+    planVerifyCommand = existingCheckpoint.verifyCommand;
+    repoActiveBranch = existingCheckpoint.branch;
+    repoPrUrl = existingCheckpoint.prUrl;
+    repoMilestoneTitle = existingCheckpoint.milestone;
+    resumedFromCheckpoint = true;
+    wavesRun = existingCheckpoint.wave;
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `Resuming Build checkpoint from wave ${existingCheckpoint.wave} with ${tasks.length} task(s).`,
+    });
+    emit({
+      type: "build_plan",
+      cycle: existingCheckpoint.wave,
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+      })),
+    });
+    for (const task of tasks) {
+      emit({
+        type: "task_status",
+        taskId: task.id,
+        title: task.title,
+        status: task.status,
+        worker:
+          task.workerIndex == null
+            ? undefined
+            : workers[task.workerIndex]?.displayName,
+        cycle: existingCheckpoint.wave,
+      });
+    }
+  }
 
-  {
+  // Guardrail check before the (potentially expensive) planning call.
+  if (stopForGuardrail(null)) return;
+
+  if (!resumedFromCheckpoint) {
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
       label: "Architect is planning the project",
@@ -2858,19 +2984,19 @@ export async function runBuildDiscussion(
     if (issues.length > 0) {
       extraFileContext += `\nYOUR SCAFFOLD WRITES THAT DID NOT LAND:\n${issues.map((s) => `- ${s}`).join("\n")}`;
     }
-  }
 
-  if (tasks.length === 0) {
-    throw new Error("The Architect produced an empty plan.");
-  }
+    if (tasks.length === 0) {
+      throw new Error("The Architect produced an empty plan.");
+    }
 
-  emit({
-    type: "build_plan",
-    cycle: 0,
-    tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
-  });
-  for (const task of tasks) {
-    emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned" });
+    emit({
+      type: "build_plan",
+      cycle: 0,
+      tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),
+    });
+    for (const task of tasks) {
+      emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned" });
+    }
   }
 
   // Plan-only policy: produce the plan (and any GitHub planning the Architect did)
@@ -3034,11 +3160,22 @@ export async function runBuildDiscussion(
     }
   }
 
+  // Persist the initial plan/state so a stop during the first wave is resumable.
+  saveCheckpoint({
+    status: "running",
+    wave: wavesRun,
+    tasks,
+    architectNotes,
+    verifyCommand,
+  });
+
   let done = false;
 
   for (let cycle = 1; cycle <= BUILD_MAX_WAVES && !done; cycle++) {
+    wavesRun = cycle;
     // Stop cleanly at the wave boundary if the active USD/time window is spent.
-    if (stoppedForGuardrail()) return;
+    if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
+      return;
     // Drive the hero progress bar one notch per review wave. Builds count
     // "waves" (review cycles), not panel-style discussion rounds. There is no
     // fixed wave budget anymore (BUILD_MAX_WAVES is only a safety backstop), so
@@ -3525,7 +3662,8 @@ export async function runBuildDiscussion(
       throwIfAborted();
       // Worker-call count is telemetry only — it never stops the run. Stop here
       // only if the active USD/time budget window is consumed.
-      if (stoppedForGuardrail()) return;
+      if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
+        return;
       const ready = tasks.filter(
         (t) =>
           (t.status === "planned" || t.status === "fixing") &&
@@ -3681,7 +3819,8 @@ export async function runBuildDiscussion(
     // verdict (and defaults to approving this wave's landed work) instead of
     // throwing away the whole build the way it used to.
     // Stop cleanly before the (expensive) Architect review call if spent.
-    if (stoppedForGuardrail()) return;
+    if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
+      return;
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
       label: `Architect is reviewing wave ${cycle}`,
@@ -3819,6 +3958,16 @@ export async function runBuildDiscussion(
     // files just written; the last wave's refresh is thus the final state
     // shown before the summary.
     await refreshRepoState();
+
+    // Checkpoint the reviewed wave so a later budget/time/blocked stop resumes
+    // from the current task graph instead of re-planning from scratch.
+    saveCheckpoint({
+      status: "running",
+      wave: cycle,
+      tasks,
+      architectNotes,
+      verifyCommand,
+    });
   }
 
   // Fold this build's scoreboard into the global per-model stats (the
@@ -3849,6 +3998,14 @@ export async function runBuildDiscussion(
   const incompleteTasks = findIncompleteBuildTasks(tasks);
   if (incompleteTasks.length > 0) {
     const message = buildIncompleteTaskFailure(incompleteTasks);
+    // Preserve the work so the user can resume from the current task graph.
+    saveCheckpoint({
+      status: "blocked",
+      wave: wavesRun,
+      tasks,
+      architectNotes,
+      verifyCommand,
+    });
     emit({
       type: "diagnostic",
       phase: "model_failed",
@@ -3916,6 +4073,16 @@ export async function runBuildDiscussion(
   updateDiscussion(discussion.id, {
     status: "completed",
     updatedAt: new Date().toISOString(),
+  });
+  // Final checkpoint: a completed run is not resumed (resume skips "completed"),
+  // but the record keeps the finished task graph and total budget window.
+  saveCheckpoint({
+    status: "completed",
+    stopReason: "completed",
+    wave: wavesRun,
+    tasks,
+    architectNotes,
+    verifyCommand,
   });
   emit({ type: "final_answer", answer: finalAnswer, confidence, dissent });
   // Files land via the runner (its folder), the picked browser folder, or
