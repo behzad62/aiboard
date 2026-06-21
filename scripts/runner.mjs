@@ -1256,13 +1256,14 @@ function listIssues({ repo, labels, limit }) {
 }
 
 function listMilestones(slug) {
+  // GET with the query string in the path. Using `-f`/`--field` here would make
+  // `gh api` switch to POST (hitting the create endpoint → 422), so pass the
+  // parameters in the URL and force the method to GET explicitly.
   const result = runGh([
     "api",
-    `repos/${slug}/milestones`,
-    "-f",
-    "state=all",
-    "-f",
-    "per_page=100",
+    "-X",
+    "GET",
+    `repos/${slug}/milestones?state=all&per_page=100`,
   ]);
   if (result.exitCode !== 0) {
     const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh api milestones failed.";
@@ -1334,10 +1335,22 @@ function createIssue({ repo, title, body, milestone, labels }) {
   const args = ["issue", "create", "--repo", slug, "--title", trimmedTitle, "--body", issueBody];
   const milestoneTitle = typeof milestone === "string" ? milestone.trim() : "";
   if (milestoneTitle) args.push("--milestone", milestoneTitle);
+  const labelArgs = [];
   for (const label of cleanLabels(labels)) {
-    args.push("--label", label);
+    labelArgs.push("--label", label);
   }
-  const result = runGh(args);
+  let result = runGh([...args, ...labelArgs]);
+  // Models frequently invent labels that don't exist in the repo, and
+  // `gh issue create --label <missing>` then fails outright ("could not add
+  // label: ... not found"). Don't lose the whole issue over a label — retry
+  // once without any labels so the issue (and its milestone link) still lands.
+  if (
+    result.exitCode !== 0 &&
+    labelArgs.length > 0 &&
+    /label/i.test(result.stderr || result.stdout || "")
+  ) {
+    result = runGh(args);
+  }
   if (result.exitCode !== 0) {
     const detail = result.spawnError || result.stderr.trim() || result.stdout.trim() || "gh issue create failed.";
     throw new Error(`GitHub CLI failed to create issue "${trimmedTitle}" in ${slug}: ${detail}`);

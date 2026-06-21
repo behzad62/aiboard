@@ -150,7 +150,7 @@ if (args[0] === "issue" && args[1] === "list") {
   ]));
   process.exit(0);
 }
-if (args[0] === "api" && /\\/milestones$/.test(args[1]) && !args.includes("-X")) {
+if (args[0] === "api" && args.includes("GET") && args.some((a) => /\\/milestones(\\?|$)/.test(a))) {
   out(JSON.stringify([]));
   process.exit(0);
 }
@@ -165,6 +165,11 @@ if (args[0] === "api" && /\\/milestones$/.test(args[1]) && args.includes("-X") &
 if (args[0] === "issue" && args[1] === "create") {
   const logPath = process.env.AIBOARD_GH_LOG;
   if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
+  const li = args.indexOf("--label");
+  if (li !== -1 && args[li + 1] === "missinglabel") {
+    process.stderr.write("could not add label: 'missinglabel' not found\\n");
+    process.exit(1);
+  }
   out("https://github.com/acme/widget/issues/12\\n");
   process.exit(0);
 }
@@ -392,6 +397,31 @@ try {
     check("issue-create: argv has --repo", argAfter("--repo") === "acme/widget", issueCreateArgv);
     check("issue-create: argv has --milestone", argAfter("--milestone") === "Games: Chess", issueCreateArgv);
     check("issue-create: argv has --label", argAfter("--label") === "aiboard", issueCreateArgv);
+
+    // Label resilience: a model-invented label that doesn't exist must NOT lose
+    // the issue — the runner retries once without labels and still creates it.
+    const labelRetry = await post(runner.port, runner.token, "/repo/issue-create", {
+      repo: "acme/widget",
+      title: "Issue with a bad label",
+      body: "",
+      labels: ["missinglabel"],
+    });
+    check(
+      "issue-create: bad label still creates the issue (retry without labels)",
+      labelRetry.res.status === 200 && labelRetry.data.issue === 12,
+      labelRetry.data
+    );
+    const retryArgvs = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as string[])
+      .filter((argv) => argv[0] === "issue" && argv[1] === "create" && argv.includes("Issue with a bad label"));
+    check(
+      "issue-create: retried exactly once without labels",
+      retryArgvs.length === 2 && !retryArgvs[1].includes("--label"),
+      retryArgvs
+    );
 
     const badMilestone = await post(runner.port, runner.token, "/repo/milestone-create", {
       repo: "acme/widget",
