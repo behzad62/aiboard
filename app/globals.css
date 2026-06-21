@@ -4,24 +4,27 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Light theme: a soft, cool "paper" base (not stark white) so white cards
+       lift off the page for depth. Text is a deep slate rather than near-black
+       to soften the contrast; borders carry a touch more definition. */
+    --background: 213 38% 97%;
+    --foreground: 222 45% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 222 45% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 222 45% 12%;
     --primary: 221.2 83.2% 53.3%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
+    --secondary: 214 32% 93.5%;
     --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
+    --muted: 214 32% 93.5%;
+    --muted-foreground: 215.3 18% 42%;
+    --accent: 214 33% 92%;
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --border: 214 27% 87.5%;
+    --input: 214 27% 87.5%;
     --ring: 221.2 83.2% 53.3%;
     --radius: 0.5rem;
   }
@@ -66,10 +69,12 @@
   }
 
   html:not(.dark) body {
+    /* Soft cool wash (slate-50 → slate-100) rather than a near-white overlay,
+       with subtle blue + amber corner glows that echo the dark theme. */
     background-image:
-      radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28%),
-      radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 20%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+      radial-gradient(circle at 0% 0%, rgba(59, 130, 246, 0.1), transparent 32%),
+      radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.08), transparent 24%),
+      linear-gradient(180deg, hsl(210 40% 98.5%), hsl(214 33% 93.5%));
   }
 
   .dark body {
