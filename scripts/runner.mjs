@@ -1817,6 +1817,58 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Folder browser (confined to `root`) ─────────────────────────────────────
+  if (req.method === "GET" && url.pathname === "/api/fs/list") {
+    try {
+      const dir = confine(root, url.searchParams.get("path") || ".");
+      const relFromRoot = path.relative(root, dir).replace(/\\/g, "/");
+      json(res, 200, {
+        ok: true,
+        root,
+        path: relFromRoot || ".",
+        absolute: dir,
+        atTop: dir === root,
+        entries: listDirs(dir).map((e) => ({ name: e.name, hidden: e.hidden })),
+      });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "List failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/fs/drives") {
+    json(res, 200, { ok: true, drives: await driveRoots() });
+    return;
+  }
+
+  // Re-root the active working folder (within `root`). Session-only for now;
+  // persistence across restarts arrives with the config file in Phase 2.
+  if (req.method === "POST" && url.pathname === "/api/fs/root") {
+    try {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const dir = confine(root, String(body.path ?? "."));
+      if (!fs.statSync(dir).isDirectory()) throw new Error("Not a directory");
+      projectDir = dir;
+      console.log(`Working folder → ${path.relative(root, dir) || "."}`);
+      json(res, 200, { ok: true, activeDir: projectDir, root });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "Set folder failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/status") {
+    json(res, 200, {
+      ok: true,
+      version: VERSION,
+      root,
+      activeDir: projectDir,
+      host: host ?? "127.0.0.1",
+      port,
+    });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/ls") {
     try {
       json(res, 200, { ok: true, files: listProjectFiles() });
