@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { BuildRunPolicy } from "@/lib/db/schema";
 import {
   buildRunPolicyLabel,
@@ -51,6 +52,33 @@ export function BuildRunPolicyControl({
   onChange,
   disabled = false,
 }: BuildRunPolicyControlProps) {
+  const [budgetUsdInput, setBudgetUsdInput] = useState(() =>
+    String(value.budgetUsd)
+  );
+  const [timeLimitMinutesInput, setTimeLimitMinutesInput] = useState(() =>
+    String(value.timeLimitMinutes)
+  );
+
+  useEffect(() => {
+    setBudgetUsdInput(String(value.budgetUsd));
+  }, [value.budgetUsd]);
+
+  useEffect(() => {
+    setTimeLimitMinutesInput(String(value.timeLimitMinutes));
+  }, [value.timeLimitMinutes]);
+
+  const commitBudgetUsd = () => {
+    const budgetUsd = numericValue(budgetUsdInput);
+    setBudgetUsdInput(String(budgetUsd));
+    onChange({ ...value, budgetUsd });
+  };
+
+  const commitTimeLimitMinutes = () => {
+    const timeLimitMinutes = Math.round(numericValue(timeLimitMinutesInput));
+    setTimeLimitMinutesInput(String(timeLimitMinutes));
+    onChange({ ...value, timeLimitMinutes });
+  };
+
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -93,10 +121,9 @@ export function BuildRunPolicyControl({
             min={0}
             step="0.01"
             disabled={disabled}
-            value={String(value.budgetUsd)}
-            onChange={(event) =>
-              onChange({ ...value, budgetUsd: numericValue(event.target.value) })
-            }
+            value={budgetUsdInput}
+            onChange={(event) => setBudgetUsdInput(event.target.value)}
+            onBlur={commitBudgetUsd}
           />
           <p className="text-xs text-muted-foreground">0 means unlimited.</p>
         </div>
@@ -109,13 +136,9 @@ export function BuildRunPolicyControl({
             min={0}
             step="1"
             disabled={disabled}
-            value={String(value.timeLimitMinutes)}
-            onChange={(event) =>
-              onChange({
-                ...value,
-                timeLimitMinutes: Math.round(numericValue(event.target.value)),
-              })
-            }
+            value={timeLimitMinutesInput}
+            onChange={(event) => setTimeLimitMinutesInput(event.target.value)}
+            onBlur={commitTimeLimitMinutes}
           />
           <p className="text-xs text-muted-foreground">
             0 means unlimited. Default is {DEFAULT_BUILD_TIME_LIMIT_MINUTES}{" "}
