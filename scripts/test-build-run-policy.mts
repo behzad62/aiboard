@@ -63,4 +63,19 @@ check(
   buildRunPolicyLabel("not-real") === "Finish job"
 );
 
+const finishWithBudget = shouldStopForBuildGuardrail({
+  settings: normalizeBuildSettings({
+    buildRunPolicy: "finish",
+    buildBudgetUsd: 1,
+    buildTimeLimitMinutes: 0,
+  }),
+  spentUsd: 1.01,
+  elapsedMs: 100,
+});
+check(
+  "finish policy still respects explicit USD guardrail",
+  finishWithBudget === "budget",
+  finishWithBudget
+);
+
 process.exit(failed === 0 ? 0 : 1);

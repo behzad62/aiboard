@@ -55,8 +55,8 @@ const budget = runBudgetStatus({
   totalRuns: 8,
   githubWorkflow: true,
 });
-check("normal run budget is doubled to 8 per phase", budget.normalRunsLeft === 8, budget);
-check("normal total budget is doubled to 24", budget.totalNormalRunsLeft === 16, budget);
+check("normal run command throttle is 8 per phase", budget.normalRunsLeft === 8, budget);
+check("normal run command throttle has 16 remaining after 8 used", budget.totalNormalRunsLeft === 16, budget);
 check("GitHub workflow commands are unlimited when active", budget.githubCommandsUnlimited, budget);
 check("run tool remains available for GitHub workflow", budget.toolAvailable, budget);
 

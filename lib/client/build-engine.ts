@@ -8,6 +8,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import type {
+  BuildStopReason,
   Discussion,
   EffortLevel,
   ReasoningEffort,
@@ -18,10 +19,17 @@ import { parseModelId } from "@/lib/providers/base";
 import { resolveModelName } from "./providers";
 import {
   BUILD_INTEGRATOR_MIN_TOKENS,
-  BUILD_LIMITS,
+  BUILD_MAX_WAVES,
   BUILD_ROUND_MIN_TOKENS,
+  BUILD_TASKS_PER_WAVE,
   EFFORT_CONFIG,
 } from "@/lib/orchestrator/config";
+import {
+  normalizeBuildSettings,
+  shouldStopForBuildGuardrail,
+} from "@/lib/orchestrator/build-policy";
+import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
+import { getModelPricing } from "@/lib/providers/pricing";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
@@ -124,6 +132,7 @@ import {
   getBuildFiles,
   getFinalResult,
   getMessagesForDiscussion,
+  getUserSettings,
   insertFinalResult,
   insertMessage,
   updateDiscussion,
@@ -292,9 +301,60 @@ export async function runBuildDiscussion(
       };
       signal?.addEventListener("abort", onAbort, { once: true });
     });
+  // Effort no longer drives the Build workflow budget — it only sets per-response
+  // token ceilings below. The run is governed by the Build run policy plus
+  // optional USD/time guardrails; worker-call count is telemetry only.
   const effort = discussion.effort as EffortLevel;
-  const limits = BUILD_LIMITS[effort];
   const config = EFFORT_CONFIG[effort];
+  const buildSettings = normalizeBuildSettings(discussion);
+  const settings = getUserSettings();
+
+  // The active budget window. Resume always starts a fresh window (USD spent and
+  // elapsed time reset to 0); historical spend lives in the saved checkpoint.
+  const buildWindowStartedAt = new Date().toISOString();
+  const buildWindowStartMs = Date.now();
+  let usageWindow = createBuildUsageWindow(buildWindowStartedAt);
+  const emitBuildUsage = (): void => {
+    emit({ type: "build_usage", usage: usageWindow });
+  };
+  const currentGuardrailStop = (): BuildStopReason | null =>
+    shouldStopForBuildGuardrail({
+      settings: buildSettings,
+      spentUsd: usageWindow.estimatedUsd,
+      elapsedMs: Date.now() - buildWindowStartMs,
+    });
+
+  // Mark the run stopped (resumable) and emit the stop. Deliberately NOT thrown:
+  // the engine caller turns any thrown error into a "failed" discussion, so a
+  // clean budget/time/blocked/user stop must update state and return instead.
+  const markStopped = (reason: BuildStopReason, message: string): void => {
+    const now = new Date().toISOString();
+    updateDiscussion(discussion.id, {
+      status: reason === "completed" ? "completed" : "stopped",
+      buildStopReason: reason,
+      buildStoppedAt: now,
+      updatedAt: now,
+    });
+    emit({ type: "build_stopped", reason, message, usage: usageWindow });
+    emit({
+      type: "status",
+      status: reason === "completed" ? "completed" : "stopped",
+    });
+  };
+
+  // Checked only at safe boundaries (never mid-stream). Returns true when the
+  // active USD/time window is consumed so the caller can stop cleanly.
+  const stoppedForGuardrail = (): boolean => {
+    const reason = currentGuardrailStop();
+    if (reason !== "budget" && reason !== "time") return false;
+    markStopped(
+      reason,
+      reason === "budget"
+        ? "Build stopped because the active USD budget window was reached. Resume starts a fresh budget window."
+        : "Build stopped because the active time budget window was reached. Resume starts a fresh time window."
+    );
+    return true;
+  };
   const reasoningEffort = (discussion.reasoningEffort ?? "default") as ReasoningEffort;
   const verbosityInstruction = buildVerbosityInstruction(
     (discussion.verbosity ?? "balanced") as Verbosity,
@@ -2030,6 +2090,20 @@ export async function runBuildDiscussion(
       maxTokens: usage.maxTokens,
       estimated: usage.estimated,
     });
+    // Fold the call into the active Build budget window (aggregate per-model
+    // tokens + estimated USD). Unknown-priced models leave USD null and surface
+    // as a partial-estimate warning in the Build stats UI.
+    const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
+    usageWindow = addBuildUsageCall(usageWindow, {
+      modelId: model.modelId,
+      modelName: model.displayName,
+      providerId,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      pricing,
+      elapsedSinceWindowStartMs: Date.now() - buildWindowStartMs,
+    });
+    emitBuildUsage();
     history.push({ label: opts.label, text: content });
     return content;
   };
@@ -2709,7 +2783,10 @@ export async function runBuildDiscussion(
   });
 
   // ── Status bookkeeping ─────────────────────────────────────────────────────
-  const totalPhases = limits.cycles * 2 + 2; // plan + waves/reviews + summary
+  // Build mode runs open-ended toward completion (bounded by BUILD_MAX_WAVES as a
+  // safety backstop, plus guardrails and no-progress detection), so there is no
+  // fixed phase count to fill a progress bar — report maxRounds 0 (indeterminate).
+  const totalPhases = 0;
   updateDiscussion(discussion.id, {
     status: "running",
     maxRounds: totalPhases,
@@ -2736,6 +2813,9 @@ export async function runBuildDiscussion(
     extraFileContext = `\nKey project files:${extraFileContext}`;
   }
 
+  // Guardrail check before the (potentially expensive) planning call.
+  if (stoppedForGuardrail()) return;
+
   {
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
@@ -2744,7 +2824,7 @@ export async function runBuildDiscussion(
         request: discussion.topic,
         treeText: treeText(),
         fileContext: extraFileContext,
-        maxTasks: limits.tasksPerWave,
+        maxTasks: BUILD_TASKS_PER_WAVE,
         workerNames: workers.map((w) => w.displayName),
         readHopsLeft: 2,
         runsLeft: runsLeftThisPhase(),
@@ -2767,7 +2847,7 @@ export async function runBuildDiscussion(
       },
     });
     const planAction = planResult.action as PlanAction;
-    tasks = planAction.tasks.slice(0, limits.tasksPerWave).map(toTask);
+    tasks = planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE).map(toTask);
     architectNotes = planAction.notes ?? "";
     planVerifyCommand =
       typeof planAction.verifyCommand === "string"
@@ -2793,8 +2873,30 @@ export async function runBuildDiscussion(
     emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned" });
   }
 
+  // Plan-only policy: produce the plan (and any GitHub planning the Architect did)
+  // without implementing code, then finish cleanly.
+  if (buildSettings.runPolicy === "plan_only") {
+    const summary = [
+      "Plan-only Build run completed.",
+      "",
+      "Planned tasks:",
+      ...tasks.map((task) => `- ${task.id}: ${task.title}`),
+    ].join("\n");
+    insertFinalResult({
+      discussionId: discussion.id,
+      answer: summary,
+      confidence: 1,
+      dissent: JSON.stringify([]),
+      createdAt: new Date().toISOString(),
+    });
+    emit({ type: "final_answer", answer: summary, confidence: 1, dissent: [] });
+    markStopped("completed", "Plan-only Build run completed.");
+    return;
+  }
+
   // ── 2..n) Implement waves + Architect reviews ──────────────────────────────
-  let workerCalls = 0;
+  // (Worker-call count is no longer tracked — it never stops the run, and the
+  // run is governed by completion, guardrails, and no-progress detection.)
   // Persists across batches and waves so small (even size-1) batches still
   // spread work over all active workers instead of piling onto the top rank.
   let assignCursor = 0;
@@ -2934,15 +3036,18 @@ export async function runBuildDiscussion(
 
   let done = false;
 
-  for (let cycle = 1; cycle <= limits.cycles && !done; cycle++) {
+  for (let cycle = 1; cycle <= BUILD_MAX_WAVES && !done; cycle++) {
+    // Stop cleanly at the wave boundary if the active USD/time window is spent.
+    if (stoppedForGuardrail()) return;
     // Drive the hero progress bar one notch per review wave. Builds count
-    // "waves" (review cycles), not panel-style discussion rounds — this
-    // corrects the store's initial maxRounds to the real wave budget.
+    // "waves" (review cycles), not panel-style discussion rounds. There is no
+    // fixed wave budget anymore (BUILD_MAX_WAVES is only a safety backstop), so
+    // report maxRounds 0 for an indeterminate, open-ended run.
     emit({
       type: "status",
       status: "running",
       round: cycle,
-      maxRounds: limits.cycles,
+      maxRounds: 0,
     });
     const pending = tasks.filter(
       (t) => t.status === "planned" || t.status === "fixing"
@@ -3418,14 +3523,9 @@ export async function runBuildDiscussion(
     // batch by batch (independent tasks never wait on each other).
     for (;;) {
       throwIfAborted();
-      if (workerCalls >= limits.totalWorkerCalls) {
-        emit({
-          type: "diagnostic",
-          phase: "round_preparing",
-          message: `Worker call budget reached (${limits.totalWorkerCalls}); moving to review`,
-        });
-        break;
-      }
+      // Worker-call count is telemetry only — it never stops the run. Stop here
+      // only if the active USD/time budget window is consumed.
+      if (stoppedForGuardrail()) return;
       const ready = tasks.filter(
         (t) =>
           (t.status === "planned" || t.status === "fixing") &&
@@ -3452,7 +3552,7 @@ export async function runBuildDiscussion(
       // we want to prevent. A task with no parseable outputs always joins (we
       // can't know its writes — don't over-block). Deferred tasks just stay
       // planned/fixing and get picked up by the next loop iteration.
-      const cap = limits.totalWorkerCalls - workerCalls;
+      const cap = BUILD_TASKS_PER_WAVE;
       const batch: BuildTask[] = [];
       const claimed = new Set<string>();
       for (const task of due) {
@@ -3522,7 +3622,6 @@ export async function runBuildDiscussion(
         }
       }
 
-      workerCalls += batch.length;
       if (batch.length > 1) {
         emit({
           type: "diagnostic",
@@ -3544,10 +3643,10 @@ export async function runBuildDiscussion(
     }
 
     if (executed.length === 0) {
-      // Nothing usable this wave. If budget remains and tasks were requeued,
-      // try the next cycle instead of silently ending the build half-done.
+      // Nothing usable this wave. Try the next wave (bounded by BUILD_MAX_WAVES,
+      // guardrails, and no-progress detection) instead of silently ending the
+      // build half-done.
       benchUnresponsiveWorkers();
-      if (workerCalls >= limits.totalWorkerCalls) break;
       emit({
         type: "diagnostic",
         phase: "round_preparing",
@@ -3581,6 +3680,8 @@ export async function runBuildDiscussion(
     // returns a verdict. If it loops or exhausts its budget the loop FORCES a
     // verdict (and defaults to approving this wave's landed work) instead of
     // throwing away the whole build the way it used to.
+    // Stop cleanly before the (expensive) Architect review call if spent.
+    if (stoppedForGuardrail()) return;
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
       label: `Architect is reviewing wave ${cycle}`,
@@ -3594,8 +3695,8 @@ export async function runBuildDiscussion(
         executedText:
           executedText + (verifyFeedback ? `\n\n${verifyFeedback}` : ""),
         outstandingTasks: buildOutstandingTasksDigest(tasks),
-        maxNewTasks: limits.tasksPerWave,
-        cyclesLeft: limits.cycles - cycle,
+        maxNewTasks: BUILD_TASKS_PER_WAVE,
+        cyclesLeft: Math.max(0, BUILD_MAX_WAVES - cycle),
         readHopsLeft: 2,
         rangeReadsLeft: 6,
         runsLeft: runsLeftThisPhase(),
@@ -3680,7 +3781,7 @@ export async function runBuildDiscussion(
 
     const novelTasks = filterNovelReviewTasks(
       tasks,
-      (action.newTasks ?? []).slice(0, limits.tasksPerWave)
+      (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
     );
     for (const skipped of novelTasks.skipped) {
       emit({
