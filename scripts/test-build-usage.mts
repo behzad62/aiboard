@@ -23,6 +23,16 @@ const usd = estimatedUsdForTokens({
 check("calculates blended token USD", Math.abs(usd - 2) < 0.000001, usd);
 
 let window = createBuildUsageWindow("2026-06-21T00:00:00.000Z");
+check(
+  "creates empty usage window",
+  window.startedAt === "2026-06-21T00:00:00.000Z" &&
+    window.elapsedMs === 0 &&
+    window.estimatedUsd === 0 &&
+    window.unknownPricedModelIds.length === 0 &&
+    window.models.length === 0,
+  window
+);
+
 window = addBuildUsageCall(window, {
   modelId: "google:gemini-3.5-flash",
   modelName: "Gemini 3.5 Flash",
