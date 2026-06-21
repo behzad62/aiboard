@@ -50,6 +50,8 @@ import {
   confine,
   listDirs,
   driveRoots,
+  createLog,
+  createNonceStore,
 } from "./runner-lib.mjs";
 
 const VERSION = 8;
@@ -112,6 +114,24 @@ const allowedOrigins = new Set([
   `http://localhost:${port}`,
   ...(host ? [`http://${host}:${port}`] : []),
 ]);
+
+// Structured log: a capped ring buffer the panel streams over SSE / polls. We
+// tee console.* through it so the terminal output stays byte-for-byte the same
+// while the panel gets a replayable feed.
+const L = createLog({ capacity: 2000 });
+const logNonces = createNonceStore();
+{
+  const origLog = console.log.bind(console);
+  const origErr = console.error.bind(console);
+  console.log = (...a) => {
+    L.log({ level: "info", category: "sys", msg: a.map(String).join(" ") });
+    origLog(...a);
+  };
+  console.error = (...a) => {
+    L.log({ level: "error", category: "sys", msg: a.map(String).join(" ") });
+    origErr(...a);
+  };
+}
 
 // "<name>=<command>" specs from repeated --mcp flags.
 const mcpSpecs = [];
@@ -1733,6 +1753,41 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
 
+  // SSE log stream — authenticated by a single-use nonce (EventSource cannot send
+  // the x-runner-token header), so it is handled BEFORE the token gate.
+  if (req.method === "GET" && url.pathname === "/api/logs/stream") {
+    if (!logNonces.consume(url.searchParams.get("nonce"))) {
+      json(res, 401, { error: "Invalid or expired log nonce" });
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      ...CORS_HEADERS,
+    });
+    for (const e of L.snapshot(0)) res.write(`data: ${JSON.stringify(e)}\n\n`);
+    const unsub = L.subscribe((e) => {
+      try {
+        res.write(`data: ${JSON.stringify(e)}\n\n`);
+      } catch {
+        /* client gone */
+      }
+    });
+    const ping = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* client gone */
+      }
+    }, 25_000);
+    req.on("close", () => {
+      clearInterval(ping);
+      unsub();
+    });
+    return;
+  }
+
   if (!authorized(req)) {
     json(res, 401, { error: "Invalid or missing token" });
     return;
@@ -1746,6 +1801,19 @@ const server = http.createServer(async (req, res) => {
       platform: process.platform,
       canWrite: true,
     });
+    return;
+  }
+
+  // Mint a single-use nonce for opening the SSE log stream.
+  if (req.method === "POST" && url.pathname === "/api/logs/nonce") {
+    json(res, 200, { ok: true, nonce: logNonces.mint() });
+    return;
+  }
+
+  // Poll fallback over the ring buffer (degrades gracefully over a buffering tunnel).
+  if (req.method === "GET" && url.pathname === "/api/logs") {
+    const since = Number(url.searchParams.get("since") ?? 0) || 0;
+    json(res, 200, { ok: true, events: L.snapshot(since), lastSeq: L.lastSeq });
     return;
   }
 

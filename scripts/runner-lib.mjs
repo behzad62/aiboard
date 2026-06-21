@@ -8,7 +8,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -171,4 +171,86 @@ export async function driveRoots() {
     });
   const results = await Promise.all(letters.map(probe));
   return results.filter(Boolean);
+}
+
+// ── Structured logging ───────────────────────────────────────────────────────
+
+/**
+ * In-memory log with a capped ring buffer, monotonic seq, live subscribers (for
+ * SSE), and a `format` that reproduces the legacy one-line stdout string. The
+ * runner tees console.* through `log` so the terminal output stays unchanged
+ * while the panel gets a structured, replayable feed.
+ */
+export function createLog({ capacity = 2000 } = {}) {
+  const buf = [];
+  let seq = 0;
+  const subscribers = new Set();
+
+  function log(event) {
+    seq += 1;
+    const e = {
+      level: "info",
+      category: "sys",
+      msg: "",
+      ...event,
+      seq,
+      ts: event && event.ts ? event.ts : new Date().toISOString(),
+    };
+    buf.push(e);
+    if (buf.length > capacity) buf.shift();
+    for (const fn of subscribers) {
+      try {
+        fn(e);
+      } catch {
+        /* a broken subscriber must not break logging */
+      }
+    }
+    return e;
+  }
+
+  /** Events with seq greater than `sinceSeq`. */
+  function snapshot(sinceSeq = 0) {
+    return buf.filter((e) => e.seq > sinceSeq);
+  }
+
+  function subscribe(fn) {
+    subscribers.add(fn);
+    return () => subscribers.delete(fn);
+  }
+
+  /** Legacy one-line representation (what used to go to stdout). */
+  function format(e) {
+    return e && typeof e.msg === "string" ? e.msg : String(e?.msg ?? "");
+  }
+
+  return {
+    log,
+    snapshot,
+    subscribe,
+    format,
+    get lastSeq() {
+      return seq;
+    },
+  };
+}
+
+/**
+ * Short-lived, single-use nonces. EventSource can't send the auth header, so the
+ * panel mints a nonce via an authenticated POST and passes it on the SSE URL.
+ */
+export function createNonceStore({ ttlMs = 30_000 } = {}) {
+  const nonces = new Map(); // nonce -> expiry ms
+  function mint() {
+    const n = randomBytes(18).toString("hex");
+    nonces.set(n, Date.now() + ttlMs);
+    return n;
+  }
+  function consume(n) {
+    if (typeof n !== "string") return false;
+    const exp = nonces.get(n);
+    if (exp === undefined) return false;
+    nonces.delete(n); // single-use regardless of validity
+    return exp > Date.now();
+  }
+  return { mint, consume };
 }
