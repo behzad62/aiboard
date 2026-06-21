@@ -42,6 +42,15 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
+import {
+  tokensMatch,
+  isAllowedHost,
+  isAllowedOrigin,
+  defaultAppOrigins,
+  confine,
+  listDirs,
+  driveRoots,
+} from "./runner-lib.mjs";
 
 const VERSION = 8;
 const MAX_OUTPUT_BYTES = 200 * 1024;
@@ -78,14 +87,31 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const projectDir = path.resolve(positional[0] ?? ".");
+const rootArg = path.resolve(positional[0] ?? process.cwd());
 const port = Number(flag("port") ?? 8787);
-const token = flag("token") ?? randomBytes(12).toString("hex");
+const token = flag("token") ?? randomBytes(16).toString("hex");
+const host = flag("host"); // undefined → loopback-only default
 
-if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
-  console.error(`Not a folder: ${projectDir}`);
+if (!fs.existsSync(rootArg) || !fs.statSync(rootArg).isDirectory()) {
+  console.error(`Not a folder: ${rootArg}`);
   process.exit(1);
 }
+// Canonical folder-browser boundary; `projectDir` is the active working folder
+// (mutable at runtime via the panel, always re-confined within `root`).
+const root = fs.realpathSync(rootArg);
+let projectDir = root;
+
+const extraAppOrigins = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--app-origin" && args[i + 1]) extraAppOrigins.push(args[i + 1]);
+}
+const appOrigins = defaultAppOrigins(extraAppOrigins);
+const allowedOrigins = new Set([
+  ...appOrigins,
+  `http://127.0.0.1:${port}`,
+  `http://localhost:${port}`,
+  ...(host ? [`http://${host}:${port}`] : []),
+]);
 
 // "<name>=<command>" specs from repeated --mcp flags.
 const mcpSpecs = [];
@@ -140,11 +166,12 @@ if (args.includes("--searxng")) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+// Access-Control-Allow-Origin is set per-request (reflected from the allowlist)
+// in the request handler, not here — so the static set carries everything else.
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
   "Access-Control-Allow-Headers": "content-type,x-runner-token",
-  "Access-Control-Max-Age": "86400",
+  "Access-Control-Max-Age": "600",
 };
 
 function json(res, status, body) {
@@ -153,7 +180,8 @@ function json(res, status, body) {
 }
 
 function authorized(req) {
-  return req.headers["x-runner-token"] === token;
+  const provided = req.headers["x-runner-token"];
+  return typeof provided === "string" && tokensMatch(provided, token);
 }
 
 function readBody(req) {
@@ -173,10 +201,13 @@ function safeResolve(relPath) {
   if (typeof relPath !== "string" || !relPath.trim()) return null;
   const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").trim();
   if (/^([A-Za-z]:|\/)/.test(normalized)) return null; // absolute
-  const target = path.resolve(projectDir, normalized);
-  const rel = path.relative(projectDir, target);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null; // escaped
-  return target;
+  try {
+    // Confine to the active project folder, with realpath hardening against
+    // symlink/junction escapes. confine() throws on any escape → null.
+    return confine(projectDir, normalized);
+  } catch {
+    return null;
+  }
 }
 
 function writeFileInProject(relPath, content) {
@@ -1679,9 +1710,24 @@ process.on("SIGTERM", () => {
 
 // ── Server ───────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin;
+  const originAllowed = isAllowedOrigin(origin, allowedOrigins);
+  if (origin && originAllowed) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+
   if (req.method === "OPTIONS") {
     res.writeHead(204, CORS_HEADERS);
     res.end();
+    return;
+  }
+
+  // Request guard (runs before auth): the Host allowlist defeats DNS-rebinding
+  // (a page that rebinds a name to our address sends a foreign Host); the Origin
+  // allowlist blocks cross-site (CSRF) drive-by use of a leaked token.
+  if (!isAllowedHost(req.headers.host, { port, host }) || !originAllowed) {
+    json(res, 403, { error: "Forbidden host or origin" });
     return;
   }
 
