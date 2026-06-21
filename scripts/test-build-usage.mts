@@ -4,6 +4,7 @@ import {
   createBuildUsageWindow,
   estimatedUsdForTokens,
 } from "../lib/client/build-usage";
+import type { BuildUsageCallInput } from "../lib/client/build-usage";
 import { formatTokenCount } from "../lib/client/token-usage";
 
 let failed = 0;
@@ -11,6 +12,8 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
   if (!ok) failed++;
 };
+const closeEnough = (actual: number | null | undefined, expected: number) =>
+  actual != null && Math.abs(actual - expected) < 0.000001;
 
 check("formats thousands compactly", formatTokenCount(18_734) === "18.7k");
 check("formats millions compactly", formatTokenCount(1_234_567) === "1.2M");
@@ -20,7 +23,7 @@ const usd = estimatedUsdForTokens({
   outputTokens: 100_000,
   pricing: { inputUsdPer1M: 2, outputUsdPer1M: 10 },
 });
-check("calculates blended token USD", Math.abs(usd - 2) < 0.000001, usd);
+check("calculates blended token USD", closeEnough(usd, 2), usd);
 
 let window = createBuildUsageWindow("2026-06-21T00:00:00.000Z");
 check(
@@ -33,15 +36,63 @@ check(
   window
 );
 
-window = addBuildUsageCall(window, {
+const geminiPricing = { inputUsdPer1M: 1.5, outputUsdPer1M: 9 };
+const firstGeminiUsd = estimatedUsdForTokens({
+  inputTokens: 18_000,
+  outputTokens: 700,
+  pricing: geminiPricing,
+});
+const secondGeminiUsd = estimatedUsdForTokens({
+  inputTokens: 2_000,
+  outputTokens: 300,
+  pricing: geminiPricing,
+});
+const expectedGeminiUsd = firstGeminiUsd + secondGeminiUsd;
+
+const firstGeminiCall: BuildUsageCallInput = {
   modelId: "google:gemini-3.5-flash",
   modelName: "Gemini 3.5 Flash",
   providerId: "google",
   inputTokens: 18_000,
   outputTokens: 700,
-  pricing: { inputUsdPer1M: 1.5, outputUsdPer1M: 9 },
-  elapsedMs: 5_000,
-});
+  pricing: geminiPricing,
+  elapsedSinceWindowStartMs: 5_000,
+};
+window = addBuildUsageCall(window, firstGeminiCall);
+
+const previousWindow = window;
+const previousGemini = previousWindow.models.find((m) => m.modelId === "google:gemini-3.5-flash");
+const secondGeminiCall: BuildUsageCallInput = {
+  modelId: "google:gemini-3.5-flash",
+  modelName: "Gemini 3.5 Flash",
+  providerId: "google",
+  inputTokens: 2_000,
+  outputTokens: 300,
+  pricing: geminiPricing,
+  elapsedSinceWindowStartMs: 8_000,
+};
+window = addBuildUsageCall(previousWindow, secondGeminiCall);
+const updatedGemini = window.models.find((m) => m.modelId === "google:gemini-3.5-flash");
+
+check(
+  "does not mutate previous usage window",
+  previousWindow !== window &&
+    previousWindow.elapsedMs === 5_000 &&
+    closeEnough(previousWindow.estimatedUsd, firstGeminiUsd) &&
+    previousWindow.models.length === 1,
+  { previousWindow, window }
+);
+check(
+  "does not mutate previous model totals",
+  previousGemini?.calls === 1 &&
+    previousGemini.inputTokens === 18_000 &&
+    previousGemini.outputTokens === 700 &&
+    previousGemini.totalTokens === 18_700 &&
+    closeEnough(previousGemini.estimatedUsd, firstGeminiUsd),
+  previousGemini
+);
+check("returns cloned updated model row", updatedGemini !== previousGemini, { previousGemini, updatedGemini });
+
 window = addBuildUsageCall(window, {
   modelId: "custom:local",
   modelName: "Local",
@@ -49,13 +100,25 @@ window = addBuildUsageCall(window, {
   inputTokens: 1000,
   outputTokens: 100,
   pricing: null,
-  elapsedMs: 10_000,
+  elapsedSinceWindowStartMs: 10_000,
 });
 
-const gemini = window.models.find((m) => m.modelId === "google:gemini-3.5-flash");
+const geminiRows = window.models.filter((m) => m.modelId === "google:gemini-3.5-flash");
+const gemini = geminiRows[0];
 const local = window.models.find((m) => m.modelId === "custom:local");
 
-check("aggregates calls by model", gemini?.calls === 1 && gemini.totalTokens === 18_700, window);
+check(
+  "aggregates duplicate priced calls by model",
+  geminiRows.length === 1 &&
+    gemini?.calls === 2 &&
+    gemini.inputTokens === 20_000 &&
+    gemini.outputTokens === 1_000 &&
+    gemini.totalTokens === 21_000 &&
+    gemini.priced === true &&
+    closeEnough(gemini.estimatedUsd, expectedGeminiUsd),
+  { geminiRows, expectedGeminiUsd }
+);
+check("window USD sums priced calls", closeEnough(window.estimatedUsd, expectedGeminiUsd), window);
 check("tracks unknown priced model ids", window.unknownPricedModelIds.includes("custom:local"), window);
 check("unknown priced model has null USD", local?.estimatedUsd === null, local);
 check("window elapsed tracks latest event", window.elapsedMs === 10_000, window);

@@ -7,6 +7,16 @@ export interface TokenPricingInput {
   pricing: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M">;
 }
 
+export interface BuildUsageCallInput {
+  modelId: string;
+  modelName: string;
+  providerId: string;
+  inputTokens: number;
+  outputTokens: number;
+  pricing: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  elapsedSinceWindowStartMs: number;
+}
+
 export function estimatedUsdForTokens(input: TokenPricingInput): number {
   return (
     (input.inputTokens * input.pricing.inputUsdPer1M +
@@ -27,15 +37,7 @@ export function createBuildUsageWindow(startedAt: string): BuildUsageWindow {
 
 export function addBuildUsageCall(
   window: BuildUsageWindow,
-  input: {
-    modelId: string;
-    modelName: string;
-    providerId: string;
-    inputTokens: number;
-    outputTokens: number;
-    pricing: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
-    elapsedMs: number;
-  }
+  input: BuildUsageCallInput
 ): BuildUsageWindow {
   const totalTokens = input.inputTokens + input.outputTokens;
   const callUsd = input.pricing
@@ -76,7 +78,7 @@ export function addBuildUsageCall(
 
   return {
     startedAt: window.startedAt,
-    elapsedMs: Math.max(window.elapsedMs, input.elapsedMs),
+    elapsedMs: Math.max(window.elapsedMs, input.elapsedSinceWindowStartMs),
     estimatedUsd: window.estimatedUsd + (callUsd == null ? 0 : callUsd),
     unknownPricedModelIds: [...unknownPricedModelIds].sort(),
     models,
