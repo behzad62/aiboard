@@ -27,7 +27,7 @@ export function headers(token: string): HeadersInit {
 
 export async function checkRunner(
   config: RunnerConfig
-): Promise<{ ok: boolean; dir?: string; platform?: string; error?: string }> {
+): Promise<{ ok: boolean; dir?: string; platform?: string; version?: number; error?: string }> {
   try {
     const res = await fetch(`${config.url.replace(/\/$/, "")}/health`, {
       headers: headers(config.token),
@@ -38,6 +38,7 @@ export async function checkRunner(
       ok: true,
       dir: data.dir,
       platform: typeof data.platform === "string" ? data.platform : undefined,
+      version: typeof data.version === "number" ? data.version : undefined,
     };
   } catch {
     return {

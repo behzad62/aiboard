@@ -54,7 +54,7 @@ import {
   createNonceStore,
 } from "./runner-lib.mjs";
 
-const VERSION = 8;
+const VERSION = 9;
 // Replaced at build time (scripts/build-runner.mjs) with the inlined panel HTML.
 // When running the unbuilt source directly this stays a placeholder; the served
 // runner is always the built public/runner.mjs.

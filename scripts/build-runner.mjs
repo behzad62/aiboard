@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -89,6 +90,14 @@ const output = `${shebang}${banner}${mergedImports}\n\n// ── inlined helpers
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, output);
+
+// Release manifest: the app reads it to show the download version + an "update
+// available" nudge; the runner's self-update verifies the SHA-256 (and, later,
+// an Ed25519 signature) against it. The hash is over the exact bytes written.
+const version = Number((output.match(/const VERSION = (\d+)/) || [])[1] || 0);
+const sha256 = createHash("sha256").update(output).digest("hex");
+const manifest = { version, sha256, url: "/runner.mjs" };
+fs.writeFileSync(path.join(repo, "public", "runner-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 console.log(
-  `Built ${path.relative(repo, OUT)} — ${(output.length / 1024).toFixed(1)} kB (panel ${(panel.length / 1024).toFixed(1)} kB)`
+  `Built ${path.relative(repo, OUT)} v${version} — ${(output.length / 1024).toFixed(1)} kB (panel ${(panel.length / 1024).toFixed(1)} kB); manifest sha256 ${sha256.slice(0, 12)}…`
 );

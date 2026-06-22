@@ -27,5 +27,13 @@ try {
   check("node --check passes (valid single file)", false);
 }
 
+// Release manifest
+const { createHash } = await import("node:crypto");
+const manifest = JSON.parse(fs.readFileSync("public/runner-manifest.json", "utf8"));
+const fileVersion = Number((out.match(/const VERSION = (\d+)/) || [])[1] || 0);
+check("manifest version matches built file", manifest.version === fileVersion && fileVersion > 0);
+check("manifest sha256 matches built file", manifest.sha256 === createHash("sha256").update(out).digest("hex"));
+check("manifest url is /runner.mjs", manifest.url === "/runner.mjs");
+
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

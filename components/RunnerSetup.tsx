@@ -46,12 +46,26 @@ export function RunnerSetup({
   const [status, setStatus] = useState<
     { state: "idle" | "ok" | "error"; message?: string }
   >({ state: "idle" });
+  const [manifestVersion, setManifestVersion] = useState<number | null>(null);
+  const [connectedVersion, setConnectedVersion] = useState<number | null>(null);
+
+  // Latest runner version (from the build-time manifest) for the download label
+  // and the "update available" nudge.
+  useEffect(() => {
+    fetch("/runner-manifest.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m) => {
+        if (m && typeof m.version === "number") setManifestVersion(m.version);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     setUrl(initialSelection?.url ?? DEFAULT_RUNNER_URL);
     setToken(initialSelection?.token ?? "");
     setAccess(initialSelection?.access ?? "ask");
     setConnectedDir(null);
+    setConnectedVersion(null);
     setStatus({ state: "idle" });
   }, [initialSelection?.access, initialSelection?.token, initialSelection?.url]);
 
@@ -70,6 +84,7 @@ export function RunnerSetup({
     setStatus({ state: "idle", message: "Checking…" });
     const result = await checkRunner({ url, token });
     setConnectedDir(result.ok ? result.dir ?? null : null);
+    setConnectedVersion(result.ok ? result.version ?? null : null);
     setStatus(
       result.ok
         ? { state: "ok", message: `Connected to folder "${result.dir}"` }
@@ -119,7 +134,7 @@ export function RunnerSetup({
         <Button type="button" variant="outline" size="sm" asChild>
           <a href="/runner.mjs" download="runner.mjs">
             <Download className="mr-2 h-4 w-4" />
-            Download runner.mjs
+            Download runner.mjs{manifestVersion ? ` (v${manifestVersion})` : ""}
           </a>
         </Button>
         <span className="text-xs text-muted-foreground">
@@ -282,6 +297,16 @@ export function RunnerSetup({
             folder or restart the runner on the same project so they match.
           </p>
         )}
+
+        {connectedVersion != null &&
+          manifestVersion != null &&
+          connectedVersion < manifestVersion && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+              Your runner is v{connectedVersion}; v{manifestVersion} is
+              available. Re-download <code>runner.mjs</code> and restart it to
+              get the latest features and fixes.
+            </p>
+          )}
       </div>
     </div>
   );

@@ -37,8 +37,9 @@ yarn-error.log*
 # database and local uploads
 /data/
 
-# build-time copy of scripts/runner.mjs (the downloadable runner)
+# build-time copy of scripts/runner.mjs (the downloadable runner) + its manifest
 /public/runner.mjs
+/public/runner-manifest.json
 
 # typescript
 *.tsbuildinfo
