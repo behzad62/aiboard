@@ -1,0 +1,108 @@
+/** Build quality gate checks (run: npx tsx scripts/test-build-quality-gates.mts) */
+import {
+  evaluateBuildQualityGate,
+  formatBuildQualityGateSummary,
+} from "../lib/orchestrator/build-quality-gates";
+
+let failed = 0;
+const check = (name: string, ok: boolean, detail?: unknown) => {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+  if (!ok) failed++;
+};
+
+const cleanStatus = {
+  isRepo: true,
+  currentBranch: "codex/example",
+  upstream: "origin/codex/example",
+  ahead: 0,
+  behind: 0,
+  staged: [] as string[],
+  unstaged: [] as string[],
+  untracked: [] as string[],
+  conflicted: [] as string[],
+  clean: true,
+};
+
+const cleanReady = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: cleanStatus,
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+    { name: "Lint", command: "npm run lint", status: "passed" },
+    { name: "Build", command: "npm run build", status: "passed" },
+  ],
+  issueNumbers: [18, 19, 20],
+});
+
+check("clean ready gate passes", cleanReady.status === "ready", cleanReady);
+check("ready gate has issue warning", cleanReady.warnings.some((w) => /close on merge/i.test(w.message)), cleanReady);
+
+const dirty = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: {
+    ...cleanStatus,
+    clean: false,
+    unstaged: ["app/games/games-client.tsx"],
+  },
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+  ],
+});
+
+check("dirty tree blocks completion", dirty.status === "blocked", dirty);
+check("dirty tree names changed file", dirty.blockers.some((b) => b.message.includes("app/games/games-client.tsx")), dirty);
+
+const aheadWithPr = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: { ...cleanStatus, ahead: 1 },
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+  ],
+});
+
+check("local branch ahead after PR blocks completion", aheadWithPr.status === "blocked", aheadWithPr);
+check("local branch ahead explains stale PR", aheadWithPr.blockers.some((b) => /PR is stale/i.test(b.message)), aheadWithPr);
+
+const missingChecks = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: cleanStatus,
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+    { name: "Lint", command: "npm run lint", status: "missing" },
+    { name: "Build", command: "npm run build", status: "failed", outputPreview: "prefer-const" },
+  ],
+});
+
+check("missing and failed checks block completion", missingChecks.blockers.length === 2, missingChecks);
+check("failed check includes output preview", missingChecks.blockers.some((b) => b.details?.includes("prefer-const")), missingChecks);
+
+const noRunner = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: null,
+  repoPrUrl: null,
+  repoPushedBranch: null,
+  requiredChecks: [],
+});
+
+check("missing repo status blocks GitHub workflow", noRunner.status === "blocked", noRunner);
+check("missing repo status explains runner requirement", noRunner.blockers.some((b) => /runner/i.test(b.message)), noRunner);
+
+const summary = formatBuildQualityGateSummary(missingChecks);
+check("summary has quality gate heading", summary.includes("Build quality gate"), summary);
+check("summary names failed build command", summary.includes("npm run build"), summary);
+check("summary includes output preview", summary.includes("prefer-const"), summary);
+
+process.exit(failed === 0 ? 0 : 1);

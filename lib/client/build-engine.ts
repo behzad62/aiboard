@@ -43,6 +43,12 @@ import {
   scheduleBuildToolActions,
 } from "@/lib/orchestrator/build-tool-scheduler";
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
+import {
+  evaluateBuildQualityGate,
+  formatBuildQualityGateSummary,
+  type BuildQualityGateRepoStatus,
+  type BuildQualityRequiredCheck,
+} from "@/lib/orchestrator/build-quality-gates";
 import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
@@ -942,8 +948,8 @@ export async function runBuildDiscussion(
    * repo. All wrappers are soft — failures are swallowed so a flaky runner
    * never aborts the build.
    */
-  const refreshRepoState = async (): Promise<void> => {
-    if (!runner || !repoIsGit) return;
+  const refreshRepoState = async (): Promise<RepoStatus | null> => {
+    if (!runner || !repoIsGit) return null;
     try {
       const repoStatus = await getRepoStatusViaRunner(runner);
       if (repoStatus) {
@@ -955,8 +961,10 @@ export async function runBuildDiscussion(
       if (repoDiff) {
         emit({ type: "repo_diff", diff: toRepoDiffEvent(repoDiff) });
       }
+      return repoStatus;
     } catch (err) {
       console.error("[build] refreshing repo status failed:", err);
+      return null;
     }
   };
 
@@ -2017,6 +2025,97 @@ export async function runBuildDiscussion(
       }
     }
     return null;
+  };
+
+  const repoStatusForQualityGate = (
+    status: RepoStatus | null
+  ): BuildQualityGateRepoStatus | null =>
+    status
+      ? {
+          isRepo: status.isRepo,
+          currentBranch: status.currentBranch,
+          upstream: status.upstream,
+          ahead: status.ahead,
+          behind: status.behind,
+          staged: status.staged,
+          unstaged: status.unstaged,
+          untracked: status.untracked,
+          conflicted: status.conflicted,
+          clean: status.clean,
+        }
+      : null;
+
+  const addUniqueCommand = (commands: string[], command: string): void => {
+    const trimmed = command.trim();
+    if (!trimmed) return;
+    if (!commands.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+      commands.push(trimmed);
+    }
+  };
+
+  const detectFinalVerificationCommands = async (): Promise<string[]> => {
+    const commands: string[] = [];
+    addUniqueCommand(commands, verifyCommand);
+
+    const packageJsonText = await readFile("package.json");
+    if (packageJsonText) {
+      try {
+        const pkg = JSON.parse(packageJsonText) as {
+          scripts?: Record<string, unknown>;
+        };
+        const scripts = pkg.scripts ?? {};
+        const hasTsconfig = (await readFile("tsconfig.json")) != null;
+        if (hasTsconfig) {
+          addUniqueCommand(commands, "npx --yes tsc --noEmit");
+        }
+        if (typeof scripts.lint === "string") {
+          addUniqueCommand(commands, "npm run lint");
+        }
+        if (typeof scripts.build === "string") {
+          addUniqueCommand(commands, "npm run build");
+        }
+        if (
+          typeof scripts.test === "string" &&
+          !/no test specified|exit 1/i.test(scripts.test)
+        ) {
+          addUniqueCommand(commands, "npm test");
+        }
+      } catch {
+        // Malformed package.json is already caught by TypeScript/build checks.
+      }
+    }
+
+    return commands;
+  };
+
+  const classifyFinalCheckResult = (
+    command: string,
+    feedback: string
+  ): BuildQualityRequiredCheck => {
+    const failed =
+      !feedback.trim() ||
+      /\bFAILED\b|could not run|was rejected|DENIED|does NOT compile/i.test(
+        feedback
+      );
+    return {
+      name: command,
+      command,
+      status: failed ? "failed" : "passed",
+      outputPreview: failed ? truncate(feedback, 1_500) : undefined,
+    };
+  };
+
+  const runFinalVerificationChecks = async (): Promise<
+    BuildQualityRequiredCheck[]
+  > => {
+    if (!runner) return [];
+    const commands = await detectFinalVerificationCommands();
+    const checks: BuildQualityRequiredCheck[] = [];
+    for (const command of commands) {
+      const feedback = await runVerify(command);
+      checks.push(classifyFinalCheckResult(command, feedback));
+    }
+    return checks;
   };
 
   const emitFileToolDiagnostic = (
@@ -4474,6 +4573,82 @@ export async function runBuildDiscussion(
     throw new Error(message);
   }
 
+  let finalQualityGateSummary = "";
+  if (runner || githubWorkflow) {
+    emit({
+      type: "diagnostic",
+      phase: "judging",
+      message: "Running final Build quality gate",
+    });
+    const finalChecks = await runFinalVerificationChecks();
+    if (finalChecks.length > 0) {
+      repoVerification = finalChecks
+        .map((check) => `${check.command} ${check.status}`)
+        .join("; ");
+    }
+    const finalRepoStatus = await refreshRepoState();
+    const issueNumbers = [
+      ...(repoIssueNumber == null ? [] : [repoIssueNumber]),
+      ...repoCreatedIssues.map((item) => item.issue),
+    ];
+    const qualityGate = evaluateBuildQualityGate({
+      githubWorkflow,
+      expectedPr: prExpected,
+      repoStatus: githubWorkflow
+        ? repoStatusForQualityGate(finalRepoStatus)
+        : null,
+      repoPrUrl,
+      repoPushedBranch,
+      requiredChecks: finalChecks,
+      issueNumbers,
+    });
+    finalQualityGateSummary = formatBuildQualityGateSummary(qualityGate);
+
+    if (qualityGate.status === "blocked") {
+      for (const blocker of qualityGate.blockers) {
+        recordBuildProblem({
+          code: "quality_gate_failed",
+          severity: "blocked",
+          source: "engine",
+          wave: wavesRun,
+          message: blocker.message,
+          details: blocker.details,
+        });
+      }
+      const message = `Build blocked by final quality gate:\n${qualityGate.blockers
+        .map((blocker) => `- ${blocker.message}`)
+        .join("\n")}`;
+      recoveryLog.push(
+        `Stopped as blocked by final quality gate after wave ${wavesRun}.`
+      );
+      const report = createStopReport({
+        status: "blocked",
+        stopReason: "blocked",
+        message,
+        wave: wavesRun,
+        tasks,
+        verifyCommand:
+          finalChecks.map((check) => check.command).join("; ") || verifyCommand,
+      });
+      saveCheckpoint({
+        status: "blocked",
+        stopReason: "blocked",
+        wave: wavesRun,
+        tasks,
+        architectNotes,
+        verifyCommand,
+        stopReport: report,
+      });
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        message: `${message}\n\n${truncate(finalQualityGateSummary, 2_500)}`,
+      });
+      markStopped("blocked", message, report);
+      return;
+    }
+  }
+
   throwIfAborted();
   emit({ type: "status", status: "judging" });
   emit({
@@ -4524,6 +4699,9 @@ export async function runBuildDiscussion(
       expectedPr: prExpected,
     });
     if (block) finalAnswer = `${answer}\n${block}`;
+  }
+  if (finalQualityGateSummary) {
+    finalAnswer = `${finalAnswer}\n\n${finalQualityGateSummary}`;
   }
   insertFinalResult({
     discussionId: discussion.id,

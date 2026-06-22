@@ -58,7 +58,8 @@ export type BuildProblemCode =
   | "tool_denied"
   | "no_output"
   | "repeated_no_progress"
-  | "incomplete_tasks";
+  | "incomplete_tasks"
+  | "quality_gate_failed";
 
 export interface BuildProblem {
   id: string;
