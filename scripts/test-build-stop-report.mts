@@ -86,4 +86,74 @@ check("markdown includes malformed tool call", markdown.includes("malformed_tool
 check("markdown includes unfinished task", markdown.includes("T5"), markdown);
 check("markdown is paste-oriented", markdown.includes("## What I need help with"), markdown);
 
+const missingCommandReport = createBuildStopReport({
+  discussionId: "d2",
+  topic: "Add a Games tab with chess.",
+  status: "blocked",
+  stopReason: "blocked",
+  stopMessage:
+    "Build stopped after repeated no-progress recovery attempts. Resume keeps the checkpoint.",
+  wave: 1,
+  verifyCommand: "npx --yes tsc --noEmit",
+  tasks: [
+    { id: "T1", title: "Chess board", status: "done" },
+    { id: "T9", title: "Build the app and fix runtime errors", status: "planned" },
+  ],
+  problems: [
+    {
+      id: "p3",
+      createdAt: "2026-06-22T19:00:00.000Z",
+      code: "verification_repeated",
+      severity: "error",
+      source: "runner",
+      action: "npm run build",
+      message: "Automated build check failed in wave 1: npm run build",
+      details: "Failed to compile.\n./components/games/ChessBoard.tsx\n42:7  Error: 'bgColor' is never reassigned. Use 'const' instead.  prefer-const",
+      wave: 1,
+    },
+    {
+      id: "p4",
+      createdAt: "2026-06-22T19:02:00.000Z",
+      code: "repeated_no_progress",
+      severity: "blocked",
+      source: "engine",
+      message:
+        "Build stopped after repeated no-progress recovery attempts: 5 repeated failure(s), 0 no-progress wave(s).",
+      wave: 1,
+    },
+  ],
+  commandProblems: [],
+  failureFingerprints: {
+    "npm run build|prefer-const": 5,
+  },
+  recoveryLog: [
+    "Verification failure changed after wave 1.",
+    "Stopped as blocked after wave 1: 5 repeated failure(s), 0 no-progress wave(s).",
+  ],
+  createdAt: "2026-06-22T19:02:33.605Z",
+});
+
+check(
+  "report promotes verification problem when command log is missing",
+  missingCommandReport.primaryCause?.code === "verification_repeated" &&
+    missingCommandReport.primaryCause.action === "npm run build",
+  missingCommandReport
+);
+check(
+  "report reconstructs failed command from verification problem",
+  missingCommandReport.commandProblems.some(
+    (command) =>
+      command.command === "npm run build" &&
+      command.exitCode === 1 &&
+      command.outputPreview.includes("prefer-const")
+  ),
+  missingCommandReport
+);
+check(
+  "markdown does not say failed commands are missing when verification details exist",
+  !formatBuildStopReportMarkdown(missingCommandReport).includes("No failed commands recorded.") &&
+    formatBuildStopReportMarkdown(missingCommandReport).includes("npm run build"),
+  formatBuildStopReportMarkdown(missingCommandReport)
+);
+
 process.exit(failed === 0 ? 0 : 1);

@@ -149,6 +149,8 @@ export interface BuildCheckpoint {
   issueNumbers: number[];
   failureFingerprints: Record<string, number>;
   recoveryLog: string[];
+  buildProblems?: BuildProblem[];
+  commandProblems?: BuildCommandProblem[];
   stopReport?: BuildStopReport | null;
   usageWindow: BuildUsageWindow;
 }

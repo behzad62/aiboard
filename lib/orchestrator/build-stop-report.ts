@@ -63,6 +63,41 @@ function commandProblemToBuildProblem(
   };
 }
 
+function verificationProblemToCommandProblem(
+  problem: BuildProblem
+): BuildCommandProblem | null {
+  if (
+    problem.source !== "runner" ||
+    (problem.code !== "verification_failed" &&
+      problem.code !== "verification_repeated") ||
+    !problem.action
+  ) {
+    return null;
+  }
+  return {
+    command: problem.action,
+    exitCode: 1,
+    durationMs: 0,
+    outputPreview: problem.details ?? problem.message,
+    createdAt: problem.createdAt,
+  };
+}
+
+function enrichCommandProblems(
+  commandProblems: BuildCommandProblem[],
+  problems: BuildProblem[]
+): BuildCommandProblem[] {
+  const commands = sortNewestCommands(commandProblems);
+  const seen = new Set(commands.map((command) => command.command));
+  for (const problem of sortNewestProblems(problems)) {
+    const command = verificationProblemToCommandProblem(problem);
+    if (!command || seen.has(command.command)) continue;
+    commands.push(command);
+    seen.add(command.command);
+  }
+  return commands;
+}
+
 function pickPrimaryCause(
   commandProblems: BuildCommandProblem[],
   problems: BuildProblem[]
@@ -75,6 +110,22 @@ function pickPrimaryCause(
   }
 
   const ranked = sortNewestProblems(problems).sort((a, b) => {
+    const causeRank = (problem: BuildProblem) => {
+      if (
+        problem.code === "verification_repeated" ||
+        problem.code === "verification_failed"
+      ) {
+        return 5;
+      }
+      if (
+        problem.code === "quality_gate_failed" ||
+        problem.code === "command_failed"
+      ) {
+        return 4;
+      }
+      if (problem.code === "repeated_no_progress") return 1;
+      return 2;
+    };
     const severityRank = (severity: BuildProblem["severity"]) =>
       severity === "blocked"
         ? 4
@@ -83,7 +134,11 @@ function pickPrimaryCause(
           : severity === "warning"
             ? 2
             : 1;
-    return severityRank(b.severity) - severityRank(a.severity);
+    return (
+      causeRank(b) - causeRank(a) ||
+      severityRank(b.severity) - severityRank(a.severity) ||
+      b.createdAt.localeCompare(a.createdAt)
+    );
   });
   return ranked[0] ?? null;
 }
@@ -101,6 +156,9 @@ function buildNextAction(primary: BuildProblem | null, fallback: string): string
   if (primary.code === "verification_failed" && primary.action) {
     return `Fix the failing command \`${primary.action}\` first; use the latest output in this report as the reproduction.`;
   }
+  if (primary.code === "verification_repeated" && primary.action) {
+    return `Fix the repeatedly failing command \`${primary.action}\` first; use the latest output in this report as the reproduction.`;
+  }
   if (primary.code === "malformed_tool_call") {
     return "Resume with guidance telling the Architect to stop using tools and return the required review JSON, or switch Architect models if it repeats.";
   }
@@ -115,9 +173,9 @@ function buildNextAction(primary: BuildProblem | null, fallback: string): string
 
 export function createBuildStopReport(input: BuildStopReportInput): BuildStopReport {
   const createdAt = input.createdAt ?? new Date().toISOString();
-  const commandProblems = sortNewestCommands(input.commandProblems).slice(0, 8);
   const problems = sortNewestProblems(input.problems).slice(0, 12);
-  const primary = pickPrimaryCause(commandProblems, problems);
+  const commandProblems = enrichCommandProblems(input.commandProblems, problems).slice(0, 8);
+  const primary = pickPrimaryCause(input.commandProblems, problems);
   const incompleteTasks = input.tasks
     .filter((task) => task.status !== "done")
     .map((task) => ({

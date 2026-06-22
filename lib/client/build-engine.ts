@@ -660,8 +660,10 @@ export async function runBuildDiscussion(
   let failureFingerprints: Record<string, number> =
     existingCheckpoint?.failureFingerprints ?? {};
   const recoveryLog: string[] = existingCheckpoint?.recoveryLog ?? [];
-  const buildProblems: BuildProblem[] = [];
-  const commandProblems: BuildCommandProblem[] = [];
+  const buildProblems: BuildProblem[] = [...(existingCheckpoint?.buildProblems ?? [])];
+  const commandProblems: BuildCommandProblem[] = [
+    ...(existingCheckpoint?.commandProblems ?? []),
+  ];
 
   const recordBuildProblem = (
     input: Omit<BuildProblem, "id" | "createdAt"> & {
@@ -753,6 +755,8 @@ export async function runBuildDiscussion(
       ],
       failureFingerprints: input.failureFingerprints ?? failureFingerprints,
       recoveryLog: input.recoveryLog ?? recoveryLog,
+      buildProblems,
+      commandProblems,
       stopReport: input.stopReport ?? null,
       usageWindow,
     });

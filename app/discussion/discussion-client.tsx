@@ -50,6 +50,7 @@ import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { getModeLabel } from "@/lib/orchestrator/config";
+import { diagnosticPhaseForBuildStop } from "@/lib/orchestrator/build-stop-diagnostics";
 import {
   addBuildUsageCall,
   createBuildUsageWindow,
@@ -374,7 +375,7 @@ function DiscussionPageInner() {
               {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 at: new Date().toLocaleTimeString(),
-                phase: "finished" as const,
+                phase: diagnosticPhaseForBuildStop(event.reason),
                 message: event.message,
               },
               ...prev,
