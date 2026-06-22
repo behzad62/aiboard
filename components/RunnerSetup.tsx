@@ -108,7 +108,9 @@ export function RunnerSetup({
 
       <p className="text-xs text-muted-foreground">
         The runner is a small script you start in your own terminal, pointed at
-        your project. Connecting it gives the AI team full access to{" "}
+        a project folder — or a parent folder to browse from (the path is
+        optional and just sets the root). Connecting it gives the AI team full
+        access to{" "}
         <strong>the runner&apos;s folder</strong> (read, write, search), lets
         the Architect run commands like tests and installs, fetch public web
         pages (docs, references — local addresses are refused), and can bridge
