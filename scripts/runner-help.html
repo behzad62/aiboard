@@ -29,6 +29,7 @@ node runner.mjs &lt;root-folder&gt;    # root = a folder you choose</code></pre>
 
 <h2>MCP servers</h2>
 <p>An MCP server bridges external tools to the AI team — a real browser via Playwright, current library docs via Context7, web search via SearXNG, or anything that speaks stdio MCP. Add one in the panel with a <em>name</em> and the <em>command</em> that launches it, e.g. <code>npx @playwright/mcp@latest</code>. Adding an MCP server runs an arbitrary command, so only add ones you trust.</p>
+<p>Two built-in shortcuts save you the command: <code>--context7</code> bridges Context7 docs (optional <code>--context7-key &lt;key&gt;</code> or <code>CONTEXT7_API_KEY</code> for higher rate limits), and <code>--searxng --searxng-url &lt;url&gt;</code> bridges web search through your SearXNG instance. The first time a server launches via <code>npx</code>, it pauses briefly while the package downloads.</p>
 
 <h2>Remote access (advanced)</h2>
 <p>By default the runner binds <code>127.0.0.1</code> and is reachable only from your machine — this is the safe default and needs no extra setup. If you want the hosted app to drive a build on another machine, you can expose the runner, but understand the trade-off: it grants file and shell access, so <strong>the token is the only thing protecting it</strong>.</p>

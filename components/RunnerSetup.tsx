@@ -107,17 +107,10 @@ export function RunnerSetup({
       </Label>
 
       <p className="text-xs text-muted-foreground">
-        The runner is a small script you start in your own terminal, pointed at
-        a project folder — or a parent folder to browse from (the path is
-        optional and just sets the root). Connecting it gives the AI team full
-        access to{" "}
-        <strong>the runner&apos;s folder</strong> (read, write, search), lets
-        the Architect run commands like tests and installs, fetch public web
-        pages (docs, references — local addresses are refused), and can bridge
-        MCP tools — a real browser via Playwright, or up-to-date library docs
-        via Context7 (add <code>--context7</code>), or free web search through
-        SearXNG (add <code>--searxng</code>). Commands and tool calls
-        are approval-gated unless you pick Full access. It needs{" "}
+        The runner is a small script you start in your own terminal. It gives
+        the AI team access to a project folder (read, write, search), runs
+        commands like tests and installs, and can bridge MCP tools — all
+        approval-gated unless you choose Full access. It needs{" "}
         <a
           href="https://nodejs.org"
           target="_blank"
@@ -126,15 +119,14 @@ export function RunnerSetup({
         >
           Node.js
         </a>{" "}
-        18+ installed (free) — nothing else. Download it, run it, then paste
-        the URL and token it prints to connect; leave the token empty to build
-        in-app instead. Once connected, open the runner&apos;s{" "}
-        <strong>control panel</strong> in your browser to pick the project
-        folder and watch live activity.{" "}
+        18+ (free) — nothing else. Run it, then paste the URL and token it
+        prints to connect (leave the token empty to build in-browser instead).
+        Once connected, open its <strong>control panel</strong> to pick the
+        folder, watch live logs, and manage MCP servers.{" "}
         <a href="/runner-guide" className="underline underline-offset-2">
           Read the runner guide
-        </a>
-        .
+        </a>{" "}
+        for flags, MCP setup, remote access, and self-update.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" asChild>
@@ -144,47 +136,13 @@ export function RunnerSetup({
           </a>
         </Button>
         <span className="text-xs text-muted-foreground">
-          then, in a terminal (the folder is optional — it sets the root):
+          then, in a terminal:
         </span>
       </div>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
         {"node runner.mjs                 # root = the folder you run it from\n"}
-        {"node runner.mjs path/to/folder  # or pass a root folder\n"}
-        {"node runner.mjs path/to/folder --context7\n"}
-        {"node runner.mjs path/to/folder --searxng --searxng-url https://your-searxng.example\n"}
-        {'node runner.mjs path/to/folder --mcp "playwright=npx @playwright/mcp@latest"'}
+        {"node runner.mjs path/to/folder  # or pass a root folder"}
       </pre>
-      <p className="text-xs text-muted-foreground">
-        <code>--context7</code> bridges{" "}
-        <a
-          href="https://context7.com"
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2"
-        >
-          Context7
-        </a>{" "}
-        so the AI team can pull current docs for the libraries it uses. Optional
-        API key for higher rate limits:{" "}
-        <code>--context7 --context7-key &lt;key&gt;</code> (or set{" "}
-        <code>CONTEXT7_API_KEY</code>). The first start pauses briefly while{" "}
-        <code>npx</code> fetches the server.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        <code>--searxng</code> bridges{" "}
-        <a
-          href="https://github.com/ihor-sokoliuk/mcp-searxng"
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2"
-        >
-          mcp-searxng
-        </a>{" "}
-        as <code>search</code> so the AI team can search the web through your
-        SearXNG instance. Provide the instance with{" "}
-        <code>--searxng-url &lt;url&gt;</code> (or set{" "}
-        <code>SEARXNG_URL</code>).
-      </p>
 
       <div className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
