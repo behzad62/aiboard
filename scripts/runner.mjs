@@ -1566,14 +1566,24 @@ class McpServer {
   constructor(name, command) {
     this.name = name;
     this.command = command;
-    this.status = "starting"; // starting | ready | error
+    this.enabled = true;
+    this.status = "stopped"; // stopped | starting | ready | error
     this.error = null;
     this.tools = [];
     this.pending = new Map();
     this.nextId = 1;
     this.buffer = "";
+    this.child = null;
+    this.intentionalStop = false;
+  }
 
-    this.child = spawn(command, {
+  spawnChild() {
+    this.status = "starting";
+    this.error = null;
+    this.tools = [];
+    this.buffer = "";
+    this.intentionalStop = false;
+    this.child = spawn(this.command, {
       shell: true,
       cwd: projectDir,
       env: process.env,
@@ -1583,18 +1593,57 @@ class McpServer {
     this.child.stdout.on("data", (chunk) => this.onData(chunk));
     this.child.stderr.on("data", (chunk) => {
       const line = chunk.toString().trim();
-      if (line) console.log(`[mcp:${name}] ${line.slice(0, 300)}`);
+      if (line) console.log(`[mcp:${this.name}] ${line.slice(0, 300)}`);
     });
     this.child.on("close", (code) => {
-      this.status = "error";
-      this.error = `MCP server exited (code ${code})`;
-      for (const [, p] of this.pending) p.reject(new Error(this.error));
+      for (const [, p] of this.pending) p.reject(new Error("MCP server exited"));
       this.pending.clear();
+      this.child = null;
+      if (this.intentionalStop) {
+        this.status = "stopped";
+      } else {
+        this.status = "error";
+        this.error = `MCP server exited (code ${code})`;
+      }
     });
     this.child.on("error", (err) => {
       this.status = "error";
       this.error = String(err);
     });
+  }
+
+  /** Spawn (if not already running) and perform the MCP handshake + tool list. */
+  async start() {
+    if (this.child) return;
+    this.enabled = true;
+    this.spawnChild();
+    await this.init();
+  }
+
+  /** Kill the child and mark disabled; keeps the registry entry for re-enable. */
+  stop() {
+    this.enabled = false;
+    this.intentionalStop = true;
+    this.kill();
+    this.status = "stopped";
+    this.tools = [];
+  }
+
+  /** Serializable status for the panel / /mcp/servers. */
+  toStatus() {
+    return {
+      name: this.name,
+      command: this.command,
+      enabled: this.enabled,
+      status: this.status,
+      error: this.error,
+      toolCount: this.tools.length,
+      tools: this.tools.map((t) => ({
+        name: t.name,
+        description: t.description ?? "",
+        inputSchema: t.inputSchema ?? null,
+      })),
+    };
   }
 
   onData(chunk) {
@@ -1684,10 +1733,11 @@ class McpServer {
 
   kill() {
     try {
-      this.child.kill();
+      this.child?.kill();
     } catch {
       // already gone
     }
+    this.child = null;
   }
 }
 
@@ -1695,7 +1745,7 @@ const mcpServers = new Map();
 for (const spec of mcpSpecs) {
   const proc = new McpServer(spec.name, spec.command);
   mcpServers.set(spec.name, proc);
-  void proc.init();
+  void proc.start();
 }
 
 function killBackgroundProcesses() {
@@ -1905,20 +1955,84 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/mcp/servers") {
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/mcp/servers" || url.pathname === "/api/mcp/servers")
+  ) {
     json(res, 200, {
       ok: true,
-      servers: [...mcpServers.values()].map((s) => ({
-        name: s.name,
-        status: s.status,
-        error: s.error,
-        tools: s.tools.map((t) => ({
-          name: t.name,
-          description: t.description ?? "",
-          inputSchema: t.inputSchema ?? null,
-        })),
-      })),
+      servers: [...mcpServers.values()].map((s) => s.toStatus()),
     });
+    return;
+  }
+
+  // Add an MCP server at runtime (session-scoped; preserved across self-update).
+  if (req.method === "POST" && url.pathname === "/api/mcp") {
+    let body;
+    try {
+      body = JSON.parse((await readBody(req)) || "{}");
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const name = String(body?.name ?? "").trim();
+    const command = String(body?.command ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(name)) {
+      json(res, 400, { error: "Invalid name — use letters, digits, - or _" });
+      return;
+    }
+    if (!command) {
+      json(res, 400, { error: "Missing command" });
+      return;
+    }
+    if (mcpServers.has(name)) {
+      json(res, 409, { error: `MCP server already exists: ${name}` });
+      return;
+    }
+    const proc = new McpServer(name, command);
+    mcpServers.set(name, proc);
+    console.log(`MCP server added: ${name} = ${command}`);
+    void proc.start();
+    json(res, 200, { ok: true, server: proc.toStatus() });
+    return;
+  }
+
+  // Remove (DELETE /api/mcp/<name>) or enable/disable (POST /api/mcp/<name>/enable).
+  if (url.pathname.startsWith("/api/mcp/") && url.pathname !== "/api/mcp/servers") {
+    const rest = url.pathname.slice("/api/mcp/".length);
+    const isEnable = rest.endsWith("/enable");
+    const name = decodeURIComponent(isEnable ? rest.slice(0, -"/enable".length) : rest);
+    const proc = mcpServers.get(name);
+    if (!proc) {
+      json(res, 404, { error: `Unknown MCP server: ${name}` });
+      return;
+    }
+    if (req.method === "DELETE" && !isEnable) {
+      proc.stop();
+      mcpServers.delete(name);
+      console.log(`MCP server removed: ${name}`);
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "POST" && isEnable) {
+      let body;
+      try {
+        body = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        body = {};
+      }
+      const enabled = body?.enabled !== false;
+      if (enabled) {
+        console.log(`MCP server enabled: ${name}`);
+        void proc.start();
+      } else {
+        console.log(`MCP server disabled: ${name}`);
+        proc.stop();
+      }
+      json(res, 200, { ok: true, server: proc.toStatus() });
+      return;
+    }
+    json(res, 405, { error: "Method not allowed" });
     return;
   }
 
