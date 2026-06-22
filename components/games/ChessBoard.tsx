@@ -3,7 +3,7 @@
 import { useMemo, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { ChessPiece } from "./pieces";
-import type { GameState, Square, Move, Piece } from "@/lib/games/chess/types";
+import type { GameState, Square, Move } from "@/lib/games/chess/types";
 import { squareToCoords, coordsToSquare } from "@/lib/games/chess/engine";
 
 interface ChessBoardProps {
@@ -64,8 +64,6 @@ export function ChessBoard({
   );
 
   // Get display order based on flipped state
-  const rowIndices = flipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [0, 1, 2, 3, 4, 5, 6, 7];
-  const colIndices = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
   const displayRanks = flipped ? [...RANKS].reverse() : RANKS;
   const displayFiles = flipped ? [...FILES].reverse() : FILES;
 
@@ -84,7 +82,7 @@ export function ChessBoard({
     const isCaptureTarget = isCapture(square);
 
     // Determine background color with overlays
-    let bgColor = isLight ? LIGHT_SQUARE : DARK_SQUARE;
+    const bgColor = isLight ? LIGHT_SQUARE : DARK_SQUARE;
 
     return (
       <div
