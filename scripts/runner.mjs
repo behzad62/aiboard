@@ -45,11 +45,11 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   tokensMatch,
-  isAllowedHost,
   isAllowedOrigin,
   defaultAppOrigins,
   isLoopbackHost,
   isStrongToken,
+  hostGuardPasses,
   confine,
   listDirs,
   driveRoots,
@@ -1889,7 +1889,7 @@ const server = http.createServer(async (req, res) => {
   // Request guard (runs before auth): the Host allowlist defeats DNS-rebinding
   // (a page that rebinds a name to our address sends a foreign Host); the Origin
   // allowlist blocks cross-site (CSRF) drive-by use of a leaked token.
-  if (!isAllowedHost(req.headers.host, { port, host }) || !originAllowed) {
+  if (!hostGuardPasses(req.headers.host, { port, host }) || !originAllowed) {
     json(res, 403, { error: "Forbidden host or origin" });
     return;
   }

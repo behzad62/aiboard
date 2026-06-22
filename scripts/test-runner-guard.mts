@@ -6,6 +6,7 @@ import {
   defaultAppOrigins,
   isLoopbackHost,
   isStrongToken,
+  hostGuardPasses,
 } from "./runner-lib.mjs";
 
 let failures = 0;
@@ -54,6 +55,13 @@ check("strong default-length hex token", isStrongToken("cfcc021d16364da5be8fb8f7
 check("weak short token", isStrongToken("secret") === false);
 check("weak low-entropy token", isStrongToken("aaaaaaaaaaaaaaaaaaaaaaaa") === false);
 check("strong 32-hex token", isStrongToken("0123456789abcdef0123456789abcdef") === true);
+
+// ── hostGuardPasses (strict on loopback, relaxed on a public --host bind) ─────
+check("hostGuard loopback ok", hostGuardPasses("127.0.0.1:8787", { port: 8787 }) === true);
+check("hostGuard loopback rejects foreign", hostGuardPasses("evil.example", { port: 8787 }) === false);
+check("hostGuard public --host accepts tunnel host", hostGuardPasses("abc123.ngrok-free.app", { port: 8787, host: "0.0.0.0" }) === true);
+check("hostGuard public LAN bind accepts any host", hostGuardPasses("anything.example:443", { port: 8787, host: "192.168.1.5" }) === true);
+check("hostGuard explicit loopback --host stays strict", hostGuardPasses("evil.example", { port: 8787, host: "127.0.0.1" }) === false);
 
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

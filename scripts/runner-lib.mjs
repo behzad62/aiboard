@@ -73,6 +73,18 @@ export function isStrongToken(token) {
   return new Set(token).size >= 8;
 }
 
+/**
+ * Whether the Host header passes the request guard. For the loopback default we
+ * enforce the strict allowlist (defeats DNS-rebinding). For a non-loopback --host
+ * bind the endpoint is intentionally public and usually reached through a tunnel
+ * that sets its own Host, so the Host header is not a reliable signal — there we
+ * rely on the Origin allowlist + token instead and accept any Host.
+ */
+export function hostGuardPasses(hostHeader, bound) {
+  if (!isLoopbackHost(bound && bound.host)) return true;
+  return isAllowedHost(hostHeader, bound);
+}
+
 /** Default app origins the runner trusts (prod + local dev). */
 export function defaultAppOrigins(extra = []) {
   const base = [

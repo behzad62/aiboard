@@ -46,7 +46,15 @@ node runner.mjs path/to/folder --host 0.0.0.0 --token &lt;a long random secret&g
   <li><strong>Tailscale Funnel</strong>: <code>tailscale funnel 8787</code> → a stable <code>*.ts.net</code> URL (public listener is limited to ports 443/8443/10000).</li>
   <li><strong>Cloudflare named tunnel</strong> (requires your own domain) — and verify the live-log panel actually streams. <strong>Do not use a Cloudflare Quick Tunnel (<code>trycloudflare</code>)</strong>: it buffers server-sent events, which freezes the live log.</li>
 </ol>
-<p>Start the runner with <code>--host 0.0.0.0 --token &lt;a long random secret&gt;</code> and point your tunnel at its port. Reaching a runner by a bare LAN IP (<code>http://192.168.x.x</code>) is discouraged: browsers block it as mixed content from an https page, and Chrome additionally gates local-network access behind a permission prompt — a tunnel avoids both.</p>
+<p>Putting it together — to connect the app to a tunneled runner:</p>
+<ol>
+  <li>Start the runner exposed: <code>node runner.mjs path/to/folder --host 0.0.0.0 --token &lt;a long random secret&gt;</code>.</li>
+  <li>Start your tunnel pointing at the runner's port (e.g. <code>ngrok http 8787</code>) and copy the <strong>https</strong> URL it prints (e.g. <code>https://abc123.ngrok-free.app</code>).</li>
+  <li>In the app, open <strong>Build mode → Local runner</strong> and enter the tunnel's <strong>https URL</strong> as the <em>Runner URL</em> (not <code>127.0.0.1</code>), and the <strong>same token</strong> you passed to <code>--token</code> as the <em>Token</em>.</li>
+  <li>Click <strong>Test connection</strong> — it should connect, and you can build as usual. The control panel is reachable at the same tunnel URL too.</li>
+</ol>
+<p>The token is the only thing protecting a public runner, so use a long random one and don't share the URL. If you self-host the app on your own domain (not aiboard.me), also start the runner with <code>--app-origin https://your-app-domain</code> so it trusts requests from your app.</p>
+<p>Reaching a runner by a bare LAN IP (<code>http://192.168.x.x</code>) is discouraged: browsers block it as mixed content from an https page, and Chrome additionally gates local-network access behind a permission prompt — a tunnel avoids both.</p>
 
 <h2>Self-update</h2>
 <p>When a newer runner is published, the panel shows an <em>Update</em> button. Applying it downloads the new runner, verifies its <strong>Ed25519 signature and SHA-256</strong> against the pinned key (so a compromised download host alone cannot push malicious code), swaps the file (keeping a <code>.bak</code>), and restarts on the same port and token. Updates are never automatic — they only happen when you click.</p>
