@@ -2,6 +2,7 @@
 import {
   buildWorkerToolInstructions,
   buildWorkerTaskPrompt,
+  extractLocalServerUrls,
   isWorkerBuildToolAction,
   scoreboardSection,
   type BuildTask,
@@ -86,12 +87,19 @@ const workerTools = buildWorkerToolInstructions({
   mcpToolsDoc:
     "playwright.browser_navigate args: url: string\nplaywright.browser_snapshot args: none",
   mcpCallsLeft: 2,
+  localServerUrls: ["http://localhost:3001"],
 });
 check(
   "worker tool instructions advertise MCP tools",
   workerTools.includes('"action":"tool"') &&
     workerTools.includes("playwright.browser_navigate") &&
     /2 tool calls? left/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions include active local server URL",
+  workerTools.includes("http://localhost:3001") &&
+    /browser MCP navigation/i.test(workerTools),
   workerTools
 );
 check(
@@ -102,6 +110,15 @@ check(
     tool: "browser_navigate",
     args: { url: "http://localhost:3000/games" },
   }),
+);
+
+const serverUrls = extractLocalServerUrls(
+  "npx next dev --turbopack -p 3001 &\nLocal: http://localhost:3001"
+);
+check(
+  "local server URL extraction detects command port",
+  serverUrls.includes("http://localhost:3001"),
+  serverUrls
 );
 
 process.exit(failed === 0 ? 0 : 1);

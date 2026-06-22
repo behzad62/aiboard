@@ -71,6 +71,7 @@ import {
   classifyRunCommand,
   decideBuildTaskFailure,
   detectVerifyCommand,
+  extractLocalServerUrls,
   findIncompleteBuildTasks,
   githubWorkflowRequested,
   hasCompleteBuildToolAction,
@@ -640,6 +641,7 @@ export async function runBuildDiscussion(
   let totalFetches = 0;
   let mcpToolsDoc = "";
   let totalMcpCalls = 0;
+  let localServerUrls: string[] = [];
   // Whether the runner folder is a Git repo, captured once when the runner
   // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
   let repoIsGit = false;
@@ -1025,6 +1027,18 @@ export async function runBuildDiscussion(
       ? Math.min(MCP_CALLS_PER_PHASE, TOTAL_MCP_CALLS - totalMcpCalls)
       : 0;
 
+  const rememberLocalServerUrls = (text: string): void => {
+    const next = extractLocalServerUrls(text);
+    const merged = [...new Set([...localServerUrls, ...next])].slice(0, 5);
+    if (merged.length === localServerUrls.length) return;
+    localServerUrls = merged;
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      message: `Detected local server URL(s) for browser tools: ${next.join(", ")}`,
+    });
+  };
+
   /** Execute one MCP tool call (same approval flow as commands). */
   const executeTool = async (
     action: ToolAction,
@@ -1205,6 +1219,11 @@ ${truncate(result.text, 8_000)}`,
           400
         ),
       });
+      if (result.exitCode === 0) {
+        rememberLocalServerUrls(
+          [command, result.stdout, result.stderr].filter(Boolean).join("\n")
+        );
+      }
       // Commands can create files (scaffolders, installs) — refresh the tree.
       const refreshed = await listFilesViaRunner(runner);
       if (refreshed) diskTree = [...new Set([...diskTree, ...refreshed])];
@@ -3788,6 +3807,7 @@ ${truncate(result.text, 8_000)}`,
         ...budget,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
+        localServerUrls,
       });
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {

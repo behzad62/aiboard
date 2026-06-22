@@ -1784,6 +1784,29 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
   ].join("\n");
 }
 
+export function extractLocalServerUrls(text: string): string[] {
+  const urls = new Set<string>();
+  const directUrl = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1):(\d{2,5})(?:\/[^\s"'`)]*)?/gi;
+  for (const match of text.matchAll(directUrl)) {
+    urls.add(match[0].replace(/[.,;]+$/, ""));
+  }
+
+  const portFlags =
+    /(?:^|\s)(?:-p|--port|--port=|-l|--listen|--listen=)\s*=?\s*(\d{2,5})(?=\s|$)/gi;
+  for (const match of text.matchAll(portFlags)) {
+    const port = Number(match[1]);
+    if (port > 0 && port <= 65535) urls.add(`http://localhost:${port}`);
+  }
+
+  const hostPort = /\b(?:localhost|127\.0\.0\.1):(\d{2,5})\b/gi;
+  for (const match of text.matchAll(hostPort)) {
+    const port = Number(match[1]);
+    if (port > 0 && port <= 65535) urls.add(`http://localhost:${port}`);
+  }
+
+  return [...urls].slice(0, 5);
+}
+
 export function buildWorkerToolInstructions(budget: {
   reads: number;
   rangeReads: number;
@@ -1792,7 +1815,9 @@ export function buildWorkerToolInstructions(budget: {
   appends: number;
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
+  localServerUrls?: string[];
 }): string {
+  const localServers = [...new Set(budget.localServerUrls ?? [])].filter(Boolean);
   return [
     "TOOLS - before your final answer, you may inspect, verify, or patch by responding with one or more JSON tool actions (and nothing else). The engine runs safe reads/searches together, applies writes in order, keeps MCP calls approval-gated, and reports which were served or skipped:",
     budget.reads > 0
@@ -1811,6 +1836,9 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
       : "",
     mcpToolDoc(budget.mcpToolsDoc, budget.mcpCallsLeft),
+    localServers.length > 0
+      ? `Active local server URL${localServers.length === 1 ? "" : "s"} for browser MCP navigation: ${localServers.join(", ")}. Use these exact URL(s) instead of guessing localhost ports.`
+      : "",
     "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
   ]
     .filter(Boolean)
