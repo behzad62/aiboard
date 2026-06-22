@@ -287,10 +287,11 @@ export function verifyRunnerUpdate(bytes, manifest, publicKeyPem = RUNNER_PUBLIC
 /**
  * Rebuild the runner's argv from parsed values so a self-update re-exec preserves
  * the bound state. ALWAYS emits --port and --token (even if originally omitted),
- * or the paired app's saved token silently breaks.
+ * or the paired app's saved token silently breaks. Emits --no-default-mcp and the
+ * exact current MCP set so a removed/disabled default is not resurrected.
  */
 export function buildPreservedArgv({ root, port, token, host, mcp = [], appOrigins = [] }) {
-  const argv = [root, "--port", String(port), "--token", token];
+  const argv = [root, "--port", String(port), "--token", token, "--no-default-mcp"];
   if (host) argv.push("--host", host);
   for (const m of mcp) argv.push("--mcp", `${m.name}=${m.command}`);
   for (const o of appOrigins) argv.push("--app-origin", o);

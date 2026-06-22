@@ -40,6 +40,7 @@ const argv = buildPreservedArgv({ root: "/proj", port: 8787, token: "abc", mcp: 
 check("argv root first", argv[0] === "/proj");
 check("argv emits --port even if omitted originally", argv[argv.indexOf("--port") + 1] === "8787");
 check("argv emits --token even if omitted originally", argv[argv.indexOf("--token") + 1] === "abc");
+check("argv emits --no-default-mcp (exact MCP set on re-exec)", argv.includes("--no-default-mcp"));
 check("argv reproduces --mcp", argv[argv.indexOf("--mcp") + 1] === "pw=npx x");
 check("argv omits --host when not set", !argv.includes("--host"));
 

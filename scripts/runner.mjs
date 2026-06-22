@@ -157,57 +157,61 @@ const logNonces = createNonceStore();
   };
 }
 
-// "<name>=<command>" specs from repeated --mcp flags.
-const mcpSpecs = [];
+// MCP servers (name -> command for a stdio server the runner spawns). A curated
+// set of zero-config servers is enabled by DEFAULT — disable/remove any in the
+// control panel, or start with none via --no-default-mcp. User --mcp / --context7
+// / --searxng flags override or add by name.
+const context7Key = flag("context7-key") ?? process.env.CONTEXT7_API_KEY;
+const mcpByName = new Map();
+if (!args.includes("--no-default-mcp")) {
+  mcpByName.set("playwright", {
+    name: "playwright",
+    command: "npx -y @playwright/mcp@latest",
+  });
+  mcpByName.set("context7", {
+    name: "context7",
+    command: `npx -y @upstash/context7-mcp${context7Key ? ` --api-key ${context7Key}` : ""}`,
+  });
+  mcpByName.set("sequential-thinking", {
+    name: "sequential-thinking",
+    command: "npx -y @modelcontextprotocol/server-sequential-thinking",
+  });
+}
+
+// Repeated --mcp "<name>=<command>" flags override defaults by name.
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--mcp" && args[i + 1]) {
     const spec = args[i + 1];
     const eq = spec.indexOf("=");
     if (eq > 0) {
-      mcpSpecs.push({ name: spec.slice(0, eq).trim(), command: spec.slice(eq + 1).trim() });
+      const name = spec.slice(0, eq).trim();
+      mcpByName.set(name, { name, command: spec.slice(eq + 1).trim() });
     } else {
       console.error(`Ignoring malformed --mcp spec (want name=command): ${spec}`);
     }
   }
 }
 
-// Convenience: --context7 bridges the Context7 docs MCP server so the Architect
-// can pull current library/framework documentation, without the user having to
-// remember the npx command. The optional API key (higher rate limits) comes
-// from --context7-key <key> or the CONTEXT7_API_KEY env var. Equivalent to
-//   --mcp "context7=npx -y @upstash/context7-mcp [--api-key <key>]"
+// --context7 (re)enables Context7, honoring an API key from --context7-key / env.
 if (args.includes("--context7")) {
-  const apiKey = flag("context7-key") ?? process.env.CONTEXT7_API_KEY;
-  const command = `npx -y @upstash/context7-mcp${apiKey ? ` --api-key ${apiKey}` : ""}`;
-  if (mcpSpecs.some((s) => s.name === "context7")) {
-    console.error('--context7 ignored: an --mcp "context7=..." spec is already set');
-  } else {
-    mcpSpecs.push({ name: "context7", command });
-    console.log(
-      `Context7 MCP enabled${apiKey ? " (with API key)" : " (no API key — free-tier rate limits)"}. First start may pause while npx fetches @upstash/context7-mcp.`
-    );
-  }
+  mcpByName.set("context7", {
+    name: "context7",
+    command: `npx -y @upstash/context7-mcp${context7Key ? ` --api-key ${context7Key}` : ""}`,
+  });
 }
 
-// Convenience: --searxng bridges the free/privacy-focused mcp-searxng server
-// as "search", so the Architect can use web search without remembering the npx
-// command. The SearXNG instance URL comes from --searxng-url <url> or the
-// SEARXNG_URL env var. Equivalent to:
-//   SEARXNG_URL=<url> --mcp "search=npx -y mcp-searxng"
+// --searxng bridges web search as "search" (needs --searxng-url / SEARXNG_URL).
 if (args.includes("--searxng")) {
   const searxngUrl = (flag("searxng-url") ?? process.env.SEARXNG_URL ?? "").trim();
   if (!searxngUrl) {
     console.error("--searxng ignored: provide --searxng-url <url> or set SEARXNG_URL");
-  } else if (mcpSpecs.some((s) => s.name === "search")) {
-    console.error('--searxng ignored: an --mcp "search=..." spec is already set');
   } else {
     process.env.SEARXNG_URL = searxngUrl;
-    mcpSpecs.push({ name: "search", command: "npx -y mcp-searxng" });
-    console.log(
-      `SearXNG MCP enabled as "search" using ${searxngUrl}. First start may pause while npx fetches mcp-searxng.`
-    );
+    mcpByName.set("search", { name: "search", command: "npx -y mcp-searxng" });
   }
 }
+
+const mcpSpecs = [...mcpByName.values()];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 // Access-Control-Allow-Origin is set per-request (reflected from the allowlist)
