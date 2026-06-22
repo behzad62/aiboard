@@ -18,7 +18,7 @@
 
 - **Phase 1 — Secure foundation + folder browser + live logs + minimal panel** ✅ **COMPLETE (2026-06-22)** — committed + live-verified via Playwright (panel loads, fragment token scrubbed, folder browse + re-root, SSE logs stream live, guard checks pass, console clean). Tests: `test-runner-guard`, `test-runner-confine`, `test-runner-log`, `test-runner-panel-build` all green.
 - **Phase 2 — MCP management + version awareness + signed self-update** ✅ **COMPLETE (2026-06-22)** — runtime MCP add/remove/enable + panel table (live-verified with a real playwright MCP → READY/23 tools); version manifest + download-button version + update nudge (live-verified); Ed25519-signed prompt-only self-update (live-verified end-to-end: v9→v10 re-exec on same port/token). Tests: `test-runner-update` + all prior, tsc, lint green.
-- **Phase 3 — Network mode (`--host`, LNA UX) + help guide + main/about copy** (planned after Phase 2; own plan doc).
+- **Phase 3 — Network mode (`--host`) + help guide + main/about copy** ✅ **COMPLETE (2026-06-22)** — `--host` fail-closed without a strong token + NETWORK-EXPOSED warning (live-verified); help guide authored once (scripts/runner-help.html), rendered as /runner-guide AND inlined into the panel's Help overlay (both live-verified, clean console); dashboard + about copy updated (MCP, network, self-update, guide link). LNA handled as guide guidance since the recommended remote path is a tunnel (public https), not a bare LAN IP.
 
 Each phase produces working, tested software and is committed before the next begins.
 
