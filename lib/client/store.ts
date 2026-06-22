@@ -75,6 +75,10 @@ const DEFAULT_STORE: ClientStore = {
   modelStats: [],
 };
 
+function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
+  return { ...structuredClone(DEFAULT_STORE), ...data };
+}
+
 let memory: ClientStore | null = null;
 let adapter: StorageAdapter | null = null;
 let config: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
@@ -94,20 +98,20 @@ export async function initStore(): Promise<{ needsPassphrase: boolean }> {
   const raw = await adapter.load();
 
   if (raw === null) {
-    memory = structuredClone(DEFAULT_STORE);
+    memory = hydrateStore();
     return { needsPassphrase: false };
   }
 
   const env = parseEnvelope(raw);
   if (!env) {
-    memory = { ...DEFAULT_STORE, ...(JSON.parse(raw) as Partial<ClientStore>) };
+    memory = hydrateStore(JSON.parse(raw) as Partial<ClientStore>);
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
     return { needsPassphrase: true };
   }
   const json = await unwrap(env);
-  memory = { ...DEFAULT_STORE, ...(JSON.parse(json) as Partial<ClientStore>) };
+  memory = hydrateStore(JSON.parse(json) as Partial<ClientStore>);
   return { needsPassphrase: false };
 }
 
@@ -330,11 +334,6 @@ export function deleteBuildCheckpoint(discussionId: string): void {
   );
   schedulePersist();
 }
-/**
- * Wipe a discussion's run output (model messages, final result, persisted
- * build files) for a from-scratch restart. User notes are kept — the next run
- * still has to honor them. Files already written to disk are untouched.
- */
 export function upsertGameSession(record: GameSessionRecord): void {
   const list = getGameSessions();
   const i = list.findIndex((s) => s.id === record.id);
@@ -351,6 +350,11 @@ export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void
   getGenericGameMatchRecords().push(record);
   schedulePersist();
 }
+/**
+ * Wipe a discussion's run output (model messages, final result, persisted
+ * build files) for a from-scratch restart. User notes are kept — the next run
+ * still has to honor them. Files already written to disk are untouched.
+ */
 export function clearDiscussionRun(id: string): void {
   const s = store();
   s.messages = s.messages.filter(
@@ -428,7 +432,7 @@ export function deleteAttachmentRecord(id: string): void {
 
 /** Replace the whole store (used by the one-time import from the server). */
 export function replaceStore(data: Partial<ClientStore>): void {
-  memory = { ...structuredClone(DEFAULT_STORE), ...data };
+  memory = hydrateStore(data);
   schedulePersist();
 }
 
@@ -441,7 +445,7 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
     clearTimeout(persistTimer);
     persistTimer = null;
   }
-  memory = { ...structuredClone(DEFAULT_STORE), ...data };
+  memory = hydrateStore(data);
   adapter = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
 }

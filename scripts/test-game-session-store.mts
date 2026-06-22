@@ -64,6 +64,52 @@ function match(id: string): GenericGameMatchRecord {
   };
 }
 
+function installIndexedDbStore(rawStore: string): void {
+  const values = new Map<string, unknown>([["store", rawStore]]);
+  const db = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => ({
+      objectStore: () => ({
+        get: (key: string) => {
+          const req = { result: values.get(key), onsuccess: null as (() => void) | null };
+          queueMicrotask(() => req.onsuccess?.());
+          return req;
+        },
+        put: (value: unknown, key: string) => {
+          values.set(key, value);
+        },
+      }),
+    }),
+    close: () => {},
+  };
+  const fakeIndexedDb = {
+    open: () => {
+      const req = {
+        result: db,
+        error: null,
+        onupgradeneeded: null as (() => void) | null,
+        onsuccess: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+      };
+      queueMicrotask(() => req.onsuccess?.());
+      return req;
+    },
+  };
+  (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB =
+    fakeIndexedDb as unknown as IDBFactory;
+}
+
+installIndexedDbStore(JSON.stringify({}));
+check("old store hydrates with no game sessions", (await listGameSessions()).length === 0);
+await saveGameSession(session("default-leak-check", "Default leak check"));
+__resetGameSessionStoreForTests();
+const afterOldStoreReset = await listGameSessions();
+check(
+  "old-store default game session arrays are isolated",
+  afterOldStoreReset.length === 0,
+  afterOldStoreReset
+);
+
 __resetGameSessionStoreForTests();
 
 await saveGameSession(session("session-1", "Original title"));
