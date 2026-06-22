@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
+  BuildStopReport,
   BuildStopReason,
   BuildUsageWindow,
   DiscussionMode,
@@ -88,6 +89,7 @@ export type OrchestratorEvent =
       reason: BuildStopReason;
       message: string;
       usage?: BuildUsageWindow;
+      report?: BuildStopReport;
     }
   | {
       type: "tool_batch";

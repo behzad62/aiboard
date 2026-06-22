@@ -15,6 +15,7 @@ import {
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
+import { BuildStopReportPanel } from "@/components/BuildStopReportPanel";
 import { BuildTranscriptPanel } from "@/components/BuildTranscriptPanel";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
@@ -26,7 +27,7 @@ import {
 } from "@/components/DiscussionSessionSettings";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
-import { getBuildFiles } from "@/lib/client/store";
+import { getBuildCheckpoint, getBuildFiles } from "@/lib/client/store";
 import {
   DiscussionDiagnostics,
   type DiagnosticEntry,
@@ -44,7 +45,7 @@ import {
   Square,
   StickyNote,
 } from "lucide-react";
-import type { BuildUsageWindow, Discussion } from "@/lib/db/schema";
+import type { BuildStopReport, BuildUsageWindow, Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModelPricing } from "@/lib/providers/pricing";
@@ -169,6 +170,8 @@ function DiscussionPageInner() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
+  const [buildStopReport, setBuildStopReport] =
+    useState<BuildStopReport | null>(null);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
@@ -227,6 +230,7 @@ function DiscussionPageInner() {
       switch (event.type) {
         case "status":
           setStatus(event.status);
+          if (event.status === "running") setBuildStopReport(null);
           if (event.round !== undefined) setCurrentRound(event.round);
           if (event.maxRounds !== undefined) setMaxRounds(event.maxRounds);
           if (
@@ -349,6 +353,7 @@ function DiscussionPageInner() {
           break;
         case "build_stopped":
           setBuildUsage(event.usage ?? null);
+          setBuildStopReport(event.report ?? null);
           // Reflect the stop in live state so the stopped banner, the
           // BuildRunStats reason, and the Resume affordance appear immediately —
           // not only after a reload. (markStopped persists these to the store;
@@ -504,6 +509,11 @@ function DiscussionPageInner() {
       }
       setEnabledModels(loadDashboard().enabledModels);
       setDiscussion(data.discussion);
+      setBuildStopReport(
+        data.discussion.mode === "build"
+          ? getBuildCheckpoint(data.discussion.id)?.stopReport ?? null
+          : null
+      );
       setBuildUsage(
         data.discussion.mode === "build"
           ? createBuildUsageWindow(new Date().toISOString())
@@ -715,6 +725,7 @@ function DiscussionPageInner() {
         ? createBuildUsageWindow(new Date().toISOString())
         : null
     );
+    setBuildStopReport(null);
     setWrittenFiles([]);
     setCommandRuns([]);
     setRepoStatus(null);
@@ -737,6 +748,7 @@ function DiscussionPageInner() {
     notifiedRef.current = false;
     setError(null);
     setFinalResult(null);
+    setBuildStopReport(null);
     startedRef.current = false;
     setStatus("pending");
   };
@@ -770,6 +782,7 @@ function DiscussionPageInner() {
       notifiedRef.current = false;
       setFinalResult(null);
       setError(null);
+      setBuildStopReport(null);
       startedRef.current = false;
       setStatus("pending");
     }
@@ -1159,6 +1172,10 @@ function DiscussionPageInner() {
         </TabsList>
 
         <TabsContent value="activity" className="space-y-6">
+      {discussion.mode === "build" && buildStopReport && (
+        <BuildStopReportPanel report={buildStopReport} />
+      )}
+
       {discussion.mode === "build" && (
         <BuildRunStats
           status={status}
@@ -1174,6 +1191,7 @@ function DiscussionPageInner() {
 
       {discussion.mode === "build" &&
         discussion.buildStopReason &&
+        !buildStopReport &&
         status === "stopped" && (
           <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
             {discussion.buildStopReason === "blocked"

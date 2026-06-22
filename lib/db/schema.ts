@@ -33,6 +33,89 @@ export interface BuildUsageWindow {
   models: BuildUsageModelTotal[];
 }
 
+export type BuildProblemSeverity = "info" | "warning" | "error" | "blocked";
+export type BuildProblemSource =
+  | "engine"
+  | "architect"
+  | "worker"
+  | "file_writer"
+  | "runner"
+  | "mcp";
+export type BuildProblemCode =
+  | "malformed_tool_call"
+  | "tool_warning"
+  | "empty_tool_batch"
+  | "duplicate_tool_call"
+  | "budget_exhausted"
+  | "verification_failed"
+  | "verification_repeated"
+  | "patch_failed"
+  | "edit_failed"
+  | "write_conflict"
+  | "suspicious_rewrite"
+  | "truncated_output"
+  | "command_failed"
+  | "tool_denied"
+  | "no_output"
+  | "repeated_no_progress"
+  | "incomplete_tasks";
+
+export interface BuildProblem {
+  id: string;
+  createdAt: string;
+  code: BuildProblemCode;
+  severity: BuildProblemSeverity;
+  source: BuildProblemSource;
+  message: string;
+  details?: string;
+  modelId?: string;
+  modelName?: string;
+  providerId?: string;
+  taskId?: string;
+  action?: string;
+  path?: string;
+  wave?: number;
+}
+
+export interface BuildCommandProblem {
+  command: string;
+  exitCode: number;
+  durationMs: number;
+  outputPreview: string;
+  denied?: boolean;
+  background?: boolean;
+  createdAt: string;
+}
+
+export interface BuildStopReport {
+  id: string;
+  discussionId: string;
+  createdAt: string;
+  topic: string;
+  status: string;
+  stopReason: BuildStopReason | "failed" | "incomplete";
+  stopMessage: string;
+  wave: number;
+  branch: string | null;
+  prUrl: string | null;
+  verifyCommand: string;
+  summary: string;
+  nextAction: string;
+  tasksDone: number;
+  tasksTotal: number;
+  incompleteTasks: Array<{
+    id: string;
+    title: string;
+    status: BuildCheckpointTask["status"];
+    failCount?: number;
+  }>;
+  primaryCause: BuildProblem | null;
+  problems: BuildProblem[];
+  commandProblems: BuildCommandProblem[];
+  repeatedFailureCount: number;
+  recoveryLog: string[];
+}
+
 export interface BuildCheckpointTask {
   id: string;
   title: string;
@@ -65,6 +148,7 @@ export interface BuildCheckpoint {
   issueNumbers: number[];
   failureFingerprints: Record<string, number>;
   recoveryLog: string[];
+  stopReport?: BuildStopReport | null;
   usageWindow: BuildUsageWindow;
 }
 

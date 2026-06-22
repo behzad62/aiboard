@@ -9,6 +9,9 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
   BuildCheckpoint,
+  BuildCommandProblem,
+  BuildProblem,
+  BuildStopReport,
   BuildStopReason,
   Discussion,
   EffortLevel,
@@ -39,6 +42,7 @@ import {
   packToolBatchResult,
   scheduleBuildToolActions,
 } from "@/lib/orchestrator/build-tool-scheduler";
+import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
@@ -346,7 +350,11 @@ export async function runBuildDiscussion(
   // Mark the run stopped (resumable) and emit the stop. Deliberately NOT thrown:
   // the engine caller turns any thrown error into a "failed" discussion, so a
   // clean budget/time/blocked/user stop must update state and return instead.
-  const markStopped = (reason: BuildStopReason, message: string): void => {
+  const markStopped = (
+    reason: BuildStopReason,
+    message: string,
+    report?: BuildStopReport
+  ): void => {
     const now = new Date().toISOString();
     updateDiscussion(discussion.id, {
       status: reason === "completed" ? "completed" : "stopped",
@@ -354,7 +362,7 @@ export async function runBuildDiscussion(
       buildStoppedAt: now,
       updatedAt: now,
     });
-    emit({ type: "build_stopped", reason, message, usage: usageWindow });
+    emit({ type: "build_stopped", reason, message, usage: usageWindow, report });
     emit({
       type: "status",
       status: reason === "completed" ? "completed" : "stopped",
@@ -646,6 +654,63 @@ export async function runBuildDiscussion(
   let failureFingerprints: Record<string, number> =
     existingCheckpoint?.failureFingerprints ?? {};
   const recoveryLog: string[] = existingCheckpoint?.recoveryLog ?? [];
+  const buildProblems: BuildProblem[] = [];
+  const commandProblems: BuildCommandProblem[] = [];
+
+  const recordBuildProblem = (
+    input: Omit<BuildProblem, "id" | "createdAt"> & {
+      id?: string;
+      createdAt?: string;
+    }
+  ): BuildProblem => {
+    const problem: BuildProblem = {
+      ...input,
+      id: input.id ?? uuidv4(),
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    };
+    buildProblems.push(problem);
+    if (buildProblems.length > 80) buildProblems.splice(0, buildProblems.length - 80);
+    return problem;
+  };
+
+  const recordCommandProblem = (
+    input: Omit<BuildCommandProblem, "createdAt"> & { createdAt?: string }
+  ): BuildCommandProblem => {
+    const problem: BuildCommandProblem = {
+      ...input,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    };
+    commandProblems.push(problem);
+    if (commandProblems.length > 40) {
+      commandProblems.splice(0, commandProblems.length - 40);
+    }
+    return problem;
+  };
+
+  const createStopReport = (input: {
+    status: string;
+    stopReason: BuildStopReason | "failed" | "incomplete";
+    message: string;
+    wave: number;
+    tasks: BuildTask[];
+    verifyCommand: string;
+  }): BuildStopReport =>
+    createBuildStopReport({
+      discussionId: discussion.id,
+      topic: discussion.topic,
+      status: input.status,
+      stopReason: input.stopReason,
+      stopMessage: input.message,
+      wave: input.wave,
+      branch: repoActiveBranch,
+      prUrl: repoPrUrl,
+      verifyCommand: input.verifyCommand,
+      tasks: input.tasks,
+      problems: buildProblems,
+      commandProblems,
+      failureFingerprints,
+      recoveryLog,
+    });
 
   // ── Resumable checkpoint ───────────────────────────────────────────────────
   // Persist the run (task graph, repo refs, current budget window) so a stop by
@@ -661,6 +726,7 @@ export async function runBuildDiscussion(
     verifyCommand: string;
     failureFingerprints?: Record<string, number>;
     recoveryLog?: string[];
+    stopReport?: BuildStopReport | null;
   }): void => {
     upsertBuildCheckpoint({
       discussionId: discussion.id,
@@ -681,6 +747,7 @@ export async function runBuildDiscussion(
       ],
       failureFingerprints: input.failureFingerprints ?? failureFingerprints,
       recoveryLog: input.recoveryLog ?? recoveryLog,
+      stopReport: input.stopReport ?? null,
       usageWindow,
     });
   };
@@ -701,6 +768,17 @@ export async function runBuildDiscussion(
   ): boolean => {
     const reason = currentGuardrailStop();
     if (reason !== "budget" && reason !== "time") return false;
+    const message = guardrailStopMessage(reason);
+    const report = snapshot
+      ? createStopReport({
+          status: "stopped",
+          stopReason: reason,
+          message,
+          wave: snapshot.wave,
+          tasks: snapshot.tasks,
+          verifyCommand: snapshot.verifyCommand,
+        })
+      : undefined;
     if (snapshot) {
       saveCheckpoint({
         status: "stopped",
@@ -709,9 +787,10 @@ export async function runBuildDiscussion(
         tasks: snapshot.tasks,
         architectNotes: snapshot.architectNotes,
         verifyCommand: snapshot.verifyCommand,
+        stopReport: report,
       });
     }
-    markStopped(reason, guardrailStopMessage(reason));
+    markStopped(reason, message, report);
     return true;
   };
 
@@ -1757,13 +1836,28 @@ export async function runBuildDiscussion(
    * uses its OWN budget so it never starves the Architect's discretionary
    * runs. Returns "" when there's nothing to run.
    */
+  const emitBuildCheckCommandRun = (
+    event: Omit<Extract<OrchestratorEvent, { type: "command_run" }>, "type">
+  ): void => {
+    emit({ type: "command_run", ...event });
+    if (event.exitCode !== 0 || event.denied) {
+      recordCommandProblem({
+        command: event.command,
+        exitCode: event.exitCode,
+        durationMs: event.durationMs,
+        outputPreview: event.outputPreview,
+        denied: event.denied,
+        background: event.background,
+      });
+    }
+  };
+
   const runVerify = async (command: string): Promise<string> => {
     if (!runner || !command) return "";
     const safety = classifyRunCommand(command);
     if (!safety.allowed) {
       const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
-      emit({
-        type: "command_run",
+      emitBuildCheckCommandRun({
         command,
         exitCode: -1,
         durationMs: 0,
@@ -1778,8 +1872,7 @@ export async function runBuildDiscussion(
         : "deny";
       if (decision === "allow-all") allowAllCommands = true;
       if (decision === "deny") {
-        emit({
-          type: "command_run",
+        emitBuildCheckCommandRun({
           command,
           exitCode: -1,
           durationMs: 0,
@@ -1796,8 +1889,7 @@ export async function runBuildDiscussion(
     });
     try {
       const result = await runCommand(runner, command);
-      emit({
-        type: "command_run",
+      emitBuildCheckCommandRun({
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
@@ -1839,8 +1931,7 @@ export async function runBuildDiscussion(
         });
         finalResult = await runCommand(runner, detectedVerifyCommand);
         finalCommand = detectedVerifyCommand;
-        emit({
-          type: "command_run",
+        emitBuildCheckCommandRun({
           command: detectedVerifyCommand,
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
@@ -1860,8 +1951,7 @@ export async function runBuildDiscussion(
         truncate(stripAnsi(finalResult.stderr || finalResult.stdout).trim() || "(no output)", 6_000),
       ].join("\n");
     } catch (err) {
-      emit({
-        type: "command_run",
+      emitBuildCheckCommandRun({
         command,
         exitCode: -1,
         durationMs: 0,
@@ -2236,6 +2326,14 @@ export async function runBuildDiscussion(
     const prior = waveWrites.get(key);
     if (prior && prior !== writer) {
       const issue = `CONFLICT: ${writer} attempted to write ${path}, which ${prior} already wrote in this wave — the write was rejected before it could overwrite the earlier version`;
+      recordBuildProblem({
+        code: "write_conflict",
+        severity: "error",
+        source: "file_writer",
+        taskId,
+        path,
+        message: issue,
+      });
       emit({ type: "diagnostic", phase: "model_failed", message: issue });
       return issue;
     }
@@ -2282,6 +2380,16 @@ export async function runBuildDiscussion(
                 `${result.failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${result.applied} applied).${details}`,
               ]
             : [];
+        for (const issue of issues) {
+          recordBuildProblem({
+            code: "patch_failed",
+            severity: "error",
+            source: "file_writer",
+            taskId,
+            path,
+            message: issue,
+          });
+        }
         return {
           written: result.applied > 0 ? [path] : [],
           issues,
@@ -2289,6 +2397,14 @@ export async function runBuildDiscussion(
         };
       } catch (err) {
         const issue = `Patch to ${path} via the runner failed (${err instanceof Error ? err.message : "error"}).`;
+        recordBuildProblem({
+          code: "patch_failed",
+          severity: "error",
+          source: "file_writer",
+          taskId,
+          path,
+          message: issue,
+        });
         emit({ type: "diagnostic", phase: "model_failed", message: issue });
         return { written: [], issues: [issue], summary: issue };
       }
@@ -2313,6 +2429,16 @@ export async function runBuildDiscussion(
             `${failed} patch op(s) to ${path} did NOT match the current file content and were skipped (${applied} applied).${details}`,
           ]
         : [];
+    for (const issue of issues) {
+      recordBuildProblem({
+        code: "patch_failed",
+        severity: "error",
+        source: "file_writer",
+        taskId,
+        path,
+        message: issue,
+      });
+    }
     if (applied > 0) {
       await writeFile(path, content, taskId, "patch", current);
     }
@@ -2364,6 +2490,14 @@ export async function runBuildDiscussion(
         };
       } catch (err) {
         const issue = `Append to ${path} via the runner failed (${err instanceof Error ? err.message : "error"}).`;
+        recordBuildProblem({
+          code: "patch_failed",
+          severity: "error",
+          source: "file_writer",
+          taskId,
+          path,
+          message: issue,
+        });
         emit({ type: "diagnostic", phase: "model_failed", message: issue });
         return { written: [], issues: [issue], summary: issue };
       }
@@ -2415,6 +2549,14 @@ export async function runBuildDiscussion(
       if (prior && prior !== writer) {
         const issue = `CONFLICT: ${writer} overwrote ${path}, which ${prior} also wrote in this wave — the earlier version is lost`;
         issues.push(issue);
+        recordBuildProblem({
+          code: "write_conflict",
+          severity: "error",
+          source: "file_writer",
+          taskId,
+          path,
+          message: issue,
+        });
         emit({ type: "diagnostic", phase: "model_failed", message: issue });
       }
       waveWrites.set(key, writer);
@@ -2423,6 +2565,14 @@ export async function runBuildDiscussion(
     for (const path of truncatedPaths) {
       const issue = `Output was cut off mid-block for ${path} — nothing from the truncated block was written. This file is too large for a single response; use read_range/search plus patch for existing files, or append chunks for large/missing files.`;
       issues.push(issue);
+      recordBuildProblem({
+        code: "truncated_output",
+        severity: "error",
+        source: "file_writer",
+        taskId,
+        path,
+        message: issue,
+      });
       emit({ type: "diagnostic", phase: "model_failed", message: `Truncated output block for ${path} rejected${taskId ? ` (${taskId})` : ""}` });
     }
 
@@ -2438,6 +2588,14 @@ export async function runBuildDiscussion(
       ) {
         const issue = `Rewrite of ${file.path} skipped as suspicious: the existing file is ${existing.length} chars but the replacement is only ${file.content.length}. Use SEARCH/REPLACE edit blocks for changes, or re-emit the COMPLETE file if a smaller rewrite is genuinely intended.`;
         issues.push(issue);
+        recordBuildProblem({
+          code: "suspicious_rewrite",
+          severity: "error",
+          source: "file_writer",
+          taskId,
+          path: file.path,
+          message: issue,
+        });
         emit({
           type: "diagnostic",
           phase: "model_failed",
@@ -2668,7 +2826,22 @@ export async function runBuildDiscussion(
   const emitArchitectLoopDiag = (
     phase: "round_preparing" | "judging" | "model_failed" | "model_streaming",
     message: string
-  ): void =>
+  ): void => {
+    if (phase === "model_failed") {
+      recordBuildProblem({
+        code: /tool-call rejected|TOOL CALL REJECTED|parseable/i.test(message)
+          ? "malformed_tool_call"
+          : /served nothing|duplicate/i.test(message)
+            ? "empty_tool_batch"
+            : "tool_warning",
+        severity: "error",
+        source: "architect",
+        modelId: architect.modelId,
+        modelName: architect.displayName,
+        providerId: parseModelId(architect.modelId).providerId,
+        message,
+      });
+    }
     emit({
       type: "diagnostic",
       phase,
@@ -2677,6 +2850,7 @@ export async function runBuildDiscussion(
       providerId: parseModelId(architect.modelId).providerId,
       message,
     });
+  };
 
   // Dispatch a batch of Architect tool actions in one turn: the scheduler runs
   // safe reads/searches together, queues mutations in order, and keeps risky
@@ -3315,6 +3489,21 @@ export async function runBuildDiscussion(
       } else {
         task.retryAfterMs = undefined;
       }
+      recordBuildProblem({
+        code: "no_output",
+        severity: task.status === "failed" ? "blocked" : "error",
+        source: "worker",
+        modelId: worker.modelId,
+        modelName: worker.displayName,
+        providerId: parseModelId(worker.modelId).providerId,
+        taskId: task.id,
+        wave: cycle,
+        message: `${worker.displayName} ${detail} for ${task.id}${
+          task.status === "fixing"
+            ? " - requeued for another attempt"
+            : " - giving up on this task"
+        }`,
+      });
       emit({
         type: "task_status",
         taskId: task.id,
@@ -3326,7 +3515,11 @@ export async function runBuildDiscussion(
       emit({
         type: "diagnostic",
         phase: "model_failed",
-        message: `${worker.displayName} ${detail} for ${task.id}${task.status === "fixing" ? " — requeued for another attempt" : " — giving up on this task"}`,
+        message: `${worker.displayName} ${detail} for ${task.id}${
+          task.status === "fixing"
+            ? " - requeued for another attempt"
+            : " - giving up on this task"
+        }`,
       });
     };
 
@@ -3571,6 +3764,17 @@ export async function runBuildDiscussion(
               badToolCalls += 1;
               const feedback = inspected.feedback;
               toolIssues.push(feedback);
+              recordBuildProblem({
+                code: "malformed_tool_call",
+                severity: "error",
+                source: "worker",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                taskId: task.id,
+                wave: cycle,
+                message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
+              });
               emit({
                 type: "diagnostic",
                 phase: "model_failed",
@@ -3599,6 +3803,17 @@ export async function runBuildDiscussion(
           const actor = `${worker.displayName} ${task.id}`;
           const warning = inspected.feedback ? `${inspected.feedback}\n\n` : "";
           if (warning) {
+            recordBuildProblem({
+              code: "tool_warning",
+              severity: "warning",
+              source: "worker",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              taskId: task.id,
+              wave: cycle,
+              message: `${worker.displayName} tool-call warning for ${task.id}: ${inspected.feedback}`,
+            });
             emit({
               type: "diagnostic",
               phase: "model_failed",
@@ -3615,6 +3830,17 @@ export async function runBuildDiscussion(
             // Nothing ran (all duplicate, unsupported, or budget-exhausted).
             // Count it like a malformed turn so a stuck worker still bails out.
             badToolCalls += 1;
+            recordBuildProblem({
+              code: "empty_tool_batch",
+              severity: "error",
+              source: "worker",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              taskId: task.id,
+              wave: cycle,
+              message: `${worker.displayName} tool batch for ${task.id} served nothing (all duplicate, unsupported, or budget-exhausted)`,
+            });
             emit({
               type: "diagnostic",
               phase: "model_failed",
@@ -3924,6 +4150,18 @@ export async function runBuildDiscussion(
         lastFailureFingerprint !== null && lastFailureFingerprint !== fingerprint;
       lastFailureFingerprint = fingerprint;
       failureFingerprints = recordBuildFailure(failureFingerprints, fingerprint);
+      recordBuildProblem({
+        code:
+          (failureFingerprints[fingerprint] ?? 0) > 1
+            ? "verification_repeated"
+            : "verification_failed",
+        severity: "error",
+        source: "runner",
+        action: verifyCommand,
+        wave: cycle,
+        message: `Automated build check failed in wave ${cycle}: ${verifyCommand}`,
+        details: truncate(verifyFeedback, 1_500),
+      });
       if (failureChanged) {
         recoveryLog.push(`Verification failure changed after wave ${cycle}.`);
       }
@@ -4122,6 +4360,23 @@ export async function runBuildDiscussion(
         recoveryLog.push(
           `Stopped as blocked after wave ${cycle}: ${repeatedFailureCount} repeated failure(s), ${noProgressWaves} no-progress wave(s).`
         );
+        recordBuildProblem({
+          code: "repeated_no_progress",
+          severity: "blocked",
+          source: "engine",
+          wave: cycle,
+          message: `Build stopped after repeated no-progress recovery attempts: ${repeatedFailureCount} repeated failure(s), ${noProgressWaves} no-progress wave(s).`,
+        });
+        const message =
+          "Build stopped after repeated no-progress recovery attempts. Resume keeps the checkpoint and lets you change settings or add guidance.";
+        const report = createStopReport({
+          status: "blocked",
+          stopReason: "blocked",
+          message,
+          wave: cycle,
+          tasks,
+          verifyCommand,
+        });
         saveCheckpoint({
           status: "blocked",
           stopReason: "blocked",
@@ -4129,11 +4384,9 @@ export async function runBuildDiscussion(
           tasks,
           architectNotes,
           verifyCommand,
+          stopReport: report,
         });
-        markStopped(
-          "blocked",
-          "Build stopped after repeated no-progress recovery attempts. Resume keeps the checkpoint and lets you change settings or add guidance."
-        );
+        markStopped("blocked", message, report);
         return;
       }
     }
@@ -4182,6 +4435,21 @@ export async function runBuildDiscussion(
   const incompleteTasks = findIncompleteBuildTasks(tasks);
   if (incompleteTasks.length > 0) {
     const message = buildIncompleteTaskFailure(incompleteTasks);
+    recordBuildProblem({
+      code: "incomplete_tasks",
+      severity: "blocked",
+      source: "engine",
+      wave: wavesRun,
+      message,
+    });
+    const report = createStopReport({
+      status: "failed",
+      stopReason: "incomplete",
+      message,
+      wave: wavesRun,
+      tasks,
+      verifyCommand,
+    });
     // Preserve the work so the user can resume from the current task graph.
     saveCheckpoint({
       status: "blocked",
@@ -4189,6 +4457,14 @@ export async function runBuildDiscussion(
       tasks,
       architectNotes,
       verifyCommand,
+      stopReport: report,
+    });
+    emit({
+      type: "build_stopped",
+      reason: "blocked",
+      message,
+      usage: usageWindow,
+      report,
     });
     emit({
       type: "diagnostic",
