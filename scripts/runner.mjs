@@ -42,6 +42,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   tokensMatch,
   isAllowedHost,
@@ -60,10 +61,12 @@ import {
 } from "./runner-lib.mjs";
 
 const VERSION = 9;
-// Replaced at build time (scripts/build-runner.mjs) with the inlined panel HTML.
-// When running the unbuilt source directly this stays a placeholder; the served
-// runner is always the built public/runner.mjs.
+// PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
+// panel. Running the UNBUILT source leaves it as the marker; we detect that via the
+// split PANEL_BUILD_MARKER (kept non-contiguous so the build's marker replacement
+// ignores it) and read the panel from disk instead — so dev edits show on reload.
 const PANEL_HTML = "__RUNNER_PANEL_HTML__";
+const PANEL_BUILD_MARKER = "__RUNNER_" + "PANEL_HTML__";
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
@@ -1892,6 +1895,23 @@ const server = http.createServer(async (req, res) => {
   // Unauthenticated static shell — no secrets, no side effects. The panel JS
   // authenticates its own /api/* calls with the token from the URL fragment.
   if (req.method === "GET" && url.pathname === "/") {
+    let panelHtml = PANEL_HTML;
+    if (panelHtml === PANEL_BUILD_MARKER) {
+      // Unbuilt source: inline the panel + help from disk at request time so dev
+      // edits show on reload (the built public/runner.mjs has them inlined already).
+      try {
+        const dir = path.dirname(fileURLToPath(import.meta.url));
+        panelHtml = fs
+          .readFileSync(path.join(dir, "runner-panel.html"), "utf8")
+          .replace(
+            "__RUNNER_" + "HELP_HTML__",
+            fs.readFileSync(path.join(dir, "runner-help.html"), "utf8")
+          );
+      } catch {
+        panelHtml =
+          '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:2rem;background:#0b0e14;color:#d7dee9"><h1>Panel not built</h1><p>Run <code>node scripts/build-runner.mjs</code> and serve <code>public/runner.mjs</code>, or run the source with <code>runner-panel.html</code> alongside it.</p></body>';
+      }
+    }
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "content-security-policy":
@@ -1900,7 +1920,7 @@ const server = http.createServer(async (req, res) => {
       "referrer-policy": "no-referrer",
       ...CORS_HEADERS,
     });
-    res.end(PANEL_HTML);
+    res.end(panelHtml);
     return;
   }
 
