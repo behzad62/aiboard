@@ -128,7 +128,11 @@ export function RunnerSetup({
         the URL and token it prints to connect; leave the token empty to build
         in-app instead. Once connected, open the runner&apos;s{" "}
         <strong>control panel</strong> in your browser to pick the project
-        folder and watch live activity.
+        folder and watch live activity.{" "}
+        <a href="/runner-guide" className="underline underline-offset-2">
+          Read the runner guide
+        </a>
+        .
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" asChild>

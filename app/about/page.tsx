@@ -63,7 +63,8 @@ export default function AboutPage() {
             waves. Files can be written to a real project folder on your
             machine, downloaded as a zip, or applied through an optional local
             runner that adds shell access, MCP tools, and a browser control
-            panel for picking the project folder and watching live activity.
+            panel to pick the project folder, watch live activity, manage MCP
+            servers, and keep itself current with a signed self-update.
           </li>
         </ul>
       </section>
@@ -133,6 +134,11 @@ export default function AboutPage() {
           <li>
             <Link href="/build-mode" className="underline hover:text-foreground">
               Build mode for AI-assisted coding
+            </Link>
+          </li>
+          <li>
+            <Link href="/runner-guide" className="underline hover:text-foreground">
+              Runner guide — local runner &amp; control panel
             </Link>
           </li>
         </ul>

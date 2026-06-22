@@ -1,0 +1,42 @@
+<h2>Running the runner</h2>
+<p>The runner is a single zero-dependency file. You need <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> 18+ — nothing else. Start it in a terminal, pointed at the folder you want the AI team to work in:</p>
+<pre><code>node runner.mjs path/to/your-project</code></pre>
+<p>It prints a <strong>URL</strong> and a <strong>token</strong>; paste those into the app (Build mode → Local runner) to connect. Leave the token empty in the app to build fully in-browser instead.</p>
+
+<h3>Flags</h3>
+<ul>
+  <li><code>--port &lt;n&gt;</code> — listen on a specific port (default 8787).</li>
+  <li><code>--token &lt;secret&gt;</code> — use a fixed token instead of a random one.</li>
+  <li><code>--mcp "&lt;name&gt;=&lt;command&gt;"</code> — bridge a stdio MCP server (repeatable). You can also add these live in the control panel.</li>
+  <li><code>--context7</code> — shortcut to bridge Context7 docs (optional <code>--context7-key &lt;key&gt;</code>).</li>
+  <li><code>--searxng --searxng-url &lt;url&gt;</code> — bridge web search via your SearXNG instance.</li>
+  <li><code>--host &lt;addr&gt;</code> — expose beyond loopback (see Remote access). Refuses to start without a strong <code>--token</code>.</li>
+</ul>
+
+<h2>The control panel</h2>
+<p>Open <code>http://127.0.0.1:8787/</code> in a browser (or click <em>Open control panel</em> in the app once connected). From the panel you can:</p>
+<ul>
+  <li>Browse and pick the <strong>project folder</strong> (confined to the folder the runner was started in, or an explicit root you pass as the first argument).</li>
+  <li>Watch <strong>live activity</strong> — the same log that prints in your terminal, streamed over SSE.</li>
+  <li>See your <strong>MCP servers</strong>' status and tool counts, toggle them on/off, and add or remove them at runtime.</li>
+  <li>Apply a verified <strong>self-update</strong> when one is available.</li>
+</ul>
+
+<h2>Folder &amp; root</h2>
+<p>The first argument is the <strong>root</strong> — the boundary of the folder browser. If you omit it, the folder the runner was launched from is used. The browser can pick any subfolder within the root as the active working folder; it can never escape above the root. To browse the whole machine, pass an explicit root such as <code>/</code> (or a drive root on Windows).</p>
+
+<h2>MCP servers</h2>
+<p>An MCP server bridges external tools to the AI team — a real browser via Playwright, current library docs via Context7, web search via SearXNG, or anything that speaks stdio MCP. Add one in the panel with a <em>name</em> and the <em>command</em> that launches it, e.g. <code>npx @playwright/mcp@latest</code>. Adding an MCP server runs an arbitrary command, so only add ones you trust.</p>
+
+<h2>Remote access (advanced)</h2>
+<p>By default the runner binds <code>127.0.0.1</code> and is reachable only from your machine — this is the safe default and needs no extra setup. If you want the hosted app to drive a build on another machine, you can expose the runner, but understand the trade-off: it grants file and shell access, so <strong>the token is the only thing protecting it</strong>.</p>
+<p>Because the app is served over <strong>https</strong>, it can only reach a runner over a <strong>browser-trusted https URL</strong>. The simplest way to get one is a tunnel — keep the runner on plain http and let the tunnel provide https:</p>
+<ol>
+  <li><strong>ngrok</strong> (best for the live log stream): <code>ngrok config add-authtoken &lt;token&gt;</code> then <code>ngrok http 8787</code>. The free plan gives a stable <code>*.ngrok-free.app</code> URL. Paste that https URL + the runner token into the app.</li>
+  <li><strong>Tailscale Funnel</strong>: <code>tailscale funnel 8787</code> → a stable <code>*.ts.net</code> URL (public listener is limited to ports 443/8443/10000).</li>
+  <li><strong>Cloudflare named tunnel</strong> (requires your own domain) — and verify the live-log panel actually streams. <strong>Do not use a Cloudflare Quick Tunnel (<code>trycloudflare</code>)</strong>: it buffers server-sent events, which freezes the live log.</li>
+</ol>
+<p>Start the runner with <code>--host 0.0.0.0 --token &lt;a long random secret&gt;</code> and point your tunnel at its port. Reaching a runner by a bare LAN IP (<code>http://192.168.x.x</code>) is discouraged: browsers block it as mixed content from an https page, and Chrome additionally gates local-network access behind a permission prompt — a tunnel avoids both.</p>
+
+<h2>Self-update</h2>
+<p>When a newer runner is published, the panel shows an <em>Update</em> button. Applying it downloads the new runner, verifies its <strong>Ed25519 signature and SHA-256</strong> against the pinned key (so a compromised download host alone cannot push malicious code), swaps the file (keeping a <code>.bak</code>), and restarts on the same port and token. Updates are never automatic — they only happen when you click.</p>

@@ -15,6 +15,7 @@ const repo = path.resolve(here, "..");
 const SRC = path.join(here, "runner.mjs");
 const LIB = path.join(here, "runner-lib.mjs");
 const PANEL = path.join(here, "runner-panel.html");
+const HELP = path.join(here, "runner-help.html");
 const OUT = path.join(repo, "public", "runner.mjs");
 
 const SINGLE_IMPORT = /^import\s+(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*["'](node:[^"']+)["'];?\s*$/;
@@ -72,8 +73,13 @@ runnerSrc = runnerSrc.replace(/^#![^\n]*\n/, "");
 runnerSrc = runnerSrc.replace(/import\s*\{[^}]*\}\s*from\s*["']\.\/runner-lib\.mjs["'];?/s, "");
 const runner = extractNodeImports(runnerSrc);
 
-// Panel: inline at the marker (JSON.stringify handles all escaping).
-const panel = fs.readFileSync(PANEL, "utf8");
+// Panel: inline the help fragment into it, then inline the panel at the marker
+// (JSON.stringify handles all escaping).
+let panel = fs.readFileSync(PANEL, "utf8");
+panel = panel.replace("__RUNNER_HELP_HTML__", fs.readFileSync(HELP, "utf8"));
+if (panel.includes("__RUNNER_HELP_HTML__")) {
+  throw new Error("Help marker not replaced in panel");
+}
 let runnerBody = runner.body.replace('"__RUNNER_PANEL_HTML__"', JSON.stringify(panel));
 if (runnerBody.includes("__RUNNER_PANEL_HTML__")) {
   throw new Error("Panel marker not found/replaced in runner.mjs");

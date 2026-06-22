@@ -13,6 +13,8 @@ const out = fs.readFileSync("public/runner.mjs", "utf8");
 
 check("contains panel markup", out.includes("AI&nbsp;Board") && out.includes("Project folder"));
 check("no leftover panel marker", !out.includes("__RUNNER_PANEL_HTML__"));
+check("help guide inlined", out.includes("Running the runner") && out.includes("Remote access"));
+check("no leftover help marker", !out.includes("__RUNNER_HELP_HTML__"));
 check("no runner-lib import remains", !out.includes('from "./runner-lib.mjs"'));
 check("inlined confine()", out.includes("function confine("));
 check("inlined createLog()", out.includes("function createLog("));

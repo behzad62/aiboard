@@ -2041,7 +2041,14 @@ const server = http.createServer(async (req, res) => {
         signed: !!m.sig,
       });
     } catch (err) {
-      json(res, 502, { error: err instanceof Error ? err.message : "Update check failed" });
+      // An unreachable update source is a normal condition (offline / source
+      // down). Return 200 so the panel's periodic check doesn't spam the console.
+      json(res, 200, {
+        ok: false,
+        current: VERSION,
+        updateAvailable: false,
+        error: err instanceof Error ? err.message : "Update check failed",
+      });
     }
     return;
   }
