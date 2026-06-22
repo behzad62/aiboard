@@ -79,6 +79,29 @@ export function decideBuildTaskFailure(
   return { failCount, status, instructionNote, retryDelayMs };
 }
 
+export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
+  return tasks.map((task) => {
+    if (task.status === "in_progress" || task.status === "review") {
+      return {
+        ...task,
+        status: "planned",
+      };
+    }
+
+    if (task.status === "failed") {
+      return {
+        ...task,
+        status: "fixing",
+        workerIndex: undefined,
+        assignTo: undefined,
+        retryAfterMs: undefined,
+      };
+    }
+
+    return { ...task };
+  });
+}
+
 export interface ReviewTaskFilterResult {
   accepted: PlanAction["tasks"];
   skipped: Array<{

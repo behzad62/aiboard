@@ -66,6 +66,7 @@ import {
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
+  normalizeBuildTasksForResume,
   outputPathsForTask,
   parseArchitectAction,
   prCreateRefusalReason,
@@ -2963,7 +2964,9 @@ export async function runBuildDiscussion(
     existingCheckpoint.status !== "completed" &&
     existingCheckpoint.tasks.length > 0
   ) {
-    tasks = existingCheckpoint.tasks.map((task) => ({
+    // Failed checkpoint tasks must be reopened on Resume; otherwise dependents
+    // stay blocked and the build can burn waves without dispatching any work.
+    tasks = normalizeBuildTasksForResume(existingCheckpoint.tasks.map((task) => ({
       ...task,
       // "in_progress"/"review" are transient mid-wave states. If the run stopped
       // while a task was being implemented or awaiting review, re-queue it as
@@ -2974,7 +2977,7 @@ export async function runBuildDiscussion(
         task.status === "in_progress" || task.status === "review"
           ? "planned"
           : task.status,
-    }));
+    })));
     architectNotes = existingCheckpoint.architectNotes;
     planVerifyCommand = existingCheckpoint.verifyCommand;
     repoActiveBranch = existingCheckpoint.branch;
