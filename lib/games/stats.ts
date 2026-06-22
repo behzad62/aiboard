@@ -156,6 +156,86 @@ export function getRecentMatches(limit: number = 10): GameMatchRecord[] {
     .slice(0, limit);
 }
 
+/** Get only AI vs AI match records */
+export function getAIvsAIMatches(): GameMatchRecord[] {
+  return getMatchRecords().filter((r) => r.mode === "aivai");
+}
+
+/** Get recent AI vs AI matches */
+export function getRecentAIvsAIMatches(limit: number = 10): GameMatchRecord[] {
+  const records = getAIvsAIMatches();
+  return records
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, limit);
+}
+
+/** Get model stats filtered for AI vs AI games only */
+export function getAIvsAIModelStats(): GameModelStat[] {
+  const records = getAIvsAIMatches();
+  const statsMap = new Map<string, GameModelStat>();
+
+  for (const record of records) {
+    if (record.whiteModel) {
+      updateModelStats(statsMap, record.whiteModel, record, "white");
+    }
+    if (record.blackModel) {
+      updateModelStats(statsMap, record.blackModel, record, "black");
+    }
+  }
+
+  const stats = Array.from(statsMap.values()).map((stat) => ({
+    ...stat,
+    avgMoveMs: stat.totalMoves > 0 ? stat.totalMoveMs / stat.totalMoves : 0,
+  }));
+
+  stats.sort((a, b) => {
+    const winRateA = a.games > 0 ? a.wins / a.games : 0;
+    const winRateB = b.games > 0 ? b.wins / b.games : 0;
+    if (winRateB !== winRateA) return winRateB - winRateA;
+    return b.games - a.games;
+  });
+
+  return stats;
+}
+
+/** Get aggregate AI vs AI statistics */
+export function getAIvsAIAggregateStats(): {
+  totalGames: number;
+  avgMoves: number;
+  avgDurationMs: number;
+  whiteWins: number;
+  blackWins: number;
+  draws: number;
+} {
+  const records = getAIvsAIMatches();
+  if (records.length === 0) {
+    return { totalGames: 0, avgMoves: 0, avgDurationMs: 0, whiteWins: 0, blackWins: 0, draws: 0 };
+  }
+
+  let totalMoves = 0;
+  let totalDuration = 0;
+  let whiteWins = 0;
+  let blackWins = 0;
+  let draws = 0;
+
+  for (const record of records) {
+    totalMoves += record.moves;
+    totalDuration += record.durationMs;
+    if (record.result === "white") whiteWins++;
+    else if (record.result === "black") blackWins++;
+    else draws++;
+  }
+
+  return {
+    totalGames: records.length,
+    avgMoves: Math.round(totalMoves / records.length),
+    avgDurationMs: Math.round(totalDuration / records.length),
+    whiteWins,
+    blackWins,
+    draws,
+  };
+}
+
 // Legacy aliases for compatibility with task spec
 export const getGameMatches = getMatchRecords;
 export const saveGameMatch = saveMatchRecord;
