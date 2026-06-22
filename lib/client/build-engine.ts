@@ -2993,7 +2993,8 @@ export async function runBuildDiscussion(
 
   const emitArchitectLoopDiag = (
     phase: "round_preparing" | "judging" | "model_failed" | "model_streaming",
-    message: string
+    message: string,
+    details?: string
   ): void => {
     if (phase === "model_failed") {
       recordBuildProblem({
@@ -3008,6 +3009,7 @@ export async function runBuildDiscussion(
         modelName: architect.displayName,
         providerId: parseModelId(architect.modelId).providerId,
         message,
+        details,
       });
     }
     emit({
@@ -3030,7 +3032,12 @@ export async function runBuildDiscussion(
     budgets: InspectionBudgets,
     appendContext: (text: string) => void,
     tracker: ReturnType<typeof createToolCallTracker>
-  ): Promise<{ result: string; exhausted: boolean; servedCount: number }> => {
+  ): Promise<{
+    result: string;
+    exhausted: boolean;
+    servedCount: number;
+    skippedCount: number;
+  }> => {
     const schedule = scheduleBuildToolActions(actions, {
       allowSafeRunQueue: allowAllCommands,
       maxSafeRuns: SAFE_RUN_QUEUE_LIMIT,
@@ -3075,6 +3082,7 @@ export async function runBuildDiscussion(
       }),
       exhausted,
       servedCount: served.length,
+      skippedCount: skipped.length,
     };
   };
 
@@ -3201,13 +3209,26 @@ export async function runBuildDiscussion(
         args.appendContext,
         tracker
       );
+      if (batch.servedCount > 0 && batch.skippedCount > 0) {
+        recordBuildProblem({
+          code: "tool_warning",
+          severity: "warning",
+          source: "architect",
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `Architect ${terminal} batch skipped ${batch.skippedCount} action(s)`,
+          details: batch.result,
+        });
+      }
       if (batch.servedCount === 0) {
         // Every requested action was a duplicate or unsafe/skipped — nothing
         // ran. Count it like a repeated lookup so a stuck loop still forces.
         duplicates += 1;
         emitArchitectLoopDiag(
           "model_failed",
-          `Architect ${terminal} batch served nothing (all duplicate or skipped)`
+          `Architect ${terminal} batch served nothing (all duplicate or skipped)`,
+          batch.result
         );
         messages.push({
           role: "user",
@@ -3833,7 +3854,11 @@ export async function runBuildDiscussion(
         const dispatchWorkerToolBatch = async (
           actions: ArchitectAction[],
           actor: string
-        ): Promise<{ message: string; servedCount: number }> => {
+        ): Promise<{
+          message: string;
+          servedCount: number;
+          skippedCount: number;
+        }> => {
           const schedule = scheduleBuildToolActions(actions, {
             allowSafeRunQueue: false,
             maxSafeRuns: 0,
@@ -3928,6 +3953,7 @@ export async function runBuildDiscussion(
           return {
             message: packToolBatchResult({ served, skipped, maxChars: TOOL_BATCH_RESULT_CHARS }),
             servedCount: served.length,
+            skippedCount: skipped.length,
           };
         };
 
@@ -4021,6 +4047,20 @@ export async function runBuildDiscussion(
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
           workerMessages.push({ role: "user", content: `${warning}${batch.message}` });
+          if (batch.servedCount > 0 && batch.skippedCount > 0) {
+            recordBuildProblem({
+              code: "tool_warning",
+              severity: "warning",
+              source: "worker",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              taskId: task.id,
+              wave: cycle,
+              message: `${worker.displayName} tool batch skipped ${batch.skippedCount} action(s) for ${task.id}`,
+              details: batch.message,
+            });
+          }
           if (batch.servedCount === 0) {
             // Nothing ran (all duplicate, unsupported, or budget-exhausted).
             // Count it like a malformed turn so a stuck worker still bails out.
@@ -4035,6 +4075,7 @@ export async function runBuildDiscussion(
               taskId: task.id,
               wave: cycle,
               message: `${worker.displayName} tool batch for ${task.id} served nothing (all duplicate, unsupported, or budget-exhausted)`,
+              details: batch.message,
             });
             emit({
               type: "diagnostic",

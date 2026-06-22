@@ -37,6 +37,8 @@ const report = createBuildToolReviewReport({
       severity: "error",
       source: "architect",
       message: "Architect review batch served nothing (all duplicate or skipped)",
+      details:
+        "TOOL BATCH RESULT\n\nServed:\n- none\n\nSkipped:\n- read app/games/games-client.tsx: duplicate tool request (already delivered)",
       modelName: "GLM 5.2",
       providerId: "openrouter",
       wave: 2,
@@ -68,11 +70,12 @@ const report = createBuildToolReviewReport({
   commandProblems: [
     {
       command:
-        'mcp:playwright.browser_navigate {"url":"http://localhost:3001/games"}',
-      exitCode: 1,
-      durationMs: 0,
-      outputPreview: "tool ERROR - browser did not navigate",
-      createdAt: "2026-06-22T19:51:57.000Z",
+        "npx --yes tsc --noEmit",
+      exitCode: 2,
+      durationMs: 2600,
+      outputPreview:
+        "lib/games/chess/ai.ts(242,23): error TS2304: Cannot find name 'getCustomModelByFullId'.",
+      createdAt: "2026-06-22T19:52:10.000Z",
     },
   ],
   createdAt: "2026-06-22T19:53:00.000Z",
@@ -82,7 +85,17 @@ check("tool review is created when tool problems exist", report !== null, report
 if (report) {
   check("tool review keeps completed status", report.status === "completed", report);
   check("tool review excludes verification-only problems", report.totalProblems === 3, report);
-  check("tool review includes failed command evidence", report.commandProblems.length === 1, report);
+  check(
+    "tool review synthesizes MCP command evidence",
+    report.commandProblems.length === 1 &&
+      report.commandProblems[0]?.command.includes("browser_navigate"),
+    report
+  );
+  check(
+    "tool review excludes non-tool verification command evidence",
+    !report.commandProblems.some((command) => command.command.includes("tsc")),
+    report
+  );
   check(
     "tool review groups Playwright MCP failure",
     report.groups.some(
@@ -112,6 +125,8 @@ if (report) {
   const markdown = formatBuildToolReviewMarkdown(report);
   check("markdown includes copy prompt", markdown.includes("What I need help with"), markdown);
   check("markdown includes Playwright navigate", markdown.includes("browser_navigate"), markdown);
+  check("markdown includes skipped tool label", markdown.includes("read app/games/games-client.tsx"), markdown);
+  check("markdown includes skipped tool reason", markdown.includes("duplicate tool request"), markdown);
   check("markdown includes grouped counts", markdown.includes("Problem Groups"), markdown);
   check("markdown includes worker warning", markdown.includes("tool_warning"), markdown);
   check("markdown excludes verification problem", !markdown.includes("verification_repeated"), markdown);

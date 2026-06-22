@@ -49,6 +49,10 @@ function sortNewestCommands(
   );
 }
 
+function isReviewCommandProblem(command: BuildCommandProblem): boolean {
+  return command.command.startsWith("mcp:") || command.denied === true;
+}
+
 function actorFor(problem: BuildProblem): string {
   if (problem.modelName) {
     return problem.providerId
@@ -60,6 +64,43 @@ function actorFor(problem: BuildProblem): string {
     if (match) return match[1];
   }
   return problem.source;
+}
+
+function commandProblemFromReviewProblem(
+  problem: BuildProblem
+): BuildCommandProblem | null {
+  if (!problem.action) return null;
+  if (problem.source !== "mcp" && !problem.action.startsWith("mcp:")) {
+    return null;
+  }
+  if (problem.code !== "command_failed" && problem.code !== "tool_denied") {
+    return null;
+  }
+  return {
+    command: problem.action,
+    exitCode: problem.code === "tool_denied" ? -1 : 1,
+    durationMs: 0,
+    outputPreview: problem.details ?? problem.message,
+    denied: problem.code === "tool_denied" ? true : undefined,
+    createdAt: problem.createdAt,
+  };
+}
+
+function collectCommandEvidence(
+  commandProblems: BuildCommandProblem[],
+  problems: BuildProblem[]
+): BuildCommandProblem[] {
+  const commands = sortNewestCommands(
+    commandProblems.filter(isReviewCommandProblem)
+  );
+  const seen = new Set(commands.map((command) => command.command));
+  for (const problem of sortNewestProblems(problems)) {
+    const command = commandProblemFromReviewProblem(problem);
+    if (!command || seen.has(command.command)) continue;
+    commands.push(command);
+    seen.add(command.command);
+  }
+  return sortNewestCommands(commands);
 }
 
 function severityRank(severity: BuildProblemSeverity): number {
@@ -180,18 +221,24 @@ export function createBuildToolReviewReport(
   input: BuildToolReviewReportInput
 ): BuildToolReviewReport | null {
   const createdAt = input.createdAt ?? new Date().toISOString();
-  const commandProblems = sortNewestCommands(input.commandProblems).filter(
-    (command) => command.exitCode !== 0 || command.denied
+  const directCommandProblems = sortNewestCommands(input.commandProblems).filter(
+    (command) =>
+      (command.exitCode !== 0 || command.denied) &&
+      isReviewCommandProblem(command)
   );
   const reviewProblems = sortNewestProblems(
     enrichProblemsFromCommands(
       input.problems.filter(isReviewProblem),
-      commandProblems
+      directCommandProblems
     )
   ).slice(0, 20);
 
   if (reviewProblems.length === 0) return null;
 
+  const commandProblems = collectCommandEvidence(
+    directCommandProblems,
+    reviewProblems
+  ).slice(0, 8);
   const groups = groupProblems(reviewProblems).slice(0, 12);
   const warningCount = reviewProblems.filter(
     (problem) => problem.severity === "warning"
