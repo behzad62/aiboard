@@ -20,6 +20,8 @@ interface RunnerSetupProps {
   disabled?: boolean;
   /** Name of the browser-picked project folder, to warn on a mismatch. */
   pickedFolderName?: string | null;
+  /** Reveal + scroll to the no-terminal browser-folder fallback. */
+  onUseBrowserFolder?: () => void;
 }
 
 /**
@@ -36,6 +38,7 @@ export function RunnerSetup({
   initialSelection,
   disabled = false,
   pickedFolderName,
+  onUseBrowserFolder,
 }: RunnerSetupProps) {
   const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_URL);
   const [token, setToken] = useState(initialSelection?.token ?? "");
@@ -106,7 +109,7 @@ export function RunnerSetup({
         Connect your project — local runner (recommended)
       </Label>
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         The runner is a small script you start in your own terminal. It gives
         the AI team access to a project folder (read, write, search), runs
         commands like tests and installs, and can bridge MCP tools — all
@@ -119,14 +122,25 @@ export function RunnerSetup({
         >
           Node.js
         </a>{" "}
-        18+ (free) — nothing else. Run it, then paste the URL and token it
-        prints to connect (leave the token empty to build in-browser instead).
-        Once connected, open its <strong>control panel</strong> to pick the
-        folder, watch live logs, and manage MCP servers.{" "}
-        <a href="/runner-guide" className="underline underline-offset-2">
+        18+ (free). Run it, then paste the URL and token it prints to connect,
+        and open its <strong>control panel</strong> to pick the folder, watch
+        live logs, and manage MCP servers.{" "}
+        <a
+          href="/runner-guide"
+          className="font-semibold underline underline-offset-2"
+        >
           Read the runner guide
         </a>{" "}
-        for flags, MCP setup, remote access, and self-update.
+        for flags, MCP setup, remote access, and self-update. The runner is
+        optional —{" "}
+        <button
+          type="button"
+          onClick={() => onUseBrowserFolder?.()}
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          pick a folder in the browser instead
+        </button>
+        .
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" asChild>
