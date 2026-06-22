@@ -31,7 +31,7 @@ export default function RunnerGuidePage() {
         </p>
       </header>
       <div
-        className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-display prose-a:text-primary"
+        className="runner-prose prose prose-sm dark:prose-invert max-w-none prose-headings:font-display prose-a:text-primary"
         dangerouslySetInnerHTML={{ __html: help }}
       />
       <p>

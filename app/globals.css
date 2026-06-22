@@ -173,3 +173,26 @@
 .prose pre::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Runner guide prose: drop the typography plugin's inline-code backticks and give
+   code + headings a cleaner, app-themed look (closer to the runner panel). */
+.runner-prose code::before,
+.runner-prose code::after {
+  content: none;
+}
+.runner-prose :not(pre) > code {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  font-weight: 500;
+}
+.runner-prose pre {
+  background: hsl(var(--muted) / 0.45);
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+}
+.runner-prose h2 {
+  color: hsl(var(--primary));
+}
