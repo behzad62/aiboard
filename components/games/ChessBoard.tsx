@@ -93,8 +93,9 @@ export function ChessBoard({
           interactive && "cursor-pointer hover:brightness-110",
           "transition-all duration-150"
         )}
-        style={{ backgroundColor: bgColor }}
+        style={{ backgroundColor: bgColor, width: '100%', height: '100%' }}
         onClick={() => handleSquareClick(square)}
+        data-testid={`square-${square}`}
       >
         {/* Last move highlight */}
         {isLastMoveSquare && (
@@ -165,7 +166,10 @@ export function ChessBoard({
   };
 
   return (
-    <div className="flex flex-col items-center w-full max-w-[600px] mx-auto">
+    <div
+      className="flex flex-col items-center w-full max-w-[600px] mx-auto"
+      style={{ width: '100%', minHeight: '300px' }}
+    >
       {/* Board container with shadow and border */}
       <div
         className={cn(
@@ -175,11 +179,15 @@ export function ChessBoard({
           "border-4 border-[#5c4033]",
           "bg-[#5c4033]" // Border color shows through as frame
         )}
+        style={{ width: '100%', minHeight: '300px' }}
+        data-testid="chess-board"
       >
         {/* Inner board with grid */}
         <div
           className="w-full h-full grid grid-cols-8 grid-rows-8 gap-0"
           style={{
+            width: '100%',
+            height: '100%',
             boxShadow: "inset 0 0 20px rgba(0,0,0,0.3)",
           }}
         >

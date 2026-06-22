@@ -11,6 +11,7 @@ interface GameControlsProps {
   isPaused: boolean;
   gameStatus: GameStatus;
   canPause: boolean;
+  isAIThinking?: boolean;
 }
 
 // Reset/Refresh icon
@@ -139,6 +140,7 @@ export function GameControls({
   isPaused,
   gameStatus,
   canPause,
+  isAIThinking = false,
 }: GameControlsProps) {
   // Determine displayed status (override with paused if game is paused)
   const displayStatus = isPaused && gameStatus === "playing" ? "paused" : gameStatus;
@@ -155,6 +157,7 @@ export function GameControls({
         "bg-white dark:bg-gray-900",
         "shadow-sm"
       )}
+      data-testid="game-controls"
     >
       {/* Status badge */}
       <div className="flex items-center justify-center">
@@ -189,6 +192,7 @@ export function GameControls({
             "shadow-sm hover:shadow"
           )}
           title="Reset game"
+          data-testid="game-reset"
         >
           <ResetIcon className="w-4 h-4" />
           <span>Reset</span>
@@ -229,6 +233,7 @@ export function GameControls({
             ]
           )}
           title={isPaused ? "Resume game" : "Pause game"}
+          data-testid={isPaused ? "game-resume" : "game-pause"}
         >
           {isPaused ? (
             <>
@@ -243,6 +248,30 @@ export function GameControls({
           )}
         </button>
       </div>
+
+      {/* AI thinking indicator */}
+      {isAIThinking && !isGameOver && (
+        <div
+          className={cn(
+            "flex items-center justify-center gap-2 py-2",
+            "text-sm font-medium",
+            "text-purple-600 dark:text-purple-400"
+          )}
+          data-testid="ai-thinking-indicator"
+        >
+          <svg
+            className="w-4 h-4 animate-spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+            <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+          </svg>
+          <span>AI thinking...</span>
+        </div>
+      )}
 
       {/* Game over message */}
       {isGameOver && (

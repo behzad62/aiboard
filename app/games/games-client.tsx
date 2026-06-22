@@ -19,6 +19,7 @@ import {
   getModelApiKey,
   getModelBaseURL,
 } from "@/lib/games/chess/ai";
+import { ensureReady } from "@/lib/client/api";
 import type {
   GameState,
   Square,
@@ -51,6 +52,119 @@ interface AIConfig {
   reasoningEffort: ReasoningEffort;
 }
 
+// AI Configuration Panel Component
+interface AIConfigPanelProps {
+  title: string;
+  color: PieceColor;
+  config: AIConfig;
+  onChange: (config: AIConfig) => void;
+  models: { id: string; name: string }[];
+}
+
+function AIConfigPanel({
+  title,
+  color,
+  config,
+  onChange,
+  models,
+}: AIConfigPanelProps) {
+  const reasoningIndex = REASONING_LEVELS.findIndex(
+    (l) => l.value === config.reasoningEffort
+  );
+
+  return (
+    <div
+      className={cn(
+        "p-4 rounded-xl border-2",
+        color === "white"
+          ? "border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50"
+          : "border-gray-400 dark:border-gray-500 bg-gray-100 dark:bg-gray-800/50"
+      )}
+      data-testid={`ai-config-${color}`}
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <div
+          className={cn(
+            "w-4 h-4 rounded-full border-2",
+            color === "white"
+              ? "bg-white border-gray-400"
+              : "bg-gray-900 border-gray-600"
+          )}
+        />
+        <span className="font-semibold text-gray-900 dark:text-white">
+          {title}
+        </span>
+      </div>
+
+      {/* Model Selector */}
+      <div className="mb-4">
+        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          Model
+        </label>
+        <select
+          value={config.modelId}
+          onChange={(e) => onChange({ ...config, modelId: e.target.value })}
+          className={cn(
+            "w-full p-2 rounded-lg border text-sm",
+            "bg-white dark:bg-gray-800",
+            "border-gray-300 dark:border-gray-600",
+            "text-gray-900 dark:text-white",
+            "focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+          )}
+          data-testid={`model-select-${color}`}
+        >
+          {models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Reasoning Effort Slider */}
+      <div>
+        <div className="flex justify-between items-center mb-1">
+          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+            Reasoning Level
+          </label>
+          <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+            {REASONING_LEVELS[reasoningIndex]?.label || "Disabled"}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={REASONING_LEVELS.length - 1}
+          value={reasoningIndex >= 0 ? reasoningIndex : 0}
+          onChange={(e) => {
+            const idx = parseInt(e.target.value, 10);
+            onChange({
+              ...config,
+              reasoningEffort: REASONING_LEVELS[idx].value,
+            });
+          }}
+          className={cn(
+            "w-full h-2 rounded-lg appearance-none cursor-pointer",
+            "bg-gray-200 dark:bg-gray-600",
+            "[&::-webkit-slider-thumb]:appearance-none",
+            "[&::-webkit-slider-thumb]:w-4",
+            "[&::-webkit-slider-thumb]:h-4",
+            "[&::-webkit-slider-thumb]:rounded-full",
+            "[&::-webkit-slider-thumb]:bg-amber-500",
+            "[&::-webkit-slider-thumb]:cursor-pointer"
+          )}
+          data-testid={`reasoning-slider-${color}`}
+        />
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+          {REASONING_LEVELS.map((level) => (
+            <span key={level.value}>{level.label}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function GamesClient() {
   // Setup state
   const [gameStarted, setGameStarted] = useState(false);
@@ -68,8 +182,8 @@ export function GamesClient() {
     reasoningEffort: "default",
   });
 
-  // Game state
-  const [gameState, setGameState] = useState<GameState>(createInitialState);
+  // Game state - use lazy initializer for SSR safety
+  const [gameState, setGameState] = useState<GameState>(() => createInitialState());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [legalMoves, setLegalMoves] = useState<Move[]>([]);
   const [isPaused, setIsPaused] = useState(false);
@@ -84,16 +198,38 @@ export function GamesClient() {
   const aiRequestRef = useRef<boolean>(false);
   const matchSavedRef = useRef<boolean>(false);
 
-  // Load available models on mount
+  // Load available models on mount (client-side only to avoid SSR issues with localStorage)
   useEffect(() => {
-    const models = getAvailableModels();
-    setAvailableModels(
-      models.map((m) => ({ id: m.modelId, name: m.displayName }))
-    );
-    if (models.length > 0) {
-      setWhiteAI((prev) => ({ ...prev, modelId: models[0].modelId }));
-      setBlackAI((prev) => ({ ...prev, modelId: models[0].modelId }));
+    // Ensure we're in the browser before accessing localStorage-dependent APIs
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+
+    async function loadModels() {
+      try {
+        const { needsPassphrase } = await ensureReady();
+        if (cancelled || needsPassphrase) return;
+
+        const models = getAvailableModels();
+        setAvailableModels(
+          models.map((m) => ({ id: m.modelId, name: m.displayName }))
+        );
+        if (models.length > 0) {
+          setWhiteAI((prev) => ({ ...prev, modelId: models[0].modelId }));
+          setBlackAI((prev) => ({ ...prev, modelId: models[0].modelId }));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          // Silently handle errors during model loading (e.g., localStorage not available)
+          console.warn("Failed to load available models:", err);
+        }
+      }
     }
+
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Check if current turn is AI controlled
@@ -379,11 +515,14 @@ export function GamesClient() {
     return history.length > 0 ? history[history.length - 1].move : null;
   }, [gameState.moveHistory]);
 
+  // Check if start button should be disabled (only for AI modes without models)
+  const isStartDisabled = gameMode !== "pvp" && availableModels.length === 0;
+
   // Render setup screen
   if (!gameStarted) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 dark:from-gray-900 dark:via-gray-850 dark:to-gray-900">
-        <div className="container mx-auto px-4 py-8 max-w-4xl">
+        <div className="container mx-auto px-4 py-8 max-w-5xl">
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
@@ -394,127 +533,150 @@ export function GamesClient() {
             </p>
           </div>
 
-          {/* Setup Card */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 space-y-6">
-            {/* Game Mode Selection */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
-                Game Mode
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {GAME_MODES.map((mode) => (
-                  <button
-                    key={mode.value}
-                    onClick={() => setGameMode(mode.value)}
-                    className={cn(
-                      "p-4 rounded-xl border-2 transition-all text-left",
-                      gameMode === mode.value
-                        ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
-                        : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
-                    )}
-                  >
-                    <div className="font-semibold text-gray-900 dark:text-white">
-                      {mode.label}
-                    </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {mode.description}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Human Color Selection (for PvAI) */}
-            {gameMode === "pvai" && (
+          {/* Main layout: Config on left, Board preview on right */}
+          <div className="flex flex-col lg:flex-row gap-8 items-start justify-center">
+            {/* Setup Card */}
+            <div className="w-full lg:w-[450px] bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 space-y-6">
+              {/* Game Mode Selection */}
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
-                  Play as
+                  Game Mode
                 </label>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setHumanColor("white")}
-                    className={cn(
-                      "flex-1 p-3 rounded-xl border-2 transition-all flex items-center justify-center gap-2",
-                      humanColor === "white"
-                        ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
-                        : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
-                    )}
-                  >
-                    <div className="w-6 h-6 rounded-full bg-white border-2 border-gray-300" />
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      White
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setHumanColor("black")}
-                    className={cn(
-                      "flex-1 p-3 rounded-xl border-2 transition-all flex items-center justify-center gap-2",
-                      humanColor === "black"
-                        ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
-                        : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
-                    )}
-                  >
-                    <div className="w-6 h-6 rounded-full bg-gray-900 border-2 border-gray-600" />
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      Black
-                    </span>
-                  </button>
+                <div className="grid grid-cols-1 gap-3">
+                  {GAME_MODES.map((mode) => (
+                    <button
+                      key={mode.value}
+                      onClick={() => setGameMode(mode.value)}
+                      className={cn(
+                        "p-4 rounded-xl border-2 transition-all text-left",
+                        gameMode === mode.value
+                          ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
+                          : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
+                      )}
+                      data-testid={`game-mode-${mode.value}`}
+                    >
+                      <div className="font-semibold text-gray-900 dark:text-white">
+                        {mode.label}
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                        {mode.description}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
 
-            {/* AI Configuration */}
-            {gameMode !== "pvp" && (
-              <div className="space-y-4">
-                {/* White AI Config (for AIvAI or when human is black) */}
-                {(gameMode === "aivai" ||
-                  (gameMode === "pvai" && humanColor === "black")) && (
-                  <AIConfigPanel
-                    title="White AI"
-                    color="white"
-                    config={whiteAI}
-                    onChange={setWhiteAI}
-                    models={availableModels}
-                  />
-                )}
-
-                {/* Black AI Config (for AIvAI or when human is white) */}
-                {(gameMode === "aivai" ||
-                  (gameMode === "pvai" && humanColor === "white")) && (
-                  <AIConfigPanel
-                    title="Black AI"
-                    color="black"
-                    config={blackAI}
-                    onChange={setBlackAI}
-                    models={availableModels}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Start Button */}
-            <button
-              onClick={handleStartGame}
-              disabled={
-                gameMode !== "pvp" &&
-                availableModels.length === 0
-              }
-              className={cn(
-                "w-full py-4 rounded-xl font-semibold text-lg transition-all",
-                "bg-gradient-to-r from-amber-500 to-orange-500 text-white",
-                "hover:from-amber-600 hover:to-orange-600",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-                "shadow-lg hover:shadow-xl"
+              {/* Human Color Selection (for PvAI) */}
+              {gameMode === "pvai" && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                    Play as
+                  </label>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setHumanColor("white")}
+                      className={cn(
+                        "flex-1 p-3 rounded-xl border-2 transition-all flex items-center justify-center gap-2",
+                        humanColor === "white"
+                          ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
+                          : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
+                      )}
+                      data-testid="color-white"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-white border-2 border-gray-300" />
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        White
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setHumanColor("black")}
+                      className={cn(
+                        "flex-1 p-3 rounded-xl border-2 transition-all flex items-center justify-center gap-2",
+                        humanColor === "black"
+                          ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
+                          : "border-gray-200 dark:border-gray-700 hover:border-amber-300"
+                      )}
+                      data-testid="color-black"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-gray-900 border-2 border-gray-600" />
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        Black
+                      </span>
+                    </button>
+                  </div>
+                </div>
               )}
-            >
-              Start Game
-            </button>
 
-            {gameMode !== "pvp" && availableModels.length === 0 && (
-              <p className="text-center text-sm text-red-500">
-                No AI models configured. Please add models in Settings first.
-              </p>
-            )}
+              {/* AI Configuration */}
+              {gameMode !== "pvp" && (
+                <div className="space-y-4">
+                  {/* White AI Config (for AIvAI or when human is black) */}
+                  {(gameMode === "aivai" ||
+                    (gameMode === "pvai" && humanColor === "black")) && (
+                    <AIConfigPanel
+                      title="White AI"
+                      color="white"
+                      config={whiteAI}
+                      onChange={setWhiteAI}
+                      models={availableModels}
+                    />
+                  )}
+
+                  {/* Black AI Config (for AIvAI or when human is white) */}
+                  {(gameMode === "aivai" ||
+                    (gameMode === "pvai" && humanColor === "white")) && (
+                    <AIConfigPanel
+                      title="Black AI"
+                      color="black"
+                      config={blackAI}
+                      onChange={setBlackAI}
+                      models={availableModels}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Start Button */}
+              <button
+                onClick={handleStartGame}
+                disabled={isStartDisabled}
+                className={cn(
+                  "w-full py-4 rounded-xl font-semibold text-lg transition-all",
+                  "bg-gradient-to-r from-amber-500 to-orange-500 text-white",
+                  "hover:from-amber-600 hover:to-orange-600",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                  "shadow-lg hover:shadow-xl"
+                )}
+                data-testid="start-game-button"
+              >
+                Start Game
+              </button>
+
+              {isStartDisabled && (
+                <p className="text-center text-sm text-red-500">
+                  No AI models configured. Please add models in Settings first.
+                </p>
+              )}
+            </div>
+
+            {/* Board Preview */}
+            <div className="w-full lg:flex-1 flex flex-col items-center">
+              <div className="text-center mb-4">
+                <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+                  Board Preview
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Starting position
+                </p>
+              </div>
+              <div style={{ width: "100%", maxWidth: "500px" }}>
+                <ChessBoard
+                  state={gameState}
+                  interactive={false}
+                  flipped={boardFlipped}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -532,29 +694,33 @@ export function GamesClient() {
           </h1>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             {gameMode === "pvp" && "Player vs Player"}
-            {gameMode === "pvai" &&
-              `You (${humanColor}) vs AI`}
+            {gameMode === "pvai" && `You (${humanColor}) vs AI`}
             {gameMode === "aivai" && "AI vs AI"}
           </p>
         </div>
 
-        {/* Main Layout */}
+        {/* Main Layout: Board (60%) + Controls (40%) */}
         <div className="flex flex-col lg:flex-row gap-6 items-start justify-center">
-          {/* Chess Board */}
-          <div className="flex-shrink-0">
-            <ChessBoard
-              state={gameState}
-              onSquareClick={handleSquareClick}
-              selectedSquare={selectedSquare}
-              legalMoves={legalMoves}
-              lastMove={lastMove}
-              flipped={boardFlipped}
-              interactive={!aiThinking && !isPaused && gameState.status === "playing"}
-            />
+          {/* Chess Board Container */}
+          <div
+            className="flex-shrink-0 flex justify-center"
+            style={{ width: "100%", maxWidth: "600px" }}
+          >
+            <div style={{ width: "100%", maxWidth: "600px" }}>
+              <ChessBoard
+                state={gameState}
+                onSquareClick={handleSquareClick}
+                selectedSquare={selectedSquare}
+                legalMoves={legalMoves}
+                lastMove={lastMove}
+                flipped={boardFlipped}
+                interactive={!aiThinking && !isPaused && gameState.status === "playing"}
+              />
+            </div>
           </div>
 
           {/* Control Panel */}
-          <div className="w-full lg:w-80 space-y-4">
+          <div className="w-full lg:w-80 lg:max-w-[40%] space-y-4">
             {/* Clocks */}
             <div className="flex flex-col gap-3">
               <ChessClock
@@ -584,6 +750,7 @@ export function GamesClient() {
                     gameState.status === "draw") &&
                     "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
                 )}
+                data-testid="game-status"
               >
                 {gameState.status === "checkmate" &&
                   `Checkmate! ${gameState.winner === "white" ? "White" : "Black"} wins!`}
@@ -595,7 +762,10 @@ export function GamesClient() {
 
             {/* AI Thinking Indicator */}
             {aiThinking && (
-              <div className="p-4 rounded-xl bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 flex items-center gap-3">
+              <div
+                className="p-4 rounded-xl bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 flex items-center gap-3"
+                data-testid="ai-thinking"
+              >
                 <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
                 <span>AI is thinking...</span>
               </div>
@@ -603,7 +773,10 @@ export function GamesClient() {
 
             {/* AI Error */}
             {aiError && (
-              <div className="p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+              <div
+                className="p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+                data-testid="ai-error"
+              >
                 <div className="font-semibold mb-1">AI Error</div>
                 <div className="text-sm">{aiError}</div>
               </div>
@@ -622,116 +795,6 @@ export function GamesClient() {
             {/* Move History */}
             <MoveHistory moves={gameState.moveHistory} />
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// AI Configuration Panel Component
-interface AIConfigPanelProps {
-  title: string;
-  color: PieceColor;
-  config: AIConfig;
-  onChange: (config: AIConfig) => void;
-  models: { id: string; name: string }[];
-}
-
-function AIConfigPanel({
-  title,
-  color,
-  config,
-  onChange,
-  models,
-}: AIConfigPanelProps) {
-  const reasoningIndex = REASONING_LEVELS.findIndex(
-    (l) => l.value === config.reasoningEffort
-  );
-
-  return (
-    <div
-      className={cn(
-        "p-4 rounded-xl border-2",
-        color === "white"
-          ? "border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50"
-          : "border-gray-400 dark:border-gray-500 bg-gray-100 dark:bg-gray-800/50"
-      )}
-    >
-      <div className="flex items-center gap-2 mb-3">
-        <div
-          className={cn(
-            "w-4 h-4 rounded-full border-2",
-            color === "white"
-              ? "bg-white border-gray-400"
-              : "bg-gray-900 border-gray-600"
-          )}
-        />
-        <span className="font-semibold text-gray-900 dark:text-white">
-          {title}
-        </span>
-      </div>
-
-      {/* Model Selector */}
-      <div className="mb-4">
-        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-          Model
-        </label>
-        <select
-          value={config.modelId}
-          onChange={(e) => onChange({ ...config, modelId: e.target.value })}
-          className={cn(
-            "w-full p-2 rounded-lg border text-sm",
-            "bg-white dark:bg-gray-800",
-            "border-gray-300 dark:border-gray-600",
-            "text-gray-900 dark:text-white",
-            "focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-          )}
-        >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Reasoning Effort Slider */}
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-            Reasoning Level
-          </label>
-          <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-            {REASONING_LEVELS[reasoningIndex]?.label || "Disabled"}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={REASONING_LEVELS.length - 1}
-          value={reasoningIndex >= 0 ? reasoningIndex : 0}
-          onChange={(e) => {
-            const idx = parseInt(e.target.value, 10);
-            onChange({
-              ...config,
-              reasoningEffort: REASONING_LEVELS[idx].value,
-            });
-          }}
-          className={cn(
-            "w-full h-2 rounded-lg appearance-none cursor-pointer",
-            "bg-gray-200 dark:bg-gray-600",
-            "[&::-webkit-slider-thumb]:appearance-none",
-            "[&::-webkit-slider-thumb]:w-4",
-            "[&::-webkit-slider-thumb]:h-4",
-            "[&::-webkit-slider-thumb]:rounded-full",
-            "[&::-webkit-slider-thumb]:bg-amber-500",
-            "[&::-webkit-slider-thumb]:cursor-pointer"
-          )}
-        />
-        <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-          {REASONING_LEVELS.map((level) => (
-            <span key={level.value}>{level.label}</span>
-          ))}
         </div>
       </div>
     </div>

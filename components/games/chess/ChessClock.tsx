@@ -56,6 +56,7 @@ export function ChessClock({ color, timeMs, isActive, isPaused }: ChessClockProp
 
   return (
     <div
+      data-testid={`chess-clock-${color}`}
       className={cn(
         "relative flex items-center gap-3 px-4 py-3 rounded-xl",
         "border-2 transition-all duration-300",
@@ -107,12 +108,17 @@ export function ChessClock({ color, timeMs, isActive, isPaused }: ChessClockProp
           </span>
           {/* Pause indicator */}
           {isPaused && (
-            <PauseIcon
+            <span
               className={cn(
-                "w-4 h-4",
-                isWhite ? "text-gray-400" : "text-gray-500"
+                "flex items-center gap-1 text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
+                isWhite
+                  ? "bg-yellow-100 text-yellow-700"
+                  : "bg-yellow-900/40 text-yellow-400"
               )}
-            />
+            >
+              <PauseIcon className="w-3 h-3" />
+              PAUSED
+            </span>
           )}
         </div>
       </div>

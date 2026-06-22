@@ -361,8 +361,9 @@ export function ChessPiece({ piece, size }: ChessPieceProps) {
       viewBox="0 0 45 45"
       xmlns="http://www.w3.org/2000/svg"
       className="chess-piece"
-      style={{ display: "block", maxWidth: "100%", maxHeight: "100%" }}
+      style={{ display: "block", maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%" }}
       preserveAspectRatio="xMidYMid meet"
+      data-testid="chess-piece"
     >
       <defs>
         {piece.color === "white" ? <WhiteGradient /> : <BlackGradient />}

@@ -1,14 +1,67 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   getAIvsAIAggregateStats,
   getAIvsAIModelStats,
   getRecentAIvsAIMatches,
+  saveMatchRecord,
 } from "@/lib/games/stats";
 import type { GameMatchRecord, GameModelStat } from "@/lib/games/chess/types";
+import { createInitialState, toFEN, makeMove } from "@/lib/games/chess/engine";
+import {
+  requestAIMove,
+  getAvailableModels,
+  getModelApiKey,
+  getModelBaseURL,
+} from "@/lib/games/chess/ai";
+import { ensureReady } from "@/lib/client/api";
+import type { ReasoningEffort } from "@/lib/db/schema";
 
-/** Format milliseconds to human-readable duration */
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const MAX_MOVES = 100;
+const MOVE_DELAY_MS = 300;
+const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
+  { value: "default", label: "Disabled" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+];
+
+interface AvailableModel {
+  modelId: string;
+  displayName: string;
+}
+
+interface BenchmarkConfig {
+  whiteModelId: string;
+  blackModelId: string;
+  whiteReasoning: ReasoningEffort;
+  blackReasoning: ReasoningEffort;
+  numGames: number;
+}
+
+interface BenchmarkProgress {
+  currentGame: number;
+  totalGames: number;
+  moveCount: number;
+  currentTurn: "white" | "black";
+  status: string;
+  fen: string;
+}
+
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const seconds = Math.floor(ms / 1000);
@@ -18,380 +71,552 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
-/** Format date to relative or short date string */
 function formatDate(timestamp: string): string {
   const date = new Date(timestamp);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) {
-    return "Today";
-  } else if (diffDays === 1) {
-    return "Yesterday";
-  } else if (diffDays < 7) {
-    return `${diffDays} days ago`;
-  } else {
-    return date.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
-    });
-  }
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
 }
 
-/** Get display name from model ID */
 function getModelDisplayName(modelId: string): string {
-  // Extract the model name from provider:model format
   const parts = modelId.split(":");
   return parts.length > 1 ? parts[parts.length - 1] : modelId;
 }
 
-/** Stat card component */
-function StatCard({
-  label,
-  value,
-  subValue,
-  icon,
-}: {
-  label: string;
-  value: string | number;
-  subValue?: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="bg-gradient-to-br from-zinc-800/80 to-zinc-900/80 rounded-xl p-4 border border-zinc-700/50 shadow-lg hover:shadow-xl transition-shadow">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
-            {label}
-          </p>
-          <p className="text-2xl font-bold text-white mt-1">{value}</p>
-          {subValue && (
-            <p className="text-xs text-zinc-500 mt-0.5">{subValue}</p>
-          )}
-        </div>
-        <div className="text-zinc-500">{icon}</div>
-      </div>
-    </div>
-  );
-}
+// =============================================================================
+// COMPONENT
+// =============================================================================
 
-/** Result badge component */
-function ResultBadge({ result }: { result: "white" | "black" | "draw" }) {
-  const colors = {
-    white: "bg-white/10 text-white border-white/20",
-    black: "bg-zinc-600/50 text-zinc-200 border-zinc-500/30",
-    draw: "bg-amber-500/20 text-amber-300 border-amber-500/30",
-  };
-
-  const labels = {
-    white: "White wins",
-    black: "Black wins",
-    draw: "Draw",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${colors[result]}`}
-    >
-      {labels[result]}
-    </span>
-  );
-}
-
-/** Model stats table row */
-function ModelStatRow({ stat, rank }: { stat: GameModelStat; rank: number }) {
-  const winRate = stat.games > 0 ? ((stat.wins / stat.games) * 100).toFixed(1) : "0.0";
-  
-  return (
-    <tr className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
-      <td className="py-3 px-4">
-        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-zinc-700/50 text-xs font-medium text-zinc-400">
-          {rank}
-        </span>
-      </td>
-      <td className="py-3 px-4">
-        <span className="font-medium text-zinc-200">{stat.displayName}</span>
-      </td>
-      <td className="py-3 px-4 text-center text-zinc-300">{stat.games}</td>
-      <td className="py-3 px-4 text-center text-emerald-400">{stat.wins}</td>
-      <td className="py-3 px-4 text-center text-red-400">{stat.losses}</td>
-      <td className="py-3 px-4 text-center text-amber-400">{stat.draws}</td>
-      <td className="py-3 px-4 text-center">
-        <span className="font-semibold text-zinc-200">{winRate}%</span>
-      </td>
-      <td className="py-3 px-4 text-center text-zinc-400">
-        {formatDuration(stat.avgMoveMs)}
-      </td>
-    </tr>
-  );
-}
-
-/** Match history row */
-function MatchRow({ match }: { match: GameMatchRecord }) {
-  return (
-    <tr className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
-      <td className="py-3 px-4">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-white border border-zinc-600" />
-          <span className="text-zinc-200 font-medium">
-            {getModelDisplayName(match.whiteModel || "Unknown")}
-          </span>
-        </div>
-      </td>
-      <td className="py-3 px-4 text-center text-zinc-500">vs</td>
-      <td className="py-3 px-4">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-zinc-700 border border-zinc-500" />
-          <span className="text-zinc-200 font-medium">
-            {getModelDisplayName(match.blackModel || "Unknown")}
-          </span>
-        </div>
-      </td>
-      <td className="py-3 px-4 text-center">
-        <ResultBadge result={match.result} />
-      </td>
-      <td className="py-3 px-4 text-center text-zinc-400">{match.moves}</td>
-      <td className="py-3 px-4 text-center text-zinc-400">
-        {formatDuration(match.durationMs)}
-      </td>
-      <td className="py-3 px-4 text-right text-zinc-500 text-sm">
-        {formatDate(match.timestamp)}
-      </td>
-    </tr>
-  );
-}
-
-/** Empty state component */
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 px-4">
-      <div className="w-20 h-20 rounded-full bg-zinc-800/50 flex items-center justify-center mb-6">
-        <svg
-          className="w-10 h-10 text-zinc-600"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-          />
-        </svg>
-      </div>
-      <h3 className="text-lg font-semibold text-zinc-300 mb-2">
-        No AI vs AI Games Yet
-      </h3>
-      <p className="text-zinc-500 text-center max-w-md">
-        Start an AI vs AI game to see benchmark statistics. Watch different AI
-        models compete against each other and track their performance over time.
-      </p>
-    </div>
-  );
-}
-
-/** Main GamesBenchmark component */
 export function GamesBenchmark() {
-  const [aggregateStats, setAggregateStats] = useState<ReturnType<
-    typeof getAIvsAIAggregateStats
-  > | null>(null);
+  // Available models
+  const [models, setModels] = useState<AvailableModel[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Configuration
+  const [config, setConfig] = useState<BenchmarkConfig>({
+    whiteModelId: "",
+    blackModelId: "",
+    whiteReasoning: "default",
+    blackReasoning: "default",
+    numGames: 1,
+  });
+
+  // Benchmark state
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<BenchmarkProgress | null>(null);
+  const abortRef = useRef(false);
+
+  // Stats display
   const [modelStats, setModelStats] = useState<GameModelStat[]>([]);
   const [recentMatches, setRecentMatches] = useState<GameMatchRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [aggregateStats, setAggregateStats] = useState<{
+    totalGames: number;
+    avgMoves: number;
+    avgDurationMs: number;
+    whiteWins: number;
+    blackWins: number;
+    draws: number;
+  } | null>(null);
 
+  // Load available models on mount
   useEffect(() => {
-    // Load stats on mount
-    const loadStats = () => {
-      setAggregateStats(getAIvsAIAggregateStats());
-      setModelStats(getAIvsAIModelStats());
-      setRecentMatches(getRecentAIvsAIMatches(10));
-      setIsLoading(false);
-    };
+    let cancelled = false;
 
-    loadStats();
+    async function loadModels() {
+      try {
+        const { needsPassphrase } = await ensureReady();
+        if (cancelled || needsPassphrase) return;
 
-    // Listen for storage changes (in case games are played in another tab)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "aiboard-game-stats") {
-        loadStats();
+        const available = getAvailableModels();
+        setModels(available);
+        if (available.length >= 2) {
+          setConfig((prev) => ({
+            ...prev,
+            whiteModelId: prev.whiteModelId || available[0].modelId,
+            blackModelId: prev.blackModelId || available[Math.min(1, available.length - 1)].modelId,
+          }));
+        } else if (available.length === 1) {
+          setConfig((prev) => ({
+            ...prev,
+            whiteModelId: prev.whiteModelId || available[0].modelId,
+            blackModelId: prev.blackModelId || available[0].modelId,
+          }));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load models:", err);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
+    }
+    void loadModels();
+    return () => {
+      cancelled = true;
     };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  if (isLoading) {
+  // Load stats on mount and after benchmark completes
+  const loadStats = useCallback(() => {
+    setModelStats(getAIvsAIModelStats());
+    setRecentMatches(getRecentAIvsAIMatches(10));
+    setAggregateStats(getAIvsAIAggregateStats());
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Run a single game
+  const runSingleGame = useCallback(
+    async (
+      whiteModelId: string,
+      blackModelId: string,
+      whiteReasoning: ReasoningEffort,
+      blackReasoning: ReasoningEffort,
+      gameNumber: number,
+      totalGames: number
+    ): Promise<GameMatchRecord | null> => {
+      const gameStartTime = Date.now();
+      let state = createInitialState();
+      let moveCount = 0;
+      let whiteMoveMs = 0;
+      let blackMoveMs = 0;
+
+      setProgress({
+        currentGame: gameNumber,
+        totalGames,
+        moveCount: 0,
+        currentTurn: "white",
+        status: "Starting game...",
+        fen: toFEN(state),
+      });
+
+      while (
+        state.status === "playing" ||
+        state.status === "check"
+      ) {
+        if (abortRef.current) {
+          return null;
+        }
+
+        if (moveCount >= MAX_MOVES) {
+          // Draw by move limit
+          state = { ...state, status: "draw" };
+          break;
+        }
+
+        const isWhiteTurn = state.turn === "white";
+        const currentModelId = isWhiteTurn ? whiteModelId : blackModelId;
+        const currentReasoning = isWhiteTurn ? whiteReasoning : blackReasoning;
+
+        setProgress({
+          currentGame: gameNumber,
+          totalGames,
+          moveCount,
+          currentTurn: state.turn,
+          status: `${isWhiteTurn ? "White" : "Black"} (${getModelDisplayName(currentModelId)}) thinking...`,
+          fen: toFEN(state),
+        });
+
+        const moveStartTime = Date.now();
+
+        try {
+          const apiKey = await getModelApiKey(currentModelId);
+          const baseURL = getModelBaseURL(currentModelId);
+
+          if (!apiKey) {
+            console.error(`No API key for model: ${currentModelId}`);
+            // End as draw due to configuration error
+            state = { ...state, status: "draw" };
+            break;
+          }
+
+          const result = await requestAIMove({
+            state,
+            modelId: currentModelId,
+            reasoningEffort: currentReasoning,
+            apiKey,
+            baseURL,
+          });
+
+          const moveElapsed = Date.now() - moveStartTime;
+          if (isWhiteTurn) {
+            whiteMoveMs += moveElapsed;
+          } else {
+            blackMoveMs += moveElapsed;
+          }
+
+          if ("error" in result) {
+            console.error(`AI move error: ${result.error}`);
+            // End as draw due to AI error
+            state = { ...state, status: "draw" };
+            break;
+          }
+
+          // Apply the move
+          const newState = makeMove(state, result.move);
+          if (!newState) {
+            console.error("Invalid move returned by AI:", result.move);
+            state = { ...state, status: "draw" };
+            break;
+          }
+
+          state = newState;
+          moveCount++;
+
+          // Delay between moves for visibility
+          await new Promise((resolve) => setTimeout(resolve, MOVE_DELAY_MS));
+        } catch (err) {
+          console.error("Error during AI move:", err);
+          state = { ...state, status: "draw" };
+          break;
+        }
+      }
+
+      // Determine result
+      let result: "white" | "black" | "draw" = "draw";
+      if (state.status === "checkmate" && state.winner) {
+        result = state.winner;
+      }
+
+      const gameEndTime = Date.now();
+      const durationMs = gameEndTime - gameStartTime;
+
+      const matchRecord: GameMatchRecord = {
+        id: generateId(),
+        timestamp: new Date().toISOString(),
+        mode: "aivai",
+        whiteModel: whiteModelId,
+        blackModel: blackModelId,
+        whiteReasoningEffort: whiteReasoning,
+        blackReasoningEffort: blackReasoning,
+        result,
+        moves: moveCount,
+        durationMs,
+        whiteMoveMs,
+        blackMoveMs,
+      };
+
+      saveMatchRecord(matchRecord);
+      return matchRecord;
+    },
+    []
+  );
+
+  // Run the full benchmark
+  const runBenchmark = useCallback(async () => {
+    if (!config.whiteModelId || !config.blackModelId) {
+      return;
+    }
+
+    setRunning(true);
+    abortRef.current = false;
+
+    const results: GameMatchRecord[] = [];
+
+    for (let i = 0; i < config.numGames; i++) {
+      if (abortRef.current) {
+        break;
+      }
+
+      const result = await runSingleGame(
+        config.whiteModelId,
+        config.blackModelId,
+        config.whiteReasoning,
+        config.blackReasoning,
+        i + 1,
+        config.numGames
+      );
+
+      if (result) {
+        results.push(result);
+      }
+    }
+
+    setRunning(false);
+    setProgress(null);
+    loadStats();
+  }, [config, runSingleGame, loadStats]);
+
+  // Abort the benchmark
+  const abortBenchmark = useCallback(() => {
+    abortRef.current = true;
+  }, []);
+
+  // Handle configuration changes
+  const updateConfig = useCallback(
+    <K extends keyof BenchmarkConfig>(key: K, value: BenchmarkConfig[K]) => {
+      setConfig((prev) => ({ ...prev, [key]: value }));
+    },
+    []
+  );
+
+  if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="w-8 h-8 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin" />
+      <div className="p-6">
+        <div className="text-muted-foreground">Loading available models...</div>
       </div>
     );
   }
 
-  if (!aggregateStats || aggregateStats.totalGames === 0) {
-    return <EmptyState />;
+  if (models.length === 0) {
+    return (
+      <div className="space-y-4 rounded-lg border bg-card p-6">
+        <div>
+          <h2 className="text-xl font-semibold">AI vs AI Chess Benchmark</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Run head-to-head chess matches between configured AI models and
+            compare win rate, move speed, and reliability.
+          </p>
+        </div>
+        <div className="text-center py-8">
+          <div className="text-lg font-medium mb-2">No AI Models Available</div>
+          <div className="text-muted-foreground text-sm">
+            Configure API keys in Settings to enable AI models for benchmarking.
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  const whiteWinPct =
-    aggregateStats.totalGames > 0
-      ? ((aggregateStats.whiteWins / aggregateStats.totalGames) * 100).toFixed(1)
-      : "0";
-  const blackWinPct =
-    aggregateStats.totalGames > 0
-      ? ((aggregateStats.blackWins / aggregateStats.totalGames) * 100).toFixed(1)
-      : "0";
-  const drawPct =
-    aggregateStats.totalGames > 0
-      ? ((aggregateStats.draws / aggregateStats.totalGames) * 100).toFixed(1)
-      : "0";
-
   return (
-    <div className="space-y-8">
-      {/* Header */}
+    <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <svg
-            className="w-6 h-6 text-amber-400"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          AI vs AI Chess Benchmark
-        </h2>
-        <p className="text-zinc-400 text-sm mt-1">
-          Performance statistics from AI model chess matches
+        <h2 className="text-xl font-semibold">AI vs AI Chess Benchmark</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Run head-to-head chess matches between configured AI models and
+          compare win rate, move speed, and reliability.
         </p>
       </div>
 
-      {/* Summary Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Games"
-          value={aggregateStats.totalGames}
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Avg. Moves"
-          value={aggregateStats.avgMoves}
-          subValue="per game"
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Avg. Duration"
-          value={formatDuration(aggregateStats.avgDurationMs)}
-          subValue="per game"
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Models Tested"
-          value={modelStats.length}
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-          }
-        />
-      </div>
+      {/* Configuration Section */}
+      <div className="bg-card border rounded-lg p-4">
+        <h3 className="text-lg font-semibold mb-4">Benchmark Configuration</h3>
 
-      {/* Win Distribution */}
-      <div className="bg-gradient-to-br from-zinc-800/60 to-zinc-900/60 rounded-xl p-5 border border-zinc-700/50">
-        <h3 className="text-sm font-semibold text-zinc-300 mb-4">
-          Win Distribution
-        </h3>
-        <div className="flex items-center gap-4 mb-3">
-          <div className="flex-1">
-            <div className="h-3 bg-zinc-700/50 rounded-full overflow-hidden flex">
-              <div
-                className="h-full bg-gradient-to-r from-white to-zinc-200 transition-all"
-                style={{ width: `${whiteWinPct}%` }}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* White Model */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium mb-1">White Model</label>
+              <select
+                value={config.whiteModelId}
+                onChange={(e) => updateConfig("whiteModelId", e.target.value)}
+                disabled={running}
+                className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+              >
+                {models.map((m) => (
+                  <option key={m.modelId} value={m.modelId}>
+                    {m.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                White Reasoning: {REASONING_LEVELS.find((r) => r.value === config.whiteReasoning)?.label}
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={REASONING_LEVELS.length - 1}
+                value={REASONING_LEVELS.findIndex((r) => r.value === config.whiteReasoning)}
+                onChange={(e) =>
+                  updateConfig("whiteReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                }
+                disabled={running}
+                className="w-full"
               />
-              <div
-                className="h-full bg-gradient-to-r from-zinc-500 to-zinc-600 transition-all"
-                style={{ width: `${blackWinPct}%` }}
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                {REASONING_LEVELS.map((r) => (
+                  <span key={r.value}>{r.label}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Black Model */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium mb-1">Black Model</label>
+              <select
+                value={config.blackModelId}
+                onChange={(e) => updateConfig("blackModelId", e.target.value)}
+                disabled={running}
+                className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+              >
+                {models.map((m) => (
+                  <option key={m.modelId} value={m.modelId}>
+                    {m.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Black Reasoning: {REASONING_LEVELS.find((r) => r.value === config.blackReasoning)?.label}
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={REASONING_LEVELS.length - 1}
+                value={REASONING_LEVELS.findIndex((r) => r.value === config.blackReasoning)}
+                onChange={(e) =>
+                  updateConfig("blackReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                }
+                disabled={running}
+                className="w-full"
               />
-              <div
-                className="h-full bg-gradient-to-r from-amber-500 to-amber-600 transition-all"
-                style={{ width: `${drawPct}%` }}
-              />
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                {REASONING_LEVELS.map((r) => (
+                  <span key={r.value}>{r.label}</span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
-        <div className="flex justify-between text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-white" />
-            <span className="text-zinc-400">
-              White: <span className="text-white font-medium">{aggregateStats.whiteWins}</span>{" "}
-              <span className="text-zinc-500">({whiteWinPct}%)</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-zinc-600" />
-            <span className="text-zinc-400">
-              Black: <span className="text-white font-medium">{aggregateStats.blackWins}</span>{" "}
-              <span className="text-zinc-500">({blackWinPct}%)</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-amber-500" />
-            <span className="text-zinc-400">
-              Draw: <span className="text-white font-medium">{aggregateStats.draws}</span>{" "}
-              <span className="text-zinc-500">({drawPct}%)</span>
-            </span>
-          </div>
+
+        {/* Number of Games */}
+        <div className="mt-4">
+          <label className="block text-sm font-medium mb-1">Number of Games (1-10)</label>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={config.numGames}
+            onChange={(e) =>
+              updateConfig("numGames", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))
+            }
+            disabled={running}
+            className="w-24 px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+          />
+        </div>
+
+        {/* Action Buttons */}
+        <div className="mt-4 flex gap-3">
+          {!running ? (
+            <button
+              onClick={runBenchmark}
+              disabled={!config.whiteModelId || !config.blackModelId}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Run Benchmark
+            </button>
+          ) : (
+            <button
+              onClick={abortBenchmark}
+              className="px-4 py-2 bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90"
+            >
+              Stop Benchmark
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Model Leaderboard */}
-      {modelStats.length > 0 && (
-        <div className="bg-gradient-to-br from-zinc-800/60 to-zinc-900/60 rounded-xl border border-zinc-700/50 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-700/50">
-            <h3 className="text-sm font-semibold text-zinc-300">
-              Model Leaderboard
-            </h3>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Ranked by win rate in AI vs AI games
-            </p>
+      {/* Progress Section */}
+      {running && progress && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Benchmark Progress</h3>
+          <div className="space-y-2">
+            <div className="flex items-center gap-4">
+              <span className="text-sm font-medium">
+                Game {progress.currentGame} of {progress.totalGames}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Move {progress.moveCount}
+              </span>
+              <span
+                className={`text-sm font-medium ${
+                  progress.currentTurn === "white" ? "text-amber-500" : "text-slate-700 dark:text-slate-300"
+                }`}
+              >
+                {progress.currentTurn === "white" ? "⬜ White" : "⬛ Black"} to move
+              </span>
+            </div>
+            <div className="text-sm text-muted-foreground">{progress.status}</div>
+            <div className="mt-2">
+              <code className="text-xs bg-muted px-2 py-1 rounded font-mono block overflow-x-auto">
+                {progress.fen}
+              </code>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* Aggregate Stats */}
+      {aggregateStats && aggregateStats.totalGames > 0 && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Aggregate Statistics</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold">{aggregateStats.totalGames}</div>
+              <div className="text-xs text-muted-foreground">Total Games</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{Math.round(aggregateStats.avgMoves)}</div>
+              <div className="text-xs text-muted-foreground">Avg Moves</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{formatDuration(aggregateStats.avgDurationMs)}</div>
+              <div className="text-xs text-muted-foreground">Avg Duration</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-amber-500">{aggregateStats.whiteWins}</div>
+              <div className="text-xs text-muted-foreground">White Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-slate-700 dark:text-slate-300">{aggregateStats.blackWins}</div>
+              <div className="text-xs text-muted-foreground">Black Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-muted-foreground">{aggregateStats.draws}</div>
+              <div className="text-xs text-muted-foreground">Draws</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Model Stats Table */}
+      {modelStats.length > 0 && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Model Performance</h3>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full text-sm">
               <thead>
-                <tr className="text-xs uppercase tracking-wide text-zinc-500 bg-zinc-800/30">
-                  <th className="py-2 px-4 text-left font-medium">#</th>
-                  <th className="py-2 px-4 text-left font-medium">Model</th>
-                  <th className="py-2 px-4 text-center font-medium">Games</th>
-                  <th className="py-2 px-4 text-center font-medium">Wins</th>
-                  <th className="py-2 px-4 text-center font-medium">Losses</th>
-                  <th className="py-2 px-4 text-center font-medium">Draws</th>
-                  <th className="py-2 px-4 text-center font-medium">Win Rate</th>
-                  <th className="py-2 px-4 text-center font-medium">Avg Move</th>
+                <tr className="border-b">
+                  <th className="text-left py-2 px-2">Model</th>
+                  <th className="text-center py-2 px-2">Games</th>
+                  <th className="text-center py-2 px-2">Wins</th>
+                  <th className="text-center py-2 px-2">Losses</th>
+                  <th className="text-center py-2 px-2">Draws</th>
+                  <th className="text-center py-2 px-2">Win Rate</th>
+                  <th className="text-center py-2 px-2">Avg Move Time</th>
                 </tr>
               </thead>
               <tbody>
-                {modelStats.map((stat, index) => (
-                  <ModelStatRow key={stat.modelId} stat={stat} rank={index + 1} />
+                {modelStats.map((stat) => (
+                  <tr key={stat.modelId} className="border-b last:border-b-0">
+                    <td className="py-2 px-2 font-medium">{getModelDisplayName(stat.modelId)}</td>
+                    <td className="text-center py-2 px-2">{stat.games}</td>
+                    <td className="text-center py-2 px-2 text-green-600 dark:text-green-400">{stat.wins}</td>
+                    <td className="text-center py-2 px-2 text-red-600 dark:text-red-400">{stat.losses}</td>
+                    <td className="text-center py-2 px-2 text-muted-foreground">{stat.draws}</td>
+                    <td className="text-center py-2 px-2">
+                      {stat.games > 0 ? `${Math.round((stat.wins / stat.games) * 100)}%` : "-"}
+                    </td>
+                    <td className="text-center py-2 px-2">{formatDuration(stat.avgMoveMs)}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -399,41 +624,60 @@ export function GamesBenchmark() {
         </div>
       )}
 
-      {/* Recent Matches */}
+      {/* Recent Matches Table */}
       {recentMatches.length > 0 && (
-        <div className="bg-gradient-to-br from-zinc-800/60 to-zinc-900/60 rounded-xl border border-zinc-700/50 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-700/50">
-            <h3 className="text-sm font-semibold text-zinc-300">
-              Recent Matches
-            </h3>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Last {recentMatches.length} AI vs AI games
-            </p>
-          </div>
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Recent AI vs AI Matches</h3>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full text-sm">
               <thead>
-                <tr className="text-xs uppercase tracking-wide text-zinc-500 bg-zinc-800/30">
-                  <th className="py-2 px-4 text-left font-medium">White</th>
-                  <th className="py-2 px-4 text-center font-medium"></th>
-                  <th className="py-2 px-4 text-left font-medium">Black</th>
-                  <th className="py-2 px-4 text-center font-medium">Result</th>
-                  <th className="py-2 px-4 text-center font-medium">Moves</th>
-                  <th className="py-2 px-4 text-center font-medium">Duration</th>
-                  <th className="py-2 px-4 text-right font-medium">Date</th>
+                <tr className="border-b">
+                  <th className="text-left py-2 px-2">Date</th>
+                  <th className="text-left py-2 px-2">White</th>
+                  <th className="text-left py-2 px-2">Black</th>
+                  <th className="text-center py-2 px-2">Result</th>
+                  <th className="text-center py-2 px-2">Moves</th>
+                  <th className="text-center py-2 px-2">Duration</th>
                 </tr>
               </thead>
               <tbody>
                 {recentMatches.map((match) => (
-                  <MatchRow key={match.id} match={match} />
+                  <tr key={match.id} className="border-b last:border-b-0">
+                    <td className="py-2 px-2 text-muted-foreground">{formatDate(match.timestamp)}</td>
+                    <td className="py-2 px-2">{match.whiteModel ? getModelDisplayName(match.whiteModel) : "-"}</td>
+                    <td className="py-2 px-2">{match.blackModel ? getModelDisplayName(match.blackModel) : "-"}</td>
+                    <td className="text-center py-2 px-2">
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          match.result === "white"
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                            : match.result === "black"
+                            ? "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200"
+                            : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                        }`}
+                      >
+                        {match.result === "white" ? "White" : match.result === "black" ? "Black" : "Draw"}
+                      </span>
+                    </td>
+                    <td className="text-center py-2 px-2">{match.moves}</td>
+                    <td className="text-center py-2 px-2">{formatDuration(match.durationMs)}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!running && modelStats.length === 0 && recentMatches.length === 0 && (
+        <div className="bg-card border rounded-lg p-8 text-center">
+          <div className="text-lg font-medium mb-2">No AI vs AI Games Yet</div>
+          <div className="text-sm text-muted-foreground">
+            Configure the models above and click &quot;Run Benchmark&quot; to start an AI vs AI chess match.
           </div>
         </div>
       )}
     </div>
   );
 }
-
-export default GamesBenchmark;

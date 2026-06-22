@@ -12,8 +12,14 @@ import {
 } from "./engine";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { parseModelId } from "@/lib/providers/base";
-import { getProvider, getCustomModelByFullId, streamCustomChat, listCustomModelInfos, getDecryptedApiKey, getProviderBaseURL } from "@/lib/client/providers";
-import { loadProviders } from "@/lib/client/settings-api";
+import {
+  getProvider,
+  getCustomModelByFullId,
+  streamCustomChat,
+  getDecryptedApiKey,
+  getProviderBaseURL,
+  getEnabledModels,
+} from "@/lib/client/providers";
 
 // =============================================================================
 // EXPORTED INTERFACES
@@ -355,35 +361,13 @@ interface AvailableModel {
  * @returns Array of available models with their IDs and display names
  */
 export function getAvailableModels(): AvailableModel[] {
-  const { providers } = loadProviders();
-  const result: AvailableModel[] = [];
-
-  // Add models from enabled providers with keys
-  for (const provider of providers) {
-    if (!provider.hasKey || !provider.enabled) {
-      continue;
-    }
-
-    for (const model of provider.models) {
-      result.push({
-        modelId: `${provider.providerId}:${model.id}`,
-        displayName: model.name,
-        providerId: provider.providerId,
-      });
-    }
-  }
-
-  // Add custom models (they are always available since keys are stored per-model)
-  const customModels = listCustomModelInfos();
-  for (const model of customModels) {
-    result.push({
-      modelId: `custom:${model.id}`,
-      displayName: model.name,
-      providerId: "custom",
-    });
-  }
-
-  return result;
+  // getEnabledModels() returns only models from providers with keys
+  // configured and enabled, plus custom models.
+  return getEnabledModels().map((model) => ({
+    modelId: `${model.providerId}:${model.id}`,
+    displayName: model.name,
+    providerId: model.providerId,
+  }));
 }
 
 /**
