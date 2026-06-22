@@ -2,7 +2,7 @@
 <p>The runner is a single zero-dependency file. You need <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> 18+ — nothing else. Start it in a terminal:</p>
 <pre><code>node runner.mjs                 # root = the folder you run it from
 node runner.mjs &lt;root-folder&gt;    # root = a folder you choose</code></pre>
-<p>The path argument is <strong>optional</strong>. It sets the <strong>root</strong> — the boundary the folder browser stays within — not necessarily the project itself. Omit it and the folder you launched from becomes the root; then pick the actual working folder <em>inside</em> the root from the control panel. Pass a project folder directly to start right there, or a parent folder (or <code>/</code> / a drive root) to browse more widely.</p>
+<p>The path argument is <strong>optional</strong>. It sets the <strong>root</strong> — the boundary the folder browser stays within — not necessarily the project itself. Omit it and the folder you launched from becomes the root; then pick the actual working folder <em>inside</em> the root from the control panel. Pass a project folder directly to start right there, or a parent folder to browse more widely — pass <code>/</code> on macOS/Linux, or a drive root such as <code>C:\</code> on Windows, to browse the whole machine.</p>
 <p>It prints a <strong>URL</strong> and a <strong>token</strong>; paste those into the app (Build mode → Local runner) to connect. Leave the token empty in the app to build fully in-browser instead.</p>
 
 <h3>Flags</h3>

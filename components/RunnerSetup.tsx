@@ -144,14 +144,15 @@ export function RunnerSetup({
           </a>
         </Button>
         <span className="text-xs text-muted-foreground">
-          then, in a terminal:
+          then, in a terminal (the folder is optional — it sets the root):
         </span>
       </div>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        {"node runner.mjs path/to/your-project\n"}
-        {"node runner.mjs path/to/your-project --context7\n"}
-        {"node runner.mjs path/to/your-project --searxng --searxng-url https://your-searxng.example\n"}
-        {'node runner.mjs path/to/your-project --mcp "playwright=npx @playwright/mcp@latest"'}
+        {"node runner.mjs                 # root = the folder you run it from\n"}
+        {"node runner.mjs path/to/folder  # or pass a root folder\n"}
+        {"node runner.mjs path/to/folder --context7\n"}
+        {"node runner.mjs path/to/folder --searxng --searxng-url https://your-searxng.example\n"}
+        {'node runner.mjs path/to/folder --mcp "playwright=npx @playwright/mcp@latest"'}
       </pre>
       <p className="text-xs text-muted-foreground">
         <code>--context7</code> bridges{" "}
