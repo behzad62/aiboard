@@ -11,6 +11,8 @@ import type {
   CustomModel,
   Discussion,
   FinalResult,
+  GameSessionRecord,
+  GenericGameMatchRecord,
   Message,
   ModelBuildStat,
   ProviderKey,
@@ -41,6 +43,8 @@ export interface ClientStore {
   attachments: AttachmentRecord[];
   buildFiles: BuildFileRecord[];
   buildCheckpoints: BuildCheckpoint[];
+  gameSessions: GameSessionRecord[];
+  gameMatchRecords: GenericGameMatchRecord[];
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -66,6 +70,8 @@ const DEFAULT_STORE: ClientStore = {
   attachments: [],
   buildFiles: [],
   buildCheckpoints: [],
+  gameSessions: [],
+  gameMatchRecords: [],
   modelStats: [],
 };
 
@@ -171,6 +177,16 @@ export function getBuildFiles(discussionId: string): BuildFileRecord[] {
 }
 export function getBuildCheckpoint(discussionId: string): BuildCheckpoint | undefined {
   return store().buildCheckpoints?.find((c) => c.discussionId === discussionId);
+}
+export function getGameSessions(): GameSessionRecord[] {
+  const s = store();
+  s.gameSessions ??= [];
+  return s.gameSessions;
+}
+export function getGenericGameMatchRecords(): GenericGameMatchRecord[] {
+  const s = store();
+  s.gameMatchRecords ??= [];
+  return s.gameMatchRecords;
 }
 export function getModelStats(): ModelBuildStat[] {
   return (store().modelStats ?? []).map(normalizeStat);
@@ -319,6 +335,22 @@ export function deleteBuildCheckpoint(discussionId: string): void {
  * build files) for a from-scratch restart. User notes are kept — the next run
  * still has to honor them. Files already written to disk are untouched.
  */
+export function upsertGameSession(record: GameSessionRecord): void {
+  const list = getGameSessions();
+  const i = list.findIndex((s) => s.id === record.id);
+  if (i >= 0) list[i] = record;
+  else list.push(record);
+  schedulePersist();
+}
+export function deleteGameSession(id: string): void {
+  const s = store();
+  s.gameSessions = (s.gameSessions ?? []).filter((session) => session.id !== id);
+  schedulePersist();
+}
+export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void {
+  getGenericGameMatchRecords().push(record);
+  schedulePersist();
+}
 export function clearDiscussionRun(id: string): void {
   const s = store();
   s.messages = s.messages.filter(
@@ -402,6 +434,16 @@ export function replaceStore(data: Partial<ClientStore>): void {
 
 export function exportStore(): ClientStore {
   return store();
+}
+
+export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  memory = { ...structuredClone(DEFAULT_STORE), ...data };
+  adapter = null;
+  config = { kind: "indexeddb", encryptionEnabled: false };
 }
 
 /** Switch storage location / encryption and rewrite the current data there. */
