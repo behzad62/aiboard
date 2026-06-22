@@ -13,6 +13,7 @@ import type {
   BuildProblem,
   BuildStopReport,
   BuildStopReason,
+  BuildToolReviewReport,
   Discussion,
   EffortLevel,
   ReasoningEffort,
@@ -43,6 +44,7 @@ import {
   scheduleBuildToolActions,
 } from "@/lib/orchestrator/build-tool-scheduler";
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
+import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
   evaluateBuildQualityGate,
   formatBuildQualityGateSummary,
@@ -359,7 +361,8 @@ export async function runBuildDiscussion(
   const markStopped = (
     reason: BuildStopReason,
     message: string,
-    report?: BuildStopReport
+    report?: BuildStopReport,
+    toolReviewReport?: BuildToolReviewReport | null
   ): void => {
     const now = new Date().toISOString();
     updateDiscussion(discussion.id, {
@@ -368,7 +371,14 @@ export async function runBuildDiscussion(
       buildStoppedAt: now,
       updatedAt: now,
     });
-    emit({ type: "build_stopped", reason, message, usage: usageWindow, report });
+    emit({
+      type: "build_stopped",
+      reason,
+      message,
+      usage: usageWindow,
+      report,
+      toolReviewReport,
+    });
     emit({
       type: "status",
       status: reason === "completed" ? "completed" : "stopped",
@@ -720,6 +730,19 @@ export async function runBuildDiscussion(
       recoveryLog,
     });
 
+  const createToolReviewReport = (input: {
+    status: string;
+    wave: number;
+  }): BuildToolReviewReport | null =>
+    createBuildToolReviewReport({
+      discussionId: discussion.id,
+      topic: discussion.topic,
+      status: input.status,
+      wave: input.wave,
+      problems: buildProblems,
+      commandProblems,
+    });
+
   // ── Resumable checkpoint ───────────────────────────────────────────────────
   // Persist the run (task graph, repo refs, current budget window) so a stop by
   // budget, time, blocker, or user can be resumed from where it left off. Repo
@@ -735,7 +758,10 @@ export async function runBuildDiscussion(
     failureFingerprints?: Record<string, number>;
     recoveryLog?: string[];
     stopReport?: BuildStopReport | null;
+    toolReviewReport?: BuildToolReviewReport | null;
   }): void => {
+    const toolReviewReport =
+      input.toolReviewReport ?? createToolReviewReport(input);
     upsertBuildCheckpoint({
       discussionId: discussion.id,
       status: input.status,
@@ -758,6 +784,7 @@ export async function runBuildDiscussion(
       buildProblems,
       commandProblems,
       stopReport: input.stopReport ?? null,
+      toolReviewReport,
       usageWindow,
     });
   };
@@ -789,6 +816,9 @@ export async function runBuildDiscussion(
           verifyCommand: snapshot.verifyCommand,
         })
       : undefined;
+    const toolReviewReport = snapshot
+      ? createToolReviewReport({ status: "stopped", wave: snapshot.wave })
+      : null;
     if (snapshot) {
       saveCheckpoint({
         status: "stopped",
@@ -798,9 +828,10 @@ export async function runBuildDiscussion(
         architectNotes: snapshot.architectNotes,
         verifyCommand: snapshot.verifyCommand,
         stopReport: report,
+        toolReviewReport,
       });
     }
-    markStopped(reason, message, report);
+    markStopped(reason, message, report, toolReviewReport);
     return true;
   };
 
@@ -1000,6 +1031,16 @@ export async function runBuildDiscussion(
         : "deny";
       if (decision === "allow-all") allowAllCommands = true;
       if (decision === "deny") {
+        recordBuildProblem({
+          code: "tool_denied",
+          severity: "warning",
+          source: "mcp",
+          action: label,
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `MCP ${action.server}.${action.tool} was denied by the user.`,
+        });
         emit({
           type: "command_run",
           command: label,
@@ -1032,9 +1073,33 @@ export async function runBuildDiscussion(
         durationMs: Date.now() - startedAt,
         outputPreview: truncate(result.text.trim(), 400),
       });
+      if (result.isError) {
+        recordBuildProblem({
+          code: "command_failed",
+          severity: "error",
+          source: "mcp",
+          action: label,
+          modelId: architect.modelId,
+          modelName: architect.displayName,
+          providerId: parseModelId(architect.modelId).providerId,
+          message: `MCP ${action.server}.${action.tool} returned ERROR.`,
+          details: truncate(result.text.trim(), 1_500),
+        });
+      }
       return `MCP ${action.server}.${action.tool} → ${result.isError ? "ERROR" : "ok"}\n${truncate(result.text, 8_000)}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : "MCP call failed";
+      recordBuildProblem({
+        code: "command_failed",
+        severity: "error",
+        source: "mcp",
+        action: label,
+        modelId: architect.modelId,
+        modelName: architect.displayName,
+        providerId: parseModelId(architect.modelId).providerId,
+        message: `MCP ${action.server}.${action.tool} failed: ${message}`,
+        details: message,
+      });
       emit({
         type: "command_run",
         command: label,
@@ -3355,6 +3420,9 @@ export async function runBuildDiscussion(
   // Plan-only policy: produce the plan (and any GitHub planning the Architect did)
   // without implementing code, then finish cleanly.
   if (buildSettings.runPolicy === "plan_only") {
+    const planOnlyVerifyCommand = runner
+      ? planVerifyCommand || detectVerifyCommand([...diskTree, ...virtualFs.keys()])
+      : "";
     const summary = [
       "Plan-only Build run completed.",
       "",
@@ -3368,8 +3436,32 @@ export async function runBuildDiscussion(
       dissent: JSON.stringify([]),
       createdAt: new Date().toISOString(),
     });
-    emit({ type: "final_answer", answer: summary, confidence: 1, dissent: [] });
-    markStopped("completed", "Plan-only Build run completed.");
+    const toolReviewReport = createToolReviewReport({
+      status: "completed",
+      wave: wavesRun,
+    });
+    saveCheckpoint({
+      status: "completed",
+      stopReason: "completed",
+      wave: wavesRun,
+      tasks,
+      architectNotes,
+      verifyCommand: planOnlyVerifyCommand,
+      toolReviewReport,
+    });
+    emit({
+      type: "final_answer",
+      answer: summary,
+      confidence: 1,
+      dissent: [],
+      toolReviewReport,
+    });
+    markStopped(
+      "completed",
+      "Plan-only Build run completed.",
+      undefined,
+      toolReviewReport
+    );
     return;
   }
 
@@ -4480,6 +4572,10 @@ export async function runBuildDiscussion(
           tasks,
           verifyCommand,
         });
+        const toolReviewReport = createToolReviewReport({
+          status: "blocked",
+          wave: cycle,
+        });
         saveCheckpoint({
           status: "blocked",
           stopReason: "blocked",
@@ -4488,8 +4584,9 @@ export async function runBuildDiscussion(
           architectNotes,
           verifyCommand,
           stopReport: report,
+          toolReviewReport,
         });
-        markStopped("blocked", message, report);
+        markStopped("blocked", message, report, toolReviewReport);
         return;
       }
     }
@@ -4553,6 +4650,10 @@ export async function runBuildDiscussion(
       tasks,
       verifyCommand,
     });
+    const toolReviewReport = createToolReviewReport({
+      status: "failed",
+      wave: wavesRun,
+    });
     // Preserve the work so the user can resume from the current task graph.
     saveCheckpoint({
       status: "blocked",
@@ -4561,6 +4662,7 @@ export async function runBuildDiscussion(
       architectNotes,
       verifyCommand,
       stopReport: report,
+      toolReviewReport,
     });
     emit({
       type: "build_stopped",
@@ -4568,6 +4670,7 @@ export async function runBuildDiscussion(
       message,
       usage: usageWindow,
       report,
+      toolReviewReport,
     });
     emit({
       type: "diagnostic",
@@ -4634,6 +4737,10 @@ export async function runBuildDiscussion(
         verifyCommand:
           finalChecks.map((check) => check.command).join("; ") || verifyCommand,
       });
+      const toolReviewReport = createToolReviewReport({
+        status: "blocked",
+        wave: wavesRun,
+      });
       saveCheckpoint({
         status: "blocked",
         stopReason: "blocked",
@@ -4642,13 +4749,14 @@ export async function runBuildDiscussion(
         architectNotes,
         verifyCommand,
         stopReport: report,
+        toolReviewReport,
       });
       emit({
         type: "diagnostic",
         phase: "model_failed",
         message: `${message}\n\n${truncate(finalQualityGateSummary, 2_500)}`,
       });
-      markStopped("blocked", message, report);
+      markStopped("blocked", message, report, toolReviewReport);
       return;
     }
   }
@@ -4720,6 +4828,10 @@ export async function runBuildDiscussion(
   });
   // Final checkpoint: a completed run is not resumed (resume skips "completed"),
   // but the record keeps the finished task graph and total budget window.
+  const toolReviewReport = createToolReviewReport({
+    status: "completed",
+    wave: wavesRun,
+  });
   saveCheckpoint({
     status: "completed",
     stopReason: "completed",
@@ -4727,8 +4839,15 @@ export async function runBuildDiscussion(
     tasks,
     architectNotes,
     verifyCommand,
+    toolReviewReport,
   });
-  emit({ type: "final_answer", answer: finalAnswer, confidence, dissent });
+  emit({
+    type: "final_answer",
+    answer: finalAnswer,
+    confidence,
+    dissent,
+    toolReviewReport,
+  });
   // Files land via the runner (its folder), the picked browser folder, or
   // in-app only — name whichever actually applied.
   const diskLabel = runner ? runnerDirName : diskGranted ? dirHandle?.name : null;

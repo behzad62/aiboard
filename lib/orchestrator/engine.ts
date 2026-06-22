@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   BuildStopReport,
   BuildStopReason,
+  BuildToolReviewReport,
   BuildUsageWindow,
   DiscussionMode,
   EffortLevel,
@@ -90,6 +91,7 @@ export type OrchestratorEvent =
       message: string;
       usage?: BuildUsageWindow;
       report?: BuildStopReport;
+      toolReviewReport?: BuildToolReviewReport | null;
     }
   | {
       type: "tool_batch";
@@ -99,7 +101,13 @@ export type OrchestratorEvent =
       summary: string;
     }
   | { type: "convergence"; score: number; reason?: string }
-  | { type: "final_answer"; answer: string; confidence: number; dissent: string[] }
+  | {
+      type: "final_answer";
+      answer: string;
+      confidence: number;
+      dissent: string[];
+      toolReviewReport?: BuildToolReviewReport | null;
+    }
   // Build mode (architect-orchestrated): task board + file writes.
   | {
       type: "build_plan";

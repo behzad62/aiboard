@@ -88,6 +88,36 @@ export interface BuildCommandProblem {
   createdAt: string;
 }
 
+export interface BuildToolReviewGroup {
+  key: string;
+  code: BuildProblemCode;
+  source: BuildProblemSource;
+  severity: BuildProblemSeverity;
+  actor: string;
+  count: number;
+  latestAt: string;
+  latestMessage: string;
+  taskId?: string;
+  action?: string;
+}
+
+export interface BuildToolReviewReport {
+  id: string;
+  discussionId: string;
+  createdAt: string;
+  topic: string;
+  status: string;
+  wave: number;
+  summary: string;
+  totalProblems: number;
+  warningCount: number;
+  errorCount: number;
+  blockedCount: number;
+  groups: BuildToolReviewGroup[];
+  problems: BuildProblem[];
+  commandProblems: BuildCommandProblem[];
+}
+
 export interface BuildStopReport {
   id: string;
   discussionId: string;
@@ -152,6 +182,7 @@ export interface BuildCheckpoint {
   buildProblems?: BuildProblem[];
   commandProblems?: BuildCommandProblem[];
   stopReport?: BuildStopReport | null;
+  toolReviewReport?: BuildToolReviewReport | null;
   usageWindow: BuildUsageWindow;
 }
 

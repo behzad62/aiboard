@@ -16,6 +16,7 @@ import {
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
 import { BuildStopReportPanel } from "@/components/BuildStopReportPanel";
+import { BuildToolReviewPanel } from "@/components/BuildToolReviewPanel";
 import { BuildTranscriptPanel } from "@/components/BuildTranscriptPanel";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
@@ -45,7 +46,12 @@ import {
   Square,
   StickyNote,
 } from "lucide-react";
-import type { BuildStopReport, BuildUsageWindow, Discussion } from "@/lib/db/schema";
+import type {
+  BuildStopReport,
+  BuildToolReviewReport,
+  BuildUsageWindow,
+  Discussion,
+} from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModelPricing } from "@/lib/providers/pricing";
@@ -173,6 +179,8 @@ function DiscussionPageInner() {
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [buildStopReport, setBuildStopReport] =
     useState<BuildStopReport | null>(null);
+  const [buildToolReviewReport, setBuildToolReviewReport] =
+    useState<BuildToolReviewReport | null>(null);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
@@ -231,7 +239,10 @@ function DiscussionPageInner() {
       switch (event.type) {
         case "status":
           setStatus(event.status);
-          if (event.status === "running") setBuildStopReport(null);
+          if (event.status === "running") {
+            setBuildStopReport(null);
+            setBuildToolReviewReport(null);
+          }
           if (event.round !== undefined) setCurrentRound(event.round);
           if (event.maxRounds !== undefined) setMaxRounds(event.maxRounds);
           if (
@@ -355,6 +366,7 @@ function DiscussionPageInner() {
         case "build_stopped":
           setBuildUsage(event.usage ?? null);
           setBuildStopReport(event.report ?? null);
+          setBuildToolReviewReport(event.toolReviewReport ?? null);
           // Reflect the stop in live state so the stopped banner, the
           // BuildRunStats reason, and the Resume affordance appear immediately —
           // not only after a reload. (markStopped persists these to the store;
@@ -460,6 +472,7 @@ function DiscussionPageInner() {
             confidence: event.confidence,
             dissent: event.dissent,
           });
+          setBuildToolReviewReport(event.toolReviewReport ?? null);
           setStatus("completed");
           if (discussion) notifyComplete(discussion.topic);
           break;
@@ -513,6 +526,11 @@ function DiscussionPageInner() {
       setBuildStopReport(
         data.discussion.mode === "build"
           ? getBuildCheckpoint(data.discussion.id)?.stopReport ?? null
+          : null
+      );
+      setBuildToolReviewReport(
+        data.discussion.mode === "build"
+          ? getBuildCheckpoint(data.discussion.id)?.toolReviewReport ?? null
           : null
       );
       setBuildUsage(
@@ -727,6 +745,7 @@ function DiscussionPageInner() {
         : null
     );
     setBuildStopReport(null);
+    setBuildToolReviewReport(null);
     setWrittenFiles([]);
     setCommandRuns([]);
     setRepoStatus(null);
@@ -750,6 +769,7 @@ function DiscussionPageInner() {
     setError(null);
     setFinalResult(null);
     setBuildStopReport(null);
+    setBuildToolReviewReport(null);
     startedRef.current = false;
     setStatus("pending");
   };
@@ -784,6 +804,7 @@ function DiscussionPageInner() {
       setFinalResult(null);
       setError(null);
       setBuildStopReport(null);
+      setBuildToolReviewReport(null);
       startedRef.current = false;
       setStatus("pending");
     }
@@ -1175,6 +1196,10 @@ function DiscussionPageInner() {
         <TabsContent value="activity" className="space-y-6">
       {discussion.mode === "build" && buildStopReport && (
         <BuildStopReportPanel report={buildStopReport} />
+      )}
+
+      {discussion.mode === "build" && buildToolReviewReport && (
+        <BuildToolReviewPanel report={buildToolReviewReport} />
       )}
 
       {discussion.mode === "build" && (
