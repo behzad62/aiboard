@@ -19,7 +19,11 @@ import type {
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
-import type { ChatMessage, SelectedModel } from "@/lib/providers/base";
+import type {
+  ChatMessage,
+  SelectedModel,
+  StructuredOutputFormat,
+} from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import { resolveModelName } from "./providers";
 import {
@@ -58,6 +62,7 @@ import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
 import {
   buildArchitectPlanPrompt,
+  buildArchitectActionResponseFormat,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
   buildIncompleteTaskFailure,
@@ -2425,6 +2430,7 @@ ${truncate(result.text, 8_000)}`,
       maxTokens: number;
       label: string;
       stopWhen?: (content: string) => boolean;
+      structuredOutput?: StructuredOutputFormat;
     }
   ): Promise<string> => {
     round += 1;
@@ -2458,7 +2464,8 @@ ${truncate(result.text, 8_000)}`,
       [],
       (token) => emit({ type: "message_token", messageId, token }),
       signal,
-      opts.stopWhen
+      opts.stopWhen,
+      opts.structuredOutput
     );
     insertMessage({
       id: messageId,
@@ -2516,6 +2523,7 @@ ${truncate(result.text, 8_000)}`,
       maxTokens: number;
       label: string;
       stopWhen?: (content: string) => boolean;
+      structuredOutput?: StructuredOutputFormat;
     }
   ): Promise<string> =>
     streamConversation(
@@ -2524,7 +2532,12 @@ ${truncate(result.text, 8_000)}`,
         { role: "system", content: opts.systemRole },
         { role: "user", content: prompt },
       ],
-      { maxTokens: opts.maxTokens, label: opts.label, stopWhen: opts.stopWhen }
+      {
+        maxTokens: opts.maxTokens,
+        label: opts.label,
+        stopWhen: opts.stopWhen,
+        structuredOutput: opts.structuredOutput,
+      }
     );
 
   const claimWaveWrite = (path: string, taskId?: string): string | null => {
@@ -3136,6 +3149,8 @@ ${truncate(result.text, 8_000)}`,
     };
   };
 
+  const architectActionResponseFormat = buildArchitectActionResponseFormat();
+
   const runArchitectInspectionLoop = async (args: {
     terminal: "plan" | "review";
     label: string;
@@ -3194,6 +3209,7 @@ ${truncate(result.text, 8_000)}`,
         maxTokens: architectMaxTokens,
         label: forced ? `${args.label} (final verdict)` : args.label,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
+        structuredOutput: architectActionResponseFormat,
       });
       messages.push({ role: "assistant", content: text });
 

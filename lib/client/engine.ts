@@ -33,6 +33,7 @@ import {
   parseModelId,
   type ChatMessage,
   type SelectedModel,
+  type StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
@@ -134,7 +135,8 @@ export async function collectStream(
   attachments: AttachmentPayload[],
   onToken?: (token: string) => void,
   signal?: AbortSignal,
-  stopWhen?: (content: string) => boolean
+  stopWhen?: (content: string) => boolean,
+  structuredOutput?: StructuredOutputFormat
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -162,6 +164,7 @@ export async function collectStream(
           maxTokens,
           temperature,
           reasoningEffort,
+          structuredOutput,
         })) {
           if (signal?.aborted) throw abortError();
           if (chunk.type === "token" && chunk.content) {
@@ -209,6 +212,7 @@ export async function collectStream(
         maxTokens,
         temperature,
         reasoningEffort,
+        structuredOutput,
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
         if (signal?.aborted) throw abortError();

@@ -3,6 +3,7 @@ import type { AIProvider, ChatParams, StreamChunk } from "./base";
 import { getCatalogModelsForProvider, MODEL_CATALOG } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
 import { openAIReasoningEffort } from "./reasoning";
+import { openAIResponsesTextFormatField } from "./structured-output";
 
 /** Codex models reject v1/chat/completions and must use v1/responses. */
 function usesResponsesApi(model: string): boolean {
@@ -30,6 +31,9 @@ async function* streamOpenAIResponses(
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
   const reasoningValue = openAIReasoningEffort(params.reasoningEffort ?? "default");
+  const structuredOutputField = openAIResponsesTextFormatField(
+    params.structuredOutput
+  );
 
   try {
     const stream = await client.responses.create({
@@ -40,6 +44,7 @@ async function* streamOpenAIResponses(
       ...(reasoningValue
         ? { reasoning: { effort: reasoningValue as "low" | "medium" | "high" } }
         : {}),
+      ...(structuredOutputField as Record<string, never>),
       stream: true,
     });
 

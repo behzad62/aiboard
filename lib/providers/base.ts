@@ -17,6 +17,23 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface JsonSchemaObject {
+  type?: string;
+  description?: string;
+  properties?: Record<string, JsonSchemaObject>;
+  items?: JsonSchemaObject;
+  enum?: string[];
+  required?: string[];
+  additionalProperties?: boolean | JsonSchemaObject;
+  nullable?: boolean;
+}
+
+export interface StructuredOutputFormat {
+  name: string;
+  schema: JsonSchemaObject;
+  strict?: boolean;
+}
+
 export interface ChatParams {
   apiKey: string;
   model: string;
@@ -25,6 +42,7 @@ export interface ChatParams {
   maxTokens?: number;
   temperature?: number;
   reasoningEffort?: ReasoningEffort;
+  structuredOutput?: StructuredOutputFormat;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */

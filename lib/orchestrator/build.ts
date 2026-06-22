@@ -8,6 +8,7 @@
  */
 
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
+import type { JsonSchemaObject, StructuredOutputFormat } from "../providers/base";
 
 export type BuildTaskStatus =
   | "planned"
@@ -279,6 +280,148 @@ export interface ReviewAction {
   newTasks?: PlanAction["tasks"];
   done: boolean;
   notes?: string;
+}
+
+const stringSchema = (description?: string): JsonSchemaObject => ({
+  type: "string",
+  ...(description ? { description } : {}),
+});
+
+const stringArraySchema = (description?: string): JsonSchemaObject => ({
+  type: "array",
+  ...(description ? { description } : {}),
+  items: { type: "string" },
+});
+
+const buildTaskActionSchema = (): JsonSchemaObject => ({
+  type: "object",
+  properties: {
+    id: stringSchema("Stable task id, when available."),
+    title: stringSchema("Short task title."),
+    instructions: stringSchema("Concrete implementation instructions."),
+    contextFiles: stringArraySchema("Files the worker should inspect."),
+    outputPaths: stringArraySchema("Files this task may create or modify."),
+    expectedOutputs: stringSchema("Expected completion signal."),
+    dependsOn: stringArraySchema("Task ids that must complete first."),
+    assignTo: stringSchema("Optional worker display-name preference."),
+    difficulty: {
+      type: "number",
+      description: "Task difficulty from 1 to 5.",
+    },
+  },
+  required: ["title", "instructions"],
+  additionalProperties: false,
+});
+
+/**
+ * JSON schema for the Build Architect protocol. It is intentionally a single
+ * object shape with an `action` discriminator instead of a root union, because
+ * provider schema subsets vary. The existing parser remains the final validator.
+ */
+export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
+  const taskSchema = buildTaskActionSchema();
+  return {
+    name: "architect_action",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [
+            "read",
+            "read_range",
+            "plan",
+            "review",
+            "run",
+            "search",
+            "tool",
+            "fetch",
+            "patch",
+            "append",
+            "repo_status",
+            "repo_diff",
+            "repo_branch_create",
+            "repo_commit",
+            "repo_issue_list",
+            "repo_milestone_create",
+            "repo_issue_create",
+            "repo_issue_read",
+            "repo_push",
+            "repo_pr_create",
+          ],
+          description: "Architect action discriminator.",
+        },
+        paths: stringArraySchema("Paths for read or repo_commit actions."),
+        path: stringSchema("Single file path for range, patch, or append actions."),
+        startLine: { type: "number" },
+        lineCount: { type: "number" },
+        tasks: { type: "array", items: taskSchema },
+        notes: stringSchema("Brief persistent Architect notes."),
+        verifyCommand: stringSchema("Optional mechanical verification command."),
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              taskId: stringSchema("Task id being reviewed."),
+              verdict: { type: "string", enum: ["approve", "fix"] },
+              fixInstructions: stringSchema("Instructions for a fix round."),
+            },
+            required: ["taskId", "verdict"],
+            additionalProperties: false,
+          },
+        },
+        newTasks: { type: "array", items: taskSchema },
+        done: { type: "boolean" },
+        command: stringSchema("Shell command to run."),
+        reason: stringSchema("Short reason for the requested action."),
+        query: stringSchema("Search query."),
+        server: stringSchema("MCP server name."),
+        tool: stringSchema("MCP tool name."),
+        args: {
+          type: "object",
+          description: "MCP tool arguments.",
+          additionalProperties: true,
+        },
+        url: stringSchema("Public http(s) URL to fetch."),
+        ops: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              search: stringSchema("Exact existing text."),
+              replace: stringSchema("Replacement text."),
+            },
+            required: ["search", "replace"],
+            additionalProperties: false,
+          },
+        },
+        content: stringSchema("Append content."),
+        reset: { type: "boolean" },
+        staged: { type: "boolean" },
+        stat: { type: "boolean" },
+        name: stringSchema("Branch name."),
+        base: stringSchema("Base branch."),
+        checkout: { type: "boolean" },
+        message: stringSchema("Commit message."),
+        repo: stringSchema("GitHub owner/repo slug."),
+        labels: stringArraySchema("GitHub labels."),
+        limit: { type: "number" },
+        title: stringSchema("Issue, milestone, or PR title."),
+        body: stringSchema("Issue or PR body."),
+        milestone: stringSchema("GitHub milestone title."),
+        issue: { type: "number" },
+        remote: stringSchema("Git remote."),
+        branch: stringSchema("Git branch."),
+        setUpstream: { type: "boolean" },
+        head: stringSchema("PR head branch."),
+        draft: { type: "boolean" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  };
 }
 
 /**

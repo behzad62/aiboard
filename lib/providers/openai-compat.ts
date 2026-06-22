@@ -8,6 +8,7 @@ import { formatModelId } from "./base";
 import type { StreamChunk } from "./base";
 import { openAIReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
+import { openAICompatibleStructuredOutputField } from "./structured-output";
 
 // Non-cryptographic stable hash (browser-safe — avoids Node's crypto module).
 // Only used to derive a stable OpenAI prompt_cache_key string.
@@ -226,6 +227,10 @@ export async function* streamOpenAICompatibleChat(
   const messages = needsExplicitCacheControl(providerId, params.model)
     ? applyOpenRouterCacheControl(baseMessages)
     : baseMessages;
+  const structuredOutputField = openAICompatibleStructuredOutputField(
+    providerId,
+    params.structuredOutput
+  );
 
   try {
     const stream = await client.chat.completions.create({
@@ -235,6 +240,7 @@ export async function* streamOpenAICompatibleChat(
       ...temperatureField,
       ...openAIPromptCaching,
       ...(reasoningField as Record<string, never>),
+      ...(structuredOutputField as Record<string, never>),
       stream: true,
     });
 

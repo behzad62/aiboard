@@ -10,6 +10,7 @@ import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import { geminiThinkingConfig } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
+import { googleStructuredOutputConfig } from "./structured-output";
 
 function attachmentToPart(
   file: AttachmentPayload,
@@ -96,6 +97,7 @@ export const googleProvider: AIProvider = {
         maxOutputTokens: params.maxTokens ?? 1500,
         temperature: params.temperature ?? 0.7,
         ...(thinking ? { thinkingConfig: thinking } : {}),
+        ...googleStructuredOutputConfig(params.structuredOutput),
       } as GenerationConfig;
 
       const chat = model.startChat({
