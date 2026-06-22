@@ -47,3 +47,6 @@ next-env.d.ts
 
 # drizzle
 /drizzle
+
+# Ed25519 private key for signing runner self-updates (never commit)
+/scripts/.runner-signing-key.pem

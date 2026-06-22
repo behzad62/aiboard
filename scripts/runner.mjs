@@ -52,6 +52,9 @@ import {
   driveRoots,
   createLog,
   createNonceStore,
+  verifyRunnerUpdate,
+  buildPreservedArgv,
+  RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
 const VERSION = 9;
@@ -97,6 +100,7 @@ const rootArg = path.resolve(positional[0] ?? process.cwd());
 const port = Number(flag("port") ?? 8787);
 const token = flag("token") ?? randomBytes(16).toString("hex");
 const host = flag("host"); // undefined → loopback-only default
+const updateBase = (flag("update-url") ?? "https://aiboard.me").replace(/\/$/, "");
 
 if (!fs.existsSync(rootArg) || !fs.statSync(rootArg).isDirectory()) {
   console.error(`Not a folder: ${rootArg}`);
@@ -1783,6 +1787,71 @@ process.on("SIGTERM", () => {
 });
 
 // ── Server ───────────────────────────────────────────────────────────────────
+// ── Self-update helpers ──────────────────────────────────────────────────────
+async function fetchUpdateManifest() {
+  const r = await fetch(`${updateBase}/runner-manifest.json`, {
+    headers: { "cache-control": "no-cache" },
+  });
+  if (!r.ok) throw new Error(`manifest fetch failed (HTTP ${r.status})`);
+  return await r.json();
+}
+
+/** Sync sleep (no busy-wait) for the Windows rename-retry path. */
+function syncSleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** rename with backoff — Windows Defender/indexer can hold a transient lock. */
+function renameWithRetry(from, to, attempts = 10) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (i === attempts - 1) throw err;
+      syncSleep(100 * (i + 1));
+    }
+  }
+}
+
+/** Tear down children, release the port, and re-exec the (now-updated) runner. */
+function performUpdateRestart(selfPath, preservedArgv) {
+  let relaunched = false;
+  const relaunch = () => {
+    if (relaunched) return;
+    relaunched = true;
+    const child = spawn(process.execPath, [selfPath, ...preservedArgv], {
+      stdio: "inherit",
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true, // survive the parent's exit (don't get reaped with it)
+    });
+    child.on("spawn", () => process.exit(0));
+    child.on("error", () => process.exit(1));
+    child.unref();
+  };
+  // Let the HTTP response flush first, then tear down + re-exec.
+  setTimeout(() => {
+    try {
+      for (const [, s] of mcpServers) s.kill();
+    } catch {
+      /* ignore */
+    }
+    try {
+      killBackgroundProcesses();
+    } catch {
+      /* ignore */
+    }
+    try {
+      server.closeAllConnections?.(); // drop lingering SSE so the port frees
+    } catch {
+      /* ignore */
+    }
+    server.close(relaunch);
+    setTimeout(relaunch, 2000); // fallback if close hangs
+  }, 150);
+}
+
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
   const originAllowed = isAllowedOrigin(origin, allowedOrigins);
@@ -1943,6 +2012,70 @@ const server = http.createServer(async (req, res) => {
       host: host ?? "127.0.0.1",
       port,
     });
+    return;
+  }
+
+  // ── Self-update (prompt-only; Ed25519 + SHA-256 verified) ───────────────────
+  if (req.method === "POST" && url.pathname === "/api/update/check") {
+    try {
+      const m = await fetchUpdateManifest();
+      const latest = Number(m.version) || 0;
+      json(res, 200, {
+        ok: true,
+        current: VERSION,
+        latest,
+        updateAvailable: latest > VERSION,
+        signed: !!m.sig,
+      });
+    } catch (err) {
+      json(res, 502, { error: err instanceof Error ? err.message : "Update check failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/update/apply") {
+    try {
+      const m = await fetchUpdateManifest();
+      const latest = Number(m.version) || 0;
+      if (latest <= VERSION) {
+        json(res, 200, { ok: true, updated: false, message: "Already up to date." });
+        return;
+      }
+      const r = await fetch(updateBase + (m.url || "/runner.mjs"));
+      if (!r.ok) throw new Error(`download failed (HTTP ${r.status})`);
+      const bytes = Buffer.from(await r.arrayBuffer());
+      const verdict = verifyRunnerUpdate(bytes, m, RUNNER_PUBLIC_KEY);
+      if (!verdict.ok) {
+        console.error(`Self-update REJECTED: ${verdict.reason}`);
+        json(res, 400, { error: `Update rejected: ${verdict.reason}` });
+        return;
+      }
+      const selfPath = process.argv[1];
+      const tmp = `${selfPath}.download`;
+      const fd = fs.openSync(tmp, "w");
+      fs.writeSync(fd, bytes);
+      fs.fsyncSync(fd); // durable before rename (writable handle — read-only fsync is EPERM on Windows)
+      fs.closeSync(fd);
+      try {
+        fs.copyFileSync(selfPath, `${selfPath}.bak`);
+      } catch {
+        /* rollback copy is best-effort */
+      }
+      renameWithRetry(tmp, selfPath);
+      console.log(`Self-update verified (v${VERSION} → v${latest}); restarting…`);
+      const preserved = buildPreservedArgv({
+        root,
+        port,
+        token,
+        host,
+        mcp: [...mcpServers.values()].map((s) => ({ name: s.name, command: s.command })),
+        appOrigins: extraAppOrigins,
+      });
+      json(res, 200, { ok: true, updated: true, version: latest, restarting: true });
+      performUpdateRestart(selfPath, preserved);
+    } catch (err) {
+      json(res, 502, { error: err instanceof Error ? err.message : "Update failed" });
+    }
     return;
   }
 

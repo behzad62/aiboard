@@ -76,6 +76,8 @@
   }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn.primary { background: var(--accent-dim); border-color: #2dd4bf66; color: var(--accent); }
+  #updBtn { border-color: #fbbf2466; color: var(--warn); }
+  #updBtn:hover { border-color: var(--warn); color: var(--warn); }
   .use-bar { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
   .use-bar .here { color: var(--muted); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   select.filter { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; font-size: 12px; }
@@ -131,6 +133,7 @@
   <header>
     <div class="brand"><span id="dot" class="dot"></span> AI&nbsp;Board <span style="color:var(--muted);font-weight:500">Runner</span></div>
     <span class="chip" id="ver">v–</span>
+    <button class="btn" id="updBtn" type="button" style="display:none"></button>
     <div class="spacer"></div>
     <div class="folder" id="folder"></div>
   </header>
@@ -447,13 +450,62 @@
     }
   };
 
+  // ── Self-update ───────────────────────────────────────────────────────────────
+  async function checkUpdate() {
+    const btn = $("updBtn");
+    try {
+      const res = await api("/api/update/check", { method: "POST" });
+      const d = await res.json();
+      if (d.ok && d.updateAvailable) {
+        btn.textContent = "⬆ Update to v" + d.latest;
+        btn.style.display = "";
+        btn.disabled = false;
+        btn.onclick = () => applyUpdate(d.latest);
+      } else {
+        btn.style.display = "none";
+      }
+    } catch {
+      btn.style.display = "none";
+    }
+  }
+  async function applyUpdate(latest) {
+    const btn = $("updBtn");
+    btn.textContent = "Updating…";
+    btn.disabled = true;
+    btn.onclick = null;
+    try {
+      const res = await api("/api/update/apply", { method: "POST" });
+      const d = await res.json();
+      if (!d.ok) { btn.textContent = "Update failed"; btn.disabled = false; return; }
+      if (!d.updated) { btn.style.display = "none"; return; }
+      btn.textContent = "Restarting…";
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries++;
+        try {
+          const s = await fetch("/api/status", { headers: { "x-runner-token": token } });
+          if (s.ok) {
+            const sj = await s.json();
+            if (sj.version >= latest) { clearInterval(poll); location.reload(); return; }
+          }
+        } catch {}
+        if (tries > 40) { clearInterval(poll); btn.textContent = "Reload"; btn.disabled = false; btn.onclick = () => location.reload(); }
+      }, 1000);
+    } catch {
+      btn.textContent = "Update failed";
+      btn.disabled = false;
+    }
+  }
+
   // ── Boot ────────────────────────────────────────────────────────────────────
   async function boot() {
     await refreshStatus();
     await loadDir(".");
     await loadMcp();
     await startLogs();
+    await checkUpdate();
     setInterval(loadMcp, 3000);
+    setInterval(checkUpdate, 60000);
   }
   if (!token) showGate(); else boot();
 })();

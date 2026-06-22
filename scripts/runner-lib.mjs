@@ -8,7 +8,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
-import { timingSafeEqual, randomBytes } from "node:crypto";
+import { timingSafeEqual, randomBytes, createHash, verify } from "node:crypto";
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -232,6 +232,54 @@ export function createLog({ capacity = 2000 } = {}) {
       return seq;
     },
   };
+}
+
+// ── Self-update verification ─────────────────────────────────────────────────
+
+/**
+ * Ed25519 public key pinned in the shipped runner. Self-updates must carry a
+ * signature made with the matching private key (held only in the release
+ * pipeline), so a compromised download host alone cannot push malicious code —
+ * SHA-256 is integrity, the signature is authenticity.
+ */
+export const RUNNER_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAs7Snl8aCmKSnmXp1l1ZTWeOriwAHCuCL8XJCRi3kycI=
+-----END PUBLIC KEY-----`;
+
+/**
+ * Verify downloaded runner bytes against the manifest: SHA-256 must match AND
+ * the Ed25519 signature (over the raw bytes) must verify against the pinned key.
+ * Returns {ok:true} or {ok:false, reason}.
+ */
+export function verifyRunnerUpdate(bytes, manifest, publicKeyPem = RUNNER_PUBLIC_KEY) {
+  if (!manifest || typeof manifest.sha256 !== "string") {
+    return { ok: false, reason: "manifest missing sha256" };
+  }
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== manifest.sha256) return { ok: false, reason: "sha256 mismatch" };
+  if (typeof manifest.sig !== "string" || !manifest.sig) {
+    return { ok: false, reason: "unsigned release" };
+  }
+  let sigOk = false;
+  try {
+    sigOk = verify(null, Buffer.from(bytes), publicKeyPem, Buffer.from(manifest.sig, "base64"));
+  } catch {
+    sigOk = false;
+  }
+  return sigOk ? { ok: true } : { ok: false, reason: "signature invalid" };
+}
+
+/**
+ * Rebuild the runner's argv from parsed values so a self-update re-exec preserves
+ * the bound state. ALWAYS emits --port and --token (even if originally omitted),
+ * or the paired app's saved token silently breaks.
+ */
+export function buildPreservedArgv({ root, port, token, host, mcp = [], appOrigins = [] }) {
+  const argv = [root, "--port", String(port), "--token", token];
+  if (host) argv.push("--host", host);
+  for (const m of mcp) argv.push("--mcp", `${m.name}=${m.command}`);
+  for (const o of appOrigins) argv.push("--app-origin", o);
+  return argv;
 }
 
 /**

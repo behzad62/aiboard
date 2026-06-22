@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, sign } from "node:crypto";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -97,6 +97,16 @@ fs.writeFileSync(OUT, output);
 const version = Number((output.match(/const VERSION = (\d+)/) || [])[1] || 0);
 const sha256 = createHash("sha256").update(output).digest("hex");
 const manifest = { version, sha256, url: "/runner.mjs" };
+
+// Sign the built bytes with the Ed25519 private key when present (release
+// pipeline). Without it the manifest is unsigned and the runner's self-update
+// refuses it — fail-closed authenticity.
+const keyPath = path.join(here, ".runner-signing-key.pem");
+if (fs.existsSync(keyPath)) {
+  manifest.sig = sign(null, Buffer.from(output), fs.readFileSync(keyPath, "utf8")).toString("base64");
+} else {
+  console.warn("⚠ No signing key (scripts/.runner-signing-key.pem) — manifest UNSIGNED; self-update will refuse it.");
+}
 fs.writeFileSync(path.join(repo, "public", "runner-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 console.log(
   `Built ${path.relative(repo, OUT)} v${version} — ${(output.length / 1024).toFixed(1)} kB (panel ${(panel.length / 1024).toFixed(1)} kB); manifest sha256 ${sha256.slice(0, 12)}…`
