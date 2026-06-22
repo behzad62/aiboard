@@ -1,7 +1,15 @@
 import type { Metadata } from "next";
 import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
-import { BarChart3, Github, Mail, MessageSquare, Settings } from "lucide-react";
+import {
+  BarChart3,
+  Coffee,
+  Github,
+  Info,
+  Mail,
+  MessageSquare,
+  Settings,
+} from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SITE_CONTACT_EMAIL,
@@ -55,6 +63,12 @@ export const metadata: Metadata = {
   },
 };
 
+const navLink =
+  "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+const navIconBtn =
+  "inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+const navDivider = "mx-1.5 h-5 w-px bg-border";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -74,27 +88,12 @@ export default function RootLayout({
                 {SITE_NAME}
               </Link>
               <nav className="flex items-center gap-1">
-                <Link
-                  href="/about"
-                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+                {/* Project */}
+                <Link href="/about" className={navLink}>
+                  <Info className="h-4 w-4" />
                   About
                 </Link>
-                <a
-                  href={SITE_GITHUB_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="View source on GitHub"
-                  title="View source on GitHub"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Github className="h-4 w-4" />
-                  <span className="sr-only">View source on GitHub</span>
-                </a>
-                <a
-                  href={`mailto:${SITE_CONTACT_EMAIL}`}
-                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+                <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={navLink}>
                   <Mail className="h-4 w-4" />
                   Contact
                 </a>
@@ -102,25 +101,39 @@ export default function RootLayout({
                   href="https://paypal.me/behzadashams"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className={navLink}
                 >
-                  ☕ Support this project
+                  <Coffee className="h-4 w-4" />
+                  Support this project
                 </a>
-                <ThemeToggle />
-                <Link
-                  href="/benchmark"
-                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+
+                <span className={navDivider} aria-hidden="true" />
+
+                {/* App */}
+                <Link href="/benchmark" className={navLink}>
                   <BarChart3 className="h-4 w-4" />
                   Benchmark
                 </Link>
-                <Link
-                  href="/settings"
-                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+                <Link href="/settings" className={navLink}>
                   <Settings className="h-4 w-4" />
                   Settings
                 </Link>
+
+                <span className={navDivider} aria-hidden="true" />
+
+                {/* Controls */}
+                <a
+                  href={SITE_GITHUB_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="View source on GitHub"
+                  title="View source on GitHub"
+                  className={navIconBtn}
+                >
+                  <Github className="h-4 w-4" />
+                  <span className="sr-only">View source on GitHub</span>
+                </a>
+                <ThemeToggle />
               </nav>
             </div>
           </header>
