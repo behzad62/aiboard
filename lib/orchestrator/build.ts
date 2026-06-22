@@ -1335,6 +1335,17 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
   );
 }
 
+export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
+  return (
+    action.action === "read" ||
+    action.action === "read_range" ||
+    action.action === "search" ||
+    action.action === "patch" ||
+    action.action === "append" ||
+    action.action === "tool"
+  );
+}
+
 export function hasCompleteBuildToolAction(text: string): boolean {
   return uniqueActionCandidatesInDocumentOrder(text).some((candidate) => {
     const action = parseActionCandidate(candidate);
@@ -1655,6 +1666,16 @@ export function recordToolCall(
   if (key) tracker.exact.add(key);
 }
 
+export type ToolCallResultStatus = "ok" | "error" | "denied";
+
+export function shouldRecordToolCallResult(
+  action: ArchitectAction,
+  status: ToolCallResultStatus
+): boolean {
+  if (action.action !== "tool") return true;
+  return status === "ok" || status === "denied";
+}
+
 export const DUPLICATE_TOOL_CALL_FEEDBACK =
   "DUPLICATE TOOL CALL REJECTED: you already received this exact (or a fully overlapping) read/search/command result — it is already in this conversation above. Do not repeat it. Read a DIFFERENT range/file, search a different term, or produce your decision JSON now.";
 
@@ -1761,6 +1782,39 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
     `The result comes back to you as text. Each tool below shows its exact argument names as name: type ("?" = optional) — use EXACTLY those names in "args". ${mcpCallsLeft} tool call${mcpCallsLeft === 1 ? "" : "s"} left in this phase. The user may deny a call — respect that and continue. Available tools:`,
     mcpToolsDoc,
   ].join("\n");
+}
+
+export function buildWorkerToolInstructions(budget: {
+  reads: number;
+  rangeReads: number;
+  searches: number;
+  patches: number;
+  appends: number;
+  mcpToolsDoc?: string;
+  mcpCallsLeft?: number;
+}): string {
+  return [
+    "TOOLS - before your final answer, you may inspect, verify, or patch by responding with one or more JSON tool actions (and nothing else). The engine runs safe reads/searches together, applies writes in order, keeps MCP calls approval-gated, and reports which were served or skipped:",
+    budget.reads > 0
+      ? `- Read whole small files: {"action":"read","paths":["src/file.ts"]} (${budget.reads} left).`
+      : "",
+    budget.rangeReads > 0
+      ? `- Read part of a file: {"action":"read_range","path":"src/file.ts","startLine":40,"lineCount":80} (${budget.rangeReads} left). Prefer this for large files. If a returned range is partial, continue from endLine + 1 instead of rereading overlapping lines unless you truly need overlap.`
+      : "",
+    budget.searches > 0
+      ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
+      : "",
+    budget.patches > 0
+      ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
+      : "",
+    budget.appends > 0
+      ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
+      : "",
+    mcpToolDoc(budget.mcpToolsDoc, budget.mcpCallsLeft),
+    "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function fetchToolDoc(fetchesLeft?: number): string {
@@ -1976,6 +2030,7 @@ export function buildWorkerTaskPrompt(input: {
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
+    "Do not add or import a new test framework, browser automation package, or config file unless this task explicitly includes updating dependency files such as package.json and the lockfile. For browser verification, prefer MCP browser tools when available instead of creating Playwright/Cypress test files; if you must create tests that import a package, add the dependency and keep the verify command passing.",
     input.task.status === "fixing"
       ? "This is a FIX round: the Architect reviewed previous output and the instructions above tell you what to correct. Use read_range/search plus patch for existing files. If a file is missing or too large for one response, use append chunks. Do not emit full-file blocks for existing files."
       : "",

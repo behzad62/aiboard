@@ -5,6 +5,7 @@ import {
   exactToolKey,
   isRedundantToolCall,
   recordToolCall,
+  shouldRecordToolCallResult,
   type ArchitectAction,
   type ConversationMessage,
 } from "../lib/orchestrator/build";
@@ -74,6 +75,25 @@ check(
   check(
     "mostly-new overlapping range (340-460) is allowed",
     !isRedundantToolCall(t, range("src/entities.js", 340, 120))
+  );
+}
+
+// MCP errors such as "Target page has been closed" are transient tool failures,
+// not delivered evidence. They must not poison the duplicate-call tracker.
+{
+  const mcpNavigate: ArchitectAction = {
+    action: "tool",
+    server: "playwright",
+    tool: "browser_navigate",
+    args: { url: "http://localhost:3001/games" },
+  };
+  check(
+    "failed MCP calls are not remembered as delivered",
+    !shouldRecordToolCallResult(mcpNavigate, "error")
+  );
+  check(
+    "denied MCP calls are remembered as delivered",
+    shouldRecordToolCallResult(mcpNavigate, "denied")
   );
 }
 

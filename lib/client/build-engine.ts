@@ -62,6 +62,7 @@ import {
   buildArchitectSummaryPrompt,
   buildIncompleteTaskFailure,
   buildOutstandingTasksDigest,
+  buildWorkerToolInstructions,
   buildWaveReviewDigest,
   compactToolConversation,
   createToolCallTracker,
@@ -78,6 +79,7 @@ import {
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
+  isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
   outputPathsForTask,
   parseArchitectAction,
@@ -88,6 +90,7 @@ import {
   runBudgetStatus,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
+  shouldRecordToolCallResult,
   summarizeFileChange,
   DUPLICATE_TOOL_CALL_FEEDBACK,
   FORCED_PLAN_INSTRUCTION,
@@ -108,6 +111,7 @@ import {
   type RepoPushAction,
   type RepoPrCreateAction,
   type ReviewAction,
+  type ToolCallResultStatus,
   type ToolAction,
 } from "@/lib/orchestrator/build";
 import {
@@ -1022,9 +1026,13 @@ export async function runBuildDiscussion(
       : 0;
 
   /** Execute one MCP tool call (same approval flow as commands). */
-  const executeTool = async (action: ToolAction): Promise<string> => {
-    if (!runner) return "No runner is available.";
+  const executeTool = async (
+    action: ToolAction,
+    actor: SelectedModel = architect
+  ): Promise<{ text: string; status: ToolCallResultStatus }> => {
+    if (!runner) return { text: "No runner is available.", status: "error" };
     const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
+    const providerId = parseModelId(actor.modelId).providerId;
     if (!allowAllCommands) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
@@ -1036,9 +1044,9 @@ export async function runBuildDiscussion(
           severity: "warning",
           source: "mcp",
           action: label,
-          modelId: architect.modelId,
-          modelName: architect.displayName,
-          providerId: parseModelId(architect.modelId).providerId,
+          modelId: actor.modelId,
+          modelName: actor.displayName,
+          providerId,
           message: `MCP ${action.server}.${action.tool} was denied by the user.`,
         });
         emit({
@@ -1049,13 +1057,19 @@ export async function runBuildDiscussion(
           outputPreview: "Denied by the user",
           denied: true,
         });
-        return `${label}\nThe user DENIED this tool call. Continue without it.`;
+        return {
+          text: `${label}\nThe user DENIED this tool call. Continue without it.`,
+          status: "denied",
+        };
       }
     }
     totalMcpCalls += 1;
     emit({
       type: "diagnostic",
       phase: "model_streaming",
+      modelId: actor.modelId,
+      modelName: actor.displayName,
+      providerId,
       message: `MCP tool: ${action.server}.${action.tool}`,
     });
     const startedAt = Date.now();
@@ -1079,14 +1093,18 @@ export async function runBuildDiscussion(
           severity: "error",
           source: "mcp",
           action: label,
-          modelId: architect.modelId,
-          modelName: architect.displayName,
-          providerId: parseModelId(architect.modelId).providerId,
+          modelId: actor.modelId,
+          modelName: actor.displayName,
+          providerId,
           message: `MCP ${action.server}.${action.tool} returned ERROR.`,
           details: truncate(result.text.trim(), 1_500),
         });
       }
-      return `MCP ${action.server}.${action.tool} → ${result.isError ? "ERROR" : "ok"}\n${truncate(result.text, 8_000)}`;
+      return {
+        text: `MCP ${action.server}.${action.tool} -> ${result.isError ? "ERROR" : "ok"}
+${truncate(result.text, 8_000)}`,
+        status: result.isError ? "error" : "ok",
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : "MCP call failed";
       recordBuildProblem({
@@ -1094,9 +1112,9 @@ export async function runBuildDiscussion(
         severity: "error",
         source: "mcp",
         action: label,
-        modelId: architect.modelId,
-        modelName: architect.displayName,
-        providerId: parseModelId(architect.modelId).providerId,
+        modelId: actor.modelId,
+        modelName: actor.displayName,
+        providerId,
         message: `MCP ${action.server}.${action.tool} failed: ${message}`,
         details: message,
       });
@@ -1107,7 +1125,10 @@ export async function runBuildDiscussion(
         durationMs: Date.now() - startedAt,
         outputPreview: message,
       });
-      return `MCP ${action.server}.${action.tool} failed: ${message}`;
+      return {
+        text: `MCP ${action.server}.${action.tool} failed: ${message}`,
+        status: "error",
+      };
     }
   };
 
@@ -2861,6 +2882,7 @@ export async function runBuildDiscussion(
     result: string;
     exhausted: boolean;
     deliveredRange?: { startLine: number; endLine: number };
+    toolStatus?: ToolCallResultStatus;
   }
 
   /** Run one Architect tool action against the budgets; returns the result text. */
@@ -2945,7 +2967,12 @@ export async function runBuildDiscussion(
           result: "No MCP tool calls left in this phase. Produce your decision JSON now.",
           exhausted: true,
         };
-      return { result: await executeTool(action), exhausted: false };
+      const toolResult = await executeTool(action);
+      return {
+        result: toolResult.text,
+        exhausted: false,
+        toolStatus: toolResult.status,
+      };
     }
     if (action.action === "fetch") {
       if (fetchesLeftThisPhase() <= 0)
@@ -3065,7 +3092,11 @@ export async function runBuildDiscussion(
       // Match the single-action loop: only record (for dedup) a tool that
       // actually delivered — a budget-exhausted result is not "already read".
       if (dispatched.exhausted) exhausted = true;
-      else recordToolCall(tracker, item.action, dispatched.deliveredRange);
+      else if (
+        shouldRecordToolCallResult(item.action, dispatched.toolStatus ?? "ok")
+      ) {
+        recordToolCall(tracker, item.action, dispatched.deliveredRange);
+      }
     }
     emit({
       type: "tool_batch",
@@ -3753,34 +3784,11 @@ export async function runBuildDiscussion(
       patches: number;
       appends: number;
     }): string =>
-      [
-        "FILE TOOLS — before your final answer, you may inspect or patch files by responding with one or more JSON tool actions (and nothing else). The engine runs safe reads/searches together, applies writes in order, and reports which were served or skipped:",
-        budget.reads > 0
-          ? `- Read whole small files: {"action":"read","paths":["src/file.ts"]} (${budget.reads} left).`
-          : "",
-        budget.rangeReads > 0
-          ? `- Read part of a file: {"action":"read_range","path":"src/file.ts","startLine":40,"lineCount":80} (${budget.rangeReads} left). Prefer this for large files. If a returned range is partial, continue from endLine + 1 instead of rereading overlapping lines unless you truly need overlap.`
-          : "",
-        budget.searches > 0
-          ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
-          : "",
-        budget.patches > 0
-          ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
-          : "",
-        budget.appends > 0
-          ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
-          : "",
-        "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-    const isWorkerFileAction = (action: ArchitectAction): boolean =>
-      action.action === "read" ||
-      action.action === "read_range" ||
-      action.action === "search" ||
-      action.action === "patch" ||
-      action.action === "append";
+      buildWorkerToolInstructions({
+        ...budget,
+        mcpToolsDoc,
+        mcpCallsLeft: mcpCallsLeftThisPhase(),
+      });
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
       const worker = workers[task.workerIndex!];
@@ -3813,7 +3821,7 @@ export async function runBuildDiscussion(
           {
             role: "system",
             content:
-              "You are an AI engineer completing one assigned task. Use file tools when needed, then output the final files or notes.",
+              "You are an AI engineer completing one assigned task. Use tools when needed, then output the final files or notes.",
           },
           {
             role: "user",
@@ -3846,9 +3854,9 @@ export async function runBuildDiscussion(
         const tracker = createToolCallTracker();
         let badToolCalls = 0;
 
-        // Dispatch a batch of worker file actions in one turn: safe reads run
-        // together; writes (patch/append) apply in order; duplicates and
-        // budget-exhausted/unsupported actions are skipped. Per-action side
+        // Dispatch a batch of worker tool actions in one turn: safe reads run
+        // together; writes (patch/append) apply in order; MCP stays approval-gated;
+        // duplicates and budget-exhausted/unsupported actions are skipped. Per-action side
         // effects (recordToolCall, patchedFiles/toolIssues, diagnostics) match
         // the single-action loop exactly; one combined result is returned.
         const dispatchWorkerToolBatch = async (
@@ -3870,12 +3878,24 @@ export async function runBuildDiscussion(
           }));
           for (const item of schedule.served) {
             const action = item.action;
-            if (!isWorkerFileAction(action)) {
-              skipped.push({ label: item.label, reason: "worker file loop cannot run this action" });
+            if (!isWorkerBuildToolAction(action)) {
+              skipped.push({ label: item.label, reason: "worker tool loop cannot run this action" });
               continue;
             }
             if (isRedundantToolCall(tracker, action)) {
               skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
+              continue;
+            }
+            if (action.action === "tool") {
+              if (mcpCallsLeftThisPhase() <= 0) {
+                skipped.push({ label: item.label, reason: "no MCP tool call budget left in this phase" });
+                continue;
+              }
+              const toolResult = await executeTool(action, worker);
+              if (shouldRecordToolCallResult(action, toolResult.status)) {
+                recordToolCall(tracker, action);
+              }
+              served.push({ label: item.label, result: toolResult.text });
               continue;
             }
             if (action.action === "read" && budgets.reads > 0) {

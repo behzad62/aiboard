@@ -51,6 +51,24 @@ check(
   askModeSingleRun
 );
 
+const mcpTool = scheduleBuildToolActions(
+  [
+    {
+      action: "tool",
+      server: "playwright",
+      tool: "browser_navigate",
+      args: { url: "http://localhost:3000/games" },
+    },
+  ],
+  { allowSafeRunQueue: true, maxSafeRuns: 3 }
+);
+check(
+  "mcp tool action runs alone with descriptive label",
+  mcpTool.served.length === 1 &&
+    mcpTool.served[0]?.label === "mcp:playwright.browser_navigate",
+  mcpTool
+);
+
 const packed = packToolBatchResult({
   served: [{ label: "read package.json", result: "x".repeat(100) }],
   skipped: [{ label: "run npm install", reason: "unsafe command" }],

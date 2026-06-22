@@ -81,6 +81,8 @@ function labelFor(action: ArchitectAction): string {
       return `search ${action.query}`;
     case "run":
       return `run ${action.command}`;
+    case "tool":
+      return `mcp:${action.server}.${action.tool}`;
     case "patch":
       return `patch ${action.path}`;
     case "append":

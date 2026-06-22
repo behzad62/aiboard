@@ -1,6 +1,8 @@
 /** Build prompt regression checks (run: npx tsx scripts/test-build-prompts.mts) */
 import {
+  buildWorkerToolInstructions,
   buildWorkerTaskPrompt,
+  isWorkerBuildToolAction,
   scoreboardSection,
   type BuildTask,
 } from "../lib/orchestrator/build";
@@ -61,12 +63,45 @@ check(
   !/give the COMPLETE contents of every file you write/i.test(prompt),
   prompt
 );
+check(
+  "worker prompt warns against undeclared test tooling",
+  /do not add or import a new test framework/i.test(prompt) &&
+    /MCP browser tools/i.test(prompt),
+  prompt
+);
 
 const scoreboard = scoreboardSection("- claude-opus-4-5: score 3\n- Gemini 3.5 Flash: score 0");
 check(
   "scoreboard prompt tells Architect assignTo is a sparse preference",
   /assignTo sparingly/i.test(scoreboard) && /engine balances/i.test(scoreboard),
   scoreboard
+);
+
+const workerTools = buildWorkerToolInstructions({
+  reads: 1,
+  rangeReads: 1,
+  searches: 1,
+  patches: 1,
+  appends: 1,
+  mcpToolsDoc:
+    "playwright.browser_navigate args: url: string\nplaywright.browser_snapshot args: none",
+  mcpCallsLeft: 2,
+});
+check(
+  "worker tool instructions advertise MCP tools",
+  workerTools.includes('"action":"tool"') &&
+    workerTools.includes("playwright.browser_navigate") &&
+    /2 tool calls? left/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool policy allows MCP tool actions",
+  isWorkerBuildToolAction({
+    action: "tool",
+    server: "playwright",
+    tool: "browser_navigate",
+    args: { url: "http://localhost:3000/games" },
+  }),
 );
 
 process.exit(failed === 0 ? 0 : 1);
