@@ -4,6 +4,7 @@ import type {
   GameSessionRecord,
   GenericGameMatchRecord,
 } from "../lib/games/core/types";
+import type { GameMatchRecord } from "../lib/games/chess/types";
 import {
   __resetGameSessionStoreForTests,
   deleteGameSession,
@@ -12,6 +13,7 @@ import {
   saveGameSession,
   saveGenericGameMatchRecord,
 } from "../lib/games/core/session-store";
+import { getMatchRecords } from "../lib/games/stats";
 
 let failures = 0;
 
@@ -64,6 +66,23 @@ function match(id: string): GenericGameMatchRecord {
   };
 }
 
+function legacyMatch(id: string): GameMatchRecord {
+  return {
+    id,
+    timestamp: "2026-06-23T02:00:00.000Z",
+    mode: "aivai",
+    whiteModel: "openai:white-test",
+    blackModel: "anthropic:black-test",
+    whiteReasoningEffort: "low",
+    blackReasoningEffort: "high",
+    result: "white",
+    moves: 36,
+    durationMs: 12_000,
+    whiteMoveMs: 4_000,
+    blackMoveMs: 8_000,
+  };
+}
+
 function installIndexedDbStore(rawStore: string): void {
   const values = new Map<string, unknown>([["store", rawStore]]);
   const db = {
@@ -97,6 +116,26 @@ function installIndexedDbStore(rawStore: string): void {
   };
   (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB =
     fakeIndexedDb as unknown as IDBFactory;
+}
+
+function installLocalStorageStore(values: Record<string, string>): void {
+  const items = new Map<string, string>(Object.entries(values));
+  const fakeLocalStorage = {
+    get length() {
+      return items.size;
+    },
+    clear: () => items.clear(),
+    getItem: (key: string) => items.get(key) ?? null,
+    key: (index: number) => Array.from(items.keys())[index] ?? null,
+    removeItem: (key: string) => {
+      items.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      items.set(key, value);
+    },
+  };
+  (globalThis as unknown as { localStorage: Storage }).localStorage =
+    fakeLocalStorage as Storage;
 }
 
 installIndexedDbStore(JSON.stringify({}));
@@ -163,6 +202,33 @@ check(
   afterMatchArrayMutation.length === 2 &&
     afterMatchArrayMutation.every((record) => record.id !== "match-mutated"),
   afterMatchArrayMutation
+);
+
+__resetGameSessionStoreForTests();
+const legacyRawStats = JSON.stringify([legacyMatch("legacy-match-1")]);
+installLocalStorageStore({ "aiboard-game-stats": legacyRawStats });
+const importedLegacyRecords = getMatchRecords();
+const genericRecordsAfterLegacyImport = await listGenericGameMatchRecords();
+check(
+  "legacy game stats import returns chess match records",
+  importedLegacyRecords.length === 1 &&
+    importedLegacyRecords[0]?.id === "legacy-match-1" &&
+    importedLegacyRecords[0]?.mode === "aivai" &&
+    importedLegacyRecords[0]?.whiteModel === "openai:white-test" &&
+    importedLegacyRecords[0]?.blackModel === "anthropic:black-test",
+  importedLegacyRecords
+);
+check(
+  "legacy game stats import writes generic chess match records",
+  genericRecordsAfterLegacyImport.length === 1 &&
+    genericRecordsAfterLegacyImport[0]?.id === "legacy-match-1" &&
+    genericRecordsAfterLegacyImport[0]?.gameId === "chess",
+  genericRecordsAfterLegacyImport
+);
+check(
+  "legacy game stats import preserves legacy localStorage key",
+  localStorage.getItem("aiboard-game-stats") === legacyRawStats,
+  localStorage.getItem("aiboard-game-stats")
 );
 
 __resetGameSessionStoreForTests({ needsPassphrase: true });
