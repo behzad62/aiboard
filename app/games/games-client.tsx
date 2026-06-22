@@ -57,7 +57,7 @@ export function GamesClient() {
   const [gameMode, setGameMode] = useState<GameMode>("pvp");
   const [humanColor, setHumanColor] = useState<PieceColor>("white");
   const [availableModels, setAvailableModels] = useState<
-    { modelId: string; displayName: string; providerId: string }[]
+    { id: string; name: string }[]
   >([]);
   const [whiteAI, setWhiteAI] = useState<AIConfig>({
     modelId: "",
@@ -86,12 +86,14 @@ export function GamesClient() {
 
   // Load available models on mount
   useEffect(() => {
-        const models = getAvailableModels();
-        setAvailableModels(models);
-        if (models.length > 0) {
-          setWhiteAI((prev) => ({ ...prev, modelId: models[0].modelId }));
-          setBlackAI((prev) => ({ ...prev, modelId: models[0].modelId }));
-        }
+    const models = getAvailableModels();
+    setAvailableModels(
+      models.map((m) => ({ id: m.modelId, name: m.displayName }))
+    );
+    if (models.length > 0) {
+      setWhiteAI((prev) => ({ ...prev, modelId: models[0].modelId }));
+      setBlackAI((prev) => ({ ...prev, modelId: models[0].modelId }));
+    }
   }, []);
 
   // Check if current turn is AI controlled
@@ -632,7 +634,7 @@ interface AIConfigPanelProps {
   color: PieceColor;
   config: AIConfig;
   onChange: (config: AIConfig) => void;
-  models: { modelId: string; displayName: string; providerId: string }[];
+  models: { id: string; name: string }[];
 }
 
 function AIConfigPanel({
@@ -686,8 +688,8 @@ function AIConfigPanel({
           )}
         >
           {models.map((model) => (
-            <option key={model.modelId} value={model.modelId}>
-              {model.displayName}
+            <option key={model.id} value={model.id}>
+              {model.name}
             </option>
           ))}
         </select>
