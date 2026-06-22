@@ -20,6 +20,20 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
+async function expectReject(
+  name: string,
+  action: () => Promise<void>,
+  messagePattern: RegExp
+): Promise<void> {
+  try {
+    await action();
+    check(name, false, "resolved");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    check(name, messagePattern.test(message), message);
+  }
+}
+
 const participants: GameParticipant[] = [
   { id: "white", kind: "human", label: "White" },
   { id: "black", kind: "ai", label: "Black", modelId: "openai:gpt-test" },
@@ -78,6 +92,15 @@ check(
   afterDelete
 );
 
+afterDelete.push(session("session-mutated", "Mutated outside facade"));
+const afterSessionArrayMutation = await listGameSessions();
+check(
+  "session list returns a shallow copy",
+  afterSessionArrayMutation.length === 1 &&
+    afterSessionArrayMutation.every((record) => record.id !== "session-mutated"),
+  afterSessionArrayMutation
+);
+
 await saveGenericGameMatchRecord(match("match-1"));
 await saveGenericGameMatchRecord(match("match-1"));
 const records = await listGenericGameMatchRecords();
@@ -85,6 +108,37 @@ check(
   "match records are append-only",
   records.length === 2 && records.every((record) => record.id === "match-1"),
   records
+);
+
+records.push(match("match-mutated"));
+const afterMatchArrayMutation = await listGenericGameMatchRecords();
+check(
+  "match record list returns a shallow copy",
+  afterMatchArrayMutation.length === 2 &&
+    afterMatchArrayMutation.every((record) => record.id !== "match-mutated"),
+  afterMatchArrayMutation
+);
+
+__resetGameSessionStoreForTests({ needsPassphrase: true });
+check("locked session list returns empty", (await listGameSessions()).length === 0);
+check(
+  "locked match record list returns empty",
+  (await listGenericGameMatchRecords()).length === 0
+);
+await expectReject(
+  "locked save session rejects",
+  () => saveGameSession(session("locked-session", "Locked session")),
+  /unlock/i
+);
+await expectReject(
+  "locked delete session rejects",
+  () => deleteGameSession("locked-session"),
+  /unlock/i
+);
+await expectReject(
+  "locked save match record rejects",
+  () => saveGenericGameMatchRecord(match("locked-match")),
+  /unlock/i
 );
 
 if (failures === 0) {
