@@ -47,6 +47,8 @@ import {
   isAllowedHost,
   isAllowedOrigin,
   defaultAppOrigins,
+  isLoopbackHost,
+  isStrongToken,
   confine,
   listDirs,
   driveRoots,
@@ -122,6 +124,17 @@ const allowedOrigins = new Set([
   `http://localhost:${port}`,
   ...(host ? [`http://${host}:${port}`] : []),
 ]);
+
+// Network exposure is FAIL-CLOSED: refuse a non-loopback bind without a strong
+// token — over the network the token is the only thing between the world and a
+// shell-capable daemon.
+if (!isLoopbackHost(host) && !isStrongToken(token)) {
+  console.error(
+    `Refusing to bind non-loopback host "${host}" without a strong token.\n` +
+      `Pass --token <a long random secret (>= 24 chars)>, or omit --host to stay on 127.0.0.1.`
+  );
+  process.exit(1);
+}
 
 // Structured log: a capped ring buffer the panel streams over SSE / polls. We
 // tee console.* through it so the terminal output stays byte-for-byte the same
@@ -2650,13 +2663,26 @@ const server = http.createServer(async (req, res) => {
   json(res, 404, { error: "Not found" });
 });
 
-server.listen(port, "127.0.0.1", () => {
+const bindHost = host ?? "127.0.0.1";
+server.listen(port, bindHost, () => {
   console.log("AI Board — local runner");
   console.log("──────────────────────────────────");
   console.log(`Project folder : ${projectDir}`);
-  console.log(`URL            : http://127.0.0.1:${port}`);
+  console.log(`URL            : http://${bindHost}:${port}`);
   console.log(`Token          : ${token}`);
   console.log("");
+  if (!isLoopbackHost(host)) {
+    console.log(
+      `⚠ NETWORK-EXPOSED on ${bindHost} — the runner is reachable beyond this machine. The token`
+    );
+    console.log(
+      "  is the ONLY protection, and traffic is plaintext http. For the hosted app to reach it,"
+    );
+    console.log(
+      "  front it with a tunnel that provides https (ngrok / Tailscale Funnel). See the help guide."
+    );
+    console.log("");
+  }
   if (mcpServers.size > 0) {
     console.log(`MCP servers    : ${[...mcpServers.keys()].join(", ")} (starting…)`);
   } else {

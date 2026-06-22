@@ -4,6 +4,8 @@ import {
   isAllowedHost,
   isAllowedOrigin,
   defaultAppOrigins,
+  isLoopbackHost,
+  isStrongToken,
 } from "./runner-lib.mjs";
 
 let failures = 0;
@@ -40,6 +42,18 @@ check("origin localhost dev", isAllowedOrigin("http://localhost:3000", origins) 
 check("origin 127.0.0.1 dev", isAllowedOrigin("http://127.0.0.1:3000", origins) === true);
 check("origin app-origin extra", isAllowedOrigin("https://my-self-host.example", origins) === true);
 check("origin evil rejected", isAllowedOrigin("https://evil.com", origins) === false);
+
+// ── isLoopbackHost / isStrongToken ───────────────────────────────────────────
+check("loopback undefined", isLoopbackHost(undefined) === true);
+check("loopback 127.0.0.1", isLoopbackHost("127.0.0.1") === true);
+check("loopback localhost", isLoopbackHost("localhost") === true);
+check("non-loopback 0.0.0.0", isLoopbackHost("0.0.0.0") === false);
+check("non-loopback LAN IP", isLoopbackHost("192.168.1.5") === false);
+
+check("strong default-length hex token", isStrongToken("cfcc021d16364da5be8fb8f7") === true);
+check("weak short token", isStrongToken("secret") === false);
+check("weak low-entropy token", isStrongToken("aaaaaaaaaaaaaaaaaaaaaaaa") === false);
+check("strong 32-hex token", isStrongToken("0123456789abcdef0123456789abcdef") === true);
 
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

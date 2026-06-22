@@ -58,6 +58,21 @@ export function isAllowedOrigin(originHeader, appOrigins) {
   return appOrigins instanceof Set ? appOrigins.has(originHeader) : appOrigins.includes(originHeader);
 }
 
+/** Loopback hosts that need no extra protection (TLS / LNA prompt). */
+export function isLoopbackHost(host) {
+  return !host || host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+/**
+ * A token strong enough to expose over a network: long and not trivially
+ * low-entropy. The default randomBytes(16) → 32 hex chars passes; a short or
+ * repetitive --token fails so `--host` (non-loopback) refuses to start.
+ */
+export function isStrongToken(token) {
+  if (typeof token !== "string" || token.length < 24) return false;
+  return new Set(token).size >= 8;
+}
+
 /** Default app origins the runner trusts (prod + local dev). */
 export function defaultAppOrigins(extra = []) {
   const base = [
