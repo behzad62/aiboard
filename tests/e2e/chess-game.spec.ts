@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type DelayedAIResponseWindow = Window & {
+  __delayedChessAIResponsesObserved?: number;
+};
+
 interface PersistedChessSnapshot {
   blackTimeMs?: number;
   gameState?: { moveHistory?: Array<{ san?: string }> };
@@ -118,6 +122,79 @@ function openAIStreamChunk(content: string): string {
     "data: [DONE]",
     "",
   ].join("\n\n");
+}
+
+async function installDelayedAIResponseObserver(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const observedWindow = window as DelayedAIResponseWindow;
+    observedWindow.__delayedChessAIResponsesObserved = 0;
+
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+
+      if (
+        !url.includes("/__chess-ai-test/v1/chat/completions") ||
+        !response.body
+      ) {
+        return response;
+      }
+
+      const reader = response.body.getReader();
+      let observed = false;
+      const markObservedAfterClientTurn = () => {
+        if (observed) return;
+        observed = true;
+        window.setTimeout(() => {
+          observedWindow.__delayedChessAIResponsesObserved =
+            (observedWindow.__delayedChessAIResponsesObserved ?? 0) + 1;
+        }, 0);
+      };
+
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const result = await reader.read();
+          if (result.done) {
+            controller.close();
+            markObservedAfterClientTurn();
+            return;
+          }
+
+          controller.enqueue(result.value);
+          markObservedAfterClientTurn();
+        },
+        cancel(reason) {
+          return reader.cancel(reason);
+        },
+      });
+
+      return new Response(stream, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    };
+  });
+}
+
+async function waitForDelayedAIResponseObserved(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as DelayedAIResponseWindow)
+              .__delayedChessAIResponsesObserved ?? 0
+        ),
+      { timeout: 5000 }
+    )
+    .toBeGreaterThan(0);
 }
 
 async function readPersistedChessSnapshot(
@@ -326,10 +403,6 @@ test.describe("Chess game", () => {
     const aiResponseReleased = new Promise<void>((resolve) => {
       releaseAIResponse = resolve;
     });
-    let resolveAIResponseFulfilled!: () => void;
-    const aiResponseFulfilled = new Promise<void>((resolve) => {
-      resolveAIResponseFulfilled = resolve;
-    });
 
     await page.route("**/__chess-ai-test/v1/chat/completions", async (route) => {
       aiRequestCount += 1;
@@ -342,9 +415,9 @@ test.describe("Chess game", () => {
         },
         body: openAIStreamChunk('{"from":"e2","to":"e4"}'),
       });
-      resolveAIResponseFulfilled();
     });
 
+    await installDelayedAIResponseObserver(page);
     await seedDelayedChessAIModel(page);
     await page.reload();
     await page.waitForLoadState("networkidle");
@@ -365,7 +438,7 @@ test.describe("Chess game", () => {
     await expect(page.getByTestId("start-game-button")).toBeVisible();
 
     releaseAIResponse();
-    await aiResponseFulfilled;
+    await waitForDelayedAIResponseObserved(page);
 
     await expect(
       page.getByTestId("square-e2").getByTestId("chess-piece")
