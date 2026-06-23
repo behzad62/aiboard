@@ -6,6 +6,7 @@ import { ChessBoard } from "@/components/games/ChessBoard";
 import { ChessClock } from "@/components/games/chess/ChessClock";
 import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
+import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
 import {
   PromotionDialog,
   type PromotionPieceType,
@@ -45,9 +46,8 @@ import {
   parseChessSessionRecord,
   type ChessSessionSnapshot,
 } from "@/lib/games/chess/session";
-import {
-  listGameSessions,
-} from "@/lib/games/core/session-store";
+import { listGameSessions } from "@/lib/games/core/session-store";
+import type { ChessPgnMetadata } from "@/lib/games/chess/export";
 
 // Reasoning effort levels for the slider
 const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
@@ -919,6 +919,49 @@ export function GamesClient() {
   const showGameStatus =
     gameState.status === "check" ||
     (!activeGameStatus && gameState.status !== "paused");
+  const exportSnapshot = useMemo<ChessSessionSnapshot>(
+    () => ({
+      gameMode,
+      humanColor,
+      whiteAI,
+      blackAI,
+      gameState,
+      whiteTimeMs,
+      blackTimeMs,
+      gameStartTime,
+      isPaused,
+      lastAiInteraction,
+    }),
+    [
+      blackAI,
+      blackTimeMs,
+      gameMode,
+      gameStartTime,
+      gameState,
+      humanColor,
+      isPaused,
+      lastAiInteraction,
+      whiteAI,
+      whiteTimeMs,
+    ]
+  );
+  const exportMetadata = useMemo<ChessPgnMetadata>(() => {
+    const playerLabel = (color: PieceColor) => {
+      const isAI =
+        gameMode === "aivai" ||
+        (gameMode === "pvai" && humanColor !== color);
+      if (!isAI) return color === "white" ? "White Player" : "Black Player";
+
+      const config = color === "white" ? whiteAI : blackAI;
+      return config.modelId || (color === "white" ? "White AI" : "Black AI");
+    };
+
+    return {
+      date: gameStartTime > 0 ? new Date(gameStartTime) : undefined,
+      white: playerLabel("white"),
+      black: playerLabel("black"),
+    };
+  }, [blackAI, gameMode, gameStartTime, humanColor, whiteAI]);
 
   useEffect(() => {
     if (!pendingPromotion) return;
@@ -1268,14 +1311,24 @@ export function GamesClient() {
             )}
 
             {/* Game Controls */}
-            <GameControls
-              onReset={handleReset}
-              onPause={handlePause}
-              onResume={handleResume}
-              isPaused={isPaused}
-              gameStatus={gameState.status}
-              canPause={!aiThinking}
-            />
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="min-w-[220px] flex-1">
+                <GameControls
+                  onReset={handleReset}
+                  onPause={handlePause}
+                  onResume={handleResume}
+                  isPaused={isPaused}
+                  gameStatus={gameState.status}
+                  canPause={!aiThinking}
+                />
+              </div>
+              <ExportGameMenu
+                state={gameState}
+                snapshot={exportSnapshot}
+                metadata={exportMetadata}
+                className="min-w-36 flex-1 sm:flex-none lg:flex-1"
+              />
+            </div>
 
             {/* Move History */}
             <MoveHistory moves={gameState.moveHistory} />
