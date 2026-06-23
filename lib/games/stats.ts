@@ -55,6 +55,14 @@ function readNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
 function isGameMode(value: unknown): value is GameMatchRecord["mode"] {
   return value === "pvp" || value === "pvai" || value === "aivai";
 }
@@ -70,10 +78,14 @@ function isLegacyMatchRecord(value: unknown): value is GameMatchRecord {
     readString(value.timestamp) !== undefined &&
     isGameMode(value.mode) &&
     isGameResult(value.result) &&
-    typeof value.moves === "number" &&
-    typeof value.durationMs === "number" &&
-    typeof value.whiteMoveMs === "number" &&
-    typeof value.blackMoveMs === "number"
+    isOptionalString(value.whiteModel) &&
+    isOptionalString(value.blackModel) &&
+    isOptionalString(value.whiteReasoningEffort) &&
+    isOptionalString(value.blackReasoningEffort) &&
+    isFiniteNumber(value.moves) &&
+    isFiniteNumber(value.durationMs) &&
+    isFiniteNumber(value.whiteMoveMs) &&
+    isFiniteNumber(value.blackMoveMs)
   );
 }
 

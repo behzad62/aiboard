@@ -98,14 +98,24 @@ export function getConfig(): StorageConfig {
 
 /** Load config + adapter + store. Returns needsPassphrase=true if encrypted and locked. */
 export async function initStore(): Promise<{ needsPassphrase: boolean }> {
-  if (memory) return { needsPassphrase: false };
+  if (memory && adapter) return { needsPassphrase: false };
   if (initPromise) return initPromise;
 
   const generation = initGeneration;
-  initPromise = loadStore(generation).finally(() => {
+  initPromise = (memory ? initializeAdapterForMemory() : loadStore(generation)).finally(() => {
     initPromise = null;
   });
   return initPromise;
+}
+
+async function initializeAdapterForMemory(): Promise<{ needsPassphrase: boolean }> {
+  config = await getStorageConfig();
+  adapter = await createAdapter(config);
+  if (persistDirty) {
+    if (config.encryptionEnabled && !isUnlocked()) return { needsPassphrase: true };
+    await flush();
+  }
+  return { needsPassphrase: false };
 }
 
 async function loadStore(generation: number): Promise<{ needsPassphrase: boolean }> {

@@ -434,6 +434,28 @@ check(
 );
 
 __clearGameSessionStoreForTests();
+const preInitReplaceIndexedDb = installIndexedDbStore(JSON.stringify({}));
+__replaceGameSessionStoreForTests({
+  gameMatchRecords: [match("replacement-before-any-adapter")],
+  gameStatsLegacyImportAttempted: true,
+});
+await new Promise((resolve) => setTimeout(resolve, 180));
+await __initGameSessionStoreForTests();
+await __flushGameSessionStoreForTests();
+const persistedPreInitReplacementRaw = preInitReplaceIndexedDb.getStoredRaw();
+__clearGameSessionStoreForTests();
+installIndexedDbStore(persistedPreInitReplacementRaw ?? JSON.stringify({}));
+await __initGameSessionStoreForTests();
+const reloadedPreInitReplacement = __exportGameSessionStoreForTests();
+check(
+  "replaceStore before any adapter persists after later init",
+  reloadedPreInitReplacement.gameMatchRecords.length === 1 &&
+    reloadedPreInitReplacement.gameMatchRecords[0]?.id ===
+      "replacement-before-any-adapter",
+  { persistedPreInitReplacementRaw, reloadedPreInitReplacement }
+);
+
+__clearGameSessionStoreForTests();
 const lockedEnvelope = JSON.stringify({ v: 1, encrypted: true, data: "locked" });
 const lockedThenReadyIndexedDb = installIndexedDbStore(lockedEnvelope);
 installLocalStorageStore({});
@@ -598,6 +620,36 @@ check(
   recordsAfterMalformedArrayRecovery.length === 1 &&
     recordsAfterMalformedArrayRecovery[0]?.id === "legacy-after-malformed-array",
   recordsAfterMalformedArrayRecovery
+);
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([
+    legacyMatch("legacy-before-bad-optionals"),
+    {
+      ...legacyMatch("legacy-bad-optionals"),
+      whiteModel: 123,
+      blackReasoningEffort: { value: "high" },
+    },
+  ]),
+});
+await __initGameSessionStoreForTests();
+const malformedOptionalRecords = getMatchRecords();
+check(
+  "malformed legacy optional fields import no partial records",
+  malformedOptionalRecords.length === 0,
+  malformedOptionalRecords
+);
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-bad-optionals")]),
+});
+const recordsAfterMalformedOptionalRecovery = getMatchRecords();
+check(
+  "malformed legacy optional fields do not mark migration attempted",
+  recordsAfterMalformedOptionalRecovery.length === 1 &&
+    recordsAfterMalformedOptionalRecovery[0]?.id === "legacy-after-bad-optionals",
+  recordsAfterMalformedOptionalRecovery
 );
 
 __clearGameSessionStoreForTests();
