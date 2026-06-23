@@ -139,6 +139,30 @@ check(
   parsedJson
 );
 
+const invalidJson = parseConnectFourJsonExport("{not valid json");
+check("json export parser rejects invalid JSON", invalidJson.ok === false, invalidJson);
+
+const missingSnapshot = parseConnectFourJsonExport(
+  JSON.stringify({ export: jsonContent.export })
+);
+check(
+  "json export parser rejects missing snapshot",
+  missingSnapshot.ok === false,
+  missingSnapshot
+);
+
+const malformedSnapshot = parseConnectFourJsonExport(
+  JSON.stringify({
+    export: jsonContent.export,
+    snapshot: { ...snapshot, gameMode: "bad-mode" },
+  })
+);
+check(
+  "json export parser rejects malformed snapshot",
+  malformedSnapshot.ok === false,
+  malformedSnapshot
+);
+
 const wrongGame = parseConnectFourJsonExport(JSON.stringify({ game: "chess" }));
 check(
   "json export rejects wrong game",
