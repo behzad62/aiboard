@@ -63,6 +63,21 @@ check(
   record.metadataJson
 );
 
+const originalCreatedAt = "2026-06-24T07:30:00.000Z";
+const laterSaveAt = "2026-06-24T08:15:00.000Z";
+const laterRecord = createConnectFourSessionRecord(snapshot, laterSaveAt, originalCreatedAt);
+const laterMetadata = JSON.parse(laterRecord.metadataJson);
+check(
+  "later session save preserves original createdAt",
+  laterRecord.createdAt === originalCreatedAt,
+  laterRecord
+);
+check(
+  "later session save updates updatedAt and metadata savedAt",
+  laterRecord.updatedAt === laterSaveAt && laterMetadata.savedAt === laterSaveAt,
+  { record: laterRecord, metadata: laterMetadata }
+);
+
 const parsed = parseConnectFourSessionRecord(record);
 check("session record parses", parsed !== null, parsed);
 check(
@@ -72,6 +87,22 @@ check(
     parsed.gameState.moveHistory.length === 2,
   parsed
 );
+
+const missingMetadataVersion = parseConnectFourSessionRecord({
+  ...record,
+  metadataJson: JSON.stringify({ savedAt: now, moves: 2 }),
+});
+check("session parser rejects missing metadata version", missingMetadataVersion === null, {
+  parsed: missingMetadataVersion,
+});
+
+const wrongMetadataVersion = parseConnectFourSessionRecord({
+  ...record,
+  metadataJson: JSON.stringify({ version: 2, savedAt: now, moves: 2 }),
+});
+check("session parser rejects wrong metadata version", wrongMetadataVersion === null, {
+  parsed: wrongMetadataVersion,
+});
 
 check("playing status is active", isConnectFourActiveStatus("playing") === true);
 check("draw status is not active", isConnectFourActiveStatus("draw") === false);
@@ -89,6 +120,16 @@ check("empty move list says no moves", emptyMoveList.content === "(no moves)", e
 
 const json = exportConnectFourJson(snapshot);
 check("json export has expected filename", json.filename === "ai-board-connect-four.json", json);
+const jsonContent = JSON.parse(json.content);
+check(
+  "json export uses chess-style descriptor envelope",
+  jsonContent.export?.game === "connect-four" &&
+    jsonContent.export?.format === "ai-board-connect-four-json" &&
+    jsonContent.export?.version === 1 &&
+    typeof jsonContent.export?.generatedAt === "string" &&
+    JSON.stringify(jsonContent.snapshot) === JSON.stringify(snapshot),
+  jsonContent
+);
 
 const parsedJson = parseConnectFourJsonExport(json.content);
 check("json export parses", parsedJson.ok === true, parsedJson);

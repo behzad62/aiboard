@@ -41,7 +41,8 @@ export function isConnectFourActiveStatus(status: ConnectFourStatus): boolean {
 
 export function createConnectFourSessionRecord(
   snapshot: ConnectFourSessionSnapshot,
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
+  createdAt = now
 ): GameSessionRecord {
   return {
     id: CONNECT_FOUR_ACTIVE_SESSION_ID,
@@ -55,7 +56,7 @@ export function createConnectFourSessionRecord(
       savedAt: now,
       moves: snapshot.gameState.moveHistory.length,
     }),
-    createdAt: now,
+    createdAt,
     updatedAt: now,
   };
 }
@@ -64,6 +65,14 @@ export function parseConnectFourSessionRecord(
   record: GameSessionRecord
 ): ConnectFourSessionSnapshot | null {
   if (record.gameId !== "connect-four") return null;
+
+  const metadata = parseJson(record.metadataJson);
+  if (
+    !isPlainObject(metadata) ||
+    metadata.version !== CONNECT_FOUR_SESSION_VERSION
+  ) {
+    return null;
+  }
 
   const parsed = parseJson(record.stateJson);
   if (!isPlainObject(parsed)) return null;

@@ -30,11 +30,12 @@ export function exportConnectFourJson(
     filename: "ai-board-connect-four.json",
     mimeType: "application/json",
     content: JSON.stringify({
-      app: "AI Board",
-      format: "json",
-      game: "connect-four",
-      version: 1,
-      exportedAt: new Date().toISOString(),
+      export: {
+        game: "connect-four",
+        format: "ai-board-connect-four-json",
+        version: 1,
+        generatedAt: new Date().toISOString(),
+      },
       snapshot,
     }),
   };
@@ -58,11 +59,12 @@ export function parseConnectFourJsonExport(
     };
   }
 
+  const descriptor = parsed.export;
   if (
-    parsed.app !== "AI Board" ||
-    parsed.format !== "json" ||
-    parsed.game !== "connect-four" ||
-    parsed.version !== 1
+    !isPlainObject(descriptor) ||
+    descriptor.game !== "connect-four" ||
+    descriptor.format !== "ai-board-connect-four-json" ||
+    descriptor.version !== 1
   ) {
     return {
       ok: false,
