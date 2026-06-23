@@ -1342,7 +1342,7 @@ git commit -m "Extract reusable game AI UI"
 **Files:**
 - Create all `components/games/connect-four/*.tsx` files listed in File Structure.
 
-- [ ] **Step 1: Create the board component**
+- [x] **Step 1: Create the board component**
 
 Create `components/games/connect-four/ConnectFourBoard.tsx`:
 
@@ -1403,7 +1403,7 @@ export function ConnectFourBoard({ state, interactive, onColumnClick, previewCol
 }
 ```
 
-- [ ] **Step 2: Create player panel, controls, and history**
+- [x] **Step 2: Create player panel, controls, and history**
 
 Create:
 - `components/games/connect-four/ConnectFourPlayerPanel.tsx`
@@ -1417,7 +1417,7 @@ Use `ConnectFourPlayer` props, compact panels, and `data-testid` values:
 - `connect-four-pause`
 - `connect-four-move-history`
 
-- [ ] **Step 3: Create import/export menus**
+- [x] **Step 3: Create import/export menus**
 
 Create `ConnectFourExportMenu.tsx` using `exportConnectFourJson` and `exportConnectFourMoveList`.
 
@@ -1425,7 +1425,7 @@ Create `ConnectFourImportMenu.tsx` using `parseConnectFourJsonExport`.
 
 Both components should mirror chess menu behavior: download/copy for export and file input for import.
 
-- [ ] **Step 4: Create setup component**
+- [x] **Step 4: Create setup component**
 
 Create `components/games/connect-four/ConnectFourSetup.tsx` with props:
 
@@ -1450,13 +1450,13 @@ interface ConnectFourSetupProps {
 
 Render mode buttons, side selection for PvAI, AI panels for AI-controlled players, start/resume buttons, and import.
 
-- [ ] **Step 5: Run TypeScript**
+- [x] **Step 5: Run TypeScript**
 
 Run: `npx --yes tsc --noEmit`
 
 Expected: pass.
 
-- [ ] **Step 6: Commit Task 6**
+- [x] **Step 6: Commit Task 6**
 
 ```powershell
 git add components/games/connect-four
