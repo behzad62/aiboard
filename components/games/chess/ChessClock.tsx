@@ -7,6 +7,7 @@ import type { PieceColor } from "@/lib/games/chess/types";
 interface ChessClockProps {
   color: PieceColor;
   timeMs: number;
+  isTimed?: boolean;
   /** Caller-resolved running/highlight state, including check positions. */
   isActive: boolean;
   isPaused: boolean;
@@ -16,8 +17,11 @@ interface ChessClockProps {
  * Format milliseconds to time display string
  * Shows MM:SS for times under an hour, HH:MM:SS otherwise
  */
-function formatTime(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
+function formatTime(ms: number, isTimed: boolean): string {
+  const normalizedMs = Math.max(0, ms);
+  const totalSeconds = isTimed
+    ? Math.ceil(normalizedMs / 1000)
+    : Math.floor(normalizedMs / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -50,10 +54,20 @@ function PauseIcon({ className }: { className?: string }) {
   );
 }
 
-export function ChessClock({ color, timeMs, isActive, isPaused }: ChessClockProps) {
-  const formattedTime = useMemo(() => formatTime(timeMs), [timeMs]);
+export function ChessClock({
+  color,
+  timeMs,
+  isTimed = false,
+  isActive,
+  isPaused,
+}: ChessClockProps) {
+  const formattedTime = useMemo(
+    () => formatTime(timeMs, isTimed),
+    [isTimed, timeMs]
+  );
 
   const isWhite = color === "white";
+  const isLowTime = isTimed && timeMs <= 30_000;
 
   return (
     <div
@@ -66,6 +80,10 @@ export function ChessClock({ color, timeMs, isActive, isPaused }: ChessClockProp
         isWhite
           ? "bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200"
           : "bg-gradient-to-br from-gray-800 to-gray-900 border-gray-700",
+        isLowTime &&
+          (isWhite
+            ? "border-red-300 bg-gradient-to-br from-red-50 to-gray-100"
+            : "border-red-600 bg-gradient-to-br from-red-950 to-gray-900"),
         // Active state with glow effect
         isActive && !isPaused && [
           "ring-2 ring-offset-2",
@@ -95,13 +113,19 @@ export function ChessClock({ color, timeMs, isActive, isPaused }: ChessClockProp
             isWhite ? "text-gray-500" : "text-gray-400"
           )}
         >
-          {isWhite ? "White" : "Black"}
+          {isWhite ? "White" : "Black"} {isTimed ? "remaining" : "elapsed"}
         </span>
         <div className="flex items-center gap-2">
           <span
             className={cn(
               "font-mono text-2xl font-bold tabular-nums tracking-tight",
-              isWhite ? "text-gray-900" : "text-gray-100",
+              isLowTime
+                ? isWhite
+                  ? "text-red-700"
+                  : "text-red-300"
+                : isWhite
+                  ? "text-gray-900"
+                  : "text-gray-100",
               isActive && !isPaused && "animate-pulse"
             )}
           >

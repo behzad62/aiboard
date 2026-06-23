@@ -41,9 +41,12 @@ import type { ReasoningEffort } from "@/lib/db/schema";
 import { saveMatchRecord } from "@/lib/games/stats";
 import {
   CHESS_ACTIVE_SESSION_ID,
+  DEFAULT_CHESS_TIME_CONTROL,
   createChessSessionRecord,
   isChessActiveStatus,
   parseChessSessionRecord,
+  type ChessTimeControl,
+  type ChessTimeControlMode,
   type ChessSessionSnapshot,
 } from "@/lib/games/chess/session";
 import { listGameSessions } from "@/lib/games/core/session-store";
@@ -65,6 +68,30 @@ const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
   { value: "aivai", label: "AI vs AI", description: "Watch AIs compete" },
 ];
 
+const TIME_CONTROLS: ChessTimeControl[] = [
+  DEFAULT_CHESS_TIME_CONTROL,
+  {
+    mode: "blitz-5-0",
+    initialMs: 5 * 60_000,
+    incrementMs: 0,
+    label: "5+0 blitz",
+  },
+  {
+    mode: "rapid-10-0",
+    initialMs: 10 * 60_000,
+    incrementMs: 0,
+    label: "10+0 rapid",
+  },
+  {
+    mode: "rapid-15-10",
+    initialMs: 15 * 60_000,
+    incrementMs: 10_000,
+    label: "15+10 rapid",
+  },
+];
+
+const CUSTOM_TIME_CONTROL_MODE: ChessTimeControlMode = "custom";
+
 type BoardOrientation = "white" | "black" | "auto";
 
 const BOARD_ORIENTATIONS: Array<{ value: BoardOrientation; label: string }> = [
@@ -80,6 +107,47 @@ const PROMOTION_PIECES: PromotionPieceType[] = [
   "bishop",
   "knight",
 ];
+
+function isTimedTimeControl(timeControl: ChessTimeControl): boolean {
+  return timeControl.mode !== "untimed" && timeControl.initialMs > 0;
+}
+
+function initialRemainingMs(timeControl: ChessTimeControl): number | null {
+  return isTimedTimeControl(timeControl) ? timeControl.initialMs : null;
+}
+
+function oppositeColor(color: PieceColor): PieceColor {
+  return color === "white" ? "black" : "white";
+}
+
+function createCustomTimeControl(
+  minutesInput: string,
+  incrementInput: string
+): ChessTimeControl {
+  const minutes = Number.parseFloat(minutesInput);
+  const incrementSeconds = Number.parseFloat(incrementInput);
+  const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 1;
+  const safeIncrementSeconds =
+    Number.isFinite(incrementSeconds) && incrementSeconds > 0
+      ? incrementSeconds
+      : 0;
+  const initialMs = Math.max(1_000, Math.round(safeMinutes * 60_000));
+  const incrementMs = Math.max(0, Math.round(safeIncrementSeconds * 1000));
+
+  return {
+    mode: CUSTOM_TIME_CONTROL_MODE,
+    initialMs,
+    incrementMs,
+    label: `${formatCustomMinutes(initialMs)}+${Math.round(
+      incrementMs / 1000
+    )} custom`,
+  };
+}
+
+function formatCustomMinutes(ms: number): string {
+  const minutes = ms / 60_000;
+  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2);
+}
 
 function createAIAbortError(): Error {
   const err = new Error("AI request aborted");
@@ -256,6 +324,13 @@ export function GamesClient() {
   const [isPaused, setIsPaused] = useState(false);
   const [whiteTimeMs, setWhiteTimeMs] = useState(0);
   const [blackTimeMs, setBlackTimeMs] = useState(0);
+  const [whiteRemainingMs, setWhiteRemainingMs] = useState<number | null>(null);
+  const [blackRemainingMs, setBlackRemainingMs] = useState<number | null>(null);
+  const [timeControl, setTimeControl] = useState<ChessTimeControl>(
+    DEFAULT_CHESS_TIME_CONTROL
+  );
+  const [customMinutes, setCustomMinutes] = useState("5");
+  const [customIncrementSeconds, setCustomIncrementSeconds] = useState("0");
   const [aiThinking, setAiThinking] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [gameStartTime, setGameStartTime] = useState<number>(0);
@@ -275,6 +350,7 @@ export function GamesClient() {
   const latestSessionSnapshotRef = useRef<ChessSessionSnapshot | null>(null);
   const storageNeedsPassphraseRef = useRef(false);
   const persistenceTokenRef = useRef(0);
+  const previousMoveCountRef = useRef(0);
 
   const clearAutosaveTimer = useCallback(() => {
     if (autosaveTimerRef.current) {
@@ -435,6 +511,9 @@ export function GamesClient() {
       gameState,
       whiteTimeMs,
       blackTimeMs,
+      whiteRemainingMs,
+      blackRemainingMs,
+      timeControl,
       gameStartTime,
       isPaused,
       lastAiInteraction,
@@ -448,6 +527,9 @@ export function GamesClient() {
     gameState,
     whiteTimeMs,
     blackTimeMs,
+    whiteRemainingMs,
+    blackRemainingMs,
+    timeControl,
     gameStartTime,
     isPaused,
     lastAiInteraction,
@@ -473,6 +555,7 @@ export function GamesClient() {
     whiteAI,
     blackAI,
     gameState,
+    timeControl,
     gameStartTime,
     isPaused,
     lastAiInteraction,
@@ -530,6 +613,7 @@ export function GamesClient() {
       return;
     }
 
+    const isTimed = isTimedTimeControl(timeControl);
     const interval = setInterval(() => {
       const now = Date.now();
       if (lastTickRef.current === 0) {
@@ -542,13 +626,99 @@ export function GamesClient() {
 
       if (gameState.turn === "white") {
         setWhiteTimeMs((prev) => prev + delta);
+        if (isTimed) {
+          setWhiteRemainingMs((prev) =>
+            prev === null ? prev : Math.max(0, prev - delta)
+          );
+        }
       } else {
         setBlackTimeMs((prev) => prev + delta);
+        if (isTimed) {
+          setBlackRemainingMs((prev) =>
+            prev === null ? prev : Math.max(0, prev - delta)
+          );
+        }
       }
     }, 100);
 
     return () => clearInterval(interval);
-  }, [gameStarted, isPaused, gameState.status, gameState.turn]);
+  }, [gameStarted, isPaused, gameState.status, gameState.turn, timeControl]);
+
+  useEffect(() => {
+    if (
+      !gameStarted ||
+      isPaused ||
+      !isTimedTimeControl(timeControl) ||
+      !isChessActiveStatus(gameState.status)
+    ) {
+      return;
+    }
+
+    const timedOutColor =
+      gameState.turn === "white" && whiteRemainingMs !== null && whiteRemainingMs <= 0
+        ? "white"
+        : gameState.turn === "black" &&
+            blackRemainingMs !== null &&
+            blackRemainingMs <= 0
+          ? "black"
+          : null;
+
+    if (!timedOutColor) return;
+
+    invalidateAIRequests();
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+    setLegalMoves([]);
+    setAiThinking(false);
+    setGameState((prev) =>
+      isChessActiveStatus(prev.status) && prev.turn === timedOutColor
+        ? {
+            ...prev,
+            status: "timeout",
+            winner: oppositeColor(timedOutColor),
+          }
+        : prev
+    );
+  }, [
+    blackRemainingMs,
+    gameStarted,
+    gameState.status,
+    gameState.turn,
+    invalidateAIRequests,
+    isPaused,
+    timeControl,
+    whiteRemainingMs,
+  ]);
+
+  useEffect(() => {
+    const currentMoveCount = gameState.moveHistory.length;
+    const previousMoveCount = previousMoveCountRef.current;
+
+    if (
+      gameStarted &&
+      currentMoveCount > previousMoveCount &&
+      isTimedTimeControl(timeControl) &&
+      timeControl.incrementMs > 0
+    ) {
+      const movedColor = oppositeColor(gameState.turn);
+      if (movedColor === "white") {
+        setWhiteRemainingMs((prev) =>
+          prev === null ? prev : prev + timeControl.incrementMs
+        );
+      } else {
+        setBlackRemainingMs((prev) =>
+          prev === null ? prev : prev + timeControl.incrementMs
+        );
+      }
+    }
+
+    previousMoveCountRef.current = currentMoveCount;
+  }, [
+    gameStarted,
+    gameState.moveHistory.length,
+    gameState.turn,
+    timeControl,
+  ]);
 
   // AI move effect
   useEffect(() => {
@@ -642,6 +812,7 @@ export function GamesClient() {
       !gameStarted ||
       matchSavedRef.current ||
       (gameState.status !== "checkmate" &&
+        gameState.status !== "timeout" &&
         gameState.status !== "stalemate" &&
         gameState.status !== "draw")
     ) {
@@ -671,7 +842,7 @@ export function GamesClient() {
           ? blackAI.reasoningEffort
           : undefined,
       result:
-        gameState.status === "checkmate"
+        gameState.status === "checkmate" || gameState.status === "timeout"
           ? gameState.winner === "white"
             ? "white"
             : "black"
@@ -704,6 +875,7 @@ export function GamesClient() {
     if (
       !gameStarted ||
       (gameState.status !== "checkmate" &&
+        gameState.status !== "timeout" &&
         gameState.status !== "stalemate" &&
         gameState.status !== "draw")
     ) {
@@ -891,14 +1063,22 @@ export function GamesClient() {
     clearPendingPromotion();
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
+    setWhiteRemainingMs(initialRemainingMs(timeControl));
+    setBlackRemainingMs(initialRemainingMs(timeControl));
     setIsPaused(false);
     setAiThinking(false);
     setAiError(null);
     setLastAiInteraction(null);
     lastTickRef.current = 0;
+    previousMoveCountRef.current = 0;
     matchSavedRef.current = false;
     setGameStarted(false);
-  }, [clearPendingPromotion, deleteActiveChessSession, invalidateAIRequests]);
+  }, [
+    clearPendingPromotion,
+    deleteActiveChessSession,
+    invalidateAIRequests,
+    timeControl,
+  ]);
 
   // Handle pause
   const handlePause = useCallback(() => {
@@ -927,15 +1107,23 @@ export function GamesClient() {
     setGameState(createInitialState());
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
+    setWhiteRemainingMs(initialRemainingMs(timeControl));
+    setBlackRemainingMs(initialRemainingMs(timeControl));
     setGameStartTime(Date.now());
     setLastAiInteraction(null);
     setRestoreSnapshot(null);
     setAiThinking(false);
     setAiError(null);
     lastTickRef.current = Date.now();
+    previousMoveCountRef.current = 0;
     matchSavedRef.current = false;
     setGameStarted(true);
-  }, [clearPendingPromotion, invalidateAIRequests, invalidatePersistence]);
+  }, [
+    clearPendingPromotion,
+    invalidateAIRequests,
+    invalidatePersistence,
+    timeControl,
+  ]);
 
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
@@ -949,6 +1137,15 @@ export function GamesClient() {
     setGameState(restoreSnapshot.gameState);
     setWhiteTimeMs(restoreSnapshot.whiteTimeMs);
     setBlackTimeMs(restoreSnapshot.blackTimeMs);
+    setWhiteRemainingMs(restoreSnapshot.whiteRemainingMs);
+    setBlackRemainingMs(restoreSnapshot.blackRemainingMs);
+    setTimeControl(restoreSnapshot.timeControl);
+    if (restoreSnapshot.timeControl.mode === "custom") {
+      setCustomMinutes(formatCustomMinutes(restoreSnapshot.timeControl.initialMs));
+      setCustomIncrementSeconds(
+        String(Math.round(restoreSnapshot.timeControl.incrementMs / 1000))
+      );
+    }
     setGameStartTime(restoreSnapshot.gameStartTime);
     setIsPaused(restoreSnapshot.isPaused);
     setLastAiInteraction(restoreSnapshot.lastAiInteraction);
@@ -957,6 +1154,7 @@ export function GamesClient() {
     setAiError(null);
     aiRequestRef.current = false;
     matchSavedRef.current = false;
+    previousMoveCountRef.current = restoreSnapshot.gameState.moveHistory.length;
     lastTickRef.current = restoreSnapshot.isPaused ? 0 : Date.now();
     setRestoreSnapshot(null);
     setGameStarted(true);
@@ -986,12 +1184,45 @@ export function GamesClient() {
     [clearPendingPromotion, invalidateAIRequests]
   );
 
+  const handleTimeControlSelect = useCallback(
+    (selected: ChessTimeControl) => {
+      setTimeControl(selected);
+      if (selected.mode === CUSTOM_TIME_CONTROL_MODE) {
+        setTimeControl(
+          createCustomTimeControl(customMinutes, customIncrementSeconds)
+        );
+      }
+    },
+    [customIncrementSeconds, customMinutes]
+  );
+
+  const handleCustomMinutesChange = useCallback(
+    (value: string) => {
+      setCustomMinutes(value);
+      if (timeControl.mode === CUSTOM_TIME_CONTROL_MODE) {
+        setTimeControl(createCustomTimeControl(value, customIncrementSeconds));
+      }
+    },
+    [customIncrementSeconds, timeControl.mode]
+  );
+
+  const handleCustomIncrementChange = useCallback(
+    (value: string) => {
+      setCustomIncrementSeconds(value);
+      if (timeControl.mode === CUSTOM_TIME_CONTROL_MODE) {
+        setTimeControl(createCustomTimeControl(customMinutes, value));
+      }
+    },
+    [customMinutes, timeControl.mode]
+  );
+
   // Auto orientation follows the human side in player-vs-AI games.
   const autoBoardFlipped = gameMode === "pvai" && humanColor === "black";
   const boardFlipped =
     boardOrientation === "black" ||
     (boardOrientation === "auto" && autoBoardFlipped);
   const activeGameStatus = isChessActiveStatus(gameState.status);
+  const isTimedGame = isTimedTimeControl(timeControl);
   const showGameStatus =
     gameState.status === "check" ||
     (!activeGameStatus && gameState.status !== "paused");
@@ -1004,12 +1235,16 @@ export function GamesClient() {
       gameState,
       whiteTimeMs,
       blackTimeMs,
+      whiteRemainingMs,
+      blackRemainingMs,
+      timeControl,
       gameStartTime,
       isPaused,
       lastAiInteraction,
     }),
     [
       blackAI,
+      blackRemainingMs,
       blackTimeMs,
       gameMode,
       gameStartTime,
@@ -1017,7 +1252,9 @@ export function GamesClient() {
       humanColor,
       isPaused,
       lastAiInteraction,
+      timeControl,
       whiteAI,
+      whiteRemainingMs,
       whiteTimeMs,
     ]
   );
@@ -1209,6 +1446,108 @@ export function GamesClient() {
                 </div>
               )}
 
+              {/* Time Control Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                  Time Control
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {TIME_CONTROLS.map((control) => (
+                    <button
+                      key={control.mode}
+                      type="button"
+                      onClick={() => handleTimeControlSelect(control)}
+                      aria-pressed={timeControl.mode === control.mode}
+                      className={cn(
+                        "rounded-lg border-2 px-3 py-2 text-left transition-all",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500",
+                        timeControl.mode === control.mode
+                          ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
+                          : "border-gray-200 hover:border-amber-300 dark:border-gray-700"
+                      )}
+                      data-testid={`time-control-${control.mode}`}
+                    >
+                      <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                        {control.label}
+                      </div>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTimeControlSelect(
+                        createCustomTimeControl(
+                          customMinutes,
+                          customIncrementSeconds
+                        )
+                      )
+                    }
+                    aria-pressed={timeControl.mode === CUSTOM_TIME_CONTROL_MODE}
+                    className={cn(
+                      "rounded-lg border-2 px-3 py-2 text-left transition-all",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500",
+                      timeControl.mode === CUSTOM_TIME_CONTROL_MODE
+                        ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20"
+                        : "border-gray-200 hover:border-amber-300 dark:border-gray-700"
+                    )}
+                    data-testid="time-control-custom"
+                  >
+                    <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                      Custom
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      Minutes + increment
+                    </div>
+                  </button>
+                </div>
+                {timeControl.mode === CUSTOM_TIME_CONTROL_MODE && (
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        Minutes
+                      </span>
+                      <input
+                        type="number"
+                        min="0.02"
+                        step="0.01"
+                        value={customMinutes}
+                        onChange={(e) =>
+                          handleCustomMinutesChange(e.target.value)
+                        }
+                        className={cn(
+                          "w-full rounded-lg border p-2 text-sm",
+                          "border-gray-300 bg-white text-gray-900",
+                          "focus:border-amber-500 focus:ring-2 focus:ring-amber-500",
+                          "dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        )}
+                        data-testid="custom-time-minutes"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        Increment seconds
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={customIncrementSeconds}
+                        onChange={(e) =>
+                          handleCustomIncrementChange(e.target.value)
+                        }
+                        className={cn(
+                          "w-full rounded-lg border p-2 text-sm",
+                          "border-gray-300 bg-white text-gray-900",
+                          "focus:border-amber-500 focus:ring-2 focus:ring-amber-500",
+                          "dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        )}
+                        data-testid="custom-time-increment"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+
               {/* AI Configuration */}
               {gameMode !== "pvp" && (
                 <div className="space-y-4">
@@ -1331,13 +1670,15 @@ export function GamesClient() {
             <div className="flex flex-col gap-3">
               <ChessClock
                 color="black"
-                timeMs={blackTimeMs}
+                timeMs={isTimedGame ? blackRemainingMs ?? 0 : blackTimeMs}
+                isTimed={isTimedGame}
                 isActive={gameState.turn === "black" && activeGameStatus}
                 isPaused={isPaused}
               />
               <ChessClock
                 color="white"
-                timeMs={whiteTimeMs}
+                timeMs={isTimedGame ? whiteRemainingMs ?? 0 : whiteTimeMs}
+                isTimed={isTimedGame}
                 isActive={gameState.turn === "white" && activeGameStatus}
                 isPaused={isPaused}
               />
@@ -1352,6 +1693,8 @@ export function GamesClient() {
                     "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
                   gameState.status === "check" &&
                     "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300",
+                  gameState.status === "timeout" &&
+                    "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
                   (gameState.status === "stalemate" ||
                     gameState.status === "draw") &&
                     "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
@@ -1361,6 +1704,8 @@ export function GamesClient() {
                 {gameState.status === "checkmate" &&
                   `Checkmate! ${gameState.winner === "white" ? "White" : "Black"} wins!`}
                 {gameState.status === "check" && "Check!"}
+                {gameState.status === "timeout" &&
+                  `Timeout! ${gameState.winner === "white" ? "White" : "Black"} wins on time!`}
                 {gameState.status === "stalemate" && "Stalemate - Draw!"}
                 {gameState.status === "draw" && "Draw!"}
               </div>

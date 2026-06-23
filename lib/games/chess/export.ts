@@ -113,8 +113,18 @@ function formatMoveLabel(index: number, move: MoveRecord): string {
 }
 
 function resultFromState(state: GameState): ChessPgnResult {
-  if (state.status === "checkmate" && state.winner === "white") return "1-0";
-  if (state.status === "checkmate" && state.winner === "black") return "0-1";
+  if (
+    (state.status === "checkmate" || state.status === "timeout") &&
+    state.winner === "white"
+  ) {
+    return "1-0";
+  }
+  if (
+    (state.status === "checkmate" || state.status === "timeout") &&
+    state.winner === "black"
+  ) {
+    return "0-1";
+  }
   if (state.status === "draw" || state.status === "stalemate") {
     return "1/2-1/2";
   }

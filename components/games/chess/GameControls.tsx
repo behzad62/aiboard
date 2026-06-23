@@ -131,6 +131,16 @@ const STATUS_CONFIG: Record<
       </svg>
     ),
   },
+  timeout: {
+    label: "Timeout",
+    bgColor: "bg-red-100 dark:bg-red-900/30",
+    textColor: "text-red-700 dark:text-red-400",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+        <path d="M12 2a10 10 0 1 0 10 10A10.01 10.01 0 0 0 12 2Zm1 5v5.59l3.3 3.3-1.4 1.42L11 13.41V7h2Z" />
+      </svg>
+    ),
+  },
 };
 
 export function GameControls({
@@ -147,7 +157,11 @@ export function GameControls({
   const statusConfig = STATUS_CONFIG[displayStatus];
 
   // Check if game is over
-  const isGameOver = gameStatus === "checkmate" || gameStatus === "stalemate" || gameStatus === "draw";
+  const isGameOver =
+    gameStatus === "checkmate" ||
+    gameStatus === "stalemate" ||
+    gameStatus === "draw" ||
+    gameStatus === "timeout";
 
   return (
     <div

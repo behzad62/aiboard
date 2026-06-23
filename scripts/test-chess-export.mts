@@ -15,7 +15,10 @@ import {
   copyGameExportToClipboard,
   downloadGameExport,
 } from "../lib/games/core/export";
-import type { ChessSessionSnapshot } from "../lib/games/chess/session";
+import {
+  DEFAULT_CHESS_TIME_CONTROL,
+  type ChessSessionSnapshot,
+} from "../lib/games/chess/session";
 import type { GameExport } from "../lib/games/core/types";
 
 let failures = 0;
@@ -58,6 +61,9 @@ function sampleSnapshot(): ChessSessionSnapshot {
     gameState: sampleState(),
     whiteTimeMs: 2500,
     blackTimeMs: 1300,
+    whiteRemainingMs: null,
+    blackRemainingMs: null,
+    timeControl: DEFAULT_CHESS_TIME_CONTROL,
     gameStartTime: 1_782_172_800_000,
     isPaused: false,
     lastAiInteraction: null,
@@ -124,6 +130,10 @@ check(
 check(
   "PGN-like result maps black checkmate",
   exportChessPgnLike({ ...state, status: "checkmate", winner: "black" }, { date: "2026.06.23" }).content.includes('[Result "0-1"]')
+);
+check(
+  "PGN-like result maps timeout winner",
+  exportChessPgnLike({ ...state, status: "timeout", winner: "black" }, { date: "2026.06.23" }).content.includes('[Result "0-1"]')
 );
 check(
   "PGN-like result maps draws",

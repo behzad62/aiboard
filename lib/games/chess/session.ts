@@ -17,6 +17,27 @@ export const CHESS_ACTIVE_SESSION_ID = "chess-active-session";
 
 const CHESS_SESSION_VERSION = 1;
 
+export type ChessTimeControlMode =
+  | "untimed"
+  | "blitz-5-0"
+  | "rapid-10-0"
+  | "rapid-15-10"
+  | "custom";
+
+export interface ChessTimeControl {
+  mode: ChessTimeControlMode;
+  initialMs: number;
+  incrementMs: number;
+  label: string;
+}
+
+export const DEFAULT_CHESS_TIME_CONTROL: ChessTimeControl = {
+  mode: "untimed",
+  initialMs: 0,
+  incrementMs: 0,
+  label: "Untimed",
+};
+
 export interface ChessSessionAIConfig {
   modelId: string;
   reasoningEffort: ReasoningEffort;
@@ -30,6 +51,9 @@ export interface ChessSessionSnapshot {
   gameState: GameState;
   whiteTimeMs: number;
   blackTimeMs: number;
+  whiteRemainingMs: number | null;
+  blackRemainingMs: number | null;
+  timeControl: ChessTimeControl;
   gameStartTime: number;
   isPaused: boolean;
   lastAiInteraction: GameAIInteraction | null;
@@ -85,6 +109,19 @@ export function parseChessSessionRecord(
   if (!isGameState(parsed.gameState)) return null;
   if (!isNonNegativeFiniteNumber(parsed.whiteTimeMs)) return null;
   if (!isNonNegativeFiniteNumber(parsed.blackTimeMs)) return null;
+  const timeControl = parseTimeControl(parsed.timeControl);
+  if (!timeControl) return null;
+  const whiteRemainingMs = parseRemainingTime(
+    parsed.whiteRemainingMs,
+    timeControl
+  );
+  const blackRemainingMs = parseRemainingTime(
+    parsed.blackRemainingMs,
+    timeControl
+  );
+  if (whiteRemainingMs === undefined || blackRemainingMs === undefined) {
+    return null;
+  }
   if (
     typeof parsed.gameStartTime !== "number" ||
     !Number.isFinite(parsed.gameStartTime)
@@ -101,6 +138,9 @@ export function parseChessSessionRecord(
     gameState: parsed.gameState,
     whiteTimeMs: parsed.whiteTimeMs,
     blackTimeMs: parsed.blackTimeMs,
+    whiteRemainingMs,
+    blackRemainingMs,
+    timeControl,
     gameStartTime: parsed.gameStartTime,
     isPaused: parsed.isPaused,
     lastAiInteraction: isGameAIInteraction(parsed.lastAiInteraction)
@@ -206,8 +246,81 @@ function isGameStatus(value: unknown): value is GameStatus {
     value === "checkmate" ||
     value === "stalemate" ||
     value === "draw" ||
-    value === "paused"
+    value === "paused" ||
+    value === "timeout"
   );
+}
+
+function parseTimeControl(value: unknown): ChessTimeControl | null {
+  if (value === undefined) return DEFAULT_CHESS_TIME_CONTROL;
+  if (!isPlainObject(value)) return null;
+  if (!isTimeControlMode(value.mode)) return null;
+  if (!isNonNegativeFiniteNumber(value.initialMs)) return null;
+  if (!isNonNegativeFiniteNumber(value.incrementMs)) return null;
+
+  const label = typeof value.label === "string" ? value.label : null;
+  if (value.mode === "untimed") {
+    return DEFAULT_CHESS_TIME_CONTROL;
+  }
+
+  if (value.initialMs <= 0) return null;
+
+  return {
+    mode: value.mode,
+    initialMs: value.initialMs,
+    incrementMs: value.incrementMs,
+    label: label || timeControlLabel(value.mode, value.initialMs, value.incrementMs),
+  };
+}
+
+function parseRemainingTime(
+  value: unknown,
+  timeControl: ChessTimeControl
+): number | null | undefined {
+  if (timeControl.mode === "untimed") {
+    return null;
+  }
+
+  if (value === undefined || value === null) {
+    return timeControl.initialMs;
+  }
+
+  return isNonNegativeFiniteNumber(value) ? value : undefined;
+}
+
+function isTimeControlMode(value: unknown): value is ChessTimeControlMode {
+  return (
+    value === "untimed" ||
+    value === "blitz-5-0" ||
+    value === "rapid-10-0" ||
+    value === "rapid-15-10" ||
+    value === "custom"
+  );
+}
+
+function timeControlLabel(
+  mode: ChessTimeControlMode,
+  initialMs: number,
+  incrementMs: number
+): string {
+  switch (mode) {
+    case "blitz-5-0":
+      return "5+0 blitz";
+    case "rapid-10-0":
+      return "10+0 rapid";
+    case "rapid-15-10":
+      return "15+10 rapid";
+    case "custom":
+      return `${formatMinutes(initialMs)}+${Math.round(incrementMs / 1000)} custom`;
+    case "untimed":
+    default:
+      return DEFAULT_CHESS_TIME_CONTROL.label;
+  }
+}
+
+function formatMinutes(ms: number): string {
+  const minutes = ms / 60_000;
+  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2);
 }
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {

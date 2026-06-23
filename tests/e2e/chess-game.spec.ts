@@ -7,7 +7,14 @@ type DelayedAIResponseWindow = Window & {
 interface PersistedChessSnapshot {
   blackTimeMs?: number;
   gameState?: { moveHistory?: Array<{ san?: string }> };
+  timeControl?: { mode?: string; initialMs?: number; incrementMs?: number };
+  whiteRemainingMs?: number | null;
   whiteTimeMs?: number;
+}
+
+interface PersistedChessMatchRecord {
+  resultJson?: string;
+  statsJson?: string;
 }
 
 type PromotionChoice = "Queen" | "Rook" | "Bishop" | "Knight";
@@ -506,6 +513,57 @@ async function readPersistedChessSnapshot(
   });
 }
 
+async function readPersistedChessMatchRecords(
+  page: Page
+): Promise<PersistedChessMatchRecord[]> {
+  return page.evaluate(async () => {
+    const rawStore = await new Promise<unknown>((resolve) => {
+      const req = indexedDB.open("ai-discussion-board", 1);
+      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("kv", "readonly");
+        const getReq = tx.objectStore("kv").get("store");
+        getReq.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+        getReq.onsuccess = () => {
+          db.close();
+          resolve(getReq.result);
+        };
+      };
+    });
+
+    if (typeof rawStore !== "string") return [];
+
+    try {
+      const parsedStore = JSON.parse(rawStore) as
+        | {
+            encrypted?: boolean;
+            data?: string;
+          }
+        | {
+            gameMatchRecords?: PersistedChessMatchRecord[];
+          };
+      const store =
+        "encrypted" in parsedStore
+          ? parsedStore.encrypted || typeof parsedStore.data !== "string"
+            ? null
+            : (JSON.parse(parsedStore.data) as {
+                gameMatchRecords?: PersistedChessMatchRecord[];
+              })
+          : (parsedStore as {
+              gameMatchRecords?: PersistedChessMatchRecord[];
+            });
+
+      return store?.gameMatchRecords ?? [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 async function waitForPersistedChessMove(page: Page, san: string): Promise<void> {
   await expect
     .poll(
@@ -691,6 +749,35 @@ test.describe("Chess game", () => {
 
     await expect(page.getByText("Player vs Player")).toBeVisible();
     await expect(page.locator('button:has-text("Start Game")')).toBeVisible();
+  });
+
+  test("custom timed game expires on a 3-second clock and saves a timeout result", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.getByTestId("time-control-custom").click();
+    await page.getByTestId("custom-time-minutes").fill("0.05");
+    await page.getByTestId("custom-time-increment").fill("0");
+    await page.click('button:has-text("Start Game")');
+
+    await expect(page.getByTestId("chess-clock-white")).toContainText("00:03");
+    await expect
+      .poll(async () => {
+        const snapshot = await readPersistedChessSnapshot(page);
+        return snapshot?.timeControl?.initialMs;
+      })
+      .toBe(3000);
+    await expect(page.getByTestId("game-status")).toContainText("Timeout", {
+      timeout: 7000,
+    });
+    await expect(page.getByTestId("game-status")).toContainText("Black wins");
+
+    await expect
+      .poll(async () => {
+        const records = await readPersistedChessMatchRecords(page);
+        if (!records[0]?.resultJson) return undefined;
+        return (JSON.parse(records[0].resultJson) as { result?: string })
+          .result;
+      })
+      .toBe("black");
   });
 
   test("board supports drag, keyboard navigation, orientation, and move indicators", async ({ page }) => {

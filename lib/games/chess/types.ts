@@ -34,7 +34,14 @@ export interface CastlingRights {
 }
 
 // Game status
-export type GameStatus = "playing" | "check" | "checkmate" | "stalemate" | "draw" | "paused";
+export type GameStatus =
+  | "playing"
+  | "check"
+  | "checkmate"
+  | "stalemate"
+  | "draw"
+  | "paused"
+  | "timeout";
 
 // Move history record with full context
 export interface MoveRecord {

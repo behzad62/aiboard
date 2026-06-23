@@ -24,6 +24,14 @@ function snapshot(): ChessSessionSnapshot {
     gameState: makeMove(createInitialState(), { from: "e2", to: "e4" }),
     whiteTimeMs: 1234,
     blackTimeMs: 0,
+    whiteRemainingMs: 300_000,
+    blackRemainingMs: 290_000,
+    timeControl: {
+      mode: "blitz-5-0",
+      initialMs: 300_000,
+      incrementMs: 0,
+      label: "5+0 blitz",
+    },
     gameStartTime: 1_767_000_000_000,
     isPaused: false,
     lastAiInteraction: null,
@@ -49,8 +57,32 @@ check(
   parsed?.whiteTimeMs === 1234 && parsed.blackTimeMs === 0,
   parsed
 );
+check(
+  "timed clock settings and remaining time round-trip",
+  parsed?.timeControl?.mode === "blitz-5-0" &&
+    parsed.whiteRemainingMs === 300_000 &&
+    parsed.blackRemainingMs === 290_000,
+  parsed
+);
+
+const legacyPayload = JSON.parse(record.stateJson) as Record<string, unknown>;
+delete legacyPayload.timeControl;
+delete legacyPayload.whiteRemainingMs;
+delete legacyPayload.blackRemainingMs;
+const legacyParsed = parseChessSessionRecord({
+  ...record,
+  stateJson: JSON.stringify(legacyPayload),
+});
+check(
+  "legacy sessions default to untimed elapsed clocks",
+  legacyParsed?.timeControl?.mode === "untimed" &&
+    legacyParsed.whiteRemainingMs === null &&
+    legacyParsed.blackRemainingMs === null,
+  legacyParsed
+);
 check("playing and check are active", isChessActiveStatus("playing") && isChessActiveStatus("check"));
 check("checkmate is not active", !isChessActiveStatus("checkmate"));
+check("timeout is not active", !isChessActiveStatus("timeout"));
 
 const malformedBoard = withMutatedState(record, (state) => {
   state.board = Array(7).fill(Array(8).fill(null));
