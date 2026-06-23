@@ -1592,13 +1592,13 @@ git commit -m "Wire Connect Four gameplay client"
 - Modify: `components/games/GamesBenchmark.tsx`
 - Modify: `scripts/test-game-benchmark-registry.mts`
 
-- [ ] **Step 1: Add benchmark runner logic**
+- [x] **Step 1: Add benchmark runner logic**
 
 Create `lib/games/connect-four/benchmark.ts` with a runner that accepts red/yellow AI model ids, reasoning effort, max moves, and abort signal. It should loop until win/draw/max moves, call `requestConnectFourAIMove`, track invalid/fallback counts, and return `ConnectFourMatchRecord`.
 
 Use `chooseFallbackConnectFourColumn` for recoverable AI failures.
 
-- [ ] **Step 2: Add UI game selector to benchmark panel**
+- [x] **Step 2: Add UI game selector to benchmark panel**
 
 Modify `components/games/GamesBenchmark.tsx`:
 - Add a segmented selector: Chess / Connect Four.
@@ -1606,7 +1606,7 @@ Modify `components/games/GamesBenchmark.tsx`:
 - Show Connect Four configuration when Connect Four is selected.
 - Display Connect Four progress: move count, current turn, result, invalid response count, fallback count.
 
-- [ ] **Step 3: Add/extend benchmark registry test**
+- [x] **Step 3: Add/extend benchmark registry test**
 
 Update `scripts/test-game-benchmark-registry.mts` by adding this Connect Four runner check after the existing registry checks:
 
@@ -1627,7 +1627,7 @@ unregister();
 console.log("PASS");
 ```
 
-- [ ] **Step 4: Run benchmark tests and TypeScript**
+- [x] **Step 4: Run benchmark tests and TypeScript**
 
 Run:
 - `npx tsx scripts/test-game-benchmark-registry.mts`
@@ -1635,7 +1635,7 @@ Run:
 
 Expected: both pass.
 
-- [ ] **Step 5: Commit Task 8**
+- [x] **Step 5: Commit Task 8**
 
 ```powershell
 git add lib/games/connect-four/benchmark.ts components/games/GamesBenchmark.tsx scripts/test-game-benchmark-registry.mts
