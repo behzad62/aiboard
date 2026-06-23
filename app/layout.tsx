@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   BarChart3,
   Coffee,
+  Gamepad2,
   Github,
   Info,
   Mail,
@@ -110,6 +111,10 @@ export default function RootLayout({
                 <span className={navDivider} aria-hidden="true" />
 
                 {/* App */}
+                <Link href="/games" className={navLink}>
+                  <Gamepad2 className="h-4 w-4" />
+                  Games
+                </Link>
                 <Link href="/benchmark" className={navLink}>
                   <BarChart3 className="h-4 w-4" />
                   Benchmark

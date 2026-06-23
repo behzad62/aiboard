@@ -22,6 +22,7 @@ import {
   qualityPerAttempt,
   qualityScore,
 } from "@/lib/client/model-stats";
+import { GamesBenchmark } from "@/components/games/GamesBenchmark";
 
 /**
  * Detailed global Build-mode model leaderboard. Every build's worker
@@ -354,6 +355,10 @@ export function BenchmarkPage() {
           </p>
         </>
       )}
+
+      <div className="border-t pt-8">
+        <GamesBenchmark />
+      </div>
     </div>
   );
 }

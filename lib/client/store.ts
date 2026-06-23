@@ -11,6 +11,8 @@ import type {
   CustomModel,
   Discussion,
   FinalResult,
+  GameSessionRecord,
+  GenericGameMatchRecord,
   Message,
   ModelBuildStat,
   ProviderKey,
@@ -26,7 +28,10 @@ import {
 } from "./storage-adapter";
 import {
   isUnlocked,
+  lock as lockCrypto,
   parseEnvelope,
+  setPassphrase as setCryptoPassphrase,
+  unlock as unlockCrypto,
   unwrap,
   wrap,
 } from "./crypto-box";
@@ -41,6 +46,9 @@ export interface ClientStore {
   attachments: AttachmentRecord[];
   buildFiles: BuildFileRecord[];
   buildCheckpoints: BuildCheckpoint[];
+  gameSessions: GameSessionRecord[];
+  gameMatchRecords: GenericGameMatchRecord[];
+  gameStatsLegacyImportAttempted: boolean;
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -66,12 +74,22 @@ const DEFAULT_STORE: ClientStore = {
   attachments: [],
   buildFiles: [],
   buildCheckpoints: [],
+  gameSessions: [],
+  gameMatchRecords: [],
+  gameStatsLegacyImportAttempted: false,
   modelStats: [],
 };
+
+function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
+  return { ...structuredClone(DEFAULT_STORE), ...data };
+}
 
 let memory: ClientStore | null = null;
 let adapter: StorageAdapter | null = null;
 let config: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
+let initPromise: Promise<{ needsPassphrase: boolean }> | null = null;
+let initGeneration = 0;
+const readyListeners = new Set<() => void>();
 
 export function isInitialized(): boolean {
   return memory !== null;
@@ -83,26 +101,83 @@ export function getConfig(): StorageConfig {
 
 /** Load config + adapter + store. Returns needsPassphrase=true if encrypted and locked. */
 export async function initStore(): Promise<{ needsPassphrase: boolean }> {
+  if (memory && adapter) return flushDirtyStoreIfReady();
+  if (initPromise) return initPromise;
+
+  const generation = initGeneration;
+  initPromise = (memory ? initializeAdapterForMemory() : loadStore(generation)).finally(() => {
+    initPromise = null;
+  });
+  return initPromise;
+}
+
+async function initializeAdapterForMemory(): Promise<{ needsPassphrase: boolean }> {
   config = await getStorageConfig();
   adapter = await createAdapter(config);
+  return flushDirtyStoreIfReady();
+}
+
+async function flushDirtyStoreIfReady(): Promise<{ needsPassphrase: boolean }> {
+  if (!persistDirty) return { needsPassphrase: false };
+  if (config.encryptionEnabled && !isUnlocked()) return { needsPassphrase: true };
+  await flush();
+  return { needsPassphrase: false };
+}
+
+async function loadStore(generation: number): Promise<{ needsPassphrase: boolean }> {
+  config = await getStorageConfig();
+  adapter = await createAdapter(config);
+  schedulePendingPersistIfReady();
   const raw = await adapter.load();
 
   if (raw === null) {
-    memory = structuredClone(DEFAULT_STORE);
+    commitLoadedStore(generation, hydrateStore());
     return { needsPassphrase: false };
   }
 
   const env = parseEnvelope(raw);
   if (!env) {
-    memory = { ...DEFAULT_STORE, ...(JSON.parse(raw) as Partial<ClientStore>) };
+    commitLoadedStore(generation, hydrateStore(JSON.parse(raw) as Partial<ClientStore>));
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
     return { needsPassphrase: true };
   }
   const json = await unwrap(env);
-  memory = { ...DEFAULT_STORE, ...(JSON.parse(json) as Partial<ClientStore>) };
+  commitLoadedStore(generation, hydrateStore(JSON.parse(json) as Partial<ClientStore>));
   return { needsPassphrase: false };
+}
+
+function commitLoadedStore(generation: number, loaded: ClientStore): void {
+  if (generation !== initGeneration || memory) return;
+  memory = loaded;
+  notifyReady();
+}
+
+function notifyReadyListener(listener: () => void): void {
+  try {
+    listener();
+  } catch {
+    // Readiness listeners must not break store initialization.
+  }
+}
+
+function notifyReady(): void {
+  for (const listener of Array.from(readyListeners)) {
+    notifyReadyListener(listener);
+  }
+}
+
+export function onStoreReady(listener: () => void): () => void {
+  readyListeners.add(listener);
+  if (memory) {
+    queueMicrotask(() => {
+      if (readyListeners.has(listener) && memory) notifyReadyListener(listener);
+    });
+  }
+  return () => {
+    readyListeners.delete(listener);
+  };
 }
 
 function store(): ClientStore {
@@ -111,19 +186,35 @@ function store(): ClientStore {
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistDirty = false;
+
 function schedulePersist(): void {
+  persistDirty = true;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => void flush(), 150);
 }
 
+function schedulePendingPersistIfReady(): void {
+  if (memory && adapter && persistDirty) schedulePersist();
+}
+
 export async function flush(): Promise<void> {
-  if (!memory || !adapter) return;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  if (!memory) {
+    persistDirty = false;
+    return;
+  }
+  if (!adapter) return;
+  if (config.encryptionEnabled && !isUnlocked()) {
+    persistDirty = true;
+    return;
+  }
   const env = await wrap(JSON.stringify(memory), config.encryptionEnabled);
   await adapter.save(JSON.stringify(env));
+  persistDirty = false;
 }
 
 // ── Reads (synchronous against memory) ────────────────────────────────────────
@@ -171,6 +262,19 @@ export function getBuildFiles(discussionId: string): BuildFileRecord[] {
 }
 export function getBuildCheckpoint(discussionId: string): BuildCheckpoint | undefined {
   return store().buildCheckpoints?.find((c) => c.discussionId === discussionId);
+}
+export function getGameSessions(): GameSessionRecord[] {
+  const s = store();
+  s.gameSessions ??= [];
+  return s.gameSessions;
+}
+export function getGenericGameMatchRecords(): GenericGameMatchRecord[] {
+  const s = store();
+  s.gameMatchRecords ??= [];
+  return s.gameMatchRecords;
+}
+export function hasAttemptedGameStatsLegacyImport(): boolean {
+  return store().gameStatsLegacyImportAttempted ?? false;
 }
 export function getModelStats(): ModelBuildStat[] {
   return (store().modelStats ?? []).map(normalizeStat);
@@ -314,6 +418,26 @@ export function deleteBuildCheckpoint(discussionId: string): void {
   );
   schedulePersist();
 }
+export function upsertGameSession(record: GameSessionRecord): void {
+  const list = getGameSessions();
+  const i = list.findIndex((s) => s.id === record.id);
+  if (i >= 0) list[i] = record;
+  else list.push(record);
+  schedulePersist();
+}
+export function deleteGameSession(id: string): void {
+  const s = store();
+  s.gameSessions = (s.gameSessions ?? []).filter((session) => session.id !== id);
+  schedulePersist();
+}
+export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void {
+  getGenericGameMatchRecords().push(record);
+  schedulePersist();
+}
+export function markGameStatsLegacyImportAttempted(): void {
+  store().gameStatsLegacyImportAttempted = true;
+  schedulePersist();
+}
 /**
  * Wipe a discussion's run output (model messages, final result, persisted
  * build files) for a from-scratch restart. User notes are kept — the next run
@@ -396,12 +520,58 @@ export function deleteAttachmentRecord(id: string): void {
 
 /** Replace the whole store (used by the one-time import from the server). */
 export function replaceStore(data: Partial<ClientStore>): void {
-  memory = { ...structuredClone(DEFAULT_STORE), ...data };
+  initGeneration++;
+  memory = hydrateStore(data);
+  notifyReady();
   schedulePersist();
 }
 
 export function exportStore(): ClientStore {
   return store();
+}
+
+export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDirty = false;
+  initGeneration++;
+  memory = hydrateStore(data);
+  adapter = null;
+  initPromise = null;
+  config = { kind: "indexeddb", encryptionEnabled: false };
+  notifyReady();
+}
+
+export function __clearClientStoreForTests(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDirty = false;
+  initGeneration++;
+  memory = null;
+  adapter = null;
+  initPromise = null;
+  config = { kind: "indexeddb", encryptionEnabled: false };
+}
+
+export async function __setClientStorePassphraseForTests(
+  passphrase: string
+): Promise<string> {
+  return setCryptoPassphrase(passphrase);
+}
+
+export async function __unlockClientStoreForTests(
+  passphrase: string,
+  saltB64: string
+): Promise<void> {
+  await unlockCrypto(passphrase, saltB64);
+}
+
+export function __lockClientStoreForTests(): void {
+  lockCrypto();
 }
 
 /** Switch storage location / encryption and rewrite the current data there. */
