@@ -1202,7 +1202,7 @@ git commit -m "Add games picker shell"
 - Modify: `components/games/chess/AIPresence.tsx`
 - Modify: `app/games/chess-game-client.tsx`
 
-- [ ] **Step 1: Extract generic AI config panel**
+- [x] **Step 1: Extract generic AI config panel**
 
 Create `components/games/GameAIConfigPanel.tsx` by moving the existing chess `AIConfigPanel` shape into a game-neutral component:
 
@@ -1278,7 +1278,7 @@ export function GameAIConfigPanel({ title, accent, config, models, onChange }: G
 }
 ```
 
-- [ ] **Step 2: Extract generic AI presence**
+- [x] **Step 2: Extract generic AI presence**
 
 Create `components/games/GameAIPresence.tsx`:
 
@@ -1316,19 +1316,19 @@ export function GameAIPresence({ interaction, className }: GameAIPresenceProps) 
 }
 ```
 
-- [ ] **Step 3: Adapt chess to generic AI presence/config**
+- [x] **Step 3: Adapt chess to generic AI presence/config**
 
 Update `components/games/chess/AIPresence.tsx` to re-export or wrap `GameAIPresence`.
 
 Update `app/games/chess-game-client.tsx` imports and `AIConfigPanel` usage to use `GameAIConfigPanel`. Keep visual behavior acceptable and do not change chess rules/state.
 
-- [ ] **Step 4: Run TypeScript**
+- [x] **Step 4: Run TypeScript**
 
 Run: `npx --yes tsc --noEmit`
 
 Expected: pass.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```powershell
 git add components/games/GameAIConfigPanel.tsx components/games/GameAIPresence.tsx components/games/chess/AIPresence.tsx app/games/chess-game-client.tsx
