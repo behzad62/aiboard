@@ -779,18 +779,25 @@ export function isInsufficientMaterial(board: Board): boolean {
 
 /** Check for threefold repetition using FEN position history */
 function isThreefoldRepetition(state: GameState): boolean {
-  if (state.moveHistory.length < 8) return false;
+  const positionPart = (fen: string) => fen.split(" ").slice(0, 4).join(" ");
+  const currentPosition = positionPart(toFEN(state));
+  const positions: string[] = [];
 
-  // Get position part of FEN (without move counters)
-  const currentFEN = toFEN(state);
-  const positionPart = currentFEN.split(" ").slice(0, 4).join(" ");
+  if (state.moveHistory[0]) {
+    positions.push(positionPart(state.moveHistory[0].fenBefore));
+  }
 
-  let count = 1; // Current position counts as 1
-
-  // Check history for matching positions
   for (const record of state.moveHistory) {
-    const historyPosition = record.fenAfter.split(" ").slice(0, 4).join(" ");
-    if (historyPosition === positionPart) {
+    positions.push(positionPart(record.fenAfter));
+  }
+
+  if (positions[positions.length - 1] !== currentPosition) {
+    positions.push(currentPosition);
+  }
+
+  let count = 0;
+  for (const position of positions) {
+    if (position === currentPosition) {
       count++;
       if (count >= 3) return true;
     }

@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:games": "tsx lib/games/chess/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-game-session-store.mts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -47,6 +48,7 @@
     "eslint-config-next": "^15.2.0",
     "postcss": "^8.5.2",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.3"
   }
 }
