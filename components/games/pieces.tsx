@@ -11,16 +11,16 @@ interface ChessPieceProps {
 const WhiteGradient = () => (
   <>
     <linearGradient id="whitePieceGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stopColor="#FFFEF5" />
-      <stop offset="50%" stopColor="#F5F0E0" />
-      <stop offset="100%" stopColor="#E8E0D0" />
+      <stop offset="0%" stopColor="#FFFFFF" />
+      <stop offset="58%" stopColor="#F8FAFC" />
+      <stop offset="100%" stopColor="#E2E8F0" />
     </linearGradient>
     <linearGradient id="whitePieceHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.9" />
+      <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.5" />
       <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
     </linearGradient>
     <filter id="whiteShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="1" stdDeviation="1" floodColor="#000000" floodOpacity="0.2" />
+      <feDropShadow dx="0" dy="1" stdDeviation="0.7" floodColor="#0F172A" floodOpacity="0.25" />
     </filter>
   </>
 );
@@ -28,16 +28,16 @@ const WhiteGradient = () => (
 const BlackGradient = () => (
   <>
     <linearGradient id="blackPieceGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stopColor="#4A4A4A" />
-      <stop offset="50%" stopColor="#2D2D2D" />
-      <stop offset="100%" stopColor="#1A1A1A" />
+      <stop offset="0%" stopColor="#6B7280" />
+      <stop offset="55%" stopColor="#4B5563" />
+      <stop offset="100%" stopColor="#374151" />
     </linearGradient>
     <linearGradient id="blackPieceHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stopColor="#808080" stopOpacity="0.4" />
-      <stop offset="100%" stopColor="#808080" stopOpacity="0" />
+      <stop offset="0%" stopColor="#CBD5E1" stopOpacity="0.22" />
+      <stop offset="100%" stopColor="#CBD5E1" stopOpacity="0" />
     </linearGradient>
     <filter id="blackShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="1" stdDeviation="1" floodColor="#000000" floodOpacity="0.35" />
+      <feDropShadow dx="0" dy="1" stdDeviation="0.8" floodColor="#000000" floodOpacity="0.32" />
     </filter>
   </>
 );
@@ -45,7 +45,7 @@ const BlackGradient = () => (
 // Pawn SVG
 function PawnSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
@@ -73,7 +73,7 @@ function PawnSVG({ color }: { color: PieceColor }) {
 // Knight SVG
 function KnightSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
@@ -81,47 +81,47 @@ function KnightSVG({ color }: { color: PieceColor }) {
     <g filter={filter}>
       {/* Plinth */}
       <path
-        d="M9 40 L11 35 Q12 33 16 33 L31 33 Q35 33 36 36 L37 40 Z"
+        d="M9.5 40 L12 34.5 Q13 33 16 33 L31 33 Q34 33 35.5 35.5 L37 40 Z"
         fill={fill}
         stroke={stroke}
-        strokeWidth="1"
+        strokeWidth="1.45"
       />
-      {/* Horse bust */}
+      {/* Horse head and neck */}
       <path
-        d="M14 35 Q14 30 16 25 Q18 20 20 17 Q20 12 23 10 Q25 8 28 8 L29 4 L32 9 Q36 11 37 15 Q38 19 35 21 Q33 23 29 23 Q26 23 25 26 Q24 30 29 35 Z"
+        d="M15 34.5 Q16 29 18 24 Q19.5 20 22 16.5 Q22.5 12 25.5 9.5 Q27 8.2 28.8 8 L30 4.8 L32.5 9.2 Q35.5 10.2 36.8 13.2 Q38 16.2 36 18.8 Q34.5 20.8 31.2 21.1 L28.4 21.4 Q26.3 21.7 25.2 24 Q24 26.8 26.5 30 Q28.2 32.2 31 34.5 Z"
         fill={fill}
         stroke={stroke}
-        strokeWidth="1"
+        strokeWidth="1.45"
       />
-      {/* Neck mass */}
+      {/* Neck front */}
       <path
-        d="M17 35 Q18 29 20 25 Q22 21 24 18 Q24 25 27 29 Q29 32 31 35 Z"
+        d="M18 34 Q19 27 22.2 21.5 Q22.5 26.5 25 30 Q26.3 31.8 28.8 34 Z"
         fill={fill}
         stroke={stroke}
-        strokeWidth="0.9"
+        strokeWidth="1.1"
       />
       {/* Mane cuts */}
       <path
-        d="M21 12 L18 16 L21 16 L18 20 L22 20 L19 24 L23 24 L20 29"
+        d="M24.3 10.5 Q22.6 13 22.2 16.2 M21.5 15 L18.9 18.8 L21.6 18.7 M20.2 20 L17.8 24.2 L21.4 23.5 M19.5 25.2 L18 29.8"
         fill="none"
         stroke={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.25"
-        opacity="0.95"
+        strokeWidth="1.35"
+        opacity="0.9"
       />
       {/* Jaw and face details */}
       <path
-        d="M31 18 Q34 18 36 17 M29 22 Q31 20 34 20"
+        d="M31.5 18.2 Q33.8 18.2 35.7 17.3 M28.6 21.3 Q31 19.7 34.2 19.9"
         fill="none"
         stroke={stroke}
         strokeLinecap="round"
-        strokeWidth="0.9"
+        strokeWidth="1"
       />
-      <circle cx="30.5" cy="14.5" r="1.15" fill={stroke} />
-      <circle cx="35" cy="19.4" r="0.65" fill={stroke} />
+      <circle cx="30.4" cy="14.1" r="1" fill={stroke} />
+      <circle cx="35" cy="18.6" r="0.62" fill={stroke} />
       <path
-        d="M19 27 Q20 17 26 10"
+        d="M19.2 27 Q20.7 17.5 26.2 10.4"
         fill="none"
         stroke={highlight}
         strokeLinecap="round"
@@ -135,7 +135,7 @@ function KnightSVG({ color }: { color: PieceColor }) {
 // Bishop SVG
 function BishopSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
@@ -190,7 +190,7 @@ function BishopSVG({ color }: { color: PieceColor }) {
 // Rook SVG
 function RookSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
@@ -239,7 +239,7 @@ function RookSVG({ color }: { color: PieceColor }) {
 // Queen SVG
 function QueenSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
@@ -284,7 +284,7 @@ function QueenSVG({ color }: { color: PieceColor }) {
 // King SVG
 function KingSVG({ color }: { color: PieceColor }) {
   const fill = color === "white" ? "url(#whitePieceGradient)" : "url(#blackPieceGradient)";
-  const stroke = color === "white" ? "#5C4033" : "#1A1A1A";
+  const stroke = color === "white" ? "#64748B" : "#1F2937";
   const filter = color === "white" ? "url(#whiteShadow)" : "url(#blackShadow)";
   const highlight = color === "white" ? "url(#whitePieceHighlight)" : "url(#blackPieceHighlight)";
 
