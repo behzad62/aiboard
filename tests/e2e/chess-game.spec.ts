@@ -10,6 +10,18 @@ interface PersistedChessSnapshot {
   whiteTimeMs?: number;
 }
 
+type PromotionChoice = "Queen" | "Rook" | "Bishop" | "Knight";
+
+const PROMOTION_EXPECTATIONS: Array<{
+  choice: PromotionChoice;
+  san: string;
+}> = [
+  { choice: "Queen", san: "e8=Q+" },
+  { choice: "Rook", san: "e8=R+" },
+  { choice: "Bishop", san: "e8=B" },
+  { choice: "Knight", san: "e8=N" },
+];
+
 async function seedDelayedChessAIModel(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const now = new Date().toISOString();
@@ -53,6 +65,124 @@ async function seedDelayedChessAIModel(page: Page): Promise<void> {
       buildFiles: [],
       buildCheckpoints: [],
       gameSessions: [],
+      gameMatchRecords: [],
+      gameStatsLegacyImportAttempted: false,
+      modelStats: [],
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open("ai-discussion-board", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("kv")) {
+          db.createObjectStore("kv");
+        }
+      };
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(
+          JSON.stringify({
+            v: 1,
+            encrypted: false,
+            data: JSON.stringify(store),
+          }),
+          "store"
+        );
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+    });
+  });
+}
+
+async function seedPromotionChessSession(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const now = new Date().toISOString();
+    const promotionState = {
+      board: [
+        [{ color: "black", type: "king" }, null, null, null, null, null, null, null],
+        [null, null, null, null, { color: "white", type: "pawn" }, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, { color: "white", type: "king" }, null, null, null],
+      ],
+      turn: "white",
+      castlingRights: {
+        whiteKingside: false,
+        whiteQueenside: false,
+        blackKingside: false,
+        blackQueenside: false,
+      },
+      enPassantTarget: null,
+      halfmoveClock: 0,
+      fullmoveNumber: 1,
+      status: "playing",
+      winner: null,
+      moveHistory: [],
+    };
+    const sessionSnapshot = {
+      gameMode: "pvp",
+      humanColor: "white",
+      whiteAI: { modelId: "", reasoningEffort: "default" },
+      blackAI: { modelId: "", reasoningEffort: "default" },
+      gameState: promotionState,
+      whiteTimeMs: 0,
+      blackTimeMs: 0,
+      gameStartTime: Date.now(),
+      isPaused: false,
+      lastAiInteraction: null,
+    };
+    const store = {
+      userSettings: {
+        id: "default",
+        defaultEffort: "medium",
+        defaultMode: "panel",
+        judgeModelId: null,
+        defaultVerbosity: "balanced",
+        defaultStyleNote: "",
+        defaultReasoningEffort: "default",
+        defaultBuildRunPolicy: "finish",
+        defaultBuildBudgetUsd: 0,
+        defaultBuildTimeLimitMinutes: 120,
+      },
+      providerKeys: [],
+      customModels: [],
+      discussions: [],
+      messages: [],
+      finalResults: [],
+      attachments: [],
+      buildFiles: [],
+      buildCheckpoints: [],
+      gameSessions: [
+        {
+          id: "chess-active-session",
+          gameId: "chess",
+          title: "Chess: Player vs Player",
+          status: "active",
+          participants: [
+            { id: "white", kind: "human", label: "White Player" },
+            { id: "black", kind: "human", label: "Black Player" },
+          ],
+          stateJson: JSON.stringify(sessionSnapshot),
+          metadataJson: JSON.stringify({
+            version: 1,
+            savedAt: now,
+          }),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
       gameMatchRecords: [],
       gameStatsLegacyImportAttempted: false,
       modelStats: [],
@@ -395,6 +525,46 @@ test.describe("Chess game", () => {
     await expect(page.getByTestId("chess-clock-white")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).not.toContainText("00:00");
+  });
+
+  test("player pawn promotion accepts all promotion choices", async ({ context }) => {
+    for (const { choice, san } of PROMOTION_EXPECTATIONS) {
+      await test.step(`promotes to ${choice}`, async () => {
+        const promotionPage = await context.newPage();
+        try {
+          await promotionPage.goto("/games");
+          await promotionPage.waitForLoadState("networkidle");
+          await seedPromotionChessSession(promotionPage);
+          await promotionPage.reload();
+          await promotionPage.waitForLoadState("networkidle");
+
+          await expect(promotionPage.getByTestId("restore-game-banner")).toBeVisible();
+          await promotionPage.getByTestId("resume-game-button").click();
+
+          await promotionPage.getByTestId("square-e7").click();
+          await promotionPage.getByTestId("square-e8").click();
+
+          const dialog = promotionPage.getByRole("dialog", {
+            name: "Choose promotion",
+          });
+          await expect(dialog).toBeVisible();
+          await dialog.getByRole("button", { name: choice }).click();
+
+          await expect(dialog).toBeHidden();
+          await expect(
+            promotionPage.getByTestId("square-e7").getByTestId("chess-piece")
+          ).toHaveCount(0);
+          await expect(
+            promotionPage.getByTestId("square-e8").getByTestId("chess-piece")
+          ).toHaveCount(1);
+          await expect(
+            promotionPage.getByText(san, { exact: true })
+          ).toBeVisible();
+        } finally {
+          await promotionPage.close();
+        }
+      });
+    }
   });
 
   test("reset ignores a stale delayed AI move", async ({ page }) => {

@@ -7,6 +7,10 @@ import { ChessClock } from "@/components/games/chess/ChessClock";
 import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
 import {
+  PromotionDialog,
+  type PromotionPieceType,
+} from "@/components/games/chess/PromotionDialog";
+import {
   createInitialState,
   makeMove,
   generateLegalMovesFromSquare,
@@ -62,6 +66,12 @@ const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
 ];
 
 const CLOCK_AUTOSAVE_INTERVAL_MS = 5_000;
+const PROMOTION_PIECES: PromotionPieceType[] = [
+  "queen",
+  "rook",
+  "bishop",
+  "knight",
+];
 
 function createAIAbortError(): Error {
   const err = new Error("AI request aborted");
@@ -228,6 +238,10 @@ export function GamesClient() {
   // Game state - use lazy initializer for SSR safety
   const [gameState, setGameState] = useState<GameState>(() => createInitialState());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const [pendingPromotion, setPendingPromotion] = useState<{
+    from: Square;
+    to: Square;
+  } | null>(null);
   const [legalMoves, setLegalMoves] = useState<Move[]>([]);
   const [isPaused, setIsPaused] = useState(false);
   const [whiteTimeMs, setWhiteTimeMs] = useState(0);
@@ -689,10 +703,36 @@ export function GamesClient() {
     void deleteActiveChessSession();
   }, [gameStarted, gameState.status, deleteActiveChessSession]);
 
+  const clearPendingPromotion = useCallback(() => {
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+    setLegalMoves([]);
+  }, []);
+
+  const handlePromotionSelect = useCallback(
+    (promotion: PromotionPieceType) => {
+      if (!pendingPromotion) return;
+
+      const move: Move = { ...pendingPromotion, promotion };
+      setPendingPromotion(null);
+      setSelectedSquare(null);
+      setLegalMoves([]);
+      setGameState((prev) =>
+        isLegalMove(prev, move) ? makeMove(prev, move) : prev
+      );
+    },
+    [pendingPromotion]
+  );
+
   // Handle square click for human moves
   const handleSquareClick = useCallback(
     (square: Square) => {
-      if (isPaused || !isChessActiveStatus(gameState.status) || aiThinking) {
+      if (
+        pendingPromotion ||
+        isPaused ||
+        !isChessActiveStatus(gameState.status) ||
+        aiThinking
+      ) {
         return;
       }
 
@@ -736,7 +776,17 @@ export function GamesClient() {
           (movingPiece.color === "white" && targetRank === "8") ||
           (movingPiece.color === "black" && targetRank === "1")
         ) {
-          move.promotion = "queen"; // Auto-promote to queen
+          const legalPromotionMoves = generateLegalMovesFromSquare(
+            gameState,
+            selectedSquare
+          ).filter(
+            (legalMove) => legalMove.to === square && legalMove.promotion
+          );
+
+          if (legalPromotionMoves.length > 0) {
+            setPendingPromotion({ from: selectedSquare, to: square });
+            return;
+          }
         }
       }
 
@@ -750,7 +800,14 @@ export function GamesClient() {
         setLegalMoves([]);
       }
     },
-    [gameState, selectedSquare, isPaused, aiThinking, isAIControlled]
+    [
+      gameState,
+      selectedSquare,
+      pendingPromotion,
+      isPaused,
+      aiThinking,
+      isAIControlled,
+    ]
   );
 
   // Handle reset
@@ -758,8 +815,7 @@ export function GamesClient() {
     invalidateAIRequests();
     void deleteActiveChessSession();
     setGameState(createInitialState());
-    setSelectedSquare(null);
-    setLegalMoves([]);
+    clearPendingPromotion();
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
     setIsPaused(false);
@@ -769,16 +825,17 @@ export function GamesClient() {
     lastTickRef.current = 0;
     matchSavedRef.current = false;
     setGameStarted(false);
-  }, [deleteActiveChessSession, invalidateAIRequests]);
+  }, [clearPendingPromotion, deleteActiveChessSession, invalidateAIRequests]);
 
   // Handle pause
   const handlePause = useCallback(() => {
     invalidateAIRequests();
     invalidatePersistence();
+    clearPendingPromotion();
     setAiThinking(false);
     setIsPaused(true);
     lastTickRef.current = 0;
-  }, [invalidateAIRequests, invalidatePersistence]);
+  }, [clearPendingPromotion, invalidateAIRequests, invalidatePersistence]);
 
   // Handle resume
   const handleResume = useCallback(() => {
@@ -793,6 +850,7 @@ export function GamesClient() {
   const handleStartGame = useCallback(() => {
     invalidateAIRequests();
     invalidatePersistence();
+    clearPendingPromotion();
     setGameState(createInitialState());
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
@@ -804,7 +862,7 @@ export function GamesClient() {
     lastTickRef.current = Date.now();
     matchSavedRef.current = false;
     setGameStarted(true);
-  }, [invalidateAIRequests, invalidatePersistence]);
+  }, [clearPendingPromotion, invalidateAIRequests, invalidatePersistence]);
 
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
@@ -821,8 +879,7 @@ export function GamesClient() {
     setGameStartTime(restoreSnapshot.gameStartTime);
     setIsPaused(restoreSnapshot.isPaused);
     setLastAiInteraction(restoreSnapshot.lastAiInteraction);
-    setSelectedSquare(null);
-    setLegalMoves([]);
+    clearPendingPromotion();
     setAiThinking(false);
     setAiError(null);
     aiRequestRef.current = false;
@@ -830,23 +887,30 @@ export function GamesClient() {
     lastTickRef.current = restoreSnapshot.isPaused ? 0 : Date.now();
     setRestoreSnapshot(null);
     setGameStarted(true);
-  }, [invalidateAIRequests, invalidatePersistence, restoreSnapshot]);
+  }, [
+    clearPendingPromotion,
+    invalidateAIRequests,
+    invalidatePersistence,
+    restoreSnapshot,
+  ]);
 
   const handleStartNewGame = useCallback(() => {
     invalidateAIRequests();
+    clearPendingPromotion();
     setAiThinking(false);
     setAiError(null);
     void deleteActiveChessSession();
-  }, [deleteActiveChessSession, invalidateAIRequests]);
+  }, [clearPendingPromotion, deleteActiveChessSession, invalidateAIRequests]);
 
   const handleGameModeChange = useCallback(
     (mode: GameMode) => {
       invalidateAIRequests();
+      clearPendingPromotion();
       setAiThinking(false);
       setAiError(null);
       setGameMode(mode);
     },
-    [invalidateAIRequests]
+    [clearPendingPromotion, invalidateAIRequests]
   );
 
   // Board should be flipped when human plays black
@@ -855,6 +919,42 @@ export function GamesClient() {
   const showGameStatus =
     gameState.status === "check" ||
     (!activeGameStatus && gameState.status !== "paused");
+
+  useEffect(() => {
+    if (!pendingPromotion) return;
+
+    const movingPiece = getPiece(gameState, pendingPromotion.from);
+    const targetRank = pendingPromotion.to[1];
+    const isPromotionTarget =
+      movingPiece?.type === "pawn" &&
+      movingPiece.color === gameState.turn &&
+      ((movingPiece.color === "white" && targetRank === "8") ||
+        (movingPiece.color === "black" && targetRank === "1"));
+    const hasLegalPromotion = PROMOTION_PIECES.some((promotion) =>
+      isLegalMove(gameState, { ...pendingPromotion, promotion })
+    );
+
+    if (
+      !gameStarted ||
+      isPaused ||
+      aiThinking ||
+      !activeGameStatus ||
+      isAIControlled(gameState.turn) ||
+      !isPromotionTarget ||
+      !hasLegalPromotion
+    ) {
+      clearPendingPromotion();
+    }
+  }, [
+    activeGameStatus,
+    aiThinking,
+    clearPendingPromotion,
+    gameStarted,
+    gameState,
+    isAIControlled,
+    isPaused,
+    pendingPromotion,
+  ]);
 
   // Last move for highlighting
   const lastMove = useMemo(() => {
@@ -1097,7 +1197,9 @@ export function GamesClient() {
                 legalMoves={legalMoves}
                 lastMove={lastMove}
                 flipped={boardFlipped}
-                interactive={!aiThinking && !isPaused && activeGameStatus}
+                interactive={
+                  !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
+                }
               />
             </div>
           </div>
@@ -1180,6 +1282,12 @@ export function GamesClient() {
           </div>
         </div>
       </div>
+      {pendingPromotion && (
+        <PromotionDialog
+          onCancel={clearPendingPromotion}
+          onSelect={handlePromotionSelect}
+        />
+      )}
     </div>
   );
 }
