@@ -16,6 +16,10 @@ import {
   getModelBaseURL,
 } from "@/lib/games/chess/ai";
 import { ensureReady } from "@/lib/client/api";
+import {
+  registerGameBenchmark,
+  type GameBenchmarkRunner,
+} from "@/lib/games/core/benchmark";
 import type { ReasoningEffort } from "@/lib/db/schema";
 
 // =============================================================================
@@ -312,40 +316,65 @@ export function GamesBenchmark() {
     []
   );
 
+  const runChessBenchmark = useCallback(
+    async (
+      benchmarkConfig: BenchmarkConfig,
+      signal: AbortSignal
+    ): Promise<GameMatchRecord[]> => {
+      if (!benchmarkConfig.whiteModelId || !benchmarkConfig.blackModelId) {
+        return [];
+      }
+
+      setRunning(true);
+      abortRef.current = false;
+
+      const results: GameMatchRecord[] = [];
+
+      try {
+        for (let i = 0; i < benchmarkConfig.numGames; i++) {
+          if (signal.aborted || abortRef.current) {
+            break;
+          }
+
+          const result = await runSingleGame(
+            benchmarkConfig.whiteModelId,
+            benchmarkConfig.blackModelId,
+            benchmarkConfig.whiteReasoning,
+            benchmarkConfig.blackReasoning,
+            i + 1,
+            benchmarkConfig.numGames
+          );
+
+          if (result) {
+            results.push(result);
+          }
+        }
+      } finally {
+        setRunning(false);
+        setProgress(null);
+        loadStats();
+      }
+
+      return results;
+    },
+    [loadStats, runSingleGame]
+  );
+
+  useEffect(() => {
+    const runner: GameBenchmarkRunner<BenchmarkConfig, GameMatchRecord[]> = {
+      gameId: "chess",
+      label: "AI vs AI Chess Benchmark",
+      run: runChessBenchmark,
+    };
+
+    return registerGameBenchmark(runner);
+  }, [runChessBenchmark]);
+
   // Run the full benchmark
   const runBenchmark = useCallback(async () => {
-    if (!config.whiteModelId || !config.blackModelId) {
-      return;
-    }
-
-    setRunning(true);
-    abortRef.current = false;
-
-    const results: GameMatchRecord[] = [];
-
-    for (let i = 0; i < config.numGames; i++) {
-      if (abortRef.current) {
-        break;
-      }
-
-      const result = await runSingleGame(
-        config.whiteModelId,
-        config.blackModelId,
-        config.whiteReasoning,
-        config.blackReasoning,
-        i + 1,
-        config.numGames
-      );
-
-      if (result) {
-        results.push(result);
-      }
-    }
-
-    setRunning(false);
-    setProgress(null);
-    loadStats();
-  }, [config, runSingleGame, loadStats]);
+    const controller = new AbortController();
+    await runChessBenchmark(config, controller.signal);
+  }, [config, runChessBenchmark]);
 
   // Abort the benchmark
   const abortBenchmark = useCallback(() => {
