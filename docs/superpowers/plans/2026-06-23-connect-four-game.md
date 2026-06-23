@@ -1649,7 +1649,7 @@ git commit -m "Add Connect Four benchmark support"
 **Files:**
 - Modify: `package.json`
 
-- [ ] **Step 1: Add Connect Four scripts to `test:games`**
+- [x] **Step 1: Add Connect Four scripts to `test:games`**
 
 Modify `package.json`:
 
@@ -1657,7 +1657,7 @@ Modify `package.json`:
 "test:games": "tsx lib/games/chess/rules-tests.mts && tsx lib/games/connect-four/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-chess-ai-interactions.mts && tsx scripts/test-connect-four-ai.mts && tsx scripts/test-connect-four-session-export.mts && tsx scripts/test-games-catalog.mts && tsx scripts/test-game-benchmark-registry.mts && tsx scripts/test-game-session-store.mts"
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 - `npx tsx lib/games/connect-four/rules-tests.mts`
@@ -1667,25 +1667,25 @@ Run:
 
 Expected: all print final `PASS`.
 
-- [ ] **Step 3: Run full games tests**
+- [x] **Step 3: Run full games tests**
 
 Run: `npm run test:games`
 
 Expected: all game scripts pass.
 
-- [ ] **Step 4: Run TypeScript**
+- [x] **Step 4: Run TypeScript**
 
 Run: `npx --yes tsc --noEmit`
 
 Expected: exit code 0.
 
-- [ ] **Step 5: Run production build**
+- [x] **Step 5: Run production build**
 
 Run: `npm run build`
 
 Expected: build succeeds. Existing provider `validationCandidate` lint warnings and the known multiple-lockfile warning are acceptable if unchanged.
 
-- [ ] **Step 6: Commit Task 9**
+- [x] **Step 6: Commit Task 9**
 
 ```powershell
 git add package.json package-lock.json
