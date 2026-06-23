@@ -10,8 +10,11 @@ import {
   __exportGameSessionStoreForTests,
   __flushGameSessionStoreForTests,
   __initGameSessionStoreForTests,
+  __lockGameSessionStoreForTests,
   __replaceGameSessionStoreForTests,
   __resetGameSessionStoreForTests,
+  __setGameSessionStorePassphraseForTests,
+  __unlockGameSessionStoreForTests,
   deleteGameSession,
   listGameSessions,
   listGenericGameMatchRecords,
@@ -95,11 +98,15 @@ function legacyMatch(id: string): GameMatchRecord {
   };
 }
 
-function installIndexedDbStore(rawStore: string): {
+function installIndexedDbStore(
+  rawStore: string,
+  rawConfig?: unknown
+): {
   getStoredRaw: () => string | undefined;
   setStoredRaw: (raw: string) => void;
 } {
   const values = new Map<string, unknown>([["store", rawStore]]);
+  if (rawConfig !== undefined) values.set("config", rawConfig);
   const db = {
     objectStoreNames: { contains: () => true },
     transaction: () => {
@@ -453,6 +460,51 @@ check(
     reloadedPreInitReplacement.gameMatchRecords[0]?.id ===
       "replacement-before-any-adapter",
   { persistedPreInitReplacementRaw, reloadedPreInitReplacement }
+);
+
+__clearGameSessionStoreForTests();
+const encryptedPreInitSalt = await __setGameSessionStorePassphraseForTests(
+  "pre-init-replace-passphrase"
+);
+__lockGameSessionStoreForTests();
+const encryptedPreInitReplaceIndexedDb = installIndexedDbStore(JSON.stringify({}), {
+  kind: "indexeddb",
+  encryptionEnabled: true,
+  salt: encryptedPreInitSalt,
+});
+__replaceGameSessionStoreForTests({
+  gameMatchRecords: [match("encrypted-replacement-before-unlock")],
+  gameStatsLegacyImportAttempted: true,
+});
+await new Promise((resolve) => setTimeout(resolve, 180));
+const lockedEncryptedPreInitReadiness = await __initGameSessionStoreForTests();
+check(
+  "encrypted pre-init replace reports locked before dirty flush",
+  lockedEncryptedPreInitReadiness.needsPassphrase === true,
+  lockedEncryptedPreInitReadiness
+);
+await __unlockGameSessionStoreForTests(
+  "pre-init-replace-passphrase",
+  encryptedPreInitSalt
+);
+const unlockedEncryptedPreInitReadiness = await __initGameSessionStoreForTests();
+const persistedEncryptedPreInitReplacementRaw =
+  encryptedPreInitReplaceIndexedDb.getStoredRaw();
+__clearGameSessionStoreForTests();
+await __initGameSessionStoreForTests();
+const reloadedEncryptedPreInitReplacement = __exportGameSessionStoreForTests();
+__lockGameSessionStoreForTests();
+check(
+  "encrypted dirty replace flushes after later unlock readiness",
+  unlockedEncryptedPreInitReadiness.needsPassphrase === false &&
+    reloadedEncryptedPreInitReplacement.gameMatchRecords.length === 1 &&
+    reloadedEncryptedPreInitReplacement.gameMatchRecords[0]?.id ===
+      "encrypted-replacement-before-unlock",
+  {
+    unlockedEncryptedPreInitReadiness,
+    persistedEncryptedPreInitReplacementRaw,
+    reloadedEncryptedPreInitReplacement,
+  }
 );
 
 __clearGameSessionStoreForTests();

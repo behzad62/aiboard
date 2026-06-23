@@ -1,5 +1,8 @@
 import {
   __clearClientStoreForTests,
+  __lockClientStoreForTests,
+  __setClientStorePassphraseForTests,
+  __unlockClientStoreForTests,
   deleteGameSession as deleteStoredGameSession,
   exportStore,
   flush,
@@ -96,4 +99,21 @@ export function __exportGameSessionStoreForTests(): ClientStore {
 
 export function __replaceGameSessionStoreForTests(data: Partial<ClientStore>): void {
   replaceStore(data);
+}
+
+export async function __setGameSessionStorePassphraseForTests(
+  passphrase: string
+): Promise<string> {
+  return __setClientStorePassphraseForTests(passphrase);
+}
+
+export async function __unlockGameSessionStoreForTests(
+  passphrase: string,
+  saltB64: string
+): Promise<void> {
+  await __unlockClientStoreForTests(passphrase, saltB64);
+}
+
+export function __lockGameSessionStoreForTests(): void {
+  __lockClientStoreForTests();
 }

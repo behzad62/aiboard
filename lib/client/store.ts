@@ -28,7 +28,10 @@ import {
 } from "./storage-adapter";
 import {
   isUnlocked,
+  lock as lockCrypto,
   parseEnvelope,
+  setPassphrase as setCryptoPassphrase,
+  unlock as unlockCrypto,
   unwrap,
   wrap,
 } from "./crypto-box";
@@ -98,7 +101,7 @@ export function getConfig(): StorageConfig {
 
 /** Load config + adapter + store. Returns needsPassphrase=true if encrypted and locked. */
 export async function initStore(): Promise<{ needsPassphrase: boolean }> {
-  if (memory && adapter) return { needsPassphrase: false };
+  if (memory && adapter) return flushDirtyStoreIfReady();
   if (initPromise) return initPromise;
 
   const generation = initGeneration;
@@ -111,10 +114,13 @@ export async function initStore(): Promise<{ needsPassphrase: boolean }> {
 async function initializeAdapterForMemory(): Promise<{ needsPassphrase: boolean }> {
   config = await getStorageConfig();
   adapter = await createAdapter(config);
-  if (persistDirty) {
-    if (config.encryptionEnabled && !isUnlocked()) return { needsPassphrase: true };
-    await flush();
-  }
+  return flushDirtyStoreIfReady();
+}
+
+async function flushDirtyStoreIfReady(): Promise<{ needsPassphrase: boolean }> {
+  if (!persistDirty) return { needsPassphrase: false };
+  if (config.encryptionEnabled && !isUnlocked()) return { needsPassphrase: true };
+  await flush();
   return { needsPassphrase: false };
 }
 
@@ -545,6 +551,23 @@ export function __clearClientStoreForTests(): void {
   adapter = null;
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
+}
+
+export async function __setClientStorePassphraseForTests(
+  passphrase: string
+): Promise<string> {
+  return setCryptoPassphrase(passphrase);
+}
+
+export async function __unlockClientStoreForTests(
+  passphrase: string,
+  saltB64: string
+): Promise<void> {
+  await unlockCrypto(passphrase, saltB64);
+}
+
+export function __lockClientStoreForTests(): void {
+  lockCrypto();
 }
 
 /** Switch storage location / encryption and rewrite the current data there. */
