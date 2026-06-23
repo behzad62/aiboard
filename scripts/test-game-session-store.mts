@@ -6,6 +6,10 @@ import type {
 } from "../lib/games/core/types";
 import type { GameMatchRecord } from "../lib/games/chess/types";
 import {
+  __clearGameSessionStoreForTests,
+  __exportGameSessionStoreForTests,
+  __flushGameSessionStoreForTests,
+  __initGameSessionStoreForTests,
   __resetGameSessionStoreForTests,
   deleteGameSession,
   listGameSessions,
@@ -90,22 +94,36 @@ function legacyMatch(id: string): GameMatchRecord {
   };
 }
 
-function installIndexedDbStore(rawStore: string): void {
+function installIndexedDbStore(rawStore: string): {
+  getStoredRaw: () => string | undefined;
+} {
   const values = new Map<string, unknown>([["store", rawStore]]);
   const db = {
     objectStoreNames: { contains: () => true },
-    transaction: () => ({
-      objectStore: () => ({
-        get: (key: string) => {
-          const req = { result: values.get(key), onsuccess: null as (() => void) | null };
-          queueMicrotask(() => req.onsuccess?.());
-          return req;
-        },
-        put: (value: unknown, key: string) => {
-          values.set(key, value);
-        },
-      }),
-    }),
+    transaction: () => {
+      const tx = {
+        oncomplete: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+        error: null,
+        objectStore: () => ({
+          get: (key: string) => {
+            const req = {
+              result: values.get(key),
+              onsuccess: null as (() => void) | null,
+              onerror: null as (() => void) | null,
+              error: null,
+            };
+            queueMicrotask(() => req.onsuccess?.());
+            return req;
+          },
+          put: (value: unknown, key: string) => {
+            values.set(key, value);
+            queueMicrotask(() => tx.oncomplete?.());
+          },
+        }),
+      };
+      return tx;
+    },
     close: () => {},
   };
   const fakeIndexedDb = {
@@ -123,6 +141,30 @@ function installIndexedDbStore(rawStore: string): void {
   };
   (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB =
     fakeIndexedDb as unknown as IDBFactory;
+
+  return {
+    getStoredRaw: () =>
+      typeof values.get("store") === "string"
+        ? (values.get("store") as string)
+        : undefined,
+  };
+}
+
+function installFailingLocalStorageStore(): void {
+  const fakeLocalStorage = {
+    get length() {
+      return 0;
+    },
+    clear: () => {},
+    getItem: () => {
+      throw new Error("localStorage unavailable");
+    },
+    key: () => null,
+    removeItem: () => {},
+    setItem: () => {},
+  };
+  (globalThis as unknown as { localStorage: Storage }).localStorage =
+    fakeLocalStorage as Storage;
 }
 
 function installLocalStorageStore(values: Record<string, string>): void {
@@ -144,6 +186,87 @@ function installLocalStorageStore(values: Record<string, string>): void {
   (globalThis as unknown as { localStorage: Storage }).localStorage =
     fakeLocalStorage as Storage;
 }
+
+async function settleAsyncReadiness(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({});
+saveMatchRecord(legacyMatch("queued-before-ready"));
+await settleAsyncReadiness();
+const queuedRecordsAfterReadiness = getMatchRecords();
+check(
+  "saveMatchRecord queues records before store readiness",
+  queuedRecordsAfterReadiness.length === 1 &&
+    queuedRecordsAfterReadiness[0]?.id === "queued-before-ready",
+  queuedRecordsAfterReadiness
+);
+await __flushGameSessionStoreForTests();
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({ "aiboard-game-stats": "{not json" });
+await __initGameSessionStoreForTests();
+const malformedRecords = getMatchRecords();
+check(
+  "malformed legacy stats return no records",
+  malformedRecords.length === 0,
+  malformedRecords
+);
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-malformed")]),
+});
+const recordsAfterMalformedRecovery = getMatchRecords();
+check(
+  "malformed legacy stats do not mark migration attempted",
+  recordsAfterMalformedRecovery.length === 1 &&
+    recordsAfterMalformedRecovery[0]?.id === "legacy-after-malformed",
+  recordsAfterMalformedRecovery
+);
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installFailingLocalStorageStore();
+await __initGameSessionStoreForTests();
+const transientFailureRecords = getMatchRecords();
+check(
+  "transient legacy stats read failure returns no records",
+  transientFailureRecords.length === 0,
+  transientFailureRecords
+);
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-transient")]),
+});
+const recordsAfterTransientRecovery = getMatchRecords();
+check(
+  "transient legacy stats read failure does not mark migration attempted",
+  recordsAfterTransientRecovery.length === 1 &&
+    recordsAfterTransientRecovery[0]?.id === "legacy-after-transient",
+  recordsAfterTransientRecovery
+);
+
+__clearGameSessionStoreForTests();
+const durableIndexedDb = installIndexedDbStore(JSON.stringify({}));
+const durableLegacyRawStats = JSON.stringify([legacyMatch("durable-legacy-match")]);
+installLocalStorageStore({ "aiboard-game-stats": durableLegacyRawStats });
+await __initGameSessionStoreForTests();
+const durableImportedRecords = getMatchRecords();
+await __flushGameSessionStoreForTests();
+const persistedRawStore = durableIndexedDb.getStoredRaw();
+__clearGameSessionStoreForTests();
+await __initGameSessionStoreForTests();
+const reloadedDurableStore = __exportGameSessionStoreForTests();
+check(
+  "legacy stats migration persists marker and records together",
+  durableImportedRecords.length === 1 &&
+    persistedRawStore !== undefined &&
+    reloadedDurableStore.gameStatsLegacyImportAttempted === true &&
+    reloadedDurableStore.gameMatchRecords.length === 1 &&
+    reloadedDurableStore.gameMatchRecords[0]?.id === "durable-legacy-match",
+  { durableImportedRecords, persistedRawStore, reloadedDurableStore }
+);
 
 installIndexedDbStore(JSON.stringify({}));
 check("old store hydrates with no game sessions", (await listGameSessions()).length === 0);

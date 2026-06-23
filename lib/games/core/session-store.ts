@@ -1,5 +1,8 @@
 import {
+  __clearClientStoreForTests,
   deleteGameSession as deleteStoredGameSession,
+  exportStore,
+  flush,
   getGameSessions,
   getGenericGameMatchRecords,
   __resetClientStoreForTests,
@@ -8,6 +11,7 @@ import {
   saveGenericGameMatchRecord as saveStoredGenericGameMatchRecord,
   upsertGameSession,
 } from "../../client/store";
+import type { ClientStore } from "../../client/store";
 import type {
   GameSessionRecord,
   GenericGameMatchRecord,
@@ -68,4 +72,23 @@ export function __resetGameSessionStoreForTests(options?: {
       ? null
       : { needsPassphrase: options.needsPassphrase };
   __resetClientStoreForTests();
+}
+
+export function __clearGameSessionStoreForTests(): void {
+  readinessOverrideForTests = null;
+  __clearClientStoreForTests();
+}
+
+export async function __initGameSessionStoreForTests(): Promise<{
+  needsPassphrase: boolean;
+}> {
+  return initStore();
+}
+
+export async function __flushGameSessionStoreForTests(): Promise<void> {
+  await flush();
+}
+
+export function __exportGameSessionStoreForTests(): ClientStore {
+  return exportStore();
 }

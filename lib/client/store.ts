@@ -459,6 +459,16 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   config = { kind: "indexeddb", encryptionEnabled: false };
 }
 
+export function __clearClientStoreForTests(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  memory = null;
+  adapter = null;
+  config = { kind: "indexeddb", encryptionEnabled: false };
+}
+
 /** Switch storage location / encryption and rewrite the current data there. */
 export async function applyStorageConfig(next: StorageConfig): Promise<void> {
   config = next;

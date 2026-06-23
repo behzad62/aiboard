@@ -2,6 +2,8 @@ import {
   exportStore,
   getGenericGameMatchRecords,
   hasAttemptedGameStatsLegacyImport,
+  initStore,
+  isInitialized,
   markGameStatsLegacyImportAttempted,
   replaceStore,
   saveGenericGameMatchRecord,
@@ -13,6 +15,9 @@ import type {
 import type { GameMatchRecord, GameModelStat } from "./chess/types";
 
 const STORAGE_KEY = "aiboard-game-stats";
+let pendingMatchRecords: GenericGameMatchRecord[] = [];
+let readinessAttempt: Promise<void> | null = null;
+let flushingPendingRecords = false;
 
 function getLocalStorage(): Storage | null {
   try {
@@ -152,8 +157,10 @@ function getStoredGenericMatchRecords(): GenericGameMatchRecord[] | null {
   try {
     const records = getGenericGameMatchRecords();
     importLegacyMatchRecordsIfNeeded(records);
+    flushPendingMatchRecordsIfReady();
     return getGenericGameMatchRecords();
   } catch {
+    startReadinessAttempt();
     return null;
   }
 }
@@ -169,22 +176,74 @@ function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): vo
   const storage = getLocalStorage();
   if (!storage) return;
 
+  let parsed: unknown;
   try {
     const data = storage.getItem(STORAGE_KEY);
     if (!data) return;
+    parsed = JSON.parse(data);
+  } catch {
+    // Leave migration unmarked so a later read can retry transient/malformed data.
+    return;
+  }
 
-    const parsed = JSON.parse(data);
-    if (!Array.isArray(parsed)) return;
+  if (!Array.isArray(parsed)) return;
 
-    for (const record of parsed) {
-      if (isLegacyMatchRecord(record)) {
-        saveGenericGameMatchRecord(legacyMatchToGeneric(record));
-      }
+  for (const record of parsed) {
+    if (isLegacyMatchRecord(record)) {
+      saveGenericGameMatchRecord(legacyMatchToGeneric(record));
+    }
+  }
+  markGameStatsLegacyImportAttempted();
+}
+
+function flushPendingMatchRecordsIfReady(): void {
+  if (flushingPendingRecords || pendingMatchRecords.length === 0) return;
+
+  flushingPendingRecords = true;
+  const recordsToFlush = pendingMatchRecords;
+  pendingMatchRecords = [];
+
+  try {
+    const records = getGenericGameMatchRecords();
+    importLegacyMatchRecordsIfNeeded(records);
+    for (const record of recordsToFlush) {
+      saveGenericGameMatchRecord(record);
     }
   } catch {
-    // Silently skip malformed legacy data or unavailable storage.
+    pendingMatchRecords = [...recordsToFlush, ...pendingMatchRecords];
+    startReadinessAttempt();
   } finally {
-    markGameStatsLegacyImportAttempted();
+    flushingPendingRecords = false;
+  }
+}
+
+function startReadinessAttempt(): void {
+  if (pendingMatchRecords.length === 0 || readinessAttempt) return;
+
+  readinessAttempt = (async () => {
+    try {
+      if (!isInitialized()) {
+        const { needsPassphrase } = await initStore();
+        if (needsPassphrase) return;
+      }
+      flushPendingMatchRecordsIfReady();
+    } catch {
+      // Keep queued records in memory for a later ready read/save attempt.
+    } finally {
+      readinessAttempt = null;
+    }
+  })();
+}
+
+function saveGenericMatchRecordWhenReady(record: GenericGameMatchRecord): boolean {
+  try {
+    const records = getGenericGameMatchRecords();
+    importLegacyMatchRecordsIfNeeded(records);
+    flushPendingMatchRecordsIfReady();
+    saveGenericGameMatchRecord(record);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -213,11 +272,10 @@ export function getMatchRecords(): GameMatchRecord[] {
 
 /** Save a chess match record to the generic match-record store. */
 export function saveMatchRecord(record: GameMatchRecord): void {
-  try {
-    getStoredGenericMatchRecords();
-    saveGenericGameMatchRecord(legacyMatchToGeneric(record));
-  } catch {
-    // Silently fail if the client store is unavailable or locked.
+  const genericRecord = legacyMatchToGeneric(record);
+  if (!saveGenericMatchRecordWhenReady(genericRecord)) {
+    pendingMatchRecords.push(genericRecord);
+    startReadinessAttempt();
   }
 }
 
