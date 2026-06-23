@@ -1471,7 +1471,7 @@ git commit -m "Add Connect Four UI components"
 - Modify: `app/games/connect-four-game-client.tsx`
 - Modify: `lib/games/connect-four/engine.ts` if AI interaction metadata must be attached to moves.
 
-- [ ] **Step 1: Replace the temporary client with a stateful client**
+- [x] **Step 1: Replace the temporary client with a stateful client**
 
 Implement `ConnectFourGameClient` with focused local state:
 - `gameStarted`
@@ -1520,7 +1520,7 @@ import {
 import { deleteGameSession, listGameSessions, saveGameSession } from "@/lib/games/core/session-store";
 ```
 
-- [ ] **Step 2: Implement human moves**
+- [x] **Step 2: Implement human moves**
 
 Add `handleColumnClick(column)`:
 - Ignore when not started, paused, replaying, AI thinking, not active, or not human turn.
@@ -1528,7 +1528,7 @@ Add `handleColumnClick(column)`:
 - Apply `dropDisc`.
 - Clear AI warnings/errors for successful human move.
 
-- [ ] **Step 3: Implement AI moves**
+- [x] **Step 3: Implement AI moves**
 
 Add an effect like chess:
 - When current player is AI and game is active, request move.
@@ -1558,7 +1558,7 @@ function isRecoverableConnectFourAIError(error: string): boolean {
 }
 ```
 
-- [ ] **Step 4: Implement autosave and restore**
+- [x] **Step 4: Implement autosave and restore**
 
 Use `listGameSessions` to find `gameId === "connect-four"` and parse it with `parseConnectFourSessionRecord`.
 
@@ -1566,17 +1566,17 @@ Autosave active or paused games with `saveGameSession(createConnectFourSessionRe
 
 Delete `CONNECT_FOUR_ACTIVE_SESSION_ID` when a game reaches `win` or `draw` and the result has been handled.
 
-- [ ] **Step 5: Implement import/export and replay wiring**
+- [x] **Step 5: Implement import/export and replay wiring**
 
 Use the Connect Four import/export components. Replay displays reconstructed board state from `moveHistory[index].boardAfter`; index `-1` means initial board.
 
-- [ ] **Step 6: Run TypeScript**
+- [x] **Step 6: Run TypeScript**
 
 Run: `npx --yes tsc --noEmit`
 
 Expected: pass.
 
-- [ ] **Step 7: Commit Task 7**
+- [x] **Step 7: Commit Task 7**
 
 ```powershell
 git add app/games/connect-four-game-client.tsx lib/games/connect-four/engine.ts
