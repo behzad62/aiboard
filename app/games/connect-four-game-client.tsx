@@ -318,23 +318,27 @@ export function ConnectFourGameClient({
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
 
-    let deletePromise: Promise<void> | null = null;
-    deletePromise = (async () => {
-      try {
-        await deleteGameSession(CONNECT_FOUR_ACTIVE_SESSION_ID);
-      } catch (error) {
-        if (token === persistenceTokenRef.current) {
-          console.warn("Failed to delete active Connect Four session:", error);
+    const previousDelete = pendingSessionDeleteRef.current ?? Promise.resolve();
+    let deleteTail: Promise<void> | null = null;
+    deleteTail = previousDelete
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await deleteGameSession(CONNECT_FOUR_ACTIVE_SESSION_ID);
+        } catch (error) {
+          if (token === persistenceTokenRef.current) {
+            console.warn("Failed to delete active Connect Four session:", error);
+          }
         }
-      } finally {
-        if (pendingSessionDeleteRef.current === deletePromise) {
+      })
+      .finally(() => {
+        if (pendingSessionDeleteRef.current === deleteTail) {
           pendingSessionDeleteRef.current = null;
         }
-      }
-    })();
+      });
 
-    pendingSessionDeleteRef.current = deletePromise;
-    await deletePromise;
+    pendingSessionDeleteRef.current = deleteTail;
+    await deleteTail;
   }, [clearAutosaveTimer, invalidatePersistence]);
 
   useEffect(() => {
