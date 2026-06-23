@@ -152,6 +152,9 @@ export function ChessBoard({
     (square: Square, event: PointerEvent<HTMLButtonElement>) => {
       if (!interactive) return;
       if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (event.pointerType !== "mouse") {
+        event.preventDefault();
+      }
 
       const [row, col] = squareToCoords(square);
       const piece = state.board[row][col];
@@ -173,10 +176,22 @@ export function ChessBoard({
 
       const from = dragOriginRef.current;
       dragOriginRef.current = null;
-      if (!from) return;
+      if (!from) {
+        if (event.pointerType !== "mouse") {
+          suppressNextClickRef.current = true;
+          handleSquareClick(square);
+        }
+        return;
+      }
 
       const to = squareFromPoint(event.clientX, event.clientY) ?? square;
-      if (to === from) return;
+      if (to === from) {
+        if (event.pointerType !== "mouse") {
+          suppressNextClickRef.current = true;
+          handleSquareClick(square);
+        }
+        return;
+      }
 
       suppressNextClickRef.current = true;
       setFocusedSquare(to);
@@ -283,6 +298,7 @@ export function ChessBoard({
         className={cn(
           "relative flex items-center justify-center appearance-none border-0 p-0",
           "aspect-square",
+          "touch-none select-none",
           interactive && "cursor-pointer hover:brightness-110",
           "transition-all duration-150",
           "focus-visible:z-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600"
@@ -395,16 +411,17 @@ export function ChessBoard({
           "rounded-lg overflow-hidden",
           "shadow-xl",
           "border-4 border-[#5c4033]",
-          "bg-[#5c4033]" // Border color shows through as frame
+          "bg-[#5c4033]", // Border color shows through as frame
+          "touch-none"
         )}
         style={{ width: '100%', minHeight: '300px' }}
+        role="group"
+        aria-label={flipped ? "Chess board, black view" : "Chess board, white view"}
         data-testid="chess-board"
       >
         {/* Inner board with grid */}
         <div
-          className="w-full h-full grid grid-cols-8 grid-rows-8 gap-0"
-          role="grid"
-          aria-label={flipped ? "Chess board, black view" : "Chess board, white view"}
+          className="w-full h-full grid grid-cols-8 grid-rows-8 gap-0 touch-none"
           style={{
             width: '100%',
             height: '100%',

@@ -697,6 +697,15 @@ test.describe("Chess game", () => {
     await page.click("text=Player vs Player");
     await page.click('button:has-text("Start Game")');
 
+    await expect(page.locator('[role="grid"]')).toHaveCount(0);
+    await expect(page.getByTestId("chess-board")).toHaveCSS(
+      "touch-action",
+      "none"
+    );
+    await expect(page.getByTestId("square-e2")).toHaveCSS(
+      "touch-action",
+      "none"
+    );
     await expect(page.getByTestId("board-orientation-auto")).toBeVisible();
     await expectSquareAbove(page, "e7", "e2");
 
