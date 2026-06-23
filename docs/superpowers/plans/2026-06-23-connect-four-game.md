@@ -662,7 +662,7 @@ git commit -m "Add Connect Four AI helpers"
 - Create: `lib/games/connect-four/export.ts`
 - Create: `scripts/test-connect-four-session-export.mts`
 
-- [ ] **Step 1: Write the failing session/export test**
+- [x] **Step 1: Write the failing session/export test**
 
 Create `scripts/test-connect-four-session-export.mts`:
 
@@ -723,13 +723,13 @@ else console.log(`FAIL ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
 ```
 
-- [ ] **Step 2: Run the failing session/export test**
+- [x] **Step 2: Run the failing session/export test**
 
 Run: `npx tsx scripts/test-connect-four-session-export.mts`
 
 Expected: failure because session/export modules do not exist.
 
-- [ ] **Step 3: Implement session conversion**
+- [x] **Step 3: Implement session conversion**
 
 Create `lib/games/connect-four/session.ts`:
 
@@ -844,7 +844,7 @@ export function parseConnectFourSessionRecord(
 
 `dropDisc` intentionally requires an explicit timestamp so the rules engine stays deterministic. UI/session code supplies `Date.now()` at the boundary when a real move is made.
 
-- [ ] **Step 4: Implement export/import**
+- [x] **Step 4: Implement export/import**
 
 Create `lib/games/connect-four/export.ts`:
 
@@ -916,13 +916,13 @@ export function parseConnectFourJsonExport(content: string): ConnectFourJsonImpo
 }
 ```
 
-- [ ] **Step 5: Run the session/export test**
+- [x] **Step 5: Run the session/export test**
 
 Run: `npx tsx scripts/test-connect-four-session-export.mts`
 
 Expected: all checks print `PASS`.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```powershell
 git add lib/games/connect-four/session.ts lib/games/connect-four/export.ts scripts/test-connect-four-session-export.mts
