@@ -60,7 +60,7 @@ export function isLegalColumn(state: ConnectFourGameState, column: number): bool
 export function dropDisc(
   state: ConnectFourGameState,
   column: number,
-  timestamp = Date.now()
+  timestamp: number
 ): ConnectFourGameState {
   if (state.status !== "playing") {
     throw new Error("Cannot drop a disc after the game has ended or paused.");

@@ -36,6 +36,9 @@ function assertWinningSequence(name: string, columns: number[], winner: "red" | 
 }
 
 const initial = createInitialConnectFourState();
+check("dropDisc requires explicit timestamp", dropDisc.length === 3, {
+  arity: dropDisc.length,
+});
 check(
   "board is 7 columns by 6 rows",
   CONNECT_FOUR_COLUMNS === 7 &&
@@ -83,7 +86,7 @@ check(
   getLegalColumns(fullColumnState)
 );
 try {
-  dropDisc(fullColumnState, 0);
+  dropDisc(fullColumnState, 0, 2_000);
   check("dropping in a full column throws a full-column error", false);
 } catch (err) {
   check(
