@@ -85,6 +85,7 @@ let memory: ClientStore | null = null;
 let adapter: StorageAdapter | null = null;
 let config: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
 let initPromise: Promise<{ needsPassphrase: boolean }> | null = null;
+let initGeneration = 0;
 const readyListeners = new Set<() => void>();
 
 export function isInitialized(): boolean {
@@ -100,36 +101,40 @@ export async function initStore(): Promise<{ needsPassphrase: boolean }> {
   if (memory) return { needsPassphrase: false };
   if (initPromise) return initPromise;
 
-  initPromise = loadStore().finally(() => {
+  const generation = initGeneration;
+  initPromise = loadStore(generation).finally(() => {
     initPromise = null;
   });
   return initPromise;
 }
 
-async function loadStore(): Promise<{ needsPassphrase: boolean }> {
+async function loadStore(generation: number): Promise<{ needsPassphrase: boolean }> {
   config = await getStorageConfig();
   adapter = await createAdapter(config);
   const raw = await adapter.load();
 
   if (raw === null) {
-    memory = hydrateStore();
-    notifyReady();
+    commitLoadedStore(generation, hydrateStore());
     return { needsPassphrase: false };
   }
 
   const env = parseEnvelope(raw);
   if (!env) {
-    memory = hydrateStore(JSON.parse(raw) as Partial<ClientStore>);
-    notifyReady();
+    commitLoadedStore(generation, hydrateStore(JSON.parse(raw) as Partial<ClientStore>));
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
     return { needsPassphrase: true };
   }
   const json = await unwrap(env);
-  memory = hydrateStore(JSON.parse(json) as Partial<ClientStore>);
-  notifyReady();
+  commitLoadedStore(generation, hydrateStore(JSON.parse(json) as Partial<ClientStore>));
   return { needsPassphrase: false };
+}
+
+function commitLoadedStore(generation: number, loaded: ClientStore): void {
+  if (generation !== initGeneration || memory) return;
+  memory = loaded;
+  notifyReady();
 }
 
 function notifyReady(): void {
@@ -478,6 +483,7 @@ export function deleteAttachmentRecord(id: string): void {
 
 /** Replace the whole store (used by the one-time import from the server). */
 export function replaceStore(data: Partial<ClientStore>): void {
+  initGeneration++;
   memory = hydrateStore(data);
   notifyReady();
   schedulePersist();
@@ -492,6 +498,7 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  initGeneration++;
   memory = hydrateStore(data);
   adapter = null;
   initPromise = null;
@@ -504,6 +511,7 @@ export function __clearClientStoreForTests(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  initGeneration++;
   memory = null;
   adapter = null;
   initPromise = null;

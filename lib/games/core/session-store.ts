@@ -8,6 +8,7 @@ import {
   __resetClientStoreForTests,
   initStore,
   isInitialized,
+  replaceStore,
   saveGenericGameMatchRecord as saveStoredGenericGameMatchRecord,
   upsertGameSession,
 } from "../../client/store";
@@ -91,4 +92,8 @@ export async function __flushGameSessionStoreForTests(): Promise<void> {
 
 export function __exportGameSessionStoreForTests(): ClientStore {
   return exportStore();
+}
+
+export function __replaceGameSessionStoreForTests(data: Partial<ClientStore>): void {
+  replaceStore(data);
 }

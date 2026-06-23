@@ -10,6 +10,7 @@ import {
   __exportGameSessionStoreForTests,
   __flushGameSessionStoreForTests,
   __initGameSessionStoreForTests,
+  __replaceGameSessionStoreForTests,
   __resetGameSessionStoreForTests,
   deleteGameSession,
   listGameSessions,
@@ -297,6 +298,32 @@ check(
 );
 
 __clearGameSessionStoreForTests();
+const staleInitIndexedDb = installControlledIndexedDbStore(
+  JSON.stringify({
+    gameMatchRecords: [match("stale-init-record")],
+    gameStatsLegacyImportAttempted: true,
+  })
+);
+const staleInit = __initGameSessionStoreForTests();
+await waitForCondition(
+  "stale init reaches store load",
+  () => staleInitIndexedDb.getPendingStoreLoads() === 1
+);
+__replaceGameSessionStoreForTests({
+  gameMatchRecords: [match("replacement-survives-stale-init")],
+  gameStatsLegacyImportAttempted: true,
+});
+staleInitIndexedDb.resolveStoreLoad(0);
+await staleInit;
+const storeAfterStaleInit = __exportGameSessionStoreForTests();
+check(
+  "replaceStore survives older in-flight init completion",
+  storeAfterStaleInit.gameMatchRecords.length === 1 &&
+    storeAfterStaleInit.gameMatchRecords[0]?.id === "replacement-survives-stale-init",
+  storeAfterStaleInit.gameMatchRecords
+);
+
+__clearGameSessionStoreForTests();
 const lockedEnvelope = JSON.stringify({ v: 1, encrypted: true, data: "locked" });
 const lockedThenReadyIndexedDb = installIndexedDbStore(lockedEnvelope);
 installLocalStorageStore({});
@@ -388,6 +415,27 @@ check(
   recordsAfterMalformedRecovery.length === 1 &&
     recordsAfterMalformedRecovery[0]?.id === "legacy-after-malformed",
   recordsAfterMalformedRecovery
+);
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({ "aiboard-game-stats": JSON.stringify({}) });
+await __initGameSessionStoreForTests();
+const nonArrayRecords = getMatchRecords();
+check(
+  "non-array legacy stats return no records",
+  nonArrayRecords.length === 0,
+  nonArrayRecords
+);
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-non-array")]),
+});
+const recordsAfterNonArrayRecovery = getMatchRecords();
+check(
+  "non-array legacy stats do not mark migration attempted",
+  recordsAfterNonArrayRecovery.length === 1 &&
+    recordsAfterNonArrayRecovery[0]?.id === "legacy-after-non-array",
+  recordsAfterNonArrayRecovery
 );
 
 __clearGameSessionStoreForTests();
