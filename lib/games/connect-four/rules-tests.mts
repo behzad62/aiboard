@@ -96,9 +96,38 @@ try {
   );
 }
 
+for (const [name, column] of [
+  ["negative column is rejected", -1],
+  ["column past the board is rejected", CONNECT_FOUR_COLUMNS],
+] as const) {
+  try {
+    dropDisc(initial, column, 2_100 + column);
+    check(name, false);
+  } catch (err) {
+    check(
+      name,
+      err instanceof Error && err.message.includes("out of bounds"),
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+  }
+}
+
 assertWinningSequence("horizontal win", [0, 0, 1, 1, 2, 2, 3], "red");
 assertWinningSequence("vertical win", [0, 1, 0, 1, 0, 1, 0], "red");
 assertWinningSequence("diagonal win", [0, 1, 1, 2, 3, 2, 2, 3, 4, 3, 3], "red");
+assertWinningSequence("mirrored diagonal win", [6, 5, 5, 4, 3, 4, 4, 3, 2, 3, 3], "red");
+
+const wonState = playColumns([0, 0, 1, 1, 2, 2, 3]);
+try {
+  dropDisc(wonState, 4, 2_200);
+  check("dropping after a finished game throws", false);
+} catch (err) {
+  check(
+    "dropping after a finished game throws",
+    err instanceof Error && err.message.includes("game has ended"),
+    { error: err instanceof Error ? err.message : String(err) }
+  );
+}
 
 const drawColumns = [
   4, 5, 3, 0, 5, 0, 0, 3, 2, 0, 0, 3, 2, 5, 5, 0, 3, 6, 3, 2, 2, 1, 6,
