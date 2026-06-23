@@ -940,7 +940,7 @@ git commit -m "Add Connect Four session and export helpers"
 - Create: `app/games/chess-game-client.tsx`
 - Modify: `app/games/games-client.tsx`
 
-- [ ] **Step 1: Write the failing catalog test**
+- [x] **Step 1: Write the failing catalog test**
 
 Create `scripts/test-games-catalog.mts`:
 
@@ -964,13 +964,13 @@ else console.log(`FAIL ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
 ```
 
-- [ ] **Step 2: Run the failing catalog test**
+- [x] **Step 2: Run the failing catalog test**
 
 Run: `npx tsx scripts/test-games-catalog.mts`
 
 Expected: failure because `lib/games/catalog.ts` does not exist.
 
-- [ ] **Step 3: Add catalog descriptors**
+- [x] **Step 3: Add catalog descriptors**
 
 Create `lib/games/catalog.ts`:
 
@@ -1015,13 +1015,13 @@ export function getGameDescriptor(id: string): GameDescriptor | null {
 }
 ```
 
-- [ ] **Step 4: Run the catalog test**
+- [x] **Step 4: Run the catalog test**
 
 Run: `npx tsx scripts/test-games-catalog.mts`
 
 Expected: all checks print `PASS`.
 
-- [ ] **Step 5: Create the picker component**
+- [x] **Step 5: Create the picker component**
 
 Create `components/games/GamePicker.tsx`:
 
@@ -1089,7 +1089,7 @@ export function GamePicker({ games, resumableSessions, onSelectGame }: GamePicke
 }
 ```
 
-- [ ] **Step 6: Extract chess client boundary**
+- [x] **Step 6: Extract chess client boundary**
 
 Copy the current full contents of `app/games/games-client.tsx` to `app/games/chess-game-client.tsx`.
 
@@ -1097,7 +1097,7 @@ In the copied file:
 - Rename `export default function GamesClient()` to `export function ChessGameClient()`.
 - Keep all chess behavior unchanged.
 
-- [ ] **Step 7: Replace games-client with shell**
+- [x] **Step 7: Replace games-client with shell**
 
 Replace `app/games/games-client.tsx` with:
 
@@ -1177,7 +1177,7 @@ export function ConnectFourGameClient({ onBackToGames }: ConnectFourGameClientPr
 
 Update `ChessGameClient` signature to accept `onBackToGames?: () => void` and render a small back button near the setup and play headers.
 
-- [ ] **Step 8: Run catalog test and TypeScript**
+- [x] **Step 8: Run catalog test and TypeScript**
 
 Run:
 - `npx tsx scripts/test-games-catalog.mts`
@@ -1185,7 +1185,7 @@ Run:
 
 Expected: both pass.
 
-- [ ] **Step 9: Commit Task 4**
+- [x] **Step 9: Commit Task 4**
 
 ```powershell
 git add lib/games/catalog.ts scripts/test-games-catalog.mts components/games/GamePicker.tsx app/games/games-client.tsx app/games/chess-game-client.tsx app/games/connect-four-game-client.tsx
