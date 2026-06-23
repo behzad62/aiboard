@@ -208,6 +208,10 @@ export async function flush(): Promise<void> {
     return;
   }
   if (!adapter) return;
+  if (config.encryptionEnabled && !isUnlocked()) {
+    persistDirty = true;
+    return;
+  }
   const env = await wrap(JSON.stringify(memory), config.encryptionEnabled);
   await adapter.save(JSON.stringify(env));
   persistDirty = false;

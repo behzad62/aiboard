@@ -508,6 +508,61 @@ check(
 );
 
 __clearGameSessionStoreForTests();
+const lockedAfterInitSalt = await __setGameSessionStorePassphraseForTests(
+  "locked-after-init-passphrase"
+);
+const lockedAfterInitIndexedDb = installIndexedDbStore(JSON.stringify({}), {
+  kind: "indexeddb",
+  encryptionEnabled: true,
+  salt: lockedAfterInitSalt,
+});
+await __initGameSessionStoreForTests();
+__lockGameSessionStoreForTests();
+await saveGameSession(session("locked-after-init", "Locked after init"));
+let lockedAfterInitFlushError: string | null = null;
+try {
+  await __flushGameSessionStoreForTests();
+} catch (error) {
+  lockedAfterInitFlushError =
+    error instanceof Error ? error.message : String(error);
+}
+check(
+  "locked encrypted flush after init defers without throwing",
+  lockedAfterInitFlushError === null,
+  lockedAfterInitFlushError
+);
+await __unlockGameSessionStoreForTests(
+  "locked-after-init-passphrase",
+  lockedAfterInitSalt
+);
+const unlockedAfterInitReadiness = await __initGameSessionStoreForTests();
+const lockedAfterInitRaw = lockedAfterInitIndexedDb.getStoredRaw();
+__clearGameSessionStoreForTests();
+__lockGameSessionStoreForTests();
+installIndexedDbStore(lockedAfterInitRaw ?? JSON.stringify({}), {
+  kind: "indexeddb",
+  encryptionEnabled: true,
+  salt: lockedAfterInitSalt,
+});
+await __unlockGameSessionStoreForTests(
+  "locked-after-init-passphrase",
+  lockedAfterInitSalt
+);
+await __initGameSessionStoreForTests();
+const reloadedLockedAfterInit = __exportGameSessionStoreForTests();
+check(
+  "locked encrypted flush after init persists once unlocked",
+  unlockedAfterInitReadiness.needsPassphrase === false &&
+    reloadedLockedAfterInit.gameSessions.length === 1 &&
+    reloadedLockedAfterInit.gameSessions[0]?.id === "locked-after-init",
+  {
+    unlockedAfterInitReadiness,
+    lockedAfterInitRaw,
+    reloadedLockedAfterInit,
+  }
+);
+
+__clearGameSessionStoreForTests();
 const lockedEnvelope = JSON.stringify({ v: 1, encrypted: true, data: "locked" });
 const lockedThenReadyIndexedDb = installIndexedDbStore(lockedEnvelope);
 installLocalStorageStore({});
