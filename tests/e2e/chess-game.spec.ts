@@ -876,6 +876,24 @@ test.describe("Chess game", () => {
     ).toHaveCount(1);
   });
 
+  test("board displays top and bottom player names", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.click('button:has-text("Start Game")');
+
+    await expect(page.getByTestId("board-player-top")).toContainText("Black");
+    await expect(page.getByTestId("board-player-top")).toContainText(
+      "Black Player"
+    );
+    await expect(page.getByTestId("board-player-bottom")).toContainText("White");
+    await expect(page.getByTestId("board-player-bottom")).toContainText(
+      "White Player"
+    );
+
+    await page.getByTestId("board-orientation-black").click();
+    await expect(page.getByTestId("board-player-top")).toContainText("White");
+    await expect(page.getByTestId("board-player-bottom")).toContainText("Black");
+  });
+
   test("checked king is outlined on the board", async ({ page }) => {
     await seedCheckedChessSession(page);
     await page.reload();
@@ -1100,6 +1118,52 @@ test.describe("Chess game", () => {
       "custom:delayed-chess-ai"
     );
 
+    await page.getByTestId("start-game-button").click();
+
+    await expect(page.getByTestId("ai-warning")).toContainText(
+      "legal fallback move",
+      { timeout: 15000 }
+    );
+    await expect(page.getByTestId("ai-error")).toHaveCount(0);
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await readPersistedChessSnapshot(page);
+          return snapshot?.gameState?.moveHistory?.length ?? 0;
+        },
+        { timeout: 15000 }
+      )
+      .toBeGreaterThan(0);
+    expect(aiRequestCount).toBeGreaterThanOrEqual(3);
+  });
+
+  test("AI vs AI falls back after a transient provider API error", async ({ page }) => {
+    let aiRequestCount = 0;
+
+    await page.route("**/__chess-ai-test/v1/chat/completions", async (route) => {
+      aiRequestCount += 1;
+      await route.fulfill({
+        status: 500,
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "error",
+          error: {
+            details: null,
+            type: "api_error",
+            message: "Internal server error",
+          },
+          request_id: "req_test_internal_error",
+        }),
+      });
+    });
+
+    await seedDelayedChessAIModel(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await page.getByTestId("game-mode-aivai").click();
     await page.getByTestId("start-game-button").click();
 
     await expect(page.getByTestId("ai-warning")).toContainText(

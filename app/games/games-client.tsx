@@ -188,6 +188,13 @@ interface CapturedPiecesByPlayer {
   black: Piece[];
 }
 
+interface BoardPlayerSummary {
+  color: PieceColor;
+  title: string;
+  subtitle: string;
+  kind: "human" | "ai";
+}
+
 function colorLabel(color: PieceColor): string {
   return color === "white" ? "White" : "Black";
 }
@@ -198,12 +205,48 @@ function chooseFallbackAIMove(state: GameState): Move | null {
 
 function isRecoverableAIMoveError(error: string): boolean {
   const normalized = error.toLowerCase();
+  const nonRecoverable =
+    normalized.includes("aborted") ||
+    normalized.includes("no legal moves") ||
+    normalized.includes("unknown provider") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("invalid api key") ||
+    normalized.includes("key limit") ||
+    normalized.includes("quota") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("429") ||
+    normalized.includes("401") ||
+    normalized.includes("403");
+
+  if (nonRecoverable) return false;
+
   return (
     normalized.includes("parse") ||
     normalized.includes("illegal move") ||
     normalized.includes("valid move") ||
-    normalized.includes("maximum retries")
+    normalized.includes("maximum retries") ||
+    normalized.includes("request failed") ||
+    normalized.includes("api_error") ||
+    normalized.includes("internal server error") ||
+    normalized.includes("server error") ||
+    normalized.includes("timeout") ||
+    normalized.includes("overloaded") ||
+    normalized.includes("temporarily unavailable") ||
+    normalized.includes("500") ||
+    normalized.includes("502") ||
+    normalized.includes("503") ||
+    normalized.includes("504")
   );
+}
+
+function fallbackMoveReason(error: string): string {
+  const normalized = error.toLowerCase();
+  return normalized.includes("parse") ||
+    normalized.includes("illegal move") ||
+    normalized.includes("valid move")
+    ? "returned an unreadable move"
+    : "hit a transient provider error";
 }
 
 function getCapturedPiecesByPlayer(state: GameState): CapturedPiecesByPlayer {
@@ -247,6 +290,60 @@ function getCapturedPiecesByPlayer(state: GameState): CapturedPiecesByPlayer {
 interface AIConfig {
   modelId: string;
   reasoningEffort: ReasoningEffort;
+}
+
+function BoardPlayerCard({
+  player,
+  active,
+  testId,
+}: {
+  player: BoardPlayerSummary;
+  active: boolean;
+  testId: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-xl border px-3 py-2 shadow-sm",
+        "border-slate-200 bg-white/85 text-slate-900",
+        "dark:border-slate-700 dark:bg-slate-950/75 dark:text-slate-100",
+        active &&
+          "border-amber-400 bg-amber-50 shadow-amber-500/15 dark:border-amber-500 dark:bg-amber-950/30"
+      )}
+      data-testid={testId}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className={cn(
+            "flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border-2 shadow-inner",
+            player.color === "white"
+              ? "border-stone-300 bg-stone-50 text-stone-900"
+              : "border-slate-600 bg-slate-950 text-slate-100"
+          )}
+          aria-hidden="true"
+        >
+          {player.color === "white" ? "W" : "B"}
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold leading-tight">
+            {player.title}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            <span>{player.subtitle}</span>
+            <span className="h-1 w-1 rounded-full bg-current" />
+            <span>{player.kind === "ai" ? "AI" : "Human"}</span>
+          </div>
+        </div>
+      </div>
+      <span
+        className={cn(
+          "h-2.5 w-2.5 flex-shrink-0 rounded-full",
+          active ? "bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.16)]" : "bg-slate-300 dark:bg-slate-700"
+        )}
+        aria-label={active ? "Active turn" : "Waiting"}
+      />
+    </div>
+  );
 }
 
 // AI Configuration Panel Component
@@ -853,7 +950,7 @@ export function GamesClient() {
 
           if (fallbackMove) {
             setAiWarning(
-              `${colorLabel(currentTurn)} AI returned an unreadable move. A legal fallback move was played so the AI vs AI match can continue.`
+              `${colorLabel(currentTurn)} AI ${fallbackMoveReason(result.error)}. A legal fallback move was played so the AI vs AI match can continue.`
             );
             setLastAiInteraction({
               actorId: currentTurn,
@@ -1377,6 +1474,42 @@ export function GamesClient() {
     () => getCapturedPiecesByPlayer(gameState),
     [gameState]
   );
+  const getBoardPlayer = useCallback(
+    (color: PieceColor): BoardPlayerSummary => {
+      const isAI =
+        gameMode === "aivai" ||
+        (gameMode === "pvai" && humanColor !== color);
+      const label = colorLabel(color);
+
+      if (!isAI) {
+        return {
+          color,
+          title:
+            gameMode === "pvai" && humanColor === color
+              ? `You (${label})`
+              : `${label} Player`,
+          subtitle: label,
+          kind: "human",
+        };
+      }
+
+      const config = color === "white" ? whiteAI : blackAI;
+      const modelName =
+        availableModels.find((model) => model.id === config.modelId)?.name ||
+        config.modelId ||
+        `${label} AI`;
+
+      return {
+        color,
+        title: modelName,
+        subtitle: `${label} AI`,
+        kind: "ai",
+      };
+    },
+    [availableModels, blackAI, gameMode, humanColor, whiteAI]
+  );
+  const topBoardPlayer = getBoardPlayer(boardFlipped ? "white" : "black");
+  const bottomBoardPlayer = getBoardPlayer(boardFlipped ? "black" : "white");
   const exportSnapshot = useMemo<ChessSessionSnapshot>(
     () => ({
       gameMode,
@@ -1809,19 +1942,35 @@ export function GamesClient() {
                 pieces={capturedPieces.white}
                 className="order-2 md:order-1 md:min-h-full"
               />
-              <div className="order-1 rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-2xl shadow-slate-900/10 dark:border-slate-700/80 dark:bg-slate-950/60 dark:shadow-black/35 md:order-2 sm:p-3">
-                <ChessBoard
-                  state={gameState}
-                  onSquareClick={handleSquareClick}
-                  onSquareDrag={handleSquareDrag}
-                  onClearSelection={clearBoardSelection}
-                  selectedSquare={selectedSquare}
-                  legalMoves={legalMoves}
-                  lastMove={lastMove}
-                  flipped={boardFlipped}
-                  interactive={
-                    !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
+              <div className="order-1 flex flex-col gap-2 md:order-2">
+                <BoardPlayerCard
+                  player={topBoardPlayer}
+                  active={
+                    activeGameStatus && gameState.turn === topBoardPlayer.color
                   }
+                  testId="board-player-top"
+                />
+                <div className="rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-2xl shadow-slate-900/10 dark:border-slate-700/80 dark:bg-slate-950/60 dark:shadow-black/35 sm:p-3">
+                  <ChessBoard
+                    state={gameState}
+                    onSquareClick={handleSquareClick}
+                    onSquareDrag={handleSquareDrag}
+                    onClearSelection={clearBoardSelection}
+                    selectedSquare={selectedSquare}
+                    legalMoves={legalMoves}
+                    lastMove={lastMove}
+                    flipped={boardFlipped}
+                    interactive={
+                      !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
+                    }
+                  />
+                </div>
+                <BoardPlayerCard
+                  player={bottomBoardPlayer}
+                  active={
+                    activeGameStatus && gameState.turn === bottomBoardPlayer.color
+                  }
+                  testId="board-player-bottom"
                 />
               </div>
               <CapturedPieces

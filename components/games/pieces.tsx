@@ -79,43 +79,56 @@ function KnightSVG({ color }: { color: PieceColor }) {
 
   return (
     <g filter={filter}>
-      {/* Base */}
+      {/* Wide base */}
       <path
-        d="M10 40 L10 36 Q10 34 14 34 L31 34 Q35 34 35 36 L35 40 Z"
+        d="M9 40 L11 35 Q12 33 16 33 L32 33 Q35 33 36 36 L37 40 Z"
         fill={fill}
         stroke={stroke}
         strokeWidth="1"
       />
-      {/* Body/Neck */}
+      {/* Chest and neck */}
       <path
-        d="M14 34 L14 24 Q12 18 16 12 L22 8 Q28 6 30 10 L32 14 Q34 18 32 22 L30 26 Q32 30 31 34 Z"
+        d="M15 34 Q16 28 14 23 Q12 18 16 13 Q20 8 27 7 Q32 7 35 12 Q37 16 34 21 Q31 25 28 28 Q31 30 32 34 Z"
         fill={fill}
         stroke={stroke}
         strokeWidth="1"
       />
-      {/* Mane */}
+      {/* Head profile */}
       <path
-        d="M16 12 Q18 14 17 18 Q16 22 14 24"
-        fill="none"
+        d="M18 14 Q23 12 28 13 Q31 14 32 18 Q30 17 28 18 Q26 19 25 22 Q24 25 22 27 Q20 29 17 30 Q18 25 17 22 Q15 18 18 14 Z"
+        fill={fill}
         stroke={stroke}
-        strokeWidth="1.2"
+        strokeWidth="0.9"
       />
-      {/* Ear */}
+      {/* Ear and muzzle */}
       <path
-        d="M22 8 L24 4 L26 8"
+        d="M25 8 L27 3.5 L30 8.5"
         fill={fill}
         stroke={stroke}
         strokeWidth="0.8"
       />
-      {/* Eye */}
-      <circle cx="27" cy="14" r="1.5" fill={stroke} />
-      {/* Nostril */}
-      <circle cx="32" cy="18" r="1" fill={stroke} />
-      {/* Highlight */}
       <path
-        d="M18 16 Q20 12 24 10"
+        d="M31 18 Q35 18 36 21 Q34 23 31 22"
+        fill={fill}
+        stroke={stroke}
+        strokeWidth="0.9"
+      />
+      {/* Mane cuts */}
+      <path
+        d="M18 13 Q19 17 17 20 M20 11 Q21 16 19 20 M22 9 Q24 14 21 19"
+        fill="none"
+        stroke={stroke}
+        strokeLinecap="round"
+        strokeWidth="1.1"
+        opacity="0.9"
+      />
+      <circle cx="29" cy="15" r="1.2" fill={stroke} />
+      <circle cx="34" cy="20.5" r="0.8" fill={stroke} />
+      <path
+        d="M18 18 Q20 12 27 10"
         fill="none"
         stroke={highlight}
+        strokeLinecap="round"
         strokeWidth="2"
         opacity="0.5"
       />
@@ -133,37 +146,44 @@ function BishopSVG({ color }: { color: PieceColor }) {
   return (
     <g filter={filter}>
       {/* Base */}
-      <ellipse cx="22.5" cy="40" rx="11" ry="3.5" fill={fill} stroke={stroke} strokeWidth="1" />
-      {/* Stem */}
+      <ellipse cx="22.5" cy="40" rx="12" ry="3.5" fill={fill} stroke={stroke} strokeWidth="1" />
       <path
-        d="M14 40 L16 30 L18 30 L17 40 Z M28 40 L27 30 L29 30 L31 40 Z"
-        fill={fill}
-        stroke={stroke}
-        strokeWidth="0.5"
-      />
-      {/* Body */}
-      <path
-        d="M16 30 Q14 22 18 14 Q20 10 22.5 8 Q25 10 27 14 Q31 22 29 30 Z"
+        d="M12 39 Q14 35 18 35 L27 35 Q31 35 33 39"
         fill={fill}
         stroke={stroke}
         strokeWidth="1"
       />
-      {/* Collar band */}
-      <ellipse cx="22.5" cy="30" rx="6.5" ry="2" fill={fill} stroke={stroke} strokeWidth="0.8" />
+      {/* Stem and collar */}
+      <path
+        d="M16 36 L18 30 L27 30 L29 36 Z"
+        fill={fill}
+        stroke={stroke}
+        strokeWidth="0.8"
+      />
+      <ellipse cx="22.5" cy="30" rx="8" ry="2.4" fill={fill} stroke={stroke} strokeWidth="0.9" />
+      {/* Mitre body */}
+      <path
+        d="M16 30 Q13.5 23 17 16 Q19.5 11 22.5 8 Q25.5 11 28 16 Q31.5 23 29 30 Z"
+        fill={fill}
+        stroke={stroke}
+        strokeWidth="1"
+      />
       {/* Mitre slit */}
       <path
-        d="M22.5 8 L22.5 18"
+        d="M24.5 10 Q20 16 19 25"
         fill="none"
         stroke={stroke}
-        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeWidth="1.6"
       />
       {/* Top ball */}
       <circle cx="22.5" cy="6" r="2.5" fill={fill} stroke={stroke} strokeWidth="0.8" />
       {/* Highlight */}
       <path
-        d="M18 20 Q20 14 22 12"
+        d="M17.5 22 Q19 15 22 11"
         fill="none"
         stroke={highlight}
+        strokeLinecap="round"
         strokeWidth="2"
         opacity="0.5"
       />
