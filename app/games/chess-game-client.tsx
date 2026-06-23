@@ -18,6 +18,11 @@ import { GameControls } from "@/components/games/chess/GameControls";
 import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
 import { ImportGameMenu } from "@/components/games/chess/ImportGameMenu";
 import { AIPresence } from "@/components/games/chess/AIPresence";
+import {
+  GameAIConfigPanel,
+  type GameAIConfigValue,
+  type GameAIModelOption,
+} from "@/components/games/GameAIConfigPanel";
 import { CapturedPieces } from "@/components/games/chess/CapturedPieces";
 import {
   PromotionDialog,
@@ -68,15 +73,6 @@ import {
 } from "@/lib/games/chess/session";
 import { listGameSessions } from "@/lib/games/core/session-store";
 import type { ChessPgnMetadata } from "@/lib/games/chess/export";
-
-// Reasoning effort levels for the slider
-const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
-  { value: "default", label: "Disabled" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "max", label: "Max" },
-];
 
 // Game mode options
 const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
@@ -349,10 +345,7 @@ function formatReplayMoveLabel(ply: number, move: MoveRecord | null): string {
   return `${prefix} ${move.san}`;
 }
 
-interface AIConfig {
-  modelId: string;
-  reasoningEffort: ReasoningEffort;
-}
+type AIConfig = GameAIConfigValue;
 
 function BoardPlayerCard({
   player,
@@ -408,119 +401,6 @@ function BoardPlayerCard({
         )}
         aria-label={active ? "Active turn" : "Waiting"}
       />
-    </div>
-  );
-}
-
-// AI Configuration Panel Component
-interface AIConfigPanelProps {
-  title: string;
-  color: PieceColor;
-  config: AIConfig;
-  onChange: (config: AIConfig) => void;
-  models: { id: string; name: string }[];
-}
-
-function AIConfigPanel({
-  title,
-  color,
-  config,
-  onChange,
-  models,
-}: AIConfigPanelProps) {
-  const reasoningIndex = REASONING_LEVELS.findIndex(
-    (l) => l.value === config.reasoningEffort
-  );
-
-  return (
-    <div
-      className={cn(
-        "p-4 rounded-xl border-2",
-        color === "white"
-          ? "border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50"
-          : "border-gray-400 dark:border-gray-500 bg-gray-100 dark:bg-gray-800/50"
-      )}
-      data-testid={`ai-config-${color}`}
-    >
-      <div className="flex items-center gap-2 mb-3">
-        <div
-          className={cn(
-            "w-4 h-4 rounded-full border-2",
-            color === "white"
-              ? "bg-white border-gray-400"
-              : "bg-gray-900 border-gray-600"
-          )}
-        />
-        <span className="font-semibold text-gray-900 dark:text-white">
-          {title}
-        </span>
-      </div>
-
-      {/* Model Selector */}
-      <div className="mb-4">
-        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-          Model
-        </label>
-        <select
-          value={config.modelId}
-          onChange={(e) => onChange({ ...config, modelId: e.target.value })}
-          className={cn(
-            "w-full p-2 rounded-lg border text-sm",
-            "bg-white dark:bg-gray-800",
-            "border-gray-300 dark:border-gray-600",
-            "text-gray-900 dark:text-white",
-            "focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-          )}
-          data-testid={`model-select-${color}`}
-        >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Reasoning Effort Slider */}
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-            Reasoning Level
-          </label>
-          <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-            {REASONING_LEVELS[reasoningIndex]?.label || "Disabled"}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={REASONING_LEVELS.length - 1}
-          value={reasoningIndex >= 0 ? reasoningIndex : 0}
-          onChange={(e) => {
-            const idx = parseInt(e.target.value, 10);
-            onChange({
-              ...config,
-              reasoningEffort: REASONING_LEVELS[idx].value,
-            });
-          }}
-          className={cn(
-            "w-full h-2 rounded-lg appearance-none cursor-pointer",
-            "bg-gray-200 dark:bg-gray-600",
-            "[&::-webkit-slider-thumb]:appearance-none",
-            "[&::-webkit-slider-thumb]:w-4",
-            "[&::-webkit-slider-thumb]:h-4",
-            "[&::-webkit-slider-thumb]:rounded-full",
-            "[&::-webkit-slider-thumb]:bg-amber-500",
-            "[&::-webkit-slider-thumb]:cursor-pointer"
-          )}
-          data-testid={`reasoning-slider-${color}`}
-        />
-        <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-          {REASONING_LEVELS.map((level) => (
-            <span key={level.value}>{level.label}</span>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -681,9 +561,9 @@ export function ChessGameClient({
   const [gameStarted, setGameStarted] = useState(false);
   const [gameMode, setGameMode] = useState<GameMode>("pvp");
   const [humanColor, setHumanColor] = useState<PieceColor>("white");
-  const [availableModels, setAvailableModels] = useState<
-    { id: string; name: string }[]
-  >([]);
+  const [availableModels, setAvailableModels] = useState<GameAIModelOption[]>(
+    []
+  );
   const [whiteAI, setWhiteAI] = useState<AIConfig>({
     modelId: "",
     reasoningEffort: "default",
@@ -860,9 +740,7 @@ export function ChessGameClient({
         if (cancelled || needsPassphrase) return;
 
         const models = getAvailableModels();
-        setAvailableModels(
-          models.map((m) => ({ id: m.modelId, name: m.displayName }))
-        );
+        setAvailableModels(models);
         if (models.length > 0) {
           setWhiteAI((prev) => ({ ...prev, modelId: models[0].modelId }));
           setBlackAI((prev) => ({ ...prev, modelId: models[0].modelId }));
@@ -1847,7 +1725,8 @@ export function ChessGameClient({
 
       const config = color === "white" ? whiteAI : blackAI;
       const modelName =
-        availableModels.find((model) => model.id === config.modelId)?.name ||
+        availableModels.find((model) => model.modelId === config.modelId)
+          ?.displayName ||
         config.modelId ||
         `${label} AI`;
 
@@ -2201,9 +2080,9 @@ export function ChessGameClient({
                   {/* White AI Config (for AIvAI or when human is black) */}
                   {(gameMode === "aivai" ||
                     (gameMode === "pvai" && humanColor === "black")) && (
-                    <AIConfigPanel
+                    <GameAIConfigPanel
                       title="White AI"
-                      color="white"
+                      accent="white"
                       config={whiteAI}
                       onChange={setWhiteAI}
                       models={availableModels}
@@ -2213,9 +2092,9 @@ export function ChessGameClient({
                   {/* Black AI Config (for AIvAI or when human is white) */}
                   {(gameMode === "aivai" ||
                     (gameMode === "pvai" && humanColor === "white")) && (
-                    <AIConfigPanel
+                    <GameAIConfigPanel
                       title="Black AI"
-                      color="black"
+                      accent="black"
                       config={blackAI}
                       onChange={setBlackAI}
                       models={availableModels}
