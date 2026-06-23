@@ -214,6 +214,78 @@ function installControlledIndexedDbStore(rawStore: string): {
   };
 }
 
+function installAdapterDelayedIndexedDbStore(rawStore: string): {
+  getPendingConfigLoads: () => number;
+  resolveConfigLoad: (index: number) => void;
+  getPendingStoreLoads: () => number;
+  resolveStoreLoad: (index: number) => void;
+  getStoredRaw: () => string | undefined;
+} {
+  const values = new Map<string, unknown>([["store", rawStore]]);
+  const pendingConfigLoads: Array<{ result: unknown; onsuccess: (() => void) | null }> = [];
+  const pendingStoreLoads: Array<{ result: unknown; onsuccess: (() => void) | null }> = [];
+  const db = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => {
+      const tx = {
+        oncomplete: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+        error: null,
+        objectStore: () => ({
+          get: (key: string) => {
+            const req = {
+              result: values.get(key),
+              onsuccess: null as (() => void) | null,
+              onerror: null as (() => void) | null,
+              error: null,
+            };
+            if (key === "config") pendingConfigLoads.push(req);
+            else if (key === "store") pendingStoreLoads.push(req);
+            else queueMicrotask(() => req.onsuccess?.());
+            return req;
+          },
+          put: (value: unknown, key: string) => {
+            values.set(key, value);
+            queueMicrotask(() => tx.oncomplete?.());
+          },
+        }),
+      };
+      return tx;
+    },
+    close: () => {},
+  };
+  const fakeIndexedDb = {
+    open: () => {
+      const req = {
+        result: db,
+        error: null,
+        onupgradeneeded: null as (() => void) | null,
+        onsuccess: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+      };
+      queueMicrotask(() => req.onsuccess?.());
+      return req;
+    },
+  };
+  (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB =
+    fakeIndexedDb as unknown as IDBFactory;
+
+  return {
+    getPendingConfigLoads: () => pendingConfigLoads.length,
+    resolveConfigLoad: (index: number) => {
+      pendingConfigLoads.splice(index, 1)[0]?.onsuccess?.();
+    },
+    getPendingStoreLoads: () => pendingStoreLoads.length,
+    resolveStoreLoad: (index: number) => {
+      pendingStoreLoads.splice(index, 1)[0]?.onsuccess?.();
+    },
+    getStoredRaw: () =>
+      typeof values.get("store") === "string"
+        ? (values.get("store") as string)
+        : undefined,
+  };
+}
+
 function installFailingLocalStorageStore(): void {
   const fakeLocalStorage = {
     get length() {
@@ -324,6 +396,44 @@ check(
 );
 
 __clearGameSessionStoreForTests();
+const delayedAdapterIndexedDb = installAdapterDelayedIndexedDbStore(
+  JSON.stringify({
+    gameMatchRecords: [match("old-before-adapter-replace")],
+    gameStatsLegacyImportAttempted: true,
+  })
+);
+const delayedAdapterInit = __initGameSessionStoreForTests();
+await waitForCondition(
+  "replace-before-adapter init reaches config load",
+  () => delayedAdapterIndexedDb.getPendingConfigLoads() === 1
+);
+__replaceGameSessionStoreForTests({
+  gameMatchRecords: [match("replacement-persists-before-adapter")],
+  gameStatsLegacyImportAttempted: true,
+});
+await new Promise((resolve) => setTimeout(resolve, 180));
+delayedAdapterIndexedDb.resolveConfigLoad(0);
+await waitForCondition(
+  "replace-before-adapter init reaches store load",
+  () => delayedAdapterIndexedDb.getPendingStoreLoads() === 1
+);
+delayedAdapterIndexedDb.resolveStoreLoad(0);
+await delayedAdapterInit;
+await new Promise((resolve) => setTimeout(resolve, 200));
+const persistedDelayedReplacementRaw = delayedAdapterIndexedDb.getStoredRaw();
+__clearGameSessionStoreForTests();
+installIndexedDbStore(persistedDelayedReplacementRaw ?? JSON.stringify({}));
+await __initGameSessionStoreForTests();
+const reloadedDelayedReplacement = __exportGameSessionStoreForTests();
+check(
+  "replaceStore persists after init later assigns adapter",
+  reloadedDelayedReplacement.gameMatchRecords.length === 1 &&
+    reloadedDelayedReplacement.gameMatchRecords[0]?.id ===
+      "replacement-persists-before-adapter",
+  { persistedDelayedReplacementRaw, reloadedDelayedReplacement }
+);
+
+__clearGameSessionStoreForTests();
 const lockedEnvelope = JSON.stringify({ v: 1, encrypted: true, data: "locked" });
 const lockedThenReadyIndexedDb = installIndexedDbStore(lockedEnvelope);
 installLocalStorageStore({});
@@ -419,6 +529,32 @@ check(
 
 __clearGameSessionStoreForTests();
 installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({ "aiboard-game-stats": "{not json" });
+await __initGameSessionStoreForTests();
+getMatchRecords();
+saveMatchRecord(legacyMatch("new-after-malformed-legacy"));
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-new-save")]),
+});
+const recordsAfterNewSaveThenValidLegacy = getMatchRecords();
+const recordsAfterNewSaveThenValidLegacyAgain = getMatchRecords();
+const recoveredIds = recordsAfterNewSaveThenValidLegacy
+  .map((record) => record.id)
+  .sort();
+check(
+  "legacy stats retry still imports after new generic match save",
+  recoveredIds.length === 2 &&
+    recoveredIds[0] === "legacy-after-new-save" &&
+    recoveredIds[1] === "new-after-malformed-legacy" &&
+    recordsAfterNewSaveThenValidLegacyAgain.length === 2,
+  {
+    recordsAfterNewSaveThenValidLegacy,
+    recordsAfterNewSaveThenValidLegacyAgain,
+  }
+);
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
 installLocalStorageStore({ "aiboard-game-stats": JSON.stringify({}) });
 await __initGameSessionStoreForTests();
 const nonArrayRecords = getMatchRecords();
@@ -506,6 +642,7 @@ check(
   { durableImportedRecords, persistedRawStore, reloadedDurableStore }
 );
 
+__clearGameSessionStoreForTests();
 installIndexedDbStore(JSON.stringify({}));
 check("old store hydrates with no game sessions", (await listGameSessions()).length === 0);
 await saveGameSession(session("default-leak-check", "Default leak check"));

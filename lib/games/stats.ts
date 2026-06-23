@@ -116,6 +116,10 @@ function legacyMatchToGeneric(record: GameMatchRecord): GenericGameMatchRecord {
   };
 }
 
+function genericMatchRecordKey(record: GenericGameMatchRecord): string {
+  return JSON.stringify([record.gameId, record.id]);
+}
+
 function inferMode(
   whiteModel: string | undefined,
   blackModel: string | undefined
@@ -173,21 +177,27 @@ function getStoredGenericMatchRecords(): GenericGameMatchRecord[] | null {
 function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): void {
   if (hasAttemptedGameStatsLegacyImport()) return;
 
-  if (records.length > 0) {
+  const storage = getLocalStorage();
+  if (!storage) return;
+
+  let data: string | null;
+  try {
+    data = storage.getItem(STORAGE_KEY);
+  } catch {
+    // Leave migration unmarked so a later read can retry transient failures.
+    return;
+  }
+
+  if (data === null) {
     markGameStatsLegacyImportAttempted();
     return;
   }
 
-  const storage = getLocalStorage();
-  if (!storage) return;
-
   let parsed: unknown;
   try {
-    const data = storage.getItem(STORAGE_KEY);
-    if (!data) return;
     parsed = JSON.parse(data);
   } catch {
-    // Leave migration unmarked so a later read can retry transient/malformed data.
+    // Leave migration unmarked so a later read can retry malformed data.
     return;
   }
 
@@ -199,8 +209,12 @@ function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): vo
     convertedRecords.push(legacyMatchToGeneric(record));
   }
 
+  const existingKeys = new Set(records.map(genericMatchRecordKey));
   for (const record of convertedRecords) {
+    const key = genericMatchRecordKey(record);
+    if (existingKeys.has(key)) continue;
     saveGenericGameMatchRecord(record);
+    existingKeys.add(key);
   }
   markGameStatsLegacyImportAttempted();
 }

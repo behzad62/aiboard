@@ -111,6 +111,7 @@ export async function initStore(): Promise<{ needsPassphrase: boolean }> {
 async function loadStore(generation: number): Promise<{ needsPassphrase: boolean }> {
   config = await getStorageConfig();
   adapter = await createAdapter(config);
+  schedulePendingPersistIfReady();
   const raw = await adapter.load();
 
   if (raw === null) {
@@ -137,13 +138,17 @@ function commitLoadedStore(generation: number, loaded: ClientStore): void {
   notifyReady();
 }
 
+function notifyReadyListener(listener: () => void): void {
+  try {
+    listener();
+  } catch {
+    // Readiness listeners must not break store initialization.
+  }
+}
+
 function notifyReady(): void {
   for (const listener of Array.from(readyListeners)) {
-    try {
-      listener();
-    } catch {
-      // Readiness listeners must not break store initialization.
-    }
+    notifyReadyListener(listener);
   }
 }
 
@@ -151,7 +156,7 @@ export function onStoreReady(listener: () => void): () => void {
   readyListeners.add(listener);
   if (memory) {
     queueMicrotask(() => {
-      if (readyListeners.has(listener) && memory) listener();
+      if (readyListeners.has(listener) && memory) notifyReadyListener(listener);
     });
   }
   return () => {
@@ -165,19 +170,31 @@ function store(): ClientStore {
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistDirty = false;
+
 function schedulePersist(): void {
+  persistDirty = true;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => void flush(), 150);
 }
 
+function schedulePendingPersistIfReady(): void {
+  if (memory && adapter && persistDirty) schedulePersist();
+}
+
 export async function flush(): Promise<void> {
-  if (!memory || !adapter) return;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  if (!memory) {
+    persistDirty = false;
+    return;
+  }
+  if (!adapter) return;
   const env = await wrap(JSON.stringify(memory), config.encryptionEnabled);
   await adapter.save(JSON.stringify(env));
+  persistDirty = false;
 }
 
 // ── Reads (synchronous against memory) ────────────────────────────────────────
@@ -498,6 +515,7 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  persistDirty = false;
   initGeneration++;
   memory = hydrateStore(data);
   adapter = null;
@@ -511,6 +529,7 @@ export function __clearClientStoreForTests(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  persistDirty = false;
   initGeneration++;
   memory = null;
   adapter = null;
