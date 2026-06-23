@@ -317,7 +317,7 @@ function statusAfterMove(
 export function dropDisc(
   state: ConnectFourGameState,
   column: number,
-  timestamp = Date.now()
+  timestamp: number
 ): ConnectFourGameState {
   if (state.status !== "playing") {
     throw new Error("Cannot move after the game has finished.");
@@ -841,6 +841,8 @@ export function parseConnectFourSessionRecord(
   }
 }
 ```
+
+`dropDisc` intentionally requires an explicit timestamp so the rules engine stays deterministic. UI/session code supplies `Date.now()` at the boundary when a real move is made.
 
 - [ ] **Step 4: Implement export/import**
 
