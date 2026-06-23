@@ -222,6 +222,7 @@ export function ConnectFourGameClient({
   const activeSessionCreatedAtRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistenceTokenRef = useRef(0);
+  const pendingSessionDeleteRef = useRef<Promise<void> | null>(null);
 
   const displayState = useMemo(
     () => createReplayState(gameState, replayIndex),
@@ -285,6 +286,12 @@ export function ConnectFourGameClient({
   const saveLatestSession = useCallback(async (token: number) => {
     if (token !== persistenceTokenRef.current) return;
 
+    const pendingDelete = pendingSessionDeleteRef.current;
+    if (pendingDelete) {
+      await pendingDelete;
+      if (token !== persistenceTokenRef.current) return;
+    }
+
     const snapshot = latestSnapshotRef.current;
     if (!snapshot) return;
 
@@ -311,13 +318,23 @@ export function ConnectFourGameClient({
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
 
-    try {
-      await deleteGameSession(CONNECT_FOUR_ACTIVE_SESSION_ID);
-    } catch (error) {
-      if (token === persistenceTokenRef.current) {
-        console.warn("Failed to delete active Connect Four session:", error);
+    let deletePromise: Promise<void> | null = null;
+    deletePromise = (async () => {
+      try {
+        await deleteGameSession(CONNECT_FOUR_ACTIVE_SESSION_ID);
+      } catch (error) {
+        if (token === persistenceTokenRef.current) {
+          console.warn("Failed to delete active Connect Four session:", error);
+        }
+      } finally {
+        if (pendingSessionDeleteRef.current === deletePromise) {
+          pendingSessionDeleteRef.current = null;
+        }
       }
-    }
+    })();
+
+    pendingSessionDeleteRef.current = deletePromise;
+    await deletePromise;
   }, [clearAutosaveTimer, invalidatePersistence]);
 
   useEffect(() => {
@@ -585,8 +602,8 @@ export function ConnectFourGameClient({
     setGameStarted(true);
   }, [invalidateAIRequests, invalidatePersistence]);
 
-  const handleStartNew = useCallback(() => {
-    void deleteActiveSession();
+  const handleStartNew = useCallback(async () => {
+    await deleteActiveSession();
     handleStartGame();
   }, [deleteActiveSession, handleStartGame]);
 
@@ -652,8 +669,8 @@ export function ConnectFourGameClient({
     setIsPaused(false);
   }, []);
 
-  const handleReset = useCallback(() => {
-    void deleteActiveSession();
+  const handleReset = useCallback(async () => {
+    await deleteActiveSession();
     handleStartGame();
   }, [deleteActiveSession, handleStartGame]);
 
