@@ -79,53 +79,49 @@ function KnightSVG({ color }: { color: PieceColor }) {
 
   return (
     <g filter={filter}>
-      {/* Wide base */}
+      {/* Plinth */}
       <path
-        d="M9 40 L11 35 Q12 33 16 33 L32 33 Q35 33 36 36 L37 40 Z"
+        d="M9 40 L11 35 Q12 33 16 33 L31 33 Q35 33 36 36 L37 40 Z"
         fill={fill}
         stroke={stroke}
         strokeWidth="1"
       />
-      {/* Chest and neck */}
+      {/* Horse bust */}
       <path
-        d="M15 34 Q16 28 14 23 Q12 18 16 13 Q20 8 27 7 Q32 7 35 12 Q37 16 34 21 Q31 25 28 28 Q31 30 32 34 Z"
+        d="M14 35 Q14 30 16 25 Q18 20 20 17 Q20 12 23 10 Q25 8 28 8 L29 4 L32 9 Q36 11 37 15 Q38 19 35 21 Q33 23 29 23 Q26 23 25 26 Q24 30 29 35 Z"
         fill={fill}
         stroke={stroke}
         strokeWidth="1"
       />
-      {/* Head profile */}
+      {/* Neck mass */}
       <path
-        d="M18 14 Q23 12 28 13 Q31 14 32 18 Q30 17 28 18 Q26 19 25 22 Q24 25 22 27 Q20 29 17 30 Q18 25 17 22 Q15 18 18 14 Z"
-        fill={fill}
-        stroke={stroke}
-        strokeWidth="0.9"
-      />
-      {/* Ear and muzzle */}
-      <path
-        d="M25 8 L27 3.5 L30 8.5"
-        fill={fill}
-        stroke={stroke}
-        strokeWidth="0.8"
-      />
-      <path
-        d="M31 18 Q35 18 36 21 Q34 23 31 22"
+        d="M17 35 Q18 29 20 25 Q22 21 24 18 Q24 25 27 29 Q29 32 31 35 Z"
         fill={fill}
         stroke={stroke}
         strokeWidth="0.9"
       />
       {/* Mane cuts */}
       <path
-        d="M18 13 Q19 17 17 20 M20 11 Q21 16 19 20 M22 9 Q24 14 21 19"
+        d="M21 12 L18 16 L21 16 L18 20 L22 20 L19 24 L23 24 L20 29"
         fill="none"
         stroke={stroke}
         strokeLinecap="round"
-        strokeWidth="1.1"
-        opacity="0.9"
+        strokeLinejoin="round"
+        strokeWidth="1.25"
+        opacity="0.95"
       />
-      <circle cx="29" cy="15" r="1.2" fill={stroke} />
-      <circle cx="34" cy="20.5" r="0.8" fill={stroke} />
+      {/* Jaw and face details */}
       <path
-        d="M18 18 Q20 12 27 10"
+        d="M31 18 Q34 18 36 17 M29 22 Q31 20 34 20"
+        fill="none"
+        stroke={stroke}
+        strokeLinecap="round"
+        strokeWidth="0.9"
+      />
+      <circle cx="30.5" cy="14.5" r="1.15" fill={stroke} />
+      <circle cx="35" cy="19.4" r="0.65" fill={stroke} />
+      <path
+        d="M19 27 Q20 17 26 10"
         fill="none"
         stroke={highlight}
         strokeLinecap="round"
