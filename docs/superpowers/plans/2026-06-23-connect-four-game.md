@@ -397,7 +397,7 @@ git commit -m "Add Connect Four rules engine"
 - Create: `lib/games/connect-four/ai.ts`
 - Create: `scripts/test-connect-four-ai.mts`
 
-- [ ] **Step 1: Write the failing AI test**
+- [x] **Step 1: Write the failing AI test**
 
 Create `scripts/test-connect-four-ai.mts`:
 
@@ -447,13 +447,13 @@ else console.log(`FAIL ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
 ```
 
-- [ ] **Step 2: Run the failing AI test**
+- [x] **Step 2: Run the failing AI test**
 
 Run: `npx tsx scripts/test-connect-four-ai.mts`
 
 Expected: failure because `lib/games/connect-four/ai.ts` does not exist.
 
-- [ ] **Step 3: Add AI helpers and fallback**
+- [x] **Step 3: Add AI helpers and fallback**
 
 Create `lib/games/connect-four/ai.ts` with these public exports:
 
@@ -565,7 +565,7 @@ export function chooseFallbackConnectFourColumn(state: ConnectFourGameState): nu
 }
 ```
 
-- [ ] **Step 4: Add prompt and provider request shell**
+- [x] **Step 4: Add prompt and provider request shell**
 
 Extend `lib/games/connect-four/ai.ts` with:
 
@@ -606,7 +606,7 @@ export function buildConnectFourPrompt(
 
 Then add `requestConnectFourAIMove` using the same provider streaming structure as `requestAIMove` in `lib/games/chess/ai.ts`: parse `modelId`, support custom models, stream tokens, parse response, retry parse/illegal columns with `buildConnectFourCorrectionPrompt`, retry provider errors with `getConnectFourRetryDelayMs`, and return `{ column, action: column, interaction }` on success.
 
-- [ ] **Step 5: Add model helper exports**
+- [x] **Step 5: Add model helper exports**
 
 Add to `lib/games/connect-four/ai.ts`:
 
@@ -640,13 +640,13 @@ export function getConnectFourModelBaseURL(modelId: string): string | undefined 
 }
 ```
 
-- [ ] **Step 6: Run the AI test**
+- [x] **Step 6: Run the AI test**
 
 Run: `npx tsx scripts/test-connect-four-ai.mts`
 
 Expected: all checks print `PASS`.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 ```powershell
 git add lib/games/connect-four/ai.ts scripts/test-connect-four-ai.mts
