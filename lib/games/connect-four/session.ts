@@ -281,10 +281,32 @@ function isGameAIInteraction(value: unknown): value is GameAIInteraction {
   }
 
   return (
-    (value.gesture === undefined || typeof value.gesture === "string") &&
+    (value.gesture === undefined || isGameAIInteractionGesture(value.gesture)) &&
     (value.utterance === undefined || typeof value.utterance === "string") &&
-    (value.confidence === undefined || typeof value.confidence === "number") &&
+    (value.confidence === undefined || isNormalizedConfidence(value.confidence)) &&
     (value.diagnostics === undefined || typeof value.diagnostics === "string")
+  );
+}
+
+function isGameAIInteractionGesture(
+  value: unknown
+): value is NonNullable<GameAIInteraction["gesture"]> {
+  return (
+    value === "thinking" ||
+    value === "confident" ||
+    value === "confused" ||
+    value === "celebrating" ||
+    value === "apologetic" ||
+    value === "neutral"
+  );
+}
+
+function isNormalizedConfidence(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1
   );
 }
 

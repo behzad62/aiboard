@@ -104,6 +104,49 @@ check("session parser rejects wrong metadata version", wrongMetadataVersion === 
   parsed: wrongMetadataVersion,
 });
 
+const invalidLastAiGesture = parseConnectFourSessionRecord({
+  ...record,
+  stateJson: JSON.stringify({
+    ...snapshot,
+    lastAiInteraction: { actorId: "yellow", gesture: "not-a-gesture" },
+  }),
+});
+check("session parser rejects invalid last AI gesture", invalidLastAiGesture === null, {
+  parsed: invalidLastAiGesture,
+});
+
+const invalidMoveAiGesture = parseConnectFourSessionRecord({
+  ...record,
+  stateJson: JSON.stringify({
+    ...snapshot,
+    gameState: {
+      ...snapshot.gameState,
+      moveHistory: snapshot.gameState.moveHistory.map((move, index) =>
+        index === 0
+          ? {
+              ...move,
+              aiInteraction: { actorId: "red", gesture: "not-a-gesture" },
+            }
+          : move
+      ),
+    },
+  }),
+});
+check("session parser rejects invalid move AI gesture", invalidMoveAiGesture === null, {
+  parsed: invalidMoveAiGesture,
+});
+
+const invalidAiConfidence = parseConnectFourSessionRecord({
+  ...record,
+  stateJson: JSON.stringify({
+    ...snapshot,
+    lastAiInteraction: { actorId: "yellow", confidence: 1.5 },
+  }),
+});
+check("session parser rejects invalid AI confidence", invalidAiConfidence === null, {
+  parsed: invalidAiConfidence,
+});
+
 check("playing status is active", isConnectFourActiveStatus("playing") === true);
 check("draw status is not active", isConnectFourActiveStatus("draw") === false);
 
