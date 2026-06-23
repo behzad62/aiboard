@@ -567,6 +567,63 @@ test.describe("Chess game", () => {
     }
   });
 
+  test("promotion dialog supports keyboard focus, trapping, cancel, and selection", async ({ page }) => {
+    await seedPromotionChessSession(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByTestId("restore-game-banner")).toBeVisible();
+    await page.getByTestId("resume-game-button").click();
+
+    await page.getByTestId("square-e7").click();
+    await page.getByTestId("square-e8").click();
+
+    const dialog = page.getByRole("dialog", { name: "Choose promotion" });
+    const queenButton = dialog.getByRole("button", { name: "Queen" });
+    const rookButton = dialog.getByRole("button", { name: "Rook" });
+    const bishopButton = dialog.getByRole("button", { name: "Bishop" });
+    const knightButton = dialog.getByRole("button", { name: "Knight" });
+
+    await expect(dialog).toBeVisible();
+    await expect(queenButton).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    await expect(rookButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(bishopButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(knightButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(queenButton).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(
+      page.getByTestId("square-e7").getByTestId("chess-piece")
+    ).toHaveCount(1);
+    await expect(
+      page.getByTestId("square-e8").getByTestId("chess-piece")
+    ).toHaveCount(0);
+
+    await page.getByTestId("square-e7").click();
+    await page.getByTestId("square-e8").click();
+    await expect(dialog).toBeVisible();
+    await expect(queenButton).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    await expect(rookButton).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    await expect(dialog).toBeHidden();
+    await expect(
+      page.getByTestId("square-e7").getByTestId("chess-piece")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("square-e8").getByTestId("chess-piece")
+    ).toHaveCount(1);
+    await expect(page.getByText("e8=R+", { exact: true })).toBeVisible();
+  });
+
   test("reset ignores a stale delayed AI move", async ({ page }) => {
     let aiRequestCount = 0;
     let releaseAIResponse!: () => void;
