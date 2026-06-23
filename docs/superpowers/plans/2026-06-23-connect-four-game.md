@@ -54,7 +54,7 @@ Modify:
 - Create: `lib/games/connect-four/rules-tests.mts`
 - Modify: `lib/games/index.ts`
 
-- [ ] **Step 1: Write the failing rules test**
+- [x] **Step 1: Write the failing rules test**
 
 Create `lib/games/connect-four/rules-tests.mts`:
 
@@ -127,13 +127,13 @@ if (failures === 0) {
 process.exit(failures === 0 ? 0 : 1);
 ```
 
-- [ ] **Step 2: Run the failing rules test**
+- [x] **Step 2: Run the failing rules test**
 
 Run: `npx tsx lib/games/connect-four/rules-tests.mts`
 
 Expected: failure because `lib/games/connect-four/engine.ts` does not exist.
 
-- [ ] **Step 3: Add Connect Four types**
+- [x] **Step 3: Add Connect Four types**
 
 Create `lib/games/connect-four/types.ts`:
 
@@ -198,7 +198,7 @@ export interface ConnectFourMatchRecord {
 }
 ```
 
-- [ ] **Step 4: Add the minimal pure engine**
+- [x] **Step 4: Add the minimal pure engine**
 
 Create `lib/games/connect-four/engine.ts`:
 
@@ -365,7 +365,7 @@ export function setConnectFourPaused(
 }
 ```
 
-- [ ] **Step 5: Export Connect Four modules**
+- [x] **Step 5: Export Connect Four modules**
 
 Modify `lib/games/index.ts`:
 
@@ -376,13 +376,13 @@ export * from "./connect-four/types";
 export * from "./connect-four/engine";
 ```
 
-- [ ] **Step 6: Run the rules test**
+- [x] **Step 6: Run the rules test**
 
 Run: `npx tsx lib/games/connect-four/rules-tests.mts`
 
 Expected: all checks print `PASS`.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
 ```powershell
 git add lib/games/connect-four/types.ts lib/games/connect-four/engine.ts lib/games/connect-four/rules-tests.mts lib/games/index.ts
