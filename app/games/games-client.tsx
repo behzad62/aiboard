@@ -30,6 +30,18 @@ import type {
 } from "@/lib/games/chess/types";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { saveMatchRecord } from "@/lib/games/stats";
+import {
+  CHESS_ACTIVE_SESSION_ID,
+  createChessSessionRecord,
+  isChessActiveStatus,
+  parseChessSessionRecord,
+  type ChessSessionSnapshot,
+} from "@/lib/games/chess/session";
+import {
+  deleteGameSession,
+  listGameSessions,
+  saveGameSession,
+} from "@/lib/games/core/session-store";
 
 // Reasoning effort levels for the slider
 const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
@@ -192,11 +204,42 @@ export function GamesClient() {
   const [aiThinking, setAiThinking] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [gameStartTime, setGameStartTime] = useState<number>(0);
+  const [lastAiInteraction, setLastAiInteraction] = useState<
+    ChessSessionSnapshot["lastAiInteraction"]
+  >(null);
+  const [restoreSnapshot, setRestoreSnapshot] =
+    useState<ChessSessionSnapshot | null>(null);
 
   // Refs for timer and AI
   const lastTickRef = useRef<number>(0);
   const aiRequestRef = useRef<boolean>(false);
   const matchSavedRef = useRef<boolean>(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestSessionSnapshotRef = useRef<ChessSessionSnapshot | null>(null);
+  const storageNeedsPassphraseRef = useRef(false);
+
+  const clearAutosaveTimer = useCallback(() => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+  }, []);
+
+  const deleteActiveChessSession = useCallback(async () => {
+    clearAutosaveTimer();
+    latestSessionSnapshotRef.current = null;
+    setRestoreSnapshot(null);
+
+    try {
+      const { needsPassphrase } = await ensureReady();
+      storageNeedsPassphraseRef.current = needsPassphrase;
+      if (needsPassphrase) return;
+
+      await deleteGameSession(CHESS_ACTIVE_SESSION_ID);
+    } catch (err) {
+      console.warn("Failed to delete active chess session:", err);
+    }
+  }, [clearAutosaveTimer]);
 
   // Load available models on mount (client-side only to avoid SSR issues with localStorage)
   useEffect(() => {
@@ -232,6 +275,127 @@ export function GamesClient() {
     };
   }, []);
 
+  // Load an unfinished chess session on the setup screen.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+
+    async function loadSavedSession() {
+      try {
+        const { needsPassphrase } = await ensureReady();
+        if (cancelled) return;
+        storageNeedsPassphraseRef.current = needsPassphrase;
+        if (needsPassphrase) {
+          setRestoreSnapshot(null);
+          return;
+        }
+
+        const records = await listGameSessions();
+        if (cancelled) return;
+
+        const record = records.find(
+          (session) =>
+            session.id === CHESS_ACTIVE_SESSION_ID &&
+            session.gameId === "chess" &&
+            session.status !== "complete" &&
+            session.status !== "abandoned"
+        );
+        const snapshot = record ? parseChessSessionRecord(record) : null;
+        setRestoreSnapshot(
+          snapshot &&
+            (snapshot.isPaused || isChessActiveStatus(snapshot.gameState.status))
+            ? snapshot
+            : null
+        );
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("Failed to load active chess session:", err);
+        }
+      }
+    }
+
+    void loadSavedSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Keep the latest serializable session in a ref so clock ticks do not
+  // continuously postpone the debounced autosave.
+  useEffect(() => {
+    if (
+      !gameStarted ||
+      (!isPaused && !isChessActiveStatus(gameState.status))
+    ) {
+      latestSessionSnapshotRef.current = null;
+      return;
+    }
+
+    latestSessionSnapshotRef.current = {
+      gameMode,
+      humanColor,
+      whiteAI,
+      blackAI,
+      gameState,
+      whiteTimeMs,
+      blackTimeMs,
+      gameStartTime,
+      isPaused,
+      lastAiInteraction,
+    };
+  }, [
+    gameStarted,
+    gameMode,
+    humanColor,
+    whiteAI,
+    blackAI,
+    gameState,
+    whiteTimeMs,
+    blackTimeMs,
+    gameStartTime,
+    isPaused,
+    lastAiInteraction,
+  ]);
+
+  // Autosave active chess games after meaningful state changes.
+  useEffect(() => {
+    if (!latestSessionSnapshotRef.current || storageNeedsPassphraseRef.current) {
+      return;
+    }
+
+    clearAutosaveTimer();
+    autosaveTimerRef.current = setTimeout(() => {
+      const snapshot = latestSessionSnapshotRef.current;
+      if (!snapshot) return;
+
+      void (async () => {
+        try {
+          const { needsPassphrase } = await ensureReady();
+          storageNeedsPassphraseRef.current = needsPassphrase;
+          if (needsPassphrase) return;
+
+          await saveGameSession(createChessSessionRecord(snapshot));
+        } catch (err) {
+          console.warn("Failed to autosave chess session:", err);
+        }
+      })();
+    }, 400);
+
+    return clearAutosaveTimer;
+  }, [
+    gameStarted,
+    gameMode,
+    humanColor,
+    whiteAI,
+    blackAI,
+    gameState,
+    gameStartTime,
+    isPaused,
+    lastAiInteraction,
+    clearAutosaveTimer,
+  ]);
+
   // Check if current turn is AI controlled
   const isAIControlled = useCallback(
     (color: PieceColor): boolean => {
@@ -255,7 +419,7 @@ export function GamesClient() {
 
   // Timer effect
   useEffect(() => {
-    if (!gameStarted || isPaused || gameState.status !== "playing") {
+    if (!gameStarted || isPaused || !isChessActiveStatus(gameState.status)) {
       return;
     }
 
@@ -281,7 +445,7 @@ export function GamesClient() {
 
   // AI move effect
   useEffect(() => {
-    if (!gameStarted || isPaused || gameState.status !== "playing") {
+    if (!gameStarted || isPaused || !isChessActiveStatus(gameState.status)) {
       return;
     }
 
@@ -403,10 +567,25 @@ export function GamesClient() {
     blackTimeMs,
   ]);
 
+  // Finished games are already represented by match records, so remove the
+  // active restore point once a terminal state is reached.
+  useEffect(() => {
+    if (
+      !gameStarted ||
+      (gameState.status !== "checkmate" &&
+        gameState.status !== "stalemate" &&
+        gameState.status !== "draw")
+    ) {
+      return;
+    }
+
+    void deleteActiveChessSession();
+  }, [gameStarted, gameState.status, deleteActiveChessSession]);
+
   // Handle square click for human moves
   const handleSquareClick = useCallback(
     (square: Square) => {
-      if (isPaused || gameState.status !== "playing" || aiThinking) {
+      if (isPaused || !isChessActiveStatus(gameState.status) || aiThinking) {
         return;
       }
 
@@ -469,6 +648,7 @@ export function GamesClient() {
 
   // Handle reset
   const handleReset = useCallback(() => {
+    void deleteActiveChessSession();
     setGameState(createInitialState());
     setSelectedSquare(null);
     setLegalMoves([]);
@@ -477,11 +657,12 @@ export function GamesClient() {
     setIsPaused(false);
     setAiThinking(false);
     setAiError(null);
+    setLastAiInteraction(null);
     lastTickRef.current = 0;
     aiRequestRef.current = false;
     matchSavedRef.current = false;
     setGameStarted(false);
-  }, []);
+  }, [deleteActiveChessSession]);
 
   // Handle pause
   const handlePause = useCallback(() => {
@@ -501,13 +682,44 @@ export function GamesClient() {
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
     setGameStartTime(Date.now());
+    setLastAiInteraction(null);
+    setRestoreSnapshot(null);
     lastTickRef.current = Date.now();
     matchSavedRef.current = false;
     setGameStarted(true);
   }, []);
 
+  const handleResumeSavedGame = useCallback(() => {
+    if (!restoreSnapshot) return;
+
+    setGameMode(restoreSnapshot.gameMode);
+    setHumanColor(restoreSnapshot.humanColor);
+    setWhiteAI(restoreSnapshot.whiteAI);
+    setBlackAI(restoreSnapshot.blackAI);
+    setGameState(restoreSnapshot.gameState);
+    setWhiteTimeMs(restoreSnapshot.whiteTimeMs);
+    setBlackTimeMs(restoreSnapshot.blackTimeMs);
+    setGameStartTime(restoreSnapshot.gameStartTime);
+    setIsPaused(restoreSnapshot.isPaused);
+    setLastAiInteraction(restoreSnapshot.lastAiInteraction);
+    setSelectedSquare(null);
+    setLegalMoves([]);
+    setAiThinking(false);
+    setAiError(null);
+    aiRequestRef.current = false;
+    matchSavedRef.current = false;
+    lastTickRef.current = restoreSnapshot.isPaused ? 0 : Date.now();
+    setRestoreSnapshot(null);
+    setGameStarted(true);
+  }, [restoreSnapshot]);
+
+  const handleStartNewGame = useCallback(() => {
+    void deleteActiveChessSession();
+  }, [deleteActiveChessSession]);
+
   // Board should be flipped when human plays black
   const boardFlipped = gameMode === "pvai" && humanColor === "black";
+  const activeGameStatus = isChessActiveStatus(gameState.status);
 
   // Last move for highlighting
   const lastMove = useMemo(() => {
@@ -537,6 +749,42 @@ export function GamesClient() {
           <div className="flex flex-col lg:flex-row gap-8 items-start justify-center">
             {/* Setup Card */}
             <div className="w-full lg:w-[450px] bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 space-y-6">
+              {restoreSnapshot && (
+                <div
+                  className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30"
+                  data-testid="restore-game-banner"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-amber-950 dark:text-amber-100">
+                      Unfinished chess game
+                    </div>
+                    <div className="text-xs text-amber-800 dark:text-amber-300">
+                      {restoreSnapshot.gameState.moveHistory.length} move
+                      {restoreSnapshot.gameState.moveHistory.length === 1
+                        ? ""
+                        : "s"}{" "}
+                      saved
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleResumeSavedGame}
+                      className="flex-1 rounded-md bg-amber-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
+                      data-testid="resume-game-button"
+                    >
+                      Resume game
+                    </button>
+                    <button
+                      onClick={handleStartNewGame}
+                      className="flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-gray-900 dark:text-amber-100 dark:hover:bg-amber-950"
+                      data-testid="start-new-game-button"
+                    >
+                      Start new
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Game Mode Selection */}
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
@@ -714,7 +962,7 @@ export function GamesClient() {
                 legalMoves={legalMoves}
                 lastMove={lastMove}
                 flipped={boardFlipped}
-                interactive={!aiThinking && !isPaused && gameState.status === "playing"}
+                interactive={!aiThinking && !isPaused && activeGameStatus}
               />
             </div>
           </div>
@@ -726,13 +974,13 @@ export function GamesClient() {
               <ChessClock
                 color="black"
                 timeMs={blackTimeMs}
-                isActive={gameState.turn === "black" && gameState.status === "playing"}
+                isActive={gameState.turn === "black" && activeGameStatus}
                 isPaused={isPaused}
               />
               <ChessClock
                 color="white"
                 timeMs={whiteTimeMs}
-                isActive={gameState.turn === "white" && gameState.status === "playing"}
+                isActive={gameState.turn === "white" && activeGameStatus}
                 isPaused={isPaused}
               />
             </div>

@@ -86,6 +86,28 @@ test.describe("Chess game", () => {
     await expect(page.locator('button:has-text("Start Game")')).toBeVisible();
   });
 
+  test("restores an active player vs player game after refresh", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.click('button:has-text("Start Game")');
+
+    const squares = page.locator(".grid-cols-8 > div");
+    await squares.nth(52).click();
+    await squares.nth(36).click();
+
+    await expect(page.getByText("e4")).toBeVisible();
+    await page.waitForTimeout(700);
+
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByTestId("restore-game-banner")).toBeVisible();
+    await page.getByTestId("resume-game-button").click();
+
+    await expect(page.getByText("e4")).toBeVisible();
+    await expect(page.getByTestId("chess-clock-white")).toContainText(/\d{2}:\d{2}/);
+    await expect(page.getByTestId("chess-clock-black")).toContainText(/\d{2}:\d{2}/);
+  });
+
   test("benchmark page includes the chess benchmark segment", async ({ page }) => {
     await page.goto("/benchmark");
     await page.waitForLoadState("networkidle");
