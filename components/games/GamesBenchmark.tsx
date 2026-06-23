@@ -457,7 +457,9 @@ export function GamesBenchmark() {
             },
           });
 
-          results.push(result);
+          if (result && !signal.aborted && !abortRef.current) {
+            results.push(result);
+          }
         }
       } finally {
         setRunning(false);
@@ -574,11 +576,16 @@ export function GamesBenchmark() {
               {benchmarkDescription}
             </p>
           </div>
-          <div className="inline-flex rounded-md border bg-muted p-1">
+          <div
+            className="inline-flex rounded-md border bg-muted p-1"
+            role="group"
+            aria-label="Benchmark game"
+          >
             <button
               type="button"
               onClick={() => setSelectedGame("chess")}
               disabled={running}
+              aria-pressed={selectedGame === "chess"}
               className={`px-3 py-1.5 text-sm font-medium rounded ${
                 selectedGame === "chess"
                   ? "bg-background text-foreground shadow-sm"
@@ -591,6 +598,7 @@ export function GamesBenchmark() {
               type="button"
               onClick={() => setSelectedGame("connect-four")}
               disabled={running}
+              aria-pressed={selectedGame === "connect-four"}
               className={`px-3 py-1.5 text-sm font-medium rounded ${
                 selectedGame === "connect-four"
                   ? "bg-background text-foreground shadow-sm"

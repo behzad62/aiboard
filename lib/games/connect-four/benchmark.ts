@@ -9,11 +9,23 @@ import {
   createInitialConnectFourState,
   dropDisc,
 } from "@/lib/games/connect-four/engine";
+import {
+  getCustomModelByFullId,
+  getProvider,
+} from "@/lib/client/providers";
+import { parseModelId } from "@/lib/providers/base";
 import type {
   ConnectFourGameState,
   ConnectFourMatchRecord,
   ConnectFourPlayer,
 } from "@/lib/games/connect-four/types";
+
+interface ConnectFourBenchmarkModelConfig {
+  modelId: string;
+  reasoning: ReasoningEffort;
+  apiKey: string;
+  baseURL?: string;
+}
 
 export interface ConnectFourBenchmarkProgress {
   moveCount: number;
@@ -70,6 +82,59 @@ function playerConfig(
     : { modelId: params.yellowModelId, reasoning: params.yellowReasoning };
 }
 
+function validatePlayerConfig(
+  params: RunConnectFourBenchmarkParams,
+  player: ConnectFourPlayer
+): ConnectFourBenchmarkModelConfig {
+  const { modelId, reasoning } = playerConfig(params, player);
+  const { providerId } = parseModelId(modelId);
+  const customModel = getCustomModelByFullId(modelId);
+  if (!customModel && !getProvider(providerId)) {
+    throw new Error(`Unknown provider for ${player} model: ${providerId}`);
+  }
+
+  const apiKey = getConnectFourModelApiKey(modelId);
+  if (!apiKey) {
+    throw new Error(
+      `Missing API key for ${player === "red" ? "red" : "yellow"} model: ${modelId}`
+    );
+  }
+
+  return {
+    modelId,
+    reasoning,
+    apiKey,
+    baseURL: getConnectFourModelBaseURL(modelId),
+  };
+}
+
+export function isRecoverableConnectFourAIError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  const nonrecoverableMarkers = [
+    "missing api key",
+    "unknown provider",
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "quota",
+    "key limit",
+    "401",
+    "403",
+    "aborted",
+    "ai request failed",
+  ];
+
+  if (nonrecoverableMarkers.some((marker) => normalized.includes(marker))) {
+    return false;
+  }
+
+  return (
+    normalized.includes("parse") ||
+    normalized.includes("illegal column") ||
+    normalized.includes("valid column")
+  );
+}
+
 function applyFallbackMove(state: ConnectFourGameState): ConnectFourGameState | null {
   const fallbackColumn = chooseFallbackConnectFourColumn(state);
   if (fallbackColumn === null) return null;
@@ -78,9 +143,20 @@ function applyFallbackMove(state: ConnectFourGameState): ConnectFourGameState | 
 
 export async function runConnectFourAIBenchmark(
   params: RunConnectFourBenchmarkParams
-): Promise<ConnectFourMatchRecord> {
+): Promise<ConnectFourMatchRecord | null> {
+  if (params.signal.aborted) {
+    return null;
+  }
+
   const startedAt = Date.now();
   const maxMoves = Math.max(1, Math.floor(params.maxMoves));
+  const modelConfigs: Record<
+    ConnectFourPlayer,
+    ConnectFourBenchmarkModelConfig
+  > = {
+    red: validatePlayerConfig(params, "red"),
+    yellow: validatePlayerConfig(params, "yellow"),
+  };
   let state = createInitialConnectFourState();
   let invalidResponses = 0;
   let fallbackMoves = 0;
@@ -92,7 +168,7 @@ export async function runConnectFourAIBenchmark(
   while (state.status === "playing") {
     if (params.signal.aborted) {
       emitProgress(params, state, "Aborted.", invalidResponses, fallbackMoves);
-      break;
+      return null;
     }
 
     if (state.moveHistory.length >= maxMoves) {
@@ -108,7 +184,7 @@ export async function runConnectFourAIBenchmark(
     }
 
     const currentPlayer = state.turn;
-    const { modelId, reasoning } = playerConfig(params, currentPlayer);
+    const currentConfig = modelConfigs[currentPlayer];
     emitProgress(
       params,
       state,
@@ -117,38 +193,36 @@ export async function runConnectFourAIBenchmark(
       fallbackMoves
     );
 
-    const apiKey = getConnectFourModelApiKey(modelId);
     const responseStartedAt = Date.now();
     let nextState: ConnectFourGameState | null = null;
 
-    if (apiKey) {
-      const aiResult = await requestConnectFourAIMove({
-        state,
-        modelId,
-        reasoningEffort: reasoning,
-        apiKey,
-        baseURL: getConnectFourModelBaseURL(modelId),
-        signal: params.signal,
-      });
-      totalAiResponseMs += Date.now() - responseStartedAt;
-      aiResponseCount++;
+    const aiResult = await requestConnectFourAIMove({
+      state,
+      modelId: currentConfig.modelId,
+      reasoningEffort: currentConfig.reasoning,
+      apiKey: currentConfig.apiKey,
+      baseURL: currentConfig.baseURL,
+      signal: params.signal,
+    });
+    totalAiResponseMs += Date.now() - responseStartedAt;
+    aiResponseCount++;
 
-      if (params.signal.aborted) {
-        emitProgress(params, state, "Aborted.", invalidResponses, fallbackMoves);
-        break;
-      }
+    if (params.signal.aborted) {
+      emitProgress(params, state, "Aborted.", invalidResponses, fallbackMoves);
+      return null;
+    }
 
-      if ("error" in aiResult) {
-        invalidResponses++;
-      } else {
-        try {
-          nextState = dropDisc(state, aiResult.column, Date.now());
-        } catch {
-          invalidResponses++;
-        }
+    if ("error" in aiResult) {
+      if (!isRecoverableConnectFourAIError(aiResult.error)) {
+        throw new Error(aiResult.error);
       }
-    } else {
       invalidResponses++;
+    } else {
+      try {
+        nextState = dropDisc(state, aiResult.column, Date.now());
+      } catch {
+        invalidResponses++;
+      }
     }
 
     if (!nextState) {

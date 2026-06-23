@@ -3,6 +3,7 @@ import {
   listGameBenchmarkRunners,
   registerGameBenchmark,
 } from "../lib/games/core/benchmark";
+import { isRecoverableConnectFourAIError } from "../lib/games/connect-four/benchmark";
 import type { GameId } from "../lib/games/core/types";
 
 let failures = 0;
@@ -56,6 +57,21 @@ check(
   "connect four benchmark can be unregistered",
   getGameBenchmarkRunner("connect-four") === null,
   listGameBenchmarkRunners()
+);
+
+check(
+  "connect four parse failures can use fallback",
+  isRecoverableConnectFourAIError("Failed to parse AI response after multiple attempts")
+);
+
+check(
+  "connect four auth failures do not use fallback",
+  !isRecoverableConnectFourAIError("AI request failed: 401 Unauthorized invalid API key")
+);
+
+check(
+  "connect four unknown provider failures do not use fallback",
+  !isRecoverableConnectFourAIError("Unknown provider for red model: unknown")
 );
 
 if (failures === 0) {
