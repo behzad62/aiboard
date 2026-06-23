@@ -5,6 +5,7 @@ import {
   initStore,
   isInitialized,
   markGameStatsLegacyImportAttempted,
+  onStoreReady,
   replaceStore,
   saveGenericGameMatchRecord,
 } from "../client/store";
@@ -18,6 +19,10 @@ const STORAGE_KEY = "aiboard-game-stats";
 let pendingMatchRecords: GenericGameMatchRecord[] = [];
 let readinessAttempt: Promise<void> | null = null;
 let flushingPendingRecords = false;
+
+onStoreReady(() => {
+  flushPendingMatchRecordsIfReady();
+});
 
 function getLocalStorage(): Storage | null {
   try {
@@ -188,10 +193,14 @@ function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): vo
 
   if (!Array.isArray(parsed)) return;
 
+  const convertedRecords: GenericGameMatchRecord[] = [];
   for (const record of parsed) {
-    if (isLegacyMatchRecord(record)) {
-      saveGenericGameMatchRecord(legacyMatchToGeneric(record));
-    }
+    if (!isLegacyMatchRecord(record)) return;
+    convertedRecords.push(legacyMatchToGeneric(record));
+  }
+
+  for (const record of convertedRecords) {
+    saveGenericGameMatchRecord(record);
   }
   markGameStatsLegacyImportAttempted();
 }
@@ -261,6 +270,13 @@ function chessModelInvolvesRecord(
     chessRecord?.whiteModel === modelId ||
     chessRecord?.blackModel === modelId
   );
+}
+
+function filterPendingMatchRecords(modelId?: string): void {
+  pendingMatchRecords = pendingMatchRecords.filter((record) => {
+    if (record.gameId !== "chess") return true;
+    return modelId ? !chessModelInvolvesRecord(record, modelId) : false;
+  });
 }
 
 /** Get all chess match records from the generic match-record store. */
@@ -363,6 +379,7 @@ function updateModelStats(
 
 /** Reset game stats - optionally for a specific model only */
 export function resetGameStats(modelId?: string): void {
+  filterPendingMatchRecords(modelId);
   try {
     const records = getStoredGenericMatchRecords();
     if (!records) return;

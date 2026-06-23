@@ -96,6 +96,7 @@ function legacyMatch(id: string): GameMatchRecord {
 
 function installIndexedDbStore(rawStore: string): {
   getStoredRaw: () => string | undefined;
+  setStoredRaw: (raw: string) => void;
 } {
   const values = new Map<string, unknown>([["store", rawStore]]);
   const db = {
@@ -147,6 +148,68 @@ function installIndexedDbStore(rawStore: string): {
       typeof values.get("store") === "string"
         ? (values.get("store") as string)
         : undefined,
+    setStoredRaw: (raw: string) => {
+      values.set("store", raw);
+    },
+  };
+}
+
+function installControlledIndexedDbStore(rawStore: string): {
+  getPendingStoreLoads: () => number;
+  resolveStoreLoad: (index: number) => void;
+} {
+  const values = new Map<string, unknown>([["store", rawStore]]);
+  const pendingStoreLoads: Array<{ result: unknown; onsuccess: (() => void) | null }> = [];
+  const db = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => {
+      const tx = {
+        oncomplete: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+        error: null,
+        objectStore: () => ({
+          get: (key: string) => {
+            const req = {
+              result: values.get(key),
+              onsuccess: null as (() => void) | null,
+              onerror: null as (() => void) | null,
+              error: null,
+            };
+            if (key === "store") pendingStoreLoads.push(req);
+            else queueMicrotask(() => req.onsuccess?.());
+            return req;
+          },
+          put: (value: unknown, key: string) => {
+            values.set(key, value);
+            queueMicrotask(() => tx.oncomplete?.());
+          },
+        }),
+      };
+      return tx;
+    },
+    close: () => {},
+  };
+  const fakeIndexedDb = {
+    open: () => {
+      const req = {
+        result: db,
+        error: null,
+        onupgradeneeded: null as (() => void) | null,
+        onsuccess: null as (() => void) | null,
+        onerror: null as (() => void) | null,
+      };
+      queueMicrotask(() => req.onsuccess?.());
+      return req;
+    },
+  };
+  (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB =
+    fakeIndexedDb as unknown as IDBFactory;
+
+  return {
+    getPendingStoreLoads: () => pendingStoreLoads.length,
+    resolveStoreLoad: (index: number) => {
+      pendingStoreLoads.splice(index, 1)[0]?.onsuccess?.();
+    },
   };
 }
 
@@ -191,6 +254,107 @@ async function settleAsyncReadiness(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+async function waitForCondition(
+  description: string,
+  predicate: () => boolean
+): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  check(description, false);
+}
+
+__clearGameSessionStoreForTests();
+const raceIndexedDb = installControlledIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({});
+const initialReadiness = __initGameSessionStoreForTests();
+await waitForCondition(
+  "first readiness call reaches store load",
+  () => raceIndexedDb.getPendingStoreLoads() === 1
+);
+saveMatchRecord(legacyMatch("queued-during-concurrent-init"));
+await settleAsyncReadiness();
+const concurrentPendingLoads = raceIndexedDb.getPendingStoreLoads();
+check(
+  "concurrent initStore calls share one in-flight store load",
+  concurrentPendingLoads === 1,
+  concurrentPendingLoads
+);
+if (concurrentPendingLoads > 1) {
+  raceIndexedDb.resolveStoreLoad(1);
+  await settleAsyncReadiness();
+}
+raceIndexedDb.resolveStoreLoad(0);
+await initialReadiness;
+await settleAsyncReadiness();
+const concurrentInitRecords = getMatchRecords();
+check(
+  "concurrent initStore calls do not lose queued stats saves",
+  concurrentInitRecords.length === 1 &&
+    concurrentInitRecords[0]?.id === "queued-during-concurrent-init",
+  concurrentInitRecords
+);
+
+__clearGameSessionStoreForTests();
+const lockedEnvelope = JSON.stringify({ v: 1, encrypted: true, data: "locked" });
+const lockedThenReadyIndexedDb = installIndexedDbStore(lockedEnvelope);
+installLocalStorageStore({});
+saveMatchRecord(legacyMatch("queued-while-locked"));
+await settleAsyncReadiness();
+lockedThenReadyIndexedDb.setStoredRaw(JSON.stringify({}));
+await __initGameSessionStoreForTests();
+await settleAsyncReadiness();
+const recordsAfterReadyNotification = await listGenericGameMatchRecords();
+check(
+  "queued stats saves flush after later successful store readiness",
+  recordsAfterReadyNotification.length === 1 &&
+    recordsAfterReadyNotification[0]?.id === "queued-while-locked",
+  recordsAfterReadyNotification
+);
+
+__clearGameSessionStoreForTests();
+const resetPendingIndexedDb = installControlledIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({});
+saveMatchRecord(legacyMatch("pending-reset-all"));
+await waitForCondition(
+  "pending reset save reaches store load",
+  () => resetPendingIndexedDb.getPendingStoreLoads() === 1
+);
+resetGameStats();
+resetPendingIndexedDb.resolveStoreLoad(0);
+await settleAsyncReadiness();
+const recordsAfterPendingReset = await listGenericGameMatchRecords();
+check(
+  "resetGameStats clears pending queued chess records",
+  recordsAfterPendingReset.length === 0,
+  recordsAfterPendingReset
+);
+
+__clearGameSessionStoreForTests();
+const resetModelPendingIndexedDb = installControlledIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({});
+saveMatchRecord(legacyMatch("pending-reset-target-model"));
+saveMatchRecord({
+  ...legacyMatch("pending-reset-other-model"),
+  whiteModel: "openai:other-test",
+  blackModel: "anthropic:other-test",
+});
+await waitForCondition(
+  "pending model reset save reaches store load",
+  () => resetModelPendingIndexedDb.getPendingStoreLoads() === 1
+);
+resetGameStats("openai:white-test");
+resetModelPendingIndexedDb.resolveStoreLoad(0);
+await settleAsyncReadiness();
+const recordsAfterPendingModelReset = await listGenericGameMatchRecords();
+check(
+  "model reset filters matching pending queued records",
+  recordsAfterPendingModelReset.length === 1 &&
+    recordsAfterPendingModelReset[0]?.id === "pending-reset-other-model",
+  recordsAfterPendingModelReset
+);
+
 __clearGameSessionStoreForTests();
 installIndexedDbStore(JSON.stringify({}));
 installLocalStorageStore({});
@@ -224,6 +388,32 @@ check(
   recordsAfterMalformedRecovery.length === 1 &&
     recordsAfterMalformedRecovery[0]?.id === "legacy-after-malformed",
   recordsAfterMalformedRecovery
+);
+
+__clearGameSessionStoreForTests();
+installIndexedDbStore(JSON.stringify({}));
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([
+    legacyMatch("legacy-array-valid"),
+    { id: "legacy-array-invalid" },
+  ]),
+});
+await __initGameSessionStoreForTests();
+const malformedArrayRecords = getMatchRecords();
+check(
+  "malformed legacy stats arrays import no partial records",
+  malformedArrayRecords.length === 0,
+  malformedArrayRecords
+);
+installLocalStorageStore({
+  "aiboard-game-stats": JSON.stringify([legacyMatch("legacy-after-malformed-array")]),
+});
+const recordsAfterMalformedArrayRecovery = getMatchRecords();
+check(
+  "malformed legacy stats arrays do not mark migration attempted",
+  recordsAfterMalformedArrayRecovery.length === 1 &&
+    recordsAfterMalformedArrayRecovery[0]?.id === "legacy-after-malformed-array",
+  recordsAfterMalformedArrayRecovery
 );
 
 __clearGameSessionStoreForTests();

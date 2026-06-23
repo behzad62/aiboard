@@ -84,6 +84,8 @@ function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
 let memory: ClientStore | null = null;
 let adapter: StorageAdapter | null = null;
 let config: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
+let initPromise: Promise<{ needsPassphrase: boolean }> | null = null;
+const readyListeners = new Set<() => void>();
 
 export function isInitialized(): boolean {
   return memory !== null;
@@ -95,18 +97,30 @@ export function getConfig(): StorageConfig {
 
 /** Load config + adapter + store. Returns needsPassphrase=true if encrypted and locked. */
 export async function initStore(): Promise<{ needsPassphrase: boolean }> {
+  if (memory) return { needsPassphrase: false };
+  if (initPromise) return initPromise;
+
+  initPromise = loadStore().finally(() => {
+    initPromise = null;
+  });
+  return initPromise;
+}
+
+async function loadStore(): Promise<{ needsPassphrase: boolean }> {
   config = await getStorageConfig();
   adapter = await createAdapter(config);
   const raw = await adapter.load();
 
   if (raw === null) {
     memory = hydrateStore();
+    notifyReady();
     return { needsPassphrase: false };
   }
 
   const env = parseEnvelope(raw);
   if (!env) {
     memory = hydrateStore(JSON.parse(raw) as Partial<ClientStore>);
+    notifyReady();
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
@@ -114,7 +128,30 @@ export async function initStore(): Promise<{ needsPassphrase: boolean }> {
   }
   const json = await unwrap(env);
   memory = hydrateStore(JSON.parse(json) as Partial<ClientStore>);
+  notifyReady();
   return { needsPassphrase: false };
+}
+
+function notifyReady(): void {
+  for (const listener of Array.from(readyListeners)) {
+    try {
+      listener();
+    } catch {
+      // Readiness listeners must not break store initialization.
+    }
+  }
+}
+
+export function onStoreReady(listener: () => void): () => void {
+  readyListeners.add(listener);
+  if (memory) {
+    queueMicrotask(() => {
+      if (readyListeners.has(listener) && memory) listener();
+    });
+  }
+  return () => {
+    readyListeners.delete(listener);
+  };
 }
 
 function store(): ClientStore {
@@ -442,6 +479,7 @@ export function deleteAttachmentRecord(id: string): void {
 /** Replace the whole store (used by the one-time import from the server). */
 export function replaceStore(data: Partial<ClientStore>): void {
   memory = hydrateStore(data);
+  notifyReady();
   schedulePersist();
 }
 
@@ -456,7 +494,9 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   }
   memory = hydrateStore(data);
   adapter = null;
+  initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
+  notifyReady();
 }
 
 export function __clearClientStoreForTests(): void {
@@ -466,6 +506,7 @@ export function __clearClientStoreForTests(): void {
   }
   memory = null;
   adapter = null;
+  initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
 }
 
