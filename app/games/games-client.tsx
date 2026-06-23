@@ -8,16 +8,20 @@ import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
 import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
 import { AIPresence } from "@/components/games/chess/AIPresence";
+import { CapturedPieces } from "@/components/games/chess/CapturedPieces";
 import {
   PromotionDialog,
   type PromotionPieceType,
 } from "@/components/games/chess/PromotionDialog";
 import {
   createInitialState,
+  fromFEN,
+  generateLegalMoves,
   makeMove,
   generateLegalMovesFromSquare,
   isLegalMove,
   getPiece,
+  squareToCoords,
 } from "@/lib/games/chess/engine";
 import {
   requestAIMove,
@@ -36,6 +40,7 @@ import type {
   Move,
   GameMode,
   PieceColor,
+  Piece,
   GameMatchRecord,
 } from "@/lib/games/chess/types";
 import type { ReasoningEffort } from "@/lib/db/schema";
@@ -175,6 +180,67 @@ function waitForAIDelay(ms: number, signal: AbortSignal): Promise<void> {
 
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+interface CapturedPiecesByPlayer {
+  white: Piece[];
+  black: Piece[];
+}
+
+function colorLabel(color: PieceColor): string {
+  return color === "white" ? "White" : "Black";
+}
+
+function chooseFallbackAIMove(state: GameState): Move | null {
+  return generateLegalMoves(state, state.turn)[0] ?? null;
+}
+
+function isRecoverableAIMoveError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes("parse") ||
+    normalized.includes("illegal move") ||
+    normalized.includes("valid move") ||
+    normalized.includes("maximum retries")
+  );
+}
+
+function getCapturedPiecesByPlayer(state: GameState): CapturedPiecesByPlayer {
+  const captured: CapturedPiecesByPlayer = {
+    white: [],
+    black: [],
+  };
+
+  for (const record of state.moveHistory) {
+    let beforeMove: GameState;
+
+    try {
+      beforeMove = fromFEN(record.fenBefore);
+    } catch {
+      continue;
+    }
+
+    const movingPiece = getPiece(beforeMove, record.move.from);
+    if (!movingPiece) continue;
+
+    let capturedPiece = getPiece(beforeMove, record.move.to);
+    if (
+      !capturedPiece &&
+      movingPiece.type === "pawn" &&
+      beforeMove.enPassantTarget === record.move.to &&
+      record.move.from[0] !== record.move.to[0]
+    ) {
+      const [toRow, toCol] = squareToCoords(record.move.to);
+      const capturedRow = movingPiece.color === "white" ? toRow + 1 : toRow - 1;
+      capturedPiece = beforeMove.board[capturedRow]?.[toCol] ?? null;
+    }
+
+    if (capturedPiece) {
+      captured[movingPiece.color].push(capturedPiece);
+    }
+  }
+
+  return captured;
 }
 
 interface AIConfig {
@@ -334,6 +400,7 @@ export function GamesClient() {
   const [customIncrementSeconds, setCustomIncrementSeconds] = useState("0");
   const [aiThinking, setAiThinking] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiWarning, setAiWarning] = useState<string | null>(null);
   const [gameStartTime, setGameStartTime] = useState<number>(0);
   const [lastAiInteraction, setLastAiInteraction] = useState<
     ChessSessionSnapshot["lastAiInteraction"]
@@ -772,15 +839,41 @@ export function GamesClient() {
 
         if (!isCurrentAIRequest()) return;
         if ("move" in result) {
+          setAiWarning(null);
           setLastAiInteraction(result.interaction);
           setGameState((prev) =>
             isLegalMove(prev, result.move) ? makeMove(prev, result.move) : prev
           );
         } else if ("error" in result) {
-          setAiError(result.error);
+          const fallbackMove =
+            gameMode === "aivai" && isRecoverableAIMoveError(result.error)
+              ? chooseFallbackAIMove(gameState)
+              : null;
+
+          if (fallbackMove) {
+            setAiWarning(
+              `${colorLabel(currentTurn)} AI returned an unreadable move. A legal fallback move was played so the AI vs AI match can continue.`
+            );
+            setLastAiInteraction({
+              actorId: currentTurn,
+              gesture: "confused",
+              utterance:
+                "I could not return valid move JSON, so the board used a legal fallback.",
+              diagnostics: result.error,
+            });
+            setGameState((prev) =>
+              prev.turn === currentTurn && isLegalMove(prev, fallbackMove)
+                ? makeMove(prev, fallbackMove)
+                : prev
+            );
+          } else {
+            setAiWarning(null);
+            setAiError(result.error);
+          }
         }
       } catch (err) {
         if (!isCurrentAIRequest()) return;
+        setAiWarning(null);
         setAiError(err instanceof Error ? err.message : "AI move failed");
       } finally {
         if (isCurrentAIRequest()) {
@@ -1070,6 +1163,7 @@ export function GamesClient() {
     setIsPaused(false);
     setAiThinking(false);
     setAiError(null);
+    setAiWarning(null);
     setLastAiInteraction(null);
     lastTickRef.current = 0;
     previousMoveCountRef.current = 0;
@@ -1116,6 +1210,7 @@ export function GamesClient() {
     setRestoreSnapshot(null);
     setAiThinking(false);
     setAiError(null);
+    setAiWarning(null);
     lastTickRef.current = Date.now();
     previousMoveCountRef.current = 0;
     matchSavedRef.current = false;
@@ -1154,6 +1249,7 @@ export function GamesClient() {
     clearPendingPromotion();
     setAiThinking(false);
     setAiError(null);
+    setAiWarning(null);
     aiRequestRef.current = false;
     matchSavedRef.current = false;
     previousMoveCountRef.current = restoreSnapshot.gameState.moveHistory.length;
@@ -1172,6 +1268,7 @@ export function GamesClient() {
     clearPendingPromotion();
     setAiThinking(false);
     setAiError(null);
+    setAiWarning(null);
     void deleteActiveChessSession();
   }, [clearPendingPromotion, deleteActiveChessSession, invalidateAIRequests]);
 
@@ -1181,6 +1278,7 @@ export function GamesClient() {
       clearPendingPromotion();
       setAiThinking(false);
       setAiError(null);
+      setAiWarning(null);
       setGameMode(mode);
     },
     [clearPendingPromotion, invalidateAIRequests]
@@ -1228,6 +1326,10 @@ export function GamesClient() {
   const showGameStatus =
     gameState.status === "check" ||
     (!activeGameStatus && gameState.status !== "paused");
+  const capturedPieces = useMemo(
+    () => getCapturedPiecesByPlayer(gameState),
+    [gameState]
+  );
   const exportSnapshot = useMemo<ChessSessionSnapshot>(
     () => ({
       gameMode,
@@ -1628,7 +1730,7 @@ export function GamesClient() {
 
   // Render game screen
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 dark:from-gray-900 dark:via-gray-850 dark:to-gray-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-stone-50 to-emerald-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       <div className="container mx-auto px-4 py-6">
         {/* Header */}
         <div className="text-center mb-6">
@@ -1642,32 +1744,41 @@ export function GamesClient() {
           </p>
         </div>
 
-        {/* Main Layout: Board (60%) + Controls (40%) */}
+        {/* Main Layout: Board + Controls */}
         <div className="flex flex-col lg:flex-row gap-6 items-start justify-center">
           {/* Chess Board Container */}
-          <div
-            className="flex-shrink-0 flex justify-center"
-            style={{ width: "100%", maxWidth: "600px" }}
-          >
-            <div style={{ width: "100%", maxWidth: "600px" }}>
-              <ChessBoard
-                state={gameState}
-                onSquareClick={handleSquareClick}
-                onSquareDrag={handleSquareDrag}
-                onClearSelection={clearBoardSelection}
-                selectedSquare={selectedSquare}
-                legalMoves={legalMoves}
-                lastMove={lastMove}
-                flipped={boardFlipped}
-                interactive={
-                  !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
-                }
+          <div className="w-full flex-shrink-0 lg:flex-1 lg:max-w-[860px]">
+            <div className="grid w-full items-stretch gap-3 md:grid-cols-[minmax(84px,112px)_minmax(320px,600px)_minmax(84px,112px)]">
+              <CapturedPieces
+                player="white"
+                pieces={capturedPieces.white}
+                className="order-2 md:order-1 md:min-h-full"
+              />
+              <div className="order-1 rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-2xl shadow-slate-900/10 dark:border-slate-700/80 dark:bg-slate-950/60 dark:shadow-black/35 md:order-2 sm:p-3">
+                <ChessBoard
+                  state={gameState}
+                  onSquareClick={handleSquareClick}
+                  onSquareDrag={handleSquareDrag}
+                  onClearSelection={clearBoardSelection}
+                  selectedSquare={selectedSquare}
+                  legalMoves={legalMoves}
+                  lastMove={lastMove}
+                  flipped={boardFlipped}
+                  interactive={
+                    !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
+                  }
+                />
+              </div>
+              <CapturedPieces
+                player="black"
+                pieces={capturedPieces.black}
+                className="order-3 md:min-h-full"
               />
             </div>
           </div>
 
           {/* Control Panel */}
-          <div className="w-full lg:w-80 lg:max-w-[40%] space-y-4">
+          <div className="w-full lg:w-96 lg:max-w-[36%] space-y-4">
             {/* Clocks */}
             <div className="flex flex-col gap-3">
               <ChessClock
@@ -1732,6 +1843,17 @@ export function GamesClient() {
               >
                 <div className="font-semibold mb-1">AI Error</div>
                 <div className="text-sm">{aiError}</div>
+              </div>
+            )}
+
+            {/* AI Warning */}
+            {aiWarning && (
+              <div
+                className="p-4 rounded-xl bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                data-testid="ai-warning"
+              >
+                <div className="font-semibold mb-1">AI fallback move</div>
+                <div className="text-sm">{aiWarning}</div>
               </div>
             )}
 

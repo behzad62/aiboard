@@ -23,14 +23,14 @@ interface ChessBoardProps {
   interactive?: boolean;
 }
 
-// Board colors - warm wood palette
-const LIGHT_SQUARE = "#f0d9b5";
-const DARK_SQUARE = "#b58863";
-const SELECTED_COLOR = "rgba(255, 255, 100, 0.5)";
-const LAST_MOVE_COLOR = "rgba(255, 255, 0, 0.3)";
-const LEGAL_MOVE_DOT = "rgba(0, 0, 0, 0.15)";
-const CAPTURE_RING = "rgba(0, 0, 0, 0.15)";
-const CHECK_OUTLINE = "rgba(220, 38, 38, 0.95)";
+// Board colors - warm wood with higher contrast highlights.
+const LIGHT_SQUARE = "#ead7b0";
+const DARK_SQUARE = "#8f6747";
+const SELECTED_COLOR = "rgba(245, 158, 11, 0.46)";
+const LAST_MOVE_COLOR = "rgba(250, 204, 21, 0.36)";
+const LEGAL_MOVE_DOT = "rgba(15, 23, 42, 0.24)";
+const CAPTURE_RING = "rgba(22, 163, 74, 0.58)";
+const CHECK_OUTLINE = "rgba(239, 68, 68, 0.98)";
 
 // File and rank labels
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -299,11 +299,16 @@ export function ChessBoard({
           "relative flex items-center justify-center appearance-none border-0 p-0",
           "aspect-square",
           "touch-none select-none",
-          interactive && "cursor-pointer hover:brightness-110",
+          interactive && "cursor-pointer hover:saturate-110",
           "transition-all duration-150",
           "focus-visible:z-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600"
         )}
-        style={{ backgroundColor: bgColor, width: '100%', height: '100%' }}
+        style={{
+          backgroundColor: bgColor,
+          width: "100%",
+          height: "100%",
+          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+        }}
         onClick={() => handleClick(square)}
         onFocus={() => setFocusedSquare(square)}
         onKeyDown={(event) => handleSquareKeyDown(square, event)}
@@ -338,7 +343,7 @@ export function ChessBoard({
 
         {/* Piece */}
         {piece && (
-          <div className="absolute inset-[5%] flex items-center justify-center z-10 transition-transform duration-150">
+          <div className="absolute inset-[5%] flex items-center justify-center z-10 transition-transform duration-150 drop-shadow-[0_6px_5px_rgba(15,23,42,0.35)]">
             <div className="w-full h-full flex items-center justify-center">
               <ChessPiece piece={piece} />
             </div>
@@ -378,7 +383,7 @@ export function ChessBoard({
           <span
             className={cn(
               "absolute bottom-0.5 right-1 text-[10px] font-semibold pointer-events-none select-none",
-              isLight ? "text-[#b58863]" : "text-[#f0d9b5]"
+              isLight ? "text-[#9a6b43]" : "text-[#f4dfba]"
             )}
           >
             {displayFiles[displayCol]}
@@ -389,7 +394,7 @@ export function ChessBoard({
           <span
             className={cn(
               "absolute top-0.5 left-1 text-[10px] font-semibold pointer-events-none select-none",
-              isLight ? "text-[#b58863]" : "text-[#f0d9b5]"
+              isLight ? "text-[#9a6b43]" : "text-[#f4dfba]"
             )}
           >
             {displayRanks[displayRow]}
@@ -408,10 +413,10 @@ export function ChessBoard({
       <div
         className={cn(
           "w-full aspect-square",
-          "rounded-lg overflow-hidden",
-          "shadow-xl",
-          "border-4 border-[#5c4033]",
-          "bg-[#5c4033]", // Border color shows through as frame
+          "rounded-xl overflow-hidden",
+          "shadow-[0_24px_50px_rgba(15,23,42,0.28)]",
+          "border-[6px] border-[#3f2d22]",
+          "bg-[#3f2d22]",
           "touch-none"
         )}
         style={{ width: '100%', minHeight: '300px' }}
@@ -425,7 +430,7 @@ export function ChessBoard({
           style={{
             width: '100%',
             height: '100%',
-            boxShadow: "inset 0 0 20px rgba(0,0,0,0.3)",
+            boxShadow: "inset 0 0 28px rgba(0,0,0,0.28)",
           }}
         >
           {Array.from({ length: 8 }, (_, displayRow) =>

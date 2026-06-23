@@ -751,6 +751,25 @@ test.describe("Chess game", () => {
     await expect(page.locator('button:has-text("Start Game")')).toBeVisible();
   });
 
+  test("captured piece trays update after a capture", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.click('button:has-text("Start Game")');
+
+    await expect(page.getByTestId("captured-white")).toContainText("No captures");
+    await expect(page.getByTestId("captured-black")).toContainText("No captures");
+
+    await page.getByTestId("square-e2").click();
+    await page.getByTestId("square-e4").click();
+    await page.getByTestId("square-d7").click();
+    await page.getByTestId("square-d5").click();
+    await page.getByTestId("square-e4").click();
+    await page.getByTestId("square-d5").click();
+
+    await expect(page.getByTestId("captured-white-black-pawn")).toHaveCount(1);
+    await expect(page.getByTestId("captured-white")).toContainText("1");
+    await expect(page.getByTestId("captured-black")).toContainText("No captures");
+  });
+
   test("custom timed game expires on a 3-second clock and saves a timeout result", async ({ page }) => {
     await page.click("text=Player vs Player");
     await page.getByTestId("time-control-custom").click();
@@ -1021,6 +1040,52 @@ test.describe("Chess game", () => {
     await expect(page.getByTestId("ai-presence")).toContainText(
       "I like the central control here."
     );
+  });
+
+  test("AI vs AI falls back to a legal move when a model response cannot be parsed", async ({ page }) => {
+    let aiRequestCount = 0;
+
+    await page.route("**/__chess-ai-test/v1/chat/completions", async (route) => {
+      aiRequestCount += 1;
+      await route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+        },
+        body: openAIStreamChunk("I need more time to think."),
+      });
+    });
+
+    await seedDelayedChessAIModel(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await page.getByTestId("game-mode-aivai").click();
+    await expect(page.getByTestId("model-select-white")).toHaveValue(
+      "custom:delayed-chess-ai"
+    );
+    await expect(page.getByTestId("model-select-black")).toHaveValue(
+      "custom:delayed-chess-ai"
+    );
+
+    await page.getByTestId("start-game-button").click();
+
+    await expect(page.getByTestId("ai-warning")).toContainText(
+      "legal fallback move",
+      { timeout: 15000 }
+    );
+    await expect(page.getByTestId("ai-error")).toHaveCount(0);
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await readPersistedChessSnapshot(page);
+          return snapshot?.gameState?.moveHistory?.length ?? 0;
+        },
+        { timeout: 15000 }
+      )
+      .toBeGreaterThan(0);
+    expect(aiRequestCount).toBeGreaterThanOrEqual(3);
   });
 
   test("reset ignores a stale delayed AI move", async ({ page }) => {
