@@ -39,6 +39,25 @@ check("registered benchmark can run", result && typeof result === "object" && "o
 unregister();
 check("unregister removes benchmark", getGameBenchmarkRunner(gameId) === null, listGameBenchmarkRunners());
 
+const unregisterConnectFour = registerGameBenchmark({
+  gameId: "connect-four",
+  label: "AI vs AI Connect Four Benchmark",
+  run: async () => [{ id: "test" }],
+});
+
+check(
+  "connect four benchmark can be registered",
+  getGameBenchmarkRunner("connect-four") !== null,
+  listGameBenchmarkRunners()
+);
+
+unregisterConnectFour();
+check(
+  "connect four benchmark can be unregistered",
+  getGameBenchmarkRunner("connect-four") === null,
+  listGameBenchmarkRunners()
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {
