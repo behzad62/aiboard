@@ -1762,7 +1762,7 @@ git commit -m "Fix Connect Four verification issues"
 
 ## Final Delivery
 
-- [ ] Confirm `git status --short --branch` is clean.
-- [ ] Push `codex/connect-four-game`.
-- [ ] Open a PR against `main`.
-- [ ] Include verification results in the PR description.
+- [x] Confirm `git status --short --branch` is clean.
+- [x] Push `codex/connect-four-game`.
+- [x] Open a PR against `main`.
+- [x] Include verification results in the PR description.
