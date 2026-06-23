@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +57,9 @@ export function GameAIConfigPanel({
     (level) => level.value === config.reasoningEffort
   );
   const safeReasoningIndex = reasoningIndex >= 0 ? reasoningIndex : 0;
+  const reasoningLabel = REASONING_LEVELS[safeReasoningIndex].label;
+  const modelSelectId = useId();
+  const reasoningRangeId = useId();
 
   return (
     <div
@@ -73,10 +77,14 @@ export function GameAIConfigPanel({
       </div>
 
       <div className="mb-4">
-        <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+        <label
+          htmlFor={modelSelectId}
+          className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+        >
           Model
         </label>
         <select
+          id={modelSelectId}
           value={config.modelId}
           onChange={(event) =>
             onChange({ ...config, modelId: event.target.value })
@@ -99,18 +107,23 @@ export function GameAIConfigPanel({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+          <label
+            htmlFor={reasoningRangeId}
+            className="text-xs font-medium text-gray-600 dark:text-gray-400"
+          >
             Reasoning Level
           </label>
           <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-            {REASONING_LEVELS[safeReasoningIndex].label}
+            {reasoningLabel}
           </span>
         </div>
         <input
+          id={reasoningRangeId}
           type="range"
           min={0}
           max={REASONING_LEVELS.length - 1}
           value={safeReasoningIndex}
+          aria-valuetext={reasoningLabel}
           onChange={(event) => {
             const index = Number.parseInt(event.target.value, 10);
             onChange({

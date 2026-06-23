@@ -912,12 +912,9 @@ export function ChessGameClient({
   // Get AI config for a color
   const getAIConfig = useCallback(
     (color: PieceColor): AIConfig => {
-      if (gameMode === "pvai") {
-        return color === humanColor ? whiteAI : blackAI;
-      }
       return color === "white" ? whiteAI : blackAI;
     },
-    [gameMode, humanColor, whiteAI, blackAI]
+    [whiteAI, blackAI]
   );
 
   // Timer effect
