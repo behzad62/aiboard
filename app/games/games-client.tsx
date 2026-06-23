@@ -7,6 +7,7 @@ import { ChessClock } from "@/components/games/chess/ChessClock";
 import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
 import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
+import { AIPresence } from "@/components/games/chess/AIPresence";
 import {
   PromotionDialog,
   type PromotionPieceType,
@@ -771,8 +772,9 @@ export function GamesClient() {
 
         if (!isCurrentAIRequest()) return;
         if ("move" in result) {
+          setLastAiInteraction(result.interaction);
           setGameState((prev) =>
-            isCurrentAIRequest() ? makeMove(prev, result.move) : prev
+            isLegalMove(prev, result.move) ? makeMove(prev, result.move) : prev
           );
         } else if ("error" in result) {
           setAiError(result.error);
@@ -1732,6 +1734,8 @@ export function GamesClient() {
                 <div className="text-sm">{aiError}</div>
               </div>
             )}
+
+            <AIPresence interaction={lastAiInteraction} />
 
             {/* Game Controls */}
             <div className="flex flex-wrap items-start gap-3">

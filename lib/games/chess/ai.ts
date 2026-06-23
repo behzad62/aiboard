@@ -20,6 +20,11 @@ import {
   getProviderBaseURL,
   getEnabledModels,
 } from "@/lib/client/providers";
+import {
+  buildGameAIInteraction,
+  type GameAIInteractionResult,
+} from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 
 // =============================================================================
 // EXPORTED INTERFACES
@@ -59,12 +64,18 @@ IMPORTANT: You must respond with ONLY valid JSON in this exact format:
 {
   "from": "e2",
   "to": "e4",
-  "promotion": "queen"
+  "promotion": "queen",
+  "gesture": "confident",
+  "utterance": "I like the central control here.",
+  "confidence": 0.72
 }
 
 Rules for your response:
 - "from" and "to" are required - use algebraic notation (a-h for files, 1-8 for ranks)
 - "promotion" is ONLY included when a pawn reaches the last rank. Valid values: "queen", "rook", "bishop", "knight". Omit this field entirely for non-promotion moves.
+- Optional "gesture" values: "thinking", "confident", "confused", "celebrating", "apologetic", "neutral". Use "neutral" or omit it unless there is a clear reason.
+- Optional "utterance" must be at most one short sentence. Omit it for normal quiet chess moves.
+- Optional "confidence" must be a number from 0 to 1.
 - You MUST choose a move from the provided list of legal moves
 - Do not include any text outside the JSON object
 - Do not wrap the JSON in markdown code fences`;
@@ -179,6 +190,14 @@ export function parseAIResponse(rawText: string): ChessAIResponse | null {
       response.reasoning = parsed.reasoning;
     }
 
+    const interaction = buildGameAIInteraction("ai", parsed);
+    if (interaction?.gesture) response.gesture = interaction.gesture;
+    if (interaction?.utterance) response.utterance = interaction.utterance;
+    if (interaction?.confidence !== undefined) {
+      response.confidence = interaction.confidence;
+    }
+    if (interaction?.diagnostics) response.diagnostics = interaction.diagnostics;
+
     return response;
   } catch {
     return null;
@@ -198,8 +217,9 @@ interface RequestAIMoveParams {
   signal?: AbortSignal;
 }
 
-interface AIMoveSuccess {
+interface AIMoveSuccess extends GameAIInteractionResult<Move> {
   move: Move;
+  interaction: GameAIInteraction | null;
   reasoning?: string;
 }
 
@@ -345,9 +365,16 @@ export async function requestAIMove(
       }
 
       // Success!
+      const interaction = buildGameAIInteraction(state.turn, parsed);
       return {
+        action: move,
         move,
         reasoning: parsed.reasoning,
+        ...(parsed.gesture ? { gesture: parsed.gesture } : {}),
+        ...(parsed.utterance ? { utterance: parsed.utterance } : {}),
+        ...(parsed.confidence !== undefined ? { confidence: parsed.confidence } : {}),
+        ...(parsed.diagnostics ? { diagnostics: parsed.diagnostics } : {}),
+        interaction,
       };
     } catch (err) {
       if (signal?.aborted) {

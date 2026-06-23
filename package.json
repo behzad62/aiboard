@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:games": "tsx lib/games/chess/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-game-session-store.mts",
+    "test:games": "tsx lib/games/chess/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-chess-ai-interactions.mts && tsx scripts/test-game-session-store.mts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

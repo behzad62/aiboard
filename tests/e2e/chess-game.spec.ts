@@ -990,6 +990,39 @@ test.describe("Chess game", () => {
     await expect(page.getByText("e8=R+", { exact: true })).toBeVisible();
   });
 
+  test("AI presence shows optional move metadata", async ({ page }) => {
+    await page.route("**/__chess-ai-test/v1/chat/completions", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+        },
+        body: openAIStreamChunk(
+          '{"from":"e2","to":"e4","gesture":"confident","utterance":"I like the central control here.","confidence":0.72}'
+        ),
+      });
+    });
+
+    await seedDelayedChessAIModel(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await page.getByTestId("game-mode-pvai").click();
+    await page.getByTestId("color-black").click();
+    await page.getByTestId("start-game-button").click();
+
+    await expect(
+      page.getByTestId("square-e4").getByTestId("chess-piece")
+    ).toHaveCount(1);
+    await expect(page.getByTestId("ai-presence")).toContainText(
+      "White AI - Confident"
+    );
+    await expect(page.getByTestId("ai-presence")).toContainText(
+      "I like the central control here."
+    );
+  });
+
   test("reset ignores a stale delayed AI move", async ({ page }) => {
     let aiRequestCount = 0;
     let releaseAIResponse!: () => void;

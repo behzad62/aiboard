@@ -1,3 +1,5 @@
+import type { GameAIInteraction } from "../core/types";
+
 /**
  * Chess game types and interfaces
  */
@@ -78,6 +80,10 @@ export interface ChessAIResponse {
   to: string;
   promotion?: string;
   reasoning?: string;
+  gesture?: GameAIInteraction["gesture"];
+  utterance?: string;
+  confidence?: number;
+  diagnostics?: string;
 }
 
 // Game mode types
