@@ -11,6 +11,7 @@ import type {
 import type { GameMatchRecord, GameModelStat } from "./chess/types";
 
 const STORAGE_KEY = "aiboard-game-stats";
+const MIGRATION_KEY = "aiboard-game-stats-generic-import-v1";
 
 function getLocalStorage(): Storage | null {
   try {
@@ -157,10 +158,18 @@ function getStoredGenericMatchRecords(): GenericGameMatchRecord[] | null {
 }
 
 function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): void {
-  if (records.length > 0) return;
-
   const storage = getLocalStorage();
   if (!storage) return;
+
+  try {
+    if (storage.getItem(MIGRATION_KEY)) return;
+    if (records.length > 0) {
+      storage.setItem(MIGRATION_KEY, "done");
+      return;
+    }
+  } catch {
+    return;
+  }
 
   try {
     const data = storage.getItem(STORAGE_KEY);
@@ -176,6 +185,12 @@ function importLegacyMatchRecordsIfNeeded(records: GenericGameMatchRecord[]): vo
     }
   } catch {
     // Silently skip malformed legacy data or unavailable storage.
+  } finally {
+    try {
+      storage.setItem(MIGRATION_KEY, "done");
+    } catch {
+      // Silently skip if the migration marker cannot be written.
+    }
   }
 }
 

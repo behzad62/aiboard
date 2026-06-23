@@ -13,7 +13,7 @@ import {
   saveGameSession,
   saveGenericGameMatchRecord,
 } from "../lib/games/core/session-store";
-import { getMatchRecords } from "../lib/games/stats";
+import { getMatchRecords, resetGameStats } from "../lib/games/stats";
 
 let failures = 0;
 
@@ -229,6 +229,14 @@ check(
   "legacy game stats import preserves legacy localStorage key",
   localStorage.getItem("aiboard-game-stats") === legacyRawStats,
   localStorage.getItem("aiboard-game-stats")
+);
+resetGameStats();
+const recordsAfterLegacyReset = getMatchRecords();
+const genericRecordsAfterLegacyReset = await listGenericGameMatchRecords();
+check(
+  "legacy game stats import is not repeated after reset",
+  recordsAfterLegacyReset.length === 0 && genericRecordsAfterLegacyReset.length === 0,
+  { recordsAfterLegacyReset, genericRecordsAfterLegacyReset }
 );
 
 __resetGameSessionStoreForTests({ needsPassphrase: true });
