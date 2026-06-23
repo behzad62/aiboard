@@ -1,6 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  Pause,
+  Play,
+  StepBack,
+  StepForward,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChessBoard } from "@/components/games/ChessBoard";
 import { ChessClock } from "@/components/games/chess/ChessClock";
@@ -42,6 +50,7 @@ import type {
   GameMode,
   PieceColor,
   Piece,
+  MoveRecord,
   GameMatchRecord,
 } from "@/lib/games/chess/types";
 import type { ReasoningEffort } from "@/lib/db/schema";
@@ -108,6 +117,7 @@ const BOARD_ORIENTATIONS: Array<{ value: BoardOrientation; label: string }> = [
 ];
 
 const CLOCK_AUTOSAVE_INTERVAL_MS = 5_000;
+const REPLAY_STEP_MS = 900;
 const PROMOTION_PIECES: PromotionPieceType[] = [
   "queen",
   "rook",
@@ -304,6 +314,40 @@ function getCapturedPiecesByPlayer(state: GameState): CapturedPiecesByPlayer {
   return captured;
 }
 
+function deriveReplayGameState(state: GameState, ply: number): GameState {
+  const history = state.moveHistory;
+  if (history.length === 0 || ply >= history.length) return state;
+
+  const firstMove = history[0];
+  if (!firstMove) return state;
+
+  const safePly = Math.max(0, Math.min(ply, history.length));
+  try {
+    const replayMove = safePly > 0 ? history[safePly - 1] : null;
+    if (safePly > 0 && !replayMove) return state;
+
+    const replayState =
+      safePly === 0
+        ? fromFEN(firstMove.fenBefore)
+        : fromFEN(replayMove!.fenAfter);
+
+    return {
+      ...replayState,
+      moveHistory: history.slice(0, safePly),
+    };
+  } catch {
+    return state;
+  }
+}
+
+function formatReplayMoveLabel(ply: number, move: MoveRecord | null): string {
+  if (!move || ply === 0) return "Initial position";
+
+  const moveNumber = Math.floor((ply - 1) / 2) + 1;
+  const prefix = (ply - 1) % 2 === 0 ? `${moveNumber}.` : `${moveNumber}...`;
+  return `${prefix} ${move.san}`;
+}
+
 interface AIConfig {
   modelId: string;
   reasoningEffort: ReasoningEffort;
@@ -480,6 +524,153 @@ function AIConfigPanel({
   );
 }
 
+interface ReplayControlsProps {
+  moveCount: number;
+  cursor: number;
+  isLive: boolean;
+  isPlaying: boolean;
+  currentMove: MoveRecord | null;
+  onFirst: () => void;
+  onPrevious: () => void;
+  onPlayPause: () => void;
+  onNext: () => void;
+  onLive: () => void;
+  onSeek: (ply: number) => void;
+}
+
+function ReplayControls({
+  moveCount,
+  cursor,
+  isLive,
+  isPlaying,
+  currentMove,
+  onFirst,
+  onPrevious,
+  onPlayPause,
+  onNext,
+  onLive,
+  onSeek,
+}: ReplayControlsProps) {
+  const hasMoves = moveCount > 0;
+  const atStart = cursor <= 0;
+  const atLive = isLive || cursor >= moveCount;
+  const moveLabel = formatReplayMoveLabel(cursor, currentMove);
+
+  const buttonBase =
+    "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500 disabled:cursor-not-allowed disabled:opacity-45";
+  const mutedButton =
+    "border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800";
+  const activeButton =
+    "border-amber-500 bg-amber-500 text-white hover:bg-amber-600 dark:border-amber-400 dark:bg-amber-500 dark:text-gray-950";
+
+  return (
+    <div
+      className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900"
+      data-testid="replay-controls"
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+            Replay
+          </div>
+          <div className="mt-0.5 truncate font-mono text-xs text-gray-500 dark:text-gray-400">
+            {moveLabel}
+          </div>
+        </div>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold",
+            atLive
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+          )}
+        >
+          {atLive ? "Live" : `${cursor}/${moveCount}`}
+        </span>
+      </div>
+
+      <input
+        type="range"
+        min={0}
+        max={Math.max(moveCount, 0)}
+        value={Math.min(cursor, moveCount)}
+        onChange={(event) => onSeek(Number.parseInt(event.target.value, 10))}
+        disabled={!hasMoves}
+        className={cn(
+          "mb-3 h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200 disabled:cursor-not-allowed dark:bg-gray-700",
+          "[&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4",
+          "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full",
+          "[&::-webkit-slider-thumb]:bg-amber-500 [&::-webkit-slider-thumb]:shadow"
+        )}
+        aria-label="Replay move"
+        data-testid="replay-slider"
+      />
+
+      <div className="grid grid-cols-5 gap-2">
+        <button
+          type="button"
+          onClick={onFirst}
+          disabled={!hasMoves || atStart}
+          className={cn(buttonBase, mutedButton)}
+          aria-label="Replay from start"
+          title="Start"
+          data-testid="replay-first"
+        >
+          <ChevronsLeft className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={!hasMoves || atStart}
+          className={cn(buttonBase, mutedButton)}
+          aria-label="Previous move"
+          title="Previous"
+          data-testid="replay-previous"
+        >
+          <StepBack className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onPlayPause}
+          disabled={!hasMoves}
+          className={cn(buttonBase, isPlaying ? activeButton : mutedButton)}
+          aria-label={isPlaying ? "Pause replay" : "Play replay"}
+          title={isPlaying ? "Pause" : "Play"}
+          data-testid="replay-play-pause"
+        >
+          {isPlaying ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Play className="h-4 w-4" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!hasMoves || atLive}
+          className={cn(buttonBase, mutedButton)}
+          aria-label="Next move"
+          title="Next"
+          data-testid="replay-next"
+        >
+          <StepForward className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onLive}
+          disabled={!hasMoves || atLive}
+          className={cn(buttonBase, mutedButton)}
+          aria-label="Skip to latest move"
+          title="Latest"
+          data-testid="replay-live"
+        >
+          <ChevronsRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function GamesClient() {
   // Setup state
   const [gameStarted, setGameStarted] = useState(false);
@@ -499,6 +690,8 @@ export function GamesClient() {
 
   // Game state - use lazy initializer for SSR safety
   const [gameState, setGameState] = useState<GameState>(() => createInitialState());
+  const [replayCursor, setReplayCursor] = useState<number | null>(null);
+  const [replayPlaying, setReplayPlaying] = useState(false);
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<{
     from: Square;
@@ -538,6 +731,56 @@ export function GamesClient() {
   const storageNeedsPassphraseRef = useRef(false);
   const persistenceTokenRef = useRef(0);
   const previousMoveCountRef = useRef(0);
+
+  const moveCount = gameState.moveHistory.length;
+  const replayDisplayPly = replayCursor ?? moveCount;
+  const replayPly = Math.min(replayDisplayPly, moveCount);
+  const isReplayLive = replayCursor === null || replayPly >= moveCount;
+  const isReplayReviewing = !isReplayLive;
+  const displayGameState = useMemo(
+    () => deriveReplayGameState(gameState, replayPly),
+    [gameState, replayPly]
+  );
+  const replayCurrentMove =
+    replayPly > 0 ? gameState.moveHistory[replayPly - 1] ?? null : null;
+
+  useEffect(() => {
+    if (moveCount === 0) {
+      setReplayCursor(null);
+      setReplayPlaying(false);
+      return;
+    }
+
+    setReplayCursor((current) => {
+      if (current === null) return null;
+      return current >= moveCount ? null : current;
+    });
+  }, [moveCount]);
+
+  useEffect(() => {
+    if (!replayPlaying || moveCount === 0) return;
+
+    const interval = setInterval(() => {
+      setReplayCursor((current) => {
+        const cursor = current ?? 0;
+        const next = cursor + 1;
+        if (next >= moveCount) {
+          setReplayPlaying(false);
+          return null;
+        }
+        return next;
+      });
+    }, REPLAY_STEP_MS);
+
+    return () => clearInterval(interval);
+  }, [moveCount, replayPlaying]);
+
+  useEffect(() => {
+    if (!isReplayReviewing) return;
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+    setLegalMoves([]);
+  }, [isReplayReviewing]);
 
   const clearAutosaveTimer = useCallback(() => {
     if (autosaveTimerRef.current) {
@@ -1129,6 +1372,7 @@ export function GamesClient() {
   const handleSquareClick = useCallback(
     (square: Square) => {
       if (
+        isReplayReviewing ||
         pendingPromotion ||
         isPaused ||
         !isChessActiveStatus(gameState.status) ||
@@ -1208,6 +1452,7 @@ export function GamesClient() {
       isPaused,
       aiThinking,
       isAIControlled,
+      isReplayReviewing,
     ]
   );
 
@@ -1215,6 +1460,7 @@ export function GamesClient() {
     (from: Square, to: Square) => {
       if (
         from === to ||
+        isReplayReviewing ||
         pendingPromotion ||
         isPaused ||
         !isChessActiveStatus(gameState.status) ||
@@ -1264,6 +1510,7 @@ export function GamesClient() {
       aiThinking,
       gameState,
       isAIControlled,
+      isReplayReviewing,
       isPaused,
       pendingPromotion,
     ]
@@ -1274,6 +1521,8 @@ export function GamesClient() {
     invalidateAIRequests();
     void deleteActiveChessSession();
     setGameState(createInitialState());
+    setReplayCursor(null);
+    setReplayPlaying(false);
     clearPendingPromotion();
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
@@ -1314,12 +1563,80 @@ export function GamesClient() {
     lastTickRef.current = Date.now();
   }, [invalidateAIRequests, invalidatePersistence]);
 
+  const pauseLiveGameForReplay = useCallback(() => {
+    if (gameStarted && !isPaused && isChessActiveStatus(gameState.status)) {
+      handlePause();
+    }
+  }, [gameStarted, gameState.status, handlePause, isPaused]);
+
+  const enterReplayAt = useCallback(
+    (ply: number) => {
+      if (moveCount === 0) {
+        setReplayCursor(null);
+        setReplayPlaying(false);
+        return;
+      }
+
+      const nextPly = Math.max(0, Math.min(ply, moveCount));
+      setReplayPlaying(false);
+      clearBoardSelection();
+
+      if (nextPly >= moveCount) {
+        setReplayCursor(null);
+        return;
+      }
+
+      pauseLiveGameForReplay();
+      setReplayCursor(nextPly);
+    },
+    [clearBoardSelection, moveCount, pauseLiveGameForReplay]
+  );
+
+  const handleReplayFirst = useCallback(() => {
+    enterReplayAt(0);
+  }, [enterReplayAt]);
+
+  const handleReplayPrevious = useCallback(() => {
+    enterReplayAt(replayPly - 1);
+  }, [enterReplayAt, replayPly]);
+
+  const handleReplayNext = useCallback(() => {
+    enterReplayAt(replayPly + 1);
+  }, [enterReplayAt, replayPly]);
+
+  const handleReplayLive = useCallback(() => {
+    setReplayPlaying(false);
+    setReplayCursor(null);
+    clearBoardSelection();
+  }, [clearBoardSelection]);
+
+  const handleReplayPlayPause = useCallback(() => {
+    if (moveCount === 0) return;
+    if (replayPlaying) {
+      setReplayPlaying(false);
+      return;
+    }
+
+    clearBoardSelection();
+    pauseLiveGameForReplay();
+    setReplayCursor(replayPly >= moveCount ? 0 : replayPly);
+    setReplayPlaying(true);
+  }, [
+    clearBoardSelection,
+    moveCount,
+    pauseLiveGameForReplay,
+    replayPlaying,
+    replayPly,
+  ]);
+
   // Start game
   const handleStartGame = useCallback(() => {
     invalidateAIRequests();
     invalidatePersistence();
     clearPendingPromotion();
     setGameState(createInitialState());
+    setReplayCursor(null);
+    setReplayPlaying(false);
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
     setWhiteRemainingMs(initialRemainingMs(timeControl));
@@ -1351,6 +1668,8 @@ export function GamesClient() {
       setWhiteAI(snapshot.whiteAI);
       setBlackAI(snapshot.blackAI);
       setGameState(snapshot.gameState);
+      setReplayCursor(null);
+      setReplayPlaying(false);
       setWhiteTimeMs(snapshot.whiteTimeMs);
       setBlackTimeMs(snapshot.blackTimeMs);
       setWhiteRemainingMs(snapshot.whiteRemainingMs);
@@ -1397,6 +1716,8 @@ export function GamesClient() {
     setWhiteAI(restoreSnapshot.whiteAI);
     setBlackAI(restoreSnapshot.blackAI);
     setGameState(restoreSnapshot.gameState);
+    setReplayCursor(null);
+    setReplayPlaying(false);
     setWhiteTimeMs(restoreSnapshot.whiteTimeMs);
     setBlackTimeMs(restoreSnapshot.blackTimeMs);
     setWhiteRemainingMs(restoreSnapshot.whiteRemainingMs);
@@ -1431,6 +1752,8 @@ export function GamesClient() {
   const handleStartNewGame = useCallback(() => {
     invalidateAIRequests();
     clearPendingPromotion();
+    setReplayCursor(null);
+    setReplayPlaying(false);
     setAiThinking(false);
     setAiError(null);
     setAiWarning(null);
@@ -1487,13 +1810,16 @@ export function GamesClient() {
     boardOrientation === "black" ||
     (boardOrientation === "auto" && autoBoardFlipped);
   const activeGameStatus = isChessActiveStatus(gameState.status);
+  const displayActiveGameStatus = isChessActiveStatus(displayGameState.status);
+  const statusGameState = isReplayReviewing ? displayGameState : gameState;
+  const statusActiveGameStatus = isChessActiveStatus(statusGameState.status);
   const isTimedGame = isTimedTimeControl(timeControl);
   const showGameStatus =
-    gameState.status === "check" ||
-    (!activeGameStatus && gameState.status !== "paused");
+    statusGameState.status === "check" ||
+    (!statusActiveGameStatus && statusGameState.status !== "paused");
   const capturedPieces = useMemo(
-    () => getCapturedPiecesByPlayer(gameState),
-    [gameState]
+    () => getCapturedPiecesByPlayer(displayGameState),
+    [displayGameState]
   );
   const getBoardPlayer = useCallback(
     (color: PieceColor): BoardPlayerSummary => {
@@ -1620,9 +1946,9 @@ export function GamesClient() {
 
   // Last move for highlighting
   const lastMove = useMemo(() => {
-    const history = gameState.moveHistory;
+    const history = displayGameState.moveHistory;
     return history.length > 0 ? history[history.length - 1].move : null;
-  }, [gameState.moveHistory]);
+  }, [displayGameState.moveHistory]);
 
   // Check if start button should be disabled (only for AI modes without models)
   const isStartDisabled = gameMode !== "pvp" && availableModels.length === 0;
@@ -1968,29 +2294,35 @@ export function GamesClient() {
                 <BoardPlayerCard
                   player={topBoardPlayer}
                   active={
-                    activeGameStatus && gameState.turn === topBoardPlayer.color
+                    displayActiveGameStatus &&
+                    displayGameState.turn === topBoardPlayer.color
                   }
                   testId="board-player-top"
                 />
                 <div className="rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-2xl shadow-slate-900/10 dark:border-slate-700/80 dark:bg-slate-950/60 dark:shadow-black/35 sm:p-3">
                   <ChessBoard
-                    state={gameState}
+                    state={displayGameState}
                     onSquareClick={handleSquareClick}
                     onSquareDrag={handleSquareDrag}
                     onClearSelection={clearBoardSelection}
-                    selectedSquare={selectedSquare}
-                    legalMoves={legalMoves}
+                    selectedSquare={isReplayReviewing ? null : selectedSquare}
+                    legalMoves={isReplayReviewing ? [] : legalMoves}
                     lastMove={lastMove}
                     flipped={boardFlipped}
                     interactive={
-                      !pendingPromotion && !aiThinking && !isPaused && activeGameStatus
+                      !isReplayReviewing &&
+                      !pendingPromotion &&
+                      !aiThinking &&
+                      !isPaused &&
+                      activeGameStatus
                     }
                   />
                 </div>
                 <BoardPlayerCard
                   player={bottomBoardPlayer}
                   active={
-                    activeGameStatus && gameState.turn === bottomBoardPlayer.color
+                    displayActiveGameStatus &&
+                    displayGameState.turn === bottomBoardPlayer.color
                   }
                   testId="board-player-bottom"
                 />
@@ -2011,14 +2343,22 @@ export function GamesClient() {
                 color="black"
                 timeMs={isTimedGame ? blackRemainingMs ?? 0 : blackTimeMs}
                 isTimed={isTimedGame}
-                isActive={gameState.turn === "black" && activeGameStatus}
+                isActive={
+                  !isReplayReviewing &&
+                  gameState.turn === "black" &&
+                  activeGameStatus
+                }
                 isPaused={isPaused}
               />
               <ChessClock
                 color="white"
                 timeMs={isTimedGame ? whiteRemainingMs ?? 0 : whiteTimeMs}
                 isTimed={isTimedGame}
-                isActive={gameState.turn === "white" && activeGameStatus}
+                isActive={
+                  !isReplayReviewing &&
+                  gameState.turn === "white" &&
+                  activeGameStatus
+                }
                 isPaused={isPaused}
               />
             </div>
@@ -2028,25 +2368,25 @@ export function GamesClient() {
               <div
                 className={cn(
                   "p-4 rounded-xl text-center font-semibold",
-                  gameState.status === "checkmate" &&
+                  statusGameState.status === "checkmate" &&
                     "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
-                  gameState.status === "check" &&
+                  statusGameState.status === "check" &&
                     "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300",
-                  gameState.status === "timeout" &&
+                  statusGameState.status === "timeout" &&
                     "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
-                  (gameState.status === "stalemate" ||
-                    gameState.status === "draw") &&
+                  (statusGameState.status === "stalemate" ||
+                    statusGameState.status === "draw") &&
                     "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
                 )}
                 data-testid="game-status"
               >
-                {gameState.status === "checkmate" &&
-                  `Checkmate! ${gameState.winner === "white" ? "White" : "Black"} wins!`}
-                {gameState.status === "check" && "Check!"}
-                {gameState.status === "timeout" &&
-                  `Timeout! ${gameState.winner === "white" ? "White" : "Black"} wins on time!`}
-                {gameState.status === "stalemate" && "Stalemate - Draw!"}
-                {gameState.status === "draw" && "Draw!"}
+                {statusGameState.status === "checkmate" &&
+                  `Checkmate! ${statusGameState.winner === "white" ? "White" : "Black"} wins!`}
+                {statusGameState.status === "check" && "Check!"}
+                {statusGameState.status === "timeout" &&
+                  `Timeout! ${statusGameState.winner === "white" ? "White" : "Black"} wins on time!`}
+                {statusGameState.status === "stalemate" && "Stalemate - Draw!"}
+                {statusGameState.status === "draw" && "Draw!"}
               </div>
             )}
 
@@ -2084,6 +2424,20 @@ export function GamesClient() {
             )}
 
             <AIPresence interaction={lastAiInteraction} />
+
+            <ReplayControls
+              moveCount={moveCount}
+              cursor={replayPly}
+              isLive={isReplayLive}
+              isPlaying={replayPlaying}
+              currentMove={replayCurrentMove}
+              onFirst={handleReplayFirst}
+              onPrevious={handleReplayPrevious}
+              onPlayPause={handleReplayPlayPause}
+              onNext={handleReplayNext}
+              onLive={handleReplayLive}
+              onSeek={enterReplayAt}
+            />
 
             {/* Game Controls */}
             <div className="flex flex-wrap items-start gap-3">
@@ -2139,7 +2493,11 @@ export function GamesClient() {
             </div>
 
             {/* Move History */}
-            <MoveHistory moves={gameState.moveHistory} />
+            <MoveHistory
+              moves={gameState.moveHistory}
+              activePly={isReplayLive ? undefined : replayPly}
+              onSelectPly={enterReplayAt}
+            />
           </div>
         </div>
       </div>

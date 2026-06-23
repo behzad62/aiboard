@@ -6,6 +6,8 @@ import type { MoveRecord } from "@/lib/games/chess/types";
 
 interface MoveHistoryProps {
   moves: MoveRecord[];
+  activePly?: number;
+  onSelectPly?: (ply: number) => void;
 }
 
 // Piece symbol mapping for display
@@ -49,7 +51,11 @@ interface MovePairRow {
   blackMove: MoveRecord | null;
 }
 
-export function MoveHistory({ moves }: MoveHistoryProps) {
+export function MoveHistory({
+  moves,
+  activePly,
+  onSelectPly,
+}: MoveHistoryProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Group moves into pairs (white + black)
@@ -74,7 +80,12 @@ export function MoveHistory({ moves }: MoveHistoryProps) {
     }
   }, [moves.length]);
 
-  const renderMove = (move: MoveRecord | null, isLast: boolean, isWhite: boolean) => {
+  const renderMove = (
+    move: MoveRecord | null,
+    isLast: boolean,
+    isWhite: boolean,
+    ply: number
+  ) => {
     if (!move) {
       return (
         <td className="px-2 py-1.5 text-gray-400 dark:text-gray-600">—</td>
@@ -83,16 +94,28 @@ export function MoveHistory({ moves }: MoveHistoryProps) {
 
     const pieceSymbol = getPieceSymbol(move.san);
     const moveText = getMoveText(move.san);
+    const isActiveReplayMove = activePly === ply;
 
     return (
       <td
         className={cn(
-          "px-2 py-1.5 font-mono text-sm transition-colors",
+          "px-1 py-1 font-mono text-sm transition-colors",
           isLast && "bg-amber-100/50 dark:bg-amber-900/20",
-          "hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer rounded"
+          isActiveReplayMove && "bg-amber-200/70 dark:bg-amber-800/40",
+          onSelectPly && "cursor-pointer"
         )}
+        data-replay-active={isActiveReplayMove || undefined}
       >
-        <span className="inline-flex items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => onSelectPly?.(ply)}
+          disabled={!onSelectPly}
+          className={cn(
+            "inline-flex w-full items-center gap-0.5 rounded px-1 py-0.5 text-left transition-colors",
+            onSelectPly && "hover:bg-gray-100 dark:hover:bg-gray-800"
+          )}
+          data-testid={`move-history-ply-${ply}`}
+        >
           {pieceSymbol && (
             <span className={cn(
               "text-base",
@@ -104,7 +127,7 @@ export function MoveHistory({ moves }: MoveHistoryProps) {
           <span className="text-gray-800 dark:text-gray-200">
             {moveText}
           </span>
-        </span>
+        </button>
       </td>
     );
   };
@@ -188,8 +211,18 @@ export function MoveHistory({ moves }: MoveHistoryProps) {
                     <td className="px-2 py-1.5 text-center text-xs text-gray-400 dark:text-gray-500 font-mono">
                       {pair.moveNumber}.
                     </td>
-                    {renderMove(pair.whiteMove, isWhiteLastMove, true)}
-                    {renderMove(pair.blackMove, isBlackLastMove, false)}
+                    {renderMove(
+                      pair.whiteMove,
+                      isWhiteLastMove,
+                      true,
+                      (pair.moveNumber - 1) * 2 + 1
+                    )}
+                    {renderMove(
+                      pair.blackMove,
+                      isBlackLastMove,
+                      false,
+                      (pair.moveNumber - 1) * 2 + 2
+                    )}
                   </tr>
                 );
               })}
