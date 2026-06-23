@@ -221,6 +221,124 @@ async function seedPromotionChessSession(page: Page): Promise<void> {
   });
 }
 
+async function seedCheckedChessSession(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const now = new Date().toISOString();
+    const checkedState = {
+      board: [
+        [null, null, null, null, { color: "black", type: "king" }, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, null, null, null, null],
+        [null, null, null, null, { color: "black", type: "rook" }, null, null, null],
+        [{ color: "white", type: "rook" }, null, null, null, { color: "white", type: "king" }, null, null, null],
+      ],
+      turn: "white",
+      castlingRights: {
+        whiteKingside: false,
+        whiteQueenside: false,
+        blackKingside: false,
+        blackQueenside: false,
+      },
+      enPassantTarget: null,
+      halfmoveClock: 0,
+      fullmoveNumber: 1,
+      status: "check",
+      winner: null,
+      moveHistory: [],
+    };
+    const sessionSnapshot = {
+      gameMode: "pvp",
+      humanColor: "white",
+      whiteAI: { modelId: "", reasoningEffort: "default" },
+      blackAI: { modelId: "", reasoningEffort: "default" },
+      gameState: checkedState,
+      whiteTimeMs: 0,
+      blackTimeMs: 0,
+      gameStartTime: Date.now(),
+      isPaused: false,
+      lastAiInteraction: null,
+    };
+    const store = {
+      userSettings: {
+        id: "default",
+        defaultEffort: "medium",
+        defaultMode: "panel",
+        judgeModelId: null,
+        defaultVerbosity: "balanced",
+        defaultStyleNote: "",
+        defaultReasoningEffort: "default",
+        defaultBuildRunPolicy: "finish",
+        defaultBuildBudgetUsd: 0,
+        defaultBuildTimeLimitMinutes: 120,
+      },
+      providerKeys: [],
+      customModels: [],
+      discussions: [],
+      messages: [],
+      finalResults: [],
+      attachments: [],
+      buildFiles: [],
+      buildCheckpoints: [],
+      gameSessions: [
+        {
+          id: "chess-active-session",
+          gameId: "chess",
+          title: "Chess: Player vs Player",
+          status: "active",
+          participants: [
+            { id: "white", kind: "human", label: "White Player" },
+            { id: "black", kind: "human", label: "Black Player" },
+          ],
+          stateJson: JSON.stringify(sessionSnapshot),
+          metadataJson: JSON.stringify({
+            version: 1,
+            savedAt: now,
+          }),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      gameMatchRecords: [],
+      gameStatsLegacyImportAttempted: false,
+      modelStats: [],
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open("ai-discussion-board", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("kv")) {
+          db.createObjectStore("kv");
+        }
+      };
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(
+          JSON.stringify({
+            v: 1,
+            encrypted: false,
+            data: JSON.stringify(store),
+          }),
+          "store"
+        );
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+    });
+  });
+}
+
 function openAIStreamChunk(content: string): string {
   return [
     `data: ${JSON.stringify({
@@ -417,6 +535,79 @@ async function waitForPersistedBlackClock(
     .toBeGreaterThanOrEqual(minMs);
 }
 
+async function dragSquareWithMouse(
+  page: Page,
+  from: string,
+  to: string
+): Promise<void> {
+  const source = page.getByTestId(`square-${from}`);
+  const target = page.getByTestId(`square-${to}`);
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+
+  if (!sourceBox || !targetBox) {
+    throw new Error(`Unable to drag ${from} to ${to}: square not visible`);
+  }
+
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 6 }
+  );
+  await page.mouse.up();
+}
+
+async function dragSquareWithPointer(
+  page: Page,
+  from: string,
+  to: string,
+  pointerType: "mouse" | "touch"
+): Promise<void> {
+  const source = page.getByTestId(`square-${from}`);
+  const target = page.getByTestId(`square-${to}`);
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+
+  if (!sourceBox || !targetBox) {
+    throw new Error(`Unable to pointer-drag ${from} to ${to}: square not visible`);
+  }
+
+  await source.dispatchEvent("pointerdown", {
+    pointerId: 10,
+    pointerType,
+    button: 0,
+    buttons: 1,
+    clientX: sourceBox.x + sourceBox.width / 2,
+    clientY: sourceBox.y + sourceBox.height / 2,
+  });
+  await target.dispatchEvent("pointerup", {
+    pointerId: 10,
+    pointerType,
+    button: 0,
+    buttons: 0,
+    clientX: targetBox.x + targetBox.width / 2,
+    clientY: targetBox.y + targetBox.height / 2,
+  });
+}
+
+async function expectSquareAbove(
+  page: Page,
+  upperSquare: string,
+  lowerSquare: string
+): Promise<void> {
+  const upperBox = await page.getByTestId(`square-${upperSquare}`).boundingBox();
+  const lowerBox = await page.getByTestId(`square-${lowerSquare}`).boundingBox();
+
+  expect(upperBox, `${upperSquare} should be visible`).toBeTruthy();
+  expect(lowerBox, `${lowerSquare} should be visible`).toBeTruthy();
+  expect(upperBox!.y).toBeLessThan(lowerBox!.y);
+}
+
 test.describe("Chess game", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/games");
@@ -469,14 +660,13 @@ test.describe("Chess game", () => {
     const svgPieces = page.locator(".grid-cols-8 svg");
     await expect(svgPieces).toHaveCount(32);
 
-    const squares = page.locator(".grid-cols-8 > div");
-    await squares.nth(52).click();
+    await page.getByTestId("square-e2").click();
     await page.waitForTimeout(300);
 
     const legalMoveIndicators = page.locator(".grid-cols-8 .rounded-full");
     await expect(legalMoveIndicators.first()).toBeVisible();
 
-    await squares.nth(36).click();
+    await page.getByTestId("square-e4").click();
     await page.waitForTimeout(300);
 
     await expect(page.getByTestId("chess-clock-black")).toContainText("Black");
@@ -503,13 +693,93 @@ test.describe("Chess game", () => {
     await expect(page.locator('button:has-text("Start Game")')).toBeVisible();
   });
 
+  test("board supports drag, keyboard navigation, orientation, and move indicators", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.click('button:has-text("Start Game")');
+
+    await expect(page.getByTestId("board-orientation-auto")).toBeVisible();
+    await expectSquareAbove(page, "e7", "e2");
+
+    await page.getByTestId("board-orientation-black").click();
+    await expectSquareAbove(page, "e2", "e7");
+
+    await page.getByTestId("board-orientation-white").click();
+    await expectSquareAbove(page, "e7", "e2");
+
+    await page.getByTestId("board-orientation-auto").click();
+    await expectSquareAbove(page, "e7", "e2");
+
+    await dragSquareWithMouse(page, "e2", "e4");
+    await expect(
+      page.getByTestId("square-e2").getByTestId("chess-piece")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("square-e4").getByTestId("chess-piece")
+    ).toHaveCount(1);
+    await expect(
+      page.getByTestId("square-e2").getByTestId("last-move-highlight")
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("square-e4").getByTestId("last-move-highlight")
+    ).toBeVisible();
+
+    await page.getByTestId("square-d7").click();
+    await page.getByTestId("square-d5").click();
+
+    await page.getByTestId("square-e4").focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByTestId("square-e5").getByTestId("legal-move-dot")
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("square-d5").getByTestId("legal-capture-ring")
+    ).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("legal-move-dot")).toHaveCount(0);
+    await expect(page.getByTestId("legal-capture-ring")).toHaveCount(0);
+
+    await page.getByTestId("square-g2").focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Space");
+
+    await expect(
+      page.getByTestId("square-g2").getByTestId("chess-piece")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("square-g4").getByTestId("chess-piece")
+    ).toHaveCount(1);
+
+    await dragSquareWithPointer(page, "g7", "g5", "touch");
+    await expect(
+      page.getByTestId("square-g7").getByTestId("chess-piece")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("square-g5").getByTestId("chess-piece")
+    ).toHaveCount(1);
+  });
+
+  test("checked king is outlined on the board", async ({ page }) => {
+    await seedCheckedChessSession(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByTestId("restore-game-banner")).toBeVisible();
+    await page.getByTestId("resume-game-button").click();
+
+    await expect(
+      page.getByTestId("square-e1").getByTestId("king-check-outline")
+    ).toBeVisible();
+  });
+
   test("restores an active player vs player game after refresh", async ({ page }) => {
     await page.click("text=Player vs Player");
     await page.click('button:has-text("Start Game")');
 
-    const squares = page.locator(".grid-cols-8 > div");
-    await squares.nth(52).click();
-    await squares.nth(36).click();
+    await page.getByTestId("square-e2").click();
+    await page.getByTestId("square-e4").click();
 
     await expect(page.getByText("e4")).toBeVisible();
     await waitForPersistedChessMove(page, "e4");

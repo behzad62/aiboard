@@ -65,6 +65,14 @@ const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
   { value: "aivai", label: "AI vs AI", description: "Watch AIs compete" },
 ];
 
+type BoardOrientation = "white" | "black" | "auto";
+
+const BOARD_ORIENTATIONS: Array<{ value: BoardOrientation; label: string }> = [
+  { value: "white", label: "White" },
+  { value: "black", label: "Black" },
+  { value: "auto", label: "Auto" },
+];
+
 const CLOCK_AUTOSAVE_INTERVAL_MS = 5_000;
 const PROMOTION_PIECES: PromotionPieceType[] = [
   "queen",
@@ -243,6 +251,8 @@ export function GamesClient() {
     to: Square;
   } | null>(null);
   const [legalMoves, setLegalMoves] = useState<Move[]>([]);
+  const [boardOrientation, setBoardOrientation] =
+    useState<BoardOrientation>("auto");
   const [isPaused, setIsPaused] = useState(false);
   const [whiteTimeMs, setWhiteTimeMs] = useState(0);
   const [blackTimeMs, setBlackTimeMs] = useState(0);
@@ -709,6 +719,11 @@ export function GamesClient() {
     setLegalMoves([]);
   }, []);
 
+  const clearBoardSelection = useCallback(() => {
+    setSelectedSquare(null);
+    setLegalMoves([]);
+  }, []);
+
   const handlePromotionSelect = useCallback(
     (promotion: PromotionPieceType) => {
       if (!pendingPromotion) return;
@@ -807,6 +822,64 @@ export function GamesClient() {
       isPaused,
       aiThinking,
       isAIControlled,
+    ]
+  );
+
+  const handleSquareDrag = useCallback(
+    (from: Square, to: Square) => {
+      if (
+        from === to ||
+        pendingPromotion ||
+        isPaused ||
+        !isChessActiveStatus(gameState.status) ||
+        aiThinking ||
+        isAIControlled(gameState.turn)
+      ) {
+        return;
+      }
+
+      const movingPiece = getPiece(gameState, from);
+      if (!movingPiece || movingPiece.color !== gameState.turn) {
+        return;
+      }
+
+      const move: Move = { from, to };
+
+      if (movingPiece.type === "pawn") {
+        const targetRank = to[1];
+        if (
+          (movingPiece.color === "white" && targetRank === "8") ||
+          (movingPiece.color === "black" && targetRank === "1")
+        ) {
+          const legalPromotionMoves = generateLegalMovesFromSquare(
+            gameState,
+            from
+          ).filter(
+            (legalMove) => legalMove.to === to && legalMove.promotion
+          );
+
+          if (legalPromotionMoves.length > 0) {
+            setPendingPromotion({ from, to });
+            setSelectedSquare(null);
+            setLegalMoves([]);
+            return;
+          }
+        }
+      }
+
+      if (isLegalMove(gameState, move)) {
+        setGameState((prev) => makeMove(prev, move));
+      }
+
+      setSelectedSquare(null);
+      setLegalMoves([]);
+    },
+    [
+      aiThinking,
+      gameState,
+      isAIControlled,
+      isPaused,
+      pendingPromotion,
     ]
   );
 
@@ -913,8 +986,11 @@ export function GamesClient() {
     [clearPendingPromotion, invalidateAIRequests]
   );
 
-  // Board should be flipped when human plays black
-  const boardFlipped = gameMode === "pvai" && humanColor === "black";
+  // Auto orientation follows the human side in player-vs-AI games.
+  const autoBoardFlipped = gameMode === "pvai" && humanColor === "black";
+  const boardFlipped =
+    boardOrientation === "black" ||
+    (boardOrientation === "auto" && autoBoardFlipped);
   const activeGameStatus = isChessActiveStatus(gameState.status);
   const showGameStatus =
     gameState.status === "check" ||
@@ -1236,6 +1312,8 @@ export function GamesClient() {
               <ChessBoard
                 state={gameState}
                 onSquareClick={handleSquareClick}
+                onSquareDrag={handleSquareDrag}
+                onClearSelection={clearBoardSelection}
                 selectedSquare={selectedSquare}
                 legalMoves={legalMoves}
                 lastMove={lastMove}
@@ -1321,6 +1399,34 @@ export function GamesClient() {
                   gameStatus={gameState.status}
                   canPause={!aiThinking}
                 />
+              </div>
+              <div
+                className="min-w-[220px] flex-1 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900"
+                data-testid="board-orientation-controls"
+              >
+                <div className="mb-3 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Board View
+                </div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-gray-800">
+                  {BOARD_ORIENTATIONS.map((orientation) => (
+                    <button
+                      key={orientation.value}
+                      type="button"
+                      onClick={() => setBoardOrientation(orientation.value)}
+                      aria-pressed={boardOrientation === orientation.value}
+                      className={cn(
+                        "rounded-md px-2 py-2 text-sm font-medium transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500",
+                        boardOrientation === orientation.value
+                          ? "bg-white text-amber-700 shadow-sm dark:bg-gray-700 dark:text-amber-300"
+                          : "text-gray-600 hover:bg-white/70 dark:text-gray-300 dark:hover:bg-gray-700/70"
+                      )}
+                      data-testid={`board-orientation-${orientation.value}`}
+                    >
+                      {orientation.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <ExportGameMenu
                 state={gameState}
