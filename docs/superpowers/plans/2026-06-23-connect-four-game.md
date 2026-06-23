@@ -1699,13 +1699,13 @@ git commit -m "Add Connect Four tests to games suite"
 **Files:**
 - No source changes expected unless verification finds a bug.
 
-- [ ] **Step 1: Start dev server**
+- [x] **Step 1: Start dev server**
 
 Run: `npm run dev`
 
 Expected: local Next server starts. If port 3000 is occupied, use the next available port from Next output.
 
-- [ ] **Step 2: Verify game picker**
+- [x] **Step 2: Verify game picker**
 
 Open `/games`.
 
@@ -1716,7 +1716,7 @@ Expected:
 - Back returns to picker.
 - Selecting Connect Four opens Connect Four setup.
 
-- [ ] **Step 3: Verify Connect Four PvP**
+- [x] **Step 3: Verify Connect Four PvP**
 
 Start Player vs Player.
 
@@ -1727,7 +1727,7 @@ Expected:
 - Four in a row ends game with clear winner.
 - Reset starts a fresh board.
 
-- [ ] **Step 4: Verify Connect Four import/export/replay**
+- [x] **Step 4: Verify Connect Four import/export/replay**
 
 Play at least four moves.
 
@@ -1736,7 +1736,7 @@ Expected:
 - JSON export imports back into the same position.
 - Replay controls step through the position without changing the live game.
 
-- [ ] **Step 5: Verify AI modes with configured model**
+- [x] **Step 5: Verify AI modes with configured model**
 
 If a provider key is configured:
 - Start Player vs AI and confirm AI moves.
@@ -1745,11 +1745,11 @@ If a provider key is configured:
 If no provider key is configured:
 - Confirm setup disables or explains AI start consistently with chess.
 
-- [ ] **Step 6: Stop dev server**
+- [x] **Step 6: Stop dev server**
 
 Stop the dev server cleanly before running any production build again.
 
-- [ ] **Step 7: Commit verification fixes if needed**
+- [x] **Step 7: Commit verification fixes if needed**
 
 If source changes were required:
 
