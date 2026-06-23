@@ -193,10 +193,27 @@ interface BoardPlayerSummary {
   title: string;
   subtitle: string;
   kind: "human" | "ai";
+  reasoningLabel?: string;
 }
 
 function colorLabel(color: PieceColor): string {
   return color === "white" ? "White" : "Black";
+}
+
+function compactReasoningLabel(reasoningEffort: ReasoningEffort): string {
+  switch (reasoningEffort) {
+    case "low":
+      return "R: Low";
+    case "medium":
+      return "R: Med";
+    case "high":
+      return "R: High";
+    case "max":
+      return "R: Max";
+    case "default":
+    default:
+      return "R: Off";
+  }
 }
 
 function chooseFallbackAIMove(state: GameState): Move | null {
@@ -331,7 +348,11 @@ function BoardPlayerCard({
           <div className="mt-0.5 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
             <span>{player.subtitle}</span>
             <span className="h-1 w-1 rounded-full bg-current" />
-            <span>{player.kind === "ai" ? "AI" : "Human"}</span>
+            <span>
+              {player.kind === "ai"
+                ? player.reasoningLabel ?? "R: Off"
+                : "Human"}
+            </span>
           </div>
         </div>
       </div>
@@ -1504,6 +1525,7 @@ export function GamesClient() {
         title: modelName,
         subtitle: `${label} AI`,
         kind: "ai",
+        reasoningLabel: compactReasoningLabel(config.reasoningEffort),
       };
     },
     [availableModels, blackAI, gameMode, humanColor, whiteAI]
