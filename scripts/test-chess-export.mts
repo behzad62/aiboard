@@ -1,4 +1,5 @@
 /* Chess export checks (run: npx tsx scripts/test-chess-export.mts) */
+import { readFileSync } from "node:fs";
 import {
   createInitialState,
   makeMove,
@@ -64,6 +65,21 @@ function sampleSnapshot(): ChessSessionSnapshot {
 }
 
 const state = sampleState();
+const exportMenuSource = readFileSync(
+  new URL("../components/games/chess/ExportGameMenu.tsx", import.meta.url),
+  "utf8"
+);
+
+check(
+  "export disclosure does not advertise menu semantics",
+  !/aria-haspopup="menu"|role="menu"|role="menuitem"/.test(exportMenuSource)
+);
+check(
+  "export status is announced to assistive technology",
+  exportMenuSource.includes('role="status"') &&
+    exportMenuSource.includes('aria-live="polite"') &&
+    exportMenuSource.includes('aria-atomic="true"')
+);
 
 const moveList = exportChessMoveList(state);
 check("move list uses text/plain", moveList.mimeType === "text/plain", moveList);

@@ -109,7 +109,6 @@ export function ExportGameMenu({
           "transition-all duration-200 hover:bg-gray-50 hover:shadow active:scale-95",
           "dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
         )}
-        aria-haspopup="menu"
         aria-expanded={open}
         data-testid="game-export-toggle"
         title="Export game"
@@ -129,7 +128,6 @@ export function ExportGameMenu({
             "border border-gray-200 bg-white py-1 shadow-lg",
             "dark:border-gray-700 dark:bg-gray-900"
           )}
-          role="menu"
         >
           <ExportMenuButton
             icon={<ClipboardCopy className="h-4 w-4" aria-hidden="true" />}
@@ -167,6 +165,9 @@ export function ExportGameMenu({
               : "text-green-700 dark:text-green-400"
           )}
           data-testid="game-export-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
         >
           {statusLabel}
         </div>
@@ -197,7 +198,6 @@ function ExportMenuButton({
         "text-gray-700 transition-colors hover:bg-gray-100",
         "dark:text-gray-300 dark:hover:bg-gray-800"
       )}
-      role="menuitem"
       data-testid={`game-export-${testId}`}
     >
       {icon}
