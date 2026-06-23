@@ -770,6 +770,9 @@ export function GamesClient() {
   // Board should be flipped when human plays black
   const boardFlipped = gameMode === "pvai" && humanColor === "black";
   const activeGameStatus = isChessActiveStatus(gameState.status);
+  const showGameStatus =
+    gameState.status === "check" ||
+    (!activeGameStatus && gameState.status !== "paused");
 
   // Last move for highlighting
   const lastMove = useMemo(() => {
@@ -1036,7 +1039,7 @@ export function GamesClient() {
             </div>
 
             {/* Game Status */}
-            {gameState.status !== "playing" && gameState.status !== "paused" && (
+            {showGameStatus && (
               <div
                 className={cn(
                   "p-4 rounded-xl text-center font-semibold",

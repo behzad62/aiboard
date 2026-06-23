@@ -7,6 +7,7 @@ import type { PieceColor } from "@/lib/games/chess/types";
 interface ChessClockProps {
   color: PieceColor;
   timeMs: number;
+  /** Caller-resolved running/highlight state, including check positions. */
   isActive: boolean;
   isPaused: boolean;
 }
