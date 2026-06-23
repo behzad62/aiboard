@@ -19,6 +19,7 @@ import type {
   ConnectFourMatchRecord,
   ConnectFourPlayer,
 } from "@/lib/games/connect-four/types";
+import type { GenericGameMatchRecord } from "@/lib/games/core/types";
 
 interface ConnectFourBenchmarkModelConfig {
   modelId: string;
@@ -53,6 +54,50 @@ function generateId(): string {
 
 function resultForState(state: ConnectFourGameState): ConnectFourPlayer | "draw" {
   return state.status === "win" && state.winner ? state.winner : "draw";
+}
+
+export function connectFourMatchToGenericGameMatchRecord(
+  record: ConnectFourMatchRecord
+): GenericGameMatchRecord {
+  const winner = record.result === "draw" ? null : record.result;
+
+  return {
+    id: record.id,
+    gameId: "connect-four",
+    timestamp: record.timestamp,
+    participants: [
+      {
+        id: "red",
+        kind: record.redModel ? "ai" : "human",
+        label: "Red",
+        ...(record.redModel ? { modelId: record.redModel } : {}),
+        ...(record.redReasoningEffort
+          ? { reasoningEffort: record.redReasoningEffort }
+          : {}),
+      },
+      {
+        id: "yellow",
+        kind: record.yellowModel ? "ai" : "human",
+        label: "Yellow",
+        ...(record.yellowModel ? { modelId: record.yellowModel } : {}),
+        ...(record.yellowReasoningEffort
+          ? { reasoningEffort: record.yellowReasoningEffort }
+          : {}),
+      },
+    ],
+    resultJson: JSON.stringify({
+      result: record.result,
+      winner,
+      draw: record.result === "draw",
+    }),
+    statsJson: JSON.stringify({
+      moves: record.moves,
+      durationMs: record.durationMs,
+      avgAiResponseMs: record.avgAiResponseMs ?? null,
+      invalidResponses: record.invalidResponses ?? null,
+      fallbackMoves: record.fallbackMoves ?? null,
+    }),
+  };
 }
 
 function emitProgress(

@@ -21,10 +21,12 @@ import {
   type GameBenchmarkRunner,
 } from "@/lib/games/core/benchmark";
 import {
+  connectFourMatchToGenericGameMatchRecord,
   runConnectFourAIBenchmark,
   type ConnectFourBenchmarkProgress,
 } from "@/lib/games/connect-four/benchmark";
 import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
+import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import type { ReasoningEffort } from "@/lib/db/schema";
 
 // =============================================================================
@@ -81,6 +83,16 @@ interface ConnectFourBenchmarkProgressState
   totalGames: number;
 }
 
+interface ConnectFourBenchmarkSummary {
+  completedGames: number;
+  savedGames: number;
+  redWins: number;
+  yellowWins: number;
+  draws: number;
+  avgMoves: number;
+  avgDurationMs: number;
+}
+
 // =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
@@ -119,6 +131,29 @@ function getModelDisplayName(modelId: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : modelId;
 }
 
+function summarizeConnectFourBenchmark(
+  results: ConnectFourMatchRecord[],
+  savedGames: number
+): ConnectFourBenchmarkSummary | null {
+  if (results.length === 0) return null;
+
+  const totalMoves = results.reduce((sum, result) => sum + result.moves, 0);
+  const totalDurationMs = results.reduce(
+    (sum, result) => sum + result.durationMs,
+    0
+  );
+
+  return {
+    completedGames: results.length,
+    savedGames,
+    redWins: results.filter((result) => result.result === "red").length,
+    yellowWins: results.filter((result) => result.result === "yellow").length,
+    draws: results.filter((result) => result.result === "draw").length,
+    avgMoves: totalMoves / results.length,
+    avgDurationMs: totalDurationMs / results.length,
+  };
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -152,6 +187,8 @@ export function GamesBenchmark() {
   const [progress, setProgress] = useState<ChessBenchmarkProgress | null>(null);
   const [connectFourProgress, setConnectFourProgress] =
     useState<ConnectFourBenchmarkProgressState | null>(null);
+  const [connectFourSummary, setConnectFourSummary] =
+    useState<ConnectFourBenchmarkSummary | null>(null);
   const abortRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -375,6 +412,7 @@ export function GamesBenchmark() {
       setRunning(true);
       abortRef.current = false;
       setConnectFourProgress(null);
+      setConnectFourSummary(null);
 
       const results: GameMatchRecord[] = [];
 
@@ -432,8 +470,10 @@ export function GamesBenchmark() {
       abortRef.current = false;
       setProgress(null);
       setConnectFourProgress(null);
+      setConnectFourSummary(null);
 
       const results: ConnectFourMatchRecord[] = [];
+      let savedGames = 0;
 
       try {
         for (let i = 0; i < benchmarkConfig.numGames; i++) {
@@ -459,7 +499,24 @@ export function GamesBenchmark() {
 
           if (result && !signal.aborted && !abortRef.current) {
             results.push(result);
+            try {
+              await saveGenericGameMatchRecord(
+                connectFourMatchToGenericGameMatchRecord(result)
+              );
+              savedGames++;
+            } catch (error) {
+              console.warn(
+                "Failed to save Connect Four benchmark result:",
+                error
+              );
+            }
           }
+        }
+
+        if (!signal.aborted && !abortRef.current) {
+          setConnectFourSummary(
+            summarizeConnectFourBenchmark(results, savedGames)
+          );
         }
       } finally {
         setRunning(false);
@@ -1047,7 +1104,42 @@ export function GamesBenchmark() {
         </div>
       )}
 
-      {!running && isConnectFourSelected && (
+      {!running && isConnectFourSelected && connectFourSummary && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Latest Connect Four Benchmark</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold">{connectFourSummary.completedGames}</div>
+              <div className="text-xs text-muted-foreground">Completed</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{connectFourSummary.savedGames}</div>
+              <div className="text-xs text-muted-foreground">Saved</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-red-600 dark:text-red-400">{connectFourSummary.redWins}</div>
+              <div className="text-xs text-muted-foreground">Red Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{connectFourSummary.yellowWins}</div>
+              <div className="text-xs text-muted-foreground">Yellow Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-muted-foreground">{connectFourSummary.draws}</div>
+              <div className="text-xs text-muted-foreground">Draws</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{Math.round(connectFourSummary.avgMoves)}</div>
+              <div className="text-xs text-muted-foreground">Avg Moves</div>
+            </div>
+          </div>
+          <div className="mt-3 text-center text-sm text-muted-foreground">
+            Average duration {formatDuration(connectFourSummary.avgDurationMs)}
+          </div>
+        </div>
+      )}
+
+      {!running && isConnectFourSelected && !connectFourSummary && (
         <div className="bg-card border rounded-lg p-8 text-center">
           <div className="text-lg font-medium mb-2">No Connect Four benchmark running</div>
           <div className="text-sm text-muted-foreground">

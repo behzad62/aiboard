@@ -85,6 +85,14 @@ function isAIControlledPlayer(
   return false;
 }
 
+function shouldPersistConnectFourSnapshot(
+  snapshot: ConnectFourSessionSnapshot
+): boolean {
+  return (
+    snapshot.isPaused || isConnectFourActiveStatus(snapshot.gameState.status)
+  );
+}
+
 function isNonrecoverableAIError(error: string): boolean {
   const normalized = error.toLowerCase();
   return (
@@ -223,6 +231,7 @@ export function ConnectFourGameClient({
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistenceTokenRef = useRef(0);
   const pendingSessionDeleteRef = useRef<Promise<void> | null>(null);
+  const canPersistActiveSessionRef = useRef(false);
 
   const displayState = useMemo(
     () => createReplayState(gameState, replayIndex),
@@ -230,6 +239,7 @@ export function ConnectFourGameClient({
   );
   const isReplayReviewing = replayIndex !== null;
   const activeGame = isConnectFourActiveStatus(gameState.status);
+  canPersistActiveSessionRef.current = gameStarted && (isPaused || activeGame);
   const displayActiveGame = isConnectFourActiveStatus(displayState.status);
   const currentPlayerIsAI = isAIControlledPlayer(
     gameMode,
@@ -294,6 +304,7 @@ export function ConnectFourGameClient({
 
     const snapshot = latestSnapshotRef.current;
     if (!snapshot) return;
+    if (!shouldPersistConnectFourSnapshot(snapshot)) return;
 
     const now = new Date(Date.now()).toISOString();
     const createdAt = activeSessionCreatedAtRef.current ?? now;
@@ -309,6 +320,22 @@ export function ConnectFourGameClient({
       console.warn("Failed to autosave Connect Four session:", error);
     }
   }, []);
+
+  const flushLatestActiveSession = useCallback(async () => {
+    const snapshot = latestSnapshotRef.current;
+    if (
+      !snapshot ||
+      !canPersistActiveSessionRef.current ||
+      !shouldPersistConnectFourSnapshot(snapshot)
+    ) {
+      clearAutosaveTimer();
+      return;
+    }
+
+    const token = persistenceTokenRef.current;
+    clearAutosaveTimer();
+    await saveLatestSession(token);
+  }, [clearAutosaveTimer, saveLatestSession]);
 
   const deleteActiveSession = useCallback(async () => {
     const token = invalidatePersistence();
@@ -561,9 +588,9 @@ export function ConnectFourGameClient({
   useEffect(() => {
     return () => {
       activeAIAbortControllerRef.current?.abort();
-      clearAutosaveTimer();
+      void flushLatestActiveSession();
     };
-  }, [clearAutosaveTimer]);
+  }, [flushLatestActiveSession]);
 
   const applySnapshot = useCallback(
     (snapshot: ConnectFourSessionSnapshot, createdAt: string | null = null) => {
@@ -678,6 +705,11 @@ export function ConnectFourGameClient({
     handleStartGame();
   }, [deleteActiveSession, handleStartGame]);
 
+  const handleBackToGames = useCallback(() => {
+    if (!onBackToGames) return;
+    void flushLatestActiveSession().finally(onBackToGames);
+  }, [flushLatestActiveSession, onBackToGames]);
+
   const handleReplayStart = useCallback(() => {
     if (moveCount > 0) {
       invalidateAIRequests();
@@ -731,7 +763,7 @@ export function ConnectFourGameClient({
           {onBackToGames && (
             <button
               type="button"
-              onClick={onBackToGames}
+              onClick={handleBackToGames}
               className="mb-5 inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -766,7 +798,7 @@ export function ConnectFourGameClient({
           {onBackToGames && (
             <button
               type="button"
-              onClick={onBackToGames}
+              onClick={handleBackToGames}
               className="mb-4 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
