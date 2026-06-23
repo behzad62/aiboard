@@ -10,6 +10,7 @@ import type {
   GameState,
   GameStatus,
   PieceColor,
+  PieceType,
 } from "@/lib/games/chess/types";
 
 export const CHESS_ACTIVE_SESSION_ID = "chess-active-session";
@@ -187,6 +188,17 @@ function isPieceColor(value: unknown): value is PieceColor {
   return value === "white" || value === "black";
 }
 
+function isPieceType(value: unknown): value is PieceType {
+  return (
+    value === "pawn" ||
+    value === "knight" ||
+    value === "bishop" ||
+    value === "rook" ||
+    value === "queen" ||
+    value === "king"
+  );
+}
+
 function isGameStatus(value: unknown): value is GameStatus {
   return (
     value === "playing" ||
@@ -233,16 +245,89 @@ function isGameState(value: unknown): value is GameState {
   if (!isPlainObject(value)) return false;
 
   return (
-    Array.isArray(value.board) &&
+    isBoard(value.board) &&
     isPieceColor(value.turn) &&
-    isPlainObject(value.castlingRights) &&
-    (typeof value.enPassantTarget === "string" ||
+    isCastlingRights(value.castlingRights) &&
+    (isSquare(value.enPassantTarget) ||
       value.enPassantTarget === null) &&
-    Number.isFinite(value.halfmoveClock) &&
-    Number.isFinite(value.fullmoveNumber) &&
+    isNonNegativeFiniteNumber(value.halfmoveClock) &&
+    isNonNegativeFiniteNumber(value.fullmoveNumber) &&
     isGameStatus(value.status) &&
     (isPieceColor(value.winner) || value.winner === null) &&
-    Array.isArray(value.moveHistory)
+    isMoveHistory(value.moveHistory)
+  );
+}
+
+function isBoard(value: unknown): value is GameState["board"] {
+  return (
+    Array.isArray(value) &&
+    value.length === 8 &&
+    value.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.length === 8 &&
+        row.every((cell) => cell === null || isPiece(cell))
+    )
+  );
+}
+
+function isPiece(value: unknown): value is GameState["board"][number][number] {
+  return (
+    isPlainObject(value) &&
+    isPieceColor(value.color) &&
+    isPieceType(value.type)
+  );
+}
+
+function isCastlingRights(
+  value: unknown
+): value is GameState["castlingRights"] {
+  return (
+    isPlainObject(value) &&
+    typeof value.whiteKingside === "boolean" &&
+    typeof value.whiteQueenside === "boolean" &&
+    typeof value.blackKingside === "boolean" &&
+    typeof value.blackQueenside === "boolean"
+  );
+}
+
+function isMoveHistory(value: unknown): value is GameState["moveHistory"] {
+  return Array.isArray(value) && value.every(isMoveRecord);
+}
+
+function isMoveRecord(
+  value: unknown
+): value is GameState["moveHistory"][number] {
+  return (
+    isPlainObject(value) &&
+    isMove(value.move) &&
+    typeof value.san === "string" &&
+    typeof value.fenBefore === "string" &&
+    typeof value.fenAfter === "string" &&
+    typeof value.timestamp === "number" &&
+    Number.isFinite(value.timestamp)
+  );
+}
+
+function isMove(value: unknown): value is GameState["moveHistory"][number]["move"] {
+  return (
+    isPlainObject(value) &&
+    isSquare(value.from) &&
+    isSquare(value.to) &&
+    (value.promotion === undefined || isPromotionPiece(value.promotion))
+  );
+}
+
+function isSquare(value: unknown): value is string {
+  return typeof value === "string" && /^[a-h][1-8]$/.test(value);
+}
+
+function isPromotionPiece(value: unknown): value is PieceType {
+  return (
+    value === "knight" ||
+    value === "bishop" ||
+    value === "rook" ||
+    value === "queen"
   );
 }
 

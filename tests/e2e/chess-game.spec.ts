@@ -1,4 +1,78 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function waitForPersistedChessMove(page: Page, san: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        return page.evaluate(async (expectedSan) => {
+          const rawStore = await new Promise<unknown>((resolve) => {
+            const req = indexedDB.open("ai-discussion-board", 1);
+            req.onerror = () => resolve(null);
+            req.onsuccess = () => {
+              const db = req.result;
+              const tx = db.transaction("kv", "readonly");
+              const getReq = tx.objectStore("kv").get("store");
+              getReq.onerror = () => {
+                db.close();
+                resolve(null);
+              };
+              getReq.onsuccess = () => {
+                db.close();
+                resolve(getReq.result);
+              };
+            };
+          });
+
+          if (typeof rawStore !== "string") return false;
+
+          try {
+            const parsedStore = JSON.parse(rawStore) as
+              | {
+                  encrypted?: boolean;
+                  data?: string;
+                }
+              | {
+                  gameSessions?: Array<{ id?: string; stateJson?: string }>;
+                };
+            const store =
+              "encrypted" in parsedStore
+                ? parsedStore.encrypted || typeof parsedStore.data !== "string"
+                  ? null
+                  : (JSON.parse(parsedStore.data) as {
+                      gameSessions?: Array<{
+                        id?: string;
+                        stateJson?: string;
+                      }>;
+                    })
+                : (parsedStore as {
+                    gameSessions?: Array<{ id?: string; stateJson?: string }>;
+                  });
+
+            if (!store) return false;
+
+            const typedStore = store as {
+              gameSessions?: Array<{ id?: string; stateJson?: string }>;
+            };
+            const session = typedStore.gameSessions?.find(
+              (record) => record.id === "chess-active-session"
+            );
+            if (!session?.stateJson) return false;
+
+            const snapshot = JSON.parse(session.stateJson) as {
+              gameState?: { moveHistory?: Array<{ san?: string }> };
+            };
+            return snapshot.gameState?.moveHistory?.some(
+              (move) => move.san === expectedSan
+            );
+          } catch {
+            return false;
+          }
+        }, san);
+      },
+      { timeout: 5000 }
+    )
+    .toBe(true);
+}
 
 test.describe("Chess game", () => {
   test.beforeEach(async ({ page }) => {
@@ -95,7 +169,7 @@ test.describe("Chess game", () => {
     await squares.nth(36).click();
 
     await expect(page.getByText("e4")).toBeVisible();
-    await page.waitForTimeout(700);
+    await waitForPersistedChessMove(page, "e4");
 
     await page.reload();
     await page.waitForLoadState("networkidle");

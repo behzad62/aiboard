@@ -217,6 +217,7 @@ export function GamesClient() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestSessionSnapshotRef = useRef<ChessSessionSnapshot | null>(null);
   const storageNeedsPassphraseRef = useRef(false);
+  const persistenceTokenRef = useRef(0);
 
   const clearAutosaveTimer = useCallback(() => {
     if (autosaveTimerRef.current) {
@@ -225,7 +226,13 @@ export function GamesClient() {
     }
   }, []);
 
+  const invalidatePersistence = useCallback(() => {
+    persistenceTokenRef.current += 1;
+    return persistenceTokenRef.current;
+  }, []);
+
   const deleteActiveChessSession = useCallback(async () => {
+    invalidatePersistence();
     clearAutosaveTimer();
     latestSessionSnapshotRef.current = null;
     setRestoreSnapshot(null);
@@ -239,7 +246,7 @@ export function GamesClient() {
     } catch (err) {
       console.warn("Failed to delete active chess session:", err);
     }
-  }, [clearAutosaveTimer]);
+  }, [clearAutosaveTimer, invalidatePersistence]);
 
   // Load available models on mount (client-side only to avoid SSR issues with localStorage)
   useEffect(() => {
@@ -364,18 +371,25 @@ export function GamesClient() {
       return;
     }
 
+    const token = persistenceTokenRef.current;
     clearAutosaveTimer();
     autosaveTimerRef.current = setTimeout(() => {
+      if (token !== persistenceTokenRef.current) return;
+
       const snapshot = latestSessionSnapshotRef.current;
       if (!snapshot) return;
 
       void (async () => {
         try {
           const { needsPassphrase } = await ensureReady();
+          if (token !== persistenceTokenRef.current) return;
+
           storageNeedsPassphraseRef.current = needsPassphrase;
           if (needsPassphrase) return;
 
+          if (token !== persistenceTokenRef.current) return;
           await saveGameSession(createChessSessionRecord(snapshot));
+          if (token !== persistenceTokenRef.current) return;
         } catch (err) {
           console.warn("Failed to autosave chess session:", err);
         }
@@ -666,18 +680,21 @@ export function GamesClient() {
 
   // Handle pause
   const handlePause = useCallback(() => {
+    invalidatePersistence();
     setIsPaused(true);
     lastTickRef.current = 0;
-  }, []);
+  }, [invalidatePersistence]);
 
   // Handle resume
   const handleResume = useCallback(() => {
+    invalidatePersistence();
     setIsPaused(false);
     lastTickRef.current = Date.now();
-  }, []);
+  }, [invalidatePersistence]);
 
   // Start game
   const handleStartGame = useCallback(() => {
+    invalidatePersistence();
     setGameState(createInitialState());
     setWhiteTimeMs(0);
     setBlackTimeMs(0);
@@ -687,11 +704,12 @@ export function GamesClient() {
     lastTickRef.current = Date.now();
     matchSavedRef.current = false;
     setGameStarted(true);
-  }, []);
+  }, [invalidatePersistence]);
 
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
 
+    invalidatePersistence();
     setGameMode(restoreSnapshot.gameMode);
     setHumanColor(restoreSnapshot.humanColor);
     setWhiteAI(restoreSnapshot.whiteAI);
@@ -711,7 +729,7 @@ export function GamesClient() {
     lastTickRef.current = restoreSnapshot.isPaused ? 0 : Date.now();
     setRestoreSnapshot(null);
     setGameStarted(true);
-  }, [restoreSnapshot]);
+  }, [invalidatePersistence, restoreSnapshot]);
 
   const handleStartNewGame = useCallback(() => {
     void deleteActiveChessSession();
