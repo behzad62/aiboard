@@ -163,7 +163,17 @@ check(
   malformedSnapshot
 );
 
-const wrongGame = parseConnectFourJsonExport(JSON.stringify({ game: "chess" }));
+const wrongGame = parseConnectFourJsonExport(
+  JSON.stringify({
+    export: {
+      game: "chess",
+      format: "ai-board-chess-json",
+      version: 1,
+      generatedAt: "2026-06-24T08:30:00.000Z",
+    },
+    snapshot,
+  })
+);
 check(
   "json export rejects wrong game",
   wrongGame.ok === false,
