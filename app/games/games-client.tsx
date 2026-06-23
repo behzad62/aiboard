@@ -25,7 +25,6 @@ import {
 import {
   createInitialState,
   fromFEN,
-  generateLegalMoves,
   makeMove,
   generateLegalMovesFromSquare,
   isLegalMove,
@@ -33,6 +32,7 @@ import {
   squareToCoords,
 } from "@/lib/games/chess/engine";
 import {
+  chooseFallbackAIMove,
   requestAIMove,
   getAvailableModels,
   getModelApiKey,
@@ -224,10 +224,6 @@ function compactReasoningLabel(reasoningEffort: ReasoningEffort): string {
     default:
       return "R: Off";
   }
-}
-
-function chooseFallbackAIMove(state: GameState): Move | null {
-  return generateLegalMoves(state, state.turn)[0] ?? null;
 }
 
 function isRecoverableAIMoveError(error: string): boolean {
