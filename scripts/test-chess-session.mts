@@ -44,6 +44,11 @@ const record = createChessSessionRecord(snapshot());
 const parsed = parseChessSessionRecord(record);
 
 check("valid chess session round-trips", parsed?.gameState.moveHistory[0]?.san === "e4", parsed);
+check(
+  "clock values round-trip",
+  parsed?.whiteTimeMs === 1234 && parsed.blackTimeMs === 0,
+  parsed
+);
 check("playing and check are active", isChessActiveStatus("playing") && isChessActiveStatus("check"));
 check("checkmate is not active", !isChessActiveStatus("checkmate"));
 

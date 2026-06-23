@@ -1,77 +1,99 @@
 import { expect, test, type Page } from "@playwright/test";
 
+interface PersistedChessSnapshot {
+  blackTimeMs?: number;
+  gameState?: { moveHistory?: Array<{ san?: string }> };
+  whiteTimeMs?: number;
+}
+
+async function readPersistedChessSnapshot(
+  page: Page
+): Promise<PersistedChessSnapshot | null> {
+  return page.evaluate(async () => {
+    const rawStore = await new Promise<unknown>((resolve) => {
+      const req = indexedDB.open("ai-discussion-board", 1);
+      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("kv", "readonly");
+        const getReq = tx.objectStore("kv").get("store");
+        getReq.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+        getReq.onsuccess = () => {
+          db.close();
+          resolve(getReq.result);
+        };
+      };
+    });
+
+    if (typeof rawStore !== "string") return null;
+
+    try {
+      const parsedStore = JSON.parse(rawStore) as
+        | {
+            encrypted?: boolean;
+            data?: string;
+          }
+        | {
+            gameSessions?: Array<{ id?: string; stateJson?: string }>;
+          };
+      const store =
+        "encrypted" in parsedStore
+          ? parsedStore.encrypted || typeof parsedStore.data !== "string"
+            ? null
+            : (JSON.parse(parsedStore.data) as {
+                gameSessions?: Array<{
+                  id?: string;
+                  stateJson?: string;
+                }>;
+              })
+          : (parsedStore as {
+              gameSessions?: Array<{ id?: string; stateJson?: string }>;
+            });
+
+      if (!store) return null;
+
+      const session = store.gameSessions?.find(
+        (record) => record.id === "chess-active-session"
+      );
+      if (!session?.stateJson) return null;
+
+      return JSON.parse(session.stateJson) as PersistedChessSnapshot;
+    } catch {
+      return null;
+    }
+  });
+}
+
 async function waitForPersistedChessMove(page: Page, san: string): Promise<void> {
   await expect
     .poll(
       async () => {
-        return page.evaluate(async (expectedSan) => {
-          const rawStore = await new Promise<unknown>((resolve) => {
-            const req = indexedDB.open("ai-discussion-board", 1);
-            req.onerror = () => resolve(null);
-            req.onsuccess = () => {
-              const db = req.result;
-              const tx = db.transaction("kv", "readonly");
-              const getReq = tx.objectStore("kv").get("store");
-              getReq.onerror = () => {
-                db.close();
-                resolve(null);
-              };
-              getReq.onsuccess = () => {
-                db.close();
-                resolve(getReq.result);
-              };
-            };
-          });
-
-          if (typeof rawStore !== "string") return false;
-
-          try {
-            const parsedStore = JSON.parse(rawStore) as
-              | {
-                  encrypted?: boolean;
-                  data?: string;
-                }
-              | {
-                  gameSessions?: Array<{ id?: string; stateJson?: string }>;
-                };
-            const store =
-              "encrypted" in parsedStore
-                ? parsedStore.encrypted || typeof parsedStore.data !== "string"
-                  ? null
-                  : (JSON.parse(parsedStore.data) as {
-                      gameSessions?: Array<{
-                        id?: string;
-                        stateJson?: string;
-                      }>;
-                    })
-                : (parsedStore as {
-                    gameSessions?: Array<{ id?: string; stateJson?: string }>;
-                  });
-
-            if (!store) return false;
-
-            const typedStore = store as {
-              gameSessions?: Array<{ id?: string; stateJson?: string }>;
-            };
-            const session = typedStore.gameSessions?.find(
-              (record) => record.id === "chess-active-session"
-            );
-            if (!session?.stateJson) return false;
-
-            const snapshot = JSON.parse(session.stateJson) as {
-              gameState?: { moveHistory?: Array<{ san?: string }> };
-            };
-            return snapshot.gameState?.moveHistory?.some(
-              (move) => move.san === expectedSan
-            );
-          } catch {
-            return false;
-          }
-        }, san);
+        const snapshot = await readPersistedChessSnapshot(page);
+        return snapshot?.gameState?.moveHistory?.some(
+          (move) => move.san === san
+        );
       },
       { timeout: 5000 }
     )
     .toBe(true);
+}
+
+async function waitForPersistedBlackClock(
+  page: Page,
+  minMs: number
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const snapshot = await readPersistedChessSnapshot(page);
+        return snapshot?.blackTimeMs ?? 0;
+      },
+      { timeout: 10_000 }
+    )
+    .toBeGreaterThanOrEqual(minMs);
 }
 
 test.describe("Chess game", () => {
@@ -170,6 +192,7 @@ test.describe("Chess game", () => {
 
     await expect(page.getByText("e4")).toBeVisible();
     await waitForPersistedChessMove(page, "e4");
+    await waitForPersistedBlackClock(page, 4_000);
 
     await page.reload();
     await page.waitForLoadState("networkidle");
@@ -180,6 +203,7 @@ test.describe("Chess game", () => {
     await expect(page.getByText("e4")).toBeVisible();
     await expect(page.getByTestId("chess-clock-white")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).toContainText(/\d{2}:\d{2}/);
+    await expect(page.getByTestId("chess-clock-black")).not.toContainText("00:00");
   });
 
   test("benchmark page includes the chess benchmark segment", async ({ page }) => {

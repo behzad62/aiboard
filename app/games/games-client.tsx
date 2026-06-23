@@ -20,6 +20,10 @@ import {
   getModelBaseURL,
 } from "@/lib/games/chess/ai";
 import { ensureReady } from "@/lib/client/api";
+import {
+  deleteGameSession as deleteStoredGameSession,
+  upsertGameSession,
+} from "@/lib/client/store";
 import type {
   GameState,
   Square,
@@ -38,9 +42,7 @@ import {
   type ChessSessionSnapshot,
 } from "@/lib/games/chess/session";
 import {
-  deleteGameSession,
   listGameSessions,
-  saveGameSession,
 } from "@/lib/games/core/session-store";
 
 // Reasoning effort levels for the slider
@@ -58,6 +60,8 @@ const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
   { value: "pvai", label: "Player vs AI", description: "Play against an AI" },
   { value: "aivai", label: "AI vs AI", description: "Watch AIs compete" },
 ];
+
+const CLOCK_AUTOSAVE_INTERVAL_MS = 5_000;
 
 interface AIConfig {
   modelId: string;
@@ -232,21 +236,44 @@ export function GamesClient() {
   }, []);
 
   const deleteActiveChessSession = useCallback(async () => {
-    invalidatePersistence();
+    const token = invalidatePersistence();
     clearAutosaveTimer();
     latestSessionSnapshotRef.current = null;
     setRestoreSnapshot(null);
 
     try {
       const { needsPassphrase } = await ensureReady();
+      if (token !== persistenceTokenRef.current) return;
+
       storageNeedsPassphraseRef.current = needsPassphrase;
       if (needsPassphrase) return;
 
-      await deleteGameSession(CHESS_ACTIVE_SESSION_ID);
+      if (token !== persistenceTokenRef.current) return;
+      deleteStoredGameSession(CHESS_ACTIVE_SESSION_ID);
     } catch (err) {
       console.warn("Failed to delete active chess session:", err);
     }
   }, [clearAutosaveTimer, invalidatePersistence]);
+
+  const saveLatestChessSession = useCallback(async (token: number) => {
+    if (token !== persistenceTokenRef.current) return;
+
+    const snapshot = latestSessionSnapshotRef.current;
+    if (!snapshot) return;
+
+    try {
+      const { needsPassphrase } = await ensureReady();
+      if (token !== persistenceTokenRef.current) return;
+
+      storageNeedsPassphraseRef.current = needsPassphrase;
+      if (needsPassphrase) return;
+
+      if (token !== persistenceTokenRef.current) return;
+      upsertGameSession(createChessSessionRecord(snapshot));
+    } catch (err) {
+      console.warn("Failed to autosave chess session:", err);
+    }
+  }, []);
 
   // Load available models on mount (client-side only to avoid SSR issues with localStorage)
   useEffect(() => {
@@ -374,26 +401,7 @@ export function GamesClient() {
     const token = persistenceTokenRef.current;
     clearAutosaveTimer();
     autosaveTimerRef.current = setTimeout(() => {
-      if (token !== persistenceTokenRef.current) return;
-
-      const snapshot = latestSessionSnapshotRef.current;
-      if (!snapshot) return;
-
-      void (async () => {
-        try {
-          const { needsPassphrase } = await ensureReady();
-          if (token !== persistenceTokenRef.current) return;
-
-          storageNeedsPassphraseRef.current = needsPassphrase;
-          if (needsPassphrase) return;
-
-          if (token !== persistenceTokenRef.current) return;
-          await saveGameSession(createChessSessionRecord(snapshot));
-          if (token !== persistenceTokenRef.current) return;
-        } catch (err) {
-          console.warn("Failed to autosave chess session:", err);
-        }
-      })();
+      void saveLatestChessSession(token);
     }, 400);
 
     return clearAutosaveTimer;
@@ -408,7 +416,31 @@ export function GamesClient() {
     isPaused,
     lastAiInteraction,
     clearAutosaveTimer,
+    saveLatestChessSession,
   ]);
+
+  // Clock ticks happen every 100ms; persist them on a coarse interval so a
+  // long think or idle turn restores recent clock values without write spam.
+  useEffect(() => {
+    if (
+      !gameStarted ||
+      isPaused ||
+      !isChessActiveStatus(gameState.status) ||
+      storageNeedsPassphraseRef.current
+    ) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      if (!latestSessionSnapshotRef.current || storageNeedsPassphraseRef.current) {
+        return;
+      }
+
+      void saveLatestChessSession(persistenceTokenRef.current);
+    }, CLOCK_AUTOSAVE_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [gameStarted, isPaused, gameState.status, saveLatestChessSession]);
 
   // Check if current turn is AI controlled
   const isAIControlled = useCallback(
