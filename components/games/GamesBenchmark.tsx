@@ -127,6 +127,13 @@ export function GamesBenchmark() {
     draws: number;
   } | null>(null);
 
+  // Load stats after the client store is ready and after benchmark completes.
+  const loadStats = useCallback(() => {
+    setModelStats(getAIvsAIModelStats());
+    setRecentMatches(getRecentAIvsAIMatches(10));
+    setAggregateStats(getAIvsAIAggregateStats());
+  }, []);
+
   // Load available models on mount
   useEffect(() => {
     let cancelled = false;
@@ -151,6 +158,7 @@ export function GamesBenchmark() {
             blackModelId: prev.blackModelId || available[0].modelId,
           }));
         }
+        loadStats();
       } catch (err) {
         if (!cancelled) {
           console.error("Failed to load models:", err);
@@ -165,17 +173,6 @@ export function GamesBenchmark() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Load stats on mount and after benchmark completes
-  const loadStats = useCallback(() => {
-    setModelStats(getAIvsAIModelStats());
-    setRecentMatches(getRecentAIvsAIMatches(10));
-    setAggregateStats(getAIvsAIAggregateStats());
-  }, []);
-
-  useEffect(() => {
-    loadStats();
   }, [loadStats]);
 
   // Run a single game

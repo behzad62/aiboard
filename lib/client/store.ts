@@ -45,6 +45,7 @@ export interface ClientStore {
   buildCheckpoints: BuildCheckpoint[];
   gameSessions: GameSessionRecord[];
   gameMatchRecords: GenericGameMatchRecord[];
+  gameStatsLegacyImportAttempted: boolean;
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -72,6 +73,7 @@ const DEFAULT_STORE: ClientStore = {
   buildCheckpoints: [],
   gameSessions: [],
   gameMatchRecords: [],
+  gameStatsLegacyImportAttempted: false,
   modelStats: [],
 };
 
@@ -191,6 +193,9 @@ export function getGenericGameMatchRecords(): GenericGameMatchRecord[] {
   const s = store();
   s.gameMatchRecords ??= [];
   return s.gameMatchRecords;
+}
+export function hasAttemptedGameStatsLegacyImport(): boolean {
+  return store().gameStatsLegacyImportAttempted ?? false;
 }
 export function getModelStats(): ModelBuildStat[] {
   return (store().modelStats ?? []).map(normalizeStat);
@@ -348,6 +353,10 @@ export function deleteGameSession(id: string): void {
 }
 export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void {
   getGenericGameMatchRecords().push(record);
+  schedulePersist();
+}
+export function markGameStatsLegacyImportAttempted(): void {
+  store().gameStatsLegacyImportAttempted = true;
   schedulePersist();
 }
 /**

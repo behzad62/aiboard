@@ -13,7 +13,14 @@ import {
   saveGameSession,
   saveGenericGameMatchRecord,
 } from "../lib/games/core/session-store";
-import { getMatchRecords, resetGameStats } from "../lib/games/stats";
+import {
+  getAIvsAIAggregateStats,
+  getAIvsAIMatches,
+  getAIvsAIModelStats,
+  getMatchRecords,
+  resetGameStats,
+  saveMatchRecord,
+} from "../lib/games/stats";
 
 let failures = 0;
 
@@ -237,6 +244,53 @@ check(
   "legacy game stats import is not repeated after reset",
   recordsAfterLegacyReset.length === 0 && genericRecordsAfterLegacyReset.length === 0,
   { recordsAfterLegacyReset, genericRecordsAfterLegacyReset }
+);
+
+__resetGameSessionStoreForTests();
+installLocalStorageStore({
+  "aiboard-game-stats": legacyRawStats,
+  "aiboard-game-stats-generic-import-v1": "done",
+});
+const recordsAfterOldMarkerSplitBrain = getMatchRecords();
+check(
+  "old localStorage migration marker alone does not suppress import",
+  recordsAfterOldMarkerSplitBrain.length === 1 &&
+    recordsAfterOldMarkerSplitBrain[0]?.id === "legacy-match-1",
+  recordsAfterOldMarkerSplitBrain
+);
+
+__resetGameSessionStoreForTests();
+installLocalStorageStore({});
+saveMatchRecord(legacyMatch("public-api-match-1"));
+const genericRecordsAfterPublicSave = await listGenericGameMatchRecords();
+const publicAIvsAIMatches = getAIvsAIMatches();
+const publicAIvsAIStats = getAIvsAIModelStats();
+const publicAggregateStats = getAIvsAIAggregateStats();
+const whitePublicStat = publicAIvsAIStats.find(
+  (stat) => stat.modelId === "openai:white-test"
+);
+const blackPublicStat = publicAIvsAIStats.find(
+  (stat) => stat.modelId === "anthropic:black-test"
+);
+check(
+  "saveMatchRecord writes generic chess records",
+  genericRecordsAfterPublicSave.length === 1 &&
+    genericRecordsAfterPublicSave[0]?.id === "public-api-match-1" &&
+    genericRecordsAfterPublicSave[0]?.gameId === "chess",
+  genericRecordsAfterPublicSave
+);
+check(
+  "AI vs AI public stats read generic chess records",
+  publicAIvsAIMatches.length === 1 &&
+    publicAIvsAIMatches[0]?.id === "public-api-match-1" &&
+    whitePublicStat?.games === 1 &&
+    whitePublicStat?.wins === 1 &&
+    blackPublicStat?.games === 1 &&
+    blackPublicStat?.losses === 1 &&
+    publicAggregateStats.totalGames === 1 &&
+    publicAggregateStats.whiteWins === 1 &&
+    publicAggregateStats.avgMoves === 36,
+  { publicAIvsAIMatches, publicAIvsAIStats, publicAggregateStats }
 );
 
 __resetGameSessionStoreForTests({ needsPassphrase: true });
