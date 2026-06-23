@@ -10,6 +10,7 @@ import {
   exportChessJson,
   exportChessMoveList,
   exportChessPgnLike,
+  parseChessJsonExport,
 } from "../lib/games/chess/export";
 import {
   copyGameExportToClipboard,
@@ -148,6 +149,32 @@ const parsedJson = JSON.parse(jsonExport.content) as {
 check("JSON export uses application/json", jsonExport.mimeType === "application/json", jsonExport);
 check("JSON export includes compact metadata", parsedJson.export.game === "chess" && parsedJson.export.format === "json" && typeof parsedJson.export.generatedAt === "string", parsedJson);
 check("JSON export includes snapshot", parsedJson.snapshot.gameState.moveHistory.length === 3 && parsedJson.snapshot.whiteTimeMs === 2500, parsedJson.snapshot);
+const importedJson = parseChessJsonExport(jsonExport.content);
+check(
+  "JSON import restores exported snapshot",
+  importedJson.ok &&
+    importedJson.snapshot.gameState.moveHistory.length === 3 &&
+    importedJson.snapshot.whiteTimeMs === 2500,
+  importedJson
+);
+check(
+  "JSON import rejects non-chess exports",
+  !parseChessJsonExport(
+    JSON.stringify({
+      export: { game: "connect-four", format: "json", version: 1 },
+      snapshot: sampleSnapshot(),
+    })
+  ).ok
+);
+check(
+  "JSON import rejects malformed snapshots",
+  !parseChessJsonExport(
+    JSON.stringify({
+      export: { game: "chess", format: "json", version: 1 },
+      snapshot: { ...sampleSnapshot(), gameState: { board: [] } },
+    })
+  ).ok
+);
 
 const copied: string[] = [];
 const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(

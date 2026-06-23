@@ -7,6 +7,7 @@ import { ChessClock } from "@/components/games/chess/ChessClock";
 import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
 import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
+import { ImportGameMenu } from "@/components/games/chess/ImportGameMenu";
 import { AIPresence } from "@/components/games/chess/AIPresence";
 import { CapturedPieces } from "@/components/games/chess/CapturedPieces";
 import {
@@ -1222,6 +1223,52 @@ export function GamesClient() {
     timeControl,
   ]);
 
+  const applyImportedSnapshot = useCallback(
+    (snapshot: ChessSessionSnapshot) => {
+      invalidateAIRequests();
+      invalidatePersistence();
+      clearPendingPromotion();
+      setGameMode(snapshot.gameMode);
+      setHumanColor(snapshot.humanColor);
+      setWhiteAI(snapshot.whiteAI);
+      setBlackAI(snapshot.blackAI);
+      setGameState(snapshot.gameState);
+      setWhiteTimeMs(snapshot.whiteTimeMs);
+      setBlackTimeMs(snapshot.blackTimeMs);
+      setWhiteRemainingMs(snapshot.whiteRemainingMs);
+      setBlackRemainingMs(snapshot.blackRemainingMs);
+      setTimeControl(snapshot.timeControl);
+      if (snapshot.timeControl.mode === CUSTOM_TIME_CONTROL_MODE) {
+        setCustomMinutes(formatCustomMinutes(snapshot.timeControl.initialMs));
+        setCustomIncrementSeconds(
+          String(Math.round(snapshot.timeControl.incrementMs / 1000))
+        );
+      }
+      setGameStartTime(snapshot.gameStartTime);
+      setIsPaused(snapshot.isPaused);
+      setLastAiInteraction(snapshot.lastAiInteraction);
+      setRestoreSnapshot(null);
+      setAiThinking(false);
+      setAiError(null);
+      setAiWarning(null);
+      setSelectedSquare(null);
+      setLegalMoves([]);
+      aiRequestRef.current = false;
+      matchSavedRef.current = !isChessActiveStatus(snapshot.gameState.status);
+      previousMoveCountRef.current = snapshot.gameState.moveHistory.length;
+      lastTickRef.current = snapshot.isPaused ? 0 : Date.now();
+      setGameStarted(true);
+    },
+    [clearPendingPromotion, invalidateAIRequests, invalidatePersistence]
+  );
+
+  const confirmImportOverwrite = useCallback(() => {
+    if (!gameStarted) return true;
+    return window.confirm(
+      "Importing a chess game will replace the current board. Continue?"
+    );
+  }, [gameStarted]);
+
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
 
@@ -1702,6 +1749,14 @@ export function GamesClient() {
                   No AI models configured. Please add models in Settings first.
                 </p>
               )}
+
+              <div className="pt-2">
+                <ImportGameMenu
+                  onImport={applyImportedSnapshot}
+                  onBeforeImport={confirmImportOverwrite}
+                  className="w-full"
+                />
+              </div>
             </div>
 
             {/* Board Preview */}
@@ -1903,6 +1958,11 @@ export function GamesClient() {
                 state={gameState}
                 snapshot={exportSnapshot}
                 metadata={exportMetadata}
+                className="min-w-36 flex-1 sm:flex-none lg:flex-1"
+              />
+              <ImportGameMenu
+                onImport={applyImportedSnapshot}
+                onBeforeImport={confirmImportOverwrite}
                 className="min-w-36 flex-1 sm:flex-none lg:flex-1"
               />
             </div>

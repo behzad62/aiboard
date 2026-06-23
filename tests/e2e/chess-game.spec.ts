@@ -912,6 +912,37 @@ test.describe("Chess game", () => {
     await expect(page.getByTestId("chess-clock-black")).not.toContainText("00:00");
   });
 
+  test("imports a downloaded chess JSON game", async ({ page }) => {
+    await page.click("text=Player vs Player");
+    await page.click('button:has-text("Start Game")');
+
+    await page.getByTestId("square-e2").click();
+    await page.getByTestId("square-e4").click();
+    await expect(page.getByText("e4", { exact: true })).toBeVisible();
+
+    await page.getByTestId("game-export-toggle").click();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("game-export-download-json").click();
+    const download = await downloadPromise;
+    const downloadedPath = await download.path();
+    expect(downloadedPath).toBeTruthy();
+
+    await page.getByTestId("game-reset").click();
+    await expect(page.getByTestId("start-game-button")).toBeVisible();
+
+    await page
+      .getByTestId("game-import-input")
+      .setInputFiles(downloadedPath!);
+
+    await expect(page.getByText("e4", { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId("square-e2").getByTestId("chess-piece")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("square-e4").getByTestId("chess-piece")
+    ).toHaveCount(1);
+  });
+
   test("player pawn promotion accepts all promotion choices", async ({ context }) => {
     for (const { choice, san } of PROMOTION_EXPECTATIONS) {
       await test.step(`promotes to ${choice}`, async () => {

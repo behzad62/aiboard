@@ -1,7 +1,11 @@
 import { toFEN } from "@/lib/games/chess/engine";
-import type { ChessSessionSnapshot } from "@/lib/games/chess/session";
+import {
+  CHESS_ACTIVE_SESSION_ID,
+  parseChessSessionRecord,
+  type ChessSessionSnapshot,
+} from "@/lib/games/chess/session";
 import type { GameState, MoveRecord } from "@/lib/games/chess/types";
-import type { GameExport } from "@/lib/games/core/types";
+import type { GameExport, GameSessionRecord } from "@/lib/games/core/types";
 
 export type ChessPgnResult = "1-0" | "0-1" | "1/2-1/2" | "*";
 
@@ -11,6 +15,10 @@ export interface ChessPgnMetadata {
   white?: string;
   black?: string;
 }
+
+export type ChessJsonImportResult =
+  | { ok: true; snapshot: ChessSessionSnapshot }
+  | { ok: false; error: string };
 
 export function exportChessMoveList(state: GameState): GameExport {
   return {
@@ -54,6 +62,63 @@ export function exportChessJson(
       snapshot,
     }),
   };
+}
+
+export function parseChessJsonExport(content: string): ChessJsonImportResult {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { ok: false, error: "The selected file is not valid JSON." };
+  }
+
+  if (!isPlainObject(parsed)) {
+    return { ok: false, error: "The selected file is not a chess export." };
+  }
+
+  const descriptor = parsed.export;
+  if (
+    !isPlainObject(descriptor) ||
+    descriptor.game !== "chess" ||
+    descriptor.format !== "json" ||
+    descriptor.version !== 1
+  ) {
+    return {
+      ok: false,
+      error: "The selected file is not an AI Board chess JSON export.",
+    };
+  }
+
+  if (!isPlainObject(parsed.snapshot)) {
+    return { ok: false, error: "The chess export is missing its snapshot." };
+  }
+
+  const now = new Date().toISOString();
+  const record: GameSessionRecord = {
+    id: CHESS_ACTIVE_SESSION_ID,
+    gameId: "chess",
+    title: "Chess: Imported Game",
+    status: "active",
+    participants: [],
+    stateJson: JSON.stringify(parsed.snapshot),
+    metadataJson: JSON.stringify({
+      version: 1,
+      savedAt: now,
+    }),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const snapshot = parseChessSessionRecord(record);
+
+  if (!snapshot) {
+    return {
+      ok: false,
+      error: "The chess export snapshot is incomplete or unsupported.",
+    };
+  }
+
+  return { ok: true, snapshot };
 }
 
 export function exportChessPgnLike(
@@ -150,4 +215,8 @@ function formatPgnDate(value: Date | string | undefined): string {
 
 function escapePgnTagValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
