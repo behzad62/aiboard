@@ -63,6 +63,33 @@ const GAME_MODES: { value: GameMode; label: string; description: string }[] = [
 
 const CLOCK_AUTOSAVE_INTERVAL_MS = 5_000;
 
+function createAIAbortError(): Error {
+  const err = new Error("AI request aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function waitForAIDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(createAIAbortError());
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(createAIAbortError());
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 interface AIConfig {
   modelId: string;
   reasoningEffort: ReasoningEffort;
@@ -217,6 +244,8 @@ export function GamesClient() {
   // Refs for timer and AI
   const lastTickRef = useRef<number>(0);
   const aiRequestRef = useRef<boolean>(false);
+  const aiRequestVersionRef = useRef(0);
+  const activeAIAbortControllerRef = useRef<AbortController | null>(null);
   const matchSavedRef = useRef<boolean>(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestSessionSnapshotRef = useRef<ChessSessionSnapshot | null>(null);
@@ -233,6 +262,14 @@ export function GamesClient() {
   const invalidatePersistence = useCallback(() => {
     persistenceTokenRef.current += 1;
     return persistenceTokenRef.current;
+  }, []);
+
+  const invalidateAIRequests = useCallback(() => {
+    aiRequestVersionRef.current += 1;
+    activeAIAbortControllerRef.current?.abort();
+    activeAIAbortControllerRef.current = null;
+    aiRequestRef.current = false;
+    return aiRequestVersionRef.current;
   }, []);
 
   const deleteActiveChessSession = useCallback(async () => {
@@ -500,9 +537,17 @@ export function GamesClient() {
       return;
     }
 
-    if (aiRequestRef.current || aiThinking) {
+    if (aiRequestRef.current) {
       return;
     }
+
+    const requestVersion = aiRequestVersionRef.current;
+    const abortController = new AbortController();
+    activeAIAbortControllerRef.current = abortController;
+    const isCurrentAIRequest = () =>
+      aiRequestVersionRef.current === requestVersion &&
+      activeAIAbortControllerRef.current === abortController &&
+      !abortController.signal.aborted;
 
     const makeAIMove = async () => {
       aiRequestRef.current = true;
@@ -516,31 +561,48 @@ export function GamesClient() {
 
         // Add delay for AI vs AI to make it watchable
         if (gameMode === "aivai") {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await waitForAIDelay(500, abortController.signal);
+          if (!isCurrentAIRequest()) return;
         }
 
+        if (!isCurrentAIRequest()) return;
         const result = await requestAIMove({
           state: gameState,
           modelId: config.modelId,
           reasoningEffort: config.reasoningEffort,
           apiKey,
           baseURL,
+          signal: abortController.signal,
         });
 
+        if (!isCurrentAIRequest()) return;
         if ("move" in result) {
-          setGameState((prev) => makeMove(prev, result.move));
+          setGameState((prev) =>
+            isCurrentAIRequest() ? makeMove(prev, result.move) : prev
+          );
         } else if ("error" in result) {
           setAiError(result.error);
         }
       } catch (err) {
+        if (!isCurrentAIRequest()) return;
         setAiError(err instanceof Error ? err.message : "AI move failed");
       } finally {
-        setAiThinking(false);
-        aiRequestRef.current = false;
+        if (isCurrentAIRequest()) {
+          setAiThinking(false);
+          aiRequestRef.current = false;
+          activeAIAbortControllerRef.current = null;
+        }
       }
     };
 
     makeAIMove();
+    return () => {
+      if (activeAIAbortControllerRef.current === abortController) {
+        abortController.abort();
+        activeAIAbortControllerRef.current = null;
+        aiRequestRef.current = false;
+      }
+    };
   }, [
     gameStarted,
     isPaused,
@@ -548,7 +610,6 @@ export function GamesClient() {
     isAIControlled,
     getAIConfig,
     gameMode,
-    aiThinking,
   ]);
 
   // Save match record on game over
@@ -694,6 +755,7 @@ export function GamesClient() {
 
   // Handle reset
   const handleReset = useCallback(() => {
+    invalidateAIRequests();
     void deleteActiveChessSession();
     setGameState(createInitialState());
     setSelectedSquare(null);
@@ -705,27 +767,31 @@ export function GamesClient() {
     setAiError(null);
     setLastAiInteraction(null);
     lastTickRef.current = 0;
-    aiRequestRef.current = false;
     matchSavedRef.current = false;
     setGameStarted(false);
-  }, [deleteActiveChessSession]);
+  }, [deleteActiveChessSession, invalidateAIRequests]);
 
   // Handle pause
   const handlePause = useCallback(() => {
+    invalidateAIRequests();
     invalidatePersistence();
+    setAiThinking(false);
     setIsPaused(true);
     lastTickRef.current = 0;
-  }, [invalidatePersistence]);
+  }, [invalidateAIRequests, invalidatePersistence]);
 
   // Handle resume
   const handleResume = useCallback(() => {
+    invalidateAIRequests();
     invalidatePersistence();
+    setAiThinking(false);
     setIsPaused(false);
     lastTickRef.current = Date.now();
-  }, [invalidatePersistence]);
+  }, [invalidateAIRequests, invalidatePersistence]);
 
   // Start game
   const handleStartGame = useCallback(() => {
+    invalidateAIRequests();
     invalidatePersistence();
     setGameState(createInitialState());
     setWhiteTimeMs(0);
@@ -733,14 +799,17 @@ export function GamesClient() {
     setGameStartTime(Date.now());
     setLastAiInteraction(null);
     setRestoreSnapshot(null);
+    setAiThinking(false);
+    setAiError(null);
     lastTickRef.current = Date.now();
     matchSavedRef.current = false;
     setGameStarted(true);
-  }, [invalidatePersistence]);
+  }, [invalidateAIRequests, invalidatePersistence]);
 
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
 
+    invalidateAIRequests();
     invalidatePersistence();
     setGameMode(restoreSnapshot.gameMode);
     setHumanColor(restoreSnapshot.humanColor);
@@ -761,11 +830,24 @@ export function GamesClient() {
     lastTickRef.current = restoreSnapshot.isPaused ? 0 : Date.now();
     setRestoreSnapshot(null);
     setGameStarted(true);
-  }, [invalidatePersistence, restoreSnapshot]);
+  }, [invalidateAIRequests, invalidatePersistence, restoreSnapshot]);
 
   const handleStartNewGame = useCallback(() => {
+    invalidateAIRequests();
+    setAiThinking(false);
+    setAiError(null);
     void deleteActiveChessSession();
-  }, [deleteActiveChessSession]);
+  }, [deleteActiveChessSession, invalidateAIRequests]);
+
+  const handleGameModeChange = useCallback(
+    (mode: GameMode) => {
+      invalidateAIRequests();
+      setAiThinking(false);
+      setAiError(null);
+      setGameMode(mode);
+    },
+    [invalidateAIRequests]
+  );
 
   // Board should be flipped when human plays black
   const boardFlipped = gameMode === "pvai" && humanColor === "black";
@@ -847,7 +929,7 @@ export function GamesClient() {
                   {GAME_MODES.map((mode) => (
                     <button
                       key={mode.value}
-                      onClick={() => setGameMode(mode.value)}
+                      onClick={() => handleGameModeChange(mode.value)}
                       className={cn(
                         "p-4 rounded-xl border-2 transition-all text-left",
                         gameMode === mode.value

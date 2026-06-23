@@ -195,6 +195,7 @@ interface RequestAIMoveParams {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  signal?: AbortSignal;
 }
 
 interface AIMoveSuccess {
@@ -216,8 +217,12 @@ type AIMoveResult = AIMoveSuccess | AIMoveError;
 export async function requestAIMove(
   params: RequestAIMoveParams
 ): Promise<AIMoveResult> {
-  const { state, modelId, reasoningEffort, apiKey, baseURL } = params;
+  const { state, modelId, reasoningEffort, apiKey, baseURL, signal } = params;
   const MAX_RETRIES = 3;
+
+  if (signal?.aborted) {
+    return { error: "AI request aborted" };
+  }
 
   // Generate legal moves
   const legalMoves = generateLegalMoves(state, state.turn);
@@ -241,6 +246,10 @@ export async function requestAIMove(
   ];
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (signal?.aborted) {
+      return { error: "AI request aborted" };
+    }
+
     try {
       let responseText = "";
 
@@ -256,6 +265,10 @@ export async function requestAIMove(
         });
 
         for await (const chunk of stream) {
+          if (signal?.aborted) {
+            return { error: "AI request aborted" };
+          }
+
           if (chunk.type === "token" && chunk.content) {
             responseText += chunk.content;
           } else if (chunk.type === "error") {
@@ -280,6 +293,10 @@ export async function requestAIMove(
         });
 
         for await (const chunk of stream) {
+          if (signal?.aborted) {
+            return { error: "AI request aborted" };
+          }
+
           if (chunk.type === "token" && chunk.content) {
             responseText += chunk.content;
           } else if (chunk.type === "error") {
@@ -333,6 +350,10 @@ export async function requestAIMove(
         reasoning: parsed.reasoning,
       };
     } catch (err) {
+      if (signal?.aborted) {
+        return { error: "AI request aborted" };
+      }
+
       if (attempt < MAX_RETRIES - 1) {
         // Retry on transient errors
         continue;

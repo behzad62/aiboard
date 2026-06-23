@@ -6,6 +6,120 @@ interface PersistedChessSnapshot {
   whiteTimeMs?: number;
 }
 
+async function seedDelayedChessAIModel(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const now = new Date().toISOString();
+    const store = {
+      userSettings: {
+        id: "default",
+        defaultEffort: "medium",
+        defaultMode: "panel",
+        judgeModelId: null,
+        defaultVerbosity: "balanced",
+        defaultStyleNote: "",
+        defaultReasoningEffort: "default",
+        defaultBuildRunPolicy: "finish",
+        defaultBuildBudgetUsd: 0,
+        defaultBuildTimeLimitMinutes: 120,
+      },
+      providerKeys: [],
+      customModels: [
+        {
+          id: "delayed-chess-ai",
+          label: "Delayed Chess AI",
+          baseURL: `${window.location.origin}/__chess-ai-test/v1`,
+          model: "delayed-chess-ai",
+          apiKey: "test-key",
+          hasKey: true,
+          capabilities: {
+            image: false,
+            document: false,
+            audio: false,
+            video: false,
+          },
+          lastValidationSucceeded: true,
+          lastValidatedAt: now,
+          createdAt: now,
+        },
+      ],
+      discussions: [],
+      messages: [],
+      finalResults: [],
+      attachments: [],
+      buildFiles: [],
+      buildCheckpoints: [],
+      gameSessions: [],
+      gameMatchRecords: [],
+      gameStatsLegacyImportAttempted: false,
+      modelStats: [],
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open("ai-discussion-board", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("kv")) {
+          db.createObjectStore("kv");
+        }
+      };
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(
+          JSON.stringify({
+            v: 1,
+            encrypted: false,
+            data: JSON.stringify(store),
+          }),
+          "store"
+        );
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+    });
+  });
+}
+
+function openAIStreamChunk(content: string): string {
+  return [
+    `data: ${JSON.stringify({
+      id: "chatcmpl-delayed-chess-ai",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "delayed-chess-ai",
+      choices: [
+        {
+          index: 0,
+          delta: { content },
+          finish_reason: null,
+        },
+      ],
+    })}`,
+    `data: ${JSON.stringify({
+      id: "chatcmpl-delayed-chess-ai",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "delayed-chess-ai",
+      choices: [
+        {
+          index: 0,
+          delta: {},
+          finish_reason: "stop",
+        },
+      ],
+    })}`,
+    "data: [DONE]",
+    "",
+  ].join("\n\n");
+}
+
 async function readPersistedChessSnapshot(
   page: Page
 ): Promise<PersistedChessSnapshot | null> {
@@ -204,6 +318,61 @@ test.describe("Chess game", () => {
     await expect(page.getByTestId("chess-clock-white")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).not.toContainText("00:00");
+  });
+
+  test("reset ignores a stale delayed AI move", async ({ page }) => {
+    let aiRequestCount = 0;
+    let releaseAIResponse!: () => void;
+    const aiResponseReleased = new Promise<void>((resolve) => {
+      releaseAIResponse = resolve;
+    });
+    let resolveAIResponseFulfilled!: () => void;
+    const aiResponseFulfilled = new Promise<void>((resolve) => {
+      resolveAIResponseFulfilled = resolve;
+    });
+
+    await page.route("**/__chess-ai-test/v1/chat/completions", async (route) => {
+      aiRequestCount += 1;
+      await aiResponseReleased;
+      await route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+        },
+        body: openAIStreamChunk('{"from":"e2","to":"e4"}'),
+      });
+      resolveAIResponseFulfilled();
+    });
+
+    await seedDelayedChessAIModel(page);
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await page.getByTestId("game-mode-pvai").click();
+    await page.getByTestId("color-black").click();
+    await expect(page.getByTestId("model-select-white")).toHaveValue(
+      "custom:delayed-chess-ai"
+    );
+
+    await page.getByTestId("start-game-button").click();
+    await expect(page.getByTestId("ai-thinking")).toBeVisible();
+    await expect
+      .poll(() => aiRequestCount, { timeout: 5000 })
+      .toBeGreaterThanOrEqual(1);
+
+    await page.getByTestId("game-reset").click();
+    await expect(page.getByTestId("start-game-button")).toBeVisible();
+
+    releaseAIResponse();
+    await aiResponseFulfilled;
+
+    await expect(
+      page.getByTestId("square-e2").getByTestId("chess-piece")
+    ).toHaveCount(1);
+    await expect(
+      page.getByTestId("square-e4").getByTestId("chess-piece")
+    ).toHaveCount(0);
   });
 
   test("benchmark page includes the chess benchmark segment", async ({ page }) => {
