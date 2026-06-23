@@ -1,6 +1,7 @@
 import {
   buildConnectFourCorrectionPrompt,
   chooseFallbackConnectFourColumn,
+  collectConnectFourStreamTextForTests,
   formatLegalColumnList,
   getConnectFourRetryDelayMs,
   parseConnectFourAIResponse,
@@ -98,6 +99,74 @@ check(
     column: chooseFallbackConnectFourColumn(mustBlock),
     board: mustBlock.board,
   }
+);
+
+const abortController = new AbortController();
+let returnCalled = false;
+const neverYieldingStream = {
+  [Symbol.asyncIterator]() {
+    return {
+      next: () =>
+        new Promise<IteratorResult<{ type: "token"; content: string }>>(() => {
+          // Intentionally never resolves.
+        }),
+      return: async () => {
+        returnCalled = true;
+        return { done: true, value: undefined };
+      },
+    };
+  },
+};
+const streamCollection = collectConnectFourStreamTextForTests(
+  neverYieldingStream,
+  abortController.signal
+).then(
+  () => ({ status: "resolved" as const }),
+  (err: unknown) => ({
+    status: "rejected" as const,
+    message: err instanceof Error ? err.message : String(err),
+  })
+);
+setTimeout(() => abortController.abort(), 0);
+const abortedStreamResult = await Promise.race([
+  streamCollection,
+  new Promise<{ status: "timeout" }>((resolve) =>
+    setTimeout(() => resolve({ status: "timeout" }), 100)
+  ),
+]);
+
+check(
+  "stream collection aborts while awaiting a stalled chunk",
+  abortedStreamResult.status === "rejected" &&
+    abortedStreamResult.message === "AI request aborted",
+  abortedStreamResult
+);
+check("stalled stream iterator is closed on abort", returnCalled, {
+  returnCalled,
+});
+
+const alreadyAbortedController = new AbortController();
+alreadyAbortedController.abort();
+const alreadyAbortedResult = await Promise.race([
+  collectConnectFourStreamTextForTests(
+    neverYieldingStream,
+    alreadyAbortedController.signal
+  ).then(
+    () => ({ status: "resolved" as const }),
+    (err: unknown) => ({
+      status: "rejected" as const,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  ),
+  new Promise<{ status: "timeout" }>((resolve) =>
+    setTimeout(() => resolve({ status: "timeout" }), 100)
+  ),
+]);
+check(
+  "stream collection rejects immediately when already aborted",
+  alreadyAbortedResult.status === "rejected" &&
+    alreadyAbortedResult.message === "AI request aborted",
+  alreadyAbortedResult
 );
 
 if (failures === 0) {

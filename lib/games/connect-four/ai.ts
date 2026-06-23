@@ -4,7 +4,7 @@ import {
   type GameAIInteractionResult,
 } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
-import { parseModelId } from "@/lib/providers/base";
+import { parseModelId, type StreamChunk } from "@/lib/providers/base";
 import {
   getCustomModelByFullId,
   getDecryptedApiKey,
@@ -28,7 +28,7 @@ import type {
 const MAX_AI_ATTEMPTS = 3;
 const CENTER_FIRST_COLUMNS = [3, 2, 4, 1, 5, 0, 6] as const;
 
-interface RequestConnectFourAIMoveParams {
+export interface RequestConnectFourAIMoveParams {
   state: ConnectFourGameState;
   modelId: string;
   reasoningEffort: ReasoningEffort;
@@ -37,21 +37,22 @@ interface RequestConnectFourAIMoveParams {
   signal?: AbortSignal;
 }
 
-interface ConnectFourAIMoveSuccess extends GameAIInteractionResult<number> {
+export interface ConnectFourAIMoveSuccess
+  extends GameAIInteractionResult<number> {
   column: number;
   interaction: GameAIInteraction | null;
   reasoning?: string;
 }
 
-interface ConnectFourAIMoveError {
+export interface ConnectFourAIMoveError {
   error: string;
 }
 
-type ConnectFourAIMoveResult =
+export type ConnectFourAIMoveResult =
   | ConnectFourAIMoveSuccess
   | ConnectFourAIMoveError;
 
-interface AvailableConnectFourModel {
+export interface AvailableConnectFourModel {
   modelId: string;
   displayName: string;
   providerId: string;
@@ -389,8 +390,6 @@ async function streamConnectFourResponseText(params: {
   reasoningEffort: ReasoningEffort;
   signal?: AbortSignal;
 }): Promise<string> {
-  let responseText = "";
-
   const stream = params.customModel
     ? streamCustomChat(params.customModel, {
         apiKey: params.customModel.apiKey || params.apiKey,
@@ -402,19 +401,27 @@ async function streamConnectFourResponseText(params: {
       })
     : getStandardProviderStream(params);
 
-  for await (const chunk of stream) {
-    if (params.signal?.aborted) {
-      return responseText;
-    }
+  return collectConnectFourStreamTextForTests(stream, params.signal);
+}
 
+export async function collectConnectFourStreamTextForTests(
+  stream: AsyncIterable<StreamChunk>,
+  signal?: AbortSignal
+): Promise<string> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let responseText = "";
+
+  while (true) {
+    const next = await nextConnectFourStreamChunk(iterator, signal);
+    if (next.done) return responseText;
+
+    const chunk = next.value;
     if (chunk.type === "token" && chunk.content) {
       responseText += chunk.content;
     } else if (chunk.type === "error") {
       throw new Error(chunk.error || "Stream error");
     }
   }
-
-  return responseText;
 }
 
 function getStandardProviderStream(params: {
@@ -461,4 +468,48 @@ async function delayWithAbort(
       { once: true }
     );
   });
+}
+
+async function nextConnectFourStreamChunk(
+  iterator: AsyncIterator<StreamChunk>,
+  signal: AbortSignal | undefined
+): Promise<IteratorResult<StreamChunk>> {
+  if (signal?.aborted) {
+    closeConnectFourStreamIterator(iterator);
+    throw new Error("AI request aborted");
+  }
+
+  if (!signal) {
+    return iterator.next();
+  }
+
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      closeConnectFourStreamIterator(iterator);
+      reject(new Error("AI request aborted"));
+    };
+    signal.addEventListener("abort", abortHandler, { once: true });
+  });
+
+  try {
+    return await Promise.race([iterator.next(), abortPromise]);
+  } finally {
+    if (abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
+    }
+  }
+}
+
+function closeConnectFourStreamIterator(
+  iterator: AsyncIterator<StreamChunk>
+): void {
+  try {
+    const closeResult = iterator.return?.();
+    if (closeResult) {
+      void Promise.resolve(closeResult).catch(() => undefined);
+    }
+  } catch {
+    // The caller is already aborting or unwinding a failed stream.
+  }
 }
