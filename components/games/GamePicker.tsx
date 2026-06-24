@@ -14,11 +14,14 @@ const ACCENT_CLASSES: Record<GameDescriptor["accent"], string> = {
     "border-amber-200 bg-amber-50/70 hover:border-amber-400 dark:border-amber-900/70 dark:bg-amber-950/20 dark:hover:border-amber-600",
   "red-yellow":
     "border-red-200 bg-yellow-50/80 hover:border-red-400 dark:border-red-900/70 dark:bg-red-950/20 dark:hover:border-red-600",
+  "blue-orange":
+    "border-sky-200 bg-sky-50/80 hover:border-orange-400 dark:border-sky-900/70 dark:bg-sky-950/20 dark:hover:border-orange-500",
 };
 
 const DOT_CLASSES: Record<GameDescriptor["accent"], string> = {
   amber: "bg-amber-500",
   "red-yellow": "bg-red-500",
+  "blue-orange": "bg-sky-500",
 };
 
 export function GamePicker({

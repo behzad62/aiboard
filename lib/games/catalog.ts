@@ -5,7 +5,7 @@ export interface GameDescriptor {
   title: string;
   summary: string;
   status: "ready" | "coming-soon";
-  accent: "amber" | "red-yellow";
+  accent: "amber" | "red-yellow" | "blue-orange";
   modes: GameCatalogMode[];
 }
 
@@ -24,6 +24,14 @@ const GAME_CATALOG: GameDescriptor[] = [
     summary: "Drop discs, build threats, and connect four in a row.",
     status: "ready",
     accent: "red-yellow",
+    modes: ["pvp", "pvai", "aivai"],
+  },
+  {
+    id: "battleship",
+    title: "Battleship",
+    summary: "Call coordinates, read the board, and sink the hidden fleet.",
+    status: "ready",
+    accent: "blue-orange",
     modes: ["pvp", "pvai", "aivai"],
   },
 ];
