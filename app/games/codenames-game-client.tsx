@@ -20,6 +20,7 @@ import {
   roleLabel,
   teamLabel,
 } from "@/components/games/codenames/view-helpers";
+import { isNonrecoverableGameAIError } from "@/lib/games/core/ai-errors";
 import {
   getCodenamesAIModels,
   getCodenamesModelApiKey,
@@ -202,21 +203,6 @@ function formatAIDiagnostics(
       return lines.join("\n");
     })
     .join("\n\n---\n\n");
-}
-
-function isNonrecoverableAIError(error: string): boolean {
-  const normalized = error.toLowerCase();
-  return (
-    normalized.includes("aborted") ||
-    normalized.includes("unknown provider") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("forbidden") ||
-    normalized.includes("invalid api key") ||
-    normalized.includes("quota") ||
-    normalized.includes("key limit") ||
-    normalized.includes("401") ||
-    normalized.includes("403")
-  );
 }
 
 function fallbackInteraction(
@@ -723,7 +709,7 @@ export function CodenamesGameClient({
           }
 
           const fallbackClue =
-            gameMode === "aivai" && !isNonrecoverableAIError(result.error)
+            gameMode === "aivai" && !isNonrecoverableGameAIError(result.error)
               ? chooseFallbackClue(requestState)
               : null;
           if (fallbackClue) {
@@ -777,7 +763,7 @@ export function CodenamesGameClient({
         }
 
         const fallbackCard =
-          gameMode === "aivai" && !isNonrecoverableAIError(result.error)
+          gameMode === "aivai" && !isNonrecoverableGameAIError(result.error)
             ? chooseFallbackGuess(requestState)
             : null;
         if (fallbackCard) {

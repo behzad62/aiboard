@@ -22,6 +22,7 @@ import {
   requestConnectFourAIMove,
   type ConnectFourAIDiagnosticAttempt,
 } from "@/lib/games/connect-four/ai";
+import { isNonrecoverableGameAIError } from "@/lib/games/core/ai-errors";
 import {
   createInitialConnectFourState,
   dropDisc,
@@ -119,21 +120,6 @@ function shouldPersistConnectFourSnapshot(
 ): boolean {
   return (
     snapshot.isPaused || isConnectFourActiveStatus(snapshot.gameState.status)
-  );
-}
-
-function isNonrecoverableAIError(error: string): boolean {
-  const normalized = error.toLowerCase();
-  return (
-    normalized.includes("aborted") ||
-    normalized.includes("unknown provider") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("forbidden") ||
-    normalized.includes("invalid api key") ||
-    normalized.includes("quota") ||
-    normalized.includes("key limit") ||
-    normalized.includes("401") ||
-    normalized.includes("403")
   );
 }
 
@@ -623,7 +609,7 @@ export function ConnectFourGameClient({
         }
 
         const fallbackColumn =
-          gameMode === "aivai" && !isNonrecoverableAIError(result.error)
+          gameMode === "aivai" && !isNonrecoverableGameAIError(result.error)
             ? chooseFallbackConnectFourColumn(requestState)
             : null;
 
