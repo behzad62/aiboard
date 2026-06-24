@@ -3,6 +3,11 @@ import {
   buildGameAIInteraction,
   type GameAIInteractionResult,
 } from "@/lib/games/core/ai-interactions";
+import {
+  createGameModelCallTrace,
+  recordBenchmarkModelCallTrace,
+} from "@/lib/benchmark/model-call-traces";
+import { estimateModelCallUsage } from "@/lib/client/token-usage";
 import type { GameAIInteraction } from "@/lib/games/core/types";
 import { parseModelId, type StreamChunk } from "@/lib/providers/base";
 import type { StructuredOutputFormat } from "@/lib/providers/base";
@@ -303,6 +308,9 @@ export async function requestConnectFourAIMove(
   const { providerId, model } = parseModelId(modelId);
   const customModel = getCustomModelByFullId(modelId);
   const { system, user } = buildConnectFourPrompt(state, legalColumns);
+  const traceStartedAt = new Date().toISOString();
+  const traceStartMs = Date.now();
+  const tracePrompt = `${system}\n\n${user}`;
   const structuredOutput = buildConnectFourMoveResponseFormat();
   const messages: Array<{
     role: "system" | "user" | "assistant";
@@ -312,6 +320,38 @@ export async function requestConnectFourAIMove(
     { role: "user", content: user },
   ];
   const diagnostics: ConnectFourAIDiagnosticAttempt[] = [];
+  const recordTrace = async (input: {
+    finalStatus: "parsed" | "parse_error" | "illegal" | "provider_error";
+    rawResponse?: string;
+    parsedResponseJson?: string;
+    error?: string;
+  }) => {
+    const usage = estimateModelCallUsage({
+      messages,
+      output: input.rawResponse ?? "",
+      maxTokens: CONNECT_FOUR_AI_MAX_TOKENS,
+    });
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId,
+        providerId,
+        participantId: state.turn,
+        reasoningEffort,
+        schemaMode: "structured",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: input.rawResponse,
+        parsedResponseJson: input.parsedResponseJson,
+        diagnostics,
+        finalStatus: input.finalStatus,
+        error: input.error,
+      })
+    );
+  };
 
   for (let attempt = 0; attempt < MAX_AI_ATTEMPTS; attempt++) {
     if (signal?.aborted) {
@@ -352,6 +392,11 @@ export async function requestConnectFourAIMove(
           });
           continue;
         }
+        await recordTrace({
+          finalStatus: "parse_error",
+          rawResponse: responseText,
+          error: "Failed to parse AI response after multiple attempts",
+        });
         return {
           error: "Failed to parse AI response after multiple attempts",
           diagnostics,
@@ -379,6 +424,12 @@ export async function requestConnectFourAIMove(
           });
           continue;
         }
+        await recordTrace({
+          finalStatus: "illegal",
+          rawResponse: responseText,
+          parsedResponseJson: JSON.stringify(parsed),
+          error: `AI returned illegal column: ${parsed.column + 1} after ${MAX_AI_ATTEMPTS} attempts`,
+        });
         return {
           error: `AI returned illegal column: ${parsed.column + 1} after ${MAX_AI_ATTEMPTS} attempts`,
           diagnostics,
@@ -386,6 +437,11 @@ export async function requestConnectFourAIMove(
       }
 
       const interaction = buildGameAIInteraction(state.turn, parsed);
+      await recordTrace({
+        finalStatus: "parsed",
+        rawResponse: responseText,
+        parsedResponseJson: JSON.stringify(parsed),
+      });
       return {
         action: parsed.column,
         column: parsed.column,
@@ -420,6 +476,10 @@ export async function requestConnectFourAIMove(
         type: "request",
         message: errorMessage,
         legalColumns,
+      });
+      await recordTrace({
+        finalStatus: "provider_error",
+        error: errorMessage,
       });
       return {
         error: `AI request failed: ${errorMessage}`,

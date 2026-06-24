@@ -7,6 +7,9 @@ import {
   connectFourMatchToGenericGameMatchRecord,
   isRecoverableConnectFourAIError,
 } from "../lib/games/connect-four/benchmark";
+import { battleshipMatchToGenericGameMatchRecord } from "../lib/games/battleship/benchmark";
+import { codenamesMatchToGenericGameMatchRecord } from "../lib/games/codenames/benchmark";
+import { listRunnableGameBenchmarkDefinitions } from "../lib/games/core/benchmark-definitions";
 import type { GameId } from "../lib/games/core/types";
 
 let failures = 0;
@@ -124,6 +127,92 @@ check(
     genericConnectFourStats.invalidResponses === 2 &&
     genericConnectFourStats.fallbackMoves === 1,
   genericConnectFourRecord
+);
+
+const runnableGameIds = listRunnableGameBenchmarkDefinitions().map(
+  (definition) => definition.gameId
+);
+check(
+  "all shipped AI games are runnable benchmark targets",
+  ["chess", "connect-four", "battleship", "codenames"].every((gameId) =>
+    runnableGameIds.includes(gameId)
+  ),
+  runnableGameIds
+);
+
+const genericBattleshipRecord = battleshipMatchToGenericGameMatchRecord({
+  id: "battleship-match-1",
+  timestamp: "2026-06-24T10:00:00.000Z",
+  mode: "aivai",
+  blueModel: "openai:gpt-4.1",
+  orangeModel: "anthropic:claude-sonnet-4",
+  blueReasoningEffort: "low",
+  orangeReasoningEffort: "high",
+  result: "blue",
+  shots: 44,
+  durationMs: 21000,
+  avgAiResponseMs: 900,
+  invalidResponses: 1,
+  fallbackMoves: 2,
+  placementFallbacks: 1,
+});
+const battleshipResult = JSON.parse(genericBattleshipRecord.resultJson) as {
+  result?: string;
+  winner?: string | null;
+};
+const battleshipStats = JSON.parse(genericBattleshipRecord.statsJson) as {
+  shots?: number;
+  placementFallbacks?: number;
+};
+check(
+  "battleship match converts to generic game record",
+  genericBattleshipRecord.gameId === "battleship" &&
+    genericBattleshipRecord.participants.length === 2 &&
+    genericBattleshipRecord.participants[0]?.id === "blue" &&
+    genericBattleshipRecord.participants[1]?.id === "orange" &&
+    battleshipResult.winner === "blue" &&
+    battleshipStats.shots === 44 &&
+    battleshipStats.placementFallbacks === 1,
+  genericBattleshipRecord
+);
+
+const genericCodenamesRecord = codenamesMatchToGenericGameMatchRecord({
+  id: "codenames-match-1",
+  timestamp: "2026-06-24T10:00:00.000Z",
+  mode: "aivai",
+  redModel: "openai:gpt-4.1",
+  blueModel: "anthropic:claude-sonnet-4",
+  redReasoningEffort: "low",
+  blueReasoningEffort: "high",
+  result: "blue",
+  turns: 8,
+  moves: 19,
+  durationMs: 32000,
+  avgAiResponseMs: 1100,
+  invalidResponses: 3,
+  fallbackMoves: 2,
+  assassinHits: 1,
+});
+const codenamesResult = JSON.parse(genericCodenamesRecord.resultJson) as {
+  result?: string;
+  winner?: string | null;
+};
+const codenamesStats = JSON.parse(genericCodenamesRecord.statsJson) as {
+  turns?: number;
+  assassinHits?: number;
+};
+check(
+  "codenames match converts to generic game record",
+  genericCodenamesRecord.gameId === "codenames" &&
+    genericCodenamesRecord.participants.length === 4 &&
+    genericCodenamesRecord.participants[0]?.id === "red-spymaster" &&
+    genericCodenamesRecord.participants[1]?.id === "red-operative" &&
+    genericCodenamesRecord.participants[2]?.id === "blue-spymaster" &&
+    genericCodenamesRecord.participants[3]?.id === "blue-operative" &&
+    codenamesResult.winner === "blue" &&
+    codenamesStats.turns === 8 &&
+    codenamesStats.assassinHits === 1,
+  genericCodenamesRecord
 );
 
 if (failures === 0) {

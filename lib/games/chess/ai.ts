@@ -27,6 +27,11 @@ import {
   type GameAIInteractionResult,
 } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
+import {
+  createGameModelCallTrace,
+  recordBenchmarkModelCallTrace,
+} from "@/lib/benchmark/model-call-traces";
+import { estimateModelCallUsage } from "@/lib/client/token-usage";
 
 export const CHESS_AI_MAX_TOKENS = 4096;
 
@@ -406,8 +411,16 @@ interface AIMoveSuccess extends GameAIInteractionResult<Move> {
   reasoning?: string;
 }
 
+export interface ChessAIDiagnosticAttempt {
+  attempt: number;
+  type: "parse" | "illegal" | "request";
+  message: string;
+  rawResponse?: string;
+}
+
 interface AIMoveError {
   error: string;
+  diagnostics?: ChessAIDiagnosticAttempt[];
 }
 
 type AIMoveResult = AIMoveSuccess | AIMoveError;
@@ -440,6 +453,9 @@ export async function requestAIMove(
 
   // Build the initial prompt
   const { system, user } = buildChessPrompt(state, legalMoves);
+  const traceStartedAt = new Date().toISOString();
+  const traceStartMs = Date.now();
+  const tracePrompt = `${system}\n\n${user}`;
 
   // Track conversation for retries
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
@@ -447,6 +463,39 @@ export async function requestAIMove(
     { role: "user", content: user },
   ];
   const structuredOutput = buildChessMoveResponseFormat();
+  const diagnostics: ChessAIDiagnosticAttempt[] = [];
+  const recordTrace = async (input: {
+    finalStatus: "parsed" | "parse_error" | "illegal" | "provider_error";
+    rawResponse?: string;
+    parsedResponseJson?: string;
+    error?: string;
+  }) => {
+    const usage = estimateModelCallUsage({
+      messages,
+      output: input.rawResponse ?? "",
+      maxTokens: CHESS_AI_MAX_TOKENS,
+    });
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId,
+        providerId,
+        participantId: state.turn,
+        reasoningEffort,
+        schemaMode: "structured",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: input.rawResponse,
+        parsedResponseJson: input.parsedResponseJson,
+        diagnostics,
+        finalStatus: input.finalStatus,
+        error: input.error,
+      })
+    );
+  };
 
   for (let attempt = 0; attempt < MAX_AI_MOVE_RETRIES; attempt++) {
     if (signal?.aborted) {
@@ -513,6 +562,12 @@ export async function requestAIMove(
       // Parse the response
       const parsed = parseAIResponse(responseText);
       if (!parsed) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "parse",
+          message: "Response could not be parsed as chess move JSON.",
+          rawResponse: responseText,
+        });
         // Add assistant response and correction for retry
         if (attempt < MAX_AI_MOVE_RETRIES - 1) {
           messages.push({ role: "assistant", content: responseText });
@@ -522,7 +577,15 @@ export async function requestAIMove(
           });
           continue;
         }
-        return { error: "Failed to parse AI response after multiple attempts" };
+        await recordTrace({
+          finalStatus: "parse_error",
+          rawResponse: responseText,
+          error: "Failed to parse AI response after multiple attempts",
+        });
+        return {
+          error: "Failed to parse AI response after multiple attempts",
+          diagnostics,
+        };
       }
 
       // Construct the move
@@ -534,6 +597,12 @@ export async function requestAIMove(
 
       // Validate the move is legal
       if (!isLegalMove(state, move)) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "illegal",
+          message: `AI selected illegal move ${parsed.from}${parsed.to}.`,
+          rawResponse: responseText,
+        });
         // Add assistant response and correction for retry
         if (attempt < MAX_AI_MOVE_RETRIES - 1) {
           messages.push({ role: "assistant", content: responseText });
@@ -543,13 +612,25 @@ export async function requestAIMove(
           });
           continue;
         }
+        await recordTrace({
+          finalStatus: "illegal",
+          rawResponse: responseText,
+          parsedResponseJson: JSON.stringify(parsed),
+          error: `AI returned illegal move: ${parsed.from}${parsed.to} after ${MAX_AI_MOVE_RETRIES} attempts`,
+        });
         return {
           error: `AI returned illegal move: ${parsed.from}${parsed.to} after ${MAX_AI_MOVE_RETRIES} attempts`,
+          diagnostics,
         };
       }
 
       // Success!
       const interaction = buildGameAIInteraction(state.turn, parsed);
+      await recordTrace({
+        finalStatus: "parsed",
+        rawResponse: responseText,
+        parsedResponseJson: JSON.stringify(parsed),
+      });
       return {
         action: move,
         move,
@@ -566,6 +647,11 @@ export async function requestAIMove(
       }
 
       if (attempt < MAX_AI_MOVE_RETRIES - 1) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "request",
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
         // Retry on transient errors
         try {
           await waitForAIMoveRetry(getAIMoveRetryDelayMs(attempt), signal);
@@ -575,11 +661,24 @@ export async function requestAIMove(
         continue;
       }
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      return { error: `AI request failed: ${errorMessage}` };
+      diagnostics.push({
+        attempt: attempt + 1,
+        type: "request",
+        message: errorMessage,
+      });
+      await recordTrace({
+        finalStatus: "provider_error",
+        error: errorMessage,
+      });
+      return { error: `AI request failed: ${errorMessage}`, diagnostics };
     }
   }
 
-  return { error: "Failed to get valid move after maximum retries" };
+  await recordTrace({
+    finalStatus: "parse_error",
+    error: "Failed to get valid move after maximum retries",
+  });
+  return { error: "Failed to get valid move after maximum retries", diagnostics };
 }
 
 // =============================================================================

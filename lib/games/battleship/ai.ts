@@ -14,6 +14,12 @@ import {
   getProviderBaseURL,
   streamCustomChat,
 } from "@/lib/client/providers";
+import { estimateModelCallUsage } from "@/lib/client/token-usage";
+import {
+  createGameModelCallTrace,
+  recordBenchmarkModelCallTrace,
+  type GameAIDiagnosticLike,
+} from "@/lib/benchmark/model-call-traces";
 import {
   BATTLESHIP_FLEET,
   createBattleshipFleetFromPlacements,
@@ -493,6 +499,9 @@ export async function requestBattleshipAIMove(
   const { providerId, model } = parseModelId(params.modelId);
   const customModel = getCustomModelByFullId(params.modelId);
   const { system, user } = buildBattleshipPrompt(params.state, params.player);
+  const traceStartedAt = new Date().toISOString();
+  const traceStartMs = Date.now();
+  const tracePrompt = `${system}\n\n${user}`;
   const structuredOutput = buildBattleshipMoveResponseFormat();
   const messages: Array<{
     role: "system" | "user" | "assistant";
@@ -502,6 +511,38 @@ export async function requestBattleshipAIMove(
     { role: "user", content: user },
   ];
   const diagnostics: BattleshipAIDiagnosticAttempt[] = [];
+  const recordTrace = async (input: {
+    finalStatus: "parsed" | "parse_error" | "illegal" | "provider_error";
+    rawResponse?: string;
+    parsedResponseJson?: string;
+    error?: string;
+  }) => {
+    const usage = estimateModelCallUsage({
+      messages,
+      output: input.rawResponse ?? "",
+      maxTokens: BATTLESHIP_AI_MAX_TOKENS,
+    });
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId: params.modelId,
+        providerId,
+        participantId: params.player,
+        reasoningEffort: params.reasoningEffort,
+        schemaMode: "structured",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: input.rawResponse,
+        parsedResponseJson: input.parsedResponseJson,
+        diagnostics,
+        finalStatus: input.finalStatus,
+        error: input.error,
+      })
+    );
+  };
 
   for (let attempt = 0; attempt < MAX_AI_ATTEMPTS; attempt++) {
     if (params.signal?.aborted) return { error: "AI request aborted" };
@@ -535,6 +576,11 @@ export async function requestBattleshipAIMove(
           });
           continue;
         }
+        await recordTrace({
+          finalStatus: "parse_error",
+          rawResponse: responseText,
+          error: "Failed to parse AI response after multiple attempts",
+        });
         return { error: "Failed to parse AI response after multiple attempts", diagnostics };
       }
 
@@ -556,10 +602,21 @@ export async function requestBattleshipAIMove(
           });
           continue;
         }
+        await recordTrace({
+          finalStatus: "illegal",
+          rawResponse: responseText,
+          parsedResponseJson: JSON.stringify(parsed),
+          error: `AI returned illegal target: ${rejectedTarget}`,
+        });
         return { error: `AI returned illegal target: ${rejectedTarget}`, diagnostics };
       }
 
       const interaction = buildGameAIInteraction(params.player, parsed);
+      await recordTrace({
+        finalStatus: "parsed",
+        rawResponse: responseText,
+        parsedResponseJson: JSON.stringify(parsed),
+      });
       return {
         action: parsed.target,
         target: parsed.target,
@@ -578,8 +635,14 @@ export async function requestBattleshipAIMove(
         legalTargets: legalLabels,
       });
       if (attempt === MAX_AI_ATTEMPTS - 1) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        await recordTrace({
+          finalStatus: "provider_error",
+          error: errorMessage,
+        });
         return {
-          error: `AI request failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          error: `AI request failed: ${errorMessage}`,
           diagnostics,
         };
       }
@@ -600,6 +663,42 @@ export async function requestBattleshipAIPlacement(params: {
   const { providerId, model } = parseModelId(params.modelId);
   const customModel = getCustomModelByFullId(params.modelId);
   const { system, user } = buildBattleshipPlacementPrompt(params.player);
+  const traceStartedAt = new Date().toISOString();
+  const traceStartMs = Date.now();
+  const tracePrompt = `${system}\n\n${user}`;
+  const diagnostics: GameAIDiagnosticLike[] = [];
+  const recordTrace = async (input: {
+    finalStatus: "parsed" | "parse_error" | "provider_error";
+    rawResponse?: string;
+    parsedResponseJson?: string;
+    error?: string;
+  }) => {
+    const usage = estimateModelCallUsage({
+      messages,
+      output: input.rawResponse ?? "",
+      maxTokens: BATTLESHIP_AI_MAX_TOKENS,
+    });
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId: params.modelId,
+        providerId,
+        participantId: `${params.player}:placement`,
+        reasoningEffort: params.reasoningEffort,
+        schemaMode: "structured",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: input.rawResponse,
+        parsedResponseJson: input.parsedResponseJson,
+        diagnostics,
+        finalStatus: input.finalStatus,
+        error: input.error,
+      })
+    );
+  };
   const messages: Array<{
     role: "system" | "user" | "assistant";
     content: string;
@@ -624,9 +723,22 @@ export async function requestBattleshipAIPlacement(params: {
         signal: params.signal,
       });
       const ships = parseBattleshipPlacementResponse(responseText);
-      if (ships) return { ships };
+      if (ships) {
+        await recordTrace({
+          finalStatus: "parsed",
+          rawResponse: responseText,
+          parsedResponseJson: JSON.stringify({ ships }),
+        });
+        return { ships };
+      }
 
       if (attempt < MAX_AI_ATTEMPTS - 1) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "parse",
+          message: "Battleship fleet placement was invalid.",
+          rawResponse: responseText,
+        });
         messages.push({ role: "assistant", content: responseText });
         messages.push({
           role: "user",
@@ -636,6 +748,17 @@ export async function requestBattleshipAIPlacement(params: {
         continue;
       }
 
+      diagnostics.push({
+        attempt: attempt + 1,
+        type: "parse",
+        message: "Failed to parse AI fleet placement after multiple attempts",
+        rawResponse: responseText,
+      });
+      await recordTrace({
+        finalStatus: "parse_error",
+        rawResponse: responseText,
+        error: "Failed to parse AI fleet placement after multiple attempts",
+      });
       return {
         error: "Failed to parse AI fleet placement after multiple attempts",
         rawResponse: responseText,
@@ -643,14 +766,32 @@ export async function requestBattleshipAIPlacement(params: {
     } catch (error) {
       if (params.signal?.aborted) return { error: "AI placement aborted" };
       if (attempt === MAX_AI_ATTEMPTS - 1) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "request",
+          message: errorMessage,
+        });
+        await recordTrace({
+          finalStatus: "provider_error",
+          error: errorMessage,
+        });
         return {
-          error: `AI placement request failed: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`,
+          error: `AI placement request failed: ${errorMessage}`,
         };
       }
+      diagnostics.push({
+        attempt: attempt + 1,
+        type: "request",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
     }
   }
 
+  await recordTrace({
+    finalStatus: "parse_error",
+    error: "Failed to get valid fleet placement after maximum retries",
+  });
   return { error: "Failed to get valid fleet placement after maximum retries" };
 }

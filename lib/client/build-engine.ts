@@ -57,6 +57,11 @@ import {
 } from "@/lib/orchestrator/build-quality-gates";
 import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
+import {
+  createGameModelCallTrace,
+  type GameAIDiagnosticLike,
+  recordBenchmarkModelCallTrace,
+} from "@/lib/benchmark/model-call-traces";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
@@ -183,6 +188,9 @@ import {
 import { estimateModelCallUsage } from "./token-usage";
 
 type EventCallback = (event: OrchestratorEvent) => void;
+type StructuredTraceValidation =
+  | { ok: true; parsedResponseJson?: string }
+  | { ok: false; message: string };
 
 export type CommandApprovalDecision = "allow" | "allow-all" | "deny";
 
@@ -2431,11 +2439,18 @@ ${truncate(result.text, 8_000)}`,
       label: string;
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
+      validateStructuredOutput?: (content: string) => StructuredTraceValidation;
     }
   ): Promise<string> => {
     round += 1;
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
+    const traceStartedAt = new Date().toISOString();
+    const traceStartMs = Date.now();
+    const tracePrompt = messages
+      .map((message) => `${message.role}:\n${message.content}`)
+      .join("\n\n");
+    const diagnostics: GameAIDiagnosticLike[] = [];
     emit({
       type: "message_start",
       messageId,
@@ -2453,20 +2468,54 @@ ${truncate(result.text, 8_000)}`,
       providerId,
       message: opts.label,
     });
-    const content = await collectStream(
-      model.modelId,
-      providerId,
-      rawModel,
-      messages,
-      opts.maxTokens,
-      0.4,
-      reasoningEffort,
-      [],
-      (token) => emit({ type: "message_token", messageId, token }),
-      signal,
-      opts.stopWhen,
-      opts.structuredOutput
-    );
+    let content: string;
+    try {
+      content = await collectStream(
+        model.modelId,
+        providerId,
+        rawModel,
+        messages,
+        opts.maxTokens,
+        0.4,
+        reasoningEffort,
+        [],
+        (token) => emit({ type: "message_token", messageId, token }),
+        signal,
+        opts.stopWhen,
+        opts.structuredOutput,
+        (retry) =>
+          diagnostics.push({
+            attempt: retry.attempt,
+            type: "request",
+            message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
+          })
+      );
+    } catch (error) {
+      await recordBenchmarkModelCallTrace(
+        createGameModelCallTrace({
+          modelId: model.modelId,
+          providerId,
+          participantId: opts.label,
+          reasoningEffort,
+          schemaMode: opts.structuredOutput ? "structured" : "text",
+          promptText: tracePrompt,
+          startedAt: traceStartedAt,
+          completedAt: new Date().toISOString(),
+          latencyMs: Date.now() - traceStartMs,
+          diagnostics: [
+            ...diagnostics,
+            {
+              attempt: diagnostics.length + 1,
+              type: "request",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          finalStatus: "provider_error",
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+      throw error;
+    }
     insertMessage({
       id: messageId,
       discussionId: discussion.id,
@@ -2482,6 +2531,36 @@ ${truncate(result.text, 8_000)}`,
       output: content,
       maxTokens: opts.maxTokens,
     });
+    const validation = opts.validateStructuredOutput?.(content);
+    const traceParsedJson =
+      validation?.ok === true
+        ? validation.parsedResponseJson ?? content
+        : validation?.ok === false
+          ? undefined
+          : opts.structuredOutput
+            ? content
+            : undefined;
+    const traceStatus = validation?.ok === false ? "parse_error" : "parsed";
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId: model.modelId,
+        providerId,
+        participantId: opts.label,
+        reasoningEffort,
+        schemaMode: opts.structuredOutput ? "structured" : "text",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: content,
+        parsedResponseJson: traceParsedJson,
+        diagnostics,
+        finalStatus: traceStatus,
+        error: validation?.ok === false ? validation.message : undefined,
+      })
+    );
     emit({
       type: "token_usage",
       messageId,
@@ -3210,6 +3289,15 @@ ${truncate(result.text, 8_000)}`,
         label: forced ? `${args.label} (final verdict)` : args.label,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
         structuredOutput: architectActionResponseFormat,
+        validateStructuredOutput: (content) => {
+          const parsed = parseArchitectAction(content);
+          return parsed
+            ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
+            : {
+                ok: false,
+                message: "Architect action response could not be parsed as JSON.",
+              };
+        },
       });
       messages.push({ role: "assistant", content: text });
 
