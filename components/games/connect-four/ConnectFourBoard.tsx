@@ -67,6 +67,8 @@ export function ConnectFourBoard({
             const isPreviewColumn = previewColumn === column && canPlay;
             const isLandingPreview =
               isPreviewColumn && previewLandingRow === row && cell === null;
+            const isRedPreview = isLandingPreview && state.turn === "red";
+            const isYellowPreview = isLandingPreview && state.turn === "yellow";
             const cellLabel = cell ? `${PLAYER_LABELS[cell]} disc` : "empty";
 
             return (
@@ -80,8 +82,10 @@ export function ConnectFourBoard({
                   canPlay && "cursor-pointer",
                   !canPlay && "cursor-default",
                   isPreviewColumn && "ring-2 ring-amber-200/70 ring-offset-1 ring-offset-sky-700",
-                  isLandingPreview &&
-                    "border-amber-200 bg-sky-950/15 ring-2 ring-amber-300 ring-offset-2"
+                  isRedPreview &&
+                    "border-red-200 bg-sky-950/15 ring-2 ring-red-300/90 ring-offset-2",
+                  isYellowPreview &&
+                    "border-yellow-100 bg-sky-950/15 ring-2 ring-yellow-200/90 ring-offset-2"
                 )}
                 disabled={!canPlay}
                 onClick={() => {
@@ -114,8 +118,10 @@ export function ConnectFourBoard({
                     cell === null &&
                       cn(
                         "bg-slate-950/45",
-                        isLandingPreview &&
-                          "bg-gradient-to-br from-amber-100/75 via-amber-200/55 to-amber-500/45"
+                        isRedPreview &&
+                          "bg-gradient-to-br from-red-200/75 via-red-400/50 to-red-700/35",
+                        isYellowPreview &&
+                          "bg-gradient-to-br from-yellow-100/80 via-amber-300/55 to-yellow-600/40"
                       )
                   )}
                   aria-hidden="true"
