@@ -26,6 +26,8 @@ import {
 } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
 
+export const CHESS_AI_MAX_TOKENS = 4096;
+
 // =============================================================================
 // EXPORTED INTERFACES
 // =============================================================================
@@ -334,7 +336,7 @@ export async function requestAIMove(
           apiKey: customModel.apiKey || apiKey,
           model: customModel.model,
           messages,
-          maxTokens: 1024,
+          maxTokens: CHESS_AI_MAX_TOKENS,
           temperature: 0.3,
           reasoningEffort,
           structuredOutput,
@@ -362,7 +364,7 @@ export async function requestAIMove(
           apiKey,
           model,
           messages,
-          maxTokens: 1024,
+          maxTokens: CHESS_AI_MAX_TOKENS,
           temperature: 0.3,
           reasoningEffort,
           baseURL,

@@ -146,7 +146,7 @@ const TEXT_PROMPT =
 // streams its reasoning before any visible content) have room to finish
 // reasoning AND emit an answer. Cloud models bill per token generated, so a high
 // cap costs nothing for their short replies.
-const TEST_MAX_TOKENS = 1024;
+const TEST_MAX_TOKENS = 4096;
 
 export interface ModelTestResult {
   valid: boolean;

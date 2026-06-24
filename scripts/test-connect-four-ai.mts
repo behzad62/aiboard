@@ -1,5 +1,6 @@
 import {
   buildConnectFourCorrectionPrompt,
+  CONNECT_FOUR_AI_MAX_TOKENS,
   chooseFallbackConnectFourColumn,
   collectConnectFourStreamTextForTests,
   formatLegalColumnList,
@@ -75,6 +76,11 @@ check(
 
 check("retry delay starts at 250ms", getConnectFourRetryDelayMs(0) === 250);
 check("retry delay doubles on second attempt", getConnectFourRetryDelayMs(1) === 500);
+check(
+  "Connect Four AI uses enough output budget for structured JSON with reasoning",
+  CONNECT_FOUR_AI_MAX_TOKENS >= 4096,
+  CONNECT_FOUR_AI_MAX_TOKENS
+);
 
 check(
   "fallback chooses center on empty board",

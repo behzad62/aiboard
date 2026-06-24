@@ -27,6 +27,7 @@ import type {
 } from "./types";
 
 const MAX_AI_ATTEMPTS = 3;
+export const CONNECT_FOUR_AI_MAX_TOKENS = 4096;
 const CENTER_FIRST_COLUMNS = [3, 2, 4, 1, 5, 0, 6] as const;
 
 export interface RequestConnectFourAIMoveParams {
@@ -492,7 +493,7 @@ async function streamConnectFourResponseText(params: {
         apiKey: params.customModel.apiKey || params.apiKey,
         model: params.customModel.model,
         messages: params.messages,
-        maxTokens: 1024,
+        maxTokens: CONNECT_FOUR_AI_MAX_TOKENS,
         temperature: 0.3,
         reasoningEffort: params.reasoningEffort,
         structuredOutput: params.structuredOutput,
@@ -540,7 +541,7 @@ function getStandardProviderStream(params: {
     apiKey: params.apiKey,
     model: params.model,
     messages: params.messages,
-    maxTokens: 1024,
+    maxTokens: CONNECT_FOUR_AI_MAX_TOKENS,
     temperature: 0.3,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
