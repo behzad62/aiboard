@@ -1,8 +1,7 @@
 import type { ReasoningEffort } from "@/lib/db/schema";
-import type { ConnectFourBenchmarkProgress } from "@/lib/games/connect-four/benchmark";
+import type { RunnableGameBenchmarkId } from "@/lib/games/core/benchmark-definitions";
 
 export const MAX_CHESS_BENCHMARK_MOVES = 100;
-export const CONNECT_FOUR_DEFAULT_MAX_MOVES = 42;
 export const BENCHMARK_MOVE_DELAY_MS = 300;
 
 export const REASONING_LEVELS: {
@@ -21,21 +20,27 @@ export interface AvailableBenchmarkModel {
   displayName: string;
 }
 
-export type SelectedBenchmarkGame = "chess" | "connect-four";
+export type SelectedBenchmarkGame = RunnableGameBenchmarkId;
+
+export interface StandardGameBenchmarkConfig {
+  firstModelId: string;
+  secondModelId: string;
+  firstReasoning: ReasoningEffort;
+  secondReasoning: ReasoningEffort;
+  maxMoves: number;
+  numGames: number;
+}
+
+export type GameBenchmarkConfigMap = Record<
+  RunnableGameBenchmarkId,
+  StandardGameBenchmarkConfig
+>;
 
 export interface ChessBenchmarkConfig {
   whiteModelId: string;
   blackModelId: string;
   whiteReasoning: ReasoningEffort;
   blackReasoning: ReasoningEffort;
-  numGames: number;
-}
-
-export interface ConnectFourBenchmarkConfig {
-  redModelId: string;
-  yellowModelId: string;
-  redReasoning: ReasoningEffort;
-  yellowReasoning: ReasoningEffort;
   maxMoves: number;
   numGames: number;
 }
@@ -49,18 +54,35 @@ export interface ChessBenchmarkProgress {
   fen: string;
 }
 
-export interface ConnectFourBenchmarkProgressState
-  extends ConnectFourBenchmarkProgress {
+export interface GameBenchmarkProgressState {
   currentGame: number;
   totalGames: number;
+  moveCount: number;
+  currentTurn: string;
+  status: string;
+  result: string | null;
+  invalidResponses: number;
+  fallbackMoves: number;
+  maxMoves: number;
 }
 
-export interface ConnectFourBenchmarkSummary {
+export interface GameBenchmarkSummary {
+  gameId: RunnableGameBenchmarkId;
+  title: string;
   completedGames: number;
   savedGames: number;
-  redWins: number;
-  yellowWins: number;
+  winners: Array<{
+    label: string;
+    value: number;
+    className?: string;
+  }>;
   draws: number;
   avgMoves: number;
   avgDurationMs: number;
+  invalidResponses: number;
+  fallbackMoves: number;
+  extraStats?: Array<{
+    label: string;
+    value: number;
+  }>;
 }

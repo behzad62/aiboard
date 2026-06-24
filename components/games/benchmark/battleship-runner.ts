@@ -1,17 +1,17 @@
-import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import {
-  connectFourMatchToGenericGameMatchRecord,
-  runConnectFourAIBenchmark,
-} from "@/lib/games/connect-four/benchmark";
-import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
+  battleshipMatchToGenericGameMatchRecord,
+  runBattleshipAIBenchmark,
+  type BattleshipMatchRecord,
+} from "@/lib/games/battleship/benchmark";
+import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import type {
   GameBenchmarkProgressState,
   GameBenchmarkSummary,
   StandardGameBenchmarkConfig,
 } from "./types";
-import { summarizeConnectFourBenchmark } from "./format";
+import { summarizeBattleshipBenchmark } from "./format";
 
-export async function runConnectFourBenchmarkSeries({
+export async function runBattleshipBenchmarkSeries({
   config,
   isAborted,
   onProgress,
@@ -22,19 +22,19 @@ export async function runConnectFourBenchmarkSeries({
   onProgress: (progress: GameBenchmarkProgressState) => void;
   signal: AbortSignal;
 }): Promise<{
-  results: ConnectFourMatchRecord[];
+  results: BattleshipMatchRecord[];
   summary: GameBenchmarkSummary | null;
 }> {
-  const results: ConnectFourMatchRecord[] = [];
+  const results: BattleshipMatchRecord[] = [];
   let savedGames = 0;
 
   for (let i = 0; i < config.numGames; i++) {
     if (signal.aborted || isAborted()) break;
-    const result = await runConnectFourAIBenchmark({
-      redModelId: config.firstModelId,
-      yellowModelId: config.secondModelId,
-      redReasoning: config.firstReasoning,
-      yellowReasoning: config.secondReasoning,
+    const result = await runBattleshipAIBenchmark({
+      blueModelId: config.firstModelId,
+      orangeModelId: config.secondModelId,
+      blueReasoning: config.firstReasoning,
+      orangeReasoning: config.secondReasoning,
       maxMoves: config.maxMoves,
       signal,
       onProgress: (gameProgress) => {
@@ -50,11 +50,11 @@ export async function runConnectFourBenchmarkSeries({
       results.push(result);
       try {
         await saveGenericGameMatchRecord(
-          connectFourMatchToGenericGameMatchRecord(result)
+          battleshipMatchToGenericGameMatchRecord(result)
         );
         savedGames++;
       } catch (error) {
-        console.warn("Failed to save Connect Four benchmark result:", error);
+        console.warn("Failed to save Battleship benchmark result:", error);
       }
     }
   }
@@ -64,6 +64,6 @@ export async function runConnectFourBenchmarkSeries({
     summary:
       signal.aborted || isAborted()
         ? null
-        : summarizeConnectFourBenchmark(results, savedGames),
+        : summarizeBattleshipBenchmark(results, savedGames),
   };
 }

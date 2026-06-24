@@ -1,5 +1,7 @@
 import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
-import type { ConnectFourBenchmarkSummary } from "./types";
+import type { BattleshipMatchRecord } from "@/lib/games/battleship/benchmark";
+import type { CodenamesMatchRecord } from "@/lib/games/codenames/benchmark";
+import type { GameBenchmarkSummary } from "./types";
 
 export function generateBenchmarkId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -38,7 +40,7 @@ export function getModelDisplayName(modelId: string): string {
 export function summarizeConnectFourBenchmark(
   results: ConnectFourMatchRecord[],
   savedGames: number
-): ConnectFourBenchmarkSummary | null {
+): GameBenchmarkSummary | null {
   if (results.length === 0) return null;
 
   const totalMoves = results.reduce((sum, result) => sum + result.moves, 0);
@@ -48,12 +50,119 @@ export function summarizeConnectFourBenchmark(
   );
 
   return {
+    gameId: "connect-four",
+    title: "Latest Connect Four Benchmark",
     completedGames: results.length,
     savedGames,
-    redWins: results.filter((result) => result.result === "red").length,
-    yellowWins: results.filter((result) => result.result === "yellow").length,
+    winners: [
+      {
+        label: "Red Wins",
+        value: results.filter((result) => result.result === "red").length,
+        className: "text-red-600 dark:text-red-400",
+      },
+      {
+        label: "Yellow Wins",
+        value: results.filter((result) => result.result === "yellow").length,
+        className: "text-yellow-600 dark:text-yellow-400",
+      },
+    ],
     draws: results.filter((result) => result.result === "draw").length,
     avgMoves: totalMoves / results.length,
     avgDurationMs: totalDurationMs / results.length,
+    invalidResponses: results.reduce(
+      (sum, result) => sum + (result.invalidResponses ?? 0),
+      0
+    ),
+    fallbackMoves: results.reduce(
+      (sum, result) => sum + (result.fallbackMoves ?? 0),
+      0
+    ),
+  };
+}
+
+export function summarizeBattleshipBenchmark(
+  results: BattleshipMatchRecord[],
+  savedGames: number
+): GameBenchmarkSummary | null {
+  if (results.length === 0) return null;
+  return {
+    gameId: "battleship",
+    title: "Latest Battleship Benchmark",
+    completedGames: results.length,
+    savedGames,
+    winners: [
+      {
+        label: "Blue Wins",
+        value: results.filter((result) => result.result === "blue").length,
+        className: "text-sky-600 dark:text-sky-400",
+      },
+      {
+        label: "Orange Wins",
+        value: results.filter((result) => result.result === "orange").length,
+        className: "text-orange-600 dark:text-orange-400",
+      },
+    ],
+    draws: results.filter((result) => result.result === "draw").length,
+    avgMoves:
+      results.reduce((sum, result) => sum + result.shots, 0) / results.length,
+    avgDurationMs:
+      results.reduce((sum, result) => sum + result.durationMs, 0) /
+      results.length,
+    invalidResponses: results.reduce(
+      (sum, result) => sum + result.invalidResponses,
+      0
+    ),
+    fallbackMoves: results.reduce((sum, result) => sum + result.fallbackMoves, 0),
+    extraStats: [
+      {
+        label: "Placement Fallbacks",
+        value: results.reduce(
+          (sum, result) => sum + result.placementFallbacks,
+          0
+        ),
+      },
+    ],
+  };
+}
+
+export function summarizeCodenamesBenchmark(
+  results: CodenamesMatchRecord[],
+  savedGames: number
+): GameBenchmarkSummary | null {
+  if (results.length === 0) return null;
+  return {
+    gameId: "codenames",
+    title: "Latest Codenames Benchmark",
+    completedGames: results.length,
+    savedGames,
+    winners: [
+      {
+        label: "Red Wins",
+        value: results.filter((result) => result.result === "red").length,
+        className: "text-red-600 dark:text-red-400",
+      },
+      {
+        label: "Blue Wins",
+        value: results.filter((result) => result.result === "blue").length,
+        className: "text-blue-600 dark:text-blue-400",
+      },
+    ],
+    draws: results.filter((result) => result.result === "draw").length,
+    avgMoves:
+      results.reduce((sum, result) => sum + result.moves, 0) / results.length,
+    avgDurationMs:
+      results.reduce((sum, result) => sum + result.durationMs, 0) /
+      results.length,
+    invalidResponses: results.reduce(
+      (sum, result) => sum + result.invalidResponses,
+      0
+    ),
+    fallbackMoves: results.reduce((sum, result) => sum + result.fallbackMoves, 0),
+    extraStats: [
+      {
+        label: "Assassin Hits",
+        value: results.reduce((sum, result) => sum + result.assassinHits, 0),
+      },
+    ],
   };
 }

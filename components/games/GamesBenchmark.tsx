@@ -4,50 +4,42 @@ import { BenchmarkConfigPanel } from "./benchmark/BenchmarkConfigPanel";
 import { BenchmarkHeader } from "./benchmark/BenchmarkHeader";
 import { BenchmarkProgress } from "./benchmark/BenchmarkProgress";
 import { ChessBenchmarkStats } from "./benchmark/ChessBenchmarkStats";
-import { ConnectFourBenchmarkResult } from "./benchmark/ConnectFourBenchmarkResult";
+import { GameBenchmarkResult } from "./benchmark/GameBenchmarkResult";
 import { useGamesBenchmarkRunner } from "./benchmark/useGamesBenchmarkRunner";
 import { useGamesBenchmarkState } from "./benchmark/useGamesBenchmarkState";
 
 export function GamesBenchmark() {
   const {
     aggregateStats,
-    config,
-    connectFourConfig,
+    benchmarkDefinitions,
     loading,
     loadStats,
     models,
     modelStats,
     recentMatches,
+    selectedConfig,
+    selectedDefinition,
     selectedGame,
     setSelectedGame,
-    updateConfig,
-    updateConnectFourConfig,
+    updateSelectedConfig,
   } = useGamesBenchmarkState();
 
   const {
     abortBenchmark,
-    connectFourProgress,
-    connectFourSummary,
-    progress,
+    chessProgress,
+    gameProgress,
+    gameSummary,
     runBenchmark,
     running,
   } = useGamesBenchmarkRunner({
-    config,
-    connectFourConfig,
+    config: selectedConfig,
     loadStats,
     selectedGame,
   });
 
-  const isConnectFourSelected = selectedGame === "connect-four";
-  const benchmarkTitle = isConnectFourSelected
-    ? "AI vs AI Connect Four Benchmark"
-    : "AI vs AI Chess Benchmark";
-  const benchmarkDescription = isConnectFourSelected
-    ? "Run head-to-head Connect Four matches between configured AI models and track move quality, fallback use, and invalid responses."
-    : "Run head-to-head chess matches between configured AI models and compare win rate, move speed, and reliability.";
-  const canRunBenchmark = isConnectFourSelected
-    ? Boolean(connectFourConfig.redModelId && connectFourConfig.yellowModelId)
-    : Boolean(config.whiteModelId && config.blackModelId);
+  const canRunBenchmark = Boolean(
+    selectedConfig.firstModelId && selectedConfig.secondModelId
+  );
 
   if (loading) {
     return (
@@ -59,16 +51,18 @@ export function GamesBenchmark() {
 
   if (models.length === 0) {
     return (
-      <div className="space-y-4 rounded-lg border bg-card p-6">
-        <div>
-          <h2 className="text-xl font-semibold">{benchmarkTitle}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {benchmarkDescription}
-          </p>
-        </div>
-        <div className="text-center py-8">
-          <div className="text-lg font-medium mb-2">No AI Models Available</div>
-          <div className="text-muted-foreground text-sm">
+      <div className="space-y-6">
+        <BenchmarkHeader
+          benchmarkDefinitions={benchmarkDefinitions}
+          benchmarkDescription={selectedDefinition.description}
+          benchmarkTitle={selectedDefinition.title}
+          running={running}
+          selectedGame={selectedGame}
+          setSelectedGame={setSelectedGame}
+        />
+        <div className="rounded-lg border bg-card p-8 text-center">
+          <div className="mb-2 text-lg font-medium">No AI Models Available</div>
+          <div className="text-sm text-muted-foreground">
             Configure API keys in Settings to enable AI models for
             benchmarking.
           </div>
@@ -80,8 +74,9 @@ export function GamesBenchmark() {
   return (
     <div className="space-y-6">
       <BenchmarkHeader
-        benchmarkDescription={benchmarkDescription}
-        benchmarkTitle={benchmarkTitle}
+        benchmarkDefinitions={benchmarkDefinitions}
+        benchmarkDescription={selectedDefinition.description}
+        benchmarkTitle={selectedDefinition.title}
         running={running}
         selectedGame={selectedGame}
         setSelectedGame={setSelectedGame}
@@ -89,25 +84,24 @@ export function GamesBenchmark() {
 
       <BenchmarkConfigPanel
         canRunBenchmark={canRunBenchmark}
-        config={config}
-        connectFourConfig={connectFourConfig}
-        isConnectFourSelected={isConnectFourSelected}
+        config={selectedConfig}
+        definition={selectedDefinition}
         models={models}
         onAbortBenchmark={abortBenchmark}
         onRunBenchmark={runBenchmark}
         running={running}
-        updateConfig={updateConfig}
-        updateConnectFourConfig={updateConnectFourConfig}
+        updateConfig={updateSelectedConfig}
       />
 
       <BenchmarkProgress
-        connectFourProgress={connectFourProgress}
-        isConnectFourSelected={isConnectFourSelected}
-        progress={progress}
+        chessProgress={chessProgress}
+        definition={selectedDefinition}
+        gameProgress={gameProgress}
         running={running}
+        selectedGame={selectedGame}
       />
 
-      {!isConnectFourSelected ? (
+      {selectedGame === "chess" ? (
         <ChessBenchmarkStats
           aggregateStats={aggregateStats}
           modelStats={modelStats}
@@ -115,9 +109,10 @@ export function GamesBenchmark() {
           running={running}
         />
       ) : (
-        <ConnectFourBenchmarkResult
-          connectFourSummary={connectFourSummary}
+        <GameBenchmarkResult
+          definition={selectedDefinition}
           running={running}
+          summary={gameSummary}
         />
       )}
     </div>

@@ -1,17 +1,17 @@
-import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import {
-  connectFourMatchToGenericGameMatchRecord,
-  runConnectFourAIBenchmark,
-} from "@/lib/games/connect-four/benchmark";
-import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
+  codenamesMatchToGenericGameMatchRecord,
+  runCodenamesAIBenchmark,
+  type CodenamesMatchRecord,
+} from "@/lib/games/codenames/benchmark";
+import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import type {
   GameBenchmarkProgressState,
   GameBenchmarkSummary,
   StandardGameBenchmarkConfig,
 } from "./types";
-import { summarizeConnectFourBenchmark } from "./format";
+import { summarizeCodenamesBenchmark } from "./format";
 
-export async function runConnectFourBenchmarkSeries({
+export async function runCodenamesBenchmarkSeries({
   config,
   isAborted,
   onProgress,
@@ -22,20 +22,20 @@ export async function runConnectFourBenchmarkSeries({
   onProgress: (progress: GameBenchmarkProgressState) => void;
   signal: AbortSignal;
 }): Promise<{
-  results: ConnectFourMatchRecord[];
+  results: CodenamesMatchRecord[];
   summary: GameBenchmarkSummary | null;
 }> {
-  const results: ConnectFourMatchRecord[] = [];
+  const results: CodenamesMatchRecord[] = [];
   let savedGames = 0;
 
   for (let i = 0; i < config.numGames; i++) {
     if (signal.aborted || isAborted()) break;
-    const result = await runConnectFourAIBenchmark({
+    const result = await runCodenamesAIBenchmark({
       redModelId: config.firstModelId,
-      yellowModelId: config.secondModelId,
+      blueModelId: config.secondModelId,
       redReasoning: config.firstReasoning,
-      yellowReasoning: config.secondReasoning,
-      maxMoves: config.maxMoves,
+      blueReasoning: config.secondReasoning,
+      maxTurns: config.maxMoves,
       signal,
       onProgress: (gameProgress) => {
         onProgress({
@@ -50,11 +50,11 @@ export async function runConnectFourBenchmarkSeries({
       results.push(result);
       try {
         await saveGenericGameMatchRecord(
-          connectFourMatchToGenericGameMatchRecord(result)
+          codenamesMatchToGenericGameMatchRecord(result)
         );
         savedGames++;
       } catch (error) {
-        console.warn("Failed to save Connect Four benchmark result:", error);
+        console.warn("Failed to save Codenames benchmark result:", error);
       }
     }
   }
@@ -64,6 +64,6 @@ export async function runConnectFourBenchmarkSeries({
     summary:
       signal.aborted || isAborted()
         ? null
-        : summarizeConnectFourBenchmark(results, savedGames),
+        : summarizeCodenamesBenchmark(results, savedGames),
   };
 }

@@ -1,60 +1,76 @@
 "use client";
 
+import type { RunnableGameBenchmarkDefinition } from "@/lib/games/core/benchmark-definitions";
 import type {
   AvailableBenchmarkModel,
-  ChessBenchmarkConfig,
-  ConnectFourBenchmarkConfig,
+  StandardGameBenchmarkConfig,
 } from "./types";
-import { ChessBenchmarkConfigFields } from "./ChessBenchmarkConfigFields";
-import { ConnectFourBenchmarkConfigFields } from "./ConnectFourBenchmarkConfigFields";
+import { ModelAndReasoningField } from "./ModelAndReasoningField";
+import { NumberField } from "./NumberField";
 
 export function BenchmarkConfigPanel({
   canRunBenchmark,
   config,
-  connectFourConfig,
-  isConnectFourSelected,
+  definition,
   models,
   onAbortBenchmark,
   onRunBenchmark,
   running,
   updateConfig,
-  updateConnectFourConfig,
 }: {
   canRunBenchmark: boolean;
-  config: ChessBenchmarkConfig;
-  connectFourConfig: ConnectFourBenchmarkConfig;
-  isConnectFourSelected: boolean;
+  config: StandardGameBenchmarkConfig;
+  definition: RunnableGameBenchmarkDefinition;
   models: AvailableBenchmarkModel[];
   onAbortBenchmark: () => void;
   onRunBenchmark: () => void;
   running: boolean;
-  updateConfig: <K extends keyof ChessBenchmarkConfig>(
+  updateConfig: <K extends keyof StandardGameBenchmarkConfig>(
     key: K,
-    value: ChessBenchmarkConfig[K]
-  ) => void;
-  updateConnectFourConfig: <K extends keyof ConnectFourBenchmarkConfig>(
-    key: K,
-    value: ConnectFourBenchmarkConfig[K]
+    value: StandardGameBenchmarkConfig[K]
   ) => void;
 }) {
   return (
     <div className="rounded-lg border bg-card p-4">
       <h3 className="mb-4 text-lg font-semibold">Benchmark Configuration</h3>
-      {isConnectFourSelected ? (
-        <ConnectFourBenchmarkConfigFields
-          config={connectFourConfig}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <ModelAndReasoningField
+          label={definition.firstPlayerLabel}
+          modelId={config.firstModelId}
+          reasoning={config.firstReasoning}
           models={models}
           running={running}
-          updateConfig={updateConnectFourConfig}
+          onModelChange={(value) => updateConfig("firstModelId", value)}
+          onReasoningChange={(value) => updateConfig("firstReasoning", value)}
         />
-      ) : (
-        <ChessBenchmarkConfigFields
-          config={config}
+        <ModelAndReasoningField
+          label={definition.secondPlayerLabel}
+          modelId={config.secondModelId}
+          reasoning={config.secondReasoning}
           models={models}
           running={running}
-          updateConfig={updateConfig}
+          onModelChange={(value) => updateConfig("secondModelId", value)}
+          onReasoningChange={(value) => updateConfig("secondReasoning", value)}
         />
-      )}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-4">
+        <NumberField
+          label={`${definition.maxMovesLabel} (1-${definition.maxMovesMax})`}
+          max={definition.maxMovesMax}
+          min={1}
+          value={config.maxMoves}
+          running={running}
+          onChange={(value) => updateConfig("maxMoves", value)}
+        />
+        <NumberField
+          label="Number of Games (1-10)"
+          max={10}
+          min={1}
+          value={config.numGames}
+          running={running}
+          onChange={(value) => updateConfig("numGames", value)}
+        />
+      </div>
       <div className="mt-4 flex gap-3">
         {!running ? (
           <button

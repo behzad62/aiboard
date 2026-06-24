@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ensureReady } from "@/lib/client/api";
 import {
   getAIvsAIAggregateStats,
@@ -9,35 +9,65 @@ import {
 } from "@/lib/games/stats";
 import type { GameMatchRecord, GameModelStat } from "@/lib/games/chess/types";
 import { getAvailableModels } from "@/lib/games/chess/ai";
+import {
+  getRunnableGameBenchmarkDefinition,
+  listRunnableGameBenchmarkDefinitions,
+} from "@/lib/games/core/benchmark-definitions";
 import type {
   AvailableBenchmarkModel,
-  ChessBenchmarkConfig,
-  ConnectFourBenchmarkConfig,
+  GameBenchmarkConfigMap,
   SelectedBenchmarkGame,
+  StandardGameBenchmarkConfig,
 } from "./types";
-import { CONNECT_FOUR_DEFAULT_MAX_MOVES } from "./types";
+
+const BENCHMARK_DEFINITIONS = listRunnableGameBenchmarkDefinitions();
+
+function createDefaultConfigMap(): GameBenchmarkConfigMap {
+  return Object.fromEntries(
+    BENCHMARK_DEFINITIONS.map((definition) => [
+      definition.gameId,
+      {
+        firstModelId: "",
+        secondModelId: "",
+        firstReasoning: "default",
+        secondReasoning: "default",
+        maxMoves: definition.defaultMaxMoves,
+        numGames: 1,
+      } satisfies StandardGameBenchmarkConfig,
+    ])
+  ) as GameBenchmarkConfigMap;
+}
+
+function applyModelDefaults(
+  configs: GameBenchmarkConfigMap,
+  available: AvailableBenchmarkModel[]
+): GameBenchmarkConfigMap {
+  if (available.length === 0) return configs;
+
+  const firstModelId = available[0].modelId;
+  const secondModelId = available[Math.min(1, available.length - 1)].modelId;
+  const next = { ...configs };
+
+  for (const definition of BENCHMARK_DEFINITIONS) {
+    const current = configs[definition.gameId];
+    next[definition.gameId] = {
+      ...current,
+      firstModelId: current.firstModelId || firstModelId,
+      secondModelId: current.secondModelId || secondModelId,
+    };
+  }
+
+  return next;
+}
 
 export function useGamesBenchmarkState() {
   const [models, setModels] = useState<AvailableBenchmarkModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedGame, setSelectedGame] =
     useState<SelectedBenchmarkGame>("chess");
-  const [config, setConfig] = useState<ChessBenchmarkConfig>({
-    whiteModelId: "",
-    blackModelId: "",
-    whiteReasoning: "default",
-    blackReasoning: "default",
-    numGames: 1,
-  });
-  const [connectFourConfig, setConnectFourConfig] =
-    useState<ConnectFourBenchmarkConfig>({
-      redModelId: "",
-      yellowModelId: "",
-      redReasoning: "default",
-      yellowReasoning: "default",
-      maxMoves: CONNECT_FOUR_DEFAULT_MAX_MOVES,
-      numGames: 1,
-    });
+  const [configs, setConfigs] = useState<GameBenchmarkConfigMap>(() =>
+    createDefaultConfigMap()
+  );
   const [modelStats, setModelStats] = useState<GameModelStat[]>([]);
   const [recentMatches, setRecentMatches] = useState<GameMatchRecord[]>([]);
   const [aggregateStats, setAggregateStats] = useState<{
@@ -48,6 +78,14 @@ export function useGamesBenchmarkState() {
     blackWins: number;
     draws: number;
   } | null>(null);
+
+  const selectedDefinition = useMemo(
+    () =>
+      getRunnableGameBenchmarkDefinition(selectedGame) ??
+      BENCHMARK_DEFINITIONS[0],
+    [selectedGame]
+  );
+  const selectedConfig = configs[selectedGame];
 
   const loadStats = useCallback(() => {
     setModelStats(getAIvsAIModelStats());
@@ -65,30 +103,7 @@ export function useGamesBenchmarkState() {
 
         const available = getAvailableModels();
         setModels(available);
-        if (available.length >= 2) {
-          const secondModelId = available[Math.min(1, available.length - 1)].modelId;
-          setConfig((prev) => ({
-            ...prev,
-            whiteModelId: prev.whiteModelId || available[0].modelId,
-            blackModelId: prev.blackModelId || secondModelId,
-          }));
-          setConnectFourConfig((prev) => ({
-            ...prev,
-            redModelId: prev.redModelId || available[0].modelId,
-            yellowModelId: prev.yellowModelId || secondModelId,
-          }));
-        } else if (available.length === 1) {
-          setConfig((prev) => ({
-            ...prev,
-            whiteModelId: prev.whiteModelId || available[0].modelId,
-            blackModelId: prev.blackModelId || available[0].modelId,
-          }));
-          setConnectFourConfig((prev) => ({
-            ...prev,
-            redModelId: prev.redModelId || available[0].modelId,
-            yellowModelId: prev.yellowModelId || available[0].modelId,
-          }));
-        }
+        setConfigs((prev) => applyModelDefaults(prev, available));
         loadStats();
       } catch (err) {
         if (!cancelled) {
@@ -105,38 +120,34 @@ export function useGamesBenchmarkState() {
     };
   }, [loadStats]);
 
-  const updateConfig = useCallback(
-    <K extends keyof ChessBenchmarkConfig>(
+  const updateSelectedConfig = useCallback(
+    <K extends keyof StandardGameBenchmarkConfig>(
       key: K,
-      value: ChessBenchmarkConfig[K]
+      value: StandardGameBenchmarkConfig[K]
     ) => {
-      setConfig((prev) => ({ ...prev, [key]: value }));
+      setConfigs((prev) => ({
+        ...prev,
+        [selectedGame]: {
+          ...prev[selectedGame],
+          [key]: value,
+        },
+      }));
     },
-    []
-  );
-
-  const updateConnectFourConfig = useCallback(
-    <K extends keyof ConnectFourBenchmarkConfig>(
-      key: K,
-      value: ConnectFourBenchmarkConfig[K]
-    ) => {
-      setConnectFourConfig((prev) => ({ ...prev, [key]: value }));
-    },
-    []
+    [selectedGame]
   );
 
   return {
     aggregateStats,
-    config,
-    connectFourConfig,
+    benchmarkDefinitions: BENCHMARK_DEFINITIONS,
     loading,
     loadStats,
     models,
     modelStats,
     recentMatches,
+    selectedConfig,
+    selectedDefinition,
     selectedGame,
     setSelectedGame,
-    updateConfig,
-    updateConnectFourConfig,
+    updateSelectedConfig,
   };
 }

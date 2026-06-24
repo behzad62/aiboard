@@ -32,6 +32,10 @@ export async function runSingleChessBenchmarkGame({
   let moveCount = 0;
   let whiteMoveMs = 0;
   let blackMoveMs = 0;
+  const maxMoves = Math.max(
+    1,
+    Math.floor(config.maxMoves || MAX_CHESS_BENCHMARK_MOVES)
+  );
 
   onProgress({
     currentGame: gameNumber,
@@ -45,7 +49,7 @@ export async function runSingleChessBenchmarkGame({
   while (state.status === "playing" || state.status === "check") {
     if (isAborted()) return null;
 
-    if (moveCount >= MAX_CHESS_BENCHMARK_MOVES) {
+    if (moveCount >= maxMoves) {
       state = { ...state, status: "draw" };
       break;
     }

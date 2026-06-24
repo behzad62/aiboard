@@ -7,143 +7,243 @@ import {
 } from "@/lib/games/core/benchmark";
 import type { GameMatchRecord } from "@/lib/games/chess/types";
 import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
+import type { BattleshipMatchRecord } from "@/lib/games/battleship/benchmark";
+import type { CodenamesMatchRecord } from "@/lib/games/codenames/benchmark";
 import type {
   ChessBenchmarkConfig,
   ChessBenchmarkProgress,
-  ConnectFourBenchmarkConfig,
-  ConnectFourBenchmarkProgressState,
-  ConnectFourBenchmarkSummary,
+  GameBenchmarkProgressState,
+  GameBenchmarkSummary,
   SelectedBenchmarkGame,
+  StandardGameBenchmarkConfig,
 } from "./types";
+import { runBattleshipBenchmarkSeries } from "./battleship-runner";
 import { runSingleChessBenchmarkGame } from "./chess-runner";
+import { runCodenamesBenchmarkSeries } from "./codenames-runner";
 import { runConnectFourBenchmarkSeries } from "./connect-four-runner";
+
+type NonChessBenchmarkResult =
+  | ConnectFourMatchRecord[]
+  | BattleshipMatchRecord[]
+  | CodenamesMatchRecord[];
+
+function toChessConfig(
+  config: StandardGameBenchmarkConfig
+): ChessBenchmarkConfig {
+  return {
+    whiteModelId: config.firstModelId,
+    blackModelId: config.secondModelId,
+    whiteReasoning: config.firstReasoning,
+    blackReasoning: config.secondReasoning,
+    maxMoves: config.maxMoves,
+    numGames: config.numGames,
+  };
+}
 
 export function useGamesBenchmarkRunner({
   config,
-  connectFourConfig,
   loadStats,
   selectedGame,
 }: {
-  config: ChessBenchmarkConfig;
-  connectFourConfig: ConnectFourBenchmarkConfig;
+  config: StandardGameBenchmarkConfig;
   loadStats: () => void;
   selectedGame: SelectedBenchmarkGame;
 }) {
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<ChessBenchmarkProgress | null>(null);
-  const [connectFourProgress, setConnectFourProgress] =
-    useState<ConnectFourBenchmarkProgressState | null>(null);
-  const [connectFourSummary, setConnectFourSummary] =
-    useState<ConnectFourBenchmarkSummary | null>(null);
+  const [chessProgress, setChessProgress] =
+    useState<ChessBenchmarkProgress | null>(null);
+  const [gameProgress, setGameProgress] =
+    useState<GameBenchmarkProgressState | null>(null);
+  const [gameSummary, setGameSummary] = useState<GameBenchmarkSummary | null>(
+    null
+  );
   const abortRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const resetProgress = useCallback(() => {
+    setChessProgress(null);
+    setGameProgress(null);
+    setGameSummary(null);
+  }, []);
+
   const runChessBenchmark = useCallback(
     async (
-      benchmarkConfig: ChessBenchmarkConfig,
+      benchmarkConfig: StandardGameBenchmarkConfig,
       signal: AbortSignal
     ): Promise<GameMatchRecord[]> => {
-      if (!benchmarkConfig.whiteModelId || !benchmarkConfig.blackModelId) {
+      if (!benchmarkConfig.firstModelId || !benchmarkConfig.secondModelId) {
         return [];
       }
 
       setRunning(true);
       abortRef.current = false;
-      setConnectFourProgress(null);
-      setConnectFourSummary(null);
+      resetProgress();
 
+      const chessConfig = toChessConfig(benchmarkConfig);
       const results: GameMatchRecord[] = [];
       try {
-        for (let i = 0; i < benchmarkConfig.numGames; i++) {
+        for (let i = 0; i < chessConfig.numGames; i++) {
           if (signal.aborted || abortRef.current) break;
           const result = await runSingleChessBenchmarkGame({
-            config: benchmarkConfig,
+            config: chessConfig,
             gameNumber: i + 1,
             isAborted: () => abortRef.current,
-            onProgress: setProgress,
-            totalGames: benchmarkConfig.numGames,
+            onProgress: setChessProgress,
+            totalGames: chessConfig.numGames,
           });
           if (result) results.push(result);
         }
       } finally {
         setRunning(false);
-        setProgress(null);
+        setChessProgress(null);
         abortControllerRef.current = null;
         loadStats();
       }
       return results;
     },
-    [loadStats]
+    [loadStats, resetProgress]
   );
 
-  useEffect(() => {
-    const runner: GameBenchmarkRunner<ChessBenchmarkConfig, GameMatchRecord[]> = {
-      gameId: "chess",
-      label: "AI vs AI Chess Benchmark",
-      run: runChessBenchmark,
-    };
-    return registerGameBenchmark(runner);
-  }, [runChessBenchmark]);
-
-  const runConnectFourBenchmark = useCallback(
-    async (
-      benchmarkConfig: ConnectFourBenchmarkConfig,
-      signal: AbortSignal
-    ): Promise<ConnectFourMatchRecord[]> => {
-      if (!benchmarkConfig.redModelId || !benchmarkConfig.yellowModelId) {
-        return [];
+  const runNonChessBenchmark = useCallback(
+    async <TResult extends NonChessBenchmarkResult>(
+      benchmarkConfig: StandardGameBenchmarkConfig,
+      signal: AbortSignal,
+      runner: (args: {
+        config: StandardGameBenchmarkConfig;
+        isAborted: () => boolean;
+        onProgress: (progress: GameBenchmarkProgressState) => void;
+        signal: AbortSignal;
+      }) => Promise<{ results: TResult; summary: GameBenchmarkSummary | null }>
+    ): Promise<TResult> => {
+      if (!benchmarkConfig.firstModelId || !benchmarkConfig.secondModelId) {
+        return [] as unknown as TResult;
       }
 
       setRunning(true);
       abortRef.current = false;
-      setProgress(null);
-      setConnectFourProgress(null);
-      setConnectFourSummary(null);
+      resetProgress();
 
       try {
-        const { results, summary } = await runConnectFourBenchmarkSeries({
+        const { results, summary } = await runner({
           config: benchmarkConfig,
           isAborted: () => abortRef.current,
-          onProgress: setConnectFourProgress,
-            signal,
+          onProgress: setGameProgress,
+          signal,
         });
-        if (summary) setConnectFourSummary(summary);
+        if (summary) setGameSummary(summary);
         return results;
       } finally {
         setRunning(false);
-        setConnectFourProgress(null);
+        setGameProgress(null);
         abortControllerRef.current = null;
       }
     },
-    []
+    [resetProgress]
+  );
+
+  const runConnectFourBenchmark = useCallback(
+    async (
+      benchmarkConfig: StandardGameBenchmarkConfig,
+      signal: AbortSignal
+    ): Promise<ConnectFourMatchRecord[]> => {
+      return runNonChessBenchmark(
+        benchmarkConfig,
+        signal,
+        runConnectFourBenchmarkSeries
+      );
+    },
+    [runNonChessBenchmark]
+  );
+
+  const runBattleshipBenchmark = useCallback(
+    async (
+      benchmarkConfig: StandardGameBenchmarkConfig,
+      signal: AbortSignal
+    ): Promise<BattleshipMatchRecord[]> => {
+      return runNonChessBenchmark(
+        benchmarkConfig,
+        signal,
+        runBattleshipBenchmarkSeries
+      );
+    },
+    [runNonChessBenchmark]
+  );
+
+  const runCodenamesBenchmark = useCallback(
+    async (
+      benchmarkConfig: StandardGameBenchmarkConfig,
+      signal: AbortSignal
+    ): Promise<CodenamesMatchRecord[]> => {
+      return runNonChessBenchmark(
+        benchmarkConfig,
+        signal,
+        runCodenamesBenchmarkSeries
+      );
+    },
+    [runNonChessBenchmark]
   );
 
   useEffect(() => {
-    const runner: GameBenchmarkRunner<
-      ConnectFourBenchmarkConfig,
-      ConnectFourMatchRecord[]
-    > = {
-      gameId: "connect-four",
-      label: "AI vs AI Connect Four Benchmark",
-      run: runConnectFourBenchmark,
+    const runners: GameBenchmarkRunner<
+      StandardGameBenchmarkConfig,
+      unknown
+    >[] = [
+      {
+        gameId: "chess",
+        label: "AI vs AI Chess Benchmark",
+        run: runChessBenchmark,
+      },
+      {
+        gameId: "connect-four",
+        label: "AI vs AI Connect Four Benchmark",
+        run: runConnectFourBenchmark,
+      },
+      {
+        gameId: "battleship",
+        label: "AI vs AI Battleship Benchmark",
+        run: runBattleshipBenchmark,
+      },
+      {
+        gameId: "codenames",
+        label: "AI vs AI Codenames Benchmark",
+        run: runCodenamesBenchmark,
+      },
+    ];
+
+    const unregister = runners.map((runner) => registerGameBenchmark(runner));
+    return () => {
+      unregister.forEach((dispose) => dispose());
     };
-    return registerGameBenchmark(runner);
-  }, [runConnectFourBenchmark]);
+  }, [
+    runBattleshipBenchmark,
+    runChessBenchmark,
+    runCodenamesBenchmark,
+    runConnectFourBenchmark,
+  ]);
 
   const runBenchmark = useCallback(async () => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     if (selectedGame === "connect-four") {
-      await runConnectFourBenchmark(connectFourConfig, controller.signal);
+      await runConnectFourBenchmark(config, controller.signal);
+      return;
+    }
+    if (selectedGame === "battleship") {
+      await runBattleshipBenchmark(config, controller.signal);
+      return;
+    }
+    if (selectedGame === "codenames") {
+      await runCodenamesBenchmark(config, controller.signal);
       return;
     }
 
     await runChessBenchmark(config, controller.signal);
   }, [
     config,
-    connectFourConfig,
+    runBattleshipBenchmark,
     runChessBenchmark,
+    runCodenamesBenchmark,
     runConnectFourBenchmark,
     selectedGame,
   ]);
@@ -155,9 +255,9 @@ export function useGamesBenchmarkRunner({
 
   return {
     abortBenchmark,
-    connectFourProgress,
-    connectFourSummary,
-    progress,
+    chessProgress,
+    gameProgress,
+    gameSummary,
     runBenchmark,
     running,
   };

@@ -1,28 +1,32 @@
 "use client";
 
+import type { RunnableGameBenchmarkDefinition } from "@/lib/games/core/benchmark-definitions";
 import type {
   ChessBenchmarkProgress,
-  ConnectFourBenchmarkProgressState,
+  GameBenchmarkProgressState,
+  SelectedBenchmarkGame,
 } from "./types";
 
 export function BenchmarkProgress({
-  connectFourProgress,
-  isConnectFourSelected,
-  progress,
+  chessProgress,
+  definition,
+  gameProgress,
   running,
+  selectedGame,
 }: {
-  connectFourProgress: ConnectFourBenchmarkProgressState | null;
-  isConnectFourSelected: boolean;
-  progress: ChessBenchmarkProgress | null;
+  chessProgress: ChessBenchmarkProgress | null;
+  definition: RunnableGameBenchmarkDefinition;
+  gameProgress: GameBenchmarkProgressState | null;
   running: boolean;
+  selectedGame: SelectedBenchmarkGame;
 }) {
   if (!running) return null;
-  if (isConnectFourSelected) {
-    return connectFourProgress ? (
-      <ConnectFourProgressPanel progress={connectFourProgress} />
-    ) : null;
+  if (selectedGame === "chess") {
+    return chessProgress ? <ChessProgressPanel progress={chessProgress} /> : null;
   }
-  return progress ? <ChessProgressPanel progress={progress} /> : null;
+  return gameProgress ? (
+    <GameProgressPanel definition={definition} progress={gameProgress} />
+  ) : null;
 }
 
 function ChessProgressPanel({ progress }: { progress: ChessBenchmarkProgress }) {
@@ -56,10 +60,12 @@ function ChessProgressPanel({ progress }: { progress: ChessBenchmarkProgress }) 
   );
 }
 
-function ConnectFourProgressPanel({
+function GameProgressPanel({
+  definition,
   progress,
 }: {
-  progress: ConnectFourBenchmarkProgressState;
+  definition: RunnableGameBenchmarkDefinition;
+  progress: GameBenchmarkProgressState;
 }) {
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -70,16 +76,11 @@ function ConnectFourProgressPanel({
             Game {progress.currentGame} of {progress.totalGames}
           </span>
           <span className="text-sm text-muted-foreground">
-            Move {progress.moveCount} of {progress.maxMoves}
+            {definition.maxMovesLabel}: {progress.moveCount} of{" "}
+            {progress.maxMoves}
           </span>
-          <span
-            className={`text-sm font-medium ${
-              progress.currentTurn === "red"
-                ? "text-red-600 dark:text-red-400"
-                : "text-yellow-600 dark:text-yellow-400"
-            }`}
-          >
-            {progress.currentTurn === "red" ? "Red" : "Yellow"} to move
+          <span className={`text-sm font-medium ${turnColor(progress.currentTurn)}`}>
+            {formatTurn(progress.currentTurn)} to move
           </span>
           <span className="text-sm text-muted-foreground">
             Invalid responses: {progress.invalidResponses}
@@ -90,11 +91,25 @@ function ConnectFourProgressPanel({
         </div>
         <div className="text-sm text-muted-foreground">
           {progress.status}
-          {progress.result
-            ? ` Result: ${progress.result === "draw" ? "Draw" : progress.result}.`
-            : ""}
+          {progress.result ? ` Result: ${formatTurn(progress.result)}.` : ""}
         </div>
       </div>
     </div>
   );
+}
+
+function formatTurn(value: string): string {
+  if (value === "draw") return "Draw";
+  return value
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function turnColor(value: string): string {
+  if (value === "red") return "text-red-600 dark:text-red-400";
+  if (value === "yellow") return "text-yellow-600 dark:text-yellow-400";
+  if (value === "blue") return "text-blue-600 dark:text-blue-400";
+  if (value === "orange") return "text-orange-600 dark:text-orange-400";
+  return "text-foreground";
 }
