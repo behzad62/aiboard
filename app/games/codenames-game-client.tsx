@@ -296,7 +296,7 @@ export function CodenamesGameClient({
   const persistenceTokenRef = useRef(0);
 
   const activeGame = isCodenamesActiveStatus(gameState.status);
-  const neededSeat = requiredSeat(gameState);
+  const neededSeat = useMemo(() => requiredSeat(gameState), [gameState]);
   const neededSeatKind = neededSeat
     ? seatKind(gameMode, humanTeam, neededSeat.team)
     : "human";
@@ -819,7 +819,6 @@ export function CodenamesGameClient({
     };
   }, [
     activeGame,
-    aiThinking,
     aiError,
     blueOperativeAI,
     blueSpymasterAI,
