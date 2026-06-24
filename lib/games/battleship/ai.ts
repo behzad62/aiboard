@@ -6,6 +6,7 @@ import {
 import type { GameAIInteraction } from "@/lib/games/core/types";
 import type { StreamChunk, StructuredOutputFormat } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
+import { isRecoverableGameAIError } from "@/lib/games/core/ai-errors";
 import {
   getCustomModelByFullId,
   getDecryptedApiKey,
@@ -366,18 +367,7 @@ export function chooseFallbackBattleshipTarget(
 }
 
 export function isRecoverableBattleshipAIError(error: string): boolean {
-  const normalized = error.toLowerCase();
-  return (
-    !normalized.includes("aborted") &&
-    !normalized.includes("unknown provider") &&
-    !normalized.includes("unauthorized") &&
-    !normalized.includes("forbidden") &&
-    !normalized.includes("invalid api key") &&
-    !normalized.includes("quota") &&
-    !normalized.includes("key limit") &&
-    !normalized.includes("401") &&
-    !normalized.includes("403")
-  );
+  return isRecoverableGameAIError(error);
 }
 
 export function getBattleshipAIModels(): BattleshipAIModelOption[] {

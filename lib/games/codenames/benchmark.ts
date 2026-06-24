@@ -1,5 +1,6 @@
 import type { ReasoningEffort } from "@/lib/db/schema";
 import type { GenericGameMatchRecord, GameAIInteraction } from "@/lib/games/core/types";
+import { isRecoverableGameAIError } from "@/lib/games/core/ai-errors";
 import {
   createInitialCodenamesState,
   endCodenamesTurn,
@@ -89,18 +90,7 @@ function teamConfig(
 }
 
 function isRecoverableCodenamesAIError(error: string): boolean {
-  const normalized = error.toLowerCase();
-  return (
-    !normalized.includes("aborted") &&
-    !normalized.includes("unknown provider") &&
-    !normalized.includes("unauthorized") &&
-    !normalized.includes("forbidden") &&
-    !normalized.includes("invalid api key") &&
-    !normalized.includes("quota") &&
-    !normalized.includes("key limit") &&
-    !normalized.includes("401") &&
-    !normalized.includes("403")
-  );
+  return isRecoverableGameAIError(error);
 }
 
 function emitProgress(
