@@ -78,6 +78,7 @@ function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   const next: JsonSchemaObject = {};
   if (schema.type) next.type = schema.type;
   if (schema.description) next.description = schema.description;
+  if (schema.maxLength !== undefined) next.maxLength = schema.maxLength;
   if (schema.enum) next.enum = schema.enum;
   if (schema.required) next.required = schema.required;
   if (schema.nullable !== undefined) next.nullable = schema.nullable;

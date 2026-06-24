@@ -28,6 +28,9 @@ import type {
 
 const MAX_AI_ATTEMPTS = 3;
 export const CONNECT_FOUR_AI_MAX_TOKENS = 4096;
+const CONNECT_FOUR_REASONING_MAX_LENGTH = 80;
+const CONNECT_FOUR_UTTERANCE_MAX_LENGTH = 48;
+const CONNECT_FOUR_DIAGNOSTICS_MAX_LENGTH = 120;
 const CENTER_FIRST_COLUMNS = [3, 2, 4, 1, 5, 0, 6] as const;
 
 export interface RequestConnectFourAIMoveParams {
@@ -124,21 +127,40 @@ export function parseConnectFourAIResponse(
     };
 
     if (typeof parsed.reasoning === "string") {
-      response.reasoning = parsed.reasoning;
+      response.reasoning = compactConnectFourText(
+        parsed.reasoning,
+        CONNECT_FOUR_REASONING_MAX_LENGTH
+      );
     }
 
     const interaction = buildGameAIInteraction("ai", parsed);
     if (interaction?.gesture) response.gesture = interaction.gesture;
-    if (interaction?.utterance) response.utterance = interaction.utterance;
+    if (interaction?.utterance) {
+      response.utterance = compactConnectFourText(
+        interaction.utterance,
+        CONNECT_FOUR_UTTERANCE_MAX_LENGTH
+      );
+    }
     if (interaction?.confidence !== undefined) {
       response.confidence = interaction.confidence;
     }
-    if (interaction?.diagnostics) response.diagnostics = interaction.diagnostics;
+    if (interaction?.diagnostics) {
+      response.diagnostics = compactConnectFourText(
+        interaction.diagnostics,
+        CONNECT_FOUR_DIAGNOSTICS_MAX_LENGTH
+      );
+    }
 
     return response;
   } catch {
     return null;
   }
+}
+
+function compactConnectFourText(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 export function chooseFallbackConnectFourColumn(
@@ -171,18 +193,14 @@ export function buildConnectFourPrompt(
 ): { system: string; user: string } {
   const system = `You are a Connect Four engine choosing a legal move.
 
-Respond with ONLY valid JSON in this exact format:
-{
-  "column": 4,
-  "gesture": "confident",
-  "utterance": "Taking the center.",
-  "confidence": 0.72
-}
+Respond with ONLY compact valid JSON like {"column":4}.
 
 Rules:
 - "column" is required and must be one of the legal one-based columns.
+- Omit optional fields unless they add clear value.
 - Optional "gesture" values: "thinking", "confident", "confused", "celebrating", "apologetic", "neutral".
-- Optional "utterance" must be at most one short sentence.
+- Optional "utterance" must be under ${CONNECT_FOUR_UTTERANCE_MAX_LENGTH} characters.
+- Optional "reasoning" must be under ${CONNECT_FOUR_REASONING_MAX_LENGTH} characters.
 - Optional "confidence" must be a number from 0 to 1.
 - Do not include text outside the JSON object.
 - Do not wrap the JSON in markdown code fences.`;
@@ -233,7 +251,8 @@ export function buildConnectFourMoveResponseFormat(): StructuredOutputFormat {
         },
         reasoning: {
           type: "string",
-          description: "Brief move rationale.",
+          maxLength: CONNECT_FOUR_REASONING_MAX_LENGTH,
+          description: "Brief move rationale. Omit unless useful.",
         },
         gesture: {
           type: "string",
@@ -248,7 +267,8 @@ export function buildConnectFourMoveResponseFormat(): StructuredOutputFormat {
         },
         utterance: {
           type: "string",
-          description: "At most one short sentence.",
+          maxLength: CONNECT_FOUR_UTTERANCE_MAX_LENGTH,
+          description: "Optional short phrase, under 48 characters.",
         },
         confidence: {
           type: "number",
@@ -256,7 +276,8 @@ export function buildConnectFourMoveResponseFormat(): StructuredOutputFormat {
         },
         diagnostics: {
           type: "string",
-          description: "Optional model diagnostics.",
+          maxLength: CONNECT_FOUR_DIAGNOSTICS_MAX_LENGTH,
+          description: "Optional model diagnostics, under 120 characters.",
         },
       },
       required: ["column"],

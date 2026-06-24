@@ -20,6 +20,7 @@ export interface ChatMessage {
 export interface JsonSchemaObject {
   type?: string;
   description?: string;
+  maxLength?: number;
   properties?: Record<string, JsonSchemaObject>;
   items?: JsonSchemaObject;
   enum?: string[];

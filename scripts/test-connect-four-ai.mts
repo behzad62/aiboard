@@ -1,6 +1,8 @@
 import {
   buildConnectFourCorrectionPrompt,
   CONNECT_FOUR_AI_MAX_TOKENS,
+  buildConnectFourMoveResponseFormat,
+  buildConnectFourPrompt,
   chooseFallbackConnectFourColumn,
   collectConnectFourStreamTextForTests,
   formatLegalColumnList,
@@ -48,6 +50,19 @@ check("utterance is retained", parsed?.utterance === "Taking the center.", parse
 check("confidence is clamped", parsed?.confidence === 1, parsed);
 check("diagnostics are retained", parsed?.diagnostics === "opening book", parsed);
 
+const longUtterance = parseConnectFourAIResponse(`{
+  "column": 4,
+  "gesture": "celebrating",
+  "utterance": "I can already see the winning line forming and I am going to explain every threat on this board.",
+  "confidence": 0.9
+}`);
+check(
+  "overlong Connect Four utterance is trimmed to a compact phrase",
+  typeof longUtterance?.utterance === "string" &&
+    longUtterance.utterance.length <= 48,
+  longUtterance
+);
+
 check(
   "non-json response is rejected",
   parseConnectFourAIResponse("drop in column four") === null
@@ -80,6 +95,28 @@ check(
   "Connect Four AI uses enough output budget for structured JSON with reasoning",
   CONNECT_FOUR_AI_MAX_TOKENS >= 4096,
   CONNECT_FOUR_AI_MAX_TOKENS
+);
+
+const responseFormat = buildConnectFourMoveResponseFormat();
+check(
+  "Connect Four structured output only requires the column",
+  JSON.stringify(responseFormat.schema.required) === JSON.stringify(["column"]),
+  responseFormat
+);
+check(
+  "Connect Four structured output caps optional text fields",
+  responseFormat.schema.properties?.utterance?.maxLength === 48 &&
+    responseFormat.schema.properties?.reasoning?.maxLength === 80 &&
+    responseFormat.schema.properties?.diagnostics?.maxLength === 120,
+  responseFormat
+);
+
+const prompt = buildConnectFourPrompt(createInitialConnectFourState());
+check(
+  "Connect Four prompt prefers compact move-only JSON",
+  prompt.system.includes('{"column":4}') &&
+    prompt.system.includes("Omit optional fields unless"),
+  prompt.system
 );
 
 check(
