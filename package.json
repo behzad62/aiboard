@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:games": "tsx lib/games/chess/rules-tests.mts && tsx lib/games/connect-four/rules-tests.mts && tsx lib/games/battleship/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-chess-ai-interactions.mts && tsx scripts/test-connect-four-ai.mts && tsx scripts/test-connect-four-session-export.mts && tsx scripts/test-battleship-ai.mts && tsx scripts/test-battleship-session-export.mts && tsx scripts/test-games-catalog.mts && tsx scripts/test-game-benchmark-registry.mts && tsx scripts/test-game-session-store.mts",
+    "test:games": "tsx lib/games/chess/rules-tests.mts && tsx lib/games/connect-four/rules-tests.mts && tsx lib/games/battleship/rules-tests.mts && tsx lib/games/codenames/rules-tests.mts && tsx scripts/test-chess-export.mts && tsx scripts/test-chess-ai-interactions.mts && tsx scripts/test-connect-four-ai.mts && tsx scripts/test-connect-four-session-export.mts && tsx scripts/test-battleship-ai.mts && tsx scripts/test-battleship-session-export.mts && tsx scripts/test-codenames-ai.mts && tsx scripts/test-codenames-session-export.mts && tsx scripts/test-games-catalog.mts && tsx scripts/test-game-benchmark-registry.mts && tsx scripts/test-game-session-store.mts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

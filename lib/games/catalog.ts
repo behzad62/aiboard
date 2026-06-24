@@ -5,7 +5,7 @@ export interface GameDescriptor {
   title: string;
   summary: string;
   status: "ready" | "coming-soon";
-  accent: "amber" | "red-yellow" | "blue-orange";
+  accent: "amber" | "red-yellow" | "blue-orange" | "red-blue";
   modes: GameCatalogMode[];
 }
 
@@ -32,6 +32,14 @@ const GAME_CATALOG: GameDescriptor[] = [
     summary: "Call coordinates, read the board, and sink the hidden fleet.",
     status: "ready",
     accent: "blue-orange",
+    modes: ["pvp", "pvai", "aivai"],
+  },
+  {
+    id: "codenames",
+    title: "Codenames",
+    summary: "Give secret clues, read the grid, and avoid the assassin.",
+    status: "ready",
+    accent: "red-blue",
     modes: ["pvp", "pvai", "aivai"],
   },
 ];

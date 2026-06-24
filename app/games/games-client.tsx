@@ -7,9 +7,15 @@ import { listGameSessions } from "@/lib/games/core/session-store";
 import type { GameSessionRecord } from "@/lib/games/core/types";
 import { BattleshipGameClient } from "./battleship-game-client";
 import { ChessGameClient } from "./chess-game-client";
+import { CodenamesGameClient } from "./codenames-game-client";
 import { ConnectFourGameClient } from "./connect-four-game-client";
 
-type SelectedGame = "picker" | "chess" | "connect-four" | "battleship";
+type SelectedGame =
+  | "picker"
+  | "chess"
+  | "connect-four"
+  | "battleship"
+  | "codenames";
 
 const ACTIVE_SESSION_STATUSES = new Set<GameSessionRecord["status"]>([
   "active",
@@ -51,6 +57,10 @@ export function GamesClient() {
     return <BattleshipGameClient onBackToGames={handleBackToGames} />;
   }
 
+  if (selectedGame === "codenames") {
+    return <CodenamesGameClient onBackToGames={handleBackToGames} />;
+  }
+
   return (
     <GamePicker
       games={getGameCatalog()}
@@ -59,7 +69,8 @@ export function GamesClient() {
         if (
           gameId === "chess" ||
           gameId === "connect-four" ||
-          gameId === "battleship"
+          gameId === "battleship" ||
+          gameId === "codenames"
         ) {
           setSelectedGame(gameId);
         }

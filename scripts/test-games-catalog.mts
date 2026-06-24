@@ -22,6 +22,7 @@ check(
 
 const connectFour = catalog.find((game) => game.id === "connect-four");
 const battleship = catalog.find((game) => game.id === "battleship");
+const codenames = catalog.find((game) => game.id === "codenames");
 check("getGameCatalog includes connect-four", connectFour !== undefined, catalog);
 check(
   "connect-four modes join to pvp,pvai,aivai",
@@ -33,6 +34,12 @@ check(
   "battleship modes join to pvp,pvai,aivai",
   battleship?.modes.join(",") === "pvp,pvai,aivai",
   battleship
+);
+check("getGameCatalog includes codenames", codenames !== undefined, catalog);
+check(
+  "codenames modes join to pvp,pvai,aivai",
+  codenames?.modes.join(",") === "pvp,pvai,aivai",
+  codenames
 );
 check(
   "getGameDescriptor returns null for missing game",
