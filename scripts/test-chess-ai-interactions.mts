@@ -3,6 +3,7 @@ import {
   hasVisibleGameAIInteraction,
 } from "../lib/games/core/ai-interactions";
 import {
+  CHESS_AI_MAX_TOKENS,
   buildAICorrectionPrompt,
   chooseFallbackAIMove,
   formatLegalMoveList,
@@ -39,6 +40,11 @@ check(
 );
 check("confidence is clamped", parsed?.confidence === 1, parsed);
 check("diagnostics are retained", parsed?.diagnostics === "center push", parsed);
+check(
+  "chess AI uses enough output budget for structured JSON with reasoning",
+  CHESS_AI_MAX_TOKENS >= 4096,
+  CHESS_AI_MAX_TOKENS
+);
 
 const invalidGesture = parseAIResponse(`{
   "from": "g1",

@@ -3,6 +3,10 @@ import {
   listGameBenchmarkRunners,
   registerGameBenchmark,
 } from "../lib/games/core/benchmark";
+import {
+  connectFourMatchToGenericGameMatchRecord,
+  isRecoverableConnectFourAIError,
+} from "../lib/games/connect-four/benchmark";
 import type { GameId } from "../lib/games/core/types";
 
 let failures = 0;
@@ -38,6 +42,89 @@ check("registered benchmark can run", result && typeof result === "object" && "o
 
 unregister();
 check("unregister removes benchmark", getGameBenchmarkRunner(gameId) === null, listGameBenchmarkRunners());
+
+const unregisterConnectFour = registerGameBenchmark({
+  gameId: "connect-four",
+  label: "AI vs AI Connect Four Benchmark",
+  run: async () => [{ id: "test" }],
+});
+
+check(
+  "connect four benchmark can be registered",
+  getGameBenchmarkRunner("connect-four") !== null,
+  listGameBenchmarkRunners()
+);
+
+unregisterConnectFour();
+check(
+  "connect four benchmark can be unregistered",
+  getGameBenchmarkRunner("connect-four") === null,
+  listGameBenchmarkRunners()
+);
+
+check(
+  "connect four parse failures can use fallback",
+  isRecoverableConnectFourAIError("Failed to parse AI response after multiple attempts")
+);
+
+check(
+  "connect four auth failures do not use fallback",
+  !isRecoverableConnectFourAIError("AI request failed: 401 Unauthorized invalid API key")
+);
+
+check(
+  "connect four unknown provider failures do not use fallback",
+  !isRecoverableConnectFourAIError("Unknown provider for red model: unknown")
+);
+
+const genericConnectFourRecord = connectFourMatchToGenericGameMatchRecord({
+  id: "connect-four-match-1",
+  timestamp: "2026-06-24T10:00:00.000Z",
+  mode: "aivai",
+  redModel: "openai:gpt-4.1",
+  yellowModel: "anthropic:claude-sonnet-4",
+  redReasoningEffort: "low",
+  yellowReasoningEffort: "high",
+  result: "red",
+  moves: 21,
+  durationMs: 12000,
+  avgAiResponseMs: 750,
+  invalidResponses: 2,
+  fallbackMoves: 1,
+});
+const genericConnectFourResult = JSON.parse(
+  genericConnectFourRecord.resultJson
+) as { result?: string; winner?: string | null; draw?: boolean };
+const genericConnectFourStats = JSON.parse(
+  genericConnectFourRecord.statsJson
+) as {
+  moves?: number;
+  durationMs?: number;
+  avgAiResponseMs?: number;
+  invalidResponses?: number;
+  fallbackMoves?: number;
+};
+
+check(
+  "connect four match converts to generic game record",
+  genericConnectFourRecord.gameId === "connect-four" &&
+    genericConnectFourRecord.participants.length === 2 &&
+    genericConnectFourRecord.participants[0]?.id === "red" &&
+    genericConnectFourRecord.participants[0]?.modelId === "openai:gpt-4.1" &&
+    genericConnectFourRecord.participants[0]?.reasoningEffort === "low" &&
+    genericConnectFourRecord.participants[1]?.id === "yellow" &&
+    genericConnectFourRecord.participants[1]?.modelId === "anthropic:claude-sonnet-4" &&
+    genericConnectFourRecord.participants[1]?.reasoningEffort === "high" &&
+    genericConnectFourResult.result === "red" &&
+    genericConnectFourResult.winner === "red" &&
+    genericConnectFourResult.draw === false &&
+    genericConnectFourStats.moves === 21 &&
+    genericConnectFourStats.durationMs === 12000 &&
+    genericConnectFourStats.avgAiResponseMs === 750 &&
+    genericConnectFourStats.invalidResponses === 2 &&
+    genericConnectFourStats.fallbackMoves === 1,
+  genericConnectFourRecord
+);
 
 if (failures === 0) {
   console.log("PASS");

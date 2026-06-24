@@ -20,6 +20,13 @@ import {
   registerGameBenchmark,
   type GameBenchmarkRunner,
 } from "@/lib/games/core/benchmark";
+import {
+  connectFourMatchToGenericGameMatchRecord,
+  runConnectFourAIBenchmark,
+  type ConnectFourBenchmarkProgress,
+} from "@/lib/games/connect-four/benchmark";
+import type { ConnectFourMatchRecord } from "@/lib/games/connect-four/types";
+import { saveGenericGameMatchRecord } from "@/lib/games/core/session-store";
 import type { ReasoningEffort } from "@/lib/db/schema";
 
 // =============================================================================
@@ -27,6 +34,7 @@ import type { ReasoningEffort } from "@/lib/db/schema";
 // =============================================================================
 
 const MAX_MOVES = 100;
+const CONNECT_FOUR_DEFAULT_MAX_MOVES = 42;
 const MOVE_DELAY_MS = 300;
 const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
   { value: "default", label: "Disabled" },
@@ -41,7 +49,9 @@ interface AvailableModel {
   displayName: string;
 }
 
-interface BenchmarkConfig {
+type SelectedBenchmarkGame = "chess" | "connect-four";
+
+interface ChessBenchmarkConfig {
   whiteModelId: string;
   blackModelId: string;
   whiteReasoning: ReasoningEffort;
@@ -49,13 +59,38 @@ interface BenchmarkConfig {
   numGames: number;
 }
 
-interface BenchmarkProgress {
+interface ConnectFourBenchmarkConfig {
+  redModelId: string;
+  yellowModelId: string;
+  redReasoning: ReasoningEffort;
+  yellowReasoning: ReasoningEffort;
+  maxMoves: number;
+  numGames: number;
+}
+
+interface ChessBenchmarkProgress {
   currentGame: number;
   totalGames: number;
   moveCount: number;
   currentTurn: "white" | "black";
   status: string;
   fen: string;
+}
+
+interface ConnectFourBenchmarkProgressState
+  extends ConnectFourBenchmarkProgress {
+  currentGame: number;
+  totalGames: number;
+}
+
+interface ConnectFourBenchmarkSummary {
+  completedGames: number;
+  savedGames: number;
+  redWins: number;
+  yellowWins: number;
+  draws: number;
+  avgMoves: number;
+  avgDurationMs: number;
 }
 
 // =============================================================================
@@ -96,6 +131,29 @@ function getModelDisplayName(modelId: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : modelId;
 }
 
+function summarizeConnectFourBenchmark(
+  results: ConnectFourMatchRecord[],
+  savedGames: number
+): ConnectFourBenchmarkSummary | null {
+  if (results.length === 0) return null;
+
+  const totalMoves = results.reduce((sum, result) => sum + result.moves, 0);
+  const totalDurationMs = results.reduce(
+    (sum, result) => sum + result.durationMs,
+    0
+  );
+
+  return {
+    completedGames: results.length,
+    savedGames,
+    redWins: results.filter((result) => result.result === "red").length,
+    yellowWins: results.filter((result) => result.result === "yellow").length,
+    draws: results.filter((result) => result.result === "draw").length,
+    avgMoves: totalMoves / results.length,
+    avgDurationMs: totalDurationMs / results.length,
+  };
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -104,20 +162,35 @@ export function GamesBenchmark() {
   // Available models
   const [models, setModels] = useState<AvailableModel[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedGame, setSelectedGame] = useState<SelectedBenchmarkGame>("chess");
 
   // Configuration
-  const [config, setConfig] = useState<BenchmarkConfig>({
+  const [config, setConfig] = useState<ChessBenchmarkConfig>({
     whiteModelId: "",
     blackModelId: "",
     whiteReasoning: "default",
     blackReasoning: "default",
     numGames: 1,
   });
+  const [connectFourConfig, setConnectFourConfig] =
+    useState<ConnectFourBenchmarkConfig>({
+      redModelId: "",
+      yellowModelId: "",
+      redReasoning: "default",
+      yellowReasoning: "default",
+      maxMoves: CONNECT_FOUR_DEFAULT_MAX_MOVES,
+      numGames: 1,
+    });
 
   // Benchmark state
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<BenchmarkProgress | null>(null);
+  const [progress, setProgress] = useState<ChessBenchmarkProgress | null>(null);
+  const [connectFourProgress, setConnectFourProgress] =
+    useState<ConnectFourBenchmarkProgressState | null>(null);
+  const [connectFourSummary, setConnectFourSummary] =
+    useState<ConnectFourBenchmarkSummary | null>(null);
   const abortRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Stats display
   const [modelStats, setModelStats] = useState<GameModelStat[]>([]);
@@ -155,11 +228,22 @@ export function GamesBenchmark() {
             whiteModelId: prev.whiteModelId || available[0].modelId,
             blackModelId: prev.blackModelId || available[Math.min(1, available.length - 1)].modelId,
           }));
+          setConnectFourConfig((prev) => ({
+            ...prev,
+            redModelId: prev.redModelId || available[0].modelId,
+            yellowModelId:
+              prev.yellowModelId || available[Math.min(1, available.length - 1)].modelId,
+          }));
         } else if (available.length === 1) {
           setConfig((prev) => ({
             ...prev,
             whiteModelId: prev.whiteModelId || available[0].modelId,
             blackModelId: prev.blackModelId || available[0].modelId,
+          }));
+          setConnectFourConfig((prev) => ({
+            ...prev,
+            redModelId: prev.redModelId || available[0].modelId,
+            yellowModelId: prev.yellowModelId || available[0].modelId,
           }));
         }
         loadStats();
@@ -318,7 +402,7 @@ export function GamesBenchmark() {
 
   const runChessBenchmark = useCallback(
     async (
-      benchmarkConfig: BenchmarkConfig,
+      benchmarkConfig: ChessBenchmarkConfig,
       signal: AbortSignal
     ): Promise<GameMatchRecord[]> => {
       if (!benchmarkConfig.whiteModelId || !benchmarkConfig.blackModelId) {
@@ -327,6 +411,8 @@ export function GamesBenchmark() {
 
       setRunning(true);
       abortRef.current = false;
+      setConnectFourProgress(null);
+      setConnectFourSummary(null);
 
       const results: GameMatchRecord[] = [];
 
@@ -352,6 +438,7 @@ export function GamesBenchmark() {
       } finally {
         setRunning(false);
         setProgress(null);
+        abortControllerRef.current = null;
         loadStats();
       }
 
@@ -361,7 +448,7 @@ export function GamesBenchmark() {
   );
 
   useEffect(() => {
-    const runner: GameBenchmarkRunner<BenchmarkConfig, GameMatchRecord[]> = {
+    const runner: GameBenchmarkRunner<ChessBenchmarkConfig, GameMatchRecord[]> = {
       gameId: "chess",
       label: "AI vs AI Chess Benchmark",
       run: runChessBenchmark,
@@ -370,24 +457,144 @@ export function GamesBenchmark() {
     return registerGameBenchmark(runner);
   }, [runChessBenchmark]);
 
+  const runConnectFourBenchmark = useCallback(
+    async (
+      benchmarkConfig: ConnectFourBenchmarkConfig,
+      signal: AbortSignal
+    ): Promise<ConnectFourMatchRecord[]> => {
+      if (!benchmarkConfig.redModelId || !benchmarkConfig.yellowModelId) {
+        return [];
+      }
+
+      setRunning(true);
+      abortRef.current = false;
+      setProgress(null);
+      setConnectFourProgress(null);
+      setConnectFourSummary(null);
+
+      const results: ConnectFourMatchRecord[] = [];
+      let savedGames = 0;
+
+      try {
+        for (let i = 0; i < benchmarkConfig.numGames; i++) {
+          if (signal.aborted || abortRef.current) {
+            break;
+          }
+
+          const result = await runConnectFourAIBenchmark({
+            redModelId: benchmarkConfig.redModelId,
+            yellowModelId: benchmarkConfig.yellowModelId,
+            redReasoning: benchmarkConfig.redReasoning,
+            yellowReasoning: benchmarkConfig.yellowReasoning,
+            maxMoves: benchmarkConfig.maxMoves,
+            signal,
+            onProgress: (gameProgress) => {
+              setConnectFourProgress({
+                ...gameProgress,
+                currentGame: i + 1,
+                totalGames: benchmarkConfig.numGames,
+              });
+            },
+          });
+
+          if (result && !signal.aborted && !abortRef.current) {
+            results.push(result);
+            try {
+              await saveGenericGameMatchRecord(
+                connectFourMatchToGenericGameMatchRecord(result)
+              );
+              savedGames++;
+            } catch (error) {
+              console.warn(
+                "Failed to save Connect Four benchmark result:",
+                error
+              );
+            }
+          }
+        }
+
+        if (!signal.aborted && !abortRef.current) {
+          setConnectFourSummary(
+            summarizeConnectFourBenchmark(results, savedGames)
+          );
+        }
+      } finally {
+        setRunning(false);
+        setConnectFourProgress(null);
+        abortControllerRef.current = null;
+      }
+
+      return results;
+    },
+    []
+  );
+
+  useEffect(() => {
+    const runner: GameBenchmarkRunner<
+      ConnectFourBenchmarkConfig,
+      ConnectFourMatchRecord[]
+    > = {
+      gameId: "connect-four",
+      label: "AI vs AI Connect Four Benchmark",
+      run: runConnectFourBenchmark,
+    };
+
+    return registerGameBenchmark(runner);
+  }, [runConnectFourBenchmark]);
+
   // Run the full benchmark
   const runBenchmark = useCallback(async () => {
     const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    if (selectedGame === "connect-four") {
+      await runConnectFourBenchmark(connectFourConfig, controller.signal);
+      return;
+    }
+
     await runChessBenchmark(config, controller.signal);
-  }, [config, runChessBenchmark]);
+  }, [
+    config,
+    connectFourConfig,
+    runChessBenchmark,
+    runConnectFourBenchmark,
+    selectedGame,
+  ]);
 
   // Abort the benchmark
   const abortBenchmark = useCallback(() => {
     abortRef.current = true;
+    abortControllerRef.current?.abort();
   }, []);
 
   // Handle configuration changes
   const updateConfig = useCallback(
-    <K extends keyof BenchmarkConfig>(key: K, value: BenchmarkConfig[K]) => {
+    <K extends keyof ChessBenchmarkConfig>(key: K, value: ChessBenchmarkConfig[K]) => {
       setConfig((prev) => ({ ...prev, [key]: value }));
     },
     []
   );
+
+  const updateConnectFourConfig = useCallback(
+    <K extends keyof ConnectFourBenchmarkConfig>(
+      key: K,
+      value: ConnectFourBenchmarkConfig[K]
+    ) => {
+      setConnectFourConfig((prev) => ({ ...prev, [key]: value }));
+    },
+    []
+  );
+
+  const isConnectFourSelected = selectedGame === "connect-four";
+  const benchmarkTitle = isConnectFourSelected
+    ? "AI vs AI Connect Four Benchmark"
+    : "AI vs AI Chess Benchmark";
+  const benchmarkDescription = isConnectFourSelected
+    ? "Run head-to-head Connect Four matches between configured AI models and track move quality, fallback use, and invalid responses."
+    : "Run head-to-head chess matches between configured AI models and compare win rate, move speed, and reliability.";
+  const canRunBenchmark = isConnectFourSelected
+    ? Boolean(connectFourConfig.redModelId && connectFourConfig.yellowModelId)
+    : Boolean(config.whiteModelId && config.blackModelId);
 
   if (loading) {
     return (
@@ -401,10 +608,9 @@ export function GamesBenchmark() {
     return (
       <div className="space-y-4 rounded-lg border bg-card p-6">
         <div>
-          <h2 className="text-xl font-semibold">AI vs AI Chess Benchmark</h2>
+          <h2 className="text-xl font-semibold">{benchmarkTitle}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Run head-to-head chess matches between configured AI models and
-            compare win rate, move speed, and reliability.
+            {benchmarkDescription}
           </p>
         </div>
         <div className="text-center py-8">
@@ -420,121 +626,277 @@ export function GamesBenchmark() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold">AI vs AI Chess Benchmark</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Run head-to-head chess matches between configured AI models and
-          compare win rate, move speed, and reliability.
-        </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold">{benchmarkTitle}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {benchmarkDescription}
+            </p>
+          </div>
+          <div
+            className="inline-flex rounded-md border bg-muted p-1"
+            role="group"
+            aria-label="Benchmark game"
+          >
+            <button
+              type="button"
+              onClick={() => setSelectedGame("chess")}
+              disabled={running}
+              aria-pressed={selectedGame === "chess"}
+              className={`px-3 py-1.5 text-sm font-medium rounded ${
+                selectedGame === "chess"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              } disabled:opacity-50`}
+            >
+              Chess
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedGame("connect-four")}
+              disabled={running}
+              aria-pressed={selectedGame === "connect-four"}
+              className={`px-3 py-1.5 text-sm font-medium rounded ${
+                selectedGame === "connect-four"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              } disabled:opacity-50`}
+            >
+              Connect Four
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Configuration Section */}
       <div className="bg-card border rounded-lg p-4">
         <h3 className="text-lg font-semibold mb-4">Benchmark Configuration</h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* White Model */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">White Model</label>
-              <select
-                value={config.whiteModelId}
-                onChange={(e) => updateConfig("whiteModelId", e.target.value)}
-                disabled={running}
-                className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
-              >
-                {models.map((m) => (
-                  <option key={m.modelId} value={m.modelId}>
-                    {m.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                White Reasoning: {REASONING_LEVELS.find((r) => r.value === config.whiteReasoning)?.label}
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={REASONING_LEVELS.length - 1}
-                value={REASONING_LEVELS.findIndex((r) => r.value === config.whiteReasoning)}
-                onChange={(e) =>
-                  updateConfig("whiteReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
-                }
-                disabled={running}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                {REASONING_LEVELS.map((r) => (
-                  <span key={r.value}>{r.label}</span>
-                ))}
+        {!isConnectFourSelected ? (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* White Model */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">White Model</label>
+                  <select
+                    value={config.whiteModelId}
+                    onChange={(e) => updateConfig("whiteModelId", e.target.value)}
+                    disabled={running}
+                    className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                  >
+                    {models.map((m) => (
+                      <option key={m.modelId} value={m.modelId}>
+                        {m.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    White Reasoning: {REASONING_LEVELS.find((r) => r.value === config.whiteReasoning)?.label}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={REASONING_LEVELS.length - 1}
+                    value={REASONING_LEVELS.findIndex((r) => r.value === config.whiteReasoning)}
+                    onChange={(e) =>
+                      updateConfig("whiteReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                    }
+                    disabled={running}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    {REASONING_LEVELS.map((r) => (
+                      <span key={r.value}>{r.label}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Black Model */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Black Model</label>
+                  <select
+                    value={config.blackModelId}
+                    onChange={(e) => updateConfig("blackModelId", e.target.value)}
+                    disabled={running}
+                    className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                  >
+                    {models.map((m) => (
+                      <option key={m.modelId} value={m.modelId}>
+                        {m.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Black Reasoning: {REASONING_LEVELS.find((r) => r.value === config.blackReasoning)?.label}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={REASONING_LEVELS.length - 1}
+                    value={REASONING_LEVELS.findIndex((r) => r.value === config.blackReasoning)}
+                    onChange={(e) =>
+                      updateConfig("blackReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                    }
+                    disabled={running}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    {REASONING_LEVELS.map((r) => (
+                      <span key={r.value}>{r.label}</span>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Black Model */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">Black Model</label>
-              <select
-                value={config.blackModelId}
-                onChange={(e) => updateConfig("blackModelId", e.target.value)}
-                disabled={running}
-                className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
-              >
-                {models.map((m) => (
-                  <option key={m.modelId} value={m.modelId}>
-                    {m.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Black Reasoning: {REASONING_LEVELS.find((r) => r.value === config.blackReasoning)?.label}
-              </label>
+            {/* Number of Games */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium mb-1">Number of Games (1-10)</label>
               <input
-                type="range"
-                min={0}
-                max={REASONING_LEVELS.length - 1}
-                value={REASONING_LEVELS.findIndex((r) => r.value === config.blackReasoning)}
+                type="number"
+                min={1}
+                max={10}
+                value={config.numGames}
                 onChange={(e) =>
-                  updateConfig("blackReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                  updateConfig("numGames", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))
                 }
                 disabled={running}
-                className="w-full"
+                className="w-24 px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
               />
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                {REASONING_LEVELS.map((r) => (
-                  <span key={r.value}>{r.label}</span>
-                ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Red Model</label>
+                  <select
+                    value={connectFourConfig.redModelId}
+                    onChange={(e) =>
+                      updateConnectFourConfig("redModelId", e.target.value)
+                    }
+                    disabled={running}
+                    className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                  >
+                    {models.map((m) => (
+                      <option key={m.modelId} value={m.modelId}>
+                        {m.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Red Reasoning: {REASONING_LEVELS.find((r) => r.value === connectFourConfig.redReasoning)?.label}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={REASONING_LEVELS.length - 1}
+                    value={REASONING_LEVELS.findIndex((r) => r.value === connectFourConfig.redReasoning)}
+                    onChange={(e) =>
+                      updateConnectFourConfig("redReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                    }
+                    disabled={running}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    {REASONING_LEVELS.map((r) => (
+                      <span key={r.value}>{r.label}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Yellow Model</label>
+                  <select
+                    value={connectFourConfig.yellowModelId}
+                    onChange={(e) =>
+                      updateConnectFourConfig("yellowModelId", e.target.value)
+                    }
+                    disabled={running}
+                    className="w-full px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                  >
+                    {models.map((m) => (
+                      <option key={m.modelId} value={m.modelId}>
+                        {m.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Yellow Reasoning: {REASONING_LEVELS.find((r) => r.value === connectFourConfig.yellowReasoning)?.label}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={REASONING_LEVELS.length - 1}
+                    value={REASONING_LEVELS.findIndex((r) => r.value === connectFourConfig.yellowReasoning)}
+                    onChange={(e) =>
+                      updateConnectFourConfig("yellowReasoning", REASONING_LEVELS[parseInt(e.target.value)].value)
+                    }
+                    disabled={running}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    {REASONING_LEVELS.map((r) => (
+                      <span key={r.value}>{r.label}</span>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* Number of Games */}
-        <div className="mt-4">
-          <label className="block text-sm font-medium mb-1">Number of Games (1-10)</label>
-          <input
-            type="number"
-            min={1}
-            max={10}
-            value={config.numGames}
-            onChange={(e) =>
-              updateConfig("numGames", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))
-            }
-            disabled={running}
-            className="w-24 px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
-          />
-        </div>
+            <div className="mt-4 flex flex-wrap gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Max Moves (1-42)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={42}
+                  value={connectFourConfig.maxMoves}
+                  onChange={(e) =>
+                    updateConnectFourConfig("maxMoves", Math.max(1, Math.min(42, parseInt(e.target.value) || 1)))
+                  }
+                  disabled={running}
+                  className="w-24 px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Number of Games (1-10)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={connectFourConfig.numGames}
+                  onChange={(e) =>
+                    updateConnectFourConfig("numGames", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))
+                  }
+                  disabled={running}
+                  className="w-24 px-3 py-2 border rounded-md bg-background text-foreground disabled:opacity-50"
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Action Buttons */}
         <div className="mt-4 flex gap-3">
           {!running ? (
             <button
               onClick={runBenchmark}
-              disabled={!config.whiteModelId || !config.blackModelId}
+              disabled={!canRunBenchmark}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Run Benchmark
@@ -551,7 +913,7 @@ export function GamesBenchmark() {
       </div>
 
       {/* Progress Section */}
-      {running && progress && (
+      {running && !isConnectFourSelected && progress && (
         <div className="bg-card border rounded-lg p-4">
           <h3 className="text-lg font-semibold mb-3">Benchmark Progress</h3>
           <div className="space-y-2">
@@ -580,8 +942,45 @@ export function GamesBenchmark() {
         </div>
       )}
 
+      {running && isConnectFourSelected && connectFourProgress && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Benchmark Progress</h3>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="text-sm font-medium">
+                Game {connectFourProgress.currentGame} of {connectFourProgress.totalGames}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Move {connectFourProgress.moveCount} of {connectFourProgress.maxMoves}
+              </span>
+              <span
+                className={`text-sm font-medium ${
+                  connectFourProgress.currentTurn === "red"
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-yellow-600 dark:text-yellow-400"
+                }`}
+              >
+                {connectFourProgress.currentTurn === "red" ? "Red" : "Yellow"} to move
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Invalid responses: {connectFourProgress.invalidResponses}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Fallback moves: {connectFourProgress.fallbackMoves}
+              </span>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {connectFourProgress.status}
+              {connectFourProgress.result
+                ? ` Result: ${connectFourProgress.result === "draw" ? "Draw" : connectFourProgress.result}.`
+                : ""}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Aggregate Stats */}
-      {aggregateStats && aggregateStats.totalGames > 0 && (
+      {!isConnectFourSelected && aggregateStats && aggregateStats.totalGames > 0 && (
         <div className="bg-card border rounded-lg p-4">
           <h3 className="text-lg font-semibold mb-3">Aggregate Statistics</h3>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -614,7 +1013,7 @@ export function GamesBenchmark() {
       )}
 
       {/* Model Stats Table */}
-      {modelStats.length > 0 && (
+      {!isConnectFourSelected && modelStats.length > 0 && (
         <div className="bg-card border rounded-lg p-4">
           <h3 className="text-lg font-semibold mb-3">Model Performance</h3>
           <div className="overflow-x-auto">
@@ -651,7 +1050,7 @@ export function GamesBenchmark() {
       )}
 
       {/* Recent Matches Table */}
-      {recentMatches.length > 0 && (
+      {!isConnectFourSelected && recentMatches.length > 0 && (
         <div className="bg-card border rounded-lg p-4">
           <h3 className="text-lg font-semibold mb-3">Recent AI vs AI Matches</h3>
           <div className="overflow-x-auto">
@@ -696,11 +1095,55 @@ export function GamesBenchmark() {
       )}
 
       {/* Empty State */}
-      {!running && modelStats.length === 0 && recentMatches.length === 0 && (
+      {!running && !isConnectFourSelected && modelStats.length === 0 && recentMatches.length === 0 && (
         <div className="bg-card border rounded-lg p-8 text-center">
           <div className="text-lg font-medium mb-2">No AI vs AI Games Yet</div>
           <div className="text-sm text-muted-foreground">
             Configure the models above and click &quot;Run Benchmark&quot; to start an AI vs AI chess match.
+          </div>
+        </div>
+      )}
+
+      {!running && isConnectFourSelected && connectFourSummary && (
+        <div className="bg-card border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-3">Latest Connect Four Benchmark</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold">{connectFourSummary.completedGames}</div>
+              <div className="text-xs text-muted-foreground">Completed</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{connectFourSummary.savedGames}</div>
+              <div className="text-xs text-muted-foreground">Saved</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-red-600 dark:text-red-400">{connectFourSummary.redWins}</div>
+              <div className="text-xs text-muted-foreground">Red Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{connectFourSummary.yellowWins}</div>
+              <div className="text-xs text-muted-foreground">Yellow Wins</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-muted-foreground">{connectFourSummary.draws}</div>
+              <div className="text-xs text-muted-foreground">Draws</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{Math.round(connectFourSummary.avgMoves)}</div>
+              <div className="text-xs text-muted-foreground">Avg Moves</div>
+            </div>
+          </div>
+          <div className="mt-3 text-center text-sm text-muted-foreground">
+            Average duration {formatDuration(connectFourSummary.avgDurationMs)}
+          </div>
+        </div>
+      )}
+
+      {!running && isConnectFourSelected && !connectFourSummary && (
+        <div className="bg-card border rounded-lg p-8 text-center">
+          <div className="text-lg font-medium mb-2">No Connect Four benchmark running</div>
+          <div className="text-sm text-muted-foreground">
+            Configure the models above and click &quot;Run Benchmark&quot; to start an AI vs AI Connect Four match.
           </div>
         </div>
       )}
