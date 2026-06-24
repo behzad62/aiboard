@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   CONNECT_FOUR_COLUMNS,
   CONNECT_FOUR_ROWS,
+  getLandingRow,
   getLegalColumns,
 } from "@/lib/games/connect-four/engine";
 import type {
@@ -33,6 +34,11 @@ export function ConnectFourBoard({
   onPreviewColumn,
 }: ConnectFourBoardProps) {
   const legalColumns = useMemo(() => new Set(getLegalColumns(state)), [state]);
+  const previewLandingRow = useMemo(
+    () =>
+      previewColumn === null ? null : getLandingRow(state, previewColumn),
+    [previewColumn, state]
+  );
 
   return (
     <div
@@ -58,7 +64,9 @@ export function ConnectFourBoard({
           Array.from({ length: CONNECT_FOUR_COLUMNS }, (_, column) => {
             const cell = state.board[row][column];
             const canPlay = interactive && legalColumns.has(column);
-            const isPreviewed = previewColumn === column && canPlay;
+            const isPreviewColumn = previewColumn === column && canPlay;
+            const isLandingPreview =
+              isPreviewColumn && previewLandingRow === row && cell === null;
             const cellLabel = cell ? `${PLAYER_LABELS[cell]} disc` : "empty";
 
             return (
@@ -69,9 +77,11 @@ export function ConnectFourBoard({
                   "group relative aspect-square rounded-full border-[5px] border-sky-950/55 bg-sky-950/35 p-1",
                   "shadow-[inset_0_3px_8px_rgba(8,47,73,0.55)] transition duration-150",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300",
-                  canPlay && "cursor-pointer hover:-translate-y-0.5 hover:border-white/70 hover:bg-sky-950/20",
+                  canPlay && "cursor-pointer",
                   !canPlay && "cursor-default",
-                  isPreviewed && "ring-2 ring-amber-200 ring-offset-2 ring-offset-sky-700"
+                  isPreviewColumn && "ring-2 ring-amber-200/70 ring-offset-1 ring-offset-sky-700",
+                  isLandingPreview &&
+                    "border-amber-200 bg-sky-950/15 ring-2 ring-amber-300 ring-offset-2"
                 )}
                 disabled={!canPlay}
                 onClick={() => {
@@ -104,8 +114,8 @@ export function ConnectFourBoard({
                     cell === null &&
                       cn(
                         "bg-slate-950/45",
-                        canPlay && "group-hover:bg-slate-900/35",
-                        isPreviewed && "bg-amber-100/35"
+                        isLandingPreview &&
+                          "bg-gradient-to-br from-amber-100/75 via-amber-200/55 to-amber-500/45"
                       )
                   )}
                   aria-hidden="true"

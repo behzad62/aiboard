@@ -57,6 +57,21 @@ export function isLegalColumn(state: ConnectFourGameState, column: number): bool
   return getLegalColumns(state).includes(column);
 }
 
+export function getLandingRow(
+  state: ConnectFourGameState,
+  column: number
+): number | null {
+  if (!isLegalColumn(state, column)) return null;
+
+  for (let row = CONNECT_FOUR_ROWS - 1; row >= 0; row--) {
+    if (state.board[row][column] === null) {
+      return row;
+    }
+  }
+
+  return null;
+}
+
 export function dropDisc(
   state: ConnectFourGameState,
   column: number,

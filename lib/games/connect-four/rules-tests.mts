@@ -4,6 +4,7 @@ import {
   CONNECT_FOUR_ROWS,
   createInitialConnectFourState,
   dropDisc,
+  getLandingRow,
   getLegalColumns,
   isLegalColumn,
   setConnectFourPaused,
@@ -67,6 +68,12 @@ check(
 
 const afterFirstMove = dropDisc(initial, 0, 1_234);
 check("disc drops to bottom row", afterFirstMove.board[5][0] === "red", afterFirstMove.board);
+check("landing row starts at the bottom", getLandingRow(initial, 0) === 5, {
+  landingRow: getLandingRow(initial, 0),
+});
+check("landing row moves upward after a disc", getLandingRow(afterFirstMove, 0) === 4, {
+  landingRow: getLandingRow(afterFirstMove, 0),
+});
 check("turn alternates", afterFirstMove.turn === "yellow", { turn: afterFirstMove.turn });
 check(
   "move history stores one-based displayColumn",
@@ -85,6 +92,9 @@ check(
     getLegalColumns(fullColumnState).length === 6,
   getLegalColumns(fullColumnState)
 );
+check("full column has no landing row", getLandingRow(fullColumnState, 0) === null, {
+  landingRow: getLandingRow(fullColumnState, 0),
+});
 try {
   dropDisc(fullColumnState, 0, 2_000);
   check("dropping in a full column throws a full-column error", false);
