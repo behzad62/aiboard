@@ -18,6 +18,16 @@ import type {
   ProviderKey,
   UserSettings,
 } from "@/lib/db/schema";
+import type {
+  BenchmarkArtifact,
+  BenchmarkAttempt,
+  BenchmarkCase,
+  BenchmarkFailure,
+  BenchmarkMetricValue,
+  BenchmarkModelCallTrace,
+  BenchmarkRun,
+  BenchmarkSuite,
+} from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
 import {
   createAdapter,
@@ -49,6 +59,14 @@ export interface ClientStore {
   gameSessions: GameSessionRecord[];
   gameMatchRecords: GenericGameMatchRecord[];
   gameStatsLegacyImportAttempted: boolean;
+  benchmarkSuites: BenchmarkSuite[];
+  benchmarkRuns: BenchmarkRun[];
+  benchmarkCases: BenchmarkCase[];
+  benchmarkAttempts: BenchmarkAttempt[];
+  benchmarkMetricValues: BenchmarkMetricValue[];
+  benchmarkArtifacts: BenchmarkArtifact[];
+  benchmarkFailures: BenchmarkFailure[];
+  benchmarkTraces: BenchmarkModelCallTrace[];
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -77,6 +95,14 @@ const DEFAULT_STORE: ClientStore = {
   gameSessions: [],
   gameMatchRecords: [],
   gameStatsLegacyImportAttempted: false,
+  benchmarkSuites: [],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkAttempts: [],
+  benchmarkMetricValues: [],
+  benchmarkArtifacts: [],
+  benchmarkFailures: [],
+  benchmarkTraces: [],
   modelStats: [],
 };
 
@@ -263,6 +289,11 @@ export function getBuildFiles(discussionId: string): BuildFileRecord[] {
 export function getBuildCheckpoint(discussionId: string): BuildCheckpoint | undefined {
   return store().buildCheckpoints?.find((c) => c.discussionId === discussionId);
 }
+export function getBuildCheckpoints(): BuildCheckpoint[] {
+  const s = store();
+  s.buildCheckpoints ??= [];
+  return s.buildCheckpoints;
+}
 export function getGameSessions(): GameSessionRecord[] {
   const s = store();
   s.gameSessions ??= [];
@@ -272,6 +303,46 @@ export function getGenericGameMatchRecords(): GenericGameMatchRecord[] {
   const s = store();
   s.gameMatchRecords ??= [];
   return s.gameMatchRecords;
+}
+export function getBenchmarkSuites(): BenchmarkSuite[] {
+  const s = store();
+  s.benchmarkSuites ??= [];
+  return s.benchmarkSuites;
+}
+export function getBenchmarkRuns(): BenchmarkRun[] {
+  const s = store();
+  s.benchmarkRuns ??= [];
+  return s.benchmarkRuns;
+}
+export function getBenchmarkCases(): BenchmarkCase[] {
+  const s = store();
+  s.benchmarkCases ??= [];
+  return s.benchmarkCases;
+}
+export function getBenchmarkAttempts(): BenchmarkAttempt[] {
+  const s = store();
+  s.benchmarkAttempts ??= [];
+  return s.benchmarkAttempts;
+}
+export function getBenchmarkMetricValues(): BenchmarkMetricValue[] {
+  const s = store();
+  s.benchmarkMetricValues ??= [];
+  return s.benchmarkMetricValues;
+}
+export function getBenchmarkArtifacts(): BenchmarkArtifact[] {
+  const s = store();
+  s.benchmarkArtifacts ??= [];
+  return s.benchmarkArtifacts;
+}
+export function getBenchmarkFailures(): BenchmarkFailure[] {
+  const s = store();
+  s.benchmarkFailures ??= [];
+  return s.benchmarkFailures;
+}
+export function getBenchmarkTraces(): BenchmarkModelCallTrace[] {
+  const s = store();
+  s.benchmarkTraces ??= [];
+  return s.benchmarkTraces;
 }
 export function hasAttemptedGameStatsLegacyImport(): boolean {
   return store().gameStatsLegacyImportAttempted ?? false;
@@ -432,6 +503,43 @@ export function deleteGameSession(id: string): void {
 }
 export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void {
   getGenericGameMatchRecords().push(record);
+  schedulePersist();
+}
+function upsertById<T extends { id: string }>(records: T[], record: T): void {
+  const i = records.findIndex((item) => item.id === record.id);
+  if (i >= 0) records[i] = record;
+  else records.push(record);
+}
+export function upsertBenchmarkSuite(record: BenchmarkSuite): void {
+  upsertById(getBenchmarkSuites(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkRun(record: BenchmarkRun): void {
+  upsertById(getBenchmarkRuns(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkCase(record: BenchmarkCase): void {
+  upsertById(getBenchmarkCases(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkAttempt(record: BenchmarkAttempt): void {
+  upsertById(getBenchmarkAttempts(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkMetricValue(record: BenchmarkMetricValue): void {
+  upsertById(getBenchmarkMetricValues(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkArtifact(record: BenchmarkArtifact): void {
+  upsertById(getBenchmarkArtifacts(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkFailure(record: BenchmarkFailure): void {
+  upsertById(getBenchmarkFailures(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkTrace(record: BenchmarkModelCallTrace): void {
+  upsertById(getBenchmarkTraces(), record);
   schedulePersist();
 }
 export function markGameStatsLegacyImportAttempted(): void {

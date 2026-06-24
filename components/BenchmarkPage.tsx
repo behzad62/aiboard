@@ -22,6 +22,7 @@ import {
   qualityPerAttempt,
   qualityScore,
 } from "@/lib/client/model-stats";
+import { BenchmarkLab } from "@/components/BenchmarkLab";
 import { GamesBenchmark } from "@/components/games/GamesBenchmark";
 
 /**
@@ -249,6 +250,8 @@ export function BenchmarkPage() {
           </Button>
         )}
       </header>
+
+      <BenchmarkLab />
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading stats…</p>

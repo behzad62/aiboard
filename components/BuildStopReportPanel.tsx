@@ -6,12 +6,18 @@ import {
   Check,
   ClipboardCopy,
   ListTodo,
+  Save,
   Terminal,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { BuildStopReport } from "@/lib/db/schema";
 import { formatBuildStopReportMarkdown } from "@/lib/orchestrator/build-stop-report";
+import { createBuildBenchmarkCaseFromStopReport } from "@/lib/benchmark/build-cases";
+import {
+  saveBenchmarkArtifact,
+  saveBenchmarkCase,
+} from "@/lib/benchmark/store";
 
 interface BuildStopReportPanelProps {
   report: BuildStopReport;
@@ -29,6 +35,7 @@ function compact(text: string, max = 520): string {
 
 export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
   const [copied, setCopied] = useState(false);
+  const [savedCase, setSavedCase] = useState(false);
   const markdown = useMemo(() => formatBuildStopReportMarkdown(report), [report]);
   const latestCommand = report.commandProblems[0];
 
@@ -36,6 +43,14 @@ export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
     await navigator.clipboard.writeText(markdown);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  const saveAsBenchmarkCase = async () => {
+    const { benchmarkCase, artifact } = createBuildBenchmarkCaseFromStopReport(report);
+    await saveBenchmarkCase(benchmarkCase);
+    await saveBenchmarkArtifact(artifact);
+    setSavedCase(true);
+    window.setTimeout(() => setSavedCase(false), 1800);
   };
 
   return (
@@ -55,14 +70,29 @@ export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
           <p className="mt-1 text-sm">{report.summary}</p>
           <p className="mt-1 text-xs opacity-80">{formatTime(report.createdAt)}</p>
         </div>
-        <Button size="sm" variant="outline" onClick={copyReport} className="shrink-0">
-          {copied ? (
-            <Check className="mr-2 h-4 w-4" />
-          ) : (
-            <ClipboardCopy className="mr-2 h-4 w-4" />
-          )}
-          {copied ? "Copied" : "Copy report"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={saveAsBenchmarkCase}
+            className="shrink-0"
+          >
+            {savedCase ? (
+              <Check className="mr-2 h-4 w-4" />
+            ) : (
+              <Save className="mr-2 h-4 w-4" />
+            )}
+            {savedCase ? "Saved" : "Save case"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={copyReport} className="shrink-0">
+            {copied ? (
+              <Check className="mr-2 h-4 w-4" />
+            ) : (
+              <ClipboardCopy className="mr-2 h-4 w-4" />
+            )}
+            {copied ? "Copied" : "Copy report"}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-px bg-amber-200/70 dark:bg-amber-900/70 lg:grid-cols-[1.1fr_0.9fr]">
