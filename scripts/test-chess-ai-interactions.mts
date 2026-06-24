@@ -2,7 +2,16 @@ import {
   buildGameAIInteraction,
   hasVisibleGameAIInteraction,
 } from "../lib/games/core/ai-interactions";
-import { CHESS_AI_MAX_TOKENS, parseAIResponse } from "../lib/games/chess/ai";
+import {
+  CHESS_AI_MAX_TOKENS,
+  buildAICorrectionPrompt,
+  chooseFallbackAIMove,
+  formatLegalMoveList,
+  getAIMoveRetryDelayMs,
+  parseAIResponse,
+} from "../lib/games/chess/ai";
+import { fromFEN, generateLegalMoves } from "../lib/games/chess/engine";
+import type { Move } from "../lib/games/chess/types";
 
 let failures = 0;
 
@@ -60,6 +69,40 @@ const visible = buildGameAIInteraction("white", {
 });
 
 check("non-neutral gesture is visible", hasVisibleGameAIInteraction(visible), visible);
+
+const correctionMoves: Move[] = [
+  { from: "e2", to: "e4" },
+  { from: "g1", to: "f3" },
+  { from: "e7", to: "e8", promotion: "queen" },
+];
+const legalMoveText = formatLegalMoveList(correctionMoves);
+check("compact legal move list uses long algebraic notation", legalMoveText === "e2e4, g1f3, e7e8q", legalMoveText);
+
+const parseCorrection = buildAICorrectionPrompt("parse", correctionMoves);
+check("parse correction includes legal moves", parseCorrection.includes("Legal moves: e2e4, g1f3, e7e8q"), parseCorrection);
+check("parse correction demands JSON only", parseCorrection.includes("ONLY valid JSON"), parseCorrection);
+
+const illegalCorrection = buildAICorrectionPrompt("illegal", correctionMoves, {
+  from: "a2",
+  to: "a5",
+});
+check("illegal correction names bad move", illegalCorrection.includes("a2a5"), illegalCorrection);
+check("illegal correction includes legal moves", illegalCorrection.includes("Legal moves: e2e4, g1f3, e7e8q"), illegalCorrection);
+
+check("provider retry delay starts short", getAIMoveRetryDelayMs(0) === 250, getAIMoveRetryDelayMs(0));
+check("provider retry delay backs off", getAIMoveRetryDelayMs(1) === 500, getAIMoveRetryDelayMs(1));
+
+const captureState = fromFEN("3r3k/8/8/8/8/8/8/3QK3 w - - 0 1");
+const legalCaptures = generateLegalMoves(captureState, "white").map((move) =>
+  formatLegalMoveList([move])
+);
+const fallbackCapture = chooseFallbackAIMove(captureState);
+check("fallback test position has quiet moves before capture", legalCaptures[0] !== "d1d8", legalCaptures.slice(0, 5));
+check(
+  "fallback prefers a queen capture over the first legal move",
+  fallbackCapture?.from === "d1" && fallbackCapture.to === "d8",
+  { fallbackCapture, legalCaptures: legalCaptures.slice(0, 12) }
+);
 
 if (failures === 0) {
   console.log("PASS");

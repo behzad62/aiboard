@@ -3,12 +3,14 @@
  * Sends game state to an LLM and parses its move response.
  */
 
-import type { GameState, Move, ChessAIResponse, PieceType } from "./types";
+import type { GameState, Move, ChessAIResponse, Piece, PieceType } from "./types";
 import {
   toFEN,
   boardToAscii,
   generateLegalMoves,
+  getPiece,
   isLegalMove,
+  makeMove,
 } from "./engine";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { parseModelId, type StructuredOutputFormat } from "@/lib/providers/base";
@@ -42,6 +44,131 @@ export interface AIPlayerConfig {
   reasoningEffort: string; // 'disabled' | 'low' | 'medium' | 'high' | etc.
   apiKey?: string;
   baseURL?: string;
+}
+
+const MAX_AI_MOVE_RETRIES = 3;
+const MAX_CORRECTION_LEGAL_MOVES = 80;
+const PIECE_VALUES: Record<PieceType, number> = {
+  pawn: 100,
+  knight: 300,
+  bishop: 320,
+  rook: 500,
+  queen: 900,
+  king: 0,
+};
+
+function moveToLongAlgebraic(move: Move): string {
+  return `${move.from}${move.to}${move.promotion ? move.promotion[0] : ""}`;
+}
+
+export function formatLegalMoveList(
+  moves: Move[],
+  maxMoves = MAX_CORRECTION_LEGAL_MOVES
+): string {
+  const visibleMoves = moves.slice(0, maxMoves).map(moveToLongAlgebraic);
+  const omitted = moves.length - visibleMoves.length;
+  return omitted > 0
+    ? `${visibleMoves.join(", ")} (${omitted} more)`
+    : visibleMoves.join(", ");
+}
+
+export function buildAICorrectionPrompt(
+  reason: "parse" | "illegal",
+  legalMoves: Move[],
+  rejectedMove?: Move
+): string {
+  const legalMoveList = formatLegalMoveList(legalMoves);
+  const format =
+    '{"from":"e2","to":"e4"} or {"from":"e7","to":"e8","promotion":"queen"}';
+
+  if (reason === "illegal") {
+    const rejected = rejectedMove ? ` ${moveToLongAlgebraic(rejectedMove)}` : "";
+    return `Your move${rejected} is not legal in the current position. Legal moves: ${legalMoveList}. Respond with ONLY valid JSON in this format: ${format}`;
+  }
+
+  return `Your response could not be parsed as valid move JSON. Legal moves: ${legalMoveList}. Respond with ONLY valid JSON in this format: ${format}`;
+}
+
+export function getAIMoveRetryDelayMs(attempt: number): number {
+  return Math.min(1_000, 250 * 2 ** Math.max(0, attempt));
+}
+
+function waitForAIMoveRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  if (signal.aborted) {
+    return Promise.reject(new Error("AI request aborted"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(new Error("AI request aborted"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function capturedPieceForMove(state: GameState, move: Move): Piece | null {
+  const target = getPiece(state, move.to);
+  if (target) return target;
+
+  const mover = getPiece(state, move.from);
+  if (mover?.type !== "pawn" || move.to !== state.enPassantTarget) {
+    return null;
+  }
+
+  const file = move.to.charCodeAt(0) - 97;
+  const captureRank = mover.color === "white"
+    ? Number.parseInt(move.to[1], 10) - 1
+    : Number.parseInt(move.to[1], 10) + 1;
+  return state.board[8 - captureRank]?.[file] ?? null;
+}
+
+function scoreFallbackMove(state: GameState, move: Move, index: number): number {
+  const mover = getPiece(state, move.from);
+  const captured = capturedPieceForMove(state, move);
+  let score = -index / 1000;
+
+  if (captured) {
+    score += 1_000 + PIECE_VALUES[captured.type] - (mover ? PIECE_VALUES[mover.type] / 20 : 0);
+  }
+
+  if (move.promotion) {
+    score += 2_000 + PIECE_VALUES[move.promotion];
+  }
+
+  try {
+    const nextState = makeMove(state, move);
+    if (nextState.status === "checkmate") score += 100_000;
+    else if (nextState.status === "check") score += 500;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  return score;
+}
+
+export function chooseFallbackAIMove(state: GameState): Move | null {
+  const legalMoves = generateLegalMoves(state, state.turn);
+  if (legalMoves.length === 0) return null;
+
+  return legalMoves.reduce(
+    (best, move, index) => {
+      const score = scoreFallbackMove(state, move, index);
+      return score > best.score ? { move, score } : best;
+    },
+    { move: legalMoves[0], score: scoreFallbackMove(state, legalMoves[0], 0) }
+  ).move;
 }
 
 // =============================================================================
@@ -294,7 +421,6 @@ export async function requestAIMove(
   params: RequestAIMoveParams
 ): Promise<AIMoveResult> {
   const { state, modelId, reasoningEffort, apiKey, baseURL, signal } = params;
-  const MAX_RETRIES = 3;
 
   if (signal?.aborted) {
     return { error: "AI request aborted" };
@@ -322,7 +448,7 @@ export async function requestAIMove(
   ];
   const structuredOutput = buildChessMoveResponseFormat();
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < MAX_AI_MOVE_RETRIES; attempt++) {
     if (signal?.aborted) {
       return { error: "AI request aborted" };
     }
@@ -388,12 +514,11 @@ export async function requestAIMove(
       const parsed = parseAIResponse(responseText);
       if (!parsed) {
         // Add assistant response and correction for retry
-        if (attempt < MAX_RETRIES - 1) {
+        if (attempt < MAX_AI_MOVE_RETRIES - 1) {
           messages.push({ role: "assistant", content: responseText });
           messages.push({
             role: "user",
-            content:
-              "Your response could not be parsed as valid JSON. Please respond with ONLY a JSON object in the format: {\"from\": \"e2\", \"to\": \"e4\"}",
+            content: buildAICorrectionPrompt("parse", legalMoves),
           });
           continue;
         }
@@ -410,16 +535,16 @@ export async function requestAIMove(
       // Validate the move is legal
       if (!isLegalMove(state, move)) {
         // Add assistant response and correction for retry
-        if (attempt < MAX_RETRIES - 1) {
+        if (attempt < MAX_AI_MOVE_RETRIES - 1) {
           messages.push({ role: "assistant", content: responseText });
           messages.push({
             role: "user",
-            content: `Your move ${parsed.from}${parsed.to}${parsed.promotion ? parsed.promotion[0] : ""} is not legal. Please choose from the legal moves listed.`,
+            content: buildAICorrectionPrompt("illegal", legalMoves, move),
           });
           continue;
         }
         return {
-          error: `AI returned illegal move: ${parsed.from}${parsed.to} after ${MAX_RETRIES} attempts`,
+          error: `AI returned illegal move: ${parsed.from}${parsed.to} after ${MAX_AI_MOVE_RETRIES} attempts`,
         };
       }
 
@@ -440,8 +565,13 @@ export async function requestAIMove(
         return { error: "AI request aborted" };
       }
 
-      if (attempt < MAX_RETRIES - 1) {
+      if (attempt < MAX_AI_MOVE_RETRIES - 1) {
         // Retry on transient errors
+        try {
+          await waitForAIMoveRetry(getAIMoveRetryDelayMs(attempt), signal);
+        } catch {
+          return { error: "AI request aborted" };
+        }
         continue;
       }
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
