@@ -4,6 +4,7 @@ import {
   canPlaceBattleshipShip,
   createBattleshipBoard,
   createBattleshipFleetFromPlacements,
+  getBattleshipPlacementPreview,
   createBattleshipStateWithBoards,
   createInitialBattleshipState,
   createRandomBattleshipBoard,
@@ -70,18 +71,71 @@ check(
   validateBattleshipFleet(randomBoard.ships).ok,
   randomBoard
 );
+const carrierDefinition = BATTLESHIP_FLEET.find((ship) => ship.id === "carrier")!;
+const cruiserDefinition = BATTLESHIP_FLEET.find((ship) => ship.id === "cruiser")!;
+const destroyerDefinition = BATTLESHIP_FLEET.find(
+  (ship) => ship.id === "destroyer"
+)!;
+const horizontalPreview = getBattleshipPlacementPreview(
+  [],
+  carrierDefinition,
+  { row: 0, column: 0 },
+  "horizontal"
+);
+check(
+  "placement preview includes every horizontal ship cell",
+  horizontalPreview.isValid &&
+    horizontalPreview.cells.map(targetToLabel).join(",") === "A1,A2,A3,A4,A5",
+  horizontalPreview
+);
+const verticalPreview = getBattleshipPlacementPreview(
+  [],
+  destroyerDefinition,
+  { row: 8, column: 9 },
+  "vertical"
+);
+check(
+  "placement preview includes every vertical ship cell",
+  verticalPreview.isValid &&
+    verticalPreview.cells.map(targetToLabel).join(",") === "I10,J10",
+  verticalPreview
+);
+const outOfBoundsPreview = getBattleshipPlacementPreview(
+  [],
+  cruiserDefinition,
+  { row: 0, column: 8 },
+  "horizontal"
+);
+check(
+  "placement preview keeps off-board cells but marks them invalid",
+  !outOfBoundsPreview.isValid &&
+    outOfBoundsPreview.outOfBounds &&
+    outOfBoundsPreview.cells.map((cell) => `${cell.row}:${cell.column}`).join(",") ===
+      "0:8,0:9,0:10",
+  outOfBoundsPreview
+);
 if (customFleet.ok) {
   const carrier = customFleet.ships.find((ship) => ship.id === "carrier");
-  const destroyer = BATTLESHIP_FLEET.find((ship) => ship.id === "destroyer");
   check(
     "partial placement rejects a ship overlapping existing cells",
-    Boolean(carrier && destroyer) &&
+    Boolean(carrier && destroyerDefinition) &&
       !canPlaceBattleshipShip(
         carrier ? [carrier] : [],
-        destroyer!,
+        destroyerDefinition,
         { row: 0, column: 0 },
         "vertical"
       )
+  );
+  const overlapPreview = getBattleshipPlacementPreview(
+    carrier ? [carrier] : [],
+    destroyerDefinition,
+    { row: 0, column: 1 },
+    "horizontal"
+  );
+  check(
+    "placement preview marks overlapping cells invalid",
+    !overlapPreview.isValid && overlapPreview.overlaps,
+    overlapPreview
   );
   const customState = createBattleshipStateWithBoards(
     createBattleshipBoard(customFleet.ships),

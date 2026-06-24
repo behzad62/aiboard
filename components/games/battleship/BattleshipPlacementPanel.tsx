@@ -1,14 +1,17 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { Check, RotateCcw, Ship, Shuffle } from "lucide-react";
 import {
   BATTLESHIP_BOARD_SIZE,
   BATTLESHIP_FLEET,
   canPlaceBattleshipShip,
   createBattleshipShip,
+  getBattleshipPlacementPreview,
   targetToLabel,
 } from "@/lib/games/battleship/engine";
 import type {
+  BattleshipCoordinate,
   BattleshipOrientation,
   BattleshipPlayer,
   BattleshipShip,
@@ -178,8 +181,41 @@ function PlacementBoard({
   onPlaceShip: (ship: BattleshipShip) => void;
   onRemoveShip: (shipId: string) => void;
 }) {
+  const [previewStart, setPreviewStart] =
+    useState<BattleshipCoordinate | null>(null);
+  const existingShips = useMemo(
+    () => ships.filter((ship) => ship.id !== selectedDefinition.id),
+    [selectedDefinition.id, ships]
+  );
+  const preview = previewStart
+    ? getBattleshipPlacementPreview(
+        existingShips,
+        selectedDefinition,
+        previewStart,
+        orientation
+      )
+    : null;
+  const previewCellKeys = useMemo(
+    () =>
+      new Set(
+        preview?.cells
+          .filter(
+            (cell) =>
+              cell.row >= 0 &&
+              cell.row < BATTLESHIP_BOARD_SIZE &&
+              cell.column >= 0 &&
+              cell.column < BATTLESHIP_BOARD_SIZE
+          )
+          .map(cellKey) ?? []
+      ),
+    [preview]
+  );
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900">
+    <div
+      className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900"
+      onMouseLeave={() => setPreviewStart(null)}
+    >
       <div className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-1">
         <div />
         <div
@@ -199,10 +235,14 @@ function PlacementBoard({
             row={row}
             player={player}
             ships={ships}
+            existingShips={existingShips}
             selectedDefinition={selectedDefinition}
             orientation={orientation}
+            previewCellKeys={previewCellKeys}
+            previewIsValid={preview?.isValid ?? false}
             onPlaceShip={onPlaceShip}
             onRemoveShip={onRemoveShip}
+            onPreviewStart={setPreviewStart}
           />
         ))}
       </div>
@@ -214,18 +254,26 @@ function PlacementRow({
   row,
   player,
   ships,
+  existingShips,
   selectedDefinition,
   orientation,
+  previewCellKeys,
+  previewIsValid,
   onPlaceShip,
   onRemoveShip,
+  onPreviewStart,
 }: {
   row: number;
   player: BattleshipPlayer;
   ships: BattleshipShip[];
+  existingShips: BattleshipShip[];
   selectedDefinition: (typeof BATTLESHIP_FLEET)[number];
   orientation: BattleshipOrientation;
+  previewCellKeys: Set<string>;
+  previewIsValid: boolean;
   onPlaceShip: (ship: BattleshipShip) => void;
   onRemoveShip: (shipId: string) => void;
+  onPreviewStart: (target: BattleshipCoordinate) => void;
 }) {
   const rowLabel = String.fromCharCode(65 + row);
 
@@ -242,13 +290,11 @@ function PlacementRow({
       >
         {Array.from({ length: BATTLESHIP_BOARD_SIZE }, (_, column) => {
           const target = { row, column };
+          const targetKey = cellKey(target);
           const occupyingShip = ships.find((ship) =>
             ship.cells.some(
               (cell) => cell.row === row && cell.column === column
             )
-          );
-          const existingShips = ships.filter(
-            (ship) => ship.id !== selectedDefinition.id
           );
           const canPlace = canPlaceBattleshipShip(
             existingShips,
@@ -256,11 +302,17 @@ function PlacementRow({
             target,
             orientation
           );
+          const inPreview = previewCellKeys.has(targetKey);
 
           return (
             <button
               key={`${row}:${column}`}
               type="button"
+              onMouseEnter={() => onPreviewStart(target)}
+              onMouseMove={() => onPreviewStart(target)}
+              onPointerEnter={() => onPreviewStart(target)}
+              onPointerMove={() => onPreviewStart(target)}
+              onFocus={() => onPreviewStart(target)}
               onClick={() => {
                 if (occupyingShip) {
                   onRemoveShip(occupyingShip.id);
@@ -279,19 +331,35 @@ function PlacementRow({
                     ? "bg-sky-500 text-white dark:bg-sky-500"
                     : "bg-orange-500 text-white dark:bg-orange-500"),
                 !occupyingShip &&
+                  inPreview &&
+                  previewIsValid &&
+                  "bg-emerald-200 ring-2 ring-emerald-500 dark:bg-emerald-900/70",
+                !occupyingShip &&
+                  inPreview &&
+                  !previewIsValid &&
+                  "bg-red-100 ring-2 ring-red-400 dark:bg-red-950/70",
+                !occupyingShip &&
                   canPlace &&
                   "hover:-translate-y-0.5 hover:bg-emerald-100 hover:ring-2 hover:ring-emerald-400 dark:hover:bg-emerald-950"
               )}
               data-testid={`battleship-placement-cell-${targetToLabel(target)}`}
               aria-label={targetToLabel(target)}
             >
-              {occupyingShip ? occupyingShip.name.charAt(0) : ""}
+              {occupyingShip
+                ? occupyingShip.name.charAt(0)
+                : inPreview
+                  ? selectedDefinition.name.charAt(0)
+                  : ""}
             </button>
           );
         })}
       </div>
     </>
   );
+}
+
+function cellKey(target: BattleshipCoordinate): string {
+  return `${target.row}:${target.column}`;
 }
 
 function orientationButtonClass(active: boolean): string {

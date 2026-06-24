@@ -192,6 +192,34 @@ export function canPlaceBattleshipShip(
   return validateShipAgainstFleet(candidate, existingShips);
 }
 
+export function getBattleshipPlacementPreview(
+  existingShips: BattleshipShip[],
+  definition: BattleshipShipDefinition,
+  start: BattleshipCoordinate,
+  orientation: BattleshipOrientation
+): {
+  cells: BattleshipCoordinate[];
+  isValid: boolean;
+  overlaps: boolean;
+  outOfBounds: boolean;
+} {
+  const candidate = createBattleshipShip(definition, start, orientation);
+  const occupied = new Set(
+    existingShips.flatMap((existing) =>
+      existing.cells.map((cell) => keyOf(cell))
+    )
+  );
+  const outOfBounds = candidate.cells.some((cell) => !isInBounds(cell));
+  const overlaps = candidate.cells.some((cell) => occupied.has(keyOf(cell)));
+
+  return {
+    cells: candidate.cells.map(cloneCoordinate),
+    isValid: isStraightContiguousShip(candidate) && !outOfBounds && !overlaps,
+    overlaps,
+    outOfBounds,
+  };
+}
+
 export function validateBattleshipFleet(
   ships: BattleshipShip[]
 ): BattleshipFleetValidationResult {
