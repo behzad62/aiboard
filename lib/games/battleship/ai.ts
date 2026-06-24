@@ -15,6 +15,8 @@ import {
   streamCustomChat,
 } from "@/lib/client/providers";
 import {
+  BATTLESHIP_FLEET,
+  createBattleshipFleetFromPlacements,
   getAvailableBattleshipTargets,
   isLegalBattleshipTarget,
   parseBattleshipTargetLabel,
@@ -24,7 +26,10 @@ import type {
   BattleshipAIResponse,
   BattleshipCoordinate,
   BattleshipGameState,
+  BattleshipOrientation,
   BattleshipPlayer,
+  BattleshipShip,
+  BattleshipShipPlacement,
 } from "./types";
 
 export const BATTLESHIP_AI_MAX_TOKENS = 4096;
@@ -67,6 +72,14 @@ export interface BattleshipAIDiagnosticAttempt {
 export type BattleshipAIMoveResult =
   | BattleshipAIMoveSuccess
   | { error: string; diagnostics?: BattleshipAIDiagnosticAttempt[] };
+
+export interface BattleshipAIPlacementSuccess {
+  ships: BattleshipShip[];
+}
+
+export type BattleshipAIPlacementResult =
+  | BattleshipAIPlacementSuccess
+  | { error: string; rawResponse?: string };
 
 function compactText(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
@@ -128,6 +141,64 @@ export function parseBattleshipAIResponse(
   } catch {
     return null;
   }
+}
+
+export function parseBattleshipPlacementResponse(
+  rawText: string
+): BattleshipShip[] | null {
+  const parsed = parseJsonObject(rawText);
+  if (!parsed || !Array.isArray(parsed.ships)) return null;
+
+  const placements: BattleshipShipPlacement[] = [];
+  for (const item of parsed.ships) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      return null;
+    }
+
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : null;
+    const start =
+      typeof record.start === "string"
+        ? record.start
+        : typeof record.coordinate === "string"
+          ? record.coordinate
+          : null;
+    const orientation = normalizePlacementOrientation(record.orientation);
+
+    if (!id || !start || !orientation) return null;
+    placements.push({ id, start, orientation });
+  }
+
+  const result = createBattleshipFleetFromPlacements(placements);
+  return result.ok ? result.ships : null;
+}
+
+function parseJsonObject(rawText: string): Record<string, unknown> | null {
+  if (!rawText || typeof rawText !== "string") return null;
+
+  let text = rawText.trim();
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (codeBlockMatch) text = codeBlockMatch[1].trim();
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizePlacementOrientation(
+  value: unknown
+): BattleshipOrientation | null {
+  if (value === "horizontal" || value === "h") return "horizontal";
+  if (value === "vertical" || value === "v") return "vertical";
+  return null;
 }
 
 function boardIntel(state: BattleshipGameState, player: BattleshipPlayer): string {
@@ -215,6 +286,64 @@ export function buildBattleshipMoveResponseFormat(): StructuredOutputFormat {
       additionalProperties: false,
     },
   };
+}
+
+export function buildBattleshipPlacementResponseFormat(): StructuredOutputFormat {
+  return {
+    name: "battleship_fleet_placement",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        ships: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                enum: BATTLESHIP_FLEET.map((ship) => ship.id),
+              },
+              start: {
+                type: "string",
+                description: "Top or left starting coordinate, A1 through J10.",
+              },
+              orientation: {
+                type: "string",
+                enum: ["horizontal", "vertical"],
+              },
+            },
+            required: ["id", "start", "orientation"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["ships"],
+      additionalProperties: false,
+    },
+  };
+}
+
+export function buildBattleshipPlacementPrompt(
+  player: BattleshipPlayer
+): { system: string; user: string } {
+  const fleet = BATTLESHIP_FLEET.map(
+    (ship) => `${ship.id}=${ship.size}`
+  ).join(", ");
+  const system = `You are placing a Battleship fleet on a 10x10 board.
+
+Respond with ONLY compact valid JSON like {"ships":[{"id":"carrier","start":"A1","orientation":"horizontal"}]}.
+
+Rules:
+- Place exactly these ships: ${fleet}.
+- Coordinates use A1 through J10.
+- Ships must be straight, horizontal or vertical.
+- Ships must not overlap and must stay inside the board.
+- Do not include text outside the JSON object.`;
+
+  const user = `Place the ${player === "blue" ? "Blue" : "Orange"} fleet. Choose a legal, varied setup.`;
+
+  return { system, user };
 }
 
 export function chooseFallbackBattleshipTarget(
@@ -458,4 +587,70 @@ export async function requestBattleshipAIMove(
   }
 
   return { error: "Failed to get valid target after maximum retries", diagnostics };
+}
+
+export async function requestBattleshipAIPlacement(params: {
+  player: BattleshipPlayer;
+  modelId: string;
+  reasoningEffort: ReasoningEffort;
+  apiKey: string;
+  baseURL?: string;
+  signal?: AbortSignal;
+}): Promise<BattleshipAIPlacementResult> {
+  const { providerId, model } = parseModelId(params.modelId);
+  const customModel = getCustomModelByFullId(params.modelId);
+  const { system, user } = buildBattleshipPlacementPrompt(params.player);
+  const messages: Array<{
+    role: "system" | "user" | "assistant";
+    content: string;
+  }> = [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+
+  for (let attempt = 0; attempt < MAX_AI_ATTEMPTS; attempt++) {
+    if (params.signal?.aborted) return { error: "AI placement aborted" };
+
+    try {
+      const responseText = await streamBattleshipResponseText({
+        providerId,
+        model,
+        customModel,
+        apiKey: params.apiKey,
+        baseURL: params.baseURL,
+        messages,
+        reasoningEffort: params.reasoningEffort,
+        structuredOutput: buildBattleshipPlacementResponseFormat(),
+        signal: params.signal,
+      });
+      const ships = parseBattleshipPlacementResponse(responseText);
+      if (ships) return { ships };
+
+      if (attempt < MAX_AI_ATTEMPTS - 1) {
+        messages.push({ role: "assistant", content: responseText });
+        messages.push({
+          role: "user",
+          content:
+            "Your fleet placement was invalid. Respond with ONLY JSON containing exactly five non-overlapping ships inside A1-J10.",
+        });
+        continue;
+      }
+
+      return {
+        error: "Failed to parse AI fleet placement after multiple attempts",
+        rawResponse: responseText,
+      };
+    } catch (error) {
+      if (params.signal?.aborted) return { error: "AI placement aborted" };
+      if (attempt === MAX_AI_ATTEMPTS - 1) {
+        return {
+          error: `AI placement request failed: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        };
+      }
+    }
+  }
+
+  return { error: "Failed to get valid fleet placement after maximum retries" };
 }

@@ -4,6 +4,7 @@ export type BattleshipPlayer = "blue" | "orange";
 export type BattleshipStatus = "playing" | "paused" | "win";
 export type BattleshipGameMode = "pvp" | "pvai" | "aivai";
 export type BattleshipShotResult = "miss" | "hit" | "sunk";
+export type BattleshipOrientation = "horizontal" | "vertical";
 
 export interface BattleshipCoordinate {
   row: number;
@@ -19,6 +20,16 @@ export interface BattleshipShipDefinition {
 export interface BattleshipShip extends BattleshipShipDefinition {
   cells: BattleshipCoordinate[];
 }
+
+export interface BattleshipShipPlacement {
+  id: string;
+  start: string;
+  orientation: BattleshipOrientation;
+}
+
+export type BattleshipFleetValidationResult =
+  | { ok: true; ships: BattleshipShip[] }
+  | { ok: false; error: string };
 
 export interface BattleshipShotRecord {
   target: BattleshipCoordinate;

@@ -1,11 +1,14 @@
 import type {
   BattleshipCoordinate,
+  BattleshipFleetValidationResult,
   BattleshipGameState,
+  BattleshipOrientation,
   BattleshipMoveRecord,
   BattleshipPlayer,
   BattleshipPlayerBoard,
   BattleshipShip,
   BattleshipShipDefinition,
+  BattleshipShipPlacement,
   BattleshipShotRecord,
   BattleshipShotResult,
 } from "./types";
@@ -94,10 +97,27 @@ function createDefaultBoard(): BattleshipPlayerBoard {
 }
 
 export function createInitialBattleshipState(): BattleshipGameState {
+  return createBattleshipStateWithBoards(createDefaultBoard(), createDefaultBoard());
+}
+
+export function createBattleshipStateWithBoards(
+  blue: BattleshipPlayerBoard,
+  orange: BattleshipPlayerBoard
+): BattleshipGameState {
+  const blueValidation = validateBattleshipFleet(blue.ships);
+  if (!blueValidation.ok) {
+    throw new Error(`Invalid blue fleet: ${blueValidation.error}`);
+  }
+
+  const orangeValidation = validateBattleshipFleet(orange.ships);
+  if (!orangeValidation.ok) {
+    throw new Error(`Invalid orange fleet: ${orangeValidation.error}`);
+  }
+
   return {
     boards: {
-      blue: createDefaultBoard(),
-      orange: createDefaultBoard(),
+      blue: cloneBoard(blue),
+      orange: cloneBoard(orange),
     },
     turn: "blue",
     status: "playing",
@@ -120,6 +140,175 @@ export function parseBattleshipTargetLabel(
   return isInBounds({ row, column }) ? { row, column } : null;
 }
 
+export function createBattleshipShip(
+  definition: BattleshipShipDefinition,
+  start: BattleshipCoordinate,
+  orientation: BattleshipOrientation
+): BattleshipShip {
+  return {
+    ...definition,
+    cells: Array.from({ length: definition.size }, (_, index) =>
+      orientation === "horizontal"
+        ? { row: start.row, column: start.column + index }
+        : { row: start.row + index, column: start.column }
+    ),
+  };
+}
+
+export function createBattleshipFleetFromPlacements(
+  placements: BattleshipShipPlacement[]
+): BattleshipFleetValidationResult {
+  const ships: BattleshipShip[] = [];
+
+  for (const placement of placements) {
+    const definition = BATTLESHIP_FLEET.find(
+      (ship) => ship.id === placement.id
+    );
+    if (!definition) {
+      return { ok: false, error: `Unknown ship: ${placement.id}` };
+    }
+
+    const start = parseBattleshipTargetLabel(placement.start);
+    if (!start) {
+      return {
+        ok: false,
+        error: `Invalid start coordinate for ${definition.name}.`,
+      };
+    }
+
+    ships.push(createBattleshipShip(definition, start, placement.orientation));
+  }
+
+  return validateBattleshipFleet(ships);
+}
+
+export function canPlaceBattleshipShip(
+  existingShips: BattleshipShip[],
+  definition: BattleshipShipDefinition,
+  start: BattleshipCoordinate,
+  orientation: BattleshipOrientation
+): boolean {
+  const candidate = createBattleshipShip(definition, start, orientation);
+  return validateShipAgainstFleet(candidate, existingShips);
+}
+
+export function validateBattleshipFleet(
+  ships: BattleshipShip[]
+): BattleshipFleetValidationResult {
+  if (ships.length !== BATTLESHIP_FLEET.length) {
+    return {
+      ok: false,
+      error: `Expected ${BATTLESHIP_FLEET.length} ships, received ${ships.length}.`,
+    };
+  }
+
+  const expectedDefinitions = new Map(
+    BATTLESHIP_FLEET.map((definition) => [definition.id, definition])
+  );
+  const seenShipIds = new Set<string>();
+  const occupied = new Set<string>();
+
+  for (const ship of ships) {
+    const definition = expectedDefinitions.get(ship.id);
+    if (!definition) {
+      return { ok: false, error: `Unknown ship: ${ship.id}` };
+    }
+    if (seenShipIds.has(ship.id)) {
+      return { ok: false, error: `Duplicate ship: ${ship.id}` };
+    }
+    seenShipIds.add(ship.id);
+
+    if (ship.name !== definition.name || ship.size !== definition.size) {
+      return { ok: false, error: `Ship metadata mismatch: ${ship.id}` };
+    }
+    if (ship.cells.length !== definition.size) {
+      return { ok: false, error: `${ship.name} has the wrong size.` };
+    }
+
+    const shipCells = new Set<string>();
+    for (const cell of ship.cells) {
+      if (!isInBounds(cell)) {
+        return { ok: false, error: `${ship.name} extends outside the board.` };
+      }
+      const key = keyOf(cell);
+      if (shipCells.has(key)) {
+        return { ok: false, error: `${ship.name} overlaps itself.` };
+      }
+      if (occupied.has(key)) {
+        return { ok: false, error: `${ship.name} overlaps another ship.` };
+      }
+      shipCells.add(key);
+      occupied.add(key);
+    }
+
+    if (!isStraightContiguousShip(ship)) {
+      return { ok: false, error: `${ship.name} is not straight and contiguous.` };
+    }
+  }
+
+  for (const definition of BATTLESHIP_FLEET) {
+    if (!seenShipIds.has(definition.id)) {
+      return { ok: false, error: `Missing ship: ${definition.id}` };
+    }
+  }
+
+  return { ok: true, ships: ships.map(cloneShip) };
+}
+
+export function createBattleshipBoard(
+  ships: BattleshipShip[]
+): BattleshipPlayerBoard {
+  const validation = validateBattleshipFleet(ships);
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+
+  return {
+    ships: validation.ships,
+    shotsReceived: [],
+  };
+}
+
+export function createRandomBattleshipBoard(
+  rng: () => number = Math.random
+): BattleshipPlayerBoard {
+  const ships: BattleshipShip[] = [];
+
+  for (const definition of BATTLESHIP_FLEET) {
+    const candidates: Array<{
+      start: BattleshipCoordinate;
+      orientation: BattleshipOrientation;
+    }> = [];
+
+    for (const orientation of ["horizontal", "vertical"] as const) {
+      for (let row = 0; row < BATTLESHIP_BOARD_SIZE; row++) {
+        for (let column = 0; column < BATTLESHIP_BOARD_SIZE; column++) {
+          const start = { row, column };
+          const candidate = createBattleshipShip(definition, start, orientation);
+          if (validateShipAgainstFleet(candidate, ships)) {
+            candidates.push({ start, orientation });
+          }
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      throw new Error(`Could not place ${definition.name}.`);
+    }
+
+    const index = Math.min(
+      candidates.length - 1,
+      Math.max(0, Math.floor(rng() * candidates.length))
+    );
+    const placement = candidates[index];
+    ships.push(
+      createBattleshipShip(definition, placement.start, placement.orientation)
+    );
+  }
+
+  return createBattleshipBoard(ships);
+}
+
 export function isInBounds(target: BattleshipCoordinate): boolean {
   return (
     Number.isInteger(target.row) &&
@@ -129,6 +318,39 @@ export function isInBounds(target: BattleshipCoordinate): boolean {
     target.column >= 0 &&
     target.column < BATTLESHIP_BOARD_SIZE
   );
+}
+
+function isStraightContiguousShip(ship: BattleshipShip): boolean {
+  if (ship.cells.length === 0) return false;
+
+  const sameRow = ship.cells.every((cell) => cell.row === ship.cells[0].row);
+  const sameColumn = ship.cells.every(
+    (cell) => cell.column === ship.cells[0].column
+  );
+  if (!sameRow && !sameColumn) return false;
+
+  const values = ship.cells
+    .map((cell) => (sameRow ? cell.column : cell.row))
+    .sort((a, b) => a - b);
+
+  return values.every((value, index) =>
+    index === 0 ? true : value === values[index - 1] + 1
+  );
+}
+
+function validateShipAgainstFleet(
+  ship: BattleshipShip,
+  existingShips: BattleshipShip[]
+): boolean {
+  if (!isStraightContiguousShip(ship)) return false;
+  if (!ship.cells.every(isInBounds)) return false;
+
+  const occupied = new Set(
+    existingShips.flatMap((existing) =>
+      existing.cells.map((cell) => keyOf(cell))
+    )
+  );
+  return ship.cells.every((cell) => !occupied.has(keyOf(cell)));
 }
 
 export function isLegalBattleshipTarget(

@@ -1,9 +1,12 @@
 import {
+  buildBattleshipPlacementResponseFormat,
   buildBattleshipMoveResponseFormat,
   buildBattleshipPrompt,
   chooseFallbackBattleshipTarget,
+  parseBattleshipPlacementResponse,
   parseBattleshipAIResponse,
 } from "../lib/games/battleship/ai";
+import { validateBattleshipFleet } from "../lib/games/battleship/engine";
 import {
   createInitialBattleshipState,
   fireBattleshipShot,
@@ -27,11 +30,38 @@ check("AI response parses A1 target labels", parsed?.target.row === 1 && parsed.
 check("AI response clamps confidence", parsed?.confidence === 1, parsed);
 check("invalid target is rejected", parseBattleshipAIResponse('{"target":"K1"}') === null);
 
+const placement = parseBattleshipPlacementResponse(`\`\`\`json
+{"ships":[
+  {"id":"carrier","start":"A1","orientation":"horizontal"},
+  {"id":"battleship","start":"C1","orientation":"vertical"},
+  {"id":"cruiser","start":"J1","orientation":"horizontal"},
+  {"id":"submarine","start":"F6","orientation":"vertical"},
+  {"id":"destroyer","start":"H3","orientation":"horizontal"}
+]}
+\`\`\``);
+check(
+  "AI placement response parses a valid fleet",
+  placement !== null && validateBattleshipFleet(placement).ok,
+  placement
+);
+check(
+  "AI placement response rejects overlapping ships",
+  parseBattleshipPlacementResponse(
+    '{"ships":[{"id":"carrier","start":"A1","orientation":"horizontal"},{"id":"battleship","start":"A1","orientation":"vertical"},{"id":"cruiser","start":"J1","orientation":"horizontal"},{"id":"submarine","start":"F6","orientation":"vertical"},{"id":"destroyer","start":"H3","orientation":"horizontal"}]}'
+  ) === null
+);
+
 const format = buildBattleshipMoveResponseFormat();
+const placementFormat = buildBattleshipPlacementResponseFormat();
 check(
   "Battleship structured output requires target",
   JSON.stringify(format.schema.required) === JSON.stringify(["target"]),
   format
+);
+check(
+  "Battleship placement structured output requires ships",
+  JSON.stringify(placementFormat.schema.required) === JSON.stringify(["ships"]),
+  placementFormat
 );
 check(
   "Battleship structured output keeps optional text compact",

@@ -1,11 +1,17 @@
 import {
   BATTLESHIP_BOARD_SIZE,
   BATTLESHIP_FLEET,
+  canPlaceBattleshipShip,
+  createBattleshipBoard,
+  createBattleshipFleetFromPlacements,
+  createBattleshipStateWithBoards,
   createInitialBattleshipState,
+  createRandomBattleshipBoard,
   fireBattleshipShot,
   getAvailableBattleshipTargets,
   isLegalBattleshipTarget,
   targetToLabel,
+  validateBattleshipFleet,
 } from "./engine";
 
 let failures = 0;
@@ -25,6 +31,69 @@ check(
   BATTLESHIP_FLEET.map((ship) => ship.size).join(",") === "5,4,3,3,2",
   BATTLESHIP_FLEET
 );
+const customFleet = createBattleshipFleetFromPlacements([
+  { id: "carrier", start: "A1", orientation: "horizontal" },
+  { id: "battleship", start: "C1", orientation: "vertical" },
+  { id: "cruiser", start: "J1", orientation: "horizontal" },
+  { id: "submarine", start: "F6", orientation: "vertical" },
+  { id: "destroyer", start: "H3", orientation: "horizontal" },
+]);
+check("custom fleet placement is accepted", customFleet.ok, customFleet);
+check(
+  "custom fleet creates every ship once",
+  customFleet.ok && customFleet.ships.length === BATTLESHIP_FLEET.length,
+  customFleet
+);
+check(
+  "overlapping custom fleet is rejected",
+  !createBattleshipFleetFromPlacements([
+    { id: "carrier", start: "A1", orientation: "horizontal" },
+    { id: "battleship", start: "A1", orientation: "vertical" },
+    { id: "cruiser", start: "J1", orientation: "horizontal" },
+    { id: "submarine", start: "F6", orientation: "vertical" },
+    { id: "destroyer", start: "H3", orientation: "horizontal" },
+  ]).ok
+);
+check(
+  "out of bounds custom fleet is rejected",
+  !createBattleshipFleetFromPlacements([
+    { id: "carrier", start: "A7", orientation: "horizontal" },
+    { id: "battleship", start: "C1", orientation: "vertical" },
+    { id: "cruiser", start: "J1", orientation: "horizontal" },
+    { id: "submarine", start: "F6", orientation: "vertical" },
+    { id: "destroyer", start: "H3", orientation: "horizontal" },
+  ]).ok
+);
+const randomBoard = createRandomBattleshipBoard(() => 0.42);
+check(
+  "auto placement creates a valid fleet",
+  validateBattleshipFleet(randomBoard.ships).ok,
+  randomBoard
+);
+if (customFleet.ok) {
+  const carrier = customFleet.ships.find((ship) => ship.id === "carrier");
+  const destroyer = BATTLESHIP_FLEET.find((ship) => ship.id === "destroyer");
+  check(
+    "partial placement rejects a ship overlapping existing cells",
+    Boolean(carrier && destroyer) &&
+      !canPlaceBattleshipShip(
+        carrier ? [carrier] : [],
+        destroyer!,
+        { row: 0, column: 0 },
+        "vertical"
+      )
+  );
+  const customState = createBattleshipStateWithBoards(
+    createBattleshipBoard(customFleet.ships),
+    randomBoard
+  );
+  check(
+    "game can start from custom boards",
+    customState.boards.blue.ships[0]?.cells[0]?.row === 0 &&
+      customState.boards.orange.ships.length === BATTLESHIP_FLEET.length,
+    customState
+  );
+}
 check("blue starts", initial.turn === "blue", initial.turn);
 check(
   "both players receive all ships",

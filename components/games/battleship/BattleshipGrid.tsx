@@ -143,7 +143,7 @@ function RowFragment({
               }}
               disabled={!legal}
               className={cn(
-                "relative aspect-square min-h-8 rounded-md border text-[10px] font-bold transition",
+                "relative aspect-square min-h-8 overflow-hidden rounded-md border text-[10px] font-bold transition",
                 "border-sky-900/20 bg-sky-100 shadow-inner dark:border-sky-400/20 dark:bg-sky-950",
                 revealShips &&
                   ship &&
@@ -159,9 +159,25 @@ function RowFragment({
               data-testid={`battleship-cell-${targetToLabel(target)}`}
               aria-label={targetToLabel(target)}
             >
-              {shot?.result === "miss" && "*"}
-              {shot?.result === "hit" && "X"}
-              {shot?.result === "sunk" && "X"}
+              {shot?.result === "miss" && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <span className="h-3 w-3 rounded-full border-2 border-sky-600 bg-white/80 shadow-[0_0_0_4px_rgba(14,165,233,0.18)] dark:border-sky-300 dark:bg-sky-100" />
+                </span>
+              )}
+              {shot?.result === "hit" && (
+                <span className="absolute inset-0 flex items-center justify-center bg-red-500/15">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[11px] font-black text-white shadow-[0_0_0_5px_rgba(220,38,38,0.18)]">
+                    X
+                  </span>
+                </span>
+              )}
+              {shot?.result === "sunk" && (
+                <span className="absolute inset-0 flex items-center justify-center bg-red-700">
+                  <span className="text-[9px] font-black uppercase tracking-wide text-white">
+                    Sunk
+                  </span>
+                </span>
+              )}
               {!shot && revealShips && ship && (
                 <Ship className="mx-auto h-3.5 w-3.5" aria-hidden="true" />
               )}

@@ -17,7 +17,9 @@ import type {
   GameAIModelOption,
 } from "@/components/games/GameAIConfigPanel";
 import { BattleshipGrid } from "@/components/games/battleship/BattleshipGrid";
+import { BattleshipHandoff } from "@/components/games/battleship/BattleshipHandoff";
 import { BattleshipMoveHistory } from "@/components/games/battleship/BattleshipMoveHistory";
+import { BattleshipPlacementPanel } from "@/components/games/battleship/BattleshipPlacementPanel";
 import { BattleshipPlayerCard } from "@/components/games/battleship/BattleshipPlayerCard";
 import { BattleshipSetup } from "@/components/games/battleship/BattleshipSetup";
 import {
@@ -34,15 +36,21 @@ import {
   getBattleshipModelApiKey,
   getBattleshipModelBaseURL,
   isRecoverableBattleshipAIError,
+  requestBattleshipAIPlacement,
   requestBattleshipAIMove,
   type BattleshipAIDiagnosticAttempt,
 } from "@/lib/games/battleship/ai";
 import {
+  BATTLESHIP_FLEET,
+  createBattleshipBoard,
   createInitialBattleshipState,
+  createBattleshipStateWithBoards,
+  createRandomBattleshipBoard,
   fireBattleshipShot,
   isLegalBattleshipTarget,
   setBattleshipPaused,
   targetToLabel,
+  validateBattleshipFleet,
 } from "@/lib/games/battleship/engine";
 import {
   exportBattleshipJson,
@@ -60,7 +68,9 @@ import type {
   BattleshipCoordinate,
   BattleshipGameMode,
   BattleshipGameState,
+  BattleshipOrientation,
   BattleshipPlayer,
+  BattleshipShip,
 } from "@/lib/games/battleship/types";
 import {
   copyGameExportToClipboard,
@@ -75,11 +85,17 @@ import type { GameAIInteraction } from "@/lib/games/core/types";
 import { cn } from "@/lib/utils";
 
 type AIConfig = GameAIConfigValue;
+type BattleshipHandoffMode = "placement" | "play";
 
 const EMPTY_AI_CONFIG: AIConfig = {
   modelId: "",
   reasoningEffort: "default",
 };
+const EMPTY_PLACEMENTS: Record<BattleshipPlayer, BattleshipShip[]> = {
+  blue: [],
+  orange: [],
+};
+const HANDOFF_SECONDS = 5;
 
 function normalizeAIConfig(
   config: AIConfig,
@@ -105,6 +121,14 @@ function createFallbackInteraction(
     utterance: "I had trouble choosing a shot, so a legal fallback was used.",
     diagnostics: error,
   };
+}
+
+function nextUnplacedShipId(ships: BattleshipShip[]): string {
+  return (
+    BATTLESHIP_FLEET.find(
+      (definition) => !ships.some((ship) => ship.id === definition.id)
+    )?.id ?? BATTLESHIP_FLEET[0].id
+  );
 }
 
 function formatAIDiagnostics(
@@ -208,6 +232,24 @@ export function BattleshipGameClient({
   const [restoreCreatedAt, setRestoreCreatedAt] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [placementActive, setPlacementActive] = useState(false);
+  const [placementPlayer, setPlacementPlayer] =
+    useState<BattleshipPlayer>("blue");
+  const [placementShips, setPlacementShips] =
+    useState<Record<BattleshipPlayer, BattleshipShip[]>>(EMPTY_PLACEMENTS);
+  const [selectedPlacementShipId, setSelectedPlacementShipId] = useState(
+    BATTLESHIP_FLEET[0].id
+  );
+  const [placementOrientation, setPlacementOrientation] =
+    useState<BattleshipOrientation>("horizontal");
+  const [placementError, setPlacementError] = useState<string | null>(null);
+  const [aiPlacing, setAiPlacing] = useState(false);
+  const [handoffPlayer, setHandoffPlayer] =
+    useState<BattleshipPlayer | null>(null);
+  const [handoffMode, setHandoffMode] = useState<BattleshipHandoffMode | null>(
+    null
+  );
+  const [handoffSeconds, setHandoffSeconds] = useState(HANDOFF_SECONDS);
 
   const activeAIAbortControllerRef = useRef<AbortController | null>(null);
   const aiRequestVersionRef = useRef(0);
@@ -215,19 +257,23 @@ export function BattleshipGameClient({
   const latestSnapshotRef = useRef<BattleshipSessionSnapshot | null>(null);
   const activeSessionCreatedAtRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handoffIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const persistenceTokenRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeGame = isBattleshipActiveStatus(gameState.status);
+  const handoffActive = handoffPlayer !== null;
   const currentPlayerIsAI = isAIControlledPlayer(
     gameMode,
     humanPlayer,
     gameState.turn
   );
   const viewPlayer =
-    activeGame || gameState.status === "paused"
-      ? gameState.turn
-      : gameState.winner ?? humanPlayer;
+    gameMode === "pvai"
+      ? humanPlayer
+      : activeGame || gameState.status === "paused"
+        ? gameState.turn
+        : gameState.winner ?? humanPlayer;
   const targetPlayer = opponentOf(viewPlayer);
   const currentAIConfig = gameState.turn === "blue" ? blueAI : orangeAI;
   const exportSnapshot = useMemo(
@@ -282,6 +328,52 @@ export function BattleshipGameClient({
     persistenceTokenRef.current += 1;
     return persistenceTokenRef.current;
   }, []);
+
+  const clearHandoffTimer = useCallback(() => {
+    if (handoffIntervalRef.current) {
+      clearInterval(handoffIntervalRef.current);
+      handoffIntervalRef.current = null;
+    }
+  }, []);
+
+  const finishHandoff = useCallback(
+    (
+      nextPlayer: BattleshipPlayer | null = handoffPlayer,
+      mode: BattleshipHandoffMode | null = handoffMode
+    ) => {
+      clearHandoffTimer();
+      setHandoffPlayer(null);
+      setHandoffMode(null);
+      setHandoffSeconds(HANDOFF_SECONDS);
+
+      if (mode === "placement" && nextPlayer) {
+        setPlacementPlayer(nextPlayer);
+        setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
+        setPlacementError(null);
+      }
+    },
+    [clearHandoffTimer, handoffMode, handoffPlayer]
+  );
+
+  const startHandoff = useCallback(
+    (nextPlayer: BattleshipPlayer, mode: BattleshipHandoffMode) => {
+      clearHandoffTimer();
+      setHandoffPlayer(nextPlayer);
+      setHandoffMode(mode);
+      setHandoffSeconds(HANDOFF_SECONDS);
+
+      let remaining = HANDOFF_SECONDS;
+      handoffIntervalRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          finishHandoff(nextPlayer, mode);
+          return;
+        }
+        setHandoffSeconds(remaining);
+      }, 1000);
+    },
+    [clearHandoffTimer, finishHandoff]
+  );
 
   const saveLatestSession = useCallback(async (token: number) => {
     if (token !== persistenceTokenRef.current) return;
@@ -407,7 +499,7 @@ export function BattleshipGameClient({
   }, [deleteActiveSession, gameStarted, gameState.status]);
 
   useEffect(() => {
-    if (!gameStarted || isPaused || !activeGame) return;
+    if (!gameStarted || handoffActive || isPaused || !activeGame) return;
     if (!currentPlayerIsAI || aiRequestActiveRef.current) return;
 
     if (!currentAIConfig.modelId) {
@@ -547,20 +639,23 @@ export function BattleshipGameClient({
     gameMode,
     gameStarted,
     gameState,
+    handoffActive,
     isPaused,
   ]);
 
   useEffect(() => {
     return () => {
+      clearHandoffTimer();
       activeAIAbortControllerRef.current?.abort();
       void flushLatestActiveSession();
     };
-  }, [flushLatestActiveSession]);
+  }, [clearHandoffTimer, flushLatestActiveSession]);
 
   const applySnapshot = useCallback(
     (snapshot: BattleshipSessionSnapshot, createdAt: string | null = null) => {
       invalidateAIRequests();
       invalidatePersistence();
+      clearHandoffTimer();
       setGameMode(snapshot.gameMode);
       setHumanPlayer(snapshot.humanPlayer);
       setBlueAI(snapshot.blueAI);
@@ -580,12 +675,109 @@ export function BattleshipGameClient({
       activeSessionCreatedAtRef.current = createdAt;
       setGameStarted(true);
     },
-    [invalidateAIRequests, invalidatePersistence]
+    [clearHandoffTimer, invalidateAIRequests, invalidatePersistence]
   );
 
-  const handleStartGame = useCallback(() => {
+  const requestAIPlacement = useCallback(
+    async (player: BattleshipPlayer): Promise<BattleshipShip[]> => {
+      const config = player === "blue" ? blueAI : orangeAI;
+      if (config.modelId) {
+        const abortController = new AbortController();
+        activeAIAbortControllerRef.current = abortController;
+        try {
+          const result = await requestBattleshipAIPlacement({
+            player,
+            modelId: config.modelId,
+            reasoningEffort: config.reasoningEffort,
+            apiKey: getBattleshipModelApiKey(config.modelId) ?? "",
+            baseURL: getBattleshipModelBaseURL(config.modelId),
+            signal: abortController.signal,
+          });
+
+          if ("ships" in result) {
+            return result.ships;
+          }
+
+          setAiWarning(
+            `${playerLabel(player)} AI could not place a valid fleet. A legal auto-placement was used.`
+          );
+        } catch (error) {
+          if (abortController.signal.aborted) throw error;
+          const message =
+            error instanceof Error ? error.message : "AI placement request failed.";
+          setAiWarning(
+            `${playerLabel(player)} AI placement failed (${message}). A legal auto-placement was used.`
+          );
+        } finally {
+          if (activeAIAbortControllerRef.current === abortController) {
+            activeAIAbortControllerRef.current = null;
+          }
+        }
+      }
+
+      return createRandomBattleshipBoard().ships;
+    },
+    [blueAI, orangeAI]
+  );
+
+  const startPlayingFromShips = useCallback(
+    (
+      shipsByPlayer: Record<BattleshipPlayer, BattleshipShip[]>,
+      useInitialHandoff: boolean
+    ) => {
+      const blueValidation = validateBattleshipFleet(shipsByPlayer.blue);
+      const orangeValidation = validateBattleshipFleet(shipsByPlayer.orange);
+      if (!blueValidation.ok || !orangeValidation.ok) {
+        setPlacementError(
+          !blueValidation.ok
+            ? blueValidation.error
+            : !orangeValidation.ok
+              ? orangeValidation.error
+              : "Invalid fleet placement."
+        );
+        return;
+      }
+
+      invalidateAIRequests();
+      invalidatePersistence();
+      setGameState(
+        createBattleshipStateWithBoards(
+          createBattleshipBoard(blueValidation.ships),
+          createBattleshipBoard(orangeValidation.ships)
+        )
+      );
+      setIsPaused(false);
+      setAiThinking(false);
+      setAiError(null);
+      setAiDiagnostics([]);
+      setAiDiagnosticsCopied(false);
+      setLastAiInteraction(null);
+      setImportMessage(null);
+      setExportMessage(null);
+      setRestoreSnapshot(null);
+      setRestoreCreatedAt(null);
+      setPlacementActive(false);
+      setAiPlacing(false);
+      setPlacementError(null);
+      activeSessionCreatedAtRef.current = null;
+      setGameStarted(true);
+
+      if (useInitialHandoff) {
+        startHandoff("blue", "play");
+      }
+    },
+    [invalidateAIRequests, invalidatePersistence, startHandoff]
+  );
+
+  const handleBeginPlacement = useCallback(async () => {
     invalidateAIRequests();
     invalidatePersistence();
+    clearHandoffTimer();
+    const emptyPlacements: Record<BattleshipPlayer, BattleshipShip[]> = {
+      blue: [],
+      orange: [],
+    };
+
     setGameState(createInitialBattleshipState());
     setIsPaused(false);
     setAiThinking(false);
@@ -598,19 +790,160 @@ export function BattleshipGameClient({
     setExportMessage(null);
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
+    setPlacementShips(emptyPlacements);
+    setPlacementError(null);
+    setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
+    setPlacementOrientation("horizontal");
+    setHandoffPlayer(null);
+    setHandoffMode(null);
+    setHandoffSeconds(HANDOFF_SECONDS);
     activeSessionCreatedAtRef.current = null;
-    setGameStarted(true);
-  }, [invalidateAIRequests, invalidatePersistence]);
+    setGameStarted(false);
+
+    if (gameMode === "aivai") {
+      setAiPlacing(true);
+      try {
+        const [blueShips, orangeShips] = await Promise.all([
+          requestAIPlacement("blue"),
+          requestAIPlacement("orange"),
+        ]);
+        startPlayingFromShips(
+          { blue: blueShips, orange: orangeShips },
+          false
+        );
+      } catch (error) {
+        setAiPlacing(false);
+        setAiError(
+          error instanceof Error ? error.message : "AI placement failed."
+        );
+      }
+      return;
+    }
+
+    const nextPlacementPlayer = gameMode === "pvp" ? "blue" : humanPlayer;
+    setPlacementPlayer(nextPlacementPlayer);
+    setPlacementActive(true);
+  }, [
+    gameMode,
+    humanPlayer,
+    clearHandoffTimer,
+    invalidateAIRequests,
+    invalidatePersistence,
+    requestAIPlacement,
+    startPlayingFromShips,
+  ]);
 
   const handleStartNew = useCallback(async () => {
     await deleteActiveSession();
-    handleStartGame();
-  }, [deleteActiveSession, handleStartGame]);
+    await handleBeginPlacement();
+  }, [deleteActiveSession, handleBeginPlacement]);
 
   const handleResumeSavedGame = useCallback(() => {
     if (!restoreSnapshot) return;
     applySnapshot(restoreSnapshot, restoreCreatedAt);
   }, [applySnapshot, restoreCreatedAt, restoreSnapshot]);
+
+  const handlePlaceShip = useCallback(
+    (ship: BattleshipShip) => {
+      setPlacementShips((current) => {
+        const nextShips = [
+          ...current[placementPlayer].filter((item) => item.id !== ship.id),
+          ship,
+        ];
+        setSelectedPlacementShipId(nextUnplacedShipId(nextShips));
+        setPlacementError(null);
+        return {
+          ...current,
+          [placementPlayer]: nextShips,
+        };
+      });
+    },
+    [placementPlayer]
+  );
+
+  const handleRemovePlacedShip = useCallback(
+    (shipId: string) => {
+      setPlacementShips((current) => ({
+        ...current,
+        [placementPlayer]: current[placementPlayer].filter(
+          (ship) => ship.id !== shipId
+        ),
+      }));
+      setSelectedPlacementShipId(shipId);
+      setPlacementError(null);
+    },
+    [placementPlayer]
+  );
+
+  const handleAutoPlaceFleet = useCallback(() => {
+    const board = createRandomBattleshipBoard();
+    setPlacementShips((current) => ({
+      ...current,
+      [placementPlayer]: board.ships,
+    }));
+    setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
+    setPlacementError(null);
+  }, [placementPlayer]);
+
+  const handleClearFleet = useCallback(() => {
+    setPlacementShips((current) => ({
+      ...current,
+      [placementPlayer]: [],
+    }));
+    setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
+    setPlacementError(null);
+  }, [placementPlayer]);
+
+  const handleConfirmPlacement = useCallback(async () => {
+    const currentShips = placementShips[placementPlayer];
+    const validation = validateBattleshipFleet(currentShips);
+    if (!validation.ok) {
+      setPlacementError(validation.error);
+      return;
+    }
+
+    const nextPlacements = {
+      ...placementShips,
+      [placementPlayer]: validation.ships,
+    };
+    setPlacementShips(nextPlacements);
+
+    if (gameMode === "pvp" && placementPlayer === "blue") {
+      startHandoff("orange", "placement");
+      return;
+    }
+
+    if (gameMode === "pvp") {
+      startPlayingFromShips(nextPlacements, true);
+      return;
+    }
+
+    const aiPlayer = opponentOf(humanPlayer);
+    setAiPlacing(true);
+    try {
+      const aiShips = await requestAIPlacement(aiPlayer);
+      startPlayingFromShips(
+        {
+          ...nextPlacements,
+          [aiPlayer]: aiShips,
+        },
+        false
+      );
+    } catch (error) {
+      setAiPlacing(false);
+      setPlacementError(
+        error instanceof Error ? error.message : "AI placement failed."
+      );
+    }
+  }, [
+    gameMode,
+    humanPlayer,
+    placementPlayer,
+    placementShips,
+    requestAIPlacement,
+    startHandoff,
+    startPlayingFromShips,
+  ]);
 
   const handleTargetClick = useCallback(
     (target: BattleshipCoordinate) => {
@@ -626,11 +959,11 @@ export function BattleshipGameClient({
         return;
       }
 
-      setGameState((prev) =>
-        isLegalBattleshipTarget(prev, prev.turn, target)
-          ? fireBattleshipShot(prev, target, Date.now())
-          : prev
-      );
+      const nextState = fireBattleshipShot(gameState, target, Date.now());
+      setGameState(nextState);
+      if (gameMode === "pvp" && nextState.status === "playing") {
+        startHandoff(nextState.turn, "play");
+      }
       setAiWarning(null);
       setAiError(null);
       setAiDiagnostics([]);
@@ -642,7 +975,9 @@ export function BattleshipGameClient({
       currentPlayerIsAI,
       gameStarted,
       gameState,
+      gameMode,
       isPaused,
+      startHandoff,
       viewPlayer,
     ]
   );
@@ -660,8 +995,13 @@ export function BattleshipGameClient({
 
   const handleReset = useCallback(async () => {
     await deleteActiveSession();
-    handleStartGame();
-  }, [deleteActiveSession, handleStartGame]);
+    clearHandoffTimer();
+    setGameStarted(false);
+    setPlacementActive(false);
+    setAiPlacing(false);
+    setHandoffPlayer(null);
+    setHandoffMode(null);
+  }, [clearHandoffTimer, deleteActiveSession]);
 
   const handleBackToGames = useCallback(() => {
     if (!onBackToGames) return;
@@ -741,6 +1081,66 @@ export function BattleshipGameClient({
           ? `${playerLabel(gameState.turn)} AI scanning`
           : `${playerLabel(gameState.turn)} to fire`;
 
+  if (!gameStarted && aiPlacing) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 via-slate-50 to-orange-50 text-slate-950 dark:from-slate-950 dark:via-slate-900 dark:to-sky-950/40 dark:text-white">
+        <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-4 py-10 sm:px-6">
+          <section className="rounded-2xl border border-slate-200 bg-white/90 p-8 text-center shadow-xl dark:border-slate-800 dark:bg-slate-950/90">
+            <div
+              className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-sky-200 border-t-sky-600"
+              aria-hidden="true"
+            />
+            <h1 className="mt-6 text-2xl font-bold">AI fleet placement</h1>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              Models are choosing legal ship positions.
+            </p>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!gameStarted && placementActive) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 via-slate-50 to-orange-50 text-slate-950 dark:from-slate-950 dark:via-slate-900 dark:to-sky-950/40 dark:text-white">
+        <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col justify-center px-4 py-10 sm:px-6">
+          {onBackToGames && (
+            <button
+              type="button"
+              onClick={handleBackToGames}
+              className="mb-5 inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              Back to games
+            </button>
+          )}
+          {handoffActive && handoffPlayer ? (
+            <BattleshipHandoff
+              nextPlayer={handoffPlayer}
+              seconds={handoffSeconds}
+              onSkip={finishHandoff}
+            />
+          ) : (
+            <BattleshipPlacementPanel
+              player={placementPlayer}
+              ships={placementShips[placementPlayer]}
+              selectedShipId={selectedPlacementShipId}
+              orientation={placementOrientation}
+              error={placementError}
+              onSelectShip={setSelectedPlacementShipId}
+              onOrientationChange={setPlacementOrientation}
+              onPlaceShip={handlePlaceShip}
+              onRemoveShip={handleRemovePlacedShip}
+              onAutoPlace={handleAutoPlaceFleet}
+              onClear={handleClearFleet}
+              onConfirm={() => void handleConfirmPlacement()}
+            />
+          )}
+        </main>
+      </div>
+    );
+  }
+
   if (!gameStarted) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-sky-50 via-slate-50 to-orange-50 text-slate-950 dark:from-slate-950 dark:via-slate-900 dark:to-sky-950/40 dark:text-white">
@@ -767,7 +1167,7 @@ export function BattleshipGameClient({
             onHumanPlayerChange={setHumanPlayer}
             onBlueAIChange={setBlueAI}
             onOrangeAIChange={setOrangeAI}
-            onStart={handleStartGame}
+            onStart={() => void handleBeginPlacement()}
             onStartNew={handleStartNew}
             onResume={handleResumeSavedGame}
             onImportClick={() => fileInputRef.current?.click()}
@@ -809,58 +1209,94 @@ export function BattleshipGameClient({
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
-          <section className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <BattleshipPlayerCard
-                player="blue"
-                active={activeGame && gameState.turn === "blue"}
-                isAI={blueIsAI}
-                modelName={blueIsAI ? modelLabel(availableModels, blueAI.modelId) : undefined}
-                reasoning={blueIsAI ? compactReasoningLabel(blueAI) : undefined}
-                board={gameState.boards.blue}
-              />
-              <BattleshipPlayerCard
-                player="orange"
-                active={activeGame && gameState.turn === "orange"}
-                isAI={orangeIsAI}
-                modelName={
-                  orangeIsAI
-                    ? modelLabel(availableModels, orangeAI.modelId)
-                    : undefined
-                }
-                reasoning={orangeIsAI ? compactReasoningLabel(orangeAI) : undefined}
-                board={gameState.boards.orange}
-              />
-            </div>
+          {handoffActive && handoffPlayer ? (
+            <BattleshipHandoff
+              nextPlayer={handoffPlayer}
+              seconds={handoffSeconds}
+              onSkip={finishHandoff}
+            />
+          ) : (
+            <section className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <BattleshipPlayerCard
+                  player="blue"
+                  active={activeGame && gameState.turn === "blue"}
+                  isAI={blueIsAI}
+                  modelName={
+                    blueIsAI
+                      ? modelLabel(availableModels, blueAI.modelId)
+                      : undefined
+                  }
+                  reasoning={blueIsAI ? compactReasoningLabel(blueAI) : undefined}
+                  board={gameState.boards.blue}
+                />
+                <BattleshipPlayerCard
+                  player="orange"
+                  active={activeGame && gameState.turn === "orange"}
+                  isAI={orangeIsAI}
+                  modelName={
+                    orangeIsAI
+                      ? modelLabel(availableModels, orangeAI.modelId)
+                      : undefined
+                  }
+                  reasoning={
+                    orangeIsAI ? compactReasoningLabel(orangeAI) : undefined
+                  }
+                  board={gameState.boards.orange}
+                />
+              </div>
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              <BattleshipGrid
-                title={`${playerLabel(viewPlayer)} fleet`}
-                subtitle="Own waters"
-                player={viewPlayer}
-                board={gameState.boards[viewPlayer]}
-                revealShips
-                interactive={false}
-              />
-              <BattleshipGrid
-                title={`${playerLabel(targetPlayer)} waters`}
-                subtitle="Target grid"
-                player={targetPlayer}
-                board={gameState.boards[targetPlayer]}
-                revealShips={gameState.status === "win"}
-                interactive={
-                  gameStarted &&
-                  !isPaused &&
-                  !aiThinking &&
-                  activeGame &&
-                  !currentPlayerIsAI
-                }
-                attacker={gameState.turn}
-                state={gameState}
-                onCellClick={handleTargetClick}
-              />
-            </div>
-          </section>
+              {gameMode === "aivai" ? (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <BattleshipGrid
+                    title="Blue fleet"
+                    subtitle="Blue waters"
+                    player="blue"
+                    board={gameState.boards.blue}
+                    revealShips
+                    interactive={false}
+                  />
+                  <BattleshipGrid
+                    title="Orange fleet"
+                    subtitle="Orange waters"
+                    player="orange"
+                    board={gameState.boards.orange}
+                    revealShips
+                    interactive={false}
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <BattleshipGrid
+                    title={`${playerLabel(viewPlayer)} fleet`}
+                    subtitle="Own waters"
+                    player={viewPlayer}
+                    board={gameState.boards[viewPlayer]}
+                    revealShips
+                    interactive={false}
+                  />
+                  <BattleshipGrid
+                    title={`${playerLabel(targetPlayer)} waters`}
+                    subtitle="Target grid"
+                    player={targetPlayer}
+                    board={gameState.boards[targetPlayer]}
+                    revealShips={gameState.status === "win"}
+                    interactive={
+                      gameStarted &&
+                      !isPaused &&
+                      !aiThinking &&
+                      activeGame &&
+                      !currentPlayerIsAI &&
+                      !handoffActive
+                    }
+                    attacker={gameState.turn}
+                    state={gameState}
+                    onCellClick={handleTargetClick}
+                  />
+                </div>
+              )}
+            </section>
+          )}
 
           <aside className="space-y-4">
             <section
