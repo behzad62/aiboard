@@ -13,8 +13,14 @@ import {
   saveBenchmarkCase,
   saveBenchmarkFailure,
   saveBenchmarkRun,
+  __exportBenchmarkStoreForTests,
+  __replaceBenchmarkStoreForTests,
 } from "../lib/benchmark/store";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
+import {
+  createGameModelCallTrace,
+  recordBenchmarkModelCallTrace,
+} from "../lib/benchmark/model-call-traces";
 import type { BenchmarkCase, BenchmarkRun } from "../lib/benchmark/types";
 
 let failures = 0;
@@ -22,6 +28,20 @@ let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+}
+
+async function expectReject(
+  name: string,
+  action: () => Promise<void>,
+  messagePattern: RegExp
+): Promise<void> {
+  try {
+    await action();
+    check(name, false, "resolved");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    check(name, messagePattern.test(message), message);
+  }
 }
 
 const match: GenericGameMatchRecord = {
@@ -184,16 +204,222 @@ await saveBenchmarkFailure({
   message: "Bad JSON",
   createdAt: "2026-06-24T10:00:00.000Z",
 });
+const trace = createGameModelCallTrace({
+  modelId: "google:gemini-test",
+  providerId: "google",
+  participantId: "yellow",
+  reasoningEffort: "medium",
+  schemaMode: "structured",
+  promptText: "connect four prompt",
+  startedAt: "2026-06-24T10:00:00.000Z",
+  completedAt: "2026-06-24T10:00:02.000Z",
+  latencyMs: 2000,
+  rawResponse: `${"x".repeat(9000)}done`,
+  parsedResponseJson: JSON.stringify({ column: 4 }),
+  diagnostics: [
+    {
+      attempt: 1,
+      type: "parse",
+      message: "Bad JSON",
+      rawResponse: "{",
+    },
+    {
+      attempt: 2,
+      type: "request",
+      message: "Provider unavailable",
+    },
+  ],
+  finalStatus: "parsed",
+});
+const terminalFailureTrace = createGameModelCallTrace({
+  modelId: "google:gemini-test",
+  providerId: "google",
+  startedAt: "2026-06-24T10:00:00.000Z",
+  diagnostics: [
+    { attempt: 1, type: "request", message: "First provider failure" },
+    { attempt: 2, type: "request", message: "Second provider failure" },
+    { attempt: 3, type: "request", message: "Final provider failure" },
+  ],
+  finalStatus: "provider_error",
+  error: "Final provider failure",
+});
+await recordBenchmarkModelCallTrace(trace);
+__replaceBenchmarkStoreForTests({
+  ...__exportBenchmarkStoreForTests(),
+  gameMatchRecords: [match],
+  buildCheckpoints: [checkpoint],
+  modelStats: [buildStat],
+});
 
 const bundle = exportBenchmarkReportBundle();
 const markdown = formatBenchmarkMarkdownReport(bundle, dashboard);
 check("bundle exports benchmark case", bundle.cases.length === 1, bundle);
+check("trace records prompt hash", Boolean(bundle.traces[0]?.promptHash), bundle.traces);
+check(
+  "trace maps diagnostic retry statuses",
+  bundle.traces[0]?.retryHistory[0]?.status === "parse_error" &&
+    bundle.traces[0]?.retryHistory[1]?.status === "provider_error" &&
+    bundle.traces[0]?.retryHistory[2]?.status === "parsed",
+  bundle.traces[0]?.retryHistory
+);
+check(
+  "trace caps raw response size",
+  (bundle.traces[0]?.rawResponse?.length ?? 0) < 9000,
+  bundle.traces[0]?.rawResponse?.length
+);
+check(
+  "terminal trace does not add phantom retry attempts",
+  terminalFailureTrace.retryHistory.length === 3 &&
+    terminalFailureTrace.retryHistory.at(-1)?.message === "Final provider failure",
+  terminalFailureTrace.retryHistory
+);
+check(
+  "bundle exports game match source evidence",
+  bundle.sourceEvidence?.gameMatches.length === 1,
+  bundle.sourceEvidence
+);
+check(
+  "bundle exports build checkpoint source evidence",
+  bundle.sourceEvidence?.buildCheckpoints.length === 1,
+  bundle.sourceEvidence
+);
+check(
+  "bundle exports build model stats source evidence",
+  bundle.sourceEvidence?.buildStats.length === 1,
+  bundle.sourceEvidence
+);
 check("markdown report includes scorecards", markdown.includes("Model Scorecards"), markdown);
+check(
+  "markdown report includes source evidence counts",
+  markdown.includes("Game match records: 1") &&
+    markdown.includes("Build checkpoints: 1") &&
+    markdown.includes("Build model stats: 1"),
+  markdown
+);
 
 __resetBenchmarkStoreForTests();
 await importBenchmarkReportBundle(bundle);
 const importedCases = await listBenchmarkCases();
+const importedStore = __exportBenchmarkStoreForTests();
 check("bundle import restores case", importedCases.length === 1, importedCases);
+check(
+  "bundle import restores game match source evidence",
+  importedStore.gameMatchRecords.length === 1,
+  importedStore.gameMatchRecords
+);
+check(
+  "bundle import restores build checkpoint source evidence",
+  importedStore.buildCheckpoints.length === 1,
+  importedStore.buildCheckpoints
+);
+check(
+  "bundle import restores build model stats source evidence",
+  importedStore.modelStats.some((stat) => stat.modelId === buildStat.modelId),
+  importedStore.modelStats
+);
+
+await expectReject(
+  "bundle import rejects malformed records",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      cases: [{ ...benchmarkCase, id: 42 } as unknown as BenchmarkCase],
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed game match source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        gameMatches: [{ id: "bad-match" } as never],
+      },
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed build checkpoint source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        buildCheckpoints: [{ discussionId: "bad-checkpoint" } as never],
+      },
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed build task source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        buildCheckpoints: [
+          {
+            ...checkpoint,
+            tasks: [
+              {
+                id: "task-1",
+                title: "Task",
+                instructions: "Do work",
+                contextFiles: [42],
+                status: "planned",
+              },
+            ],
+          } as never,
+        ],
+      },
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed usage model source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        buildCheckpoints: [
+          {
+            ...checkpoint,
+            usageWindow: {
+              ...checkpoint.usageWindow,
+              models: [{ modelId: "bad-model" }],
+            },
+          } as never,
+        ],
+      },
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed model stat source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        buildStats: [{ modelId: "bad-stat" } as never],
+      },
+    }),
+  /invalid/i
+);
+await expectReject(
+  "bundle import rejects malformed model-stat judges source evidence",
+  () =>
+    importBenchmarkReportBundle({
+      ...bundle,
+      sourceEvidence: {
+        ...bundle.sourceEvidence!,
+        buildStats: [{ ...buildStat, judges: { "bad-judge": "many" } } as never],
+      },
+    }),
+  /invalid/i
+);
 
 if (failures === 0) {
   console.log("PASS");

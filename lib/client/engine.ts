@@ -52,10 +52,18 @@ import { buildAttachmentPromptSection } from "@/lib/attachments/prompt-text";
 import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { estimateModelCallUsage } from "./token-usage";
+import {
+  createGameModelCallTrace,
+  type GameAIDiagnosticLike,
+  recordBenchmarkModelCallTrace,
+} from "@/lib/benchmark/model-call-traces";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
 type EventCallback = (event: OrchestratorEvent) => void;
+type StructuredTraceValidation =
+  | { ok: true; parsedResponseJson?: string }
+  | { ok: false; message: string };
 
 const runningDiscussions = new Set<string>();
 const abortControllers = new Map<string, AbortController>();
@@ -99,7 +107,8 @@ async function withTransientRetry<T>(
   attempt: () => Promise<T>,
   hasOutput: () => boolean,
   label: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onRetry?: (retry: { attempt: number; delayMs: number; message: string }) => void
 ): Promise<T> {
   for (let tryNo = 0; ; tryNo++) {
     try {
@@ -117,6 +126,11 @@ async function withTransientRetry<T>(
         `[engine] transient error from ${label} — retrying in ${RETRY_DELAYS_MS[tryNo] / 1000}s (${tryNo + 1}/${RETRY_DELAYS_MS.length}):`,
         err instanceof Error ? err.message : err
       );
+      onRetry?.({
+        attempt: tryNo + 1,
+        delayMs: RETRY_DELAYS_MS[tryNo],
+        message: err instanceof Error ? err.message : String(err),
+      });
       await new Promise((resolve) =>
         setTimeout(resolve, RETRY_DELAYS_MS[tryNo])
       );
@@ -137,7 +151,12 @@ export async function collectStream(
   onToken?: (token: string) => void,
   signal?: AbortSignal,
   stopWhen?: (content: string) => boolean,
-  structuredOutput?: StructuredOutputFormat
+  structuredOutput?: StructuredOutputFormat,
+  onProviderRetry?: (retry: {
+    attempt: number;
+    delayMs: number;
+    message: string;
+  }) => void
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -181,7 +200,8 @@ export async function collectStream(
       },
       () => customContent.length > 0,
       modelId,
-      signal
+      signal,
+      onProviderRetry
     );
   }
 
@@ -230,7 +250,8 @@ export async function collectStream(
     },
     () => content.length > 0,
     modelId,
-    signal
+    signal,
+    onProviderRetry
   );
 }
 
@@ -354,6 +375,115 @@ export async function runDiscussion(
         maxTokens: usage.maxTokens,
         estimated: usage.estimated,
       });
+    };
+
+    const runTracedModelCall = async (input: {
+      modelId: string;
+      providerId: string;
+      rawModel: string;
+      label: string;
+      messages: ChatMessage[];
+      maxTokens: number;
+      temperature: number;
+      reasoningEffort: ReasoningEffort;
+      attachments: AttachmentPayload[];
+      onToken?: (token: string) => void;
+      signal?: AbortSignal;
+      stopWhen?: (content: string) => boolean;
+      structuredOutput?: StructuredOutputFormat;
+      validateStructuredOutput?: (output: string) => StructuredTraceValidation;
+    }): Promise<string> => {
+      const startedAt = new Date().toISOString();
+      const startMs = Date.now();
+      const promptText = input.messages
+        .map((message) => `${message.role}:\n${message.content}`)
+        .join("\n\n");
+      const diagnostics: GameAIDiagnosticLike[] = [];
+
+      try {
+        const output = await collectStream(
+          input.modelId,
+          input.providerId,
+          input.rawModel,
+          input.messages,
+          input.maxTokens,
+          input.temperature,
+          input.reasoningEffort,
+          input.attachments,
+          input.onToken,
+          input.signal,
+          input.stopWhen,
+          input.structuredOutput,
+          (retry) =>
+            diagnostics.push({
+              attempt: retry.attempt,
+              type: "request",
+              message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
+            })
+        );
+        const usage = estimateModelCallUsage({
+          messages: input.messages,
+          output,
+          maxTokens: input.maxTokens,
+        });
+        const validation = input.validateStructuredOutput?.(output);
+        const traceParsedJson =
+          validation?.ok === true
+            ? validation.parsedResponseJson ?? output
+            : validation?.ok === false
+              ? undefined
+              : input.structuredOutput
+                ? output
+                : undefined;
+        const traceStatus =
+          validation?.ok === false ? "parse_error" : "parsed";
+        await recordBenchmarkModelCallTrace(
+          createGameModelCallTrace({
+            modelId: input.modelId,
+            providerId: input.providerId,
+            participantId: input.label,
+            reasoningEffort: input.reasoningEffort,
+            schemaMode: input.structuredOutput ? "structured" : "text",
+            promptText,
+            startedAt,
+            completedAt: new Date().toISOString(),
+            latencyMs: Date.now() - startMs,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            rawResponse: output,
+            parsedResponseJson: traceParsedJson,
+            diagnostics,
+            finalStatus: traceStatus,
+            error: validation?.ok === false ? validation.message : undefined,
+          })
+        );
+        return output;
+      } catch (error) {
+        await recordBenchmarkModelCallTrace(
+          createGameModelCallTrace({
+            modelId: input.modelId,
+            providerId: input.providerId,
+            participantId: input.label,
+            reasoningEffort: input.reasoningEffort,
+            schemaMode: input.structuredOutput ? "structured" : "text",
+            promptText,
+            startedAt,
+            completedAt: new Date().toISOString(),
+            latencyMs: Date.now() - startMs,
+            diagnostics: [
+              ...diagnostics,
+              {
+                attempt: diagnostics.length + 1,
+                type: "request",
+                message: error instanceof Error ? error.message : String(error),
+              },
+            ],
+            finalStatus: "provider_error",
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
+        throw error;
+      }
     };
 
     emit({
@@ -504,18 +634,19 @@ export async function runDiscussion(
             message: `${model.displayName} is generating a response`,
           });
 
-          const content = await collectStream(
-            model.modelId,
+          const content = await runTracedModelCall({
+            modelId: model.modelId,
             providerId,
-            modelName,
+            rawModel: modelName,
+            label: `${model.displayName} round ${round}`,
             messages,
-            roundMaxTokens,
-            config.temperature,
+            maxTokens: roundMaxTokens,
+            temperature: config.temperature,
             reasoningEffort,
-            roundAttachments,
-            (token) => emit({ type: "message_token", messageId, token }),
-            signal
-          );
+            attachments: roundAttachments,
+            onToken: (token) => emit({ type: "message_token", messageId, token }),
+            signal,
+          });
           emitTokenUsage({
             messageId,
             modelId: model.modelId,
@@ -622,20 +753,30 @@ export async function runDiscussion(
                 content: buildConvergencePrompt(discussion.topic, voteTranscript),
               },
             ];
-            const voteText = await collectStream(
-              model.modelId,
+            const voteText = await runTracedModelCall({
+              modelId: model.modelId,
               providerId,
-              modelName,
-              voteMessages,
-              200,
-              0.2,
-              "low",
-              [],
-              undefined,
-              undefined,
-              undefined,
-              buildConvergenceVoteResponseFormat()
-            );
+              rawModel: modelName,
+              label: `${model.displayName} convergence vote`,
+              messages: voteMessages,
+              maxTokens: 200,
+              temperature: 0.2,
+              reasoningEffort: "low",
+              attachments: [],
+              structuredOutput: buildConvergenceVoteResponseFormat(),
+              validateStructuredOutput: (output) => {
+                const parsed = parseJsonResponse<{ score: number; reason?: string }>(
+                  output
+                );
+                return typeof parsed?.score === "number"
+                  ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
+                  : {
+                      ok: false,
+                      message:
+                        "Convergence vote response could not be parsed as JSON with a numeric score.",
+                    };
+              },
+            });
             emitTokenUsage({
               messageId: uuidv4(),
               modelId: model.modelId,
@@ -702,18 +843,18 @@ export async function runDiscussion(
       },
     ];
 
-    const judgeRaw = await collectStream(
-      judgeFullId,
-      judgeProviderId,
-      judgeModel,
-      judgeMessages,
-      finalMaxTokens,
-      0.3,
+    const judgeRaw = await runTracedModelCall({
+      modelId: judgeFullId,
+      providerId: judgeProviderId,
+      rawModel: judgeModel,
+      label: "Judge synthesis",
+      messages: judgeMessages,
+      maxTokens: finalMaxTokens,
+      temperature: 0.3,
       reasoningEffort,
-      allAttachments,
-      undefined,
-      signal
-    );
+      attachments: allAttachments,
+      signal,
+    });
     emitTokenUsage({
       messageId: uuidv4(),
       modelId: judgeFullId,

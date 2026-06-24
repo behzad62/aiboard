@@ -67,6 +67,15 @@ export function formatBenchmarkMarkdownReport(
   lines.push(`- Artifacts: ${bundle.artifacts.length}`);
   lines.push(`- Failures: ${bundle.failures.length}`);
   lines.push(`- Model-call traces: ${bundle.traces.length}`);
+  lines.push(
+    `- Game match records: ${bundle.sourceEvidence?.gameMatches.length ?? 0}`
+  );
+  lines.push(
+    `- Build checkpoints: ${bundle.sourceEvidence?.buildCheckpoints.length ?? 0}`
+  );
+  lines.push(
+    `- Build model stats: ${bundle.sourceEvidence?.buildStats.length ?? 0}`
+  );
   lines.push("");
   lines.push(
     "Paste this report with the exported JSON bundle when you want Codex to debug a benchmark result."

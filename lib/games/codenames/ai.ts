@@ -11,6 +11,11 @@ import {
   getProviderBaseURL,
   streamCustomChat,
 } from "@/lib/client/providers";
+import { estimateModelCallUsage } from "@/lib/client/token-usage";
+import {
+  createGameModelCallTrace,
+  recordBenchmarkModelCallTrace,
+} from "@/lib/benchmark/model-call-traces";
 import {
   getCodenamesPublicBoard,
   getCodenamesSpymasterBoard,
@@ -449,6 +454,7 @@ export async function requestCodenamesSpymasterMove(params: {
     ],
     structuredOutput: buildCodenamesSpymasterResponseFormat(),
     signal: params.signal,
+    participantId: `${params.team}:spymaster`,
     parse: (raw) => parseCodenamesSpymasterResponseResult(params.state, raw),
     correction:
       "Your Codenames clue was invalid. Respond with ONLY JSON like {\"clue\":\"space\",\"count\":2}.",
@@ -484,6 +490,7 @@ export async function requestCodenamesGuesserMove(params: {
     ],
     structuredOutput: buildCodenamesGuessResponseFormat(),
     signal: params.signal,
+    participantId: `${params.team}:operative`,
     parse: (raw) => parseCodenamesGuesserResponseResult(params.state, raw),
     correction:
       "Your Codenames guesses were invalid. Respond with ONLY JSON like {\"guesses\":[\"MOON\"]}.",
@@ -542,6 +549,7 @@ async function requestCodenamesJson<TParsed>(params: {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   structuredOutput: StructuredOutputFormat;
   signal?: AbortSignal;
+  participantId?: string;
   parse: (rawText: string) => CodenamesAIParseResult<TParsed>;
   correction: string;
 }): Promise<
@@ -552,6 +560,43 @@ async function requestCodenamesJson<TParsed>(params: {
   const customModel = getCustomModelByFullId(params.modelId);
   const diagnostics: CodenamesAIDiagnosticAttempt[] = [];
   const messages = [...params.messages];
+  const traceStartedAt = new Date().toISOString();
+  const traceStartMs = Date.now();
+  const tracePrompt = params.messages
+    .map((message) => `${message.role}:\n${message.content}`)
+    .join("\n\n");
+  const recordTrace = async (input: {
+    finalStatus: "parsed" | "parse_error" | "illegal" | "provider_error";
+    rawResponse?: string;
+    parsedResponseJson?: string;
+    error?: string;
+  }) => {
+    const usage = estimateModelCallUsage({
+      messages,
+      output: input.rawResponse ?? "",
+      maxTokens: CODENAMES_AI_MAX_TOKENS,
+    });
+    await recordBenchmarkModelCallTrace(
+      createGameModelCallTrace({
+        modelId: params.modelId,
+        providerId,
+        participantId: params.participantId,
+        reasoningEffort: params.reasoningEffort,
+        schemaMode: "structured",
+        promptText: tracePrompt,
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        latencyMs: Date.now() - traceStartMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        rawResponse: input.rawResponse,
+        parsedResponseJson: input.parsedResponseJson,
+        diagnostics,
+        finalStatus: input.finalStatus,
+        error: input.error,
+      })
+    );
+  };
 
   for (let attempt = 0; attempt < MAX_AI_ATTEMPTS; attempt++) {
     if (params.signal?.aborted) return { error: "AI request aborted", diagnostics };
@@ -569,7 +614,14 @@ async function requestCodenamesJson<TParsed>(params: {
         signal: params.signal,
       });
       const parsed = params.parse(responseText);
-      if (parsed.ok) return { parsed: parsed.parsed, diagnostics };
+      if (parsed.ok) {
+        await recordTrace({
+          finalStatus: "parsed",
+          rawResponse: responseText,
+          parsedResponseJson: JSON.stringify(parsed.parsed),
+        });
+        return { parsed: parsed.parsed, diagnostics };
+      }
 
       diagnostics.push({
         attempt: attempt + 1,
@@ -585,6 +637,11 @@ async function requestCodenamesJson<TParsed>(params: {
         });
         continue;
       }
+      await recordTrace({
+        finalStatus: parsed.type === "parse" ? "parse_error" : "illegal",
+        rawResponse: responseText,
+        error: "Failed to get a legal Codenames AI response",
+      });
       return { error: "Failed to get a legal Codenames AI response", diagnostics };
     } catch (error) {
       if (params.signal?.aborted) return { error: "AI request aborted", diagnostics };
@@ -594,8 +651,14 @@ async function requestCodenamesJson<TParsed>(params: {
         message: error instanceof Error ? error.message : "Unknown error",
       });
       if (attempt === MAX_AI_ATTEMPTS - 1) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        await recordTrace({
+          finalStatus: "provider_error",
+          error: errorMessage,
+        });
         return {
-          error: `AI request failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          error: `AI request failed: ${errorMessage}`,
           diagnostics,
         };
       }

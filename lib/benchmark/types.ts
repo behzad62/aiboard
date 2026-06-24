@@ -1,9 +1,12 @@
 import type {
+  BuildCheckpoint,
   BuildProblemCode,
   BuildProblemSeverity,
   BuildProblemSource,
+  GenericGameMatchRecord,
   GameId,
   GameParticipant,
+  ModelBuildStat,
   ReasoningEffort,
 } from "@/lib/db/schema";
 
@@ -185,6 +188,11 @@ export interface BenchmarkReportBundle {
   artifacts: BenchmarkArtifact[];
   failures: BenchmarkFailure[];
   traces: BenchmarkModelCallTrace[];
+  sourceEvidence?: {
+    gameMatches: GenericGameMatchRecord[];
+    buildCheckpoints: BuildCheckpoint[];
+    buildStats: ModelBuildStat[];
+  };
 }
 
 export interface BenchmarkParticipantResult extends GameParticipant {
