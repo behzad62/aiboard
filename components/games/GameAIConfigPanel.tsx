@@ -17,7 +17,7 @@ export interface GameAIConfigValue {
 
 interface GameAIConfigPanelProps {
   title: string;
-  accent: "red" | "yellow" | "white" | "black";
+  accent: "red" | "yellow" | "white" | "black" | "blue" | "orange";
   config: GameAIConfigValue;
   models: GameAIModelOption[];
   onChange: (config: GameAIConfigValue) => void;
@@ -37,6 +37,9 @@ const PANEL_STYLES: Record<GameAIConfigPanelProps["accent"], string> = {
     "border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-950/30",
   white: "border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-700/50",
   black: "border-gray-400 bg-gray-100 dark:border-gray-500 dark:bg-gray-800/50",
+  blue: "border-sky-300 bg-sky-50 dark:border-sky-800 dark:bg-sky-950/30",
+  orange:
+    "border-orange-300 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/30",
 };
 
 const DOT_STYLES: Record<GameAIConfigPanelProps["accent"], string> = {
@@ -44,6 +47,8 @@ const DOT_STYLES: Record<GameAIConfigPanelProps["accent"], string> = {
   yellow: "border-yellow-600 bg-yellow-400",
   white: "border-gray-400 bg-white",
   black: "border-gray-600 bg-gray-900",
+  blue: "border-sky-700 bg-sky-500",
+  orange: "border-orange-700 bg-orange-500",
 };
 
 export function GameAIConfigPanel({
