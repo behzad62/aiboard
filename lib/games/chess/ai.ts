@@ -11,7 +11,7 @@ import {
   isLegalMove,
 } from "./engine";
 import type { ReasoningEffort } from "@/lib/db/schema";
-import { parseModelId } from "@/lib/providers/base";
+import { parseModelId, type StructuredOutputFormat } from "@/lib/providers/base";
 import {
   getProvider,
   getCustomModelByFullId,
@@ -110,6 +110,60 @@ ${legalMovesFormatted.join("\n")}
 Analyze the position and choose the best move. Respond with only the JSON object.`;
 
   return { system, user };
+}
+
+export function buildChessMoveResponseFormat(): StructuredOutputFormat {
+  return {
+    name: "chess_move",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        from: {
+          type: "string",
+          description: "Origin square in algebraic notation, for example e2.",
+        },
+        to: {
+          type: "string",
+          description: "Destination square in algebraic notation, for example e4.",
+        },
+        promotion: {
+          type: "string",
+          enum: ["queen", "rook", "bishop", "knight", "q", "r", "b", "n"],
+          description: "Promotion piece only when a pawn promotes.",
+        },
+        reasoning: {
+          type: "string",
+          description: "Brief move rationale.",
+        },
+        gesture: {
+          type: "string",
+          enum: [
+            "thinking",
+            "confident",
+            "confused",
+            "celebrating",
+            "apologetic",
+            "neutral",
+          ],
+        },
+        utterance: {
+          type: "string",
+          description: "At most one short sentence.",
+        },
+        confidence: {
+          type: "number",
+          description: "Confidence from 0 to 1.",
+        },
+        diagnostics: {
+          type: "string",
+          description: "Optional model diagnostics.",
+        },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+  };
 }
 
 // =============================================================================
@@ -264,6 +318,7 @@ export async function requestAIMove(
     { role: "system", content: system },
     { role: "user", content: user },
   ];
+  const structuredOutput = buildChessMoveResponseFormat();
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (signal?.aborted) {
@@ -282,6 +337,7 @@ export async function requestAIMove(
           maxTokens: 1024,
           temperature: 0.3,
           reasoningEffort,
+          structuredOutput,
         });
 
         for await (const chunk of stream) {
@@ -310,6 +366,7 @@ export async function requestAIMove(
           temperature: 0.3,
           reasoningEffort,
           baseURL,
+          structuredOutput,
         });
 
         for await (const chunk of stream) {

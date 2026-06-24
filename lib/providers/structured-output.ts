@@ -42,6 +42,38 @@ export function openAIResponsesTextFormatField(
   };
 }
 
+export function anthropicStructuredToolConfig(
+  format: StructuredOutputFormat | undefined
+): {
+  tools?: Array<{
+    name: string;
+    description: string;
+    input_schema: JsonSchemaObject;
+  }>;
+  tool_choice?: {
+    type: "tool";
+    name: string;
+    disable_parallel_tool_use: true;
+  };
+} {
+  if (!format) return {};
+  return {
+    tools: [
+      {
+        name: format.name,
+        description:
+          "Return the requested structured JSON object. The application reads this tool input as the model response.",
+        input_schema: format.schema,
+      },
+    ],
+    tool_choice: {
+      type: "tool",
+      name: format.name,
+      disable_parallel_tool_use: true,
+    },
+  };
+}
+
 function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   const next: JsonSchemaObject = {};
   if (schema.type) next.type = schema.type;

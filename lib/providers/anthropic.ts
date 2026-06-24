@@ -6,6 +6,7 @@ import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import { anthropicEffort } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
+import { anthropicStructuredToolConfig } from "./structured-output";
 
 type AnthropicImageMedia =
   | "image/jpeg"
@@ -176,6 +177,9 @@ export async function* streamAnthropicChat(
     // it pass through. Omitted (and skipped for unsupported models) by default.
     const effort = anthropicEffort(params.model, params.reasoningEffort ?? "default");
     const effortField = effort ? { output_config: { effort } } : {};
+    const structuredToolConfig = anthropicStructuredToolConfig(
+      params.structuredOutput
+    );
 
     try {
       const stream = await client.messages.stream({
@@ -184,6 +188,7 @@ export async function* streamAnthropicChat(
         system: systemMessage?.content,
         messages: chatMessages,
         ...(effortField as Record<string, never>),
+        ...(structuredToolConfig as Record<string, never>),
       });
 
       for await (const event of stream) {
@@ -192,6 +197,11 @@ export async function* streamAnthropicChat(
           event.delta.type === "text_delta"
         ) {
           yield { type: "token", content: event.delta.text };
+        } else if (
+          event.type === "content_block_delta" &&
+          event.delta.type === "input_json_delta"
+        ) {
+          yield { type: "token", content: event.delta.partial_json };
         }
       }
       yield { type: "done" };

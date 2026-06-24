@@ -5,6 +5,7 @@ import {
 } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
 import { parseModelId, type StreamChunk } from "@/lib/providers/base";
+import type { StructuredOutputFormat } from "@/lib/providers/base";
 import {
   getCustomModelByFullId,
   getDecryptedApiKey,
@@ -218,6 +219,51 @@ Choose the best legal column. Respond with only the JSON object.`;
   return { system, user };
 }
 
+export function buildConnectFourMoveResponseFormat(): StructuredOutputFormat {
+  return {
+    name: "connect_four_move",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        column: {
+          type: "number",
+          description: "One-based Connect Four column number to play.",
+        },
+        reasoning: {
+          type: "string",
+          description: "Brief move rationale.",
+        },
+        gesture: {
+          type: "string",
+          enum: [
+            "thinking",
+            "confident",
+            "confused",
+            "celebrating",
+            "apologetic",
+            "neutral",
+          ],
+        },
+        utterance: {
+          type: "string",
+          description: "At most one short sentence.",
+        },
+        confidence: {
+          type: "number",
+          description: "Confidence from 0 to 1.",
+        },
+        diagnostics: {
+          type: "string",
+          description: "Optional model diagnostics.",
+        },
+      },
+      required: ["column"],
+      additionalProperties: false,
+    },
+  };
+}
+
 export async function requestConnectFourAIMove(
   params: RequestConnectFourAIMoveParams
 ): Promise<ConnectFourAIMoveResult> {
@@ -235,6 +281,7 @@ export async function requestConnectFourAIMove(
   const { providerId, model } = parseModelId(modelId);
   const customModel = getCustomModelByFullId(modelId);
   const { system, user } = buildConnectFourPrompt(state, legalColumns);
+  const structuredOutput = buildConnectFourMoveResponseFormat();
   const messages: Array<{
     role: "system" | "user" | "assistant";
     content: string;
@@ -258,6 +305,7 @@ export async function requestConnectFourAIMove(
         baseURL,
         messages,
         reasoningEffort,
+        structuredOutput,
         signal,
       });
 
@@ -436,6 +484,7 @@ async function streamConnectFourResponseText(params: {
   baseURL?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
+  structuredOutput: StructuredOutputFormat;
   signal?: AbortSignal;
 }): Promise<string> {
   const stream = params.customModel
@@ -446,6 +495,7 @@ async function streamConnectFourResponseText(params: {
         maxTokens: 1024,
         temperature: 0.3,
         reasoningEffort: params.reasoningEffort,
+        structuredOutput: params.structuredOutput,
       })
     : getStandardProviderStream(params);
 
@@ -479,6 +529,7 @@ function getStandardProviderStream(params: {
   baseURL?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
+  structuredOutput: StructuredOutputFormat;
 }) {
   const provider = getProvider(params.providerId);
   if (!provider) {
@@ -493,6 +544,7 @@ function getStandardProviderStream(params: {
     temperature: 0.3,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
+    structuredOutput: params.structuredOutput,
   });
 }
 

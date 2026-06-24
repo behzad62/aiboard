@@ -39,6 +39,7 @@ import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import {
   buildConvergencePrompt,
+  buildConvergenceVoteResponseFormat,
   buildJudgePrompt,
   buildRoundSystemPrompt,
   buildTranscriptFromMessages,
@@ -629,7 +630,11 @@ export async function runDiscussion(
               200,
               0.2,
               "low",
-              []
+              [],
+              undefined,
+              undefined,
+              undefined,
+              buildConvergenceVoteResponseFormat()
             );
             emitTokenUsage({
               messageId: uuidv4(),

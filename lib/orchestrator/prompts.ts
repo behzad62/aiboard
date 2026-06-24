@@ -1,5 +1,5 @@
 import type { DiscussionMode, Verbosity } from "../db/schema";
-import type { SelectedModel } from "../providers/base";
+import type { SelectedModel, StructuredOutputFormat } from "../providers/base";
 
 export const DISCUSSION_TRANSCRIPT_MARKER = "\n\n--- Discussion so far ---\n\n";
 
@@ -144,6 +144,28 @@ ${transcript}
 
 Rate how complete and accurate the current collective answer is on a scale of 1-10.
 Respond with ONLY a JSON object: {"score": <number>, "reason": "<brief reason>"}`;
+}
+
+export function buildConvergenceVoteResponseFormat(): StructuredOutputFormat {
+  return {
+    name: "convergence_vote",
+    strict: false,
+    schema: {
+      type: "object",
+      properties: {
+        score: {
+          type: "number",
+          description: "Discussion completeness score from 1 to 10.",
+        },
+        reason: {
+          type: "string",
+          description: "Brief reason for the score.",
+        },
+      },
+      required: ["score", "reason"],
+      additionalProperties: false,
+    },
+  };
 }
 
 export const META_FOOTER_INSTRUCTION = [
