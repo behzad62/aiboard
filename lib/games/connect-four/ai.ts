@@ -44,8 +44,18 @@ export interface ConnectFourAIMoveSuccess
   reasoning?: string;
 }
 
+export interface ConnectFourAIDiagnosticAttempt {
+  attempt: number;
+  type: "parse" | "illegal" | "request";
+  message: string;
+  legalColumns: number[];
+  rawResponse?: string;
+  rejectedColumn?: number;
+}
+
 export interface ConnectFourAIMoveError {
   error: string;
+  diagnostics?: ConnectFourAIDiagnosticAttempt[];
 }
 
 export type ConnectFourAIMoveResult =
@@ -232,6 +242,7 @@ export async function requestConnectFourAIMove(
     { role: "system", content: system },
     { role: "user", content: user },
   ];
+  const diagnostics: ConnectFourAIDiagnosticAttempt[] = [];
 
   for (let attempt = 0; attempt < MAX_AI_ATTEMPTS; attempt++) {
     if (signal?.aborted) {
@@ -256,6 +267,13 @@ export async function requestConnectFourAIMove(
 
       const parsed = parseConnectFourAIResponse(responseText);
       if (!parsed) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "parse",
+          message: "Response could not be parsed as Connect Four JSON.",
+          legalColumns,
+          rawResponse: responseText,
+        });
         if (attempt < MAX_AI_ATTEMPTS - 1) {
           messages.push({ role: "assistant", content: responseText });
           messages.push({
@@ -264,10 +282,21 @@ export async function requestConnectFourAIMove(
           });
           continue;
         }
-        return { error: "Failed to parse AI response after multiple attempts" };
+        return {
+          error: "Failed to parse AI response after multiple attempts",
+          diagnostics,
+        };
       }
 
       if (!isLegalColumn(state, parsed.column)) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "illegal",
+          message: `AI selected illegal column ${parsed.column + 1}.`,
+          legalColumns,
+          rawResponse: responseText,
+          rejectedColumn: parsed.column,
+        });
         if (attempt < MAX_AI_ATTEMPTS - 1) {
           messages.push({ role: "assistant", content: responseText });
           messages.push({
@@ -282,6 +311,7 @@ export async function requestConnectFourAIMove(
         }
         return {
           error: `AI returned illegal column: ${parsed.column + 1} after ${MAX_AI_ATTEMPTS} attempts`,
+          diagnostics,
         };
       }
 
@@ -304,16 +334,34 @@ export async function requestConnectFourAIMove(
       }
 
       if (attempt < MAX_AI_ATTEMPTS - 1) {
+        diagnostics.push({
+          attempt: attempt + 1,
+          type: "request",
+          message: err instanceof Error ? err.message : "Unknown error",
+          legalColumns,
+        });
         await delayWithAbort(getConnectFourRetryDelayMs(attempt), signal);
         continue;
       }
 
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      return { error: `AI request failed: ${errorMessage}` };
+      diagnostics.push({
+        attempt: attempt + 1,
+        type: "request",
+        message: errorMessage,
+        legalColumns,
+      });
+      return {
+        error: `AI request failed: ${errorMessage}`,
+        diagnostics,
+      };
     }
   }
 
-  return { error: "Failed to get valid column after maximum retries" };
+  return {
+    error: "Failed to get valid column after maximum retries",
+    diagnostics,
+  };
 }
 
 export function getAvailableConnectFourModels(): AvailableConnectFourModel[] {

@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from "@/lib/db/schema";
+import type { ConnectFourAIDiagnosticAttempt } from "@/lib/games/connect-four/ai";
 import type {
   GameAIInteraction,
   GameParticipant,
@@ -33,6 +34,7 @@ export interface ConnectFourSessionSnapshot {
   lastAiInteraction: GameAIInteraction | null;
   aiWarning: string | null;
   aiError: string | null;
+  aiDiagnostics?: ConnectFourAIDiagnosticAttempt[];
 }
 
 export function isConnectFourActiveStatus(status: ConnectFourStatus): boolean {
@@ -89,6 +91,12 @@ export function parseConnectFourSessionRecord(
   }
   if (!isNullableString(parsed.aiWarning)) return null;
   if (!isNullableString(parsed.aiError)) return null;
+  if (
+    parsed.aiDiagnostics !== undefined &&
+    !isAIDiagnosticAttemptArray(parsed.aiDiagnostics)
+  ) {
+    return null;
+  }
 
   return {
     gameState: parsed.gameState,
@@ -100,6 +108,9 @@ export function parseConnectFourSessionRecord(
     lastAiInteraction: parsed.lastAiInteraction,
     aiWarning: parsed.aiWarning,
     aiError: parsed.aiError,
+    ...(parsed.aiDiagnostics !== undefined
+      ? { aiDiagnostics: parsed.aiDiagnostics }
+      : {}),
   };
 }
 
@@ -307,6 +318,32 @@ function isNormalizedConfidence(value: unknown): value is number {
     Number.isFinite(value) &&
     value >= 0 &&
     value <= 1
+  );
+}
+
+function isAIDiagnosticAttemptArray(
+  value: unknown
+): value is ConnectFourAIDiagnosticAttempt[] {
+  return Array.isArray(value) && value.every(isAIDiagnosticAttempt);
+}
+
+function isAIDiagnosticAttempt(
+  value: unknown
+): value is ConnectFourAIDiagnosticAttempt {
+  if (!isPlainObject(value)) return false;
+  return (
+    typeof value.attempt === "number" &&
+    Number.isInteger(value.attempt) &&
+    value.attempt > 0 &&
+    (value.type === "parse" ||
+      value.type === "illegal" ||
+      value.type === "request") &&
+    typeof value.message === "string" &&
+    Array.isArray(value.legalColumns) &&
+    value.legalColumns.every((column) => Number.isInteger(column)) &&
+    (value.rawResponse === undefined || typeof value.rawResponse === "string") &&
+    (value.rejectedColumn === undefined ||
+      Number.isInteger(value.rejectedColumn))
   );
 }
 

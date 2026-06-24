@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Copy } from "lucide-react";
 import { GameAIPresence } from "@/components/games/GameAIPresence";
 import type {
   GameAIConfigValue,
@@ -20,6 +20,7 @@ import {
   getConnectFourModelApiKey,
   getConnectFourModelBaseURL,
   requestConnectFourAIMove,
+  type ConnectFourAIDiagnosticAttempt,
 } from "@/lib/games/connect-four/ai";
 import {
   createInitialConnectFourState,
@@ -73,6 +74,33 @@ function compactReasoningLabel(config: AIConfig): string {
     default:
       return "Off";
   }
+}
+
+function formatAIDiagnostics(
+  diagnostics: ConnectFourAIDiagnosticAttempt[]
+): string {
+  return diagnostics
+    .map((attempt) => {
+      const lines = [
+        `Attempt ${attempt.attempt} (${attempt.type})`,
+        `Message: ${attempt.message}`,
+        `Legal columns: ${attempt.legalColumns
+          .map((column) => column + 1)
+          .join(", ")}`,
+      ];
+
+      if (attempt.rejectedColumn !== undefined) {
+        lines.push(`Rejected column: ${attempt.rejectedColumn + 1}`);
+      }
+
+      lines.push(
+        "Raw response:",
+        attempt.rawResponse?.trim() ? attempt.rawResponse : "(no response text)"
+      );
+
+      return lines.join("\n");
+    })
+    .join("\n\n---\n\n");
 }
 
 function isAIControlledPlayer(
@@ -215,6 +243,10 @@ export function ConnectFourGameClient({
   const [aiThinking, setAiThinking] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiWarning, setAiWarning] = useState<string | null>(null);
+  const [aiDiagnostics, setAiDiagnostics] = useState<
+    ConnectFourAIDiagnosticAttempt[]
+  >([]);
+  const [aiDiagnosticsCopied, setAiDiagnosticsCopied] = useState(false);
   const [lastAiInteraction, setLastAiInteraction] =
     useState<GameAIInteraction | null>(null);
   const [restoreSnapshot, setRestoreSnapshot] =
@@ -258,6 +290,7 @@ export function ConnectFourGameClient({
       lastAiInteraction,
       aiWarning,
       aiError,
+      aiDiagnostics,
     }),
     [
       gameState,
@@ -269,7 +302,12 @@ export function ConnectFourGameClient({
       lastAiInteraction,
       aiWarning,
       aiError,
+      aiDiagnostics,
     ]
+  );
+  const aiDiagnosticsText = useMemo(
+    () => formatAIDiagnostics(aiDiagnostics),
+    [aiDiagnostics]
   );
 
   const invalidateAIRequests = useCallback(() => {
@@ -470,6 +508,8 @@ export function ConnectFourGameClient({
       aiRequestActiveRef.current = true;
       setAiThinking(true);
       setAiError(null);
+      setAiDiagnostics([]);
+      setAiDiagnosticsCopied(false);
 
       try {
         const apiKey = getConnectFourModelApiKey(config.modelId) ?? "";
@@ -486,6 +526,7 @@ export function ConnectFourGameClient({
         if (!isCurrentAIRequest()) return;
 
         if ("column" in result) {
+          setAiDiagnostics([]);
           const legal = isLegalColumn(requestState, result.column);
           const fallbackColumn =
             legal || getLegalColumns(requestState).length === 0
@@ -531,6 +572,7 @@ export function ConnectFourGameClient({
 
         if (fallbackColumn !== null) {
           const interaction = createFallbackInteraction(currentTurn, result.error);
+          setAiDiagnostics(result.diagnostics ?? []);
           setAiWarning(
             `${playerLabel(currentTurn)} AI hit a recoverable error. A legal fallback column was played so the AI vs AI match can continue.`
           );
@@ -549,11 +591,13 @@ export function ConnectFourGameClient({
               : prev
           );
         } else {
+          setAiDiagnostics(result.diagnostics ?? []);
           setAiWarning(null);
           setAiError(result.error);
         }
       } catch (error) {
         if (!isCurrentAIRequest()) return;
+        setAiDiagnostics([]);
         setAiWarning(null);
         setAiError(error instanceof Error ? error.message : "AI move failed.");
       } finally {
@@ -605,6 +649,8 @@ export function ConnectFourGameClient({
       setLastAiInteraction(snapshot.lastAiInteraction);
       setAiWarning(snapshot.aiWarning);
       setAiError(snapshot.aiError);
+      setAiDiagnostics(snapshot.aiDiagnostics ?? []);
+      setAiDiagnosticsCopied(false);
       setAiThinking(false);
       setReplayIndex(null);
       setPreviewColumn(null);
@@ -624,6 +670,8 @@ export function ConnectFourGameClient({
     setAiThinking(false);
     setAiError(null);
     setAiWarning(null);
+    setAiDiagnostics([]);
+    setAiDiagnosticsCopied(false);
     setLastAiInteraction(null);
     setReplayIndex(null);
     setPreviewColumn(null);
@@ -676,6 +724,8 @@ export function ConnectFourGameClient({
       );
       setAiWarning(null);
       setAiError(null);
+      setAiDiagnostics([]);
+      setAiDiagnosticsCopied(false);
       setPreviewColumn(null);
     },
     [
@@ -735,6 +785,18 @@ export function ConnectFourGameClient({
   const handleReplayExit = useCallback(() => {
     setReplayIndex(null);
   }, []);
+
+  const handleCopyAIDiagnostics = useCallback(async () => {
+    if (!aiDiagnosticsText) return;
+
+    try {
+      await navigator.clipboard.writeText(aiDiagnosticsText);
+      setAiDiagnosticsCopied(true);
+      window.setTimeout(() => setAiDiagnosticsCopied(false), 1500);
+    } catch {
+      setAiDiagnosticsCopied(false);
+    }
+  }, [aiDiagnosticsText]);
 
   const redIsAI = isAIControlledPlayer(gameMode, humanPlayer, "red");
   const yellowIsAI = isAIControlledPlayer(gameMode, humanPlayer, "yellow");
@@ -909,6 +971,42 @@ export function ConnectFourGameClient({
                 <div className="text-sm font-semibold">AI error</div>
                 <p className="mt-1 text-sm">{aiError}</p>
               </div>
+            )}
+
+            {aiDiagnostics.length > 0 && (
+              <section
+                className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950"
+                data-testid="connect-four-ai-diagnostics"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Raw AI responses
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                      {aiDiagnostics.length} failed attempt
+                      {aiDiagnostics.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyAIDiagnostics}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 active:scale-95 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                    data-testid="connect-four-copy-ai-diagnostics"
+                  >
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                    {aiDiagnosticsCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">
+                    Details
+                  </summary>
+                  <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs leading-relaxed text-slate-100">
+                    {aiDiagnosticsText}
+                  </pre>
+                </details>
+              </section>
             )}
 
             <GameAIPresence interaction={lastAiInteraction} />

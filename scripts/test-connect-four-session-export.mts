@@ -88,6 +88,29 @@ check(
   parsed
 );
 
+const diagnosticSnapshot: ConnectFourSessionSnapshot = {
+  ...snapshot,
+  aiError: "Failed to parse AI response after multiple attempts",
+  aiDiagnostics: [
+    {
+      attempt: 1,
+      type: "parse",
+      message: "Response could not be parsed as Connect Four JSON.",
+      legalColumns: [0, 1, 2, 3, 4, 5, 6],
+      rawResponse: "I choose the middle column.",
+    },
+  ],
+};
+const diagnosticRecord = createConnectFourSessionRecord(diagnosticSnapshot, now);
+const parsedDiagnosticRecord = parseConnectFourSessionRecord(diagnosticRecord);
+check(
+  "session parser preserves AI diagnostics",
+  parsedDiagnosticRecord !== null &&
+    JSON.stringify(parsedDiagnosticRecord.aiDiagnostics) ===
+      JSON.stringify(diagnosticSnapshot.aiDiagnostics),
+  parsedDiagnosticRecord
+);
+
 const missingMetadataVersion = parseConnectFourSessionRecord({
   ...record,
   metadataJson: JSON.stringify({ savedAt: now, moves: 2 }),
@@ -145,6 +168,17 @@ const invalidAiConfidence = parseConnectFourSessionRecord({
 });
 check("session parser rejects invalid AI confidence", invalidAiConfidence === null, {
   parsed: invalidAiConfidence,
+});
+
+const invalidAiDiagnostics = parseConnectFourSessionRecord({
+  ...record,
+  stateJson: JSON.stringify({
+    ...snapshot,
+    aiDiagnostics: [{ attempt: "first", type: "parse", message: "bad" }],
+  }),
+});
+check("session parser rejects invalid AI diagnostics", invalidAiDiagnostics === null, {
+  parsed: invalidAiDiagnostics,
 });
 
 check("playing status is active", isConnectFourActiveStatus("playing") === true);
