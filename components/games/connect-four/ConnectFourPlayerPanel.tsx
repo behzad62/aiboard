@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Trophy, User } from "lucide-react";
+import { Bot, Clock, Trophy, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConnectFourPlayer } from "@/lib/games/connect-four/types";
 
@@ -10,6 +10,7 @@ interface ConnectFourPlayerPanelProps {
   kind: "human" | "ai";
   modelLabel?: string;
   reasoningLabel?: string;
+  elapsedMs: number;
   active: boolean;
   winner?: boolean;
 }
@@ -32,12 +33,20 @@ const PLAYER_STYLES: Record<
   },
 };
 
+function formatElapsedTime(timeMs: number): string {
+  const totalSeconds = Math.floor(Math.max(0, timeMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 export function ConnectFourPlayerPanel({
   player,
   label,
   kind,
   modelLabel,
   reasoningLabel,
+  elapsedMs,
   active,
   winner = false,
 }: ConnectFourPlayerPanelProps) {
@@ -87,6 +96,19 @@ export function ConnectFourPlayerPanel({
             Turn
           </span>
         ) : null}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-current/10 bg-white/60 px-3 py-2 dark:bg-slate-950/40">
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          Time
+        </span>
+        <span
+          className="font-mono text-lg font-bold tabular-nums text-slate-950 dark:text-white"
+          data-testid={`connect-four-clock-${player}`}
+        >
+          {formatElapsedTime(elapsedMs)}
+        </span>
       </div>
 
       {kind === "ai" && (

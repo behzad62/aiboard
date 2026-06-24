@@ -24,7 +24,11 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 }
 
 function createTwoMoveState(): ConnectFourGameState {
-  const first = dropDisc(createInitialConnectFourState(), 3, 1_700_000_000_001);
+  const first = dropDisc(
+    createInitialConnectFourState(1_700_000_000_000),
+    3,
+    1_700_000_000_001
+  );
   return dropDisc(first, 2, 1_700_000_000_002);
 }
 
@@ -86,6 +90,13 @@ check(
     JSON.stringify(parsed) === JSON.stringify(snapshot) &&
     parsed.gameState.moveHistory.length === 2,
   parsed
+);
+check(
+  "parsed session restores aggregate clock totals",
+  parsed?.gameState.clock.redElapsedMs === 1 &&
+    parsed.gameState.clock.yellowElapsedMs === 1 &&
+    parsed.gameState.clock.turnStartedAt === 1_700_000_000_002,
+  parsed?.gameState.clock
 );
 
 const diagnosticSnapshot: ConnectFourSessionSnapshot = {

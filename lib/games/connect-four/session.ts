@@ -9,6 +9,7 @@ import type {
 import { CONNECT_FOUR_COLUMNS, CONNECT_FOUR_ROWS } from "@/lib/games/connect-four/engine";
 import type {
   ConnectFourBoard,
+  ConnectFourClockState,
   ConnectFourGameMode,
   ConnectFourGameState,
   ConnectFourPlayer,
@@ -78,7 +79,8 @@ export function parseConnectFourSessionRecord(
 
   const parsed = parseJson(record.stateJson);
   if (!isPlainObject(parsed)) return null;
-  if (!isConnectFourGameState(parsed.gameState)) return null;
+  const gameState = normalizeConnectFourGameState(parsed.gameState);
+  if (!gameState) return null;
   if (!isGameMode(parsed.gameMode)) return null;
   if (!isPlayer(parsed.humanPlayer)) return null;
   if (!isAIConfig(parsed.redAI) || !isAIConfig(parsed.yellowAI)) return null;
@@ -99,7 +101,7 @@ export function parseConnectFourSessionRecord(
   }
 
   return {
-    gameState: parsed.gameState,
+    gameState,
     gameMode: parsed.gameMode,
     humanPlayer: parsed.humanPlayer,
     redAI: parsed.redAI,
@@ -233,8 +235,67 @@ function isConnectFourGameState(value: unknown): value is ConnectFourGameState {
     isPlayer(value.turn) &&
     isStatus(value.status) &&
     (isPlayer(value.winner) || value.winner === null) &&
-    isMoveHistory(value.moveHistory)
+    isMoveHistory(value.moveHistory) &&
+    isClockState(value.clock)
   );
+}
+
+function normalizeConnectFourGameState(
+  value: unknown
+): ConnectFourGameState | null {
+  if (!isPlainObject(value)) return null;
+  const candidate = {
+    ...value,
+    clock: isClockState(value.clock)
+      ? value.clock
+      : inferClockFromLegacyState(value),
+  };
+
+  return isConnectFourGameState(candidate) ? candidate : null;
+}
+
+function inferClockFromLegacyState(
+  value: Record<string, unknown>
+): ConnectFourClockState {
+  const moveHistory = isMoveHistory(value.moveHistory) ? value.moveHistory : [];
+  const elapsed: ConnectFourClockState = {
+    redElapsedMs: 0,
+    yellowElapsedMs: 0,
+    turnStartedAt:
+      value.status === "playing" && isPlayer(value.turn) ? Date.now() : null,
+  };
+
+  let previousTimestamp = moveHistory[0]?.timestamp ?? null;
+  for (const record of moveHistory) {
+    if (previousTimestamp === null) {
+      previousTimestamp = record.timestamp;
+      continue;
+    }
+
+    const delta = Math.max(0, record.timestamp - previousTimestamp);
+    if (record.player === "red") {
+      elapsed.redElapsedMs += delta;
+    } else {
+      elapsed.yellowElapsedMs += delta;
+    }
+    previousTimestamp = record.timestamp;
+  }
+
+  return elapsed;
+}
+
+function isClockState(value: unknown): value is ConnectFourClockState {
+  if (!isPlainObject(value)) return false;
+
+  return (
+    isNonNegativeFiniteNumber(value.redElapsedMs) &&
+    isNonNegativeFiniteNumber(value.yellowElapsedMs) &&
+    (value.turnStartedAt === null || isNonNegativeFiniteNumber(value.turnStartedAt))
+  );
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isBoard(value: unknown): value is ConnectFourBoard {

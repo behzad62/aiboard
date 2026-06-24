@@ -37,6 +37,7 @@ import {
   type ConnectFourSessionSnapshot,
 } from "@/lib/games/connect-four/session";
 import type {
+  ConnectFourClockState,
   ConnectFourGameMode,
   ConnectFourGameState,
   ConnectFourPlayer,
@@ -183,6 +184,11 @@ function createReplayState(
   if (replayIndex < 0) {
     return {
       ...createInitialConnectFourState(),
+      clock: {
+        redElapsedMs: 0,
+        yellowElapsedMs: 0,
+        turnStartedAt: null,
+      },
       moveHistory: liveState.moveHistory,
     };
   }
@@ -205,7 +211,35 @@ function createReplayState(
         ? liveState.winner
         : null,
     moveHistory: liveState.moveHistory,
+    clock: liveState.clock,
   };
+}
+
+function displayClockForState(
+  state: ConnectFourGameState,
+  now: number
+): ConnectFourClockState {
+  if (state.status !== "playing" || state.clock.turnStartedAt === null) {
+    return state.clock;
+  }
+
+  const delta = Math.max(0, now - state.clock.turnStartedAt);
+  return state.turn === "red"
+    ? {
+        ...state.clock,
+        redElapsedMs: state.clock.redElapsedMs + delta,
+      }
+    : {
+        ...state.clock,
+        yellowElapsedMs: state.clock.yellowElapsedMs + delta,
+      };
+}
+
+function elapsedForPlayer(
+  clock: ConnectFourClockState,
+  player: ConnectFourPlayer
+): number {
+  return player === "red" ? clock.redElapsedMs : clock.yellowElapsedMs;
 }
 
 function modelLabel(
@@ -254,6 +288,7 @@ export function ConnectFourGameClient({
   const [restoreCreatedAt, setRestoreCreatedAt] = useState<string | null>(null);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const [previewColumn, setPreviewColumn] = useState<number | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   const aiRequestVersionRef = useRef(0);
   const activeAIAbortControllerRef = useRef<AbortController | null>(null);
@@ -270,6 +305,13 @@ export function ConnectFourGameClient({
     [gameState, replayIndex]
   );
   const isReplayReviewing = replayIndex !== null;
+  const displayedClock = useMemo(
+    () =>
+      isReplayReviewing
+        ? displayState.clock
+        : displayClockForState(gameState, clockNow),
+    [clockNow, displayState.clock, gameState, isReplayReviewing]
+  );
   const activeGame = isConnectFourActiveStatus(gameState.status);
   canPersistActiveSessionRef.current = gameStarted && (isPaused || activeGame);
   const displayActiveGame = isConnectFourActiveStatus(displayState.status);
@@ -484,6 +526,21 @@ export function ConnectFourGameClient({
   }, [deleteActiveSession, gameStarted, gameState.status]);
 
   useEffect(() => {
+    if (
+      !gameStarted ||
+      isPaused ||
+      isReplayReviewing ||
+      gameState.status !== "playing"
+    ) {
+      return;
+    }
+
+    setClockNow(Date.now());
+    const interval = window.setInterval(() => setClockNow(Date.now()), 500);
+    return () => window.clearInterval(interval);
+  }, [gameStarted, gameState.status, isPaused, isReplayReviewing]);
+
+  useEffect(() => {
     if (!gameStarted || isPaused || isReplayReviewing || !activeGame) return;
     if (!currentPlayerIsAI || aiRequestActiveRef.current) return;
 
@@ -654,6 +711,7 @@ export function ConnectFourGameClient({
       setAiThinking(false);
       setReplayIndex(null);
       setPreviewColumn(null);
+      setClockNow(Date.now());
       setRestoreSnapshot(null);
       setRestoreCreatedAt(null);
       activeSessionCreatedAtRef.current = createdAt;
@@ -665,7 +723,7 @@ export function ConnectFourGameClient({
   const handleStartGame = useCallback(() => {
     invalidateAIRequests();
     invalidatePersistence();
-    setGameState(createInitialConnectFourState());
+    setGameState(createInitialConnectFourState(Date.now()));
     setIsPaused(false);
     setAiThinking(false);
     setAiError(null);
@@ -675,6 +733,7 @@ export function ConnectFourGameClient({
     setLastAiInteraction(null);
     setReplayIndex(null);
     setPreviewColumn(null);
+    setClockNow(Date.now());
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
     activeSessionCreatedAtRef.current = null;
@@ -741,12 +800,13 @@ export function ConnectFourGameClient({
 
   const handlePause = useCallback(() => {
     invalidateAIRequests();
-    setGameState((prev) => setConnectFourPaused(prev, true));
+    setGameState((prev) => setConnectFourPaused(prev, true, Date.now()));
     setIsPaused(true);
   }, [invalidateAIRequests]);
 
   const handleResume = useCallback(() => {
-    setGameState((prev) => setConnectFourPaused(prev, false));
+    setGameState((prev) => setConnectFourPaused(prev, false, Date.now()));
+    setClockNow(Date.now());
     setIsPaused(false);
   }, []);
 
@@ -894,6 +954,7 @@ export function ConnectFourGameClient({
                 redIsAI ? compactReasoningLabel(redAI) : undefined
               }
               active={displayActiveGame && displayState.turn === "red"}
+              elapsedMs={elapsedForPlayer(displayedClock, "red")}
               winner={displayState.winner === "red"}
             />
 
@@ -916,6 +977,7 @@ export function ConnectFourGameClient({
                 yellowIsAI ? compactReasoningLabel(yellowAI) : undefined
               }
               active={displayActiveGame && displayState.turn === "yellow"}
+              elapsedMs={elapsedForPlayer(displayedClock, "yellow")}
               winner={displayState.winner === "yellow"}
             />
           </section>

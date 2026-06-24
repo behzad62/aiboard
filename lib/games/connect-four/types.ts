@@ -19,12 +19,19 @@ export interface ConnectFourMoveRecord {
   aiInteraction?: GameAIInteraction;
 }
 
+export interface ConnectFourClockState {
+  redElapsedMs: number;
+  yellowElapsedMs: number;
+  turnStartedAt: number | null;
+}
+
 export interface ConnectFourGameState {
   board: ConnectFourBoard;
   turn: ConnectFourPlayer;
   status: ConnectFourStatus;
   winner: ConnectFourPlayer | null;
   moveHistory: ConnectFourMoveRecord[];
+  clock: ConnectFourClockState;
 }
 
 export interface ConnectFourAIResponse {

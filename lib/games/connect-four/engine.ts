@@ -1,5 +1,6 @@
 import type {
   ConnectFourBoard,
+  ConnectFourClockState,
   ConnectFourGameState,
   ConnectFourMoveRecord,
   ConnectFourPlayer,
@@ -22,6 +23,33 @@ function nextPlayer(player: ConnectFourPlayer): ConnectFourPlayer {
   return player === "red" ? "yellow" : "red";
 }
 
+function createInitialClock(startedAt: number): ConnectFourClockState {
+  return {
+    redElapsedMs: 0,
+    yellowElapsedMs: 0,
+    turnStartedAt: startedAt,
+  };
+}
+
+function addElapsedForPlayer(
+  clock: ConnectFourClockState,
+  player: ConnectFourPlayer,
+  timestamp: number
+): ConnectFourClockState {
+  const turnStartedAt = clock.turnStartedAt ?? timestamp;
+  const elapsedMs = Math.max(0, timestamp - turnStartedAt);
+
+  return player === "red"
+    ? {
+        ...clock,
+        redElapsedMs: clock.redElapsedMs + elapsedMs,
+      }
+    : {
+        ...clock,
+        yellowElapsedMs: clock.yellowElapsedMs + elapsedMs,
+      };
+}
+
 function isInBounds(row: number, column: number): boolean {
   return (
     row >= 0 &&
@@ -31,13 +59,16 @@ function isInBounds(row: number, column: number): boolean {
   );
 }
 
-export function createInitialConnectFourState(): ConnectFourGameState {
+export function createInitialConnectFourState(
+  startedAt = Date.now()
+): ConnectFourGameState {
   return {
     board: createEmptyBoard(),
     turn: "red",
     status: "playing",
     winner: null,
     moveHistory: [],
+    clock: createInitialClock(startedAt),
   };
 }
 
@@ -106,6 +137,7 @@ export function dropDisc(
     : board[0].every((cell) => cell !== null)
       ? "draw"
       : "playing";
+  const elapsedClock = addElapsedForPlayer(state.clock, player, timestamp);
   const boardAfter = cloneBoard(board);
   const moveRecord: ConnectFourMoveRecord = {
     move: { column },
@@ -121,6 +153,10 @@ export function dropDisc(
     status,
     winner: didWin ? player : null,
     moveHistory: [...state.moveHistory, moveRecord],
+    clock: {
+      ...elapsedClock,
+      turnStartedAt: status === "playing" ? timestamp : null,
+    },
   };
 }
 
@@ -172,14 +208,28 @@ function countDirection(
 
 export function setConnectFourPaused(
   state: ConnectFourGameState,
-  paused: boolean
+  paused: boolean,
+  timestamp = Date.now()
 ): ConnectFourGameState {
   if (paused && state.status === "playing") {
-    return { ...state, status: "paused" };
+    const elapsedClock = addElapsedForPlayer(
+      state.clock,
+      state.turn,
+      timestamp
+    );
+    return {
+      ...state,
+      status: "paused",
+      clock: { ...elapsedClock, turnStartedAt: null },
+    };
   }
 
   if (!paused && state.status === "paused") {
-    return { ...state, status: "playing" };
+    return {
+      ...state,
+      status: "playing",
+      clock: { ...state.clock, turnStartedAt: timestamp },
+    };
   }
 
   return state;

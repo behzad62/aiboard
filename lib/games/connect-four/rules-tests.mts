@@ -23,7 +23,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 function playColumns(columns: number[]): ConnectFourGameState {
   return columns.reduce(
     (state, column, index) => dropDisc(state, column, 1_000 + index),
-    createInitialConnectFourState()
+    createInitialConnectFourState(1_000)
   );
 }
 
@@ -36,7 +36,7 @@ function assertWinningSequence(name: string, columns: number[], winner: "red" | 
   });
 }
 
-const initial = createInitialConnectFourState();
+const initial = createInitialConnectFourState(1_000);
 check("dropDisc requires explicit timestamp", dropDisc.length === 3, {
   arity: dropDisc.length,
 });
@@ -50,20 +50,36 @@ check(
 );
 check("red starts", initial.turn === "red", { turn: initial.turn });
 check(
+  "aggregate clock starts at zero for both players",
+  initial.clock.redElapsedMs === 0 &&
+    initial.clock.yellowElapsedMs === 0 &&
+    initial.clock.turnStartedAt === 1_000,
+  initial.clock
+);
+check(
   "all columns initially legal",
   JSON.stringify(getLegalColumns(initial)) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]) &&
     [0, 1, 2, 3, 4, 5, 6].every((column) => isLegalColumn(initial, column)),
   getLegalColumns(initial)
 );
 
-const pausedState = setConnectFourPaused(initial, true);
-const unpausedState = setConnectFourPaused(pausedState, false);
+const pausedState = setConnectFourPaused(initial, true, 1_750);
+const unpausedState = setConnectFourPaused(pausedState, false, 2_000);
 check(
   "paused games have no legal columns and can resume playing",
   pausedState.status === "paused" &&
     getLegalColumns(pausedState).length === 0 &&
     unpausedState.status === "playing",
   { pausedStatus: pausedState.status, unpausedStatus: unpausedState.status }
+);
+check(
+  "pause freezes active player elapsed time and resume restarts that turn",
+  pausedState.clock.redElapsedMs === 750 &&
+    pausedState.clock.yellowElapsedMs === 0 &&
+    pausedState.clock.turnStartedAt === null &&
+    unpausedState.clock.redElapsedMs === 750 &&
+    unpausedState.clock.turnStartedAt === 2_000,
+  { paused: pausedState.clock, unpaused: unpausedState.clock }
 );
 
 const afterFirstMove = dropDisc(initial, 0, 1_234);
@@ -75,6 +91,13 @@ check("landing row moves upward after a disc", getLandingRow(afterFirstMove, 0) 
   landingRow: getLandingRow(afterFirstMove, 0),
 });
 check("turn alternates", afterFirstMove.turn === "yellow", { turn: afterFirstMove.turn });
+check(
+  "dropping a disc adds elapsed time to the player who moved",
+  afterFirstMove.clock.redElapsedMs === 234 &&
+    afterFirstMove.clock.yellowElapsedMs === 0 &&
+    afterFirstMove.clock.turnStartedAt === 1_234,
+  afterFirstMove.clock
+);
 check(
   "move history stores one-based displayColumn",
   afterFirstMove.moveHistory.length === 1 &&
