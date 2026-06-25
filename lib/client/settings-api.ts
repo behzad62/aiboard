@@ -307,8 +307,12 @@ export function savePricingOverride(input: {
 export function saveModelContextOverride(input: {
   fullModelId: string;
   contextWindowTokens?: number;
-  outputReserveTokens?: number;
-  longContextBehavior?: ModelContextProfileOverride["longContextBehavior"];
+  maxOutputTokens?: number;
+  buildOutputReserveTokens?: number;
+  effectiveBuildInputCeilingTokens?: number;
+  longContextQuality?: ModelContextProfileOverride["longContextQuality"];
+  promptCaching?: boolean;
+  recommendedBuildRoles?: ModelContextProfileOverride["recommendedBuildRoles"];
   clear?: boolean;
 }): void {
   const settings = getUserSettings();
@@ -320,11 +324,26 @@ export function saveModelContextOverride(input: {
       ...(input.contextWindowTokens !== undefined
         ? { contextWindowTokens: input.contextWindowTokens }
         : {}),
-      ...(input.outputReserveTokens !== undefined
-        ? { outputReserveTokens: input.outputReserveTokens }
+      ...(input.maxOutputTokens !== undefined
+        ? { maxOutputTokens: input.maxOutputTokens }
         : {}),
-      ...(input.longContextBehavior !== undefined
-        ? { longContextBehavior: input.longContextBehavior }
+      ...(input.buildOutputReserveTokens !== undefined
+        ? { buildOutputReserveTokens: input.buildOutputReserveTokens }
+        : {}),
+      ...(input.effectiveBuildInputCeilingTokens !== undefined
+        ? {
+            effectiveBuildInputCeilingTokens:
+              input.effectiveBuildInputCeilingTokens,
+          }
+        : {}),
+      ...(input.longContextQuality !== undefined
+        ? { longContextQuality: input.longContextQuality }
+        : {}),
+      ...(input.promptCaching !== undefined
+        ? { promptCaching: input.promptCaching }
+        : {}),
+      ...(input.recommendedBuildRoles !== undefined
+        ? { recommendedBuildRoles: input.recommendedBuildRoles }
         : {}),
       updatedAt: new Date().toISOString(),
     };

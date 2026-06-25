@@ -17,8 +17,12 @@ const known = resolveModelContextProfile("gemini-3.5-flash", "google");
 check(
   "known model resolves to configured context size",
   known.contextWindowTokens === 1_048_576 &&
-    known.outputReserveTokens === 65_536 &&
-    known.longContextBehavior === "very_large" &&
+    known.maxOutputTokens === 65_536 &&
+    known.buildOutputReserveTokens === 65_536 &&
+    known.effectiveBuildInputCeilingTokens === 983_040 &&
+    known.longContextQuality === "excellent" &&
+    known.promptCaching === true &&
+    known.recommendedBuildRoles?.includes("architect") &&
     known.source === "registry",
   known
 );
@@ -27,8 +31,10 @@ const unknownKnownProvider = resolveModelContextProfile("new-frontier-model", "o
 check(
   "unknown model resolves to provider default profile",
   unknownKnownProvider.contextWindowTokens === 128_000 &&
-    unknownKnownProvider.outputReserveTokens === 16_384 &&
-    unknownKnownProvider.longContextBehavior === "large" &&
+    unknownKnownProvider.maxOutputTokens === 16_384 &&
+    unknownKnownProvider.buildOutputReserveTokens === 16_384 &&
+    unknownKnownProvider.longContextQuality === "good" &&
+    unknownKnownProvider.promptCaching === true &&
     unknownKnownProvider.source === "provider-default",
   unknownKnownProvider
 );
@@ -37,8 +43,10 @@ const unknownProvider = resolveModelContextProfile("anything", "unlisted");
 check(
   "unknown provider resolves to safe default profile",
   unknownProvider.contextWindowTokens === DEFAULT_MODEL_CONTEXT_PROFILE.contextWindowTokens &&
-    unknownProvider.outputReserveTokens === DEFAULT_MODEL_CONTEXT_PROFILE.outputReserveTokens &&
-    unknownProvider.longContextBehavior === DEFAULT_MODEL_CONTEXT_PROFILE.longContextBehavior &&
+    unknownProvider.maxOutputTokens === DEFAULT_MODEL_CONTEXT_PROFILE.maxOutputTokens &&
+    unknownProvider.buildOutputReserveTokens ===
+      DEFAULT_MODEL_CONTEXT_PROFILE.buildOutputReserveTokens &&
+    unknownProvider.longContextQuality === DEFAULT_MODEL_CONTEXT_PROFILE.longContextQuality &&
     unknownProvider.source === "default",
   unknownProvider
 );
@@ -46,8 +54,12 @@ check(
 const overrides: ModelContextOverrides = {
   "google:gemini-3.5-flash": {
     contextWindowTokens: 777_000,
-    outputReserveTokens: 12_345,
-    longContextBehavior: "large",
+    maxOutputTokens: 20_000,
+    buildOutputReserveTokens: 12_345,
+    effectiveBuildInputCeilingTokens: 700_000,
+    longContextQuality: "good",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker", "summary"],
     updatedAt: "2026-06-25T00:00:00.000Z",
   },
 };
@@ -55,8 +67,12 @@ const overridden = resolveModelContextProfile("gemini-3.5-flash", "google", over
 check(
   "override wins over static registry",
   overridden.contextWindowTokens === 777_000 &&
-    overridden.outputReserveTokens === 12_345 &&
-    overridden.longContextBehavior === "large" &&
+    overridden.maxOutputTokens === 20_000 &&
+    overridden.buildOutputReserveTokens === 12_345 &&
+    overridden.effectiveBuildInputCeilingTokens === 700_000 &&
+    overridden.longContextQuality === "good" &&
+    overridden.promptCaching === false &&
+    overridden.recommendedBuildRoles?.join(",") === "worker,summary" &&
     overridden.source === "override",
   overridden
 );
@@ -64,8 +80,12 @@ check(
 const invalidOverrides: ModelContextOverrides = {
   "google:gemini-3.5-flash": {
     contextWindowTokens: Number.NaN,
-    outputReserveTokens: 999_999_999,
-    longContextBehavior: "impossible" as never,
+    maxOutputTokens: 999_999_999,
+    buildOutputReserveTokens: 999_999_999,
+    effectiveBuildInputCeilingTokens: 999_999_999,
+    longContextQuality: "impossible" as never,
+    promptCaching: "yes" as never,
+    recommendedBuildRoles: ["worker", "unknown" as never],
     updatedAt: "2026-06-25T00:00:00.000Z",
   },
 };
@@ -77,9 +97,14 @@ const invalid = resolveModelContextProfile(
 check(
   "invalid overrides are ignored or clamped safely",
   invalid.contextWindowTokens === known.contextWindowTokens &&
-    invalid.outputReserveTokens <= 128_000 &&
-    invalid.outputReserveTokens <= Math.floor(invalid.contextWindowTokens / 2) &&
-    invalid.longContextBehavior === known.longContextBehavior &&
+    invalid.maxOutputTokens === 128_000 &&
+    invalid.buildOutputReserveTokens <= 128_000 &&
+    invalid.buildOutputReserveTokens <= Math.floor(invalid.contextWindowTokens / 2) &&
+    invalid.effectiveBuildInputCeilingTokens ===
+      invalid.contextWindowTokens - invalid.buildOutputReserveTokens &&
+    invalid.longContextQuality === known.longContextQuality &&
+    invalid.promptCaching === known.promptCaching &&
+    invalid.recommendedBuildRoles?.join(",") === "worker" &&
     invalid.source === "override",
   invalid
 );
@@ -87,20 +112,39 @@ check(
 const tinyOverride = resolveModelContextProfile("local", "custom", {
   "custom:local": {
     contextWindowTokens: 1,
-    outputReserveTokens: 99_999,
+    buildOutputReserveTokens: 99_999,
   },
 });
 check(
   "tiny invalid context is clamped to minimum and reserve cannot exceed half",
   tinyOverride.contextWindowTokens === MIN_CONTEXT_WINDOW_TOKENS &&
-    tinyOverride.outputReserveTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2),
+    tinyOverride.buildOutputReserveTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2) &&
+    tinyOverride.effectiveBuildInputCeilingTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2),
   tinyOverride
 );
 
 check(
   "model selector formats compact context indicator",
-  formatModelContextIndicator(known) === "1.0M ctx / 65.5k out",
+  formatModelContextIndicator(known) === "1.0M ctx / 65.5k reserve",
   formatModelContextIndicator(known)
+);
+
+const gpt55 = resolveModelContextProfile("gpt-5.5", "openai");
+check(
+  "OpenAI GPT-5.5 profile uses current documented context and max output",
+  gpt55.contextWindowTokens === 1_050_000 &&
+    gpt55.maxOutputTokens === 128_000 &&
+    gpt55.buildOutputReserveTokens === 128_000,
+  gpt55
+);
+
+const gpt54Mini = resolveModelContextProfile("gpt-5.4-mini", "openai");
+check(
+  "OpenAI GPT-5.4 Mini profile uses current documented context and max output",
+  gpt54Mini.contextWindowTokens === 400_000 &&
+    gpt54Mini.maxOutputTokens === 128_000 &&
+    gpt54Mini.buildOutputReserveTokens === 128_000,
+  gpt54Mini
 );
 
 process.exit(failed === 0 ? 0 : 1);

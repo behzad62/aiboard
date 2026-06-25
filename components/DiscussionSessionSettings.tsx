@@ -312,13 +312,19 @@ export function DiscussionSessionSettings({
                           )}{" "}
                           context
                         </span>
-                        <span>
-                          {formatContextWindowTokens(
-                            profile.outputReserveTokens
-                          )}{" "}
-                          reserve
-                        </span>
-                        <span>{profile.longContextBehavior}</span>
+                        {(profile.buildOutputReserveTokens ??
+                          profile.maxOutputTokens) != null && (
+                          <span>
+                            {formatContextWindowTokens(
+                              profile.buildOutputReserveTokens ??
+                                profile.maxOutputTokens!
+                            )}{" "}
+                            reserve
+                          </span>
+                        )}
+                        {profile.longContextQuality && (
+                          <span>{profile.longContextQuality}</span>
+                        )}
                         {profile.source === "override" && (
                           <Badge variant="warning">Override</Badge>
                         )}

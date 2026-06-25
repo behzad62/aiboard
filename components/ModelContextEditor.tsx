@@ -12,10 +12,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { saveModelContextOverride } from "@/lib/client/settings-api";
 import {
   formatContextWindowTokens,
-  type LongContextBehavior,
+  type LongContextQuality,
+  type ModelBuildRole,
   type ModelContextProfile,
   type ModelContextProfileOverride,
 } from "@/lib/providers/model-context";
@@ -27,11 +29,23 @@ interface ModelContextEditorProps {
   onSaved: () => Promise<void> | void;
 }
 
-const BEHAVIOR_LABELS: Record<LongContextBehavior, string> = {
-  standard: "Standard",
-  large: "Large",
-  very_large: "Very large",
+const QUALITY_LABELS: Record<LongContextQuality, string> = {
+  poor: "Poor",
+  ok: "Ok",
+  good: "Good",
+  excellent: "Excellent",
 };
+
+const BUILD_ROLES: ModelBuildRole[] = [
+  "architect",
+  "worker",
+  "reviewer",
+  "summary",
+];
+
+function roleLabel(role: ModelBuildRole): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function ModelContextEditor({
   fullModelId,
@@ -40,27 +54,66 @@ export function ModelContextEditor({
   onSaved,
 }: ModelContextEditorProps) {
   const [contextWindow, setContextWindow] = useState("");
-  const [outputReserve, setOutputReserve] = useState("");
-  const [behavior, setBehavior] = useState<LongContextBehavior>("standard");
+  const [maxOutput, setMaxOutput] = useState("");
+  const [buildReserve, setBuildReserve] = useState("");
+  const [inputCeiling, setInputCeiling] = useState("");
+  const [quality, setQuality] = useState<LongContextQuality>("ok");
+  const [promptCaching, setPromptCaching] = useState(false);
+  const [roles, setRoles] = useState<ModelBuildRole[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setContextWindow(String(override?.contextWindowTokens ?? profile.contextWindowTokens));
-    setOutputReserve(String(override?.outputReserveTokens ?? profile.outputReserveTokens));
-    setBehavior(override?.longContextBehavior ?? profile.longContextBehavior);
+    setMaxOutput(String(override?.maxOutputTokens ?? profile.maxOutputTokens ?? ""));
+    setBuildReserve(
+      String(
+        override?.buildOutputReserveTokens ??
+          profile.buildOutputReserveTokens ??
+          ""
+      )
+    );
+    setInputCeiling(
+      String(
+        override?.effectiveBuildInputCeilingTokens ??
+          profile.effectiveBuildInputCeilingTokens ??
+          ""
+      )
+    );
+    setQuality(override?.longContextQuality ?? profile.longContextQuality ?? "ok");
+    setPromptCaching(override?.promptCaching ?? profile.promptCaching ?? false);
+    setRoles(override?.recommendedBuildRoles ?? profile.recommendedBuildRoles ?? []);
     setMessage(null);
   }, [fullModelId, override, profile]);
 
+  const toggleRole = (role: ModelBuildRole) => {
+    setRoles((prev) =>
+      prev.includes(role)
+        ? prev.filter((existing) => existing !== role)
+        : [...prev, role]
+    );
+  };
+
+  const parseOptionalPositive = (value: string): number | undefined | null => {
+    if (value.trim() === "") return undefined;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  };
+
   const saveOverride = async () => {
-    const nextContext = Number(contextWindow);
-    const nextReserve = Number(outputReserve);
-    if (!Number.isFinite(nextContext) || !Number.isFinite(nextReserve)) {
-      setMessage("Enter valid context and reserve token counts.");
-      return;
-    }
-    if (nextContext <= 0 || nextReserve <= 0) {
-      setMessage("Context and reserve token counts must be greater than zero.");
+    const nextContext = parseOptionalPositive(contextWindow);
+    const nextMaxOutput = parseOptionalPositive(maxOutput);
+    const nextReserve = parseOptionalPositive(buildReserve);
+    const nextInputCeiling = parseOptionalPositive(inputCeiling);
+
+    if (
+      nextContext == null ||
+      nextMaxOutput == null ||
+      nextReserve == null ||
+      nextInputCeiling == null
+    ) {
+      setMessage("Enter valid positive token counts.");
       return;
     }
 
@@ -70,8 +123,12 @@ export function ModelContextEditor({
       saveModelContextOverride({
         fullModelId,
         contextWindowTokens: nextContext,
-        outputReserveTokens: nextReserve,
-        longContextBehavior: behavior,
+        maxOutputTokens: nextMaxOutput,
+        buildOutputReserveTokens: nextReserve,
+        effectiveBuildInputCeilingTokens: nextInputCeiling,
+        longContextQuality: quality,
+        promptCaching,
+        recommendedBuildRoles: roles,
       });
       setMessage("Context override saved");
       await onSaved();
@@ -106,13 +163,19 @@ export function ModelContextEditor({
       </div>
 
       <p className="text-muted-foreground">
-        {formatContextWindowTokens(profile.contextWindowTokens)} context /{" "}
-        {formatContextWindowTokens(profile.outputReserveTokens)} reserve
-        {" - "}
-        {BEHAVIOR_LABELS[profile.longContextBehavior]}
+        {formatContextWindowTokens(profile.contextWindowTokens)} context
+        {profile.maxOutputTokens
+          ? ` / ${formatContextWindowTokens(profile.maxOutputTokens)} max output`
+          : ""}
+        {profile.buildOutputReserveTokens
+          ? ` / ${formatContextWindowTokens(profile.buildOutputReserveTokens)} reserve`
+          : ""}
+        {profile.longContextQuality
+          ? ` - ${QUALITY_LABELS[profile.longContextQuality]} long context`
+          : ""}
       </p>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         <div className="space-y-1">
           <Label htmlFor={`${fullModelId}-context-window`}>Context tokens</Label>
           <Input
@@ -126,32 +189,83 @@ export function ModelContextEditor({
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`${fullModelId}-output-reserve`}>Output reserve</Label>
+          <Label htmlFor={`${fullModelId}-max-output`}>Max output</Label>
           <Input
-            id={`${fullModelId}-output-reserve`}
+            id={`${fullModelId}-max-output`}
             type="number"
             min="1"
             step="1024"
-            value={outputReserve}
-            onChange={(e) => setOutputReserve(e.target.value)}
+            value={maxOutput}
+            onChange={(e) => setMaxOutput(e.target.value)}
             placeholder="e.g. 8192"
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`${fullModelId}-long-context`}>Long context</Label>
+          <Label htmlFor={`${fullModelId}-build-reserve`}>Build reserve</Label>
+          <Input
+            id={`${fullModelId}-build-reserve`}
+            type="number"
+            min="1"
+            step="1024"
+            value={buildReserve}
+            onChange={(e) => setBuildReserve(e.target.value)}
+            placeholder="e.g. 8192"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${fullModelId}-input-ceiling`}>Input ceiling</Label>
+          <Input
+            id={`${fullModelId}-input-ceiling`}
+            type="number"
+            min="1"
+            step="1024"
+            value={inputCeiling}
+            onChange={(e) => setInputCeiling(e.target.value)}
+            placeholder="e.g. 120000"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="space-y-1">
+          <Label htmlFor={`${fullModelId}-long-context-quality`}>
+            Long-context quality
+          </Label>
           <Select
-            value={behavior}
-            onValueChange={(value) => setBehavior(value as LongContextBehavior)}
+            value={quality}
+            onValueChange={(value) => setQuality(value as LongContextQuality)}
           >
-            <SelectTrigger id={`${fullModelId}-long-context`}>
+            <SelectTrigger id={`${fullModelId}-long-context-quality`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="standard">Standard</SelectItem>
-              <SelectItem value="large">Large</SelectItem>
-              <SelectItem value="very_large">Very large</SelectItem>
+              <SelectItem value="poor">Poor</SelectItem>
+              <SelectItem value="ok">Ok</SelectItem>
+              <SelectItem value="good">Good</SelectItem>
+              <SelectItem value="excellent">Excellent</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div className="flex items-end gap-2 pb-2">
+          <Switch checked={promptCaching} onCheckedChange={setPromptCaching} />
+          <Label>Prompt caching</Label>
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <Label>Recommended Build roles</Label>
+        <div className="flex flex-wrap gap-2">
+          {BUILD_ROLES.map((role) => (
+            <Button
+              key={role}
+              type="button"
+              size="sm"
+              variant={roles.includes(role) ? "secondary" : "outline"}
+              onClick={() => toggleRole(role)}
+            >
+              {roleLabel(role)}
+            </Button>
+          ))}
         </div>
       </div>
 

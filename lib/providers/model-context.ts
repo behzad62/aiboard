@@ -1,4 +1,5 @@
-export type LongContextBehavior = "standard" | "large" | "very_large";
+export type LongContextQuality = "poor" | "ok" | "good" | "excellent";
+export type ModelBuildRole = "architect" | "worker" | "reviewer" | "summary";
 
 export type ModelContextProfileSource =
   | "registry"
@@ -11,15 +12,23 @@ export interface ModelContextProfile {
   providerId: string;
   fullModelId: string;
   contextWindowTokens: number;
-  outputReserveTokens: number;
-  longContextBehavior: LongContextBehavior;
+  maxOutputTokens?: number;
+  buildOutputReserveTokens?: number;
+  effectiveBuildInputCeilingTokens?: number;
+  longContextQuality?: LongContextQuality;
+  promptCaching?: boolean;
+  recommendedBuildRoles?: ModelBuildRole[];
   source: ModelContextProfileSource;
 }
 
 export interface ModelContextProfileOverride {
   contextWindowTokens?: number | null;
-  outputReserveTokens?: number | null;
-  longContextBehavior?: LongContextBehavior | null;
+  maxOutputTokens?: number | null;
+  buildOutputReserveTokens?: number | null;
+  effectiveBuildInputCeilingTokens?: number | null;
+  longContextQuality?: LongContextQuality | null;
+  promptCaching?: boolean | null;
+  recommendedBuildRoles?: ModelBuildRole[] | null;
   updatedAt?: string;
 }
 
@@ -32,13 +41,24 @@ type StaticModelContextProfile = Omit<
 
 export const MIN_CONTEXT_WINDOW_TOKENS = 4_096;
 export const MAX_CONTEXT_WINDOW_TOKENS = 2_000_000;
-const MIN_OUTPUT_RESERVE_TOKENS = 256;
-const MAX_OUTPUT_RESERVE_TOKENS = 128_000;
+const MIN_OUTPUT_TOKENS = 256;
+const MAX_OUTPUT_TOKENS = 128_000;
+
+const ALL_BUILD_ROLES: ModelBuildRole[] = [
+  "architect",
+  "worker",
+  "reviewer",
+  "summary",
+];
 
 export const DEFAULT_MODEL_CONTEXT_PROFILE: StaticModelContextProfile = {
   contextWindowTokens: 32_768,
-  outputReserveTokens: 4_096,
-  longContextBehavior: "standard",
+  maxOutputTokens: 4_096,
+  buildOutputReserveTokens: 4_096,
+  effectiveBuildInputCeilingTokens: 28_672,
+  longContextQuality: "ok",
+  promptCaching: false,
+  recommendedBuildRoles: ["worker"],
 };
 
 export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
@@ -47,144 +67,224 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
 > = {
   openai: {
     contextWindowTokens: 128_000,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   anthropic: {
     contextWindowTokens: 200_000,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   foundry: {
     contextWindowTokens: 200_000,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   google: {
     contextWindowTokens: 1_048_576,
-    outputReserveTokens: 65_536,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   openrouter: {
     contextWindowTokens: 128_000,
-    outputReserveTokens: 8_192,
-    longContextBehavior: "large",
+    maxOutputTokens: 8_192,
+    buildOutputReserveTokens: 8_192,
+    longContextQuality: "ok",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer"],
   },
   custom: {
     contextWindowTokens: 32_768,
-    outputReserveTokens: 4_096,
-    longContextBehavior: "standard",
+    maxOutputTokens: 4_096,
+    buildOutputReserveTokens: 4_096,
+    longContextQuality: "ok",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker"],
   },
 };
 
 export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> = {
   "openai:gpt-5.5": {
-    contextWindowTokens: 400_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "openai:gpt-5.5-pro": {
-    contextWindowTokens: 400_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
   },
   "openai:gpt-5.4": {
-    contextWindowTokens: 400_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "openai:gpt-5.4-pro": {
-    contextWindowTokens: 400_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
   },
   "openai:gpt-5.3-codex": {
     contextWindowTokens: 400_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer"],
   },
   "openai:gpt-5.4-mini": {
     contextWindowTokens: 400_000,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   "anthropic:claude-fable-5": {
     contextWindowTokens: 1_000_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "anthropic:claude-opus-4-8": {
     contextWindowTokens: 200_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
   },
   "anthropic:claude-sonnet-4-6": {
     contextWindowTokens: 1_000_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "anthropic:claude-haiku-4-5-20251001": {
     contextWindowTokens: 200_000,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "summary"],
   },
   "google:gemini-3.5-flash": {
     contextWindowTokens: 1_048_576,
-    outputReserveTokens: 65_536,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "google:gemini-3.1-pro-preview": {
     contextWindowTokens: 1_048_576,
-    outputReserveTokens: 65_536,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "google:gemini-2.5-flash": {
     contextWindowTokens: 1_048_576,
-    outputReserveTokens: 65_536,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   "openrouter:qwen/qwen3.7-max": {
     contextWindowTokens: 262_144,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "worker", "reviewer"],
   },
   "openrouter:qwen/qwen3.7-plus": {
     contextWindowTokens: 262_144,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   "openrouter:deepseek/deepseek-v4-pro": {
     contextWindowTokens: 128_000,
-    outputReserveTokens: 8_192,
-    longContextBehavior: "large",
+    maxOutputTokens: 8_192,
+    buildOutputReserveTokens: 8_192,
+    longContextQuality: "ok",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "worker", "reviewer"],
   },
   "openrouter:deepseek/deepseek-v4-flash": {
     contextWindowTokens: 1_000_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   "openrouter:minimax/minimax-m3": {
     contextWindowTokens: 1_000_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "summary"],
   },
   "openrouter:z-ai/glm-5.2": {
     contextWindowTokens: 1_000_000,
-    outputReserveTokens: 32_768,
-    longContextBehavior: "very_large",
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer"],
   },
   "openrouter:nex-agi/nex-n2-pro:free": {
     contextWindowTokens: 262_144,
-    outputReserveTokens: 16_384,
-    longContextBehavior: "large",
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker"],
   },
 };
 
-const LONG_CONTEXT_BEHAVIORS = new Set<LongContextBehavior>([
-  "standard",
-  "large",
-  "very_large",
+const LONG_CONTEXT_QUALITIES = new Set<LongContextQuality>([
+  "poor",
+  "ok",
+  "good",
+  "excellent",
 ]);
+const BUILD_ROLES = new Set<ModelBuildRole>(ALL_BUILD_ROLES);
 
 function fullModelId(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
@@ -200,6 +300,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeRoles(
+  overrideRoles: unknown,
+  baseRoles: ModelBuildRole[] | undefined
+): ModelBuildRole[] | undefined {
+  if (!Array.isArray(overrideRoles)) return baseRoles ? [...baseRoles] : undefined;
+  const roles = overrideRoles.filter((role): role is ModelBuildRole =>
+    BUILD_ROLES.has(role as ModelBuildRole)
+  );
+  const deduped = [...new Set(roles)];
+  return deduped.length > 0 ? deduped : baseRoles ? [...baseRoles] : undefined;
+}
+
 function normalizeProfile(input: {
   providerId: string;
   modelId: string;
@@ -213,29 +325,67 @@ function normalizeProfile(input: {
     MIN_CONTEXT_WINDOW_TOKENS,
     MAX_CONTEXT_WINDOW_TOKENS
   );
-  const maxReserve = Math.min(
-    MAX_OUTPUT_RESERVE_TOKENS,
-    Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.floor(contextWindowTokens / 2))
+  const maxOutputCeiling = Math.min(MAX_OUTPUT_TOKENS, contextWindowTokens);
+  const overrideMaxOutput = finiteInteger(input.override?.maxOutputTokens);
+  const baseMaxOutput = finiteInteger(input.base.maxOutputTokens);
+  const maxOutputTokens = clamp(
+    overrideMaxOutput ?? baseMaxOutput ?? Math.min(4_096, maxOutputCeiling),
+    MIN_OUTPUT_TOKENS,
+    maxOutputCeiling
   );
-  const overrideReserve = finiteInteger(input.override?.outputReserveTokens);
-  const outputReserveTokens = clamp(
-    overrideReserve ?? input.base.outputReserveTokens,
-    MIN_OUTPUT_RESERVE_TOKENS,
+  const maxReserve = Math.min(
+    maxOutputTokens,
+    MAX_OUTPUT_TOKENS,
+    Math.max(MIN_OUTPUT_TOKENS, Math.floor(contextWindowTokens / 2))
+  );
+  const overrideReserve = finiteInteger(
+    input.override?.buildOutputReserveTokens
+  );
+  const baseReserve = finiteInteger(input.base.buildOutputReserveTokens);
+  const buildOutputReserveTokens = clamp(
+    overrideReserve ?? baseReserve ?? maxOutputTokens,
+    MIN_OUTPUT_TOKENS,
     maxReserve
   );
-  const behavior = LONG_CONTEXT_BEHAVIORS.has(
-    input.override?.longContextBehavior as LongContextBehavior
+  const maxInputCeiling = Math.max(
+    0,
+    contextWindowTokens - buildOutputReserveTokens
+  );
+  const overrideInputCeiling = finiteInteger(
+    input.override?.effectiveBuildInputCeilingTokens
+  );
+  const baseInputCeiling = finiteInteger(
+    input.base.effectiveBuildInputCeilingTokens
+  );
+  const effectiveBuildInputCeilingTokens = clamp(
+    overrideInputCeiling ?? baseInputCeiling ?? maxInputCeiling,
+    0,
+    maxInputCeiling
+  );
+  const quality = LONG_CONTEXT_QUALITIES.has(
+    input.override?.longContextQuality as LongContextQuality
   )
-    ? (input.override?.longContextBehavior as LongContextBehavior)
-    : input.base.longContextBehavior;
+    ? (input.override?.longContextQuality as LongContextQuality)
+    : input.base.longContextQuality;
+  const promptCaching =
+    typeof input.override?.promptCaching === "boolean"
+      ? input.override.promptCaching
+      : input.base.promptCaching;
 
   return {
     modelId: input.modelId,
     providerId: input.providerId,
     fullModelId: fullModelId(input.providerId, input.modelId),
     contextWindowTokens,
-    outputReserveTokens,
-    longContextBehavior: behavior,
+    maxOutputTokens,
+    buildOutputReserveTokens,
+    effectiveBuildInputCeilingTokens,
+    longContextQuality: quality,
+    promptCaching,
+    recommendedBuildRoles: normalizeRoles(
+      input.override?.recommendedBuildRoles,
+      input.base.recommendedBuildRoles
+    ),
     source: input.source,
   };
 }

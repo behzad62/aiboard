@@ -30,9 +30,12 @@ function formatUnsupported(types: CapabilityInputType[]): string {
 export function formatModelContextIndicator(
   profile: ModelContextProfile
 ): string {
-  return `${formatContextWindowTokens(
-    profile.contextWindowTokens
-  )} ctx / ${formatContextWindowTokens(profile.outputReserveTokens)} out`;
+  const context = `${formatContextWindowTokens(profile.contextWindowTokens)} ctx`;
+  return profile.buildOutputReserveTokens
+    ? `${context} / ${formatContextWindowTokens(
+        profile.buildOutputReserveTokens
+      )} reserve`
+    : context;
 }
 
 export function ModelSelector({
