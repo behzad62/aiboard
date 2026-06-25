@@ -102,11 +102,23 @@ export function scheduleBuildToolActions(
   const served: ScheduledToolAction[] = [];
   const skipped: SkippedToolAction[] = [];
   let safeRuns = 0;
+  let contextRetrieves = 0;
   const mutationPaths = new Set<string>();
 
   for (const action of actions) {
     const scheduleClass = classifyBuildToolActionForScheduling(action);
     const label = labelFor(action);
+    if (action.action === "context_retrieve") {
+      if (contextRetrieves > 0) {
+        skipped.push({
+          action,
+          label,
+          reason: "only one context_retrieve can run per batch",
+        });
+        continue;
+      }
+      contextRetrieves += 1;
+    }
     if (scheduleClass === "safe_run") {
       if (options.allowSafeRunQueue && safeRuns < options.maxSafeRuns) {
         safeRuns += 1;

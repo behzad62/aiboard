@@ -6,7 +6,11 @@ import {
   getRepoDiffViaRunner,
   listIssuesViaRunner,
 } from "../lib/client/repo-runner";
-import { callMcpTool, type RunnerConfig } from "../lib/client/runner";
+import {
+  callMcpTool,
+  supportsSafeMcpBridge,
+  type RunnerConfig,
+} from "../lib/client/runner";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -46,6 +50,11 @@ const headerValue = (init: RequestInit | undefined, name: string): string | unde
 };
 
 async function main() {
+  check("mcp-version: v10 supports safe MCP bridge", supportsSafeMcpBridge(10));
+  check("mcp-version: newer runner supports safe MCP bridge", supportsSafeMcpBridge(12));
+  check("mcp-version: v9 does not support safe MCP bridge", !supportsSafeMcpBridge(9));
+  check("mcp-version: unknown version does not support safe MCP bridge", !supportsSafeMcpBridge(undefined));
+
   // 0. Successful /mcp/call parses MCP text/error/truncation fields.
   mockFetch(200, {
     ok: true,

@@ -9,7 +9,10 @@ import {
   type ArchitectAction,
   type ConversationMessage,
 } from "../lib/orchestrator/build";
-import { packToolBatchResult } from "../lib/orchestrator/build-tool-scheduler";
+import {
+  packToolBatchResult,
+  scheduleBuildToolActions,
+} from "../lib/orchestrator/build-tool-scheduler";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -182,6 +185,38 @@ check(
     normalPacked.includes("[truncated: output cap reached]") &&
       !normalPacked.includes("y".repeat(700)),
     normalPacked
+  );
+}
+
+{
+  const firstRetrieve: ArchitectAction = {
+    action: "context_retrieve",
+    ref: "ctx_first",
+    maxTokens: 4000,
+    offsetChars: 0,
+  };
+  const secondRetrieve: ArchitectAction = {
+    action: "context_retrieve",
+    ref: "ctx_second",
+    maxTokens: 4000,
+    offsetChars: 0,
+  };
+  const scheduled = scheduleBuildToolActions([firstRetrieve, secondRetrieve], {
+    allowSafeRunQueue: false,
+    maxSafeRuns: 0,
+  });
+  check(
+    "scheduler serves only one context_retrieve per batch",
+    scheduled.served.length === 1 &&
+      scheduled.served[0].action === firstRetrieve &&
+      scheduled.skipped.length === 1 &&
+      scheduled.skipped[0].action === secondRetrieve,
+    scheduled
+  );
+  check(
+    "scheduler explains skipped extra context_retrieve",
+    /context_retrieve/i.test(scheduled.skipped[0]?.reason ?? ""),
+    scheduled.skipped
   );
 }
 

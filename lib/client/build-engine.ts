@@ -181,6 +181,7 @@ import {
   runCommand,
   searchViaRunner,
   stripAnsi,
+  supportsSafeMcpBridge,
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
@@ -976,10 +977,17 @@ export async function runBuildDiscussion(
           .map(([key, def]) => `${key}${required.has(key) ? "" : "?"}: ${def?.type ?? "any"}`);
         return `${t.name}({${params.join(", ")}})`;
       };
-      const servers = (await listMcpServers(config)) ?? [];
-      const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
-      if (ready.length > 0) {
-        mcpToolsDoc = ready
+      if (!supportsSafeMcpBridge(health.version)) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `MCP bridge disabled: runner ${health.version == null ? "version is unknown" : `v${health.version}`} does not report truncation-safe MCP results. Update the local runner to v10+ before using MCP tools so long outputs remain retrievable.`,
+        });
+      } else {
+        const servers = (await listMcpServers(config)) ?? [];
+        const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
+        if (ready.length > 0) {
+          mcpToolsDoc = ready
           .map(
             (s) =>
               `Server "${s.name}":\n${s.tools
@@ -987,19 +995,20 @@ export async function runBuildDiscussion(
                 .map((t) => `- ${toolSignature(t)} — ${truncate(t.description ?? "", 160)}`)
                 .join("\n")}`
           )
-          .join("\n");
-        emit({
-          type: "diagnostic",
-          phase: "initializing",
-          message: `MCP bridge connected: ${ready.map((s) => `${s.name} (${s.tools.length} tools)`).join(", ")}`,
-        });
-      }
-      for (const s of servers.filter((x) => x.status === "error")) {
-        emit({
-          type: "diagnostic",
-          phase: "initializing",
-          message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
-        });
+            .join("\n");
+          emit({
+            type: "diagnostic",
+            phase: "initializing",
+            message: `MCP bridge connected: ${ready.map((s) => `${s.name} (${s.tools.length} tools)`).join(", ")}`,
+          });
+        }
+        for (const s of servers.filter((x) => x.status === "error")) {
+          emit({
+            type: "diagnostic",
+            phase: "initializing",
+            message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
+          });
+        }
       }
       // Capture INITIAL Git state of the runner folder (NRW-003). Surfacing
       // branch / dirty state in the UI keeps it out of the model transcript.

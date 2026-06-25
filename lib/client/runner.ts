@@ -19,6 +19,11 @@ export interface CommandResult {
 }
 
 export const DEFAULT_RUNNER_URL = "http://127.0.0.1:8787";
+export const SAFE_MCP_RUNNER_VERSION = 10;
+
+export function supportsSafeMcpBridge(version: number | undefined): boolean {
+  return typeof version === "number" && version >= SAFE_MCP_RUNNER_VERSION;
+}
 
 /** Shared header set for runner requests (JSON + the runner auth token). */
 export function headers(token: string): HeadersInit {
