@@ -43,6 +43,7 @@ import { loadAttachmentPayloads } from "../attachments/storage";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import { modelSupportsInputTypes } from "../providers/capabilities";
+import type { BuildSkillEvent } from "../skills/types";
 
 export type OrchestratorEvent =
   | { type: "status"; status: string; round?: number; maxRounds?: number }
@@ -100,6 +101,9 @@ export type OrchestratorEvent =
       skipped: number;
       summary: string;
     }
+  | ({
+      type: "skill_evidence";
+    } & BuildSkillEvent)
   | { type: "convergence"; score: number; reason?: string }
   | {
       type: "final_answer";

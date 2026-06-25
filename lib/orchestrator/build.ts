@@ -2134,6 +2134,8 @@ export function buildArchitectPlanPrompt(input: {
   githubLabels?: string[];
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
+  /** AIBoard-native compact skill context selected by the engine. */
+  skillContext?: string;
 }): string {
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). You may send a few independent reads/searches together; the engine runs the safe ones as a batch and returns a served/skipped report. Otherwise, plan now.`
@@ -2154,6 +2156,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
     scoreboardSection(input.scoreboard),
+    input.skillContext,
     "",
     readOption,
     searchToolDoc(input.searchesLeft),
@@ -2184,6 +2187,8 @@ export function buildWorkerTaskPrompt(input: {
   architectNotes: string;
   toolInstructions?: string;
   verbosityInstruction?: string;
+  /** AIBoard-native compact skill context selected by the engine. */
+  skillContext?: string;
 }): string {
   return [
     `You are an AI engineer on a team building a project. The Architect assigned you ONE task. Complete it fully — other tasks are handled by teammates, so do not do their work or restructure files outside your task.`,
@@ -2201,6 +2206,10 @@ export function buildWorkerTaskPrompt(input: {
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
+    input.skillContext,
+    input.skillContext?.trim()
+      ? "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose with RED/GREEN checks, root-cause notes, review notes, or exemption reasons as applicable."
+      : "",
     "Do not add or import a new test framework, browser automation package, or config file unless this task explicitly includes updating dependency files such as package.json and the lockfile. For browser verification, prefer MCP browser tools when available instead of creating Playwright/Cypress test files; if you must create tests that import a package, add the dependency and keep the verify command passing.",
     input.task.status === "fixing"
       ? "This is a FIX round: the Architect reviewed previous output and the instructions above tell you what to correct. Use read_range/search plus patch for existing files. If a file is missing or too large for one response, use append chunks. Do not emit full-file blocks for existing files."
@@ -2245,6 +2254,10 @@ export function buildArchitectReviewPrompt(input: {
   githubCli?: { available: boolean; authenticated: boolean };
   /** Existing GitHub label names so the model can prefer them over new ones. */
   githubLabels?: string[];
+  /** AIBoard-native compact skill context selected by the engine. */
+  skillContext?: string;
+  /** Durable worker skill evidence and gaps captured by the engine. */
+  skillEvidenceText?: string;
 }): string {
   return [
     ARCHITECT_ROLE,
@@ -2260,11 +2273,15 @@ export function buildArchitectReviewPrompt(input: {
     "",
     "Work completed since your last review (compact landed-change digest, not full file contents):",
     input.executedText,
+    input.skillEvidenceText?.trim()
+      ? `\n${input.skillEvidenceText}\nTreat missing skill evidence as a review signal: request a fix unless the task is clearly exempt and otherwise verified.`
+      : "",
     input.outstandingTasks?.trim()
       ? `\nRequired tasks still not done:\n${input.outstandingTasks}\nDo NOT set "done": true while any required task is listed here. Approve completed outstanding tasks, send unfinished ones back with precise fix instructions, or create replacement tasks that explicitly cover the missing work.`
       : "",
     "",
     scoreboardSection(input.scoreboard),
+    input.skillContext,
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     input.readHopsLeft && input.readHopsLeft > 0

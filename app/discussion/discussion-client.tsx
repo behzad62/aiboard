@@ -15,6 +15,10 @@ import {
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
+import {
+  BuildSkillsPanel,
+  type BuildSkillEventView,
+} from "@/components/BuildSkillsPanel";
 import { BuildStopReportPanel } from "@/components/BuildStopReportPanel";
 import { BuildToolReviewPanel } from "@/components/BuildToolReviewPanel";
 import { BuildTranscriptPanel } from "@/components/BuildTranscriptPanel";
@@ -176,6 +180,7 @@ function DiscussionPageInner() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
+  const [buildSkillEvents, setBuildSkillEvents] = useState<BuildSkillEventView[]>([]);
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [buildStopReport, setBuildStopReport] =
     useState<BuildStopReport | null>(null);
@@ -411,6 +416,21 @@ function DiscussionPageInner() {
             return next;
           });
           break;
+        case "skill_evidence":
+          setBuildSkillEvents((prev) =>
+            [
+              ...prev,
+              {
+                scope: event.scope,
+                phase: event.phase,
+                actor: event.actor,
+                activeSkills: event.activeSkills,
+                evidence: event.evidence,
+                warnings: event.warnings,
+              },
+            ].slice(-80)
+          );
+          break;
         case "token_usage":
           if (discussion?.mode === "build") {
             setBuildUsage((prev) => {
@@ -538,6 +558,7 @@ function DiscussionPageInner() {
           ? createBuildUsageWindow(new Date().toISOString())
           : null
       );
+      setBuildSkillEvents([]);
       // Restore the tab-session activity log so it survives navigation.
       setDiagnostics(loadDiagnostics(id));
       setAttachments(data.attachments ?? []);
@@ -746,6 +767,7 @@ function DiscussionPageInner() {
     );
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
+    setBuildSkillEvents([]);
     setWrittenFiles([]);
     setCommandRuns([]);
     setRepoStatus(null);
@@ -1213,6 +1235,10 @@ function DiscussionPageInner() {
           prUrl={repoWorkflow?.prUrl ?? null}
           usage={buildUsage}
         />
+      )}
+
+      {discussion.mode === "build" && (
+        <BuildSkillsPanel events={buildSkillEvents} />
       )}
 
       {discussion.mode === "build" &&

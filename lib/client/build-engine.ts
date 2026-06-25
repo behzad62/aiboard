@@ -186,6 +186,13 @@ import {
   type OrchestratorEvent,
 } from "./engine";
 import { estimateModelCallUsage } from "./token-usage";
+import {
+  createSkillEvidence,
+  formatSkillEvidenceDigest,
+} from "@/lib/skills/evidence";
+import { selectSkills } from "@/lib/skills/router";
+import { activeSkillIds, renderSkillContext } from "@/lib/skills/render";
+import type { SkillActivation, SkillActivationInput, SkillEvidence } from "@/lib/skills/types";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 type StructuredTraceValidation =
@@ -2421,6 +2428,44 @@ ${truncate(result.text, 8_000)}`,
       ? `Previous incomplete build transcript excerpt. Use this to resume from the stopped/failed state instead of starting over:\n\n${previousBuildContext}`
       : "");
 
+  const skillEvidenceRecords: SkillEvidence[] = [];
+  const skillInput = (
+    phase: SkillActivationInput["phase"],
+    actor: SkillActivationInput["actor"],
+    extra: Partial<SkillActivationInput> = {}
+  ): SkillActivationInput => ({
+    ...extra,
+    phase,
+    actor,
+    userRequest: discussion.topic,
+    runnerAvailable: !!runner,
+    repoAvailable: !!runner && repoIsGit,
+    mcpServers: mcpToolsDoc ? ["runner-mcp"] : [],
+    riskFlags: [
+      ...(githubWorkflow ? ["github-workflow"] : []),
+      ...(runner ? ["runner"] : []),
+      ...(extra.riskFlags ?? []),
+    ],
+  });
+  const emitSkillActivation = (
+    scope: string,
+    phase: SkillActivationInput["phase"],
+    actor: SkillActivationInput["actor"],
+    activation: SkillActivation,
+    evidence?: SkillEvidence[],
+    warnings?: string[]
+  ) => {
+    emit({
+      type: "skill_evidence",
+      scope,
+      phase,
+      actor,
+      activeSkills: activeSkillIds(activation),
+      evidence,
+      warnings,
+    });
+  };
+
   const ARCHITECT_SYSTEM_ROLE =
     "You are the Architect orchestrating an AI engineering team. Follow the response format exactly.";
 
@@ -3535,6 +3580,15 @@ ${truncate(result.text, 8_000)}`,
   if (stopForGuardrail(null)) return;
 
   if (!resumedFromCheckpoint) {
+    const planSkills = selectSkills(skillInput("plan", "architect"));
+    emitSkillActivation(
+      "Architect planning",
+      "plan",
+      "architect",
+      planSkills,
+      undefined,
+      planSkills.evidenceRequired
+    );
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
       label: "Architect is planning the project",
@@ -3558,6 +3612,7 @@ ${truncate(result.text, 8_000)}`,
         previousSummary: truncate(previousSummary, 6_000),
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
+        skillContext: renderSkillContext(planSkills),
       }),
       // read_range isn't offered during planning, so reads + searches only.
       budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
@@ -3935,6 +3990,20 @@ ${truncate(result.text, 8_000)}`,
           contextChunks.push(`\n--- ${path} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`);
         }
       }
+      const workerSkills = selectSkills(
+        skillInput("worker", "worker", {
+          task,
+          touchedPaths: [...(task.contextFiles ?? []), ...(task.outputPaths ?? [])],
+        })
+      );
+      emitSkillActivation(
+        `${task.id}: ${task.title}`,
+        "worker",
+        "worker",
+        workerSkills,
+        undefined,
+        workerSkills.evidenceRequired
+      );
 
       const startedAt = Date.now();
       let output = "";
@@ -3965,6 +4034,7 @@ ${truncate(result.text, 8_000)}`,
                 appends: WORKER_APPENDS_PER_TASK,
               }),
               verbosityInstruction,
+              skillContext: renderSkillContext(workerSkills),
             }),
           },
         ];
@@ -4272,6 +4342,23 @@ ${truncate(result.text, 8_000)}`,
         const files = [...new Set([...patchedFiles, ...artifactResult.written])];
         const issues = [...toolIssues, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
+        const skillEvidence = createSkillEvidence({
+          taskId: task.id,
+          actor: worker.displayName,
+          activeSkillIds: workerSkills.overlays,
+          workerOutput: output,
+        });
+        if (skillEvidence.length > 0) {
+          skillEvidenceRecords.push(...skillEvidence);
+          emitSkillActivation(
+            `${task.id}: ${task.title}`,
+            "worker",
+            "worker",
+            workerSkills,
+            skillEvidence,
+            skillEvidence.flatMap((record) => record.violations)
+          );
+        }
         // The model DID respond — a no-files result is a quality failure
         // (bad output), distinct from a provider denial.
         if (files.length === 0) {
@@ -4298,11 +4385,12 @@ ${truncate(result.text, 8_000)}`,
           issues.length > 0
             ? `\nWRITE ISSUES — these changes did NOT land; act on them in your review:\n${issues.map((s) => `- ${s}`).join("\n")}`
             : "";
+        const skillNotes = formatSkillEvidenceDigest(skillEvidence);
         executed.push({
           task,
           worker,
           files,
-          notes: truncate(prose, 1_500) + issueNotes,
+          notes: truncate(prose, 1_500) + (skillNotes ? `\n\n${skillNotes}` : "") + issueNotes,
           changes: waveChangeSummaries.get(task.id) ?? [],
         });
         emit({
@@ -4547,6 +4635,28 @@ ${truncate(result.text, 8_000)}`,
       }
     }
 
+    const waveTaskIds = new Set(executed.map(({ task }) => task.id));
+    const waveSkillEvidence = skillEvidenceRecords.filter(
+      (record) => record.taskId != null && waveTaskIds.has(record.taskId)
+    );
+    const reviewSkills = selectSkills(
+      skillInput("review", "reviewer", {
+        touchedPaths: executed.flatMap(({ files }) => files),
+        riskFlags: verifyFeedback ? ["verification"] : [],
+      })
+    );
+    emitSkillActivation(
+      `Architect review wave ${cycle}`,
+      "review",
+      "reviewer",
+      reviewSkills,
+      waveSkillEvidence,
+      [
+        ...reviewSkills.evidenceRequired,
+        ...waveSkillEvidence.flatMap((record) => record.violations),
+      ]
+    );
+
     emit({
       type: "diagnostic",
       phase: "judging",
@@ -4589,6 +4699,8 @@ ${truncate(result.text, 8_000)}`,
         scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
+        skillContext: renderSkillContext(reviewSkills),
+        skillEvidenceText: formatSkillEvidenceDigest(waveSkillEvidence),
       }),
       budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
       appendContext: (textChunk) => {
