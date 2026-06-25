@@ -153,6 +153,7 @@ export function DiscussionSessionSettings({
     providerId: m.providerId,
     description: m.description,
     capabilities: m.capabilities,
+    contextProfile: m.contextProfile,
   }));
   const buildContextRows = Array.from(
     new Set([

@@ -5,6 +5,7 @@ import {
   resolveModelContextProfile,
   type ModelContextOverrides,
 } from "../lib/providers/model-context";
+import { formatModelContextIndicator } from "../components/ModelSelector";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -94,6 +95,12 @@ check(
   tinyOverride.contextWindowTokens === MIN_CONTEXT_WINDOW_TOKENS &&
     tinyOverride.outputReserveTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2),
   tinyOverride
+);
+
+check(
+  "model selector formats compact context indicator",
+  formatModelContextIndicator(known) === "1.0M ctx / 65.5k out",
+  formatModelContextIndicator(known)
 );
 
 process.exit(failed === 0 ? 0 : 1);
