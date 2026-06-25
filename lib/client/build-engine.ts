@@ -69,6 +69,15 @@ import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
 import {
+  buildCommandOutputDigest,
+  buildFetchDigest,
+  buildRepoDiffDigest,
+  buildToolExchangeDigest,
+  createContextBlob,
+  retrieveContextBlobText,
+  type ContextBlobKind,
+} from "@/lib/build-context/context-store";
+import {
   buildArchitectPlanPrompt,
   buildArchitectActionResponseFormat,
   buildArchitectReviewPrompt,
@@ -112,6 +121,7 @@ import {
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
+  type ContextRetrieveAction,
   type FetchAction,
   type FileChangeOperation,
   type PlanAction,
@@ -173,6 +183,7 @@ import {
   accumulateModelStats,
   getBuildCheckpoint,
   getBuildFiles,
+  getContextBlob,
   getFinalResult,
   getMessagesForDiscussion,
   getUserSettings,
@@ -181,6 +192,7 @@ import {
   updateDiscussion,
   upsertBuildCheckpoint,
   upsertBuildFile,
+  upsertContextBlob,
 } from "./store";
 import { drainBuildNotes } from "./build-notes";
 import {
@@ -1389,7 +1401,16 @@ ${truncate(result.text, 8_000)}`,
       `Architect repo_diff${scope ? ` (${action.paths?.length} path(s))` : ""} · ${kbOf(diff.diff)}`,
       architect
     );
-    const body = truncate(diff.diff.trim(), REPO_DIFF_RESULT_CHARS);
+    const fullDiff = diff.diff.trim();
+    const body =
+      fullDiff.length > REPO_DIFF_RESULT_CHARS
+        ? storeLongToolResult(
+            "repo_diff",
+            `Repo diff${scope}`,
+            fullDiff,
+            REPO_DIFF_RESULT_CHARS
+          )
+        : fullDiff;
     return [
       `${kind}diff${scope}${diff.truncated ? " (truncated)" : ""}:`,
       body || "(no changes)",
@@ -3091,6 +3112,107 @@ ${truncate(result.text, 8_000)}`,
   const kbOf = (text: string): string =>
     `${(new TextEncoder().encode(text).length / 1024).toFixed(1)} KB`;
 
+  const TOOL_RESULT_DIGEST_THRESHOLD_CHARS = 10_000;
+
+  const formatStoredMessages = (messages: ChatMessage[]): string =>
+    messages
+      .map((message, index) =>
+        [`## ${index + 1}. ${message.role}`, message.content].join("\n")
+      )
+      .join("\n\n");
+
+  const storeContextBlob = (
+    kind: ContextBlobKind,
+    label: string,
+    text: string,
+    metadata?: Record<string, string | number | boolean | null>
+  ) => {
+    const blob = createContextBlob({
+      discussionId: discussion.id,
+      kind,
+      label,
+      text,
+      metadata,
+    });
+    upsertContextBlob(blob);
+    return blob;
+  };
+
+  const digestForContextBlob = (blob: ReturnType<typeof storeContextBlob>): string => {
+    switch (blob.kind) {
+      case "command_output":
+        return buildCommandOutputDigest(blob);
+      case "fetch":
+        return buildFetchDigest(blob);
+      case "repo_diff":
+        return buildRepoDiffDigest(blob);
+      case "tool_exchange":
+        return buildToolExchangeDigest(blob);
+      default:
+        return blob.digest;
+    }
+  };
+
+  const storeLongToolResult = (
+    kind: ContextBlobKind,
+    label: string,
+    text: string,
+    threshold = TOOL_RESULT_DIGEST_THRESHOLD_CHARS
+  ): string => {
+    if (text.length <= threshold) return text;
+    const blob = storeContextBlob(kind, label, text);
+    return digestForContextBlob(blob);
+  };
+
+  const buildCompactionPlaceholder =
+    (label: string) =>
+    ({ omitted }: { omitted: ChatMessage[] }): ChatMessage => {
+      const blob = storeContextBlob(
+        "tool_exchange",
+        label,
+        formatStoredMessages(omitted),
+        { omittedMessages: omitted.length }
+      );
+      return {
+        role: "user",
+        content: digestForContextBlob(blob),
+      };
+    };
+
+  const executeContextRetrieve = (
+    action: ContextRetrieveAction,
+    actorLabel: string,
+    actor: SelectedModel
+  ): string => {
+    const blob = getContextBlob(action.ref);
+    if (!blob || blob.discussionId !== discussion.id) {
+      return `Context ref ${action.ref} was not found for this discussion. Use only refs shown in recent digests.`;
+    }
+    const retrieved = retrieveContextBlobText(blob, {
+      maxTokens: action.maxTokens,
+    });
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      modelId: actor.modelId,
+      modelName: actor.displayName,
+      providerId: parseModelId(actor.modelId).providerId,
+      message: `${actorLabel} retrieved context ${action.ref} (${kbOf(retrieved.text)})`,
+    });
+    return [
+      `CONTEXT RETRIEVE ${action.ref}`,
+      `Label: ${retrieved.label}`,
+      `Kind: ${retrieved.kind}`,
+      `Returned: ${retrieved.returnedChars}/${retrieved.totalChars} chars, approx ${retrieved.returnedTokens}/${retrieved.totalTokens} tokens${retrieved.truncated ? " (truncated)" : ""}`,
+      "Exact text:",
+      retrieved.text || "(empty)",
+      retrieved.truncated
+        ? "[truncated: request the same ref with a larger maxTokens value if more exact text is necessary]"
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
 
   /** Parse the "--- path lines X-Y of Z ---" header readFileRange emits. */
   const parseDeliveredRange = (
@@ -3175,12 +3297,26 @@ ${truncate(result.text, 8_000)}`,
       );
       return { result: out, exhausted: false, deliveredRange: delivered };
     }
+    if (action.action === "context_retrieve") {
+      return {
+        result: executeContextRetrieve(action, "Architect", architect),
+        exhausted: false,
+      };
+    }
     if (action.action === "run") {
       // NRW-006: refuse raw commit commands before the budget check so the model
       // always gets the same redirect to repo_commit regardless of budget state.
       // executeRun enforces the same guard for any other entry point.
       if (repoIsGit && isRawCommitCommand(action.command)) {
-        return { result: await executeRun(action.command, action.reason), exhausted: false };
+        const result = await executeRun(action.command, action.reason);
+        return {
+          result: storeLongToolResult(
+            "command_output",
+            `Command: ${action.command}`,
+            result
+          ),
+          exhausted: false,
+        };
       }
       if (!canExecuteRunAction(action.command))
         return {
@@ -3188,7 +3324,15 @@ ${truncate(result.text, 8_000)}`,
             "No command runs left in this phase. Produce your decision JSON now.",
           exhausted: true,
         };
-      return { result: await executeRun(action.command, action.reason), exhausted: false };
+      const result = await executeRun(action.command, action.reason);
+      return {
+        result: storeLongToolResult(
+          "command_output",
+          `Command: ${action.command}`,
+          result
+        ),
+        exhausted: false,
+      };
     }
     if (action.action === "tool") {
       if (mcpCallsLeftThisPhase() <= 0)
@@ -3198,7 +3342,11 @@ ${truncate(result.text, 8_000)}`,
         };
       const toolResult = await executeTool(action);
       return {
-        result: toolResult.text,
+        result: storeLongToolResult(
+          "tool_exchange",
+          `MCP ${action.server}.${action.tool}`,
+          toolResult.text
+        ),
         exhausted: false,
         toolStatus: toolResult.status,
       };
@@ -3209,7 +3357,11 @@ ${truncate(result.text, 8_000)}`,
           result: "No web fetches left in this phase. Produce your decision JSON now.",
           exhausted: true,
         };
-      return { result: await executeFetch(action), exhausted: false };
+      const result = await executeFetch(action);
+      return {
+        result: storeLongToolResult("fetch", `Fetch ${action.url}`, result),
+        exhausted: false,
+      };
     }
     if (action.action === "skill_request") {
       return { result: executeSkillRequest(action), exhausted: false };
@@ -3397,7 +3549,14 @@ ${truncate(result.text, 8_000)}`,
 
     for (let turn = 0; turn < HARD_TURN_CAP; turn++) {
       throwIfAborted();
-      const compacted = compactToolConversation(messages, 120_000, 8);
+      const compacted = compactToolConversation(
+        messages,
+        120_000,
+        8,
+        buildCompactionPlaceholder(
+          `Architect ${terminal} omitted tool exchange`
+        )
+      );
       if (compacted.compacted > 0) {
         messages = compacted.messages;
         emitArchitectLoopDiag(
@@ -4162,6 +4321,12 @@ ${truncate(result.text, 8_000)}`,
               skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
               continue;
             }
+            if (action.action === "context_retrieve") {
+              const result = executeContextRetrieve(action, actor, worker);
+              recordToolCall(tracker, action);
+              served.push({ label: item.label, result });
+              continue;
+            }
             if (action.action === "tool") {
               if (mcpCallsLeftThisPhase() <= 0) {
                 skipped.push({ label: item.label, reason: "no MCP tool call budget left in this phase" });
@@ -4171,7 +4336,14 @@ ${truncate(result.text, 8_000)}`,
               if (shouldRecordToolCallResult(action, toolResult.status)) {
                 recordToolCall(tracker, action);
               }
-              served.push({ label: item.label, result: toolResult.text });
+              served.push({
+                label: item.label,
+                result: storeLongToolResult(
+                  "tool_exchange",
+                  `MCP ${action.server}.${action.tool}`,
+                  toolResult.text
+                ),
+              });
               continue;
             }
             if (action.action === "read" && budgets.reads > 0) {
@@ -4254,7 +4426,14 @@ ${truncate(result.text, 8_000)}`,
         };
 
         for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
-          const compacted = compactToolConversation(workerMessages, 80_000, 8);
+          const compacted = compactToolConversation(
+            workerMessages,
+            80_000,
+            8,
+            buildCompactionPlaceholder(
+              `${worker.displayName} ${task.id} omitted tool exchange`
+            )
+          );
           if (compacted.compacted > 0) {
             workerMessages = compacted.messages;
             emit({

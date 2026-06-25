@@ -9,6 +9,11 @@
 
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
 import type { JsonSchemaObject, StructuredOutputFormat } from "../providers/base";
+import {
+  clampContextRetrieveMaxTokens,
+  CONTEXT_RETRIEVE_DEFAULT_TOKENS,
+  isContextBlobRef,
+} from "@/lib/build-context/context-store";
 
 export type BuildTaskStatus =
   | "planned"
@@ -242,6 +247,14 @@ export interface ReadRangeAction {
   lineCount: number;
 }
 
+/** Retrieve bounded exact text from a stored context blob by ctx_ ref. */
+export interface ContextRetrieveAction {
+  action: "context_retrieve";
+  ref: string;
+  maxTokens?: number;
+  reason?: string;
+}
+
 export interface PlanAction {
   action: "plan";
   tasks: Array<{
@@ -331,6 +344,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
           enum: [
             "read",
             "read_range",
+            "context_retrieve",
             "plan",
             "review",
             "run",
@@ -355,6 +369,11 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         },
         paths: stringArraySchema("Paths for read or repo_commit actions."),
         path: stringSchema("Single file path for range, patch, or append actions."),
+        ref: stringSchema("ctx_ reference for context_retrieve actions."),
+        maxTokens: {
+          type: "number",
+          description: "Bounded token cap for context_retrieve.",
+        },
         startLine: { type: "number" },
         lineCount: { type: "number" },
         tasks: { type: "array", items: taskSchema },
@@ -738,6 +757,7 @@ export interface RepoPrCreateAction {
 export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
+  | ContextRetrieveAction
   | PlanAction
   | ReviewAction
   | RunAction
@@ -1206,6 +1226,16 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           lineCount: Math.max(1, Math.round(action.lineCount)),
         };
       }
+      if (parsed.action === "context_retrieve") {
+        const action = parsed as ContextRetrieveAction;
+        if (!isContextBlobRef(action.ref)) return null;
+        return {
+          action: "context_retrieve",
+          ref: action.ref.trim(),
+          maxTokens: clampContextRetrieveMaxTokens(action.maxTokens),
+          reason: typeof action.reason === "string" ? action.reason : undefined,
+        };
+      }
       if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
         return parsed as PlanAction;
       }
@@ -1508,6 +1538,7 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
   return (
     action.action === "read" ||
     action.action === "read_range" ||
+    action.action === "context_retrieve" ||
     action.action === "search" ||
     action.action === "patch" ||
     action.action === "append" ||
@@ -1532,6 +1563,7 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
   return (
     action.action === "read" ||
     action.action === "read_range" ||
+    action.action === "context_retrieve" ||
     action.action === "search" ||
     action.action === "patch" ||
     action.action === "append" ||
@@ -1550,6 +1582,7 @@ export function isSafeFirstToolAction(action: ArchitectAction): boolean {
   return (
     action.action === "read" ||
     action.action === "read_range" ||
+    action.action === "context_retrieve" ||
     action.action === "search" ||
     action.action === "skill_request" ||
     // Non-mutating repo inspection — safe to auto-run as the first action.
@@ -1667,7 +1700,7 @@ export function inspectStrictToolActionBatchOutput(
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|context_retrieve|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1722,6 +1755,8 @@ export function exactToolKey(action: ArchitectAction): string | null {
         .map((p) => p.trim().toLowerCase())
         .sort()
         .join("|")}`;
+    case "context_retrieve":
+      return `context_retrieve:${action.ref.trim()}:${clampContextRetrieveMaxTokens(action.maxTokens)}`;
     case "search":
       return `search:${action.query.trim().toLowerCase()}`;
     case "run":
@@ -1894,9 +1929,19 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface CompactToolConversationPlaceholderInput<
+  T extends ConversationMessage,
+> {
+  omitted: T[];
+  head: T[];
+  tail: T[];
+  totalChars: number;
+  maxChars: number;
+}
+
 /**
  * Bound a tool-loop conversation so it can never grow past a char budget. Keeps
- * the system + initial instruction (indices 0–1) and the most recent
+ * the system + initial instruction (indices 0-1) and the most recent
  * `keepRecent` messages verbatim; older tool-result turns in between collapse
  * into a single placeholder. Returns a NEW array (input untouched) plus how many
  * messages were folded away, so the caller can log it.
@@ -1904,7 +1949,10 @@ export interface ConversationMessage {
 export function compactToolConversation<T extends ConversationMessage>(
   messages: T[],
   maxChars: number,
-  keepRecent = 6
+  keepRecent = 6,
+  buildPlaceholder?: (
+    input: CompactToolConversationPlaceholderInput<T>
+  ) => T
 ): { messages: T[]; compacted: number } {
   const total = messages.reduce((n, m) => n + m.content.length, 0);
   if (total <= maxChars || messages.length <= keepRecent + 3) {
@@ -1912,12 +1960,21 @@ export function compactToolConversation<T extends ConversationMessage>(
   }
   const head = messages.slice(0, 2);
   const tail = messages.slice(messages.length - keepRecent);
+  const omittedMessages = messages.slice(head.length, messages.length - keepRecent);
   const omitted = messages.length - head.length - tail.length;
   if (omitted <= 0) return { messages, compacted: 0 };
-  const placeholder = {
-    role: "user",
-    content: `[${omitted} earlier tool exchange(s) omitted to stay within the context budget — rely on the file contents and results retained above and below; do not re-request them.]`,
-  } as T;
+  const placeholder =
+    buildPlaceholder?.({
+      omitted: omittedMessages,
+      head,
+      tail,
+      totalChars: total,
+      maxChars,
+    }) ??
+    ({
+      role: "user",
+      content: `[${omitted} earlier tool exchange(s) omitted to stay within the context budget - rely on the file contents and results retained above and below; do not re-request them.]`,
+    } as T);
   return { messages: [...head, placeholder, ...tail], compacted: omitted };
 }
 
@@ -1953,6 +2010,14 @@ function readRangeToolDoc(rangeReadsLeft?: number): string {
     "TOOL - read part of a file: when the change digest points at a large file and you only need exact nearby lines, respond with ONLY:",
     '{"action":"read_range","path":"relative/path","startLine":40,"lineCount":80}',
     `The result is bounded and includes line numbers. Prefer this over whole-file reads for large files. If a returned range is partial, continue from endLine + 1 instead of rereading overlapping lines unless you truly need overlap. After search results, read_range around the matching line numbers, not from the start of the file. ${rangeReadsLeft} range read${rangeReadsLeft === 1 ? "" : "s"} left in this review.`,
+  ].join("\n");
+}
+
+function contextRetrieveToolDoc(): string {
+  return [
+    "TOOL - retrieve old compacted context: when a digest shows a Ref like ctx_..., request bounded exact text with ONLY:",
+    `{"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"reason":"why you need the exact omitted text"}`,
+    "The result is exact text from the stored blob up to the requested cap; it may still be truncated. Do not use this for current source files - read/read_range current files instead.",
   ].join("\n");
 }
 
@@ -2036,6 +2101,7 @@ export function buildWorkerToolInstructions(budget: {
     budget.searches > 0
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
+    `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text up to the cap; use read/read_range for current source files.`,
     budget.patches > 0
       ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
       : "",
@@ -2224,6 +2290,7 @@ export function buildArchitectPlanPrompt(input: {
     "",
     readOption,
     skillRequestDoc(),
+    contextRetrieveToolDoc(),
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
@@ -2350,6 +2417,7 @@ export function buildArchitectReviewPrompt(input: {
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     skillRequestDoc(),
+    contextRetrieveToolDoc(),
     input.readHopsLeft && input.readHopsLeft > 0
       ? `If you need to see an existing file's contents before deciding, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). You may combine a few independent reads/searches in one turn. Never guess at a file's contents — read it.`
       : "",

@@ -13,6 +13,11 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
+export type {
+  ContextBlob,
+  ContextBlobKind,
+  ContextBlobMetadata,
+} from "@/lib/build-context/context-store";
 export type { BuildSkillMode } from "@/lib/skills/types";
 
 export interface ModelPricingOverride {

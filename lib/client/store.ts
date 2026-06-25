@@ -8,6 +8,7 @@
 import type {
   BuildCheckpoint,
   BuildFileRecord,
+  ContextBlob,
   CustomModel,
   Discussion,
   FinalResult,
@@ -56,6 +57,7 @@ export interface ClientStore {
   attachments: AttachmentRecord[];
   buildFiles: BuildFileRecord[];
   buildCheckpoints: BuildCheckpoint[];
+  contextBlobs: ContextBlob[];
   gameSessions: GameSessionRecord[];
   gameMatchRecords: GenericGameMatchRecord[];
   gameStatsLegacyImportAttempted: boolean;
@@ -94,6 +96,7 @@ const DEFAULT_STORE: ClientStore = {
   attachments: [],
   buildFiles: [],
   buildCheckpoints: [],
+  contextBlobs: [],
   gameSessions: [],
   gameMatchRecords: [],
   gameStatsLegacyImportAttempted: false,
@@ -296,6 +299,14 @@ export function getBuildCheckpoints(): BuildCheckpoint[] {
   s.buildCheckpoints ??= [];
   return s.buildCheckpoints;
 }
+export function getContextBlob(id: string): ContextBlob | undefined {
+  return (store().contextBlobs ?? []).find((blob) => blob.id === id);
+}
+export function getContextBlobsForDiscussion(discussionId: string): ContextBlob[] {
+  return (store().contextBlobs ?? []).filter(
+    (blob) => blob.discussionId === discussionId
+  );
+}
 export function getGameSessions(): GameSessionRecord[] {
   const s = store();
   s.gameSessions ??= [];
@@ -382,6 +393,9 @@ export function deleteDiscussion(id: string): void {
   s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
   s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
     (c) => c.discussionId !== id
+  );
+  s.contextBlobs = (s.contextBlobs ?? []).filter(
+    (blob) => blob.discussionId !== id
   );
   schedulePersist();
 }
@@ -484,6 +498,14 @@ export function upsertBuildCheckpoint(checkpoint: BuildCheckpoint): void {
   else s.buildCheckpoints.push(checkpoint);
   schedulePersist();
 }
+export function upsertContextBlob(blob: ContextBlob): void {
+  const s = store();
+  if (!s.contextBlobs) s.contextBlobs = [];
+  const existing = s.contextBlobs.findIndex((item) => item.id === blob.id);
+  if (existing >= 0) s.contextBlobs[existing] = blob;
+  else s.contextBlobs.push(blob);
+  schedulePersist();
+}
 export function deleteBuildCheckpoint(discussionId: string): void {
   const s = store();
   s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
@@ -562,6 +584,9 @@ export function clearDiscussionRun(id: string): void {
   s.buildFiles = s.buildFiles.filter((f) => f.discussionId !== id);
   s.buildCheckpoints = (s.buildCheckpoints ?? []).filter(
     (c) => c.discussionId !== id
+  );
+  s.contextBlobs = (s.contextBlobs ?? []).filter(
+    (blob) => blob.discussionId !== id
   );
   schedulePersist();
 }
