@@ -9,6 +9,10 @@ import {
   type ArchitectAction,
   type ConversationMessage,
 } from "../lib/orchestrator/build";
+import {
+  packToolBatchResult,
+  scheduleBuildToolActions,
+} from "../lib/orchestrator/build-tool-scheduler";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -135,6 +139,85 @@ check(
   ];
   const noop = compactToolConversation(small, 20_000, 6);
   check("under-budget conversation is unchanged", noop.compacted === 0 && noop.messages === small);
+}
+
+// Context retrieval output reports exact returnedChars/next offsets; it must not
+// be sliced again by the generic batch cap after retrieval succeeds.
+{
+  const exactBody = "EXACT_CONTEXT_BODY_" + "x".repeat(700);
+  const packed = packToolBatchResult({
+    served: [
+      {
+        label: "context_retrieve ctx_big@0",
+        result: exactBody,
+        preserveFullResult: true,
+      },
+      {
+        label: "read src/after.ts",
+        result: "SHOULD_BE_OMITTED_AFTER_PROTECTED_RESULT",
+      },
+    ],
+    skipped: [],
+    maxChars: 180,
+  });
+  const protectedSection = packed
+    .slice(packed.indexOf("--- context_retrieve ctx_big@0 ---"))
+    .split("--- read src/after.ts ---")[0];
+  check(
+    "protected context_retrieve batch result is preserved past maxChars",
+    packed.includes(exactBody) &&
+      !protectedSection.includes("[truncated: output cap reached]"),
+    packed
+  );
+  check(
+    "later unprotected batch result is omitted after protected result exhausts cap",
+    packed.includes("--- read src/after.ts ---\n[omitted: output cap reached]"),
+    packed
+  );
+
+  const normalPacked = packToolBatchResult({
+    served: [{ label: "read src/big.ts", result: "NORMAL_RESULT_" + "y".repeat(700) }],
+    skipped: [],
+    maxChars: 180,
+  });
+  check(
+    "normal unmarked batch result is still capped",
+    normalPacked.includes("[truncated: output cap reached]") &&
+      !normalPacked.includes("y".repeat(700)),
+    normalPacked
+  );
+}
+
+{
+  const firstRetrieve: ArchitectAction = {
+    action: "context_retrieve",
+    ref: "ctx_first",
+    maxTokens: 4000,
+    offsetChars: 0,
+  };
+  const secondRetrieve: ArchitectAction = {
+    action: "context_retrieve",
+    ref: "ctx_second",
+    maxTokens: 4000,
+    offsetChars: 0,
+  };
+  const scheduled = scheduleBuildToolActions([firstRetrieve, secondRetrieve], {
+    allowSafeRunQueue: false,
+    maxSafeRuns: 0,
+  });
+  check(
+    "scheduler serves only one context_retrieve per batch",
+    scheduled.served.length === 1 &&
+      scheduled.served[0].action === firstRetrieve &&
+      scheduled.skipped.length === 1 &&
+      scheduled.skipped[0].action === secondRetrieve,
+    scheduled
+  );
+  check(
+    "scheduler explains skipped extra context_retrieve",
+    /context_retrieve/i.test(scheduled.skipped[0]?.reason ?? ""),
+    scheduled.skipped
+  );
 }
 
 console.log(failed === 0 ? "\nAll robustness checks passed." : `\n${failed} check(s) failed.`);

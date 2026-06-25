@@ -32,6 +32,7 @@ export function classifyBuildToolActionForScheduling(
   switch (action.action) {
     case "read":
     case "read_range":
+    case "context_retrieve":
     case "search":
     case "repo_status":
     case "repo_diff":
@@ -77,6 +78,8 @@ function labelFor(action: ArchitectAction): string {
       return `read ${action.paths.join(", ")}`;
     case "read_range":
       return `read_range ${action.path}:${action.startLine}`;
+    case "context_retrieve":
+      return `context_retrieve ${action.ref}@${action.offsetChars ?? 0}`;
     case "search":
       return `search ${action.query}`;
     case "run":
@@ -99,11 +102,23 @@ export function scheduleBuildToolActions(
   const served: ScheduledToolAction[] = [];
   const skipped: SkippedToolAction[] = [];
   let safeRuns = 0;
+  let contextRetrieves = 0;
   const mutationPaths = new Set<string>();
 
   for (const action of actions) {
     const scheduleClass = classifyBuildToolActionForScheduling(action);
     const label = labelFor(action);
+    if (action.action === "context_retrieve") {
+      if (contextRetrieves > 0) {
+        skipped.push({
+          action,
+          label,
+          reason: "only one context_retrieve can run per batch",
+        });
+        continue;
+      }
+      contextRetrieves += 1;
+    }
     if (scheduleClass === "safe_run") {
       if (options.allowSafeRunQueue && safeRuns < options.maxSafeRuns) {
         safeRuns += 1;
@@ -144,7 +159,7 @@ export function scheduleBuildToolActions(
 }
 
 export function packToolBatchResult(input: {
-  served: Array<{ label: string; result: string }>;
+  served: Array<{ label: string; result: string; preserveFullResult?: boolean }>;
   skipped: Array<{ label: string; reason: string }>;
   maxChars: number;
 }): string {
@@ -156,11 +171,16 @@ export function packToolBatchResult(input: {
   lines.push("", "Results:");
   let remaining = input.maxChars - lines.join("\n").length;
   for (const item of input.served) {
+    const header = `\n--- ${item.label} ---\n`;
+    if (item.preserveFullResult) {
+      lines.push(`${header}${item.result}`);
+      remaining -= header.length + item.result.length;
+      continue;
+    }
     if (remaining <= 0) {
       lines.push(`\n--- ${item.label} ---\n[omitted: output cap reached]`);
       continue;
     }
-    const header = `\n--- ${item.label} ---\n`;
     const slice = item.result.slice(0, Math.max(0, remaining - header.length));
     const suffix = slice.length < item.result.length ? "\n[truncated: output cap reached]" : "";
     lines.push(`${header}${slice}${suffix}`);

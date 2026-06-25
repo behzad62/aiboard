@@ -69,6 +69,20 @@ import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
 import {
+  buildCommandOutputDigest,
+  buildFetchDigest,
+  buildRepoDiffDigest,
+  buildToolExchangeDigest,
+  createContextBlob,
+  formatBuildCheckContextText,
+  formatBuildCheckOutputSections,
+  formatContextBlobForPrompt,
+  formatFetchContextText,
+  formatMcpToolContextText,
+  retrieveContextBlobText,
+  type ContextBlobKind,
+} from "@/lib/build-context/context-store";
+import {
   buildArchitectPlanPrompt,
   buildArchitectActionResponseFormat,
   buildArchitectReviewPrompt,
@@ -112,6 +126,7 @@ import {
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
+  type ContextRetrieveAction,
   type FetchAction,
   type FileChangeOperation,
   type PlanAction,
@@ -166,6 +181,7 @@ import {
   runCommand,
   searchViaRunner,
   stripAnsi,
+  supportsSafeMcpBridge,
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
@@ -173,6 +189,7 @@ import {
   accumulateModelStats,
   getBuildCheckpoint,
   getBuildFiles,
+  getContextBlob,
   getFinalResult,
   getMessagesForDiscussion,
   getUserSettings,
@@ -181,6 +198,7 @@ import {
   updateDiscussion,
   upsertBuildCheckpoint,
   upsertBuildFile,
+  upsertContextBlob,
 } from "./store";
 import { drainBuildNotes } from "./build-notes";
 import {
@@ -959,10 +977,17 @@ export async function runBuildDiscussion(
           .map(([key, def]) => `${key}${required.has(key) ? "" : "?"}: ${def?.type ?? "any"}`);
         return `${t.name}({${params.join(", ")}})`;
       };
-      const servers = (await listMcpServers(config)) ?? [];
-      const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
-      if (ready.length > 0) {
-        mcpToolsDoc = ready
+      if (!supportsSafeMcpBridge(health.version)) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `MCP bridge disabled: runner ${health.version == null ? "version is unknown" : `v${health.version}`} does not report truncation-safe MCP results. Update the local runner to v10+ before using MCP tools so long outputs remain retrievable.`,
+        });
+      } else {
+        const servers = (await listMcpServers(config)) ?? [];
+        const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
+        if (ready.length > 0) {
+          mcpToolsDoc = ready
           .map(
             (s) =>
               `Server "${s.name}":\n${s.tools
@@ -970,19 +995,20 @@ export async function runBuildDiscussion(
                 .map((t) => `- ${toolSignature(t)} — ${truncate(t.description ?? "", 160)}`)
                 .join("\n")}`
           )
-          .join("\n");
-        emit({
-          type: "diagnostic",
-          phase: "initializing",
-          message: `MCP bridge connected: ${ready.map((s) => `${s.name} (${s.tools.length} tools)`).join(", ")}`,
-        });
-      }
-      for (const s of servers.filter((x) => x.status === "error")) {
-        emit({
-          type: "diagnostic",
-          phase: "initializing",
-          message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
-        });
+            .join("\n");
+          emit({
+            type: "diagnostic",
+            phase: "initializing",
+            message: `MCP bridge connected: ${ready.map((s) => `${s.name} (${s.tools.length} tools)`).join(", ")}`,
+          });
+        }
+        for (const s of servers.filter((x) => x.status === "error")) {
+          emit({
+            type: "diagnostic",
+            phase: "initializing",
+            message: `MCP server "${s.name}" failed to start: ${s.error ?? "unknown error"}`,
+          });
+        }
       }
       // Capture INITIAL Git state of the runner folder (NRW-003). Surfacing
       // branch / dirty state in the UI keeps it out of the model transcript.
@@ -1132,7 +1158,9 @@ export async function runBuildDiscussion(
         command: label,
         exitCode: result.isError ? 1 : 0,
         durationMs: Date.now() - startedAt,
-        outputPreview: truncate(result.text.trim(), 400),
+        outputPreview: result.truncated
+          ? `${truncate(result.text.trim(), 340)}\n[TRUNCATED to runner size cap]`
+          : truncate(result.text.trim(), 400),
       });
       if (result.isError) {
         recordBuildProblem({
@@ -1148,8 +1176,13 @@ export async function runBuildDiscussion(
         });
       }
       return {
-        text: `MCP ${action.server}.${action.tool} -> ${result.isError ? "ERROR" : "ok"}
-${truncate(result.text, 8_000)}`,
+        text: formatMcpToolContextText({
+          server: action.server,
+          tool: action.tool,
+          isError: result.isError,
+          truncated: result.truncated,
+          text: result.text,
+        }),
         status: result.isError ? "error" : "ok",
       };
     } catch (err) {
@@ -1311,10 +1344,15 @@ ${truncate(result.text, 8_000)}`,
         durationMs: result.durationMs,
         outputPreview: `HTTP ${result.status} ${result.statusText}; ${result.contentType || "unknown type"}; ${result.text.length} chars${result.truncated ? " (truncated)" : ""}`,
       });
-      return [
-        `Fetched ${result.finalUrl} — HTTP ${result.status} ${result.statusText}; content-type: ${result.contentType || "unknown"}; ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? "; TRUNCATED to the size cap" : ""}`,
-        truncate(result.text, 16_000),
-      ].join("\n\n");
+      return formatFetchContextText({
+        finalUrl: result.finalUrl,
+        status: result.status,
+        statusText: result.statusText,
+        contentType: result.contentType,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        text: result.text,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Fetch failed";
       emit({
@@ -1389,7 +1427,16 @@ ${truncate(result.text, 8_000)}`,
       `Architect repo_diff${scope ? ` (${action.paths?.length} path(s))` : ""} · ${kbOf(diff.diff)}`,
       architect
     );
-    const body = truncate(diff.diff.trim(), REPO_DIFF_RESULT_CHARS);
+    const fullDiff = diff.diff.trim();
+    const body =
+      fullDiff.length > REPO_DIFF_RESULT_CHARS
+        ? storeLongToolResult(
+            "repo_diff",
+            `Repo diff${scope}`,
+            fullDiff,
+            REPO_DIFF_RESULT_CHARS
+          )
+        : fullDiff;
     return [
       `${kind}diff${scope}${diff.truncated ? " (truncated)" : ""}:`,
       body || "(no changes)",
@@ -2002,6 +2049,8 @@ ${truncate(result.text, 8_000)}`,
     }
   };
 
+  const VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS = 6_000;
+
   const runVerify = async (command: string): Promise<string> => {
     if (!runner || !command) return "";
     const safety = classifyRunCommand(command);
@@ -2044,7 +2093,13 @@ ${truncate(result.text, 8_000)}`,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
         background: result.background,
-        outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 400),
+        outputPreview: truncate(
+          formatBuildCheckOutputSections({
+            stdout: stripAnsi(result.stdout),
+            stderr: stripAnsi(result.stderr),
+          }),
+          400
+        ),
       });
       let finalCommand = command;
       let finalResult = result;
@@ -2067,11 +2122,19 @@ ${truncate(result.text, 8_000)}`,
             : "deny";
           if (decision === "allow-all") allowAllCommands = true;
           if (decision === "deny") {
-            return [
-              `AUTOMATED BUILD CHECK — \`${command}\` exited ${result.exitCode} (FAILED).`,
-              "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
-              truncate(combinedOutput.trim() || "(no output)", 6_000),
-            ].join("\n");
+            const feedback = formatBuildCheckContextText({
+              command,
+              exitCode: result.exitCode,
+              output: combinedOutput.trim() || "(no output)",
+              outputTruncated: !!result.truncated,
+              note: "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
+            });
+            return storeLongToolResult(
+              "command_output",
+              `Automated build check: ${command}`,
+              feedback,
+              VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+            );
           }
         }
         emit({
@@ -2086,20 +2149,34 @@ ${truncate(result.text, 8_000)}`,
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
           background: finalResult.background,
-          outputPreview: truncate(stripAnsi(finalResult.stdout || finalResult.stderr).trim(), 400),
+          outputPreview: truncate(
+            formatBuildCheckOutputSections({
+              stdout: stripAnsi(finalResult.stdout),
+              stderr: stripAnsi(finalResult.stderr),
+            }),
+            400
+          ),
         });
       }
       const ok = finalResult.exitCode === 0;
       // Remember the latest resolved build-check outcome for the final summary's
       // Verification line (bounded; only the command + pass/fail verdict).
       repoVerification = `${finalCommand} ${ok ? "passed" : "failed"}`;
-      return [
-        `AUTOMATED BUILD CHECK — \`${finalCommand}\` exited ${finalResult.exitCode} (${ok ? "OK" : "FAILED"})${finalResult.truncated ? " [output truncated]" : ""}.`,
-        ok
-          ? "The project compiles. Approve only what the build and your review both support."
-          : "The project does NOT compile. Treat the errors below as required fixes — do NOT mark done while they remain; send the owning tasks back with precise fix instructions.",
-        truncate(stripAnsi(finalResult.stderr || finalResult.stdout).trim() || "(no output)", 6_000),
-      ].join("\n");
+      const feedback = formatBuildCheckContextText({
+        command: finalCommand,
+        exitCode: finalResult.exitCode,
+        output: formatBuildCheckOutputSections({
+          stdout: stripAnsi(finalResult.stdout),
+          stderr: stripAnsi(finalResult.stderr),
+        }),
+        outputTruncated: !!finalResult.truncated,
+      });
+      return storeLongToolResult(
+        "command_output",
+        `Automated build check: ${finalCommand}`,
+        feedback,
+        VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+      );
     } catch (err) {
       emitBuildCheckCommandRun({
         command,
@@ -3091,6 +3168,116 @@ ${truncate(result.text, 8_000)}`,
   const kbOf = (text: string): string =>
     `${(new TextEncoder().encode(text).length / 1024).toFixed(1)} KB`;
 
+  const TOOL_RESULT_DIGEST_THRESHOLD_CHARS = 10_000;
+
+  const formatStoredMessages = (messages: ChatMessage[]): string =>
+    messages
+      .map((message, index) =>
+        [`## ${index + 1}. ${message.role}`, message.content].join("\n")
+      )
+      .join("\n\n");
+
+  const storeContextBlob = (
+    kind: ContextBlobKind,
+    label: string,
+    text: string,
+    metadata?: Record<string, string | number | boolean | null>
+  ) => {
+    const blob = createContextBlob({
+      discussionId: discussion.id,
+      kind,
+      label,
+      text,
+      metadata,
+    });
+    upsertContextBlob(blob);
+    return blob;
+  };
+
+  const digestForContextBlob = (blob: ReturnType<typeof storeContextBlob>): string => {
+    switch (blob.kind) {
+      case "command_output":
+        return buildCommandOutputDigest(blob);
+      case "fetch":
+        return buildFetchDigest(blob);
+      case "repo_diff":
+        return buildRepoDiffDigest(blob);
+      case "tool_exchange":
+        return buildToolExchangeDigest(blob);
+      default:
+        return blob.digest;
+    }
+  };
+
+  const storeLongToolResult = (
+    kind: ContextBlobKind,
+    label: string,
+    text: string,
+    threshold = TOOL_RESULT_DIGEST_THRESHOLD_CHARS
+  ): string => {
+    if (text.length <= threshold) return text;
+    const blob = storeContextBlob(kind, label, text);
+    return formatContextBlobForPrompt(blob, { thresholdChars: threshold });
+  };
+
+  const buildCompactionPlaceholder =
+    (label: string) =>
+    ({ omitted }: { omitted: ChatMessage[] }): ChatMessage => {
+      const blob = storeContextBlob(
+        "tool_exchange",
+        label,
+        formatStoredMessages(omitted),
+        { omittedMessages: omitted.length }
+      );
+      return {
+        role: "user",
+        content: digestForContextBlob(blob),
+      };
+    };
+
+  const executeContextRetrieve = (
+    action: ContextRetrieveAction,
+    actorLabel: string,
+    actor: SelectedModel
+  ): string => {
+    const blob = getContextBlob(action.ref);
+    if (!blob || blob.discussionId !== discussion.id) {
+      return `Context ref ${action.ref} was not found for this discussion. Use only refs shown in recent digests.`;
+    }
+    const retrieved = retrieveContextBlobText(blob, {
+      maxTokens: action.maxTokens,
+      offsetChars: action.offsetChars,
+    });
+    emit({
+      type: "diagnostic",
+      phase: "model_streaming",
+      modelId: actor.modelId,
+      modelName: actor.displayName,
+      providerId: parseModelId(actor.modelId).providerId,
+      message: `${actorLabel} retrieved context ${action.ref} at offset ${retrieved.offsetChars} (${kbOf(retrieved.text)})`,
+    });
+    const nextOffset = retrieved.offsetChars + retrieved.returnedChars;
+    return [
+      `CONTEXT RETRIEVE ${action.ref}`,
+      `Label: ${retrieved.label}`,
+      `Kind: ${retrieved.kind}`,
+      `Offset: ${retrieved.offsetChars} chars`,
+      `Returned: ${retrieved.returnedChars}/${retrieved.totalChars} chars, approx ${retrieved.returnedTokens}/${retrieved.totalTokens} tokens${retrieved.truncated ? " (truncated)" : ""}`,
+      retrieved.omittedBeforeChars > 0
+        ? `Omitted before: ${retrieved.omittedBeforeChars} chars`
+        : "",
+      retrieved.omittedAfterChars > 0
+        ? `Omitted after: ${retrieved.omittedAfterChars} chars. To continue, request offsetChars ${nextOffset}.`
+        : "",
+      "Exact text:",
+      retrieved.text || "(empty)",
+      retrieved.truncated
+        ? "[truncated: request the same ref with a larger maxTokens value if more exact text is necessary]"
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
 
   /** Parse the "--- path lines X-Y of Z ---" header readFileRange emits. */
   const parseDeliveredRange = (
@@ -3175,12 +3362,26 @@ ${truncate(result.text, 8_000)}`,
       );
       return { result: out, exhausted: false, deliveredRange: delivered };
     }
+    if (action.action === "context_retrieve") {
+      return {
+        result: executeContextRetrieve(action, "Architect", architect),
+        exhausted: false,
+      };
+    }
     if (action.action === "run") {
       // NRW-006: refuse raw commit commands before the budget check so the model
       // always gets the same redirect to repo_commit regardless of budget state.
       // executeRun enforces the same guard for any other entry point.
       if (repoIsGit && isRawCommitCommand(action.command)) {
-        return { result: await executeRun(action.command, action.reason), exhausted: false };
+        const result = await executeRun(action.command, action.reason);
+        return {
+          result: storeLongToolResult(
+            "command_output",
+            `Command: ${action.command}`,
+            result
+          ),
+          exhausted: false,
+        };
       }
       if (!canExecuteRunAction(action.command))
         return {
@@ -3188,7 +3389,15 @@ ${truncate(result.text, 8_000)}`,
             "No command runs left in this phase. Produce your decision JSON now.",
           exhausted: true,
         };
-      return { result: await executeRun(action.command, action.reason), exhausted: false };
+      const result = await executeRun(action.command, action.reason);
+      return {
+        result: storeLongToolResult(
+          "command_output",
+          `Command: ${action.command}`,
+          result
+        ),
+        exhausted: false,
+      };
     }
     if (action.action === "tool") {
       if (mcpCallsLeftThisPhase() <= 0)
@@ -3198,7 +3407,11 @@ ${truncate(result.text, 8_000)}`,
         };
       const toolResult = await executeTool(action);
       return {
-        result: toolResult.text,
+        result: storeLongToolResult(
+          "tool_exchange",
+          `MCP ${action.server}.${action.tool}`,
+          toolResult.text
+        ),
         exhausted: false,
         toolStatus: toolResult.status,
       };
@@ -3209,7 +3422,11 @@ ${truncate(result.text, 8_000)}`,
           result: "No web fetches left in this phase. Produce your decision JSON now.",
           exhausted: true,
         };
-      return { result: await executeFetch(action), exhausted: false };
+      const result = await executeFetch(action);
+      return {
+        result: storeLongToolResult("fetch", `Fetch ${action.url}`, result),
+        exhausted: false,
+      };
     }
     if (action.action === "skill_request") {
       return { result: executeSkillRequest(action), exhausted: false };
@@ -3301,7 +3518,11 @@ ${truncate(result.text, 8_000)}`,
       allowSafeRunQueue: allowAllCommands,
       maxSafeRuns: SAFE_RUN_QUEUE_LIMIT,
     });
-    const served: Array<{ label: string; result: string }> = [];
+    const served: Array<{
+      label: string;
+      result: string;
+      preserveFullResult?: boolean;
+    }> = [];
     const skipped = schedule.skipped.map((item) => ({
       label: item.label,
       reason: item.reason,
@@ -3320,7 +3541,11 @@ ${truncate(result.text, 8_000)}`,
         budgets,
         appendContext
       );
-      served.push({ label: item.label, result: dispatched.result });
+      served.push({
+        label: item.label,
+        result: dispatched.result,
+        preserveFullResult: item.action.action === "context_retrieve",
+      });
       // Match the single-action loop: only record (for dedup) a tool that
       // actually delivered — a budget-exhausted result is not "already read".
       if (dispatched.exhausted) exhausted = true;
@@ -3397,7 +3622,14 @@ ${truncate(result.text, 8_000)}`,
 
     for (let turn = 0; turn < HARD_TURN_CAP; turn++) {
       throwIfAborted();
-      const compacted = compactToolConversation(messages, 120_000, 8);
+      const compacted = compactToolConversation(
+        messages,
+        120_000,
+        8,
+        buildCompactionPlaceholder(
+          `Architect ${terminal} omitted tool exchange`
+        )
+      );
       if (compacted.compacted > 0) {
         messages = compacted.messages;
         emitArchitectLoopDiag(
@@ -4147,7 +4379,11 @@ ${truncate(result.text, 8_000)}`,
             allowSafeRunQueue: false,
             maxSafeRuns: 0,
           });
-          const served: Array<{ label: string; result: string }> = [];
+          const served: Array<{
+            label: string;
+            result: string;
+            preserveFullResult?: boolean;
+          }> = [];
           const skipped = schedule.skipped.map((item) => ({
             label: item.label,
             reason: item.reason,
@@ -4162,6 +4398,16 @@ ${truncate(result.text, 8_000)}`,
               skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
               continue;
             }
+            if (action.action === "context_retrieve") {
+              const result = executeContextRetrieve(action, actor, worker);
+              recordToolCall(tracker, action);
+              served.push({
+                label: item.label,
+                result,
+                preserveFullResult: true,
+              });
+              continue;
+            }
             if (action.action === "tool") {
               if (mcpCallsLeftThisPhase() <= 0) {
                 skipped.push({ label: item.label, reason: "no MCP tool call budget left in this phase" });
@@ -4171,7 +4417,14 @@ ${truncate(result.text, 8_000)}`,
               if (shouldRecordToolCallResult(action, toolResult.status)) {
                 recordToolCall(tracker, action);
               }
-              served.push({ label: item.label, result: toolResult.text });
+              served.push({
+                label: item.label,
+                result: storeLongToolResult(
+                  "tool_exchange",
+                  `MCP ${action.server}.${action.tool}`,
+                  toolResult.text
+                ),
+              });
               continue;
             }
             if (action.action === "read" && budgets.reads > 0) {
@@ -4254,7 +4507,14 @@ ${truncate(result.text, 8_000)}`,
         };
 
         for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
-          const compacted = compactToolConversation(workerMessages, 80_000, 8);
+          const compacted = compactToolConversation(
+            workerMessages,
+            80_000,
+            8,
+            buildCompactionPlaceholder(
+              `${worker.displayName} ${task.id} omitted tool exchange`
+            )
+          );
           if (compacted.compacted > 0) {
             workerMessages = compacted.messages;
             emit({

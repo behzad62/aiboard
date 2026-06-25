@@ -10,6 +10,41 @@ import path from "node:path";
 import fs from "node:fs";
 import { timingSafeEqual, randomBytes, createHash, verify } from "node:crypto";
 
+// Output caps
+
+/** Cap text to a UTF-8 byte limit without returning a partial code point. */
+export function capTextToUtf8Bytes(text, maxBytes) {
+  const normalized = String(text ?? "");
+  const limit = Math.max(0, Math.floor(Number(maxBytes) || 0));
+  const buffer = Buffer.from(normalized, "utf8");
+  if (buffer.length <= limit) {
+    return { text: normalized, truncated: false, bytes: buffer.length };
+  }
+  let end = limit;
+  let capped = buffer.subarray(0, end).toString("utf8");
+  while (
+    end > 0 &&
+    (capped.endsWith("\uFFFD") || Buffer.byteLength(capped, "utf8") > limit)
+  ) {
+    end -= 1;
+    capped = buffer.subarray(0, end).toString("utf8");
+  }
+  while (Buffer.byteLength(capped, "utf8") > limit && capped.length > 0) {
+    capped = capped.slice(0, -1);
+  }
+  return {
+    text: capped,
+    truncated: true,
+    bytes: Buffer.byteLength(capped, "utf8"),
+  };
+}
+
+/** Append a chunk and cap the combined text by UTF-8 bytes. */
+export function appendTextToUtf8ByteCap(current, chunk, maxBytes) {
+  const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk ?? "");
+  return capTextToUtf8Bytes(`${current ?? ""}${chunkText}`, maxBytes);
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 /** Constant-time string compare. Returns false on length mismatch (no throw). */

@@ -57,10 +57,12 @@ import {
   createNonceStore,
   verifyRunnerUpdate,
   buildPreservedArgv,
+  capTextToUtf8Bytes,
+  appendTextToUtf8ByteCap,
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
-const VERSION = 9;
+const VERSION = 10;
 // PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
 // panel. Running the UNBUILT source leaves it as the marker; we detect that via the
 // split PANEL_BUILD_MARKER (kept non-contiguous so the build's marker replacement
@@ -68,6 +70,7 @@ const VERSION = 9;
 const PANEL_HTML = "__RUNNER_PANEL_HTML__";
 const PANEL_BUILD_MARKER = "__RUNNER_" + "PANEL_HTML__";
 const MAX_OUTPUT_BYTES = 200 * 1024;
+const MAX_MCP_RESULT_BYTES = MAX_OUTPUT_BYTES;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
 const MAX_READ_BYTES = 512 * 1024;
@@ -537,6 +540,16 @@ function stripAnsi(text) {
     .replace(/\x1b/g, ""); // bare ESC
 }
 
+function finalizeCommandOutput(stdout, stderr, truncated) {
+  const cappedStdout = capTextToUtf8Bytes(stripAnsi(stdout), MAX_OUTPUT_BYTES);
+  const cappedStderr = capTextToUtf8Bytes(stripAnsi(stderr), MAX_OUTPUT_BYTES);
+  return {
+    stdout: cappedStdout.text,
+    stderr: cappedStderr.text,
+    truncated: !!truncated || cappedStdout.truncated || cappedStderr.truncated,
+  };
+}
+
 function parseBackgroundCommand(command) {
   const trimmed = command.trim();
   if (!trimmed.endsWith("&") || trimmed.endsWith("&&")) {
@@ -565,23 +578,22 @@ function startBackgroundCommand(command) {
     let truncated = false;
     let settled = false;
     const cap = (current, chunk) => {
-      if (current.length >= MAX_OUTPUT_BYTES) {
-        truncated = true;
-        return current;
-      }
-      return current + chunk.toString();
+      const capped = appendTextToUtf8ByteCap(current, chunk, MAX_OUTPUT_BYTES);
+      if (capped.truncated) truncated = true;
+      return capped.text;
     };
 
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      const finalized = finalizeCommandOutput(result.stdout, result.stderr, truncated);
       resolve({
         ...result,
-        stdout: stripAnsi(result.stdout.slice(0, MAX_OUTPUT_BYTES)),
-        stderr: stripAnsi(result.stderr.slice(0, MAX_OUTPUT_BYTES)),
+        stdout: finalized.stdout,
+        stderr: finalized.stderr,
         durationMs: Date.now() - startedAt,
-        truncated,
+        truncated: finalized.truncated,
         background: true,
       });
     };
@@ -646,11 +658,9 @@ function runCommand(command) {
     let stderr = "";
     let truncated = false;
     const cap = (current, chunk) => {
-      if (current.length >= MAX_OUTPUT_BYTES) {
-        truncated = true;
-        return current;
-      }
-      return current + chunk.toString();
+      const capped = appendTextToUtf8ByteCap(current, chunk, MAX_OUTPUT_BYTES);
+      if (capped.truncated) truncated = true;
+      return capped.text;
     };
     child.stdout.on("data", (c) => (stdout = cap(stdout, c)));
     child.stderr.on("data", (c) => (stderr = cap(stderr, c)));
@@ -662,22 +672,24 @@ function runCommand(command) {
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      const finalized = finalizeCommandOutput(stdout, stderr, truncated);
       resolve({
         exitCode: code ?? -1,
-        stdout: stripAnsi(stdout.slice(0, MAX_OUTPUT_BYTES)),
-        stderr: stripAnsi(stderr.slice(0, MAX_OUTPUT_BYTES)),
+        stdout: finalized.stdout,
+        stderr: finalized.stderr,
         durationMs: Date.now() - startedAt,
-        truncated,
+        truncated: finalized.truncated,
       });
     });
     child.on("error", (err) => {
       clearTimeout(timer);
+      const finalized = finalizeCommandOutput("", String(err), truncated);
       resolve({
         exitCode: -1,
-        stdout: "",
-        stderr: String(err),
+        stdout: finalized.stdout,
+        stderr: finalized.stderr,
         durationMs: Date.now() - startedAt,
-        truncated: false,
+        truncated: finalized.truncated,
       });
     });
   });
@@ -1752,7 +1764,8 @@ class McpServer {
     const text = content
       .map((c) => (c?.type === "text" ? c.text : `[${c?.type ?? "unknown"} content]`))
       .join("\n");
-    return { text: text.slice(0, 50_000), isError: !!result?.isError };
+    const capped = capTextToUtf8Bytes(text, MAX_MCP_RESULT_BYTES);
+    return { text: capped.text, isError: !!result?.isError, truncated: capped.truncated };
   }
 
   kill() {
