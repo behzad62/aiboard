@@ -57,7 +57,7 @@ export function compactOneLine(text: string, maxChars = MAX_SUMMARY_CHARS): stri
   return `${compacted.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
-function stableHash(input: string): string {
+export function stableHash(input: string): string {
   let h1 = 0xdeadbeef ^ input.length;
   let h2 = 0x41c6ce57 ^ input.length;
   for (let i = 0; i < input.length; i++) {
@@ -82,6 +82,15 @@ function slugify(value: string): string {
     ?.replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "";
+}
+
+function normalizeProjectPath(path: string): string {
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
 }
 
 export function normalizeMemoryPath(path: string): string {
@@ -116,8 +125,14 @@ export function normalizeRepoRemoteUrl(url: string | null | undefined): string |
 export function deriveBuildMemoryProjectKey(input: BuildMemoryProjectKeyInput): string {
   const remote = normalizeRepoRemoteUrl(input.repoRemoteUrl);
   if (remote) return `repo:${remote}`;
-  const folder = slugify(input.runnerProjectRoot ?? input.projectFolderName ?? "");
-  if (folder) return `folder:${folder}`;
+  const runnerRoot = input.runnerProjectRoot?.trim();
+  if (runnerRoot) {
+    const normalizedRoot = normalizeProjectPath(runnerRoot);
+    const folder = slugify(normalizedRoot) || "project";
+    return `folder:${folder}-${stableHash(normalizedRoot).slice(0, 10)}`;
+  }
+  const folder = slugify(input.projectFolderName ?? "");
+  if (folder) return `folder:${folder}-${stableHash(folder).slice(0, 10)}`;
   return `discussion:${input.discussionId}`;
 }
 
@@ -247,4 +262,29 @@ export function mergeBuildMemoryRecord(
 
 export function isActiveBuildMemory(record: Pick<BuildMemoryRecord, "status">): boolean {
   return record.status === "active";
+}
+
+export function rekeyBuildMemoryRecord(
+  record: BuildMemoryRecord,
+  projectKey: string
+): BuildMemoryRecord {
+  const next = buildMemoryRecord({
+    projectKey,
+    discussionId: record.discussionId,
+    kind: record.kind,
+    summary: record.summary,
+    detail: record.detail,
+    paths: record.paths,
+    taskIds: record.taskIds,
+    command: record.command,
+    evidence: record.evidence,
+    createdAt: record.createdAt,
+    status: record.status,
+  });
+  return {
+    ...next,
+    updatedAt: record.updatedAt,
+    lastSeenAt: record.lastSeenAt,
+    hitCount: record.hitCount,
+  };
 }

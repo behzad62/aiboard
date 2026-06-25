@@ -92,6 +92,25 @@ check(
   rankedForWorker.map((m) => m.summary)
 );
 
+const oldDecision = rec({
+  kind: "decision",
+  summary: "Same weight older decision.",
+  createdAt: "2026-06-26T00:10:00.000Z",
+});
+const newDecision = rec({
+  kind: "decision",
+  summary: "Same weight newer decision.",
+  createdAt: "2026-06-27T00:10:00.000Z",
+});
+const rankedByRecency = rankBuildMemories([oldDecision, newDecision], {
+  audience: "architect",
+});
+check(
+  "ranking uses monotonic recency as a tie-breaker",
+  rankedByRecency[0].summary.includes("newer"),
+  rankedByRecency.map((memory) => `${memory.lastSeenAt}: ${memory.summary}`)
+);
+
 const workerBrief = buildWorkerMemoryBrief(records, {
   taskId: "T2",
   paths: ["src/App.tsx"],

@@ -196,6 +196,7 @@ import {
   insertFinalResult,
   insertMessage,
   listActiveBuildMemories,
+  migrateBuildMemoriesProjectKey,
   updateDiscussion,
   upsertBuildCheckpoint,
   upsertBuildFile,
@@ -706,12 +707,17 @@ export async function runBuildDiscussion(
     discussionId: discussion.id,
   });
   const refreshBuildMemoryProjectKey = (): void => {
-    buildMemoryProjectKey = deriveBuildMemoryProjectKey({
+    const previousKey = buildMemoryProjectKey;
+    const nextKey = deriveBuildMemoryProjectKey({
       repoRemoteUrl: buildMemoryRepoRemoteUrl,
       runnerProjectRoot: runnerDirName,
       projectFolderName: discussion.projectFolderName,
       discussionId: discussion.id,
     });
+    if (previousKey !== nextKey) {
+      migrateBuildMemoriesProjectKey(previousKey, nextKey);
+      buildMemoryProjectKey = nextKey;
+    }
   };
   const persistBuildMemories = (records: BuildMemoryRecord[]): void => {
     for (const record of records) upsertBuildMemory(record);
@@ -5204,7 +5210,6 @@ export async function runBuildDiscussion(
               (task ? outputPathsForTask(task) : undefined),
           };
         }),
-        notes: action.notes,
       })
     );
     // The architect's own fixes. If any were rejected/skipped, carry that into

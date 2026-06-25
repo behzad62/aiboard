@@ -93,14 +93,13 @@ export function extractProblemMemories(
       problem.code === "verification_failed" ||
       problem.code === "verification_repeated"
     ) {
+      const command = problem.action?.trim();
       memories.push(
         buildMemoryRecord({
           ...base,
           kind: "failed_approach",
-          command: problem.action,
-          summary: problem.action
-            ? `Command or verification failed: ${problem.action}`
-            : problem.message,
+          command,
+          summary: command ? `Command failed: ${command}` : problem.message,
           detail: problem.details ?? problem.message,
         })
       );
@@ -137,25 +136,6 @@ export function extractReviewMemories(
             kind: "review",
             ref: `${input.discussionId ?? "discussion"}#${result.taskId}`,
             excerpt: evidenceExcerpt(fix),
-          },
-        ],
-        createdAt: input.createdAt,
-      })
-    );
-  }
-  const notes = input.notes?.trim();
-  if (notes && /\b(decision|convention|settled|keep|use|must|avoid|prefer|standard|required?)\b/i.test(notes)) {
-    memories.push(
-      buildMemoryRecord({
-        projectKey: input.projectKey,
-        discussionId: input.discussionId,
-        kind: "decision",
-        summary: notes.replace(/^decision:\s*/i, ""),
-        evidence: [
-          {
-            kind: "review",
-            ref: `${input.discussionId ?? "discussion"}#review-notes`,
-            excerpt: evidenceExcerpt(notes),
           },
         ],
         createdAt: input.createdAt,

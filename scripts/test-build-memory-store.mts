@@ -15,6 +15,7 @@ import {
   getBuildMemory,
   listBuildMemories,
   listActiveBuildMemories,
+  migrateBuildMemoriesProjectKey,
   updateBuildMemoryStatus,
   upsertBuildMemory,
 } from "../lib/client/store";
@@ -46,10 +47,31 @@ check(
   deriveBuildMemoryProjectKey({ repoRemoteUrl: "https://github.com/example/aiboard.git", discussionId: "x" })
 );
 check(
-  "project key falls back to runner root name then discussion id",
-  deriveBuildMemoryProjectKey({ runnerProjectRoot: "C:/work/My Project", discussionId: "disc" }) ===
-    "folder:my-project" &&
+  "project key falls back to runner root then discussion id without exposing raw absolute paths",
+  deriveBuildMemoryProjectKey({ runnerProjectRoot: "C:/work/My Project", discussionId: "disc" }).startsWith(
+    "folder:my-project-"
+  ) &&
+    !deriveBuildMemoryProjectKey({ runnerProjectRoot: "C:/work/My Project", discussionId: "disc" }).includes(
+      "C:/work"
+    ) &&
     deriveBuildMemoryProjectKey({ discussionId: "disc" }) === "discussion:disc"
+);
+const sameFolderNameA = deriveBuildMemoryProjectKey({
+  runnerProjectRoot: "C:/work/alpha/ai-discussion-board",
+  discussionId: "disc-a",
+});
+const sameFolderNameB = deriveBuildMemoryProjectKey({
+  runnerProjectRoot: "D:/other/beta/ai-discussion-board",
+  discussionId: "disc-b",
+});
+check(
+  "folder fallback keys distinguish different paths with the same basename",
+  sameFolderNameA !== sameFolderNameB &&
+    sameFolderNameA.startsWith("folder:ai-discussion-board-") &&
+    sameFolderNameB.startsWith("folder:ai-discussion-board-") &&
+    !sameFolderNameA.includes("alpha") &&
+    !sameFolderNameB.includes("beta"),
+  { sameFolderNameA, sameFolderNameB }
 );
 
 const noteMemories = extractUserNoteMemories({
@@ -113,14 +135,25 @@ const reviewMemories = extractReviewMemories({
     },
     { taskId: "T5", verdict: "approve", paths: ["lib/build-context/memory-store.ts"] },
   ],
-  notes: "Decision: keep Build memory native to AIBoard instead of adding BuildContextManager.",
   createdAt: now,
 });
 check(
-  "review fixes and accepted notes create evidence-backed memories",
+  "review fixes create memory but raw Architect notes do not create decisions",
   reviewMemories.some((m) => m.kind === "failed_approach" && m.taskIds?.includes("T4")) &&
-    reviewMemories.some((m) => m.kind === "decision" && /native to AIBoard/.test(m.summary)),
+    !reviewMemories.some((m) => m.kind === "decision"),
   reviewMemories
+);
+const genericReviewNoteMemories = extractReviewMemories({
+  projectKey,
+  discussionId: "disc-34",
+  results: [],
+  notes: "Use the current structure, prefer smaller helpers, and avoid rewrites.",
+  createdAt: now,
+});
+check(
+  "generic Architect notes with use/prefer/avoid do not create decision memory",
+  genericReviewNoteMemories.length === 0,
+  genericReviewNoteMemories
 );
 
 const commandMemories = extractCommandMemories({
@@ -193,6 +226,25 @@ check(
     listBuildMemories(projectKey).length === 2 &&
     listActiveBuildMemories(projectKey).length === 1,
   listBuildMemories(projectKey)
+);
+
+const oldKey = "discussion:disc-34";
+const newKey = "repo:github.com/example/aiboard";
+const migrating = buildMemoryRecord({
+  projectKey: oldKey,
+  discussionId: "disc-34",
+  kind: "user_correction",
+  summary: "Keep PowerShell-compatible commands.",
+  evidence: [{ kind: "user_note", ref: "disc-34#note-migrate" }],
+  createdAt: now,
+});
+upsertBuildMemory(migrating);
+migrateBuildMemoriesProjectKey(oldKey, newKey);
+check(
+  "memories stored under an old key are listed under a refreshed key",
+  listBuildMemories(oldKey).length === 0 &&
+    listBuildMemories(newKey).some((memory) => memory.summary.includes("PowerShell")),
+  { old: listBuildMemories(oldKey), next: listBuildMemories(newKey) }
 );
 
 console.log(failed === 0 ? "\nAll build memory store checks passed." : `\n${failed} check(s) failed.`);

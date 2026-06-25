@@ -83,8 +83,6 @@ function scoreMemory(record: BuildMemoryRecord, options: BuildMemoryRankingOptio
   if (isMemoryRelevantToPaths(record, options.paths ?? [])) score += 70;
   score += Math.min(25, Math.max(0, record.hitCount - 1) * 5);
   score += Math.min(15, record.evidence.length * 2);
-  const seen = Date.parse(record.lastSeenAt || record.updatedAt || record.createdAt);
-  if (Number.isFinite(seen)) score += Math.min(20, Math.max(0, seen / 86_400_000) % 20);
   return score;
 }
 

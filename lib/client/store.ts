@@ -51,6 +51,7 @@ import {
 import {
   isActiveBuildMemory,
   mergeBuildMemoryRecord,
+  rekeyBuildMemoryRecord,
 } from "@/lib/build-context/memory-store";
 
 export interface ClientStore {
@@ -561,6 +562,34 @@ export function updateBuildMemoryStatus(
     status,
     updatedAt: new Date().toISOString(),
   };
+  schedulePersist();
+}
+export function migrateBuildMemoriesProjectKey(
+  oldProjectKey: string,
+  newProjectKey: string
+): void {
+  if (!oldProjectKey || !newProjectKey || oldProjectKey === newProjectKey) return;
+  const s = store();
+  if (!s.buildMemories) s.buildMemories = [];
+  const moving = s.buildMemories.filter(
+    (memory) => memory.projectKey === oldProjectKey
+  );
+  if (moving.length === 0) return;
+  s.buildMemories = s.buildMemories.filter(
+    (memory) => memory.projectKey !== oldProjectKey
+  );
+  for (const memory of moving) {
+    const rekeyed = rekeyBuildMemoryRecord(memory, newProjectKey);
+    const existing = s.buildMemories.findIndex((item) => item.id === rekeyed.id);
+    if (existing >= 0) {
+      s.buildMemories[existing] = mergeBuildMemoryRecord(
+        s.buildMemories[existing],
+        rekeyed
+      );
+    } else {
+      s.buildMemories.push(rekeyed);
+    }
+  }
   schedulePersist();
 }
 export function deleteBuildCheckpoint(discussionId: string): void {
