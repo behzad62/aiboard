@@ -31,6 +31,7 @@ import type {
   DiscussionMode,
   EffortLevel,
   BuildRunPolicy,
+  BuildSkillMode,
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
@@ -59,6 +60,7 @@ import {
 import {
   DEFAULT_BUILD_BUDGET_USD,
   DEFAULT_BUILD_RUN_POLICY,
+  DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 import { AlertTriangle, Sparkles } from "lucide-react";
@@ -73,6 +75,7 @@ interface DashboardData {
     defaultStyleNote?: string;
     defaultReasoningEffort?: ReasoningEffort;
     defaultBuildRunPolicy?: BuildRunPolicy;
+    defaultBuildSkillMode?: BuildSkillMode;
     defaultBuildBudgetUsd?: number;
     defaultBuildTimeLimitMinutes?: number;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
@@ -102,6 +105,8 @@ export default function DashboardPage() {
     useState<ReasoningEffort>("default");
   const [buildRunPolicy, setBuildRunPolicy] =
     useState<BuildRunPolicy>(DEFAULT_BUILD_RUN_POLICY);
+  const [buildSkillMode, setBuildSkillMode] =
+    useState<BuildSkillMode>(DEFAULT_BUILD_SKILL_MODE);
   const [buildBudgetUsd, setBuildBudgetUsd] = useState(
     DEFAULT_BUILD_BUDGET_USD
   );
@@ -142,6 +147,9 @@ export default function DashboardPage() {
         setReasoningEffort(d.settings.defaultReasoningEffort ?? "default");
         setBuildRunPolicy(
           d.settings.defaultBuildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY
+        );
+        setBuildSkillMode(
+          d.settings.defaultBuildSkillMode ?? DEFAULT_BUILD_SKILL_MODE
         );
         setBuildBudgetUsd(
           d.settings.defaultBuildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD
@@ -248,6 +256,7 @@ export default function DashboardPage() {
         runnerToken: mode === "build" ? runner?.token ?? null : null,
         runnerAccess: mode === "build" ? runner?.access ?? null : null,
         buildRunPolicy: mode === "build" ? buildRunPolicy : undefined,
+        buildSkillMode: mode === "build" ? buildSkillMode : undefined,
         buildBudgetUsd: mode === "build" ? buildBudgetUsd : undefined,
         buildTimeLimitMinutes:
           mode === "build" ? buildTimeLimitMinutes : undefined,
@@ -373,11 +382,13 @@ export default function DashboardPage() {
               <BuildRunPolicyControl
                 value={{
                   runPolicy: buildRunPolicy,
+                  skillMode: buildSkillMode,
                   budgetUsd: buildBudgetUsd,
                   timeLimitMinutes: buildTimeLimitMinutes,
                 }}
                 onChange={(next) => {
                   setBuildRunPolicy(next.runPolicy);
+                  setBuildSkillMode(next.skillMode);
                   setBuildBudgetUsd(next.budgetUsd);
                   setBuildTimeLimitMinutes(next.timeLimitMinutes);
                 }}

@@ -543,14 +543,16 @@ function DiscussionPageInner() {
       }
       setEnabledModels(loadDashboard().enabledModels);
       setDiscussion(data.discussion);
-      setBuildStopReport(
+      const checkpoint =
         data.discussion.mode === "build"
-          ? getBuildCheckpoint(data.discussion.id)?.stopReport ?? null
-          : null
+          ? getBuildCheckpoint(data.discussion.id)
+          : null;
+      setBuildStopReport(
+        data.discussion.mode === "build" ? checkpoint?.stopReport ?? null : null
       );
       setBuildToolReviewReport(
         data.discussion.mode === "build"
-          ? getBuildCheckpoint(data.discussion.id)?.toolReviewReport ?? null
+          ? checkpoint?.toolReviewReport ?? null
           : null
       );
       setBuildUsage(
@@ -558,7 +560,7 @@ function DiscussionPageInner() {
           ? createBuildUsageWindow(new Date().toISOString())
           : null
       );
-      setBuildSkillEvents([]);
+      setBuildSkillEvents(data.discussion.mode === "build" ? checkpoint?.skillEvents ?? [] : []);
       // Restore the tab-session activity log so it survives navigation.
       setDiagnostics(loadDiagnostics(id));
       setAttachments(data.attachments ?? []);

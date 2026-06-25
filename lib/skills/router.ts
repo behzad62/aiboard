@@ -1,5 +1,10 @@
 import { compactSkillIndexIds, getSkillCards } from "./registry";
-import type { SkillActivation, SkillActivationInput, SkillTaskLike } from "./types";
+import type {
+  BuildSkillMode,
+  SkillActivation,
+  SkillActivationInput,
+  SkillTaskLike,
+} from "./types";
 
 const ALWAYS_SKILLS = [
   "aiboard:build-os",
@@ -20,6 +25,61 @@ const REVIEW_SKILLS = [
 
 function dedupe(ids: string[]): string[] {
   return [...new Set(ids)];
+}
+
+export interface SkillSetResolution {
+  ids: string[];
+  warnings: string[];
+}
+
+function conflictWinner(
+  left: string,
+  right: string,
+  skillMode: BuildSkillMode
+): string {
+  const pair = new Set([left, right]);
+  if (
+    pair.has("agent:test-driven-development") &&
+    pair.has("superpowers:strict-test-driven-development")
+  ) {
+    return skillMode === "strict" || left === "superpowers:strict-test-driven-development"
+      ? "superpowers:strict-test-driven-development"
+      : right === "superpowers:strict-test-driven-development"
+        ? "superpowers:strict-test-driven-development"
+        : "agent:test-driven-development";
+  }
+  return left;
+}
+
+export function resolveSkillSet(
+  ids: string[],
+  options: { skillMode?: BuildSkillMode } = {}
+): SkillSetResolution {
+  const skillMode = options.skillMode ?? "balanced";
+  const warnings: string[] = [];
+  const selected: string[] = [];
+  const visit = (id: string) => {
+    const skill = getSkillCards([id])[0];
+    if (!skill) {
+      warnings.push(`Unknown skill "${id}" was ignored.`);
+      return;
+    }
+    for (const dependency of skill.dependencies ?? []) visit(dependency);
+    if (!selected.includes(id)) selected.push(id);
+  };
+  for (const id of ids) visit(id);
+
+  for (const skill of getSkillCards([...selected])) {
+    for (const conflict of skill.conflicts ?? []) {
+      if (!selected.includes(skill.id) || !selected.includes(conflict)) continue;
+      const winner = conflictWinner(skill.id, conflict, skillMode);
+      const loser = winner === skill.id ? conflict : skill.id;
+      selected.splice(selected.indexOf(loser), 1);
+      warnings.push(`Resolved skill conflict: kept ${winner}, removed ${loser}.`);
+    }
+  }
+
+  return { ids: selected, warnings };
 }
 
 function taskText(task?: SkillTaskLike): string {
@@ -148,16 +208,32 @@ function evidenceFor(ids: string[], input: SkillActivationInput): string[] {
 }
 
 function selectWorkerOverlays(input: SkillActivationInput): string[] {
+  const skillMode = input.skillMode ?? "balanced";
   if (docsOnlyTask(input)) {
-    return ["agent:incremental-implementation", "agent:documentation-and-adrs"];
+    const docs = ["agent:incremental-implementation", "agent:documentation-and-adrs"];
+    if (skillMode === "safe" && (input.runnerAvailable || input.repoAvailable)) {
+      docs.push("agent:security-and-hardening");
+    }
+    return docs;
   }
 
   const workflow = ["agent:incremental-implementation"];
-  if (changesBehavior(input)) workflow.push("agent:test-driven-development");
+  if (changesBehavior(input)) {
+    workflow.push(
+      skillMode === "strict"
+        ? "superpowers:strict-test-driven-development"
+        : "agent:test-driven-development"
+    );
+  }
   if (taskLooksLikeBugFix(input)) workflow.push("superpowers:systematic-debugging");
 
   const domains: string[] = [];
-  if (touchesSecurityBoundary(input)) domains.push("agent:security-and-hardening");
+  if (
+    touchesSecurityBoundary(input) ||
+    (skillMode === "safe" && (input.runnerAvailable || input.repoAvailable))
+  ) {
+    domains.push("agent:security-and-hardening");
+  }
   if (pathsIncludeUi(input)) domains.push("agent:frontend-ui-engineering");
   if (touchesApiOrContract(input)) domains.push("agent:api-and-interface-design");
   if (touchesDocs(input)) domains.push("agent:documentation-and-adrs");
@@ -166,25 +242,38 @@ function selectWorkerOverlays(input: SkillActivationInput): string[] {
 }
 
 export function selectSkills(input: SkillActivationInput): SkillActivation {
+  const skillMode = input.skillMode ?? "balanced";
   let overlays: string[] = [];
 
   if (input.phase === "intake") {
     overlays = ["agent:spec-driven-development", "superpowers:brainstorming"];
   } else if (input.phase === "plan") {
     overlays = PLAN_SKILLS;
-    if (input.riskFlags.some((flag) => /strict|worktree|isolation/i.test(flag))) {
+    if (
+      skillMode === "strict" ||
+      input.riskFlags.some((flag) => /strict|worktree|isolation/i.test(flag))
+    ) {
       overlays = [...overlays, "superpowers:using-git-worktrees"];
     }
   } else if (input.phase === "worker") {
     overlays = selectWorkerOverlays(input);
   } else if (input.phase === "review") {
     overlays = REVIEW_SKILLS;
-    if (touchesSecurityBoundary(input)) overlays = [...overlays, "agent:security-and-hardening"];
+    if (
+      touchesSecurityBoundary(input) ||
+      (skillMode === "safe" && (input.runnerAvailable || input.repoAvailable))
+    ) {
+      overlays = [...overlays, "agent:security-and-hardening"];
+    }
   } else if (input.phase === "summary" || input.phase === "ship") {
     overlays = ["agent:shipping-and-launch", "agent:documentation-and-adrs"];
   }
 
-  overlays = dedupe(overlays).filter((id) => !ALWAYS_SKILLS.includes(id));
+  overlays = dedupe([...(overlays ?? []), ...(input.requestedSkillIds ?? [])]).filter(
+    (id) => !ALWAYS_SKILLS.includes(id)
+  );
+  const resolved = resolveSkillSet(overlays, { skillMode });
+  overlays = resolved.ids;
   if (input.phase === "plan") overlays = overlays.slice(0, 4);
   if (input.phase === "review") overlays = overlays.slice(0, 3);
 
@@ -193,5 +282,6 @@ export function selectSkills(input: SkillActivationInput): SkillActivation {
     index: compactSkillIndexIds(),
     overlays,
     evidenceRequired: evidenceFor(overlays, input),
+    warnings: resolved.warnings,
   };
 }

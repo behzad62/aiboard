@@ -21,6 +21,8 @@ export type SkillPersistence = "always" | "session" | "phase" | "task" | "review
 
 export type SkillSource = "aiboard" | "agent-skills" | "superpowers" | "custom";
 
+export type BuildSkillMode = "fast" | "balanced" | "strict" | "safe";
+
 export interface SkillCard {
   id: string;
   source: SkillSource;
@@ -52,6 +54,8 @@ export interface SkillActivationInput {
   phase: SkillActivationPhase;
   actor: SkillActor;
   userRequest: string;
+  skillMode?: BuildSkillMode;
+  requestedSkillIds?: string[];
   task?: SkillTaskLike;
   touchedPaths?: string[];
   runnerAvailable: boolean;
@@ -65,6 +69,7 @@ export interface SkillActivation {
   index: string[];
   overlays: string[];
   evidenceRequired: string[];
+  warnings: string[];
 }
 
 export interface SkillEvidence {

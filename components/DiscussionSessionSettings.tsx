@@ -29,6 +29,7 @@ import type { AttachmentSummary } from "@/lib/attachments/types";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import type {
   BuildRunPolicy,
+  BuildSkillMode,
   Discussion,
   EffortLevel,
   ReasoningEffort,
@@ -43,6 +44,7 @@ import {
 import {
   DEFAULT_BUILD_BUDGET_USD,
   DEFAULT_BUILD_RUN_POLICY,
+  DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 
@@ -54,6 +56,7 @@ export interface DiscussionSessionSettingsValue {
   styleNote: string;
   reasoningEffort: ReasoningEffort;
   buildRunPolicy?: BuildRunPolicy;
+  buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
 }
@@ -102,6 +105,9 @@ export function DiscussionSessionSettings({
   const [buildRunPolicy, setBuildRunPolicy] = useState<BuildRunPolicy>(
     discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY
   );
+  const [buildSkillMode, setBuildSkillMode] = useState<BuildSkillMode>(
+    discussion.buildSkillMode ?? DEFAULT_BUILD_SKILL_MODE
+  );
   const [buildBudgetUsd, setBuildBudgetUsd] = useState(
     discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD
   );
@@ -118,6 +124,7 @@ export function DiscussionSessionSettings({
     setStyleNote(discussion.styleNote ?? "");
     setReasoningEffort(discussion.reasoningEffort ?? "default");
     setBuildRunPolicy(discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY);
+    setBuildSkillMode(discussion.buildSkillMode ?? DEFAULT_BUILD_SKILL_MODE);
     setBuildBudgetUsd(discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD);
     setBuildTimeLimitMinutes(
       discussion.buildTimeLimitMinutes ?? DEFAULT_BUILD_TIME_LIMIT_MINUTES
@@ -171,6 +178,8 @@ export function DiscussionSessionSettings({
       reasoningEffort,
       buildRunPolicy:
         discussion.mode === "build" ? buildRunPolicy : undefined,
+      buildSkillMode:
+        discussion.mode === "build" ? buildSkillMode : undefined,
       buildBudgetUsd: discussion.mode === "build" ? buildBudgetUsd : undefined,
       buildTimeLimitMinutes:
         discussion.mode === "build" ? buildTimeLimitMinutes : undefined,
@@ -219,11 +228,13 @@ export function DiscussionSessionSettings({
             <BuildRunPolicyControl
               value={{
                 runPolicy: buildRunPolicy,
+                skillMode: buildSkillMode,
                 budgetUsd: buildBudgetUsd,
                 timeLimitMinutes: buildTimeLimitMinutes,
               }}
               onChange={(next) => {
                 setBuildRunPolicy(next.runPolicy);
+                setBuildSkillMode(next.skillMode);
                 setBuildBudgetUsd(next.budgetUsd);
                 setBuildTimeLimitMinutes(next.timeLimitMinutes);
               }}

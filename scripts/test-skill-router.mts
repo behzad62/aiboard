@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { buildSkillContext } from "../lib/skills/render";
 import { createSkillEvidence } from "../lib/skills/evidence";
-import { selectSkills } from "../lib/skills/router";
+import { resolveSkillSet, selectSkills } from "../lib/skills/router";
 
 const baseInput = {
   userRequest: "Add skill-aware Build mode orchestration.",
@@ -86,6 +86,31 @@ assert.ok(
   "bug fixes should keep TDD active"
 );
 
+const strictBugWorker = selectSkills({
+  ...baseInput,
+  phase: "worker",
+  actor: "worker",
+  skillMode: "strict",
+  task: {
+    id: "T2",
+    title: "Fix failing parser test",
+    instructions: "Investigate the regression and fix the bug.",
+    contextFiles: ["lib/orchestrator/build.ts"],
+    outputPaths: ["lib/orchestrator/build.ts", "scripts/test-parse-action.mts"],
+    expectedOutputs: "The parser regression test passes.",
+    status: "fixing",
+  },
+});
+
+assert.ok(
+  strictBugWorker.overlays.includes("superpowers:strict-test-driven-development"),
+  "strict mode should use the Superpowers strict TDD card"
+);
+assert.ok(
+  !strictBugWorker.overlays.includes("agent:test-driven-development"),
+  "strict mode should resolve the regular TDD conflict"
+);
+
 const docsWorker = selectSkills({
   ...baseInput,
   phase: "worker",
@@ -130,6 +155,38 @@ assert.ok(
   securityWorker.overlays.includes("agent:security-and-hardening"),
   "trust-boundary tasks should load security guidance"
 );
+
+const safeUiWorker = selectSkills({
+  ...baseInput,
+  phase: "worker",
+  actor: "worker",
+  skillMode: "safe",
+  task: {
+    id: "T5",
+    title: "Update dashboard copy",
+    instructions: "Change visible UI copy.",
+    contextFiles: ["components/DashboardPage.tsx"],
+    outputPaths: ["components/DashboardPage.tsx"],
+    expectedOutputs: "Updated page copy.",
+    status: "planned",
+  },
+});
+
+assert.ok(
+  safeUiWorker.overlays.includes("agent:security-and-hardening"),
+  "safe mode should keep security active for runner/repo-enabled builds"
+);
+
+const resolved = resolveSkillSet(
+  ["agent:test-driven-development", "superpowers:strict-test-driven-development"],
+  { skillMode: "strict" }
+);
+assert.deepEqual(
+  resolved.ids,
+  ["superpowers:strict-test-driven-development"],
+  "resolver should keep the strict TDD winner"
+);
+assert.ok(resolved.warnings.some((warning) => warning.includes("conflict")));
 
 const rendered = buildSkillContext({
   ...baseInput,

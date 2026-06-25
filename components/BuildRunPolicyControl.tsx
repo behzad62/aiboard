@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { BuildRunPolicy } from "@/lib/db/schema";
+import type { BuildRunPolicy, BuildSkillMode } from "@/lib/db/schema";
 import {
+  buildSkillModeLabel,
   buildRunPolicyLabel,
+  DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 import { Input } from "@/components/ui/input";
@@ -29,8 +31,31 @@ const POLICIES: Array<{
   },
 ];
 
+const SKILL_MODES: Array<{
+  value: BuildSkillMode;
+  description: string;
+}> = [
+  {
+    value: "fast",
+    description: "Use compact overlays and light evidence gates.",
+  },
+  {
+    value: "balanced",
+    description: "Route skills by phase and task with default review discipline.",
+  },
+  {
+    value: "strict",
+    description: "Use strict TDD, worktree guidance, and stronger review gates.",
+  },
+  {
+    value: "safe",
+    description: "Keep security and trust-boundary checks active for runner work.",
+  },
+];
+
 export interface BuildRunPolicyValue {
   runPolicy: BuildRunPolicy;
+  skillMode: BuildSkillMode;
   budgetUsd: number;
   timeLimitMinutes: number;
 }
@@ -104,6 +129,35 @@ export function BuildRunPolicyControl({
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {policy.description}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Skill mode</Label>
+        <div className="grid gap-2 md:grid-cols-4">
+          {SKILL_MODES.map((mode) => {
+            const selected =
+              (value.skillMode ?? DEFAULT_BUILD_SKILL_MODE) === mode.value;
+            return (
+              <button
+                key={mode.value}
+                type="button"
+                disabled={disabled}
+                onClick={() => onChange({ ...value, skillMode: mode.value })}
+                className={cn(
+                  "rounded-lg border px-3 py-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                  selected
+                    ? "border-primary bg-primary/5 ring-2 ring-primary"
+                    : "border-border hover:bg-accent"
+                )}
+              >
+                <div className="font-medium">{buildSkillModeLabel(mode.value)}</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {mode.description}
                 </p>
               </button>
             );

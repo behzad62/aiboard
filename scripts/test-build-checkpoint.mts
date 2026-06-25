@@ -40,11 +40,36 @@ const checkpoint: BuildCheckpoint = {
     unknownPricedModelIds: [],
     models: [],
   },
+  skillMode: "strict",
+  skillEvidence: [
+    {
+      taskId: "T1",
+      skillId: "agent:test-driven-development",
+      actor: "worker-a",
+      required: ["RED", "GREEN"],
+      reportedEvidence: ["RED failed", "GREEN passed"],
+      missingEvidence: [],
+      violations: [],
+    },
+  ],
+  skillEvents: [
+    {
+      scope: "T1",
+      phase: "worker",
+      actor: "worker",
+      activeSkills: ["aiboard:build-os", "agent:test-driven-development"],
+      evidence: [],
+      warnings: [],
+    },
+  ],
 };
 
 check("checkpoint stores discussion id", checkpoint.discussionId === "d1", checkpoint);
 check("checkpoint stores task graph", checkpoint.tasks.length === 1, checkpoint);
 check("checkpoint stores budget stop reason", checkpoint.stopReason === "budget", checkpoint);
+check("checkpoint stores skill mode", checkpoint.skillMode === "strict", checkpoint);
+check("checkpoint stores skill evidence", checkpoint.skillEvidence?.length === 1, checkpoint);
+check("checkpoint stores skill events", checkpoint.skillEvents?.length === 1, checkpoint);
 
 const resumed = normalizeBuildTasksForResume([
   {

@@ -10,6 +10,7 @@ import type {
   DiscussionMode,
   EffortLevel,
   BuildRunPolicy,
+  BuildSkillMode,
   ReasoningEffort,
   UserSettings,
   Verbosity,
@@ -146,6 +147,7 @@ export interface DiscussionConfigInput {
   reasoningEffort?: ReasoningEffort;
   styleNote?: string | null;
   buildRunPolicy?: BuildRunPolicy;
+  buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
 }
@@ -207,11 +209,13 @@ export function updateDiscussionConfig(
   if (discussion.mode === "build") {
     const buildSettings = normalizeBuildSettings({
       buildRunPolicy: input.buildRunPolicy ?? discussion.buildRunPolicy,
+      buildSkillMode: input.buildSkillMode ?? discussion.buildSkillMode,
       buildBudgetUsd: input.buildBudgetUsd ?? discussion.buildBudgetUsd,
       buildTimeLimitMinutes:
         input.buildTimeLimitMinutes ?? discussion.buildTimeLimitMinutes,
     });
     patch.buildRunPolicy = buildSettings.runPolicy;
+    patch.buildSkillMode = buildSettings.skillMode;
     patch.buildBudgetUsd = buildSettings.budgetUsd;
     patch.buildTimeLimitMinutes = buildSettings.timeLimitMinutes;
   }
@@ -279,6 +283,7 @@ export interface CreateDiscussionInput {
   runnerToken?: string | null;
   runnerAccess?: "ask" | "full" | null;
   buildRunPolicy?: BuildRunPolicy;
+  buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
 }
@@ -293,6 +298,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
   const settings = getUserSettings();
   const buildSettings = normalizeBuildSettings({
     buildRunPolicy: input.buildRunPolicy ?? settings.defaultBuildRunPolicy,
+    buildSkillMode: input.buildSkillMode ?? settings.defaultBuildSkillMode,
     buildBudgetUsd: input.buildBudgetUsd ?? settings.defaultBuildBudgetUsd,
     buildTimeLimitMinutes:
       input.buildTimeLimitMinutes ?? settings.defaultBuildTimeLimitMinutes,
@@ -323,6 +329,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerToken: input.runnerToken ?? null,
     runnerAccess: input.runnerAccess ?? null,
     buildRunPolicy: input.mode === "build" ? buildSettings.runPolicy : undefined,
+    buildSkillMode: input.mode === "build" ? buildSettings.skillMode : undefined,
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,
     buildTimeLimitMinutes:
       input.mode === "build" ? buildSettings.timeLimitMinutes : undefined,

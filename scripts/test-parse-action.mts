@@ -4,6 +4,7 @@ import {
   buildArchitectReviewPrompt,
   buildOutstandingTasksDigest,
   isBuildTaskDependencySatisfied,
+  isBuildToolAction,
   isSafeFirstToolAction,
   outputPathsForTask,
   parseArchitectAction,
@@ -74,6 +75,25 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { path: string }).path === "tests/run-tests.ts" &&
       (a as { content: string }).content === "first chunk" &&
       (a as { reset: boolean }).reset === true,
+  ],
+  [
+    "skill_request action",
+    '{"action":"skill_request","ids":["agent:security-and-hardening"],"reason":"runner path validation","target":"reviewer","mode":"compact"}',
+    (a) =>
+      a?.action === "skill_request" &&
+      (a as { ids: string[] }).ids[0] === "agent:security-and-hardening" &&
+      (a as { target?: string }).target === "reviewer" &&
+      isBuildToolAction(a),
+  ],
+  [
+    "skill_request rejects empty ids",
+    '{"action":"skill_request","ids":[],"reason":"nothing"}',
+    (a) => a === null,
+  ],
+  [
+    "skill_request rejects unknown target",
+    '{"action":"skill_request","ids":["agent:security-and-hardening"],"reason":"bad","target":"worker"}',
+    (a) => a === null,
   ],
   [
     "repo_status action",

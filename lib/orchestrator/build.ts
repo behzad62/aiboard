@@ -337,6 +337,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "search",
             "tool",
             "fetch",
+            "skill_request",
             "patch",
             "append",
             "repo_status",
@@ -385,6 +386,17 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
           additionalProperties: true,
         },
         url: stringSchema("Public http(s) URL to fetch."),
+        ids: stringArraySchema("Skill ids for skill_request actions."),
+        target: {
+          type: "string",
+          enum: ["architect", "next_worker", "reviewer"],
+          description: "Actor that should receive requested skills.",
+        },
+        mode: {
+          type: "string",
+          enum: ["compact", "full"],
+          description: "Requested skill overlay detail.",
+        },
         ops: {
           type: "array",
           items: {
@@ -577,6 +589,14 @@ export interface FetchAction {
   reason?: string;
 }
 
+export interface SkillRequestAction {
+  action: "skill_request";
+  ids: string[];
+  reason: string;
+  target?: "architect" | "next_worker" | "reviewer";
+  mode?: "compact" | "full";
+}
+
 /** Apply exact SEARCH/REPLACE operations to one existing project file. */
 export interface PatchAction {
   action: "patch";
@@ -724,6 +744,7 @@ export type ArchitectAction =
   | SearchAction
   | ToolAction
   | FetchAction
+  | SkillRequestAction
   | PatchAction
   | AppendAction
   | RepoStatusAction
@@ -1244,6 +1265,34 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         return { ...(parsed as FetchAction), url: (parsed as FetchAction).url.trim() };
       }
       if (
+        parsed.action === "skill_request" &&
+        Array.isArray((parsed as SkillRequestAction).ids) &&
+        typeof (parsed as SkillRequestAction).reason === "string" &&
+        (parsed as SkillRequestAction).reason.trim()
+      ) {
+        const action = parsed as SkillRequestAction;
+        const ids = action.ids
+          .filter((id): id is string => typeof id === "string")
+          .map((id) => id.trim())
+          .filter(Boolean)
+          .slice(0, 5);
+        const target = action.target ?? "architect";
+        const mode = action.mode ?? "compact";
+        if (
+          ids.length > 0 &&
+          ["architect", "next_worker", "reviewer"].includes(target) &&
+          ["compact", "full"].includes(mode)
+        ) {
+          return {
+            action: "skill_request",
+            ids,
+            reason: action.reason.trim(),
+            target,
+            mode,
+          };
+        }
+      }
+      if (
         parsed.action === "patch" &&
         typeof (parsed as PatchAction).path === "string" &&
         Array.isArray((parsed as PatchAction).ops)
@@ -1465,6 +1514,7 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "run" ||
     action.action === "tool" ||
     action.action === "fetch" ||
+    action.action === "skill_request" ||
     action.action === "repo_status" ||
     action.action === "repo_diff" ||
     action.action === "repo_branch_create" ||
@@ -1501,6 +1551,7 @@ export function isSafeFirstToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "search" ||
+    action.action === "skill_request" ||
     // Non-mutating repo inspection — safe to auto-run as the first action.
     // repo_branch_create is deliberately excluded (it mutates the repo).
     action.action === "repo_status" ||
@@ -1616,7 +1667,7 @@ export function inspectStrictToolActionBatchOutput(
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1681,6 +1732,11 @@ export function exactToolKey(action: ArchitectAction): string | null {
       return `tool:${action.server.trim().toLowerCase()}.${action.tool
         .trim()
         .toLowerCase()}:${JSON.stringify(action.args ?? {})}`;
+    case "skill_request":
+      return `skill_request:${(action.target ?? "architect").trim()}:${action.ids
+        .map((id) => id.trim().toLowerCase())
+        .sort()
+        .join("|")}`;
     case "repo_branch_create":
       // Branch creation is idempotent-by-name: re-requesting the same branch is
       // redundant. Git branch names are CASE-SENSITIVE, so do NOT lowercase —
@@ -1927,6 +1983,14 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
   ].join("\n");
 }
 
+function skillRequestDoc(): string {
+  return [
+    "TOOL — skill request: if the compact skill index shows a relevant skill that is not currently active, the Architect may request it for a future turn. AIBoard validates ids, conflicts, and budgets; workers cannot self-load skills. Respond with ONLY:",
+    '{"action":"skill_request","ids":["agent:security-and-hardening"],"reason":"why this skill is needed","target":"architect","mode":"compact"}',
+    'Targets: "architect" for this planning/review loop, "next_worker" for the next worker task, or "reviewer" for the next review. Full mode may be requested, but the engine may downgrade to compact.',
+  ].join("\n");
+}
+
 export function extractLocalServerUrls(text: string): string[] {
   const urls = new Set<string>();
   const directUrl = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1):(\d{2,5})(?:\/[^\s"'`)]*)?/gi;
@@ -2159,6 +2223,7 @@ export function buildArchitectPlanPrompt(input: {
     input.skillContext,
     "",
     readOption,
+    skillRequestDoc(),
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
@@ -2284,6 +2349,7 @@ export function buildArchitectReviewPrompt(input: {
     input.skillContext,
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
+    skillRequestDoc(),
     input.readHopsLeft && input.readHopsLeft > 0
       ? `If you need to see an existing file's contents before deciding, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). You may combine a few independent reads/searches in one turn. Never guess at a file's contents — read it.`
       : "",
@@ -2316,6 +2382,10 @@ export function buildArchitectSummaryPrompt(input: {
   historyText: string;
   verbosityInstruction?: string;
   userNotes?: string;
+  /** AIBoard-native ship/summary skill context selected by the engine. */
+  skillContext?: string;
+  /** Durable worker skill evidence and gaps captured by the engine. */
+  skillEvidenceText?: string;
   /** When the run was a GitHub workflow, forbid claiming GitHub outcomes —
    * the engine appends an authoritative Repository-workflow section. */
   githubWorkflow?: boolean;
@@ -2340,6 +2410,10 @@ export function buildArchitectSummaryPrompt(input: {
     "",
     "Build history (plans, reviews, outcomes):",
     input.historyText,
+    input.skillContext,
+    input.skillEvidenceText?.trim()
+      ? `\nSkill evidence and gaps to account for in the hand-off:\n${input.skillEvidenceText}`
+      : "",
     "",
     input.verbosityInstruction ?? "",
     input.githubWorkflow

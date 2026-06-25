@@ -47,6 +47,12 @@ export function renderSkillContext(activation: SkillActivation): string {
           "In final prose, include a short `Skill evidence:` section with the evidence or exemption reason.",
         ].join("\n")
       : "",
+    activation.warnings.length > 0
+      ? [
+          "Skill routing warnings",
+          ...activation.warnings.map((warning) => `- ${warning}`),
+        ].join("\n")
+      : "",
   ];
 
   return sections.filter((section) => section.trim()).join("\n\n");

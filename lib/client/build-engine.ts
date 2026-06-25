@@ -122,6 +122,7 @@ import {
   type RepoPushAction,
   type RepoPrCreateAction,
   type ReviewAction,
+  type SkillRequestAction,
   type ToolCallResultStatus,
   type ToolAction,
 } from "@/lib/orchestrator/build";
@@ -192,7 +193,12 @@ import {
 } from "@/lib/skills/evidence";
 import { selectSkills } from "@/lib/skills/router";
 import { activeSkillIds, renderSkillContext } from "@/lib/skills/render";
-import type { SkillActivation, SkillActivationInput, SkillEvidence } from "@/lib/skills/types";
+import type {
+  BuildSkillEvent,
+  SkillActivation,
+  SkillActivationInput,
+  SkillEvidence,
+} from "@/lib/skills/types";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 type StructuredTraceValidation =
@@ -812,6 +818,9 @@ export async function runBuildDiscussion(
       stopReport: input.stopReport ?? null,
       toolReviewReport,
       usageWindow,
+      skillMode: buildSettings.skillMode,
+      skillEvidence: skillEvidenceRecords,
+      skillEvents: skillEventRecords,
     });
   };
 
@@ -2428,7 +2437,15 @@ ${truncate(result.text, 8_000)}`,
       ? `Previous incomplete build transcript excerpt. Use this to resume from the stopped/failed state instead of starting over:\n\n${previousBuildContext}`
       : "");
 
-  const skillEvidenceRecords: SkillEvidence[] = [];
+  const skillEvidenceRecords: SkillEvidence[] = [
+    ...(existingCheckpoint?.skillEvidence ?? []),
+  ];
+  const skillEventRecords: BuildSkillEvent[] = [
+    ...(existingCheckpoint?.skillEvents ?? []),
+  ];
+  let requestedArchitectSkillIds: string[] = [];
+  let requestedNextWorkerSkillIds: string[] = [];
+  let requestedReviewerSkillIds: string[] = [];
   const skillInput = (
     phase: SkillActivationInput["phase"],
     actor: SkillActivationInput["actor"],
@@ -2438,6 +2455,7 @@ ${truncate(result.text, 8_000)}`,
     phase,
     actor,
     userRequest: discussion.topic,
+    skillMode: buildSettings.skillMode,
     runnerAvailable: !!runner,
     repoAvailable: !!runner && repoIsGit,
     mcpServers: mcpToolsDoc ? ["runner-mcp"] : [],
@@ -2455,15 +2473,65 @@ ${truncate(result.text, 8_000)}`,
     evidence?: SkillEvidence[],
     warnings?: string[]
   ) => {
-    emit({
-      type: "skill_evidence",
+    const event: BuildSkillEvent = {
       scope,
       phase,
       actor,
       activeSkills: activeSkillIds(activation),
       evidence,
-      warnings,
-    });
+      warnings: [...activation.warnings, ...(warnings ?? [])],
+    };
+    skillEventRecords.push(event);
+    if (skillEventRecords.length > 80) {
+      skillEventRecords.splice(0, skillEventRecords.length - 80);
+    }
+    emit({ type: "skill_evidence", ...event });
+  };
+  const mergeSkillIds = (current: string[], incoming: string[]): string[] => [
+    ...new Set([...current, ...incoming]),
+  ];
+  const executeSkillRequest = (action: SkillRequestAction): string => {
+    const target = action.target ?? "architect";
+    const phase =
+      target === "next_worker" ? "worker" : target === "reviewer" ? "review" : "plan";
+    const actor =
+      target === "next_worker" ? "worker" : target === "reviewer" ? "reviewer" : "architect";
+    const activation = selectSkills(
+      skillInput(phase, actor, {
+        requestedSkillIds: action.ids,
+      })
+    );
+    const accepted = activation.overlays.filter((id) => action.ids.includes(id));
+    if (target === "next_worker") {
+      requestedNextWorkerSkillIds = mergeSkillIds(requestedNextWorkerSkillIds, accepted);
+    } else if (target === "reviewer") {
+      requestedReviewerSkillIds = mergeSkillIds(requestedReviewerSkillIds, accepted);
+    } else {
+      requestedArchitectSkillIds = mergeSkillIds(requestedArchitectSkillIds, accepted);
+    }
+    emitSkillActivation(
+      `Skill request: ${target}`,
+      phase,
+      actor,
+      activation,
+      undefined,
+      [
+        `Requested by Architect: ${action.reason}`,
+        action.mode === "full"
+          ? "Full skill text is not loaded in this MVP; compact overlays were applied."
+          : "",
+      ].filter(Boolean)
+    );
+    const loaded = accepted.length > 0 ? accepted.join(", ") : "none";
+    return [
+      `Skill request processed for ${target}. Loaded: ${loaded}.`,
+      activation.warnings.length > 0
+        ? `Warnings:\n${activation.warnings.map((warning) => `- ${warning}`).join("\n")}`
+        : "",
+      renderSkillContext(activation),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   };
 
   const ARCHITECT_SYSTEM_ROLE =
@@ -3138,6 +3206,9 @@ ${truncate(result.text, 8_000)}`,
         };
       return { result: await executeFetch(action), exhausted: false };
     }
+    if (action.action === "skill_request") {
+      return { result: executeSkillRequest(action), exhausted: false };
+    }
     if (action.action === "repo_status") {
       return { result: await executeRepoStatus(), exhausted: false };
     }
@@ -3580,7 +3651,11 @@ ${truncate(result.text, 8_000)}`,
   if (stopForGuardrail(null)) return;
 
   if (!resumedFromCheckpoint) {
-    const planSkills = selectSkills(skillInput("plan", "architect"));
+    const planSkills = selectSkills(
+      skillInput("plan", "architect", {
+        requestedSkillIds: requestedArchitectSkillIds,
+      })
+    );
     emitSkillActivation(
       "Architect planning",
       "plan",
@@ -3994,8 +4069,10 @@ ${truncate(result.text, 8_000)}`,
         skillInput("worker", "worker", {
           task,
           touchedPaths: [...(task.contextFiles ?? []), ...(task.outputPaths ?? [])],
+          requestedSkillIds: requestedNextWorkerSkillIds,
         })
       );
+      requestedNextWorkerSkillIds = [];
       emitSkillActivation(
         `${task.id}: ${task.title}`,
         "worker",
@@ -4643,8 +4720,10 @@ ${truncate(result.text, 8_000)}`,
       skillInput("review", "reviewer", {
         touchedPaths: executed.flatMap(({ files }) => files),
         riskFlags: verifyFeedback ? ["verification"] : [],
+        requestedSkillIds: requestedReviewerSkillIds,
       })
     );
+    requestedReviewerSkillIds = [];
     emitSkillActivation(
       `Architect review wave ${cycle}`,
       "review",
@@ -5069,6 +5148,19 @@ ${truncate(result.text, 8_000)}`,
   const historyText = history
     .map((h) => `## ${h.label}\n${truncate(h.text, 2_500)}`)
     .join("\n\n");
+  const summarySkills = selectSkills(
+    skillInput("summary", "architect", {
+      requestedSkillIds: requestedArchitectSkillIds,
+    })
+  );
+  emitSkillActivation(
+    "Architect summary",
+    "summary",
+    "architect",
+    summarySkills,
+    skillEvidenceRecords,
+    summarySkills.evidenceRequired
+  );
 
   const summaryRaw = await streamTurn(
     architect,
@@ -5080,6 +5172,8 @@ ${truncate(result.text, 8_000)}`,
       verbosityInstruction,
       userNotes: userNotesText(),
       githubWorkflow,
+      skillContext: renderSkillContext(summarySkills),
+      skillEvidenceText: formatSkillEvidenceDigest(skillEvidenceRecords),
     }),
     {
       systemRole:

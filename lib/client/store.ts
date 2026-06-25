@@ -81,6 +81,7 @@ const DEFAULT_STORE: ClientStore = {
     defaultStyleNote: "",
     defaultReasoningEffort: "default",
     defaultBuildRunPolicy: "finish",
+    defaultBuildSkillMode: "balanced",
     defaultBuildBudgetUsd: 0,
     defaultBuildTimeLimitMinutes: 120,
   },

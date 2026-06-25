@@ -7,6 +7,12 @@ export type {
   GameSessionStatus,
   GenericGameMatchRecord,
 } from "@/lib/games/core/types";
+import type {
+  BuildSkillEvent,
+  BuildSkillMode,
+  SkillEvidence,
+} from "@/lib/skills/types";
+export type { BuildSkillMode } from "@/lib/skills/types";
 
 export interface ModelPricingOverride {
   inputUsdPer1M: number;
@@ -194,6 +200,9 @@ export interface BuildCheckpoint {
   stopReport?: BuildStopReport | null;
   toolReviewReport?: BuildToolReviewReport | null;
   usageWindow: BuildUsageWindow;
+  skillMode?: BuildSkillMode;
+  skillEvidence?: SkillEvidence[];
+  skillEvents?: BuildSkillEvent[];
 }
 
 export interface UserSettings {
@@ -205,6 +214,7 @@ export interface UserSettings {
   defaultStyleNote?: string;
   defaultReasoningEffort?: ReasoningEffort;
   defaultBuildRunPolicy?: BuildRunPolicy;
+  defaultBuildSkillMode?: BuildSkillMode;
   defaultBuildBudgetUsd?: number;
   defaultBuildTimeLimitMinutes?: number;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
@@ -258,6 +268,7 @@ export interface Discussion {
   /** "ask" = approve each command in the UI; "full" = run without asking. */
   runnerAccess?: "ask" | "full" | null;
   buildRunPolicy?: BuildRunPolicy;
+  buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
   buildStopReason?: BuildStopReason | null;
