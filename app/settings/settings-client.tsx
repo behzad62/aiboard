@@ -35,6 +35,7 @@ import type {
 } from "@/lib/db/schema";
 import { getModeInfo, getModeLabel } from "@/lib/orchestrator/config";
 import type { ModelInfo } from "@/lib/providers/base";
+import type { ModelContextOverrides } from "@/lib/providers/model-context";
 import type { ModelPricingOverride } from "@/lib/providers/pricing";
 import { AlertTriangle, CheckCircle2, KeyRound } from "lucide-react";
 
@@ -60,6 +61,7 @@ interface SettingsData {
     defaultStyleNote?: string;
     defaultReasoningEffort?: ReasoningEffort;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
+    modelContextOverrides?: ModelContextOverrides;
   };
 }
 
@@ -300,6 +302,7 @@ export default function SettingsPage() {
           <PricingSettings
             providers={effectiveProviders}
             overrides={data?.settings.modelPricingOverrides}
+            contextOverrides={data?.settings.modelContextOverrides}
             onSaved={load}
           />
         </TabsContent>

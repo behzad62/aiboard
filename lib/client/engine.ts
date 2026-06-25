@@ -26,12 +26,14 @@ import {
   getDecryptedApiKey,
   getProvider,
   getProviderBaseURL,
+  resolveClientModelContextProfile,
   resolveModelCapabilities,
   streamCustomChat,
 } from "./providers";
 import {
   parseModelId,
   type ChatMessage,
+  type ModelContextProfile,
   type SelectedModel,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
@@ -156,7 +158,8 @@ export async function collectStream(
     attempt: number;
     delayMs: number;
     message: string;
-  }) => void
+  }) => void,
+  contextProfile?: ModelContextProfile
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -185,6 +188,7 @@ export async function collectStream(
           temperature,
           reasoningEffort,
           structuredOutput,
+          contextProfile,
         })) {
           if (signal?.aborted) throw abortError();
           if (chunk.type === "token" && chunk.content) {
@@ -234,6 +238,7 @@ export async function collectStream(
         temperature,
         reasoningEffort,
         structuredOutput,
+        contextProfile,
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
         if (signal?.aborted) throw abortError();
@@ -279,12 +284,14 @@ function wordOverlapSimilarity(a: string, b: string): number {
 function resolveModels(modelIds: string[]): SelectedModel[] {
   return modelIds.map((fullId) => {
     const { providerId, model } = parseModelId(fullId);
+    const contextProfile = resolveClientModelContextProfile(fullId);
     if (providerId === CUSTOM_PROVIDER_ID) {
       const customModel = getCustomModelByFullId(fullId);
       return {
         modelId: fullId,
         providerId,
         displayName: customModel?.label ?? model,
+        contextProfile,
       };
     }
     const provider = getProvider(providerId);
@@ -293,6 +300,7 @@ function resolveModels(modelIds: string[]): SelectedModel[] {
       modelId: fullId,
       providerId,
       displayName: modelInfo?.name ?? model,
+      contextProfile,
     };
   });
 }

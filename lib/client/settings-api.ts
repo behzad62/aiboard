@@ -10,6 +10,10 @@ import OpenAI from "openai";
 import type { CustomModel, UserSettings } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
+import {
+  resolveModelContextProfile,
+  type ModelContextProfileOverride,
+} from "@/lib/providers/model-context";
 import type { AttachmentPayload, AttachmentSummary } from "@/lib/attachments/types";
 import { classifyMimeType } from "@/lib/attachments/classify";
 import { maskApiKey } from "@/lib/utils";
@@ -59,13 +63,25 @@ export function loadProviders(): {
   settings: UserSettings;
 } {
   const keys = getProviderKeys();
+  const settings = getUserSettings();
+  const withContext = (model: ModelInfo): ModelInfo => ({
+    ...model,
+    contextProfile: resolveModelContextProfile(
+      model.id,
+      model.providerId,
+      settings.modelContextOverrides
+    ),
+  });
   const providers = getAllProviders().map((p) => {
     const saved = keys.find((k) => k.providerId === p.id);
     return {
       providerId: p.id,
       name: p.name,
       // Foundry models are user-defined (deployment-specific), not catalog.
-      models: p.id === FOUNDRY_PROVIDER_ID ? listFoundryModelInfos() : p.listModels(),
+      models:
+        p.id === FOUNDRY_PROVIDER_ID
+          ? listFoundryModelInfos().map(withContext)
+          : p.listModels().map(withContext),
       hasKey: !!saved,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
@@ -76,7 +92,7 @@ export function loadProviders(): {
       lastValidatedAt: saved?.lastValidatedAt ?? null,
     };
   });
-  return { providers, settings: getUserSettings() };
+  return { providers, settings };
 }
 
 export function saveProviderKey(input: {
@@ -284,6 +300,36 @@ export function savePricingOverride(input: {
     };
   }
   updateUserSettings({ modelPricingOverrides: next });
+}
+
+// ── Context overrides ─────────────────────────────────────────────────────────
+
+export function saveModelContextOverride(input: {
+  fullModelId: string;
+  contextWindowTokens?: number;
+  outputReserveTokens?: number;
+  longContextBehavior?: ModelContextProfileOverride["longContextBehavior"];
+  clear?: boolean;
+}): void {
+  const settings = getUserSettings();
+  const next = { ...(settings.modelContextOverrides ?? {}) };
+  if (input.clear) {
+    delete next[input.fullModelId];
+  } else {
+    next[input.fullModelId] = {
+      ...(input.contextWindowTokens !== undefined
+        ? { contextWindowTokens: input.contextWindowTokens }
+        : {}),
+      ...(input.outputReserveTokens !== undefined
+        ? { outputReserveTokens: input.outputReserveTokens }
+        : {}),
+      ...(input.longContextBehavior !== undefined
+        ? { longContextBehavior: input.longContextBehavior }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  updateUserSettings({ modelContextOverrides: next });
 }
 
 // ── Custom models ─────────────────────────────────────────────────────────────

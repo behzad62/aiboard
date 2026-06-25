@@ -36,6 +36,7 @@ import type {
   Verbosity,
 } from "@/lib/db/schema";
 import type { ModelInfo } from "@/lib/providers/base";
+import { formatContextWindowTokens } from "@/lib/providers/model-context";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
   hasEnoughParticipatingModels,
@@ -153,6 +154,17 @@ export function DiscussionSessionSettings({
     description: m.description,
     capabilities: m.capabilities,
   }));
+  const buildContextRows = Array.from(
+    new Set([
+      ...selectedModels,
+      ...(judgeModelId ? [judgeModelId] : []),
+    ])
+  )
+    .map((id) => enabledModels.find((model) => model.fullId === id))
+    .filter(
+      (model): model is ModelInfo & { fullId: string } =>
+        Boolean(model?.contextProfile)
+    );
   const runnerSelection =
     discussion.runnerUrl && discussion.runnerToken
       ? {
@@ -268,6 +280,54 @@ export function DiscussionSessionSettings({
             onChange={setSelectedModels}
             requiredInputTypes={requiredInputTypes}
           />
+
+          {discussion.mode === "build" && buildContextRows.length > 0 && (
+            <div className="space-y-2">
+              <Label>Build context windows</Label>
+              <div className="space-y-1 text-sm">
+                {buildContextRows.map((model) => {
+                  const profile = model.contextProfile!;
+                  const role =
+                    judgeModelId === model.fullId
+                      ? discussion.mode === "build"
+                        ? "Architect"
+                        : "Judge"
+                      : "Worker";
+                  return (
+                    <div
+                      key={model.fullId}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/35 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <span className="font-medium">{model.name}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {role}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          {formatContextWindowTokens(
+                            profile.contextWindowTokens
+                          )}{" "}
+                          context
+                        </span>
+                        <span>
+                          {formatContextWindowTokens(
+                            profile.outputReserveTokens
+                          )}{" "}
+                          reserve
+                        </span>
+                        <span>{profile.longContextBehavior}</span>
+                        {profile.source === "override" && (
+                          <Badge variant="warning">Override</Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {compatibleJudgeOptions.length > 0 && (
             <div className="space-y-2">

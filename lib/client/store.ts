@@ -84,6 +84,7 @@ const DEFAULT_STORE: ClientStore = {
     defaultBuildSkillMode: "balanced",
     defaultBuildBudgetUsd: 0,
     defaultBuildTimeLimitMinutes: 120,
+    modelContextOverrides: {},
   },
   providerKeys: [],
   customModels: [],
