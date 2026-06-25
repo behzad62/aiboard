@@ -5,6 +5,7 @@ import {
   type ContextPack,
 } from "../lib/build-context/context-packs";
 import { renderContextPackSection } from "../lib/build-context/prompt-assembly";
+import { estimateTokens } from "../lib/build-context/token-estimator";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -40,6 +41,40 @@ check(
   "required packs are selected first even when optional packs score higher",
   requiredFirst.selected[0]?.id === "required-brief",
   requiredFirst.selected.map((pack) => pack.id)
+);
+
+const smallRequiredContent = "Keep this small required instruction.";
+const requiredReservation = assembleContextPacks(
+  [
+    {
+      id: "large-required",
+      title: "Large required context",
+      kind: "note",
+      content: text("large_required", 500),
+      required: true,
+      priority: 10,
+    },
+    {
+      id: "small-required",
+      title: "Small required context",
+      kind: "note",
+      content: smallRequiredContent,
+      required: true,
+      priority: 1,
+    },
+  ],
+  { tokenBudget: estimateTokens(smallRequiredContent) + 45 }
+);
+const requiredReservationIds = requiredReservation.selected.map((pack) => pack.id);
+check(
+  "oversized required packs truncate without starving later required packs that fit",
+  requiredReservationIds.includes("large-required") &&
+    requiredReservationIds.includes("small-required") &&
+    requiredReservation.selected.find((pack) => pack.id === "large-required")?.mode ===
+      "truncated" &&
+    requiredReservation.selected.find((pack) => pack.id === "small-required")
+      ?.includedContent === smallRequiredContent,
+  requiredReservation
 );
 
 const exactBeatsSummary = assembleContextPacks(

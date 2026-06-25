@@ -95,6 +95,13 @@ interface PackSelection {
   truncated: boolean;
 }
 
+type PackSelectionOptions = Required<
+  Pick<
+    AssembleContextPacksOptions,
+    "allowDigestFallback" | "requiredTruncationMarker"
+  >
+>;
+
 function normalizedPriority(pack: ContextPack): number {
   return typeof pack.priority === "number" && Number.isFinite(pack.priority)
     ? pack.priority
@@ -194,8 +201,7 @@ function omittedPack(
 function choosePackContent(
   pack: ContextPack,
   remainingTokens: number,
-  options: Required<Pick<AssembleContextPacksOptions, "allowDigestFallback">> &
-    Pick<AssembleContextPacksOptions, "requiredTruncationMarker">
+  options: PackSelectionOptions
 ): PackSelection | null {
   const originalEstimatedTokens = estimateTokens(pack.content);
 
@@ -248,6 +254,51 @@ function choosePackContent(
   return null;
 }
 
+function minimumRequiredSelectionTokens(
+  pack: ContextPack,
+  options: PackSelectionOptions
+): number {
+  if (pack.required !== true || pack.content.trim().length === 0) return 0;
+
+  const originalEstimatedTokens = estimateTokens(pack.content);
+  if (originalEstimatedTokens === 0) return 0;
+
+  const candidates = [originalEstimatedTokens];
+  if (options.allowDigestFallback && !isExactCurrentSource(pack)) {
+    const digestContent = digestFallbackContent(pack);
+    if (digestContent) {
+      candidates.push(estimateTokens(digestContent));
+    }
+  }
+
+  const truncatedFloor = Math.max(
+    1,
+    estimateTokens(options.requiredTruncationMarker) + 8
+  );
+  candidates.push(truncatedFloor);
+
+  return Math.max(1, Math.min(...candidates));
+}
+
+function futureRequiredReservation(
+  sortedPacks: IndexedContextPack[],
+  startIndex: number,
+  remainingTokens: number,
+  options: PackSelectionOptions
+): number {
+  if (remainingTokens <= 1) return 0;
+
+  let preferredReservation = 0;
+  for (let index = startIndex; index < sortedPacks.length; index++) {
+    preferredReservation += minimumRequiredSelectionTokens(
+      sortedPacks[index].pack,
+      options
+    );
+  }
+
+  return Math.min(preferredReservation, remainingTokens - 1);
+}
+
 export function scoreContextPack(pack: ContextPack): number {
   const requiredScore = pack.required ? 1_000_000 : 0;
   const exactScore = isExactCurrentSource(pack) ? 100_000 : 0;
@@ -279,7 +330,8 @@ export function assembleContextPacks(
   const notes: string[] = [];
   let usedTokens = 0;
 
-  for (const { pack } of sortedPacks) {
+  for (let index = 0; index < sortedPacks.length; index++) {
+    const { pack } = sortedPacks[index];
     const remainingTokens = Math.max(0, tokenBudget - usedTokens);
     const originalEstimatedTokens = estimateTokens(pack.content);
 
@@ -302,7 +354,20 @@ export function assembleContextPacks(
       continue;
     }
 
-    const selection = choosePackContent(pack, remainingTokens, selectionOptions);
+    const reservedForLaterRequired =
+      pack.required === true
+        ? futureRequiredReservation(
+            sortedPacks,
+            index + 1,
+            remainingTokens,
+            selectionOptions
+          )
+        : 0;
+    const selectionBudget = Math.max(
+      0,
+      remainingTokens - reservedForLaterRequired
+    );
+    const selection = choosePackContent(pack, selectionBudget, selectionOptions);
     if (!selection) {
       omitted.push(
         omittedPack(
