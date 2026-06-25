@@ -25,7 +25,10 @@ import type {
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
-import { resolveModelName } from "./providers";
+import {
+  resolveClientModelContextProfile,
+  resolveModelName,
+} from "./providers";
 import {
   BUILD_INTEGRATOR_MIN_TOKENS,
   BUILD_MAX_WAVES,
@@ -443,6 +446,7 @@ export async function runBuildDiscussion(
       modelId: architectId,
       providerId: parseModelId(architectId).providerId,
       displayName: resolveModelName(architectId),
+      contextProfile: resolveClientModelContextProfile(architectId),
     };
   const workers = models.filter((m) => m.modelId !== architect.modelId);
   if (workers.length === 0) workers.push(architect); // solo build
@@ -2601,7 +2605,8 @@ ${truncate(result.text, 8_000)}`,
             attempt: retry.attempt,
             type: "request",
             message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
-          })
+          }),
+        model.contextProfile ?? resolveClientModelContextProfile(model.modelId)
       );
     } catch (error) {
       await recordBenchmarkModelCallTrace(

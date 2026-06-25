@@ -279,6 +279,7 @@ export default function DashboardPage() {
       providerId: m.providerId,
       description: m.description,
       capabilities: m.capabilities,
+      contextProfile: m.contextProfile,
     })) ?? [];
 
   if (locked) {

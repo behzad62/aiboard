@@ -1,5 +1,6 @@
 "use client";
 
+import { ModelContextEditor } from "@/components/ModelContextEditor";
 import { ModelPricingEditor } from "@/components/ModelPricingEditor";
 import {
   Tabs,
@@ -12,6 +13,10 @@ import {
   type ModelPricingOverride,
 } from "@/lib/providers/pricing";
 import type { ModelInfo } from "@/lib/providers/base";
+import {
+  resolveModelContextProfile,
+  type ModelContextOverrides,
+} from "@/lib/providers/model-context";
 
 interface ProviderModels {
   providerId: string;
@@ -22,12 +27,14 @@ interface ProviderModels {
 interface PricingSettingsProps {
   providers: ProviderModels[];
   overrides?: Record<string, ModelPricingOverride>;
+  contextOverrides?: ModelContextOverrides;
   onSaved: () => Promise<void> | void;
 }
 
 export function PricingSettings({
   providers,
   overrides,
+  contextOverrides,
   onSaved,
 }: PricingSettingsProps) {
   return (
@@ -55,6 +62,13 @@ export function PricingSettings({
           >
             {provider.models.map((model) => {
               const fullId = `${provider.providerId}:${model.id}`;
+              const contextProfile =
+                model.contextProfile ??
+                resolveModelContextProfile(
+                  model.id,
+                  model.providerId,
+                  contextOverrides
+                );
               return (
                 <div key={fullId} className="space-y-1.5">
                   <p className="text-sm font-medium">
@@ -68,6 +82,12 @@ export function PricingSettings({
                     pricing={getModelPricing(fullId, overrides)}
                     onSaved={onSaved}
                     title="Pricing"
+                  />
+                  <ModelContextEditor
+                    fullModelId={fullId}
+                    profile={contextProfile}
+                    override={contextOverrides?.[fullId]}
+                    onSaved={onSaved}
                   />
                 </div>
               );

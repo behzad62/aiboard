@@ -1,6 +1,9 @@
 import type { AttachmentPayload } from "../attachments/types";
 import type { CapabilityInputType } from "../attachments/types";
 import type { ReasoningEffort } from "../db/schema";
+import type { ModelContextProfile } from "./model-context";
+
+export type { ModelContextProfile } from "./model-context";
 
 export type ModelCapabilities = Record<CapabilityInputType, boolean>;
 
@@ -10,6 +13,7 @@ export interface ModelInfo {
   providerId: string;
   description?: string;
   capabilities?: ModelCapabilities;
+  contextProfile?: ModelContextProfile;
 }
 
 export interface ChatMessage {
@@ -48,6 +52,8 @@ export interface ChatParams {
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */
   baseURL?: string;
+  /** Build-mode context metadata resolved from the static registry + overrides. */
+  contextProfile?: ModelContextProfile;
 }
 
 export interface StreamChunk {
@@ -68,6 +74,7 @@ export interface SelectedModel {
   modelId: string;
   providerId: string;
   displayName: string;
+  contextProfile?: ModelContextProfile;
 }
 
 export function parseModelId(fullId: string): { providerId: string; model: string } {

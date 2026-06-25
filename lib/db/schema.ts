@@ -12,6 +12,7 @@ import type {
   BuildSkillMode,
   SkillEvidence,
 } from "@/lib/skills/types";
+import type { ModelContextOverrides } from "@/lib/providers/model-context";
 export type { BuildSkillMode } from "@/lib/skills/types";
 
 export interface ModelPricingOverride {
@@ -218,6 +219,7 @@ export interface UserSettings {
   defaultBuildBudgetUsd?: number;
   defaultBuildTimeLimitMinutes?: number;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
+  modelContextOverrides?: ModelContextOverrides;
 }
 
 export interface ProviderKey {

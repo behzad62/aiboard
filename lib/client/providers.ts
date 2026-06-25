@@ -12,6 +12,10 @@ import type {
   StreamChunk,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
+import {
+  resolveModelContextProfile,
+  type ModelContextOverrides,
+} from "@/lib/providers/model-context";
 import { openaiProvider } from "@/lib/providers/openai";
 import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
@@ -20,7 +24,12 @@ import { openrouterProvider } from "@/lib/providers/openrouter";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { CustomModel } from "@/lib/db/schema";
-import { getCustomModelById, getCustomModels, getProviderKey } from "./store";
+import {
+  getCustomModelById,
+  getCustomModels,
+  getProviderKey,
+  getUserSettings,
+} from "./store";
 
 export const CUSTOM_PROVIDER_ID = "custom";
 export const FOUNDRY_PROVIDER_ID = "foundry";
@@ -56,6 +65,27 @@ export function getAllProviders(): AIProvider[] {
   return Object.values(providers);
 }
 
+function withContextProfile(
+  model: ModelInfo,
+  overrides?: ModelContextOverrides
+): ModelInfo {
+  return {
+    ...model,
+    contextProfile: resolveModelContextProfile(
+      model.id,
+      model.providerId,
+      overrides
+    ),
+  };
+}
+
+function withContextProfiles(
+  models: ModelInfo[],
+  overrides?: ModelContextOverrides
+): ModelInfo[] {
+  return models.map((model) => withContextProfile(model, overrides));
+}
+
 function customModelToInfo(model: CustomModel): ModelInfo {
   return {
     id: model.id,
@@ -86,11 +116,15 @@ export function listFoundryModelInfos(): ModelInfo[] {
 }
 
 export function getAllModels(): ModelInfo[] {
-  return [
-    ...getAllProviders().flatMap((p) => p.listModels()),
-    ...listFoundryModelInfos(),
-    ...listCustomModelInfos(),
-  ];
+  const overrides = getUserSettings().modelContextOverrides;
+  return withContextProfiles(
+    [
+      ...getAllProviders().flatMap((p) => p.listModels()),
+      ...listFoundryModelInfos(),
+      ...listCustomModelInfos(),
+    ],
+    overrides
+  );
 }
 
 /** Client keys are stored as plaintext apiKey (protected by the store envelope). */
@@ -106,6 +140,7 @@ export function getProviderBaseURL(providerId: string): string | undefined {
 }
 
 export function getEnabledModels(): ModelInfo[] {
+  const overrides = getUserSettings().modelContextOverrides;
   const keyed = getAllProviders()
     .map((p) => p.id)
     .filter((id) => getDecryptedApiKey(id) !== null);
@@ -115,7 +150,19 @@ export function getEnabledModels(): ModelInfo[] {
   const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
     ? listFoundryModelInfos()
     : [];
-  return [...builtin, ...foundry, ...listCustomModelInfos()];
+  return withContextProfiles(
+    [...builtin, ...foundry, ...listCustomModelInfos()],
+    overrides
+  );
+}
+
+export function resolveClientModelContextProfile(fullId: string) {
+  const { providerId, model } = parseModelId(fullId);
+  return resolveModelContextProfile(
+    model,
+    providerId,
+    getUserSettings().modelContextOverrides
+  );
 }
 
 export function resolveModelName(fullId: string): string {
