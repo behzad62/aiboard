@@ -3509,7 +3509,11 @@ export async function runBuildDiscussion(
       allowSafeRunQueue: allowAllCommands,
       maxSafeRuns: SAFE_RUN_QUEUE_LIMIT,
     });
-    const served: Array<{ label: string; result: string }> = [];
+    const served: Array<{
+      label: string;
+      result: string;
+      preserveFullResult?: boolean;
+    }> = [];
     const skipped = schedule.skipped.map((item) => ({
       label: item.label,
       reason: item.reason,
@@ -3528,7 +3532,11 @@ export async function runBuildDiscussion(
         budgets,
         appendContext
       );
-      served.push({ label: item.label, result: dispatched.result });
+      served.push({
+        label: item.label,
+        result: dispatched.result,
+        preserveFullResult: item.action.action === "context_retrieve",
+      });
       // Match the single-action loop: only record (for dedup) a tool that
       // actually delivered — a budget-exhausted result is not "already read".
       if (dispatched.exhausted) exhausted = true;
@@ -4362,7 +4370,11 @@ export async function runBuildDiscussion(
             allowSafeRunQueue: false,
             maxSafeRuns: 0,
           });
-          const served: Array<{ label: string; result: string }> = [];
+          const served: Array<{
+            label: string;
+            result: string;
+            preserveFullResult?: boolean;
+          }> = [];
           const skipped = schedule.skipped.map((item) => ({
             label: item.label,
             reason: item.reason,
@@ -4380,7 +4392,11 @@ export async function runBuildDiscussion(
             if (action.action === "context_retrieve") {
               const result = executeContextRetrieve(action, actor, worker);
               recordToolCall(tracker, action);
-              served.push({ label: item.label, result });
+              served.push({
+                label: item.label,
+                result,
+                preserveFullResult: true,
+              });
               continue;
             }
             if (action.action === "tool") {

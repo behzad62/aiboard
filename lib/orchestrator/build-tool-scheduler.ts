@@ -147,7 +147,7 @@ export function scheduleBuildToolActions(
 }
 
 export function packToolBatchResult(input: {
-  served: Array<{ label: string; result: string }>;
+  served: Array<{ label: string; result: string; preserveFullResult?: boolean }>;
   skipped: Array<{ label: string; reason: string }>;
   maxChars: number;
 }): string {
@@ -159,11 +159,16 @@ export function packToolBatchResult(input: {
   lines.push("", "Results:");
   let remaining = input.maxChars - lines.join("\n").length;
   for (const item of input.served) {
+    const header = `\n--- ${item.label} ---\n`;
+    if (item.preserveFullResult) {
+      lines.push(`${header}${item.result}`);
+      remaining -= header.length + item.result.length;
+      continue;
+    }
     if (remaining <= 0) {
       lines.push(`\n--- ${item.label} ---\n[omitted: output cap reached]`);
       continue;
     }
-    const header = `\n--- ${item.label} ---\n`;
     const slice = item.result.slice(0, Math.max(0, remaining - header.length));
     const suffix = slice.length < item.result.length ? "\n[truncated: output cap reached]" : "";
     lines.push(`${header}${slice}${suffix}`);
