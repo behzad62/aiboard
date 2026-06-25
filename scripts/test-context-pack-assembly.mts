@@ -4,7 +4,10 @@ import {
   assembleContextPacks,
   type ContextPack,
 } from "../lib/build-context/context-packs";
-import { renderContextPackSection } from "../lib/build-context/prompt-assembly";
+import {
+  assembleContextPackPrompt,
+  renderContextPackSection,
+} from "../lib/build-context/prompt-assembly";
 import { estimateTokens } from "../lib/build-context/token-estimator";
 
 let failed = 0;
@@ -131,6 +134,14 @@ check(
     digestFallback.selected[0].retrieveRef?.id === "history:wave-4",
   digestFallback
 );
+const renderedDigestFallback = renderContextPackSection(digestFallback);
+const retrieveRefMentions =
+  renderedDigestFallback.text.match(/Retrieve ref: history:wave-4/g)?.length ?? 0;
+check(
+  "digest retrieve refs render once",
+  retrieveRefMentions === 1,
+  renderedDigestFallback.text
+);
 
 const priorityDrop = assembleContextPacks(
   [
@@ -211,9 +222,47 @@ check(
   "prompt renderer exposes selected packs, token totals, and omission notes",
   rendered.text.includes("Selected build context") &&
     rendered.text.includes("Task brief") &&
-    rendered.tokenTotal === tinyAssembly.usedTokens &&
+    rendered.contentTokenTotal === tinyAssembly.usedTokens &&
+    rendered.renderedTokenTotal === estimateTokens(rendered.text) &&
     rendered.omissionNotes.length === tinyAssembly.omitted.length,
   rendered
+);
+
+const manyTinyPacks: ContextPack[] = Array.from(
+  { length: 50 },
+  (_, index): ContextPack => ({
+    id: `tiny-${index}`,
+    title: `Tiny ${index}`,
+    kind: "note",
+    content: "x",
+    priority: 100 - index,
+  })
+);
+const contentOnlyTinyAssembly = assembleContextPacks(manyTinyPacks, {
+  tokenBudget: 50,
+});
+const contentOnlyTinyRendered = renderContextPackSection(contentOnlyTinyAssembly, {
+  heading: "Tiny packs",
+});
+const renderBudgetedTinyPrompt = assembleContextPackPrompt(manyTinyPacks, {
+  tokenBudget: 50,
+  heading: "Tiny packs",
+});
+check(
+  "content-only accounting can fit while rendered metadata exceeds budget",
+  contentOnlyTinyAssembly.usedTokens <= 50 &&
+    estimateTokens(contentOnlyTinyRendered.text) > 50,
+  {
+    contentTokens: contentOnlyTinyAssembly.usedTokens,
+    renderedTokens: estimateTokens(contentOnlyTinyRendered.text),
+  }
+);
+check(
+  "render-aware prompt helper keeps final text within token budget",
+  estimateTokens(renderBudgetedTinyPrompt.text) <= 50 &&
+    renderBudgetedTinyPrompt.renderedTokenTotal <= 50 &&
+    renderBudgetedTinyPrompt.contentTokenTotal < contentOnlyTinyAssembly.usedTokens,
+  renderBudgetedTinyPrompt
 );
 
 process.exit(failed === 0 ? 0 : 1);

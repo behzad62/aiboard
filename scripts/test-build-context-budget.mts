@@ -100,4 +100,21 @@ check(
   cappedBudget
 );
 
+const zeroCeilingBudget = createBuildPromptBudget({
+  role: "worker",
+  profile: {
+    contextWindowTokens: 128_000,
+    buildOutputReserveTokens: 8_192,
+    effectiveBuildInputCeilingTokens: 0,
+  },
+});
+check(
+  "explicit zero effective input ceiling is preserved",
+  zeroCeilingBudget.tier === "tiny" &&
+    zeroCeilingBudget.totalInputTokens === 0 &&
+    zeroCeilingBudget.contextPackTokens === 0 &&
+    zeroCeilingBudget.modelInputCeilingTokens === 0,
+  zeroCeilingBudget
+);
+
 process.exit(failed === 0 ? 0 : 1);

@@ -165,17 +165,10 @@ function comparePacks(a: IndexedContextPack, b: IndexedContextPack): number {
   return a.index - b.index;
 }
 
-function retrieveRefLine(ref: ContextRetrieveRef | undefined): string {
-  if (!ref) return "";
-  const label = ref.label ? ` (${ref.label})` : "";
-  const kind = ref.kind ? ` kind=${ref.kind}` : "";
-  return `\n\nRetrieve ref: ${ref.id}${label}${kind}`;
-}
-
 function digestFallbackContent(pack: ContextPack): string | null {
   const digest = pack.digest?.trim();
   if (!digest) return null;
-  return `${digest}${retrieveRefLine(pack.retrieveRef)}`;
+  return digest;
 }
 
 function omittedPack(

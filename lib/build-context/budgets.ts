@@ -73,10 +73,16 @@ function finitePositiveInteger(value: unknown): number | null {
     : null;
 }
 
+function finiteNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
 function buildInputCeiling(
   profile?: CreateBuildPromptBudgetOptions["profile"]
 ): number | null {
-  const explicit = finitePositiveInteger(
+  const explicit = finiteNonNegativeInteger(
     profile?.effectiveBuildInputCeilingTokens
   );
   if (explicit !== null) return explicit;
@@ -84,7 +90,8 @@ function buildInputCeiling(
   const windowTokens = finitePositiveInteger(profile?.contextWindowTokens);
   if (windowTokens === null) return null;
 
-  const reserve = finitePositiveInteger(profile?.buildOutputReserveTokens) ?? 0;
+  const reserve =
+    finiteNonNegativeInteger(profile?.buildOutputReserveTokens) ?? 0;
   return Math.max(0, windowTokens - reserve);
 }
 
@@ -105,7 +112,9 @@ function outputReserve(
   role: BuildPromptRole,
   profile?: CreateBuildPromptBudgetOptions["profile"]
 ): number {
-  const profileReserve = finitePositiveInteger(profile?.buildOutputReserveTokens);
+  const profileReserve = finiteNonNegativeInteger(
+    profile?.buildOutputReserveTokens
+  );
   if (profileReserve !== null) return profileReserve;
 
   switch (role) {
