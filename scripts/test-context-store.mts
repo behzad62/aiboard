@@ -6,6 +6,7 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatBuildCheckOutputSections,
   formatFetchContextText,
   formatMcpToolContextText,
   formatBuildCheckContextText,
@@ -106,6 +107,7 @@ const fullMcpContext = formatMcpToolContextText({
   server: "playwright",
   tool: "browser_snapshot",
   isError: false,
+  truncated: false,
   text: `${"m".repeat(8_500)}${mcpTailSentinel}`,
 });
 check(
@@ -114,6 +116,21 @@ check(
     fullMcpContext.length > 8_500 &&
     !fullMcpContext.includes("[truncated]"),
   { length: fullMcpContext.length }
+);
+
+const truncatedMcpTailSentinel = "MCP_TAIL_AFTER_RUNNER_CAP";
+const truncatedMcpContext = formatMcpToolContextText({
+  server: "playwright",
+  tool: "browser_snapshot",
+  isError: false,
+  truncated: true,
+  text: `${"m".repeat(1_000)}${truncatedMcpTailSentinel}`,
+});
+check(
+  "MCP formatter records runner cap note without dropping received text",
+  truncatedMcpContext.includes("TRUNCATED to the runner size cap") &&
+    truncatedMcpContext.includes(truncatedMcpTailSentinel),
+  truncatedMcpContext.slice(0, 200)
 );
 
 const fetchTailSentinel = "FETCH_TAIL_AFTER_OLD_16K_LIMIT";
@@ -181,6 +198,22 @@ check(
 );
 
 const verifyTailSentinel = "VERIFY_TAIL_AFTER_OLD_6K_LIMIT";
+const buildCheckSections = formatBuildCheckOutputSections({
+  stdout: "stdout sentinel for build check",
+  stderr: "stderr sentinel for build check",
+});
+const stdoutStderrVerifyText = formatBuildCheckContextText({
+  command: "npm test",
+  exitCode: 1,
+  output: buildCheckSections,
+});
+check(
+  "build-check formatter preserves labeled stdout and stderr sections",
+  stdoutStderrVerifyText.includes("stdout:\nstdout sentinel for build check") &&
+    stdoutStderrVerifyText.includes("stderr:\nstderr sentinel for build check"),
+  stdoutStderrVerifyText
+);
+
 const fullVerifyText = formatBuildCheckContextText({
   command: "npm test",
   exitCode: 1,

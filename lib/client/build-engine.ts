@@ -75,6 +75,7 @@ import {
   buildToolExchangeDigest,
   createContextBlob,
   formatBuildCheckContextText,
+  formatBuildCheckOutputSections,
   formatContextBlobForPrompt,
   formatFetchContextText,
   formatMcpToolContextText,
@@ -1148,7 +1149,9 @@ export async function runBuildDiscussion(
         command: label,
         exitCode: result.isError ? 1 : 0,
         durationMs: Date.now() - startedAt,
-        outputPreview: truncate(result.text.trim(), 400),
+        outputPreview: result.truncated
+          ? `${truncate(result.text.trim(), 340)}\n[TRUNCATED to runner size cap]`
+          : truncate(result.text.trim(), 400),
       });
       if (result.isError) {
         recordBuildProblem({
@@ -1168,6 +1171,7 @@ export async function runBuildDiscussion(
           server: action.server,
           tool: action.tool,
           isError: result.isError,
+          truncated: result.truncated,
           text: result.text,
         }),
         status: result.isError ? "error" : "ok",
@@ -2080,7 +2084,13 @@ export async function runBuildDiscussion(
         exitCode: result.exitCode,
         durationMs: result.durationMs,
         background: result.background,
-        outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 400),
+        outputPreview: truncate(
+          formatBuildCheckOutputSections({
+            stdout: stripAnsi(result.stdout),
+            stderr: stripAnsi(result.stderr),
+          }),
+          400
+        ),
       });
       let finalCommand = command;
       let finalResult = result;
@@ -2130,7 +2140,13 @@ export async function runBuildDiscussion(
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
           background: finalResult.background,
-          outputPreview: truncate(stripAnsi(finalResult.stdout || finalResult.stderr).trim(), 400),
+          outputPreview: truncate(
+            formatBuildCheckOutputSections({
+              stdout: stripAnsi(finalResult.stdout),
+              stderr: stripAnsi(finalResult.stderr),
+            }),
+            400
+          ),
         });
       }
       const ok = finalResult.exitCode === 0;
@@ -2140,9 +2156,10 @@ export async function runBuildDiscussion(
       const feedback = formatBuildCheckContextText({
         command: finalCommand,
         exitCode: finalResult.exitCode,
-        output:
-          stripAnsi(finalResult.stderr || finalResult.stdout).trim() ||
-          "(no output)",
+        output: formatBuildCheckOutputSections({
+          stdout: stripAnsi(finalResult.stdout),
+          stderr: stripAnsi(finalResult.stderr),
+        }),
         outputTruncated: !!finalResult.truncated,
       });
       return storeLongToolResult(

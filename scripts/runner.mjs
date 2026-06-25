@@ -60,7 +60,7 @@ import {
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
-const VERSION = 9;
+const VERSION = 10;
 // PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
 // panel. Running the UNBUILT source leaves it as the marker; we detect that via the
 // split PANEL_BUILD_MARKER (kept non-contiguous so the build's marker replacement
@@ -68,6 +68,7 @@ const VERSION = 9;
 const PANEL_HTML = "__RUNNER_PANEL_HTML__";
 const PANEL_BUILD_MARKER = "__RUNNER_" + "PANEL_HTML__";
 const MAX_OUTPUT_BYTES = 200 * 1024;
+const MAX_MCP_RESULT_BYTES = MAX_OUTPUT_BYTES;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const BACKGROUND_STARTUP_MS = 2_000;
 const MAX_READ_BYTES = 512 * 1024;
@@ -92,6 +93,18 @@ const SKIP_DIRS = new Set([
 ]);
 
 const backgroundProcesses = new Map();
+
+function capTextToUtf8Bytes(text, maxBytes) {
+  const normalized = String(text ?? "");
+  const buffer = Buffer.from(normalized, "utf8");
+  if (buffer.length <= maxBytes) {
+    return { text: normalized, truncated: false };
+  }
+  return {
+    text: buffer.subarray(0, maxBytes).toString("utf8"),
+    truncated: true,
+  };
+}
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -1752,7 +1765,8 @@ class McpServer {
     const text = content
       .map((c) => (c?.type === "text" ? c.text : `[${c?.type ?? "unknown"} content]`))
       .join("\n");
-    return { text: text.slice(0, 50_000), isError: !!result?.isError };
+    const capped = capTextToUtf8Bytes(text, MAX_MCP_RESULT_BYTES);
+    return { text: capped.text, isError: !!result?.isError, truncated: capped.truncated };
   }
 
   kill() {

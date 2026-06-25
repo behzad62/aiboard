@@ -263,6 +263,12 @@ export interface McpServerInfo {
   tools: McpToolInfo[];
 }
 
+export interface McpToolCallResult {
+  text: string;
+  isError: boolean;
+  truncated: boolean;
+}
+
 /** MCP servers the runner bridges. Null when unsupported/unreachable. */
 export async function listMcpServers(
   config: RunnerConfig
@@ -285,7 +291,7 @@ export async function callMcpTool(
   server: string,
   tool: string,
   args: unknown
-): Promise<{ text: string; isError: boolean }> {
+): Promise<McpToolCallResult> {
   const res = await fetch(`${config.url.replace(/\/$/, "")}/mcp/call`, {
     method: "POST",
     headers: headers(config.token),
@@ -295,7 +301,11 @@ export async function callMcpTool(
   if (!res.ok) {
     throw new Error(data.error ?? `MCP call failed (HTTP ${res.status})`);
   }
-  return { text: data.text ?? "", isError: !!data.isError };
+  return {
+    text: typeof data.text === "string" ? data.text : "",
+    isError: !!data.isError,
+    truncated: !!data.truncated,
+  };
 }
 
 export interface RunnerFetchResult {

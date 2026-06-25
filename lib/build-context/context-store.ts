@@ -73,6 +73,7 @@ export interface McpToolContextTextInput {
   server: string;
   tool: string;
   isError: boolean;
+  truncated?: boolean;
   text: string;
 }
 
@@ -94,15 +95,31 @@ export interface BuildCheckContextTextInput {
   note?: string;
 }
 
+export interface BuildCheckOutputSectionsInput {
+  stdout?: string | null;
+  stderr?: string | null;
+}
+
 export interface ContextBlobPromptFormatOptions {
   thresholdChars?: number;
 }
 
 export function formatMcpToolContextText(input: McpToolContextTextInput): string {
   return [
-    `MCP ${input.server}.${input.tool} -> ${input.isError ? "ERROR" : "ok"}`,
+    `MCP ${input.server}.${input.tool} -> ${input.isError ? "ERROR" : "ok"}${input.truncated ? "; TRUNCATED to the runner size cap (client stored all text received from runner)" : ""}`,
     input.text,
   ].join("\n");
+}
+
+export function formatBuildCheckOutputSections(
+  input: BuildCheckOutputSectionsInput
+): string {
+  const stdout = (input.stdout ?? "").trim();
+  const stderr = (input.stderr ?? "").trim();
+  const parts: string[] = [];
+  if (stdout) parts.push(`stdout:\n${stdout}`);
+  if (stderr) parts.push(`stderr:\n${stderr}`);
+  return parts.length > 0 ? parts.join("\n") : "(no output)";
 }
 
 export function formatFetchContextText(input: FetchContextTextInput): string {
