@@ -64,6 +64,37 @@ export interface ContextRetrievalResult {
   totalTokens: number;
 }
 
+export interface McpToolContextTextInput {
+  server: string;
+  tool: string;
+  isError: boolean;
+  text: string;
+}
+
+export interface FetchContextTextInput {
+  finalUrl: string;
+  status: number;
+  statusText: string;
+  contentType?: string | null;
+  durationMs: number;
+  truncated: boolean;
+  text: string;
+}
+
+export function formatMcpToolContextText(input: McpToolContextTextInput): string {
+  return [
+    `MCP ${input.server}.${input.tool} -> ${input.isError ? "ERROR" : "ok"}`,
+    input.text,
+  ].join("\n");
+}
+
+export function formatFetchContextText(input: FetchContextTextInput): string {
+  return [
+    `Fetched ${input.finalUrl} - HTTP ${input.status} ${input.statusText}; content-type: ${input.contentType || "unknown"}; ${(input.durationMs / 1000).toFixed(1)}s${input.truncated ? "; TRUNCATED to the runner size cap" : ""}`,
+    input.text,
+  ].join("\n\n");
+}
+
 export function isContextBlobRef(value: unknown): value is string {
   return (
     typeof value === "string" &&

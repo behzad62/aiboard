@@ -74,6 +74,8 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatFetchContextText,
+  formatMcpToolContextText,
   retrieveContextBlobText,
   type ContextBlobKind,
 } from "@/lib/build-context/context-store";
@@ -1160,8 +1162,12 @@ export async function runBuildDiscussion(
         });
       }
       return {
-        text: `MCP ${action.server}.${action.tool} -> ${result.isError ? "ERROR" : "ok"}
-${truncate(result.text, 8_000)}`,
+        text: formatMcpToolContextText({
+          server: action.server,
+          tool: action.tool,
+          isError: result.isError,
+          text: result.text,
+        }),
         status: result.isError ? "error" : "ok",
       };
     } catch (err) {
@@ -1323,10 +1329,15 @@ ${truncate(result.text, 8_000)}`,
         durationMs: result.durationMs,
         outputPreview: `HTTP ${result.status} ${result.statusText}; ${result.contentType || "unknown type"}; ${result.text.length} chars${result.truncated ? " (truncated)" : ""}`,
       });
-      return [
-        `Fetched ${result.finalUrl} — HTTP ${result.status} ${result.statusText}; content-type: ${result.contentType || "unknown"}; ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? "; TRUNCATED to the size cap" : ""}`,
-        truncate(result.text, 16_000),
-      ].join("\n\n");
+      return formatFetchContextText({
+        finalUrl: result.finalUrl,
+        status: result.status,
+        statusText: result.statusText,
+        contentType: result.contentType,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        text: result.text,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Fetch failed";
       emit({

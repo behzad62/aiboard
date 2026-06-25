@@ -6,6 +6,8 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatFetchContextText,
+  formatMcpToolContextText,
   retrieveContextBlobText,
 } from "../lib/build-context/context-store";
 import {
@@ -95,6 +97,39 @@ check(
   [buildJsonDigest(jsonBlob), buildRepoDiffDigest(diffBlob), buildFetchDigest(fetchBlob), buildToolExchangeDigest(exchangeBlob)].every(
     (digest) => /ctx_[A-Za-z0-9_-]+/.test(digest) && digest.includes("context_retrieve")
   )
+);
+
+const mcpTailSentinel = "MCP_TAIL_AFTER_OLD_8K_LIMIT";
+const fullMcpContext = formatMcpToolContextText({
+  server: "playwright",
+  tool: "browser_snapshot",
+  isError: false,
+  text: `${"m".repeat(8_500)}${mcpTailSentinel}`,
+});
+check(
+  "MCP context formatter preserves text beyond old 8k prompt truncation",
+  fullMcpContext.includes(mcpTailSentinel) &&
+    fullMcpContext.length > 8_500 &&
+    !fullMcpContext.includes("[truncated]"),
+  { length: fullMcpContext.length }
+);
+
+const fetchTailSentinel = "FETCH_TAIL_AFTER_OLD_16K_LIMIT";
+const fullFetchContext = formatFetchContextText({
+  finalUrl: "https://example.test/docs",
+  status: 200,
+  statusText: "OK",
+  contentType: "text/plain",
+  durationMs: 1250,
+  truncated: false,
+  text: `${"f".repeat(16_500)}${fetchTailSentinel}`,
+});
+check(
+  "fetch context formatter preserves body beyond old 16k prompt truncation",
+  fullFetchContext.includes(fetchTailSentinel) &&
+    fullFetchContext.length > 16_500 &&
+    !fullFetchContext.includes("[truncated]"),
+  { length: fullFetchContext.length }
 );
 
 const bounded = retrieveContextBlobText(blobA, { maxTokens: 120 });
