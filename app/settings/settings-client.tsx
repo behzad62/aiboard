@@ -291,7 +291,10 @@ export default function SettingsPage() {
               ))}
 
               <TabsContent value="custom">
-                <CustomModelsManager onChanged={load} />
+                <CustomModelsManager
+                  contextOverrides={data?.settings.modelContextOverrides}
+                  onChanged={load}
+                />
               </TabsContent>
             </Tabs>
           </div>

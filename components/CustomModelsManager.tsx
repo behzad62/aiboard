@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ModelContextEditor } from "@/components/ModelContextEditor";
 import { Plus, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -16,6 +17,10 @@ import {
   updateCustomModelCapabilities,
 } from "@/lib/client/settings-api";
 import { ensureReady } from "@/lib/client/api";
+import {
+  resolveModelContextProfile,
+  type ModelContextOverrides,
+} from "@/lib/providers/model-context";
 
 interface ModelCaps {
   image: boolean;
@@ -49,8 +54,15 @@ const NO_CAPS: ModelCaps = {
   audio: false,
   video: false,
 };
+const CUSTOM_PROVIDER_ID = "custom";
 
-export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
+export function CustomModelsManager({
+  contextOverrides,
+  onChanged,
+}: {
+  contextOverrides?: ModelContextOverrides;
+  onChanged?: () => void;
+}) {
   const [models, setModels] = useState<CustomModelView[]>([]);
   const [label, setLabel] = useState("");
   const [baseURL, setBaseURL] = useState("");
@@ -81,7 +93,9 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
   };
 
   const canSubmit =
-    label.trim().length > 0 && baseURL.trim().length > 0 && model.trim().length > 0;
+    label.trim().length > 0 &&
+    baseURL.trim().length > 0 &&
+    model.trim().length > 0;
   const canTest = baseURL.trim().length > 0 && model.trim().length > 0;
 
   const add = async () => {
@@ -118,7 +132,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
       setMessage(
         data.valid
           ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
-          : `Test failed: ${data.error ?? "unknown error"}`
+          : `Test failed: ${data.error ?? "unknown error"}`,
       );
     } catch {
       setMessage("Test failed: could not reach the endpoint.");
@@ -169,9 +183,8 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
         Connect any OpenAI-API-compatible endpoint — a model you run locally
         (Ollama, LM Studio) or a hosted server. For local Ollama, base URL{" "}
         <code className="rounded bg-muted px-1">http://localhost:11434/v1</code>{" "}
-        and model{" "}
-        <code className="rounded bg-muted px-1">gemma4:12b</code>. Ollama must
-        also allow requests from the browser: set{" "}
+        and model <code className="rounded bg-muted px-1">gemma4:12b</code>.
+        Ollama must also allow requests from the browser: set{" "}
         <code className="rounded bg-muted px-1">OLLAMA_ORIGINS=*</code> before
         starting it (PowerShell:{" "}
         <code className="rounded bg-muted px-1">
@@ -184,78 +197,96 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
 
       {models.length > 0 && (
         <div className="space-y-2">
-          {models.map((m) => (
-            <div key={m.id} className="rounded-lg border p-3">
-              <div className="flex items-center gap-3">
-              <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{m.label}</p>
-                <p className="truncate font-mono text-xs text-muted-foreground">
-                  {m.model} · {m.baseURL}
-                </p>
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {CAPABILITY_FIELDS.map((f) => {
-                    const on = m.capabilities?.[f.key] ?? false;
-                    return (
-                      <button
-                        key={f.key}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => toggleCapability(m, f.key)}
-                        title={`Toggle ${f.label} support`}
-                        className={cn(
-                          "rounded-full border px-2 py-0.5 text-[0.65rem] font-medium transition-colors",
-                          on
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-accent"
-                        )}
-                      >
-                        {f.label}
-                      </button>
-                    );
-                  })}
+          {models.map((m) => {
+            const fullModelId = `${CUSTOM_PROVIDER_ID}:${m.id}`;
+            const contextProfile = resolveModelContextProfile(
+              m.id,
+              CUSTOM_PROVIDER_ID,
+              contextOverrides,
+            );
+
+            return (
+              <div key={m.id} className="space-y-3 rounded-lg border p-3">
+                <div className="flex items-center gap-3">
+                  <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{m.label}</p>
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      {m.model} · {m.baseURL}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {CAPABILITY_FIELDS.map((f) => {
+                        const on = m.capabilities?.[f.key] ?? false;
+                        return (
+                          <button
+                            key={f.key}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => toggleCapability(m, f.key)}
+                            title={`Toggle ${f.label} support`}
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[0.65rem] font-medium transition-colors",
+                              on
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:bg-accent",
+                            )}
+                          >
+                            {f.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <Badge
+                    variant={
+                      m.lastValidationSucceeded == null
+                        ? "secondary"
+                        : m.lastValidationSucceeded
+                          ? "success"
+                          : "destructive"
+                    }
+                  >
+                    {m.lastValidationSucceeded == null
+                      ? "Not tested"
+                      : m.lastValidationSucceeded
+                        ? "Connection verified"
+                        : "Last test failed"}
+                  </Badge>
+                  {m.hasKey && <Badge variant="secondary">key saved</Badge>}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testSaved(m.id)}
+                    disabled={testingId === m.id}
+                  >
+                    {testingId === m.id ? "Testing..." : "Test connection"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => remove(m.id)}
+                    title="Remove custom model"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
+                {testResults[m.id] && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {testResults[m.id]}
+                  </p>
+                )}
+                <ModelContextEditor
+                  fullModelId={fullModelId}
+                  profile={contextProfile}
+                  override={contextOverrides?.[fullModelId]}
+                  onSaved={async () => {
+                    await load();
+                    onChanged?.();
+                  }}
+                />
               </div>
-              <Badge
-                variant={
-                  m.lastValidationSucceeded == null
-                    ? "secondary"
-                    : m.lastValidationSucceeded
-                      ? "success"
-                      : "destructive"
-                }
-              >
-                {m.lastValidationSucceeded == null
-                  ? "Not tested"
-                  : m.lastValidationSucceeded
-                    ? "Connection verified"
-                    : "Last test failed"}
-              </Badge>
-              {m.hasKey && <Badge variant="secondary">key saved</Badge>}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => testSaved(m.id)}
-                disabled={testingId === m.id}
-              >
-                {testingId === m.id ? "Testing..." : "Test connection"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => remove(m.id)}
-                title="Remove custom model"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-              </div>
-              {testResults[m.id] && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {testResults[m.id]}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -318,7 +349,7 @@ export function CustomModelsManager({ onChanged }: { onChanged?: () => void }) {
                     "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
                     on
                       ? "border-primary bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent"
+                      : "text-muted-foreground hover:bg-accent",
                   )}
                 >
                   {capLabel}

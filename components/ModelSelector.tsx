@@ -2,10 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/lib/providers/base";
-import {
-  formatContextWindowTokens,
-  type ModelContextProfile,
-} from "@/lib/providers/model-context";
+import { formatModelContextIndicator } from "@/lib/providers/model-context-format";
 import type { CapabilityInputType } from "@/lib/attachments/types";
 import { unsupportedInputTypes } from "@/lib/providers/capabilities";
 import { Label } from "@/components/ui/label";
@@ -25,17 +22,6 @@ interface ModelSelectorProps {
 
 function formatUnsupported(types: CapabilityInputType[]): string {
   return types.map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join(", ");
-}
-
-export function formatModelContextIndicator(
-  profile: ModelContextProfile
-): string {
-  const context = `${formatContextWindowTokens(profile.contextWindowTokens)} ctx`;
-  return profile.buildOutputReserveTokens
-    ? `${context} / ${formatContextWindowTokens(
-        profile.buildOutputReserveTokens
-      )} reserve`
-    : context;
 }
 
 export function ModelSelector({

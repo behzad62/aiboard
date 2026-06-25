@@ -64,25 +64,17 @@ export function ModelContextEditor({
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    setContextWindow(String(override?.contextWindowTokens ?? profile.contextWindowTokens));
-    setMaxOutput(String(override?.maxOutputTokens ?? profile.maxOutputTokens ?? ""));
+    setContextWindow(String(profile.contextWindowTokens));
+    setMaxOutput(String(profile.maxOutputTokens ?? ""));
     setBuildReserve(
-      String(
-        override?.buildOutputReserveTokens ??
-          profile.buildOutputReserveTokens ??
-          ""
-      )
+      String(profile.buildOutputReserveTokens ?? "")
     );
     setInputCeiling(
-      String(
-        override?.effectiveBuildInputCeilingTokens ??
-          profile.effectiveBuildInputCeilingTokens ??
-          ""
-      )
+      String(profile.effectiveBuildInputCeilingTokens ?? "")
     );
-    setQuality(override?.longContextQuality ?? profile.longContextQuality ?? "ok");
-    setPromptCaching(override?.promptCaching ?? profile.promptCaching ?? false);
-    setRoles(override?.recommendedBuildRoles ?? profile.recommendedBuildRoles ?? []);
+    setQuality(profile.longContextQuality ?? "ok");
+    setPromptCaching(profile.promptCaching ?? false);
+    setRoles(profile.recommendedBuildRoles ?? []);
     setMessage(null);
   }, [fullModelId, override, profile]);
 
@@ -280,7 +272,7 @@ export function ModelContextEditor({
           onClick={resetOverride}
           disabled={saving}
         >
-          Reset to built-in context
+          Reset context override
         </Button>
       </div>
 

@@ -5,7 +5,7 @@ import {
   resolveModelContextProfile,
   type ModelContextOverrides,
 } from "../lib/providers/model-context";
-import { formatModelContextIndicator } from "../components/ModelSelector";
+import { formatModelContextIndicator } from "../lib/providers/model-context-format";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -121,6 +121,23 @@ check(
     tinyOverride.buildOutputReserveTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2) &&
     tinyOverride.effectiveBuildInputCeilingTokens === Math.floor(MIN_CONTEXT_WINDOW_TOKENS / 2),
   tinyOverride
+);
+
+const customOverride = resolveModelContextProfile("ollama-local", "custom", {
+  "custom:ollama-local": {
+    contextWindowTokens: 64_000,
+    maxOutputTokens: 16_000,
+    buildOutputReserveTokens: 8_000,
+  },
+});
+check(
+  "custom model override resolves by full custom model id",
+  customOverride.fullModelId === "custom:ollama-local" &&
+    customOverride.contextWindowTokens === 64_000 &&
+    customOverride.maxOutputTokens === 16_000 &&
+    customOverride.buildOutputReserveTokens === 8_000 &&
+    customOverride.source === "override",
+  customOverride
 );
 
 check(
