@@ -29,13 +29,14 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 };
 
 const parsed = parseArchitectAction(
-  '{"action":"context_retrieve","ref":"ctx_tool_exchange_abc123XYZ","maxTokens":4000,"reason":"need old command output"}'
+  '{"action":"context_retrieve","ref":"ctx_tool_exchange_abc123XYZ","maxTokens":4000,"offsetChars":1200,"reason":"need old command output"}'
 );
 check(
   "parser accepts context_retrieve with safe ref",
   parsed?.action === "context_retrieve" &&
     parsed.ref === "ctx_tool_exchange_abc123XYZ" &&
-    parsed.maxTokens === 4000,
+    parsed.maxTokens === 4000 &&
+    parsed.offsetChars === 1200,
   parsed
 );
 check(
@@ -47,13 +48,16 @@ check(
   parsed
 );
 check(
-  "parser clamps context_retrieve maxTokens",
+  "parser clamps context_retrieve maxTokens and offsetChars",
   parseArchitectAction(
-    '{"action":"context_retrieve","ref":"ctx_abc123","maxTokens":999999}'
+    '{"action":"context_retrieve","ref":"ctx_abc123","maxTokens":999999,"offsetChars":-99}'
   )?.action === "context_retrieve" &&
     (parseArchitectAction(
-      '{"action":"context_retrieve","ref":"ctx_abc123","maxTokens":999999}'
-    ) as { maxTokens?: number } | null)?.maxTokens === 12000
+      '{"action":"context_retrieve","ref":"ctx_abc123","maxTokens":999999,"offsetChars":-99}'
+    ) as { maxTokens?: number; offsetChars?: number } | null)?.maxTokens === 12000 &&
+    (parseArchitectAction(
+      '{"action":"context_retrieve","ref":"ctx_abc123","maxTokens":999999,"offsetChars":-99}'
+    ) as { maxTokens?: number; offsetChars?: number } | null)?.offsetChars === 0
 );
 check(
   "parser rejects invalid context_retrieve refs",
@@ -68,11 +72,22 @@ if (parsed) {
     action: "context_retrieve",
     ref: "ctx_tool_exchange_abc123XYZ",
     maxTokens: 4000,
+    offsetChars: 1200,
+  });
+  const keyC = exactToolKey({
+    action: "context_retrieve",
+    ref: "ctx_tool_exchange_abc123XYZ",
+    maxTokens: 4000,
+    offsetChars: 2400,
   });
   const tracker = createToolCallTracker();
   check("exactToolKey dedupes identical context_retrieve calls", keyA === keyB, {
     keyA,
     keyB,
+  });
+  check("exactToolKey distinguishes context_retrieve offsets", keyA !== keyC, {
+    keyA,
+    keyC,
   });
   check("first context_retrieve is not redundant", !isRedundantToolCall(tracker, parsed));
   recordToolCall(tracker, parsed);

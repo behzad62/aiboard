@@ -3,6 +3,7 @@ import { estimateTokens } from "./token-estimator";
 export const CONTEXT_REF_PREFIX = "ctx_";
 export const CONTEXT_RETRIEVE_DEFAULT_TOKENS = 4_000;
 export const CONTEXT_RETRIEVE_MAX_TOKENS = 12_000;
+export const CONTEXT_RETRIEVE_MAX_OFFSET_CHARS = 10_000_000;
 export const CONTEXT_DIGEST_PREVIEW_CHARS = 1_200;
 
 export type ContextBlobKind =
@@ -50,6 +51,7 @@ export interface CreateContextBlobInput {
 export interface ContextRetrievalOptions {
   maxTokens?: number;
   maxChars?: number;
+  offsetChars?: number;
 }
 
 export interface ContextRetrievalResult {
@@ -58,8 +60,11 @@ export interface ContextRetrievalResult {
   kind: ContextBlobKind;
   text: string;
   truncated: boolean;
+  offsetChars: number;
   returnedChars: number;
   totalChars: number;
+  omittedBeforeChars: number;
+  omittedAfterChars: number;
   returnedTokens: number;
   totalTokens: number;
 }
@@ -81,6 +86,18 @@ export interface FetchContextTextInput {
   text: string;
 }
 
+export interface BuildCheckContextTextInput {
+  command: string;
+  exitCode: number;
+  output: string;
+  outputTruncated?: boolean;
+  note?: string;
+}
+
+export interface ContextBlobPromptFormatOptions {
+  thresholdChars?: number;
+}
+
 export function formatMcpToolContextText(input: McpToolContextTextInput): string {
   return [
     `MCP ${input.server}.${input.tool} -> ${input.isError ? "ERROR" : "ok"}`,
@@ -95,10 +112,40 @@ export function formatFetchContextText(input: FetchContextTextInput): string {
   ].join("\n\n");
 }
 
+export function formatBuildCheckContextText(
+  input: BuildCheckContextTextInput
+): string {
+  const ok = input.exitCode === 0;
+  return [
+    `AUTOMATED BUILD CHECK - \`${input.command}\` exited ${input.exitCode} (${ok ? "OK" : "FAILED"})${input.outputTruncated ? " [output truncated]" : ""}.`,
+    input.note ??
+      (ok
+        ? "The project compiles. Approve only what the build and your review both support."
+        : "The project does NOT compile. Treat the errors below as required fixes - do NOT mark done while they remain; send the owning tasks back with precise fix instructions."),
+    input.output.trim() || "(no output)",
+  ].join("\n");
+}
+
+export function formatContextBlobForPrompt(
+  blob: ContextBlob,
+  options: ContextBlobPromptFormatOptions = {}
+): string {
+  const thresholdChars = Math.max(0, Math.floor(options.thresholdChars ?? 10_000));
+  return blob.text.length > thresholdChars ? buildContextDigest(blob) : blob.text;
+}
+
 export function isContextBlobRef(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^ctx_[A-Za-z0-9_-]{3,120}$/.test(value.trim())
+  );
+}
+
+export function clampContextRetrieveOffsetChars(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(
+    0,
+    Math.min(CONTEXT_RETRIEVE_MAX_OFFSET_CHARS, Math.round(value))
   );
 }
 
@@ -244,7 +291,7 @@ export function buildContextDigest(
   blob: ContextBlob,
   options: { previewChars?: number } = {}
 ): string {
-  const retrieve = `{"action":"context_retrieve","ref":"${blob.id}","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"reason":"need exact stored context"}`;
+  const retrieve = `{"action":"context_retrieve","ref":"${blob.id}","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"need exact stored context"}`;
   return [
     `CONTEXT DIGEST: ${blob.label}`,
     `Ref: ${blob.id}`,
@@ -252,6 +299,7 @@ export function buildContextDigest(
     `Size: ${blob.charCount} chars, approx ${blob.tokenEstimate} tokens`,
     `Summary: ${summaryForKind(blob)}`,
     `Retrieve exact bounded text with: ${retrieve}`,
+    "For later pages, increase offsetChars by the number of returned chars.",
     "Preview:",
     previewText(blob.text, options.previewChars),
   ].join("\n");
@@ -302,21 +350,32 @@ export function retrieveContextBlobText(
   options: ContextRetrievalOptions = {}
 ): ContextRetrievalResult {
   const maxTokens = clampContextRetrieveMaxTokens(options.maxTokens);
+  const offsetChars = Math.min(
+    blob.text.length,
+    clampContextRetrieveOffsetChars(options.offsetChars)
+  );
   const charBound =
     typeof options.maxChars === "number" && Number.isFinite(options.maxChars)
       ? Math.max(0, Math.floor(options.maxChars))
-      : blob.text.length;
-  const charLimited = blob.text.slice(0, charBound);
+      : blob.text.length - offsetChars;
+  const charLimited = blob.text.slice(offsetChars, offsetChars + charBound);
   const text = exactPrefixWithinTokenBudget(charLimited, maxTokens);
   const returnedTokens = estimateTokens(text);
+  const omittedAfterChars = Math.max(
+    0,
+    blob.text.length - offsetChars - text.length
+  );
   return {
     ref: blob.id,
     label: blob.label,
     kind: blob.kind,
     text,
-    truncated: text.length < blob.text.length,
+    truncated: offsetChars > 0 || omittedAfterChars > 0,
+    offsetChars,
     returnedChars: text.length,
     totalChars: blob.text.length,
+    omittedBeforeChars: offsetChars,
+    omittedAfterChars,
     returnedTokens,
     totalTokens: blob.tokenEstimate,
   };

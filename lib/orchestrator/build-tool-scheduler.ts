@@ -79,7 +79,7 @@ function labelFor(action: ArchitectAction): string {
     case "read_range":
       return `read_range ${action.path}:${action.startLine}`;
     case "context_retrieve":
-      return `context_retrieve ${action.ref}`;
+      return `context_retrieve ${action.ref}@${action.offsetChars ?? 0}`;
     case "search":
       return `search ${action.query}`;
     case "run":

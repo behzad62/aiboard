@@ -10,6 +10,7 @@
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
 import type { JsonSchemaObject, StructuredOutputFormat } from "../providers/base";
 import {
+  clampContextRetrieveOffsetChars,
   clampContextRetrieveMaxTokens,
   CONTEXT_RETRIEVE_DEFAULT_TOKENS,
   isContextBlobRef,
@@ -252,6 +253,7 @@ export interface ContextRetrieveAction {
   action: "context_retrieve";
   ref: string;
   maxTokens?: number;
+  offsetChars?: number;
   reason?: string;
 }
 
@@ -373,6 +375,10 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         maxTokens: {
           type: "number",
           description: "Bounded token cap for context_retrieve.",
+        },
+        offsetChars: {
+          type: "number",
+          description: "Optional character offset for paging through a context blob.",
         },
         startLine: { type: "number" },
         lineCount: { type: "number" },
@@ -1233,6 +1239,7 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           action: "context_retrieve",
           ref: action.ref.trim(),
           maxTokens: clampContextRetrieveMaxTokens(action.maxTokens),
+          offsetChars: clampContextRetrieveOffsetChars(action.offsetChars),
           reason: typeof action.reason === "string" ? action.reason : undefined,
         };
       }
@@ -1756,7 +1763,7 @@ export function exactToolKey(action: ArchitectAction): string | null {
         .sort()
         .join("|")}`;
     case "context_retrieve":
-      return `context_retrieve:${action.ref.trim()}:${clampContextRetrieveMaxTokens(action.maxTokens)}`;
+      return `context_retrieve:${action.ref.trim()}:${clampContextRetrieveMaxTokens(action.maxTokens)}:${clampContextRetrieveOffsetChars(action.offsetChars)}`;
     case "search":
       return `search:${action.query.trim().toLowerCase()}`;
     case "run":
@@ -2016,8 +2023,8 @@ function readRangeToolDoc(rangeReadsLeft?: number): string {
 function contextRetrieveToolDoc(): string {
   return [
     "TOOL - retrieve old compacted context: when a digest shows a Ref like ctx_..., request bounded exact text with ONLY:",
-    `{"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"reason":"why you need the exact omitted text"}`,
-    "The result is exact text from the stored blob up to the requested cap; it may still be truncated. Do not use this for current source files - read/read_range current files instead.",
+    `{"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why you need the exact omitted text"}`,
+    "The result is exact text from that character offset up to the requested cap; it reports omitted text before/after. For later pages, increase offsetChars by the returned character count. Do not use this for current source files - read/read_range current files instead.",
   ].join("\n");
 }
 
@@ -2101,7 +2108,7 @@ export function buildWorkerToolInstructions(budget: {
     budget.searches > 0
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
-    `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text up to the cap; use read/read_range for current source files.`,
+    `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text from that character offset up to the cap; use read/read_range for current source files.`,
     budget.patches > 0
       ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
       : "",

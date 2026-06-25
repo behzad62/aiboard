@@ -74,6 +74,8 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatBuildCheckContextText,
+  formatContextBlobForPrompt,
   formatFetchContextText,
   formatMcpToolContextText,
   retrieveContextBlobText,
@@ -2034,6 +2036,8 @@ export async function runBuildDiscussion(
     }
   };
 
+  const VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS = 6_000;
+
   const runVerify = async (command: string): Promise<string> => {
     if (!runner || !command) return "";
     const safety = classifyRunCommand(command);
@@ -2099,11 +2103,19 @@ export async function runBuildDiscussion(
             : "deny";
           if (decision === "allow-all") allowAllCommands = true;
           if (decision === "deny") {
-            return [
-              `AUTOMATED BUILD CHECK — \`${command}\` exited ${result.exitCode} (FAILED).`,
-              "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
-              truncate(combinedOutput.trim() || "(no output)", 6_000),
-            ].join("\n");
+            const feedback = formatBuildCheckContextText({
+              command,
+              exitCode: result.exitCode,
+              output: combinedOutput.trim() || "(no output)",
+              outputTruncated: !!result.truncated,
+              note: "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
+            });
+            return storeLongToolResult(
+              "command_output",
+              `Automated build check: ${command}`,
+              feedback,
+              VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+            );
           }
         }
         emit({
@@ -2125,13 +2137,20 @@ export async function runBuildDiscussion(
       // Remember the latest resolved build-check outcome for the final summary's
       // Verification line (bounded; only the command + pass/fail verdict).
       repoVerification = `${finalCommand} ${ok ? "passed" : "failed"}`;
-      return [
-        `AUTOMATED BUILD CHECK — \`${finalCommand}\` exited ${finalResult.exitCode} (${ok ? "OK" : "FAILED"})${finalResult.truncated ? " [output truncated]" : ""}.`,
-        ok
-          ? "The project compiles. Approve only what the build and your review both support."
-          : "The project does NOT compile. Treat the errors below as required fixes — do NOT mark done while they remain; send the owning tasks back with precise fix instructions.",
-        truncate(stripAnsi(finalResult.stderr || finalResult.stdout).trim() || "(no output)", 6_000),
-      ].join("\n");
+      const feedback = formatBuildCheckContextText({
+        command: finalCommand,
+        exitCode: finalResult.exitCode,
+        output:
+          stripAnsi(finalResult.stderr || finalResult.stdout).trim() ||
+          "(no output)",
+        outputTruncated: !!finalResult.truncated,
+      });
+      return storeLongToolResult(
+        "command_output",
+        `Automated build check: ${finalCommand}`,
+        feedback,
+        VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+      );
     } catch (err) {
       emitBuildCheckCommandRun({
         command,
@@ -3172,7 +3191,7 @@ export async function runBuildDiscussion(
   ): string => {
     if (text.length <= threshold) return text;
     const blob = storeContextBlob(kind, label, text);
-    return digestForContextBlob(blob);
+    return formatContextBlobForPrompt(blob, { thresholdChars: threshold });
   };
 
   const buildCompactionPlaceholder =
@@ -3201,6 +3220,7 @@ export async function runBuildDiscussion(
     }
     const retrieved = retrieveContextBlobText(blob, {
       maxTokens: action.maxTokens,
+      offsetChars: action.offsetChars,
     });
     emit({
       type: "diagnostic",
@@ -3208,13 +3228,21 @@ export async function runBuildDiscussion(
       modelId: actor.modelId,
       modelName: actor.displayName,
       providerId: parseModelId(actor.modelId).providerId,
-      message: `${actorLabel} retrieved context ${action.ref} (${kbOf(retrieved.text)})`,
+      message: `${actorLabel} retrieved context ${action.ref} at offset ${retrieved.offsetChars} (${kbOf(retrieved.text)})`,
     });
+    const nextOffset = retrieved.offsetChars + retrieved.returnedChars;
     return [
       `CONTEXT RETRIEVE ${action.ref}`,
       `Label: ${retrieved.label}`,
       `Kind: ${retrieved.kind}`,
+      `Offset: ${retrieved.offsetChars} chars`,
       `Returned: ${retrieved.returnedChars}/${retrieved.totalChars} chars, approx ${retrieved.returnedTokens}/${retrieved.totalTokens} tokens${retrieved.truncated ? " (truncated)" : ""}`,
+      retrieved.omittedBeforeChars > 0
+        ? `Omitted before: ${retrieved.omittedBeforeChars} chars`
+        : "",
+      retrieved.omittedAfterChars > 0
+        ? `Omitted after: ${retrieved.omittedAfterChars} chars. To continue, request offsetChars ${nextOffset}.`
+        : "",
       "Exact text:",
       retrieved.text || "(empty)",
       retrieved.truncated

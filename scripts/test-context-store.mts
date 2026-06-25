@@ -8,6 +8,8 @@ import {
   createContextBlob,
   formatFetchContextText,
   formatMcpToolContextText,
+  formatBuildCheckContextText,
+  formatContextBlobForPrompt,
   retrieveContextBlobText,
 } from "../lib/build-context/context-store";
 import {
@@ -146,6 +148,61 @@ check(
   "unbounded-enough retrieval returns exact full text",
   !exact.truncated && exact.text === longOutput,
   exact
+);
+const lateMarker = "LATE_MARKER_AFTER_OFFSET";
+const pagedBlob = createContextBlob({
+  discussionId: "disc-ctx",
+  kind: "command_output",
+  label: "paged command output",
+  text: `${"a".repeat(4_500)}${lateMarker}${"b".repeat(4_500)}`,
+});
+const paged = retrieveContextBlobText(pagedBlob, {
+  offsetChars: 4_500,
+  maxTokens: 60,
+});
+check(
+  "offset retrieval returns exact text from later in the blob",
+  paged.offsetChars === 4_500 &&
+    paged.omittedBeforeChars === 4_500 &&
+    paged.text.startsWith(lateMarker) &&
+    paged.omittedAfterChars > 0,
+  paged
+);
+const sanitizedOffset = retrieveContextBlobText(pagedBlob, {
+  offsetChars: -100,
+  maxTokens: 20,
+});
+check(
+  "negative retrieval offsets are sanitized to the beginning",
+  sanitizedOffset.offsetChars === 0 &&
+    sanitizedOffset.omittedBeforeChars === 0 &&
+    sanitizedOffset.text === pagedBlob.text.slice(0, sanitizedOffset.returnedChars),
+  sanitizedOffset
+);
+
+const verifyTailSentinel = "VERIFY_TAIL_AFTER_OLD_6K_LIMIT";
+const fullVerifyText = formatBuildCheckContextText({
+  command: "npm test",
+  exitCode: 1,
+  output: `${"v".repeat(6_500)}${verifyTailSentinel}`,
+  outputTruncated: true,
+});
+const verifyBlob = createContextBlob({
+  discussionId: "disc-ctx",
+  kind: "command_output",
+  label: "Automated build check: npm test",
+  text: fullVerifyText,
+});
+const verifyPromptText = formatContextBlobForPrompt(verifyBlob, {
+  thresholdChars: 6_000,
+});
+check(
+  "long automated build-check output is represented by digest and ref",
+  fullVerifyText.includes(verifyTailSentinel) &&
+    verifyPromptText.includes(verifyBlob.id) &&
+    verifyPromptText.includes('"action":"context_retrieve"') &&
+    verifyPromptText.length < fullVerifyText.length,
+  { promptLength: verifyPromptText.length, fullLength: fullVerifyText.length }
 );
 
 __resetClientStoreForTests();
