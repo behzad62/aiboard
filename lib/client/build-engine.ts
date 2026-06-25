@@ -195,9 +195,11 @@ import {
   getUserSettings,
   insertFinalResult,
   insertMessage,
+  listActiveBuildMemories,
   updateDiscussion,
   upsertBuildCheckpoint,
   upsertBuildFile,
+  upsertBuildMemory,
   upsertContextBlob,
 } from "./store";
 import { drainBuildNotes } from "./build-notes";
@@ -220,6 +222,23 @@ import type {
   SkillActivationInput,
   SkillEvidence,
 } from "@/lib/skills/types";
+import {
+  deriveBuildMemoryProjectKey,
+  type BuildMemoryRecord,
+} from "@/lib/build-context/memory-store";
+import {
+  commandProblemsToMemoryResults,
+  extractCommandMemories,
+  extractProblemMemories,
+  extractReviewMemories,
+  extractSkillViolationMemories,
+  extractUserNoteMemories,
+  type CommandMemoryResult,
+} from "@/lib/build-context/memory-extractors";
+import {
+  buildArchitectMemoryBrief,
+  buildWorkerMemoryBrief,
+} from "@/lib/build-context/memory-brief";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 type StructuredTraceValidation =
@@ -679,6 +698,52 @@ export async function runBuildDiscussion(
   // ── Optional local runner (user-started; opt-in by config) ────────────────
   let runner: RunnerConfig | null = null;
   let runnerDirName: string | null = null;
+  let buildMemoryRepoRemoteUrl: string | null = null;
+  let buildMemoryProjectKey = deriveBuildMemoryProjectKey({
+    repoRemoteUrl: buildMemoryRepoRemoteUrl,
+    runnerProjectRoot: runnerDirName,
+    projectFolderName: discussion.projectFolderName,
+    discussionId: discussion.id,
+  });
+  const refreshBuildMemoryProjectKey = (): void => {
+    buildMemoryProjectKey = deriveBuildMemoryProjectKey({
+      repoRemoteUrl: buildMemoryRepoRemoteUrl,
+      runnerProjectRoot: runnerDirName,
+      projectFolderName: discussion.projectFolderName,
+      discussionId: discussion.id,
+    });
+  };
+  const persistBuildMemories = (records: BuildMemoryRecord[]): void => {
+    for (const record of records) upsertBuildMemory(record);
+  };
+  const activeBuildMemories = (): BuildMemoryRecord[] =>
+    listActiveBuildMemories(buildMemoryProjectKey);
+  const commandMemoryResults: CommandMemoryResult[] = [];
+  const rememberCommandMemory = (result: CommandMemoryResult): void => {
+    if (result.command.trim() === "" || result.exitCode === -1) return;
+    commandMemoryResults.push(result);
+    if (commandMemoryResults.length > 80) {
+      commandMemoryResults.splice(0, commandMemoryResults.length - 80);
+    }
+    persistBuildMemories(
+      extractCommandMemories({
+        projectKey: buildMemoryProjectKey,
+        discussionId: discussion.id,
+        commandResults: commandMemoryResults,
+      })
+    );
+  };
+  const architectMemoryBriefText = (): string =>
+    buildArchitectMemoryBrief(activeBuildMemories(), { tokenBudget: 700 }).text;
+  const workerMemoryBriefText = (task: BuildTask): string =>
+    buildWorkerMemoryBrief(activeBuildMemories(), {
+      taskId: task.id,
+      paths: [
+        ...(task.contextFiles ?? []),
+        ...(task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)),
+      ],
+      tokenBudget: 360,
+    }).text;
   // One-line note about the runner's shell/OS, fed to the Architect so it stops
   // emitting Unix-only commands (sed/awk/grep) on a Windows runner. Empty when
   // the platform is unknown (old runner) — no hint then.
@@ -742,6 +807,13 @@ export async function runBuildDiscussion(
     };
     buildProblems.push(problem);
     if (buildProblems.length > 80) buildProblems.splice(0, buildProblems.length - 80);
+    persistBuildMemories(
+      extractProblemMemories({
+        projectKey: buildMemoryProjectKey,
+        discussionId: discussion.id,
+        problems: [problem],
+      })
+    );
     return problem;
   };
 
@@ -756,6 +828,15 @@ export async function runBuildDiscussion(
     if (commandProblems.length > 40) {
       commandProblems.splice(0, commandProblems.length - 40);
     }
+    persistBuildMemories(
+      extractCommandMemories({
+        projectKey: buildMemoryProjectKey,
+        discussionId: discussion.id,
+        commandResults: commandProblemsToMemoryResults(
+          commandProblems.filter((item) => !item.denied)
+        ),
+      })
+    );
     return problem;
   };
 
@@ -905,6 +986,7 @@ export async function runBuildDiscussion(
     if (health.ok) {
       runner = config;
       runnerDirName = health.dir ?? null;
+      refreshBuildMemoryProjectKey();
       shellHint = shellHintForPlatform(health.platform);
       emit({
         type: "diagnostic",
@@ -1019,6 +1101,11 @@ export async function runBuildDiscussion(
       const repoStatus = await getRepoStatusViaRunner(config);
       if (repoStatus) {
         repoIsGit = repoStatus.isRepo;
+        buildMemoryRepoRemoteUrl =
+          repoStatus.remotes.find((remote) => remote.name === "origin")?.url ??
+          repoStatus.remotes[0]?.url ??
+          null;
+        refreshBuildMemoryProjectKey();
         // Capture the GitHub CLI state once — gates the issue/push/PR typed
         // actions in the Architect prompts (only when gh is installed + authed).
         githubCli = repoStatus.githubCli;
@@ -1290,6 +1377,12 @@ export async function runBuildDiscussion(
           [command, result.stdout, result.stderr].filter(Boolean).join("\n")
         );
       }
+      rememberCommandMemory({
+        command,
+        exitCode: result.exitCode,
+        outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 800),
+        createdAt: new Date().toISOString(),
+      });
       // Commands can create files (scaffolders, installs) — refresh the tree.
       const refreshed = await listFilesViaRunner(runner);
       if (refreshed) diskTree = [...new Set([...diskTree, ...refreshed])];
@@ -1302,6 +1395,12 @@ export async function runBuildDiscussion(
         exitCode: -1,
         durationMs: 0,
         outputPreview: message,
+      });
+      rememberCommandMemory({
+        command,
+        exitCode: 1,
+        outputPreview: message,
+        createdAt: new Date().toISOString(),
       });
       return `$ ${command}\nRunner error: ${message}`;
     }
@@ -2037,6 +2136,14 @@ export async function runBuildDiscussion(
     event: Omit<Extract<OrchestratorEvent, { type: "command_run" }>, "type">
   ): void => {
     emit({ type: "command_run", ...event });
+    if (!event.denied) {
+      rememberCommandMemory({
+        command: event.command,
+        exitCode: event.exitCode,
+        outputPreview: event.outputPreview,
+        createdAt: new Date().toISOString(),
+      });
+    }
     if (event.exitCode !== 0 || event.denied) {
       recordCommandProblem({
         command: event.command,
@@ -2489,6 +2596,13 @@ export async function runBuildDiscussion(
     );
     if (fresh.length > 0) {
       userNotes.push(...fresh);
+      persistBuildMemories(
+        extractUserNoteMemories({
+          projectKey: buildMemoryProjectKey,
+          discussionId: discussion.id,
+          notes: fresh,
+        })
+      );
       emit({
         type: "diagnostic",
         phase: "round_preparing",
@@ -3920,6 +4034,7 @@ export async function runBuildDiscussion(
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         userNotes: userNotesText(),
+        memoryBrief: architectMemoryBriefText(),
         scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
         previousSummary: truncate(previousSummary, 6_000),
         fetchesLeft: fetchesLeftThisPhase(),
@@ -4340,6 +4455,7 @@ export async function runBuildDiscussion(
                 ? `\nContext files:${contextChunks.join("\n")}`
                 : "",
               architectNotes,
+              memoryBrief: workerMemoryBriefText(task),
               toolInstructions: workerToolInstructions({
                 reads: WORKER_READS_PER_TASK,
                 rangeReads: WORKER_RANGE_READS_PER_TASK,
@@ -4692,6 +4808,23 @@ export async function runBuildDiscussion(
         });
         if (skillEvidence.length > 0) {
           skillEvidenceRecords.push(...skillEvidence);
+          persistBuildMemories(
+            extractSkillViolationMemories({
+              projectKey: buildMemoryProjectKey,
+              discussionId: discussion.id,
+              violations: skillEvidence.flatMap((record) =>
+                record.violations.map((violation) => ({
+                  taskId: record.taskId,
+                  skillId: record.skillId,
+                  violation,
+                  paths: [
+                    ...(task.contextFiles ?? []),
+                    ...(task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)),
+                  ],
+                }))
+              ),
+            })
+          );
           emitSkillActivation(
             `${task.id}: ${task.title}`,
             "worker",
@@ -5040,6 +5173,7 @@ export async function runBuildDiscussion(
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         userNotes: userNotesText(),
+        memoryBrief: architectMemoryBriefText(),
         scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
@@ -5053,6 +5187,26 @@ export async function runBuildDiscussion(
     });
     const action = reviewResult.action as ReviewAction;
     const text = reviewResult.text;
+    persistBuildMemories(
+      extractReviewMemories({
+        projectKey: buildMemoryProjectKey,
+        discussionId: discussion.id,
+        results: action.results.map((result) => {
+          const task = tasks.find((item) => item.id === result.taskId);
+          const prior = executed.find((item) => item.task.id === result.taskId);
+          return {
+            taskId: result.taskId,
+            verdict: result.verdict,
+            fixInstructions: result.fixInstructions,
+            paths:
+              prior?.files ??
+              task?.outputPaths ??
+              (task ? outputPathsForTask(task) : undefined),
+          };
+        }),
+        notes: action.notes,
+      })
+    );
     // The architect's own fixes. If any were rejected/skipped, carry that into
     // the accumulated context so the next phase knows they did not land.
     const { issues: fixIssues } = await writeEmittedFiles(text);

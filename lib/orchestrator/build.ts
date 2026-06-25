@@ -2271,6 +2271,8 @@ export function buildArchitectPlanPrompt(input: {
   githubLabels?: string[];
   /** Hand-off summary from a previous pass — this is a follow-up build. */
   previousSummary?: string;
+  /** Durable AIBoard Build memory brief selected by the engine. */
+  memoryBrief?: string;
   /** AIBoard-native compact skill context selected by the engine. */
   skillContext?: string;
 }): string {
@@ -2290,6 +2292,7 @@ export function buildArchitectPlanPrompt(input: {
       : "",
     input.fileContext,
     userNotesSection(input.userNotes),
+    input.memoryBrief,
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
     scoreboardSection(input.scoreboard),
@@ -2328,6 +2331,8 @@ export function buildWorkerTaskPrompt(input: {
   verbosityInstruction?: string;
   /** AIBoard-native compact skill context selected by the engine. */
   skillContext?: string;
+  /** Durable task/path-relevant AIBoard Build memory brief selected by the engine. */
+  memoryBrief?: string;
 }): string {
   return [
     `You are an AI engineer on a team building a project. The Architect assigned you ONE task. Complete it fully — other tasks are handled by teammates, so do not do their work or restructure files outside your task.`,
@@ -2345,6 +2350,7 @@ export function buildWorkerTaskPrompt(input: {
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
+    input.memoryBrief,
     input.skillContext,
     input.skillContext?.trim()
       ? "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose with RED/GREEN checks, root-cause notes, review notes, or exemption reasons as applicable."
@@ -2395,6 +2401,8 @@ export function buildArchitectReviewPrompt(input: {
   githubLabels?: string[];
   /** AIBoard-native compact skill context selected by the engine. */
   skillContext?: string;
+  /** Durable AIBoard Build memory brief selected by the engine. */
+  memoryBrief?: string;
   /** Durable worker skill evidence and gaps captured by the engine. */
   skillEvidenceText?: string;
 }): string {
@@ -2420,6 +2428,7 @@ export function buildArchitectReviewPrompt(input: {
       : "",
     "",
     scoreboardSection(input.scoreboard),
+    input.memoryBrief,
     input.skillContext,
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
