@@ -42,12 +42,12 @@ const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint:
   chatgpt: {
     label: "Account runner URL",
     placeholder: "http://127.0.0.1:8788",
-    hint: "Run node scripts/account-provider-runner.mjs, then paste its local URL here.",
+    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here.",
   },
   "github-copilot": {
     label: "Account runner URL",
     placeholder: "http://127.0.0.1:8788",
-    hint: "Run node scripts/account-provider-runner.mjs, then paste its local URL here.",
+    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here.",
   },
 };
 
@@ -67,13 +67,13 @@ const ACCOUNT_RUNNER_PROVIDERS: Record<
     path: "chatgpt",
     loginLabel: "Log in with OpenAI",
     tokenLabel: "Runner token",
-    tokenPlaceholder: "Paste the token printed by account-provider-runner.mjs",
+    tokenPlaceholder: "Paste the token printed by the account runner",
   },
   "github-copilot": {
     path: "github-copilot",
     loginLabel: "Log in with GitHub",
     tokenLabel: "Runner token",
-    tokenPlaceholder: "Paste the token printed by account-provider-runner.mjs",
+    tokenPlaceholder: "Paste the token printed by the account runner",
   },
 };
 
@@ -318,26 +318,37 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         />
         {accountRunner && (
           <p className="text-xs text-muted-foreground">
-            This is only the local runner token.
+            This token is printed in the terminal when the account runner starts.
           </p>
         )}
       </div>
 
       {accountRunner && (
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground">Account login</p>
+          <p className="font-medium text-foreground">Account runner and login</p>
           <p className="mt-1">
-            Save the runner URL/token, then authorize your account in the provider browser flow.
+            Download the runner, run it with Node, paste its printed URL/token above, save, then authorize your account.
           </p>
-          <Button
-            type="button"
-            variant="secondary"
-            className="mt-3"
-            onClick={loginAccountProvider}
-            disabled={loggingIn || loading || testing}
-          >
-            {loggingIn ? "Starting login..." : accountRunner.loginLabel}
-          </Button>
+          <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
+            node account-provider-runner.mjs
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a
+              href="/account-provider-runner.mjs"
+              download
+              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              Download account runner
+            </a>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={loginAccountProvider}
+              disabled={loggingIn || loading || testing}
+            >
+              {loggingIn ? "Starting login..." : accountRunner.loginLabel}
+            </Button>
+          </div>
         </div>
       )}
 
