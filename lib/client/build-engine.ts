@@ -82,6 +82,7 @@ import {
   retrieveContextBlobText,
   type ContextBlobKind,
 } from "@/lib/build-context/context-store";
+import { BuildContextManager } from "@/lib/build-context";
 import {
   buildArchitectPlanPrompt,
   buildArchitectActionResponseFormat,
@@ -237,10 +238,6 @@ import {
   shouldRecordAutomatedBuildCheckFailure,
   type CommandMemoryResult,
 } from "@/lib/build-context/memory-extractors";
-import {
-  buildArchitectMemoryBrief,
-  buildWorkerMemoryBrief,
-} from "@/lib/build-context/memory-brief";
 
 type EventCallback = (event: OrchestratorEvent) => void;
 type StructuredTraceValidation =
@@ -489,6 +486,9 @@ export async function runBuildDiscussion(
     };
   const workers = models.filter((m) => m.modelId !== architect.modelId);
   if (workers.length === 0) workers.push(architect); // solo build
+  const buildContextManager = new BuildContextManager();
+  const modelContextProfile = (model: SelectedModel) =>
+    model.contextProfile ?? resolveClientModelContextProfile(model.modelId);
 
   // ── Worker scoreboard ─────────────────────────────────────────────────────
   // Tracks each worker's performance so the Architect can assign harder tasks
@@ -740,17 +740,6 @@ export async function runBuildDiscussion(
       })
     );
   };
-  const architectMemoryBriefText = (): string =>
-    buildArchitectMemoryBrief(activeBuildMemories(), { tokenBudget: 700 }).text;
-  const workerMemoryBriefText = (task: BuildTask): string =>
-    buildWorkerMemoryBrief(activeBuildMemories(), {
-      taskId: task.id,
-      paths: [
-        ...(task.contextFiles ?? []),
-        ...(task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)),
-      ],
-      tokenBudget: 360,
-    }).text;
   // One-line note about the runner's shell/OS, fed to the Architect so it stops
   // emitting Unix-only commands (sed/awk/grep) on a Windows runner. Empty when
   // the platform is unknown (old runner) — no hint then.
@@ -2823,7 +2812,7 @@ export async function runBuildDiscussion(
             type: "request",
             message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
           }),
-        model.contextProfile ?? resolveClientModelContextProfile(model.modelId)
+        modelContextProfile(model)
       );
     } catch (error) {
       await recordBenchmarkModelCallTrace(
@@ -4041,13 +4030,24 @@ export async function runBuildDiscussion(
       undefined,
       planSkills.evidenceRequired
     );
+    const planSkillContext = renderSkillContext(planSkills);
+    const planAssembledContext = buildContextManager.buildPlanContext({
+      modelContextProfile: modelContextProfile(architect),
+      request: discussion.topic,
+      treeText: treeText(),
+      fileContext: extraFileContext,
+      previousSummary: truncate(previousSummary, 6_000),
+      userNotes: userNotesText(),
+      memoryRecords: activeBuildMemories(),
+      scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+    });
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
       label: "Architect is planning the project",
       initialUser: buildArchitectPlanPrompt({
         request: discussion.topic,
         treeText: treeText(),
-        fileContext: extraFileContext,
+        fileContext: "",
         maxTasks: BUILD_TASKS_PER_WAVE,
         workerNames: workers.map((w) => w.displayName),
         readHopsLeft: 2,
@@ -4059,13 +4059,14 @@ export async function runBuildDiscussion(
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
-        userNotes: userNotesText(),
-        memoryBrief: architectMemoryBriefText(),
-        scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
-        previousSummary: truncate(previousSummary, 6_000),
+        userNotes: "",
+        memoryBrief: "",
+        scoreboard: "",
+        previousSummary: "",
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
-        skillContext: renderSkillContext(planSkills),
+        skillContext: planSkillContext,
+        assembledContext: planAssembledContext,
       }),
       // read_range isn't offered during planning, so reads + searches only.
       budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
@@ -4459,6 +4460,19 @@ export async function runBuildDiscussion(
         undefined,
         workerSkills.evidenceRequired
       );
+      const workerContextFileText = contextChunks.length
+        ? `\nContext files:${contextChunks.join("\n")}`
+        : "";
+      const workerSkillContext = renderSkillContext(workerSkills);
+      const workerAssembledContext = buildContextManager.buildWorkerContext({
+        modelContextProfile: modelContextProfile(worker),
+        request: discussion.topic,
+        treeText: treeText(),
+        task,
+        contextFileText: workerContextFileText,
+        architectNotes,
+        memoryRecords: activeBuildMemories(),
+      });
 
       const startedAt = Date.now();
       let output = "";
@@ -4477,11 +4491,9 @@ export async function runBuildDiscussion(
               request: discussion.topic,
               treeText: treeText(),
               task,
-              contextFileText: contextChunks.length
-                ? `\nContext files:${contextChunks.join("\n")}`
-                : "",
-              architectNotes,
-              memoryBrief: workerMemoryBriefText(task),
+              contextFileText: "",
+              architectNotes: "",
+              memoryBrief: "",
               toolInstructions: workerToolInstructions({
                 reads: WORKER_READS_PER_TASK,
                 rangeReads: WORKER_RANGE_READS_PER_TASK,
@@ -4490,7 +4502,8 @@ export async function runBuildDiscussion(
                 appends: WORKER_APPENDS_PER_TASK,
               }),
               verbosityInstruction,
-              skillContext: renderSkillContext(workerSkills),
+              skillContext: workerSkillContext,
+              assembledContext: workerAssembledContext,
             }),
           },
         ];
@@ -5174,6 +5187,22 @@ export async function runBuildDiscussion(
     // Stop cleanly before the (expensive) Architect review call if spent.
     if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
       return;
+    const reviewSkillContext = renderSkillContext(reviewSkills);
+    const reviewSkillEvidenceText = formatSkillEvidenceDigest(waveSkillEvidence);
+    const reviewOutstandingTasks = buildOutstandingTasksDigest(tasks);
+    const reviewAssembledContext = buildContextManager.buildReviewContext({
+      modelContextProfile: modelContextProfile(architect),
+      request: discussion.topic,
+      treeText: treeText(),
+      fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
+      executedText,
+      outstandingTasks: reviewOutstandingTasks,
+      verificationText: verifyFeedback,
+      userNotes: userNotesText(),
+      memoryRecords: activeBuildMemories(),
+      scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+      skillEvidenceText: reviewSkillEvidenceText,
+    });
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
       label: `Architect is reviewing wave ${cycle}`,
@@ -5183,10 +5212,9 @@ export async function runBuildDiscussion(
         // Everything read so far (plan-phase manifests + read hops) — without
         // this the Architect forgets file contents between phases and starts
         // inventing replacements for files it has already seen.
-        fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
-        executedText:
-          executedText + (verifyFeedback ? `\n\n${verifyFeedback}` : ""),
-        outstandingTasks: buildOutstandingTasksDigest(tasks),
+        fileContext: "",
+        executedText: "",
+        outstandingTasks: "",
         maxNewTasks: BUILD_TASKS_PER_WAVE,
         cyclesLeft: Math.max(0, BUILD_MAX_WAVES - cycle),
         readHopsLeft: 2,
@@ -5199,13 +5227,14 @@ export async function runBuildDiscussion(
         searchesLeft: SEARCHES_PER_PHASE,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
-        userNotes: userNotesText(),
-        memoryBrief: architectMemoryBriefText(),
-        scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+        userNotes: "",
+        memoryBrief: "",
+        scoreboard: "",
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
-        skillContext: renderSkillContext(reviewSkills),
-        skillEvidenceText: formatSkillEvidenceDigest(waveSkillEvidence),
+        skillContext: reviewSkillContext,
+        skillEvidenceText: "",
+        assembledContext: reviewAssembledContext,
       }),
       budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
       appendContext: (textChunk) => {
@@ -5606,19 +5635,50 @@ export async function runBuildDiscussion(
     skillEvidenceRecords,
     summarySkills.evidenceRequired
   );
+  const summarySkillContext = renderSkillContext(summarySkills);
+  const summarySkillEvidenceText = formatSkillEvidenceDigest(skillEvidenceRecords);
+  const filesChangedText = [...writtenThisRun].sort().join("\n");
+  const summaryVerificationText = [
+    repoVerification ? `Recorded verification: ${repoVerification}` : "",
+    finalQualityGateSummary,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const summaryKnownGaps = [
+    !summaryVerificationText
+      ? "No automated final verification result was recorded by the engine."
+      : "",
+    !filesChangedText ? "No files were created or modified in this run." : "",
+    buildOutstandingTasksDigest(tasks),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const summaryAssembledContext = buildContextManager.buildSummaryContext({
+    modelContextProfile: modelContextProfile(architect),
+    request: discussion.topic,
+    treeText: treeText(),
+    filesChanged: filesChangedText,
+    historyText: truncate(historyText, 60_000),
+    verificationText: summaryVerificationText,
+    knownGaps: summaryKnownGaps,
+    userNotes: userNotesText(),
+    memoryRecords: activeBuildMemories(),
+    skillEvidenceText: summarySkillEvidenceText,
+  });
 
   const summaryRaw = await streamTurn(
     architect,
     buildArchitectSummaryPrompt({
       request: discussion.topic,
       treeText: treeText(),
-      filesChanged: [...writtenThisRun].sort().join("\n"),
-      historyText: truncate(historyText, 60_000),
+      filesChanged: filesChangedText,
+      historyText: "",
       verbosityInstruction,
-      userNotes: userNotesText(),
+      userNotes: "",
       githubWorkflow,
-      skillContext: renderSkillContext(summarySkills),
-      skillEvidenceText: formatSkillEvidenceDigest(skillEvidenceRecords),
+      skillContext: summarySkillContext,
+      skillEvidenceText: "",
+      assembledContext: summaryAssembledContext,
     }),
     {
       systemRole:

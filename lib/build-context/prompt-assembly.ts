@@ -11,6 +11,10 @@ import {
   estimateTokens,
   truncateToTokenBudget,
 } from "./token-estimator";
+import type {
+  BuildPromptBudget,
+  BuildPromptRole,
+} from "./budgets";
 
 export interface RenderContextPackSectionOptions {
   heading?: string;
@@ -37,6 +41,21 @@ export interface RenderedContextPackSection {
 export interface AssembleContextPackPromptOptions
   extends AssembleContextPacksOptions,
     RenderContextPackSectionOptions {}
+
+export interface AssembledBuildContext {
+  role: BuildPromptRole;
+  budget: BuildPromptBudget;
+  rendered: RenderedContextPackSection;
+  packs: ContextPack[];
+  notes: string[];
+}
+
+export interface BuildPromptContextInput {
+  assembledContext?: AssembledBuildContext;
+  memoryBrief?: string;
+  verificationText?: string;
+  knownGaps?: string;
+}
 
 function renderRetrieveRef(ref: ContextRetrieveRef | undefined): string {
   if (!ref) return "";
@@ -199,4 +218,20 @@ export function assembleContextPackPrompt(
     ...options,
     includeOmissionNotes: false,
   });
+}
+
+export function renderAssembledContext(
+  assembledContext?: AssembledBuildContext
+): string {
+  if (!assembledContext) return "";
+
+  const { budget, rendered, role, notes } = assembledContext;
+  return [
+    "## Assembled build context",
+    `Context role: ${role}. Context tier: ${budget.tier}. Selected packs: ${rendered.packCount}. Omitted packs: ${rendered.omittedCount}. Rendered tokens: ${rendered.renderedTokenTotal}/${rendered.tokenBudget}.`,
+    rendered.text,
+    notes.length > 0 ? `### Context assembly notes\n${notes.map((note) => `- ${note}`).join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
