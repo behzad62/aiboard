@@ -10,6 +10,7 @@ import {
   extractReviewMemories,
   extractSkillViolationMemories,
   extractUserNoteMemories,
+  shouldRecordAutomatedBuildCheckFailure,
 } from "../lib/build-context/memory-extractors";
 import {
   __resetClientStoreForTests,
@@ -270,6 +271,58 @@ check(
     afterUnrelatedReliableTsc.hitCount === storedReliableTsc.hitCount &&
     afterUnrelatedReliableTsc.evidence.length === storedReliableTsc.evidence.length,
   { storedReliableTsc, afterUnrelatedReliableTsc, unrelatedMemories }
+);
+
+const successfulBuildCheckFeedback =
+  "AUTOMATED BUILD CHECK\n$ npm test\nexited 0 (OK)\nstdout:\nok";
+check(
+  "successful build-check feedback does not request verification_failed memory",
+  !shouldRecordAutomatedBuildCheckFailure({
+    feedback: successfulBuildCheckFeedback,
+    failed: false,
+  }),
+  successfulBuildCheckFeedback
+);
+
+__resetClientStoreForTests();
+const failedBuildCheckCommand = extractCommandMemoriesForExecution({
+  projectKey,
+  discussionId: "disc-34",
+  current: {
+    command: "npm test",
+    exitCode: 1,
+    outputPreview: "1 test failed",
+    createdAt: "2026-06-26T00:08:00.000Z",
+    executionId: "cmd-build-check-1",
+  },
+  history: [],
+})[0];
+upsertBuildMemory(failedBuildCheckCommand);
+const verificationProblemMemories = extractProblemMemories({
+  projectKey,
+  discussionId: "disc-34",
+  problems: [
+    {
+      id: "prob-verify-1",
+      createdAt: "2026-06-26T00:08:00.000Z",
+      code: "verification_failed",
+      severity: "error",
+      source: "runner",
+      action: "npm test",
+      message: "Automated build check failed in wave 1: npm test",
+      details: "AUTOMATED BUILD CHECK\n$ npm test\nexited 1 (FAILED)",
+    },
+  ],
+});
+for (const memory of verificationProblemMemories) upsertBuildMemory(memory);
+const storedFailedBuildCheck = getBuildMemory(failedBuildCheckCommand.id);
+check(
+  "one failed automated build-check execution contributes one command failure memory evidence",
+  verificationProblemMemories.length === 0 &&
+    !!storedFailedBuildCheck &&
+    storedFailedBuildCheck.hitCount === 1 &&
+    storedFailedBuildCheck.evidence.length === 1,
+  { verificationProblemMemories, storedFailedBuildCheck }
 );
 
 const skillMemories = extractSkillViolationMemories({

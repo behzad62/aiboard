@@ -234,6 +234,7 @@ import {
   extractReviewMemories,
   extractSkillViolationMemories,
   extractUserNoteMemories,
+  shouldRecordAutomatedBuildCheckFailure,
   type CommandMemoryResult,
 } from "@/lib/build-context/memory-extractors";
 import {
@@ -700,14 +701,17 @@ export async function runBuildDiscussion(
   let runner: RunnerConfig | null = null;
   let runnerDirName: string | null = null;
   let buildMemoryRepoRemoteUrl: string | null = null;
+  let buildMemoryRunnerProjectRoot: string | null = null;
   let buildMemoryProjectKey = deriveBuildMemoryProjectKey({
     repoRemoteUrl: buildMemoryRepoRemoteUrl,
+    runnerProjectRoot: buildMemoryRunnerProjectRoot,
     discussionId: discussion.id,
   });
   const refreshBuildMemoryProjectKey = (): void => {
     const previousKey = buildMemoryProjectKey;
     const nextKey = deriveBuildMemoryProjectKey({
       repoRemoteUrl: buildMemoryRepoRemoteUrl,
+      runnerProjectRoot: buildMemoryRunnerProjectRoot,
       discussionId: discussion.id,
     });
     if (previousKey !== nextKey) {
@@ -1108,6 +1112,7 @@ export async function runBuildDiscussion(
       const repoStatus = await getRepoStatusViaRunner(config);
       if (repoStatus) {
         repoIsGit = repoStatus.isRepo;
+        buildMemoryRunnerProjectRoot = repoStatus.root;
         buildMemoryRepoRemoteUrl =
           repoStatus.remotes.find((remote) => remote.name === "origin")?.url ??
           repoStatus.remotes[0]?.url ??
@@ -2165,8 +2170,13 @@ export async function runBuildDiscussion(
 
   const VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS = 6_000;
 
-  const runVerify = async (command: string): Promise<string> => {
-    if (!runner || !command) return "";
+  type BuildVerifyResult = {
+    feedback: string;
+    failed: boolean;
+  };
+
+  const runVerify = async (command: string): Promise<BuildVerifyResult> => {
+    if (!runner || !command) return { feedback: "", failed: false };
     const safety = classifyRunCommand(command);
     if (!safety.allowed) {
       const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
@@ -2177,7 +2187,10 @@ export async function runBuildDiscussion(
         outputPreview: message,
         denied: true,
       });
-      return `AUTOMATED BUILD CHECK - \`${command}\` was rejected before execution. ${message}`;
+      return {
+        feedback: `AUTOMATED BUILD CHECK - \`${command}\` was rejected before execution. ${message}`,
+        failed: true,
+      };
     }
     if (!allowAllCommands) {
       const decision = hooks?.requestCommandApproval
@@ -2192,7 +2205,7 @@ export async function runBuildDiscussion(
           outputPreview: "Denied by the user",
           denied: true,
         });
-        return "";
+        return { feedback: "", failed: false };
       }
     }
     emit({
@@ -2243,12 +2256,15 @@ export async function runBuildDiscussion(
               outputTruncated: !!result.truncated,
               note: "The declared TypeScript command hit the npx tsc shim, and the user denied the detected retry.",
             });
-            return storeLongToolResult(
-              "command_output",
-              `Automated build check: ${command}`,
-              feedback,
-              VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
-            );
+            return {
+              feedback: storeLongToolResult(
+                "command_output",
+                `Automated build check: ${command}`,
+                feedback,
+                VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+              ),
+              failed: true,
+            };
           }
         }
         emit({
@@ -2285,12 +2301,15 @@ export async function runBuildDiscussion(
         }),
         outputTruncated: !!finalResult.truncated,
       });
-      return storeLongToolResult(
-        "command_output",
-        `Automated build check: ${finalCommand}`,
-        feedback,
-        VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
-      );
+      return {
+        feedback: storeLongToolResult(
+          "command_output",
+          `Automated build check: ${finalCommand}`,
+          feedback,
+          VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS
+        ),
+        failed: !ok,
+      };
     } catch (err) {
       emitBuildCheckCommandRun({
         command,
@@ -2298,7 +2317,10 @@ export async function runBuildDiscussion(
         durationMs: 0,
         outputPreview: err instanceof Error ? err.message : "build check failed",
       });
-      return `AUTOMATED BUILD CHECK — \`${command}\` could not run: ${err instanceof Error ? err.message : "error"}.`;
+      return {
+        feedback: `AUTOMATED BUILD CHECK — \`${command}\` could not run: ${err instanceof Error ? err.message : "error"}.`,
+        failed: true,
+      };
     }
   };
 
@@ -2423,13 +2445,10 @@ export async function runBuildDiscussion(
 
   const classifyFinalCheckResult = (
     command: string,
-    feedback: string
+    result: BuildVerifyResult
   ): BuildQualityRequiredCheck => {
-    const failed =
-      !feedback.trim() ||
-      /\bFAILED\b|could not run|was rejected|DENIED|does NOT compile/i.test(
-        feedback
-      );
+    const feedback = result.feedback;
+    const failed = result.failed || !feedback.trim();
     return {
       name: command,
       command,
@@ -2445,8 +2464,8 @@ export async function runBuildDiscussion(
     const commands = await detectFinalVerificationCommands();
     const checks: BuildQualityRequiredCheck[] = [];
     for (const command of commands) {
-      const feedback = await runVerify(command);
-      checks.push(classifyFinalCheckResult(command, feedback));
+      const result = await runVerify(command);
+      checks.push(classifyFinalCheckResult(command, result));
     }
     return checks;
   };
@@ -5089,12 +5108,13 @@ export async function runBuildDiscussion(
 
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
-    const verifyFeedback = await runVerify(verifyCommand);
+    const verifyResult = await runVerify(verifyCommand);
+    const verifyFeedback = verifyResult.feedback;
 
     // Fingerprint a failing build/test so a recurring identical failure counts
     // toward the no-progress/blocked stop, while a failure that changes shape
     // after a fix counts as recovery progress (and resets the no-progress run).
-    if (verifyFeedback && /failed|error|exit/i.test(verifyFeedback)) {
+    if (shouldRecordAutomatedBuildCheckFailure(verifyResult)) {
       const fingerprint = fingerprintBuildFailure(verifyCommand, verifyFeedback);
       const failureChanged =
         lastFailureFingerprint !== null && lastFailureFingerprint !== fingerprint;
@@ -5124,7 +5144,7 @@ export async function runBuildDiscussion(
     const reviewSkills = selectSkills(
       skillInput("review", "reviewer", {
         touchedPaths: executed.flatMap(({ files }) => files),
-        riskFlags: verifyFeedback ? ["verification"] : [],
+        riskFlags: verifyResult.failed ? ["verification"] : [],
         requestedSkillIds: requestedReviewerSkillIds,
       })
     );

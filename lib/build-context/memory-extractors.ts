@@ -89,11 +89,7 @@ export function extractProblemMemories(
         })
       );
     }
-    if (
-      problem.code === "command_failed" ||
-      problem.code === "verification_failed" ||
-      problem.code === "verification_repeated"
-    ) {
+    if (problem.code === "command_failed") {
       const command = problem.action?.trim();
       memories.push(
         buildMemoryRecord({
@@ -107,6 +103,13 @@ export function extractProblemMemories(
     }
   }
   return memories;
+}
+
+export function shouldRecordAutomatedBuildCheckFailure(input: {
+  feedback: string;
+  failed: boolean;
+}): boolean {
+  return input.failed && input.feedback.trim().length > 0;
 }
 
 export function extractReviewMemories(
