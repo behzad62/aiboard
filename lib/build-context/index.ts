@@ -235,6 +235,7 @@ export class BuildContextManager {
         kind: "note",
         content: userNotesRequirementText(input.userNotes),
         required: true,
+        exact: true,
         priority: 135,
       }),
       ...optionalPack({
@@ -242,7 +243,7 @@ export class BuildContextManager {
         title: "Already inspected project files",
         kind: "source",
         content: input.fileContext,
-        exact: true,
+        exact: false,
         required: true,
         priority: 100,
       }),
@@ -263,6 +264,7 @@ export class BuildContextManager {
         kind: "summary",
         content: followUpSummaryText(input.previousSummary),
         required: true,
+        exact: true,
         priority: 130,
       }),
       ...optionalPack({

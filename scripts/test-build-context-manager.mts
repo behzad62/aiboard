@@ -214,6 +214,7 @@ const budgetPressedFollowUp = manager.buildPlanContext({
   modelContextProfile: constrainedProfile,
   request: "Add parser diagnostics",
   treeText: "src/parser.ts",
+  fileContext: `Key project files:\n--- package.json ---\n${text("manifest_context", 600)}`,
   previousSummary: `DELIVERED_FEATURE: the previous build shipped a public parse() API and CLI wiring.\n${text("previous_delivery", 500)}`,
   userNotes: "Keep public API compatibility.",
 });
