@@ -85,7 +85,10 @@ import {
 import {
   BuildContextManager,
   codeIntelResultToContextPack,
+  createCodeIntelPhaseBudget,
   createCodeIntelProvider,
+  filterCodebaseMemoryMcpToolsForGenericUse,
+  isGenericMcpToolAllowed,
   shouldAutoIncludeCodeIntelArchitecture,
   type CodeIntelProvider,
   type ContextPack,
@@ -762,7 +765,10 @@ export async function runBuildDiscussion(
   let mcpServersForCodeIntel: Awaited<ReturnType<typeof listMcpServers>> = [];
   let totalMcpCalls = 0;
   let codeIntelProvider: CodeIntelProvider | null = null;
-  let totalCodeIntelCalls = 0;
+  const codeIntelBudget = createCodeIntelPhaseBudget({
+    perPhase: CODE_INTEL_CALLS_PER_PHASE,
+    total: TOTAL_CODE_INTEL_CALLS,
+  });
   let localServerUrls: string[] = [];
   // Whether the runner folder is a Git repo, captured once when the runner
   // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
@@ -1082,8 +1088,11 @@ export async function runBuildDiscussion(
         const servers = (await listMcpServers(config)) ?? [];
         mcpServersForCodeIntel = servers;
         const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
-        if (ready.length > 0) {
-          mcpToolsDoc = ready
+        const readyForDocs = ready
+          .map((server) => filterCodebaseMemoryMcpToolsForGenericUse(server))
+          .filter((server) => server.tools.length > 0);
+        if (readyForDocs.length > 0) {
+          mcpToolsDoc = readyForDocs
           .map(
             (s) =>
               `Server "${s.name}":\n${s.tools
@@ -1189,12 +1198,7 @@ export async function runBuildDiscussion(
       : 0;
 
   const codeIntelCallsLeftThisPhase = (): number =>
-    codeIntelProvider?.status.available
-      ? Math.min(
-          CODE_INTEL_CALLS_PER_PHASE,
-          TOTAL_CODE_INTEL_CALLS - totalCodeIntelCalls
-        )
-      : 0;
+    codeIntelProvider?.status.available ? codeIntelBudget.callsLeft() : 0;
 
   const codeIntelStatusForPrompt = (): string =>
     codeIntelProvider?.status.available ? codeIntelProvider.status.detail : "";
@@ -1219,6 +1223,34 @@ export async function runBuildDiscussion(
     if (!runner) return { text: "No runner is available.", status: "error" };
     const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
     const providerId = parseModelId(actor.modelId).providerId;
+    const requestedServer = mcpServersForCodeIntel.find(
+      (server) => server.name === action.server
+    );
+    if (!isGenericMcpToolAllowed(requestedServer, action.tool)) {
+      const message = `MCP ${action.server}.${action.tool} is blocked: codebase-memory mutating tools are not available through generic MCP. Use read-only code_intel actions or non-mutating MCP tools.`;
+      recordBuildProblem({
+        code: "tool_denied",
+        severity: "warning",
+        source: "mcp",
+        action: label,
+        modelId: actor.modelId,
+        modelName: actor.displayName,
+        providerId,
+        message,
+      });
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return {
+        text: `${label}\n${message}`,
+        status: "denied",
+      };
+    }
     if (!allowAllCommands) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
@@ -2402,11 +2434,19 @@ export async function runBuildDiscussion(
   codeIntelProvider = createCodeIntelProvider({
     mcp:
       runner && mcpServersForCodeIntel
-        ? {
-            servers: mcpServersForCodeIntel ?? [],
-            callTool: (server, tool, args) =>
-              callMcpTool(runner!, server, tool, args),
-          }
+          ? {
+              servers: mcpServersForCodeIntel ?? [],
+              projectHints: [
+                buildMemoryRunnerProjectRoot,
+                runnerDirName,
+                buildMemoryRepoRemoteUrl,
+              ].filter(
+                (value): value is string =>
+                  typeof value === "string" && value.trim().length > 0
+              ),
+              callTool: (server, tool, args) =>
+                callMcpTool(runner!, server, tool, args),
+            }
         : null,
     native: {
       listFiles: currentProjectFiles,
@@ -3421,7 +3461,9 @@ export async function runBuildDiscussion(
         },
       };
     }
-    totalCodeIntelCalls += 1;
+    if (!codeIntelBudget.recordCall()) {
+      throw new Error("No code_intel calls left in this phase.");
+    }
     const result = await codeIntelProvider.query({
       ...action,
       repoFiles: currentProjectFiles(),
@@ -4202,6 +4244,7 @@ export async function runBuildDiscussion(
       planSkills.evidenceRequired
     );
     const planSkillContext = renderSkillContext(planSkills);
+    codeIntelBudget.resetPhase();
     const planningCodeIntelPacks = await planCodeIntelPacks();
     const planAssembledContext = buildContextManager.buildPlanContext({
       modelContextProfile: modelContextProfile(architect),
@@ -5368,6 +5411,7 @@ export async function runBuildDiscussion(
     const reviewChangedFiles = [
       ...new Set(executed.flatMap(({ files }) => files)),
     ];
+    codeIntelBudget.resetPhase();
     const reviewImpactPacks = await reviewCodeIntelPacks(
       reviewChangedFiles,
       cycle

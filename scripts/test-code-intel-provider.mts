@@ -7,7 +7,10 @@ import {
 } from "../lib/build-context";
 import {
   codeIntelResultToContextPack,
+  createCodeIntelPhaseBudget,
   createCodeIntelProvider,
+  filterCodebaseMemoryMcpToolsForGenericUse,
+  isGenericMcpToolAllowed,
   shouldAutoIncludeCodeIntelArchitecture,
   type CodeIntelMcpServer,
 } from "../lib/build-context/code-intel";
@@ -33,13 +36,19 @@ const server: CodeIntelMcpServer = {
   status: "ready",
   tools: [
     {
+      name: "list_projects",
+      description: "List indexed projects",
+      inputSchema: { properties: {} },
+    },
+    {
       name: "get_architecture",
       description: "Codebase overview",
       inputSchema: {
         properties: {
+          project: { type: "string" },
           aspects: { type: "array" },
-          limit: { type: "integer" },
         },
+        required: ["project"],
       },
     },
     {
@@ -47,11 +56,13 @@ const server: CodeIntelMcpServer = {
       description: "Structured symbol search",
       inputSchema: {
         properties: {
+          project: { type: "string" },
           name_pattern: { type: "string" },
           label: { type: "string" },
           limit: { type: "integer" },
           offset: { type: "integer" },
         },
+        required: ["project"],
       },
     },
     {
@@ -59,11 +70,13 @@ const server: CodeIntelMcpServer = {
       description: "Trace inbound/outbound symbol paths",
       inputSchema: {
         properties: {
+          project: { type: "string" },
           function_name: { type: "string" },
           direction: { type: "string" },
           depth: { type: "integer" },
-          limit: { type: "integer" },
+          mode: { type: "string" },
         },
+        required: ["function_name", "project"],
       },
     },
     {
@@ -71,9 +84,12 @@ const server: CodeIntelMcpServer = {
       description: "Detect git diff blast radius",
       inputSchema: {
         properties: {
-          paths: { type: "array" },
-          limit: { type: "integer" },
+          project: { type: "string" },
+          scope: { type: "string" },
+          depth: { type: "integer" },
+          base_branch: { type: "string" },
         },
+        required: ["project"],
       },
     },
     {
@@ -93,8 +109,34 @@ const calls: Array<{ server: string; tool: string; args: unknown }> = [];
 const provider = createCodeIntelProvider({
   mcp: {
     servers: [server],
+    projectHints: [
+      "C:/Users/b_a_s/source/repos/ai-discussion-board",
+      "https://github.com/behzad62/aiboard.git",
+    ],
     callTool: async (serverName, tool, args) => {
       calls.push({ server: serverName, tool, args });
+      if (tool === "list_projects") {
+        return {
+          text: JSON.stringify({
+            projects: [
+              {
+                name: "unrelated",
+                root_path: "C:/work/unrelated",
+              },
+              {
+                name: "aiboard",
+                root_path: "C:/Users/b_a_s/source/repos/ai-discussion-board",
+                git: {
+                  canonical_root:
+                    "C:/Users/b_a_s/source/repos/ai-discussion-board",
+                },
+              },
+            ],
+          }),
+          isError: false,
+          truncated: false,
+        };
+      }
       return {
         text: `${tool} result for ${JSON.stringify(args)}`,
         isError: false,
@@ -131,13 +173,53 @@ assert.ok(provider.status.detail.includes("codebase-memory-mcp"));
 assert.ok(!provider.status.tools.includes("index_repository"));
 assert.ok(!provider.status.tools.includes("manage_adr"));
 
+const genericFiltered = filterCodebaseMemoryMcpToolsForGenericUse(server);
+assert.ok(genericFiltered.tools.some((tool) => tool.name === "search_graph"));
+assert.ok(genericFiltered.tools.some((tool) => tool.name === "list_projects"));
+assert.ok(!genericFiltered.tools.some((tool) => tool.name === "index_repository"));
+assert.ok(!genericFiltered.tools.some((tool) => tool.name === "manage_adr"));
+assert.equal(isGenericMcpToolAllowed(server, "search_graph"), true);
+for (const mutating of [
+  "index_repository",
+  "manage_adr",
+  "delete_project",
+  "ingest_traces",
+  "write_cache",
+  "update_graph",
+  "store_memory",
+  "create_project",
+  "delete_project",
+  "remove_project",
+]) {
+  assert.equal(isGenericMcpToolAllowed(server, mutating), false, mutating);
+}
+const nonCodebaseServer: CodeIntelMcpServer = {
+  name: "playwright",
+  status: "ready",
+  tools: [
+    {
+      name: "browser_create_context",
+      description: "Create an isolated browser context",
+      inputSchema: { properties: {} },
+    },
+  ],
+};
+assert.equal(
+  filterCodebaseMemoryMcpToolsForGenericUse(nonCodebaseServer).tools.length,
+  1
+);
+assert.equal(
+  isGenericMcpToolAllowed(nonCodebaseServer, "browser_create_context"),
+  true
+);
+
 const architecture = await provider.query({
   op: "architecture",
   repoFiles: files,
 });
 assert.equal(architecture.mode, "codebase-memory-mcp");
 assert.equal(calls.at(-1)?.tool, "get_architecture");
-assert.ok((calls.at(-1)?.args as { limit?: number }).limit! <= 10);
+assert.equal((calls.at(-1)?.args as { project?: string }).project, "aiboard");
 assert.ok(architecture.content.includes("get_architecture result"));
 
 const search = await provider.query({
@@ -147,6 +229,7 @@ const search = await provider.query({
 });
 assert.equal(search.mode, "codebase-memory-mcp");
 assert.equal(calls.at(-1)?.tool, "search_graph");
+assert.equal((calls.at(-1)?.args as { project?: string }).project, "aiboard");
 assert.match(
   (calls.at(-1)?.args as { name_pattern?: string }).name_pattern ?? "",
   /BuildContextManager/
@@ -160,8 +243,9 @@ const trace = await provider.query({
 });
 assert.equal(trace.mode, "codebase-memory-mcp");
 assert.equal(calls.at(-1)?.tool, "trace_path");
+assert.equal((calls.at(-1)?.args as { project?: string }).project, "aiboard");
 assert.equal((calls.at(-1)?.args as { depth?: number }).depth, 3);
-assert.ok((calls.at(-1)?.args as { limit?: number }).limit! <= 10);
+assert.equal((calls.at(-1)?.args as { mode?: string }).mode, "calls");
 
 const impact = await provider.query({
   op: "detect_change_impact",
@@ -170,10 +254,25 @@ const impact = await provider.query({
 });
 assert.equal(impact.mode, "codebase-memory-mcp");
 assert.equal(calls.at(-1)?.tool, "detect_changes");
-assert.deepEqual((calls.at(-1)?.args as { paths?: string[] }).paths, [
-  "lib/client/build-engine.ts",
-]);
-assert.ok((calls.at(-1)?.args as { limit?: number }).limit! <= 10);
+assert.equal((calls.at(-1)?.args as { project?: string }).project, "aiboard");
+assert.match(
+  (calls.at(-1)?.args as { scope?: string }).scope ?? "",
+  /lib\/client\/build-engine\.ts/
+);
+
+const resolverCalls = calls.filter((call) => call.tool === "list_projects");
+assert.equal(resolverCalls.length, 1);
+assert.ok(
+  ["get_architecture", "search_graph", "trace_path", "detect_changes"].every(
+    (tool) =>
+      calls.some(
+        (call) =>
+          call.tool === tool &&
+          (call.args as { project?: string }).project === "aiboard"
+      )
+  ),
+  calls
+);
 
 assert.ok(
   calls.every(
@@ -191,6 +290,88 @@ const compatible = createCodeIntelProvider({
 });
 assert.equal(compatible.status.mode, "codebase-memory-mcp");
 assert.equal(compatible.status.serverName, "structural-code-intel");
+
+const singleProjectCalls: Array<{ tool: string; args: unknown }> = [];
+const singleProject = createCodeIntelProvider({
+  mcp: {
+    servers: [server],
+    projectHints: ["C:/missing/root"],
+    callTool: async (_serverName, tool, args) => {
+      singleProjectCalls.push({ tool, args });
+      if (tool === "list_projects") {
+        return {
+          text: JSON.stringify({
+            projects: [{ name: "only-project", root_path: "C:/one" }],
+          }),
+          isError: false,
+          truncated: false,
+        };
+      }
+      return { text: "ok", isError: false, truncated: false };
+    },
+  },
+  native: { listFiles: async () => files },
+});
+const singleProjectResult = await singleProject.query({ op: "architecture" });
+assert.equal(singleProjectResult.mode, "codebase-memory-mcp");
+assert.equal(
+  (singleProjectCalls.at(-1)?.args as { project?: string }).project,
+  "only-project"
+);
+
+const ambiguousProject = createCodeIntelProvider({
+  mcp: {
+    servers: [server],
+    projectHints: ["C:/missing/root"],
+    callTool: async (_serverName, tool) => {
+      if (tool === "list_projects") {
+        return {
+          text: JSON.stringify({
+            projects: [
+              { name: "first", root_path: "C:/first" },
+              { name: "second", root_path: "C:/second" },
+            ],
+          }),
+          isError: false,
+          truncated: false,
+        };
+      }
+      return { text: "should not call graph tool", isError: false, truncated: false };
+    },
+  },
+  native: {
+    listFiles: async () => files,
+    searchText: async (query) => [
+      { path: "lib/client/build-engine.ts", line: 1, text: query },
+    ],
+  },
+});
+const ambiguousFallback = await ambiguousProject.query({
+  op: "search_symbols",
+  query: "BuildContextManager",
+});
+assert.equal(ambiguousFallback.mode, "native");
+assert.equal(ambiguousFallback.fallbackFrom, "codebase-memory-mcp");
+assert.match(ambiguousFallback.content, /Could not resolve codebase-memory project/);
+
+const phaseBudget = createCodeIntelPhaseBudget({ perPhase: 2, total: 5 });
+assert.equal(phaseBudget.callsLeft(), 2);
+assert.equal(phaseBudget.recordCall(), true);
+assert.equal(phaseBudget.callsLeft(), 1);
+assert.equal(phaseBudget.recordCall(), true);
+assert.equal(phaseBudget.callsLeft(), 0);
+assert.equal(phaseBudget.recordCall(), false);
+phaseBudget.resetPhase();
+assert.equal(phaseBudget.callsLeft(), 2);
+assert.equal(phaseBudget.recordCall(), true);
+assert.equal(phaseBudget.recordCall(), true);
+phaseBudget.resetPhase();
+assert.equal(phaseBudget.callsLeft(), 1);
+assert.equal(phaseBudget.recordCall(), true);
+assert.equal(phaseBudget.callsLeft(), 0);
+phaseBudget.resetPhase();
+assert.equal(phaseBudget.callsLeft(), 0);
+assert.equal(phaseBudget.recordCall(), false);
 
 const native = createCodeIntelProvider({
   mcp: { servers: [], callTool: async () => ({ text: "", isError: true, truncated: false }) },

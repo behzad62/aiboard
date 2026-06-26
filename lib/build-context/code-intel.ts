@@ -32,6 +32,7 @@ export interface CodeIntelMcpToolResult {
 
 export interface CodeIntelMcpBridge {
   servers: CodeIntelMcpServer[];
+  projectHints?: string[];
   callTool: (
     server: string,
     tool: string,
@@ -99,6 +100,12 @@ interface CodeIntelMcpCandidate {
   tools: Map<string, CodeIntelMcpTool>;
   safeToolNames: string[];
   capabilities: CodeIntelOperation[];
+}
+
+export interface CodeIntelPhaseBudget {
+  callsLeft: () => number;
+  recordCall: () => boolean;
+  resetPhase: () => void;
 }
 
 const OP_ORDER: CodeIntelOperation[] = [
@@ -177,6 +184,28 @@ const MUTATING_TOOL_PATTERNS = [
   /^remove/i,
 ];
 
+export function createCodeIntelPhaseBudget(input: {
+  perPhase: number;
+  total: number;
+}): CodeIntelPhaseBudget {
+  const perPhase = Math.max(0, Math.floor(input.perPhase));
+  const total = Math.max(0, Math.floor(input.total));
+  let totalUsed = 0;
+  let phaseUsed = 0;
+  return {
+    callsLeft: () => Math.max(0, Math.min(perPhase - phaseUsed, total - totalUsed)),
+    recordCall: () => {
+      if (phaseUsed >= perPhase || totalUsed >= total) return false;
+      phaseUsed += 1;
+      totalUsed += 1;
+      return true;
+    },
+    resetPhase: () => {
+      phaseUsed = 0;
+    },
+  };
+}
+
 function normalizeToolName(name: string): string {
   return name.trim().toLowerCase();
 }
@@ -188,6 +217,40 @@ export function isReadOnlyCodeIntelToolName(name: string): boolean {
     return false;
   }
   return READ_ONLY_TOOL_NAMES.has(normalized);
+}
+
+export function isCodebaseMemoryMcpServer(
+  server: CodeIntelMcpServer
+): boolean {
+  const name = server.name.trim().toLowerCase();
+  if (
+    name === CODEBASE_MEMORY_SERVER_NAME ||
+    name.includes(CODEBASE_MEMORY_SERVER_NAME)
+  ) {
+    return true;
+  }
+  const safeToolNames = server.tools
+    .map((tool) => tool.name)
+    .filter(isReadOnlyCodeIntelToolName);
+  return capabilitiesFromTools(safeToolNames).length >= 2;
+}
+
+export function filterCodebaseMemoryMcpToolsForGenericUse<T extends CodeIntelMcpServer>(
+  server: T
+): T {
+  if (!isCodebaseMemoryMcpServer(server)) return server;
+  return {
+    ...server,
+    tools: server.tools.filter((tool) => isReadOnlyCodeIntelToolName(tool.name)),
+  };
+}
+
+export function isGenericMcpToolAllowed(
+  server: CodeIntelMcpServer | undefined,
+  toolName: string
+): boolean {
+  if (!server || !isCodebaseMemoryMcpServer(server)) return true;
+  return isReadOnlyCodeIntelToolName(toolName);
 }
 
 function boundedLimit(limit: unknown): number {
@@ -328,20 +391,164 @@ function selectTool(
   return null;
 }
 
+function toolSupportsProject(tool: CodeIntelMcpTool): boolean {
+  return schemaProperties(tool)?.has("project") ?? false;
+}
+
+function toolRequiresProject(tool: CodeIntelMcpTool): boolean {
+  return (tool.inputSchema?.required ?? []).includes("project");
+}
+
+interface IndexedMcpProject {
+  name: string;
+  rootPath?: string;
+  gitRoots: string[];
+}
+
+function normalizedHint(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^file:\/\//i, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .toLowerCase();
+}
+
+function basename(value: string): string {
+  const normalized = normalizedHint(value);
+  return normalized.split("/").filter(Boolean).pop() ?? normalized;
+}
+
+function parseJsonObject(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function stringProp(
+  value: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const raw = value[key];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function parseProjectsFromListProjects(text: string): IndexedMcpProject[] {
+  const parsed = parseJsonObject(text);
+  if (!parsed || typeof parsed !== "object") return [];
+  const projects = (parsed as { projects?: unknown }).projects;
+  if (!Array.isArray(projects)) return [];
+  return projects
+    .map((item): IndexedMcpProject | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const name = stringProp(record, "name");
+      if (!name) return null;
+      const rootPath =
+        stringProp(record, "root_path") ??
+        stringProp(record, "root") ??
+        stringProp(record, "path") ??
+        stringProp(record, "repo_path") ??
+        stringProp(record, "repository_path");
+      const git = record.git && typeof record.git === "object"
+        ? (record.git as Record<string, unknown>)
+        : {};
+      const gitRoots = [
+        stringProp(git, "canonical_root"),
+        stringProp(git, "worktree_root"),
+      ].filter((value): value is string => !!value);
+      return { name, rootPath, gitRoots };
+    })
+    .filter((project): project is IndexedMcpProject => project != null);
+}
+
+function projectMatchesHints(
+  project: IndexedMcpProject,
+  hints: string[]
+): boolean {
+  const projectStrings = [
+    project.name,
+    project.rootPath,
+    ...project.gitRoots,
+  ].filter((value): value is string => !!value);
+  const normalizedProjects = projectStrings.map(normalizedHint);
+  const projectNames = new Set([
+    normalizedHint(project.name),
+    basename(project.name),
+    ...projectStrings.map(basename),
+  ]);
+
+  for (const hint of hints) {
+    const normalized = normalizedHint(hint);
+    if (!normalized) continue;
+    const hintBase = basename(normalized);
+    if (
+      normalizedProjects.some(
+        (projectValue) =>
+          projectValue === normalized ||
+          normalized.endsWith(`/${projectValue}`) ||
+          projectValue.endsWith(`/${normalized}`)
+      )
+    ) {
+      return true;
+    }
+    if (hintBase && projectNames.has(hintBase)) return true;
+  }
+  return false;
+}
+
+async function resolveMcpProject(input: {
+  bridge: CodeIntelMcpBridge;
+  candidate: CodeIntelMcpCandidate;
+}): Promise<string | null> {
+  const listProjects = input.candidate.tools.get("list_projects");
+  if (!listProjects) return null;
+  const result = await input.bridge.callTool(
+    input.candidate.server.name,
+    listProjects.name,
+    {}
+  );
+  if (result.isError) {
+    throw new Error(result.text || "list_projects returned an error");
+  }
+  const projects = parseProjectsFromListProjects(result.text);
+  if (projects.length === 0) return null;
+  const hints = input.bridge.projectHints ?? [];
+  const matches = projects.filter((project) => projectMatchesHints(project, hints));
+  if (matches.length === 1) return matches[0].name;
+  if (matches.length > 1) return null;
+  return projects.length === 1 ? projects[0].name : null;
+}
+
 function argsForMcpQuery(
   tool: CodeIntelMcpTool,
-  input: CodeIntelQuery
+  input: CodeIntelQuery,
+  project: string | null
 ): Record<string, unknown> {
   const limit = boundedLimit(input.limit);
   const query = (input.query ?? input.symbol ?? "").trim();
   const symbol = (input.symbol ?? input.query ?? "").trim();
   const paths = boundedPaths(input.paths);
   const toolName = normalizeToolName(tool.name);
+  const projectArg = project ? { project } : {};
 
   if (input.op === "architecture") {
     return withCommonBounds(
       tool,
       {
+        ...projectArg,
         aspects: [
           "languages",
           "packages",
@@ -358,11 +565,12 @@ function argsForMcpQuery(
 
   if (input.op === "search_symbols") {
     if (toolName === "search_code") {
-      return withCommonBounds(tool, { query }, limit);
+      return withCommonBounds(tool, { ...projectArg, pattern: query, query }, limit);
     }
     return withCommonBounds(
       tool,
       {
+        ...projectArg,
         name_pattern: query ? `.*${regexEscape(query)}.*` : ".*",
         pattern: query,
         query,
@@ -375,10 +583,12 @@ function argsForMcpQuery(
     return withCommonBounds(
       tool,
       {
+        ...projectArg,
         function_name: symbol,
         symbol,
         name: symbol,
         direction: "both",
+        mode: "calls",
       },
       limit
     );
@@ -387,10 +597,13 @@ function argsForMcpQuery(
   return withCommonBounds(
     tool,
     {
+      ...projectArg,
       paths,
       files: paths,
       changed_files: paths,
       changedFiles: paths,
+      scope: paths.length > 0 ? paths.join(",") : undefined,
+      depth: Math.min(3, limit),
     },
     limit
   );
@@ -573,13 +786,21 @@ async function runMcpQuery(
   bridge: CodeIntelMcpBridge,
   candidate: CodeIntelMcpCandidate,
   input: CodeIntelQuery,
-  status: CodeIntelStatus
+  status: CodeIntelStatus,
+  resolveProject: () => Promise<string | null>
 ): Promise<CodeIntelResult> {
   const tool = selectTool(candidate, input.op);
   if (!tool) {
     throw new Error(`No read-only MCP tool is available for ${input.op}.`);
   }
-  const args = argsForMcpQuery(tool, input);
+  let project: string | null = null;
+  if (toolSupportsProject(tool) || toolRequiresProject(tool)) {
+    project = await resolveProject();
+    if (!project && toolRequiresProject(tool)) {
+      throw new Error("Could not resolve codebase-memory project from list_projects.");
+    }
+  }
+  const args = argsForMcpQuery(tool, input, project);
   const result = await bridge.callTool(candidate.server.name, tool.name, args);
   if (result.isError) {
     throw new Error(result.text || `${tool.name} returned an error`);
@@ -625,11 +846,25 @@ export function createCodeIntelProvider(input: {
 
   const status = statusForMcp(candidate);
   const fallbackStatus = nativeStatus(native);
+  let projectPromise: Promise<string | null> | null = null;
+  const resolveProject = (): Promise<string | null> => {
+    projectPromise ??= resolveMcpProject({
+      bridge: input.mcp!,
+      candidate,
+    });
+    return projectPromise;
+  };
   return {
     status,
     query: async (query) => {
       try {
-        return await runMcpQuery(input.mcp!, candidate, query, status);
+        return await runMcpQuery(
+          input.mcp!,
+          candidate,
+          query,
+          status,
+          resolveProject
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : "MCP code intelligence failed";
         if (!fallbackStatus.available) {
