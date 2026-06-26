@@ -170,14 +170,15 @@
         <div class="sec-head">
           MCP servers
           <div class="spacer"></div>
+          <button class="btn" id="setupCodeGraphBtn" type="button">CodeGraph</button>
           <button class="btn" id="addMcpBtn" type="button">+ Add</button>
         </div>
         <div class="mcplist" id="mcplist"></div>
+        <div class="mcp-err" id="mcpErr"></div>
         <form class="mcp-add" id="mcpAddForm" style="display:none">
           <div class="mcp-hint">Give it a short name and the command that launches a stdio MCP server. The runner runs it locally as a child process. Open <b>Help</b> (top right) for examples.</div>
           <input id="mcpName" placeholder="name (e.g. playwright)" autocomplete="off" spellcheck="false" />
           <input id="mcpCmd" placeholder="command (e.g. npx @playwright/mcp@latest)" autocomplete="off" spellcheck="false" />
-          <div class="mcp-err" id="mcpErr"></div>
           <div class="row">
             <button type="submit" class="btn primary">Add server</button>
             <button type="button" class="btn" id="mcpCancel">Cancel</button>
@@ -460,6 +461,27 @@
     try { await api("/api/mcp/" + encodeURIComponent(name), { method: "DELETE" }); } catch {}
     loadMcp();
   }
+  async function setupCodeGraph() {
+    const err = $("mcpErr");
+    err.textContent = "Setting up CodeGraph...";
+    try {
+      const res = await api("/api/codegraph/setup", { method: "POST" });
+      const data = await res.json();
+
+      if (!data.ok) {
+        err.textContent = data.error || "CodeGraph setup failed.";
+        return;
+      }
+
+      err.textContent = data.initializedNow
+        ? "CodeGraph initialized and server added."
+        : "CodeGraph server added.";
+      await loadMcp();
+    } catch {
+      err.textContent = "CodeGraph setup failed.";
+    }
+  }
+  $("setupCodeGraphBtn").onclick = setupCodeGraph;
   $("addMcpBtn").onclick = () => { $("mcpAddForm").style.display = "flex"; $("mcpName").focus(); };
   $("mcpCancel").onclick = () => { $("mcpAddForm").style.display = "none"; $("mcpErr").textContent = ""; };
   $("mcpAddForm").onsubmit = async (e) => {

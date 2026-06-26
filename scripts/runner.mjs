@@ -15,7 +15,7 @@
  * Usage:
  *   node runner.mjs <project-folder> [--port 8787] [--token <secret>]
  *                   [--mcp "<name>=<command>"]... [--context7 [--context7-key <key>]]
- *                   [--searxng [--searxng-url <url>]]
+ *                   [--searxng [--searxng-url <url>]] [--codegraph]
  *
  * MCP bridge: each --mcp flag spawns a stdio MCP server and exposes its tools
  * to the Architect (with the same per-call approval as commands), e.g.:
@@ -31,6 +31,15 @@
  * SearXNG shortcut: --searxng bridges the mcp-searxng search server as "search".
  * Provide your SearXNG instance with --searxng-url <url> or SEARXNG_URL:
  *   node runner.mjs ./my-app --searxng --searxng-url https://searxng.example
+ *
+ * CodeGraph shortcut: --codegraph initializes CodeGraph for the current project
+ * when needed, then bridges it as the "codegraph" MCP server:
+ *   node runner.mjs ./my-app --codegraph
+ *
+ * If you want to initialize manually, run:
+ *   codegraph init
+ * then use:
+ *   node runner.mjs ./my-app --mcp "codegraph=codegraph serve --mcp"
  *
  * Then paste the printed URL + token into the app (Build mode → Local runner).
  *
@@ -214,6 +223,22 @@ if (args.includes("--searxng")) {
   }
 }
 
+// --codegraph initializes CodeGraph for the active project and bridges it as MCP.
+if (args.includes("--codegraph")) {
+  const setup = ensureCodeGraphInitialized();
+  if (!setup.ok) {
+    console.error(`[codegraph] ${setup.error}`);
+  } else {
+    if (setup.initializedNow) {
+      console.log("[codegraph] project index initialized.");
+    }
+    mcpByName.set("codegraph", {
+      name: "codegraph",
+      command: codeGraphMcpCommand(),
+    });
+  }
+}
+
 const mcpSpecs = [...mcpByName.values()];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -294,6 +319,77 @@ function listProjectFiles() {
   };
   walk(projectDir, "");
   return files.sort();
+}
+
+function runCodeGraph(args, opts = {}) {
+  const result = spawnSync("codegraph", args, {
+    cwd: projectDir,
+    encoding: "utf8",
+    timeout: opts.timeoutMs ?? 5 * 60 * 1000,
+    maxBuffer: MAX_OUTPUT_BYTES,
+    shell: process.platform === "win32",
+    windowsHide: true,
+  });
+
+  return {
+    exitCode: typeof result.status === "number" ? result.status : -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    spawnError: result.error ? String(result.error) : null,
+  };
+}
+
+function getCodeGraphStatus() {
+  const version = runCodeGraph(["--version"], { timeoutMs: 30_000 });
+  const installed = version.exitCode === 0;
+  const indexPath = path.join(projectDir, ".codegraph");
+  const initialized = fs.existsSync(indexPath) && fs.statSync(indexPath).isDirectory();
+
+  return {
+    installed,
+    initialized,
+    indexPath,
+    version: installed ? `${version.stdout}\n${version.stderr}`.trim() : "",
+    error: installed
+      ? null
+      : version.spawnError ||
+        version.stderr.trim() ||
+        version.stdout.trim() ||
+        "CodeGraph CLI not found on PATH.",
+  };
+}
+
+function ensureCodeGraphInitialized() {
+  const status = getCodeGraphStatus();
+
+  if (!status.installed) {
+    return {
+      ok: false,
+      ...status,
+      error: "CodeGraph CLI is not installed or not on PATH. Install it first, then retry CodeGraph setup.",
+    };
+  }
+
+  if (status.initialized) {
+    return { ok: true, ...status, initializedNow: false };
+  }
+
+  console.log("[codegraph] initializing project index...");
+  const init = runCodeGraph(["init"]);
+  if (init.exitCode !== 0) {
+    return {
+      ok: false,
+      ...getCodeGraphStatus(),
+      initializedNow: false,
+      error: init.spawnError || init.stderr.trim() || init.stdout.trim() || "codegraph init failed.",
+    };
+  }
+
+  return { ok: true, ...getCodeGraphStatus(), initializedNow: true };
+}
+
+function codeGraphMcpCommand() {
+  return "codegraph serve --mcp";
 }
 
 /** Case-insensitive substring search across project files. */
@@ -2142,6 +2238,41 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       json(res, 500, { error: err instanceof Error ? err.message : "List failed" });
     }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/codegraph/status") {
+    const status = getCodeGraphStatus();
+    const proc = mcpServers.get("codegraph");
+    json(res, 200, {
+      ok: true,
+      ...status,
+      server: proc ? proc.toStatus() : null,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/codegraph/setup") {
+    const setup = ensureCodeGraphInitialized();
+    if (!setup.ok) {
+      json(res, 400, setup);
+      return;
+    }
+
+    let proc = mcpServers.get("codegraph");
+    if (!proc) {
+      proc = new McpServer("codegraph", codeGraphMcpCommand());
+      mcpServers.set("codegraph", proc);
+      console.log("MCP server added: codegraph = " + codeGraphMcpCommand());
+    }
+
+    void proc.start();
+
+    json(res, 200, {
+      ok: true,
+      ...setup,
+      server: proc.toStatus(),
+    });
     return;
   }
 
