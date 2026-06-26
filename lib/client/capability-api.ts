@@ -45,6 +45,10 @@ interface CollectedProbeOutput {
   error?: string;
 }
 
+function updateCapabilitySettings(patch: CapabilitySettingsExtension): void {
+  updateUserSettings(patch as unknown as Parameters<typeof updateUserSettings>[0]);
+}
+
 export function getCapabilityProfiles(): Record<string, ModelCapabilityProbeProfile> {
   return {
     ...((getUserSettings() as CapabilitySettingsExtension).modelCapabilityProfiles ?? {}),
@@ -60,16 +64,16 @@ export function getCapabilityProfile(
 export function clearCapabilityProfile(fullModelId: string): void {
   const next = getCapabilityProfiles();
   delete next[fullModelId];
-  updateUserSettings({ modelCapabilityProfiles: next } as CapabilitySettingsExtension);
+  updateCapabilitySettings({ modelCapabilityProfiles: next });
 }
 
 function saveCapabilityProfile(profile: ModelCapabilityProbeProfile): void {
-  updateUserSettings({
+  updateCapabilitySettings({
     modelCapabilityProfiles: {
       ...getCapabilityProfiles(),
       [profile.fullModelId]: profile,
     },
-  } as CapabilitySettingsExtension);
+  });
 }
 
 function resolveProbeTarget(fullModelId: string): ProbeTarget {
