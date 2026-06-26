@@ -41,12 +41,12 @@ const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint:
   },
   chatgpt: {
     label: "Account runner URL",
-    placeholder: "http://127.0.0.1:8788",
-    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here.",
+    placeholder: "http://127.0.0.1:1455",
+    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
   },
   "github-copilot": {
     label: "Account runner URL",
-    placeholder: "http://127.0.0.1:8788",
+    placeholder: "http://127.0.0.1:1455",
     hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here.",
   },
 };
