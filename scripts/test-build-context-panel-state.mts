@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import {
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
+  getVisibleBuildContextAssemblies,
+  getVisibleBuildContextDroppedPacks,
+  getVisibleBuildContextRetrieveRefs,
   reduceBuildContextPanelState,
 } from "../components/BuildContextPanel";
 import type { OrchestratorEvent } from "../lib/orchestrator/engine";
@@ -53,6 +56,23 @@ assert.equal(state.assemblies.at(-1)?.label, "Task 5");
 assert.equal(state.assemblies[0].droppedPacks[0]?.title, "Dropped 44");
 assert.equal(state.assemblies[0].retrieveRefs[0]?.id, "ctx_44");
 
+const visibleAssemblies = getVisibleBuildContextAssemblies(state);
+assert.equal(visibleAssemblies.length, 8);
+assert.deepEqual(
+  visibleAssemblies.slice(0, 3).map((item) => item.label),
+  ["Task 44", "Task 43", "Task 42"]
+);
+
+const visibleDroppedPacks = getVisibleBuildContextDroppedPacks(state);
+assert.equal(visibleDroppedPacks.length, 12);
+assert.equal(visibleDroppedPacks[0]?.assemblyLabel, "Task 44");
+assert.equal(visibleDroppedPacks[1]?.assemblyLabel, "Task 43");
+
+const visibleRetrieveRefs = getVisibleBuildContextRetrieveRefs(state);
+assert.equal(visibleRetrieveRefs.length, 12);
+assert.equal(visibleRetrieveRefs[0]?.assemblyLabel, "Task 44");
+assert.equal(visibleRetrieveRefs[1]?.assemblyLabel, "Task 43");
+
 state = reduceBuildContextPanelState(state, {
   type: "memory_event",
   activeDecisions: [{ id: "m1", summary: "Use IndexedDB storage", paths: ["lib/client/store.ts"] }],
@@ -94,5 +114,19 @@ state = reduceBuildContextPanelState(state, {
 
 assert.equal(state.codeIntel?.provider, "native");
 assert.equal(state.codeIntel?.architectureDigestIncluded, true);
+
+state = reduceBuildContextPanelState(state, {
+  type: "code_intel_status",
+  provider: "native",
+  status: "available",
+  available: true,
+  detail: "Native code intelligence still available.",
+  architectureDigestIncluded: false,
+  changeImpactDigestIncluded: true,
+  callsLeft: 1,
+});
+
+assert.equal(state.codeIntel?.architectureDigestIncluded, true);
+assert.equal(state.codeIntel?.changeImpactDigestIncluded, true);
 
 console.log("PASS build context panel state");

@@ -41,6 +41,26 @@ export interface BuildContextPanelState {
   codeIntel: BuildCodeIntelStatusView | null;
 }
 
+export interface VisibleDroppedContextPack {
+  assemblyLabel: string;
+  modelName: string;
+  id: string;
+  title: string;
+  kind: string;
+  reason: string;
+  estimatedTokens: number;
+}
+
+export interface VisibleBuildContextRef {
+  assemblyLabel?: string;
+  action?: BuildContextBlobView["action"];
+  id: string;
+  label?: string;
+  kind?: string;
+  tokenEstimate?: number;
+  charCount?: number;
+}
+
 export const EMPTY_BUILD_CONTEXT_PANEL_STATE: BuildContextPanelState = {
   assemblies: [],
   blobs: [],
@@ -71,11 +91,67 @@ export function reduceBuildContextPanelState(
         ...state,
         blobs: [event, ...state.blobs].slice(0, HISTORY_CAP),
       };
-    case "code_intel_status":
-      return { ...state, codeIntel: event };
+    case "code_intel_status": {
+      const previous = state.codeIntel;
+      return {
+        ...state,
+        codeIntel: {
+          ...event,
+          architectureDigestIncluded:
+            event.architectureDigestIncluded ||
+            previous?.architectureDigestIncluded === true,
+          changeImpactDigestIncluded:
+            event.changeImpactDigestIncluded ||
+            previous?.changeImpactDigestIncluded === true,
+        },
+      };
+    }
     default:
       return state;
   }
+}
+
+export function getVisibleBuildContextAssemblies(
+  state: BuildContextPanelState
+): BuildContextAssemblyView[] {
+  return state.assemblies.slice(0, 8);
+}
+
+export function getVisibleBuildContextDroppedPacks(
+  state: BuildContextPanelState
+): VisibleDroppedContextPack[] {
+  return state.assemblies
+    .flatMap((assembly) =>
+      assembly.droppedPacks.map((pack) => ({
+        assemblyLabel: assembly.label,
+        modelName: assembly.modelName,
+        ...pack,
+      }))
+    )
+    .slice(0, 12);
+}
+
+export function getVisibleBuildContextRetrieveRefs(
+  state: BuildContextPanelState
+): VisibleBuildContextRef[] {
+  const assemblyRefs = state.assemblies.flatMap((assembly) =>
+    assembly.retrieveRefs.map((ref) => ({
+      assemblyLabel: assembly.label,
+      id: ref.id,
+      label: ref.label,
+      kind: ref.kind,
+      tokenEstimate: ref.tokenEstimate,
+    }))
+  );
+  const blobRefs = state.blobs.map((blob) => ({
+    action: blob.action,
+    id: blob.ref,
+    label: blob.label,
+    kind: blob.kind,
+    tokenEstimate: blob.tokenEstimate,
+    charCount: blob.charCount,
+  }));
+  return [...assemblyRefs, ...blobRefs].slice(0, 12);
 }
 
 function formatTokens(tokens: number | undefined): string {
@@ -147,6 +223,10 @@ function MemoryList({
 export function BuildContextPanel({ state }: { state: BuildContextPanelState }) {
   const [open, setOpen] = useState(true);
   const latest = state.assemblies[0];
+  const visibleAssemblies = getVisibleBuildContextAssemblies(state);
+  const visibleDroppedPacks = getVisibleBuildContextDroppedPacks(state);
+  const visibleRetrieveRefs = getVisibleBuildContextRetrieveRefs(state);
+  const hasRetrieveRefs = visibleRetrieveRefs.length > 0;
   const hasData =
     state.assemblies.length > 0 ||
     state.blobs.length > 0 ||
@@ -184,6 +264,9 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
           {latest && latest.omittedPackCount > 0 && (
             <Badge variant="warning">{latest.omittedPackCount} dropped</Badge>
           )}
+          {state.assemblies.length > 1 && (
+            <Badge variant="secondary">{state.assemblies.length} contexts</Badge>
+          )}
           {state.codeIntel && (
             <Badge variant={statusVariant(state.codeIntel.status)}>
               {state.codeIntel.status.replaceAll("_", " ")}
@@ -201,28 +284,40 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
                 Context
               </p>
               {latest ? (
-                <div className="rounded-md border bg-muted/20 p-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="min-w-0 truncate text-sm font-medium">
-                      {latest.label}
-                    </p>
-                    <Badge variant="outline">{latest.contextTier}</Badge>
-                  </div>
-                  <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                    <span>Model: {latest.modelName}</span>
-                    <span>
-                      Context size: {formatTokens(latest.modelContextWindowTokens)}
-                    </span>
-                    <span>
-                      Input used: ~{formatTokens(latest.estimatedInputTokens)} /{" "}
-                      {formatTokens(latest.totalInputBudgetTokens)}
-                    </span>
-                    <span>
-                      Packs: {latest.selectedPackCount} selected,{" "}
-                      {latest.omittedPackCount} dropped
-                    </span>
-                  </div>
-                </div>
+                <ul className="space-y-1">
+                  {visibleAssemblies.map((assembly) => (
+                    <li
+                      key={`${assembly.phase}-${assembly.label}-${assembly.modelId}`}
+                      className="rounded-md border bg-muted/20 p-2"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="min-w-0 truncate text-sm font-medium">
+                          {assembly.label}
+                        </p>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          <Badge variant="outline">{assembly.contextTier}</Badge>
+                          <Badge variant={assembly.omittedPackCount > 0 ? "warning" : "secondary"}>
+                            {assembly.omittedPackCount} dropped
+                          </Badge>
+                        </span>
+                      </div>
+                      <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                        <span>Model: {assembly.modelName}</span>
+                        <span>
+                          Context size: {formatTokens(assembly.modelContextWindowTokens)}
+                        </span>
+                        <span>
+                          Input used: ~{formatTokens(assembly.estimatedInputTokens)} /{" "}
+                          {formatTokens(assembly.totalInputBudgetTokens)}
+                        </span>
+                        <span>
+                          Packs: {assembly.selectedPackCount} selected,{" "}
+                          {assembly.omittedPackCount} dropped
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               ) : (
                 <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                   Context assemblies appear when Build starts planning.
@@ -230,21 +325,27 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
               )}
             </div>
 
-            {latest?.droppedPacks.length ? (
+            {visibleDroppedPacks.length > 0 ? (
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <AlertTriangle className="h-3.5 w-3.5" />
                   Dropped packs
                 </p>
                 <ul className="space-y-1">
-                  {latest.droppedPacks.slice(0, 5).map((pack) => (
+                  {visibleDroppedPacks.map((pack) => (
                     <li
-                      key={`${latest.label}-${pack.id}`}
+                      key={`${pack.assemblyLabel}-${pack.id}`}
                       className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-xs"
                     >
-                      <span className="min-w-0 truncate">{pack.title}</span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {pack.reason}, ~{formatTokens(pack.estimatedTokens)}
+                      <span className="min-w-0">
+                        <span className="block truncate">{pack.title}</span>
+                        <span className="block truncate text-muted-foreground">
+                          {pack.assemblyLabel} - {pack.modelName}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right text-muted-foreground">
+                        {pack.reason}
+                        <br />~{formatTokens(pack.estimatedTokens)}
                       </span>
                     </li>
                   ))}
@@ -252,33 +353,31 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
               </div>
             ) : null}
 
-            {(latest?.retrieveRefs.length || state.blobs.length) && (
+            {hasRetrieveRefs && (
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <Link2 className="h-3.5 w-3.5" />
                   Retrieve refs
                 </p>
                 <ul className="grid gap-1 sm:grid-cols-2">
-                  {[...(latest?.retrieveRefs ?? []), ...state.blobs]
-                    .slice(0, 6)
-                    .map((ref) => {
-                      const id = "ref" in ref ? ref.ref : ref.id;
-                      return (
-                        <li
-                          key={`${id}-${"action" in ref ? ref.action : "selected"}`}
-                          className="rounded-md border bg-muted/20 px-2 py-1.5"
-                        >
-                          <p className="truncate font-mono text-[0.7rem]">{id}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {ref.label ?? "stored context"} -{" "}
-                            {"charCount" in ref
-                              ? `${formatBytes(ref.charCount)}, `
-                              : ""}
-                            ~{formatTokens(ref.tokenEstimate)}
-                          </p>
-                        </li>
-                      );
-                    })}
+                  {visibleRetrieveRefs.map((ref) => (
+                    <li
+                      key={`${ref.id}-${ref.action ?? ref.assemblyLabel ?? "selected"}`}
+                      className="rounded-md border bg-muted/20 px-2 py-1.5"
+                    >
+                      <p className="truncate font-mono text-[0.7rem]">{ref.id}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {ref.label ?? "stored context"} -{" "}
+                        {ref.charCount != null ? `${formatBytes(ref.charCount)}, ` : ""}
+                        ~{formatTokens(ref.tokenEstimate)}
+                      </p>
+                      {(ref.assemblyLabel || ref.action) && (
+                        <p className="truncate text-[0.65rem] text-muted-foreground">
+                          {ref.assemblyLabel ?? ref.action}
+                        </p>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               </div>
             )}
