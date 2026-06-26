@@ -90,6 +90,8 @@ import {
   filterCodebaseMemoryMcpToolsForGenericUse,
   isGenericMcpToolAllowed,
   shouldAutoIncludeCodeIntelArchitecture,
+  type AssembledBuildContext,
+  type CodeIntelStatus,
   type CodeIntelProvider,
   type ContextPack,
 } from "@/lib/build-context";
@@ -251,6 +253,10 @@ import {
 } from "@/lib/build-context/memory-extractors";
 
 type EventCallback = (event: OrchestratorEvent) => void;
+type ContextAssembledEvent = Extract<OrchestratorEvent, { type: "context_assembled" }>;
+type MemoryEvent = Extract<OrchestratorEvent, { type: "memory_event" }>;
+type ContextBlobEvent = Extract<OrchestratorEvent, { type: "context_blob" }>;
+type CodeIntelStatusEvent = Extract<OrchestratorEvent, { type: "code_intel_status" }>;
 type StructuredTraceValidation =
   | { ok: true; parsedResponseJson?: string }
   | { ok: false; message: string };
@@ -502,6 +508,70 @@ export async function runBuildDiscussion(
   const buildContextManager = new BuildContextManager();
   const modelContextProfile = (model: SelectedModel) =>
     model.contextProfile ?? resolveClientModelContextProfile(model.modelId);
+  const emitContextAssembled = (
+    assembled: AssembledBuildContext,
+    input: {
+      phase: ContextAssembledEvent["phase"];
+      label: string;
+      model: SelectedModel;
+      taskId?: string;
+    }
+  ): void => {
+    const { providerId } = parseModelId(input.model.modelId);
+    const retrieveRefs = assembled.rendered.assembly.selected
+      .map((pack) => pack.retrieveRef)
+      .filter((ref): ref is NonNullable<typeof ref> => Boolean(ref))
+      .slice(0, 10)
+      .map((ref) => ({
+        id: ref.id,
+        label: ref.label,
+        kind: ref.kind,
+        tokenEstimate: ref.tokenEstimate,
+      }));
+    const droppedPacks = assembled.rendered.assembly.omitted
+      .filter((pack) => pack.reason !== "empty")
+      .slice(0, 10)
+      .map((pack) => ({
+        id: pack.id,
+        title: pack.title,
+        kind: pack.kind,
+        reason: pack.reason,
+        estimatedTokens: pack.estimatedTokens,
+      }));
+    const droppedPackCount = assembled.rendered.assembly.omitted.filter(
+      (pack) => pack.reason !== "empty"
+    ).length;
+    const estimatedInputTokens = Math.min(
+      assembled.budget.totalInputTokens,
+      assembled.budget.fixedPromptTokens +
+        assembled.budget.taskTokens +
+        assembled.budget.historyTokens +
+        assembled.rendered.renderedTokenTotal
+    );
+
+    emit({
+      type: "context_assembled",
+      role: assembled.role,
+      phase: input.phase,
+      label: input.label,
+      taskId: input.taskId,
+      modelId: input.model.modelId,
+      modelName: input.model.displayName,
+      providerId,
+      contextTier: assembled.budget.tier,
+      totalInputBudgetTokens: assembled.budget.totalInputTokens,
+      modelContextWindowTokens: assembled.budget.modelContextWindowTokens,
+      modelInputCeilingTokens: assembled.budget.modelInputCeilingTokens,
+      estimatedInputTokens,
+      contextPackBudgetTokens: assembled.budget.contextPackTokens,
+      contextPackUsedTokens: assembled.rendered.contentTokenTotal,
+      selectedPackCount: assembled.rendered.packCount,
+      omittedPackCount: droppedPackCount,
+      droppedPacks,
+      retrieveRefs,
+      notes: assembled.notes.slice(0, 4),
+    });
+  };
 
   // ── Worker scoreboard ─────────────────────────────────────────────────────
   // Tracks each worker's performance so the Architect can assign harder tasks
@@ -732,11 +802,58 @@ export async function runBuildDiscussion(
       buildMemoryProjectKey = nextKey;
     }
   };
-  const persistBuildMemories = (records: BuildMemoryRecord[]): void => {
-    for (const record of records) upsertBuildMemory(record);
-  };
   const activeBuildMemories = (): BuildMemoryRecord[] =>
     listActiveBuildMemories(buildMemoryProjectKey);
+  let lastMemoryEventSignature = "";
+  const memoryItem = (
+    record: BuildMemoryRecord
+  ): MemoryEvent["activeDecisions"][number] => ({
+    id: record.id,
+    summary: record.summary,
+    paths: record.paths?.slice(0, 4),
+    taskIds: record.taskIds?.slice(0, 4),
+    hitCount: record.hitCount,
+  });
+  const emitBuildMemoryEvent = (
+    records: BuildMemoryRecord[] = activeBuildMemories()
+  ): void => {
+    const activeDecisions = records
+      .filter((record) => record.kind === "decision" || record.kind === "user_correction")
+      .slice(0, 6)
+      .map(memoryItem);
+    const failedApproaches = records
+      .filter((record) => record.kind === "failed_approach" || record.kind === "skill_violation")
+      .slice(0, 6)
+      .map(memoryItem);
+    const fragileFiles = records
+      .filter((record) => record.kind === "fragile_file")
+      .slice(0, 6)
+      .map(memoryItem);
+    const warnings = [
+      ...fragileFiles.map((record) => `Fragile file: ${record.summary}`),
+      ...failedApproaches.map((record) => `Avoid repeat: ${record.summary}`),
+    ].slice(0, 6);
+    const signature = JSON.stringify({
+      activeDecisions,
+      failedApproaches,
+      fragileFiles,
+      warnings,
+    });
+    if (signature === lastMemoryEventSignature) return;
+    lastMemoryEventSignature = signature;
+    emit({
+      type: "memory_event",
+      activeDecisions,
+      failedApproaches,
+      fragileFiles,
+      warnings,
+    });
+  };
+  const persistBuildMemories = (records: BuildMemoryRecord[]): void => {
+    if (records.length === 0) return;
+    for (const record of records) upsertBuildMemory(record);
+    emitBuildMemoryEvent();
+  };
   const commandMemoryResults: CommandMemoryResult[] = [];
   const rememberCommandMemory = (result: CommandMemoryResult): void => {
     if (result.command.trim() === "" || result.exitCode === -1) return;
@@ -1202,6 +1319,34 @@ export async function runBuildDiscussion(
 
   const codeIntelStatusForPrompt = (): string =>
     codeIntelProvider?.status.available ? codeIntelProvider.status.detail : "";
+
+  const emitCodeIntelStatus = (
+    status: CodeIntelStatus | null | undefined,
+    options: {
+      status?: CodeIntelStatusEvent["status"];
+      detail?: string;
+      architectureDigestIncluded?: boolean;
+      changeImpactDigestIncluded?: boolean;
+    } = {}
+  ): void => {
+    emit({
+      type: "code_intel_status",
+      provider: status?.mode ?? "none",
+      status:
+        options.status ??
+        (status?.available ? "available" : "unavailable"),
+      available: status?.available ?? false,
+      detail:
+        options.detail ??
+        status?.detail ??
+        "Code intelligence is unavailable.",
+      tools: status?.tools.slice(0, 8),
+      capabilities: status?.capabilities.slice(0, 8),
+      architectureDigestIncluded: options.architectureDigestIncluded ?? false,
+      changeImpactDigestIncluded: options.changeImpactDigestIncluded ?? false,
+      callsLeft: codeIntelCallsLeftThisPhase(),
+    });
+  };
 
   const rememberLocalServerUrls = (text: string): void => {
     const next = extractLocalServerUrls(text);
@@ -2455,6 +2600,7 @@ export async function runBuildDiscussion(
     },
   });
 
+  emitCodeIntelStatus(codeIntelProvider.status);
   if (codeIntelProvider.status.available) {
     emit({
       type: "diagnostic",
@@ -3412,6 +3558,16 @@ export async function runBuildDiscussion(
       metadata,
     });
     upsertContextBlob(blob);
+    emit({
+      type: "context_blob",
+      action: "created",
+      ref: blob.id,
+      label: blob.label,
+      kind: blob.kind,
+      source: typeof metadata?.source === "string" ? metadata.source : undefined,
+      charCount: blob.charCount,
+      tokenEstimate: blob.tokenEstimate,
+    } satisfies ContextBlobEvent);
     return blob;
   };
 
@@ -3469,6 +3625,17 @@ export async function runBuildDiscussion(
       repoFiles: currentProjectFiles(),
       maxChars: 10_000,
     });
+    if (result.fallbackFrom) {
+      emitCodeIntelStatus(result.status, {
+        status: "fallback",
+        detail: `${result.title}: ${result.error ?? "native fallback used"}`,
+      });
+    } else if (!result.ok) {
+      emitCodeIntelStatus(result.status, {
+        status: "error",
+        detail: result.error ?? result.content,
+      });
+    }
     emitFileToolDiagnostic(
       `${actor.displayName} code_intel ${action.op} via ${result.mode}${result.toolName ? `:${result.toolName}` : ""} - ${kbOf(result.content)}`,
       actor
@@ -3486,6 +3653,14 @@ export async function runBuildDiscussion(
     try {
       const result = await runCodeIntelQuery(action);
       const pack = codeIntelResultToContextPack(result, options);
+      if (pack) {
+        emitCodeIntelStatus(result.status, {
+          status: "auto_included",
+          detail: `${pack.title} included via ${result.mode}${result.fallbackFrom ? " fallback" : ""}.`,
+          architectureDigestIncluded: action.op === "architecture",
+          changeImpactDigestIncluded: action.op === "detect_change_impact",
+        });
+      }
       return pack ? [pack] : [];
     } catch (err) {
       emit({
@@ -3570,6 +3745,19 @@ export async function runBuildDiscussion(
       maxTokens: action.maxTokens,
       offsetChars: action.offsetChars,
     });
+    emit({
+      type: "context_blob",
+      action: "retrieved",
+      ref: retrieved.ref,
+      label: retrieved.label,
+      kind: retrieved.kind,
+      charCount: retrieved.totalChars,
+      tokenEstimate: retrieved.totalTokens,
+      offsetChars: retrieved.offsetChars,
+      returnedChars: retrieved.returnedChars,
+      returnedTokens: retrieved.returnedTokens,
+      truncated: retrieved.truncated,
+    } satisfies ContextBlobEvent);
     emit({
       type: "diagnostic",
       phase: "model_streaming",
@@ -4257,6 +4445,12 @@ export async function runBuildDiscussion(
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       contextPacks: planningCodeIntelPacks,
     });
+    emitBuildMemoryEvent();
+    emitContextAssembled(planAssembledContext, {
+      phase: "plan",
+      label: "Architect planning",
+      model: architect,
+    });
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
       label: "Architect is planning the project",
@@ -4690,6 +4884,13 @@ export async function runBuildDiscussion(
         contextFileText: workerContextFileText,
         architectNotes,
         memoryRecords: activeBuildMemories(),
+      });
+      emitBuildMemoryEvent();
+      emitContextAssembled(workerAssembledContext, {
+        phase: "worker",
+        label: `${task.id}: ${task.title}`,
+        model: worker,
+        taskId: task.id,
       });
 
       const startedAt = Date.now();
@@ -5430,6 +5631,12 @@ export async function runBuildDiscussion(
       skillEvidenceText: reviewSkillEvidenceText,
       contextPacks: reviewImpactPacks,
     });
+    emitBuildMemoryEvent();
+    emitContextAssembled(reviewAssembledContext, {
+      phase: "review",
+      label: `Architect review wave ${cycle}`,
+      model: architect,
+    });
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
       label: `Architect is reviewing wave ${cycle}`,
@@ -5893,6 +6100,12 @@ export async function runBuildDiscussion(
     userNotes: userNotesText(),
     memoryRecords: activeBuildMemories(),
     skillEvidenceText: summarySkillEvidenceText,
+  });
+  emitBuildMemoryEvent();
+  emitContextAssembled(summaryAssembledContext, {
+    phase: "summary",
+    label: "Architect final summary",
+    model: architect,
   });
 
   const summaryRaw = await streamTurn(
