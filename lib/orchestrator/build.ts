@@ -10,6 +10,10 @@
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
 import type { JsonSchemaObject, StructuredOutputFormat } from "../providers/base";
 import {
+  renderAssembledContext,
+  type BuildPromptContextInput,
+} from "@/lib/build-context/prompt-assembly";
+import {
   clampContextRetrieveOffsetChars,
   clampContextRetrieveMaxTokens,
   CONTEXT_RETRIEVE_DEFAULT_TOKENS,
@@ -2246,7 +2250,7 @@ function runToolDoc(
     .join("\n");
 }
 
-export function buildArchitectPlanPrompt(input: {
+export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
   fileContext: string;
@@ -2276,6 +2280,8 @@ export function buildArchitectPlanPrompt(input: {
   /** AIBoard-native compact skill context selected by the engine. */
   skillContext?: string;
 }): string {
+  const assembledContext = renderAssembledContext(input.assembledContext);
+  const hasAssembledContext = assembledContext.trim().length > 0;
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). You may send a few independent reads/searches together; the engine runs the safe ones as a batch and returns a served/skipped report. Otherwise, plan now.`
     : "Plan now — no more file reads are available.";
@@ -2287,15 +2293,16 @@ export function buildArchitectPlanPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
-    input.previousSummary?.trim()
+    hasAssembledContext ? assembledContext : "",
+    !hasAssembledContext && input.previousSummary?.trim()
       ? `\nThis is a FOLLOW-UP pass: a previous build already delivered the project summarized below. Everything delivered is still a requirement — preserve it. Plan ONLY the delta (changes the notes/request ask for), editing existing files where possible instead of rebuilding.\nPrevious hand-off summary:\n${input.previousSummary}`
       : "",
-    input.fileContext,
-    userNotesSection(input.userNotes),
-    input.memoryBrief,
+    !hasAssembledContext ? input.fileContext : "",
+    !hasAssembledContext ? userNotesSection(input.userNotes) : "",
+    !hasAssembledContext ? input.memoryBrief : "",
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
-    scoreboardSection(input.scoreboard),
+    !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
     input.skillContext,
     "",
     readOption,
@@ -2321,7 +2328,7 @@ export function buildArchitectPlanPrompt(input: {
     .join("\n");
 }
 
-export function buildWorkerTaskPrompt(input: {
+export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
   task: BuildTask;
@@ -2334,6 +2341,8 @@ export function buildWorkerTaskPrompt(input: {
   /** Durable task/path-relevant AIBoard Build memory brief selected by the engine. */
   memoryBrief?: string;
 }): string {
+  const assembledContext = renderAssembledContext(input.assembledContext);
+  const hasAssembledContext = assembledContext.trim().length > 0;
   return [
     `You are an AI engineer on a team building a project. The Architect assigned you ONE task. Complete it fully — other tasks are handled by teammates, so do not do their work or restructure files outside your task.`,
     "",
@@ -2341,8 +2350,11 @@ export function buildWorkerTaskPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
-    input.architectNotes ? `\nArchitect's conventions:\n${input.architectNotes}` : "",
-    input.contextFileText,
+    hasAssembledContext ? assembledContext : "",
+    !hasAssembledContext && input.architectNotes
+      ? `\nArchitect's conventions:\n${input.architectNotes}`
+      : "",
+    !hasAssembledContext ? input.contextFileText : "",
     "",
     `YOUR TASK — ${input.task.id}: ${input.task.title}`,
     input.task.instructions,
@@ -2350,7 +2362,7 @@ export function buildWorkerTaskPrompt(input: {
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
-    input.memoryBrief,
+    !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
     input.skillContext?.trim()
       ? "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose with RED/GREEN checks, root-cause notes, review notes, or exemption reasons as applicable."
@@ -2373,7 +2385,7 @@ export function buildWorkerTaskPrompt(input: {
     .join("\n");
 }
 
-export function buildArchitectReviewPrompt(input: {
+export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
   fileContext?: string;
@@ -2406,6 +2418,8 @@ export function buildArchitectReviewPrompt(input: {
   /** Durable worker skill evidence and gaps captured by the engine. */
   skillEvidenceText?: string;
 }): string {
+  const assembledContext = renderAssembledContext(input.assembledContext);
+  const hasAssembledContext = assembledContext.trim().length > 0;
   return [
     ARCHITECT_ROLE,
     "",
@@ -2413,22 +2427,25 @@ export function buildArchitectReviewPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
-    input.fileContext?.trim()
+    hasAssembledContext ? assembledContext : "",
+    !hasAssembledContext && input.fileContext?.trim()
       ? `\nFile contents you have already read — ground every decision in these; NEVER invent replacement content for an existing file:${input.fileContext}`
       : "",
-    userNotesSection(input.userNotes),
+    !hasAssembledContext ? userNotesSection(input.userNotes) : "",
     "",
-    "Work completed since your last review (compact landed-change digest, not full file contents):",
-    input.executedText,
-    input.skillEvidenceText?.trim()
+    !hasAssembledContext
+      ? "Work completed since your last review (compact landed-change digest, not full file contents):"
+      : "",
+    !hasAssembledContext ? input.executedText : "",
+    !hasAssembledContext && input.skillEvidenceText?.trim()
       ? `\n${input.skillEvidenceText}\nTreat missing skill evidence as a review signal: request a fix unless the task is clearly exempt and otherwise verified.`
       : "",
-    input.outstandingTasks?.trim()
+    !hasAssembledContext && input.outstandingTasks?.trim()
       ? `\nRequired tasks still not done:\n${input.outstandingTasks}\nDo NOT set "done": true while any required task is listed here. Approve completed outstanding tasks, send unfinished ones back with precise fix instructions, or create replacement tasks that explicitly cover the missing work.`
       : "",
     "",
-    scoreboardSection(input.scoreboard),
-    input.memoryBrief,
+    !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
+    !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
@@ -2458,7 +2475,7 @@ export function buildArchitectReviewPrompt(input: {
     .join("\n");
 }
 
-export function buildArchitectSummaryPrompt(input: {
+export function buildArchitectSummaryPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
   /** Paths actually written this run — the summary may only claim these. */
@@ -2474,6 +2491,8 @@ export function buildArchitectSummaryPrompt(input: {
    * the engine appends an authoritative Repository-workflow section. */
   githubWorkflow?: boolean;
 }): string {
+  const assembledContext = renderAssembledContext(input.assembledContext);
+  const hasAssembledContext = assembledContext.trim().length > 0;
   return [
     ARCHITECT_ROLE,
     "",
@@ -2490,18 +2509,31 @@ export function buildArchitectSummaryPrompt(input: {
     input.filesChanged?.trim()
       ? `\nFiles actually created or modified in THIS run (the complete list — do NOT claim changes to any file not listed here; if something planned is missing from this list, it did NOT happen and belongs under known gaps):\n${input.filesChanged}`
       : "\nNo files were created or modified in this run — say so plainly and describe what went wrong instead of describing planned work as done.",
-    userNotesSection(input.userNotes),
+    hasAssembledContext ? assembledContext : "",
+    !hasAssembledContext ? userNotesSection(input.userNotes) : "",
+    !hasAssembledContext && input.memoryBrief?.trim()
+      ? `\n${input.memoryBrief}`
+      : "",
+    !hasAssembledContext && input.verificationText?.trim()
+      ? `\nVerification actually performed:\n${input.verificationText}`
+      : "",
+    !hasAssembledContext && input.knownGaps?.trim()
+      ? `\nKnown gaps and unperformed work:\n${input.knownGaps}`
+      : "",
     "",
-    "Build history (plans, reviews, outcomes):",
-    input.historyText,
+    !hasAssembledContext ? "Build history (plans, reviews, outcomes):" : "",
+    !hasAssembledContext ? input.historyText : "",
     input.skillContext,
-    input.skillEvidenceText?.trim()
+    !hasAssembledContext && input.skillEvidenceText?.trim()
       ? `\nSkill evidence and gaps to account for in the hand-off:\n${input.skillEvidenceText}`
       : "",
     "",
     input.verbosityInstruction ?? "",
     input.githubWorkflow
       ? "GITHUB OUTCOMES: do NOT state whether any GitHub milestone, issue, branch, commit, push, or pull request was created, nor its status — the engine appends an authoritative \"Repository workflow\" section below your summary with the REAL outcomes. Never assert a GitHub action succeeded; if you didn't see the engine confirm it via a tool result, it may not have happened."
+      : "",
+    hasAssembledContext
+      ? "Known gaps, failed checks, and unperformed work in the assembled context must be reported as gaps, not described as completed work."
       : "",
     "Do not re-emit file contents. Do NOT wrap the summary in JSON.",
     META_FOOTER_INSTRUCTION,
