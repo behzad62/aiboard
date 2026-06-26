@@ -17,6 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import type { ModelInfo } from "@/lib/providers/base";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import { saveProviderKey, validateProvider } from "@/lib/client/settings-api";
+import { getProviderKey } from "@/lib/client/store";
 
 interface ProviderConfig {
   providerId: string;
@@ -32,16 +33,24 @@ interface ProviderConfig {
   lastValidatedAt?: string | null;
 }
 
-/** Gateway providers that need a per-user endpoint next to the key. */
 const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint: string }> = {
   foundry: {
     label: "Foundry endpoint (base URL)",
     placeholder: "https://<resource>.services.ai.azure.com/anthropic/",
     hint: "From your Azure AI Foundry resource — the Anthropic-compatible endpoint ending in /anthropic/.",
   },
+  chatgpt: {
+    label: "Account runner URL",
+    placeholder: "http://127.0.0.1:8788",
+    hint: "Run node scripts/account-provider-runner.mjs, then paste its local URL here.",
+  },
+  "github-copilot": {
+    label: "Account runner URL",
+    placeholder: "http://127.0.0.1:8788",
+    hint: "Run node scripts/account-provider-runner.mjs, then paste its local URL here.",
+  },
 };
 
-/** Gateway providers whose model ids are user-defined (deployment-specific). */
 const NEEDS_MODEL_IDS: Record<string, { label: string; placeholder: string; hint: string }> = {
   foundry: {
     label: "Model ids (one per line)",
@@ -49,6 +58,31 @@ const NEEDS_MODEL_IDS: Record<string, { label: string; placeholder: string; hint
     hint: "The Anthropic model ids your Foundry deployment exposes — enter exactly what your resource calls them.",
   },
 };
+
+const ACCOUNT_RUNNER_PROVIDERS: Record<
+  string,
+  { path: string; loginLabel: string; tokenLabel: string; tokenPlaceholder: string }
+> = {
+  chatgpt: {
+    path: "chatgpt",
+    loginLabel: "Log in with OpenAI",
+    tokenLabel: "Runner token",
+    tokenPlaceholder: "Paste the token printed by account-provider-runner.mjs",
+  },
+  "github-copilot": {
+    path: "github-copilot",
+    loginLabel: "Log in with GitHub",
+    tokenLabel: "Runner token",
+    tokenPlaceholder: "Paste the token printed by account-provider-runner.mjs",
+  },
+};
+
+interface AccountRunnerLoginResponse {
+  ok?: boolean;
+  url?: string;
+  instructions?: string;
+  error?: string;
+}
 
 interface ApiKeyFormProps {
   provider: ProviderConfig;
@@ -64,16 +98,17 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [enabled, setEnabled] = useState(provider.enabled);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const baseUrlField = NEEDS_BASE_URL[provider.providerId];
   const modelIdsField = NEEDS_MODEL_IDS[provider.providerId];
+  const accountRunner = ACCOUNT_RUNNER_PROVIDERS[provider.providerId];
 
   const parsedModelIds = modelIdsText
     .split(/[\n,]/)
     .map((m) => m.trim())
     .filter((m) => m.length > 0);
-  // For user-defined-model providers the dropdown reflects what's typed now.
   const selectableModels = modelIdsField
     ? parsedModelIds.map((id) => ({ id, name: id }))
     : provider.models;
@@ -90,12 +125,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
     try {
       if (baseUrlField && !baseURL.trim()) {
-        throw new Error("This provider needs its endpoint base URL");
+        throw new Error(accountRunner ? "This provider needs the account runner URL" : "This provider needs its endpoint base URL");
       }
       if (modelIdsField && parsedModelIds.length === 0) {
         throw new Error("Add at least one model id");
       }
-      // Keep a valid default model when the typed list changed.
       const nextDefault =
         modelIdsField && !parsedModelIds.includes(defaultModel)
           ? parsedModelIds[0]
@@ -142,9 +176,48 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     }
   };
 
+  const loginAccountProvider = async () => {
+    if (!accountRunner) return;
+    setLoggingIn(true);
+    setMessage(null);
+    try {
+      const saved = getProviderKey(provider.providerId);
+      const runnerBaseURL = (baseURL || saved?.baseURL || "").trim().replace(/\/$/, "");
+      const runnerToken = (apiKey || saved?.apiKey || "").trim();
+      if (!runnerBaseURL) throw new Error("Enter the account runner URL first");
+      if (!runnerToken) throw new Error("Enter or save the account runner token first");
+
+      const response = await fetch(`${runnerBaseURL}/providers/${accountRunner.path}/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-runner-token": runnerToken,
+        },
+      });
+      const data = (await response.json().catch(() => ({}))) as AccountRunnerLoginResponse;
+      if (!response.ok || data.error) {
+        throw new Error(data.error ?? `Login failed (${response.status})`);
+      }
+      if (data.url) window.open(data.url, "_blank", "noopener,noreferrer");
+      setMessage(
+        [
+          data.instructions,
+          data.url ? "Opened the provider login in a new tab." : null,
+          "After approval finishes, click Test connection.",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
   const handleEnabledChange = async (checked: boolean) => {
     if (!provider.hasKey) {
-      setMessage("Save an API key before enabling this provider");
+      setMessage(accountRunner ? "Save the runner URL and token before enabling this provider" : "Save an API key before enabling this provider");
       return;
     }
 
@@ -185,6 +258,14 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const runtimeBehavior = getModelRuntimeBehavior(
     `${provider.providerId}:${defaultModel}`
   );
+  const keyLabel = accountRunner?.tokenLabel ?? "API Key";
+  const keyPlaceholder = accountRunner
+    ? provider.hasKey
+      ? "Leave blank to keep existing runner token"
+      : accountRunner.tokenPlaceholder
+    : provider.hasKey
+      ? "Leave blank to keep existing key"
+      : "Enter API key";
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
@@ -200,7 +281,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <Switch
             id={`enabled-${provider.providerId}`}
             checked={enabled}
-            disabled={toggling || loading || testing}
+            disabled={toggling || loading || testing || loggingIn}
             onCheckedChange={handleEnabledChange}
           />
         </div>
@@ -227,15 +308,38 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       )}
 
       <div className="space-y-2">
-        <Label htmlFor={`key-${provider.providerId}`}>API Key</Label>
+        <Label htmlFor={`key-${provider.providerId}`}>{keyLabel}</Label>
         <Input
           id={`key-${provider.providerId}`}
           type="password"
-          placeholder={provider.hasKey ? "Leave blank to keep existing key" : "Enter API key"}
+          placeholder={keyPlaceholder}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
         />
+        {accountRunner && (
+          <p className="text-xs text-muted-foreground">
+            This is only the local runner token.
+          </p>
+        )}
       </div>
+
+      {accountRunner && (
+        <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Account login</p>
+          <p className="mt-1">
+            Save the runner URL/token, then authorize your account in the provider browser flow.
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-3"
+            onClick={loginAccountProvider}
+            disabled={loggingIn || loading || testing}
+          >
+            {loggingIn ? "Starting login..." : accountRunner.loginLabel}
+          </Button>
+        </div>
+      )}
 
       {modelIdsField && (
         <div className="space-y-2">
