@@ -94,8 +94,6 @@ export function rankBuildMemories(
     .filter(isActiveBuildMemory)
     .filter((record) => {
       if (options.audience === "architect") return true;
-      if (record.kind === "decision" || record.kind === "user_correction") return true;
-      if (record.kind === "reliable_command") return true;
       if (options.taskId && (record.taskIds ?? []).includes(options.taskId)) return true;
       return isMemoryRelevantToPaths(record, options.paths ?? []);
     })

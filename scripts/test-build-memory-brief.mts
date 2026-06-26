@@ -84,8 +84,11 @@ const rankedForWorker = rankBuildMemories(records, {
   paths: ["src/App.tsx"],
 });
 check(
-  "ranking favors task/path-relevant memory and filters inactive statuses",
+  "worker ranking only includes task/path-relevant active memory",
   rankedForWorker[0].summary.includes("src/App.tsx") &&
+    !rankedForWorker.some((m) => m.summary.includes("PowerShell")) &&
+    !rankedForWorker.some((m) => m.summary.includes("native to AIBoard")) &&
+    !rankedForWorker.some((m) => m.summary.includes("npx tsc")) &&
     !rankedForWorker.some((m) => m.summary.includes("Stale decision")) &&
     !rankedForWorker.some((m) => m.summary.includes("Dismissed decision")) &&
     !rankedForWorker.some((m) => m.summary.includes("Superseded decision")),
@@ -117,10 +120,12 @@ const workerBrief = buildWorkerMemoryBrief(records, {
   tokenBudget: 180,
 });
 check(
-  "worker receives task/path-relevant memory but not unrelated path memory",
+  "worker receives only task/path-relevant memory, not unscoped project-level memory",
   workerBrief.text.includes("Build memory") &&
     workerBrief.text.includes("src/App.tsx") &&
-    workerBrief.text.includes("PowerShell") &&
+    !workerBrief.text.includes("PowerShell") &&
+    !workerBrief.text.includes("native to AIBoard") &&
+    !workerBrief.text.includes("npx tsc --noEmit") &&
     !workerBrief.text.includes("Unrelated docs patch failed") &&
     estimateTokens(workerBrief.text) <= 180,
   workerBrief

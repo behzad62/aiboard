@@ -73,6 +73,22 @@ check(
     !sameFolderNameB.includes("beta"),
   { sameFolderNameA, sameFolderNameB }
 );
+const displayOnlyA = deriveBuildMemoryProjectKey({
+  projectFolderName: "app",
+  discussionId: "disc-display-a",
+});
+const displayOnlyB = deriveBuildMemoryProjectKey({
+  projectFolderName: "app",
+  discussionId: "disc-display-b",
+});
+check(
+  "projectFolderName-only fallback does not create a shared folder key",
+  displayOnlyA === "discussion:disc-display-a" &&
+    displayOnlyB === "discussion:disc-display-b" &&
+    displayOnlyA !== displayOnlyB &&
+    !displayOnlyA.includes("app"),
+  { displayOnlyA, displayOnlyB }
+);
 
 const noteMemories = extractUserNoteMemories({
   projectKey,

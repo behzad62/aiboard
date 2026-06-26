@@ -131,8 +131,6 @@ export function deriveBuildMemoryProjectKey(input: BuildMemoryProjectKeyInput): 
     const folder = slugify(normalizedRoot) || "project";
     return `folder:${folder}-${stableHash(normalizedRoot).slice(0, 10)}`;
   }
-  const folder = slugify(input.projectFolderName ?? "");
-  if (folder) return `folder:${folder}-${stableHash(folder).slice(0, 10)}`;
   return `discussion:${input.discussionId}`;
 }
 
