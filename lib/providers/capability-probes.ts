@@ -7,8 +7,10 @@ export type CapabilityProbeId =
   | "streaming"
   | "imageInput"
   | "documentInput"
+  | "toolCalls"
   | "temperature"
-  | "maxTokens";
+  | "maxTokens"
+  | "concurrency";
 
 export type CapabilityProbeStatus = "pass" | "fail" | "skipped";
 
@@ -85,6 +87,13 @@ export const CAPABILITY_PROBES: CapabilityProbeDefinition[] = [
     advanced: true,
   },
   {
+    id: "toolCalls",
+    label: "Build action protocol",
+    description: "Checks whether the model can emit and use AI Board's safe JSON build-action protocol.",
+    defaultSelected: false,
+    advanced: true,
+  },
+  {
     id: "temperature",
     label: "Temperature parameter",
     description: "Checks whether the provider accepts the temperature parameter for this model.",
@@ -95,6 +104,13 @@ export const CAPABILITY_PROBES: CapabilityProbeDefinition[] = [
     id: "maxTokens",
     label: "Max-token parameter",
     description: "Checks whether a small output cap is accepted for this model.",
+    defaultSelected: false,
+    advanced: true,
+  },
+  {
+    id: "concurrency",
+    label: "Parallel requests",
+    description: "Runs two tiny prompts at once to detect whether this account/model tolerates basic parallelism.",
     defaultSelected: false,
     advanced: true,
   },
@@ -150,6 +166,36 @@ export const DOCUMENT_PROBE_MESSAGES: ChatMessage[] = [
     role: "user",
     content: "Read the attached text document. What is AIBOARD_DOCUMENT_SECRET? Reply with only the value.",
   },
+];
+
+export const TOOL_CALL_PROBE_MESSAGES: ChatMessage[] = [
+  { role: "system", content: TEST_SYSTEM },
+  {
+    role: "user",
+    content:
+      'Return only JSON with fields action="use_helper", helper="sum", and input containing a=2 and b=3.',
+  },
+];
+
+export const toolResultProbeMessages = (helperJson: string): ChatMessage[] => [
+  { role: "system", content: TEST_SYSTEM },
+  {
+    role: "user",
+    content:
+      'You requested this safe test helper: ' +
+      helperJson +
+      '\nThe helper returned 5. Reply with exactly: AIBOARD_TOOL_OK=5',
+  },
+];
+
+export const CONCURRENCY_A_MESSAGES: ChatMessage[] = [
+  { role: "system", content: TEST_SYSTEM },
+  { role: "user", content: "Reply with exactly: AIBOARD_CONCURRENCY_A" },
+];
+
+export const CONCURRENCY_B_MESSAGES: ChatMessage[] = [
+  { role: "system", content: TEST_SYSTEM },
+  { role: "user", content: "Reply with exactly: AIBOARD_CONCURRENCY_B" },
 ];
 
 export const TEMPERATURE_PROBE_MESSAGES: ChatMessage[] = [
