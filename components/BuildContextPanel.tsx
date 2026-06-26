@@ -191,6 +191,12 @@ function memoryCount(memory: BuildMemoryEventView): number {
   );
 }
 
+export function hasBuildMemoryEntryRefs(
+  item: BuildMemoryEventView["activeDecisions"][number]
+): boolean {
+  return (item.paths?.length ?? 0) > 0 || (item.taskIds?.length ?? 0) > 0;
+}
+
 function MemoryList({
   title,
   items,
@@ -208,7 +214,7 @@ function MemoryList({
         {items.slice(0, 4).map((item) => (
           <li key={item.id} className="rounded-md border bg-muted/20 px-2 py-1.5">
             <p className="line-clamp-2 text-xs font-medium">{item.summary}</p>
-            {(item.paths?.length || item.taskIds?.length) && (
+            {hasBuildMemoryEntryRefs(item) && (
               <p className="mt-0.5 truncate font-mono text-[0.65rem] text-muted-foreground">
                 {[...(item.paths ?? []), ...(item.taskIds ?? [])].slice(0, 3).join(" - ")}
               </p>

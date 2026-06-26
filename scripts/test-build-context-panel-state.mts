@@ -4,6 +4,7 @@ import {
   getVisibleBuildContextAssemblies,
   getVisibleBuildContextDroppedPacks,
   getVisibleBuildContextRetrieveRefs,
+  hasBuildMemoryEntryRefs,
   reduceBuildContextPanelState,
 } from "../components/BuildContextPanel";
 import type { OrchestratorEvent } from "../lib/orchestrator/engine";
@@ -84,6 +85,9 @@ state = reduceBuildContextPanelState(state, {
 assert.equal(state.memory.activeDecisions.length, 1);
 assert.equal(state.memory.failedApproaches[0]?.summary, "Do not extend server engine");
 assert.equal(state.memory.warnings[0], "1 fragile file warning active");
+assert.equal(hasBuildMemoryEntryRefs({ id: "empty", summary: "No refs", paths: [], taskIds: [] }), false);
+assert.equal(hasBuildMemoryEntryRefs({ id: "path", summary: "Has path", paths: ["app/page.tsx"], taskIds: [] }), true);
+assert.equal(hasBuildMemoryEntryRefs({ id: "task", summary: "Has task", paths: [], taskIds: ["T1"] }), true);
 
 for (let i = 0; i < 45; i++) {
   state = reduceBuildContextPanelState(state, {
