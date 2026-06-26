@@ -35,6 +35,10 @@ async function parseRunnerResponse(response: Response): Promise<AccountRunnerRes
   }
 }
 
+function hasUnsupportedAttachments(params: ChatParams): boolean {
+  return (params.attachments ?? []).some((a) => a.category !== "text_inline");
+}
+
 export function createAccountRunnerProvider(
   options: AccountRunnerProviderOptions
 ): AIProvider {
@@ -68,6 +72,13 @@ export function createAccountRunnerProvider(
         };
         return;
       }
+      if (hasUnsupportedAttachments(params)) {
+        yield {
+          type: "error",
+          error: `${options.name} account-provider runner is text-only in this release`,
+        };
+        return;
+      }
 
       try {
         const response = await fetch(
@@ -85,8 +96,6 @@ export function createAccountRunnerProvider(
               temperature: params.temperature,
               reasoningEffort: params.reasoningEffort,
               structuredOutput: params.structuredOutput,
-              // The first account-provider runner release is text-only; keep
-              // attachments on the app side until provider-specific mapping is added.
               attachments: [],
             }),
           }
