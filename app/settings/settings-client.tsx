@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
 import { PricingSettings } from "@/components/PricingSettings";
 import { CustomModelsManager } from "@/components/CustomModelsManager";
+import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
@@ -45,6 +46,8 @@ interface ProviderConfig {
   models: ModelInfo[];
   hasKey: boolean;
   keyHint?: string | null;
+  baseURL?: string | null;
+  modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
   lastValidationSucceeded?: boolean | null;
@@ -298,6 +301,8 @@ export default function SettingsPage() {
               </TabsContent>
             </Tabs>
           </div>
+
+          <CapabilityLab providers={effectiveProviders} onChanged={load} />
         </TabsContent>
 
         {/* ── Pricing ───────────────────────────────────────────── */}
