@@ -33,6 +33,7 @@ export function classifyBuildToolActionForScheduling(
     case "read":
     case "read_range":
     case "context_retrieve":
+    case "code_intel":
     case "search":
     case "repo_status":
     case "repo_diff":
@@ -80,6 +81,8 @@ function labelFor(action: ArchitectAction): string {
       return `read_range ${action.path}:${action.startLine}`;
     case "context_retrieve":
       return `context_retrieve ${action.ref}@${action.offsetChars ?? 0}`;
+    case "code_intel":
+      return `code_intel ${action.op}`;
     case "search":
       return `search ${action.query}`;
     case "run":

@@ -82,7 +82,14 @@ import {
   retrieveContextBlobText,
   type ContextBlobKind,
 } from "@/lib/build-context/context-store";
-import { BuildContextManager } from "@/lib/build-context";
+import {
+  BuildContextManager,
+  codeIntelResultToContextPack,
+  createCodeIntelProvider,
+  shouldAutoIncludeCodeIntelArchitecture,
+  type CodeIntelProvider,
+  type ContextPack,
+} from "@/lib/build-context";
 import {
   buildArchitectPlanPrompt,
   buildArchitectActionResponseFormat,
@@ -127,6 +134,7 @@ import {
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
   type BuildTask,
+  type CodeIntelAction,
   type ContextRetrieveAction,
   type FetchAction,
   type FileChangeOperation,
@@ -257,6 +265,8 @@ export interface BuildHooks {
 const SEARCHES_PER_PHASE = 4;
 const MCP_CALLS_PER_PHASE = 8;
 const TOTAL_MCP_CALLS = 24;
+const CODE_INTEL_CALLS_PER_PHASE = 3;
+const TOTAL_CODE_INTEL_CALLS = 10;
 const FETCHES_PER_PHASE = 4;
 const TOTAL_FETCHES = 12;
 const WORKER_READS_PER_TASK = 4;
@@ -749,7 +759,10 @@ export async function runBuildDiscussion(
   let totalRuns = 0;
   let totalFetches = 0;
   let mcpToolsDoc = "";
+  let mcpServersForCodeIntel: Awaited<ReturnType<typeof listMcpServers>> = [];
   let totalMcpCalls = 0;
+  let codeIntelProvider: CodeIntelProvider | null = null;
+  let totalCodeIntelCalls = 0;
   let localServerUrls: string[] = [];
   // Whether the runner folder is a Git repo, captured once when the runner
   // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
@@ -1067,6 +1080,7 @@ export async function runBuildDiscussion(
         });
       } else {
         const servers = (await listMcpServers(config)) ?? [];
+        mcpServersForCodeIntel = servers;
         const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
         if (ready.length > 0) {
           mcpToolsDoc = ready
@@ -1173,6 +1187,17 @@ export async function runBuildDiscussion(
     runner && mcpToolsDoc
       ? Math.min(MCP_CALLS_PER_PHASE, TOTAL_MCP_CALLS - totalMcpCalls)
       : 0;
+
+  const codeIntelCallsLeftThisPhase = (): number =>
+    codeIntelProvider?.status.available
+      ? Math.min(
+          CODE_INTEL_CALLS_PER_PHASE,
+          TOTAL_CODE_INTEL_CALLS - totalCodeIntelCalls
+        )
+      : 0;
+
+  const codeIntelStatusForPrompt = (): string =>
+    codeIntelProvider?.status.available ? codeIntelProvider.status.detail : "";
 
   const rememberLocalServerUrls = (text: string): void => {
     const next = extractLocalServerUrls(text);
@@ -2371,6 +2396,33 @@ export async function runBuildDiscussion(
     return null;
   };
 
+  const currentProjectFiles = (): string[] =>
+    [...new Set([...diskTree, ...virtualFs.keys()])].sort();
+
+  codeIntelProvider = createCodeIntelProvider({
+    mcp:
+      runner && mcpServersForCodeIntel
+        ? {
+            servers: mcpServersForCodeIntel ?? [],
+            callTool: (server, tool, args) =>
+              callMcpTool(runner!, server, tool, args),
+          }
+        : null,
+    native: {
+      listFiles: currentProjectFiles,
+      readFile,
+      searchText: searchProject,
+    },
+  });
+
+  if (codeIntelProvider.status.available) {
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: codeIntelProvider.status.detail,
+    });
+  }
+
   const repoStatusForQualityGate = (
     status: RepoStatus | null
   ): BuildQualityGateRepoStatus | null =>
@@ -3349,6 +3401,105 @@ export async function runBuildDiscussion(
     return formatContextBlobForPrompt(blob, { thresholdChars: threshold });
   };
 
+  const runCodeIntelQuery = async (
+    action: CodeIntelAction,
+    actor: SelectedModel = architect
+  ) => {
+    if (!codeIntelProvider?.status.available) {
+      return {
+        ok: false,
+        content: "Code intelligence is unavailable; use read/search instead.",
+        title: "Code intelligence unavailable",
+        mode: "native" as const,
+        op: action.op,
+        status: codeIntelProvider?.status ?? {
+          mode: "native" as const,
+          available: false,
+          detail: "Code intelligence unavailable.",
+          tools: [],
+          capabilities: [],
+        },
+      };
+    }
+    totalCodeIntelCalls += 1;
+    const result = await codeIntelProvider.query({
+      ...action,
+      repoFiles: currentProjectFiles(),
+      maxChars: 10_000,
+    });
+    emitFileToolDiagnostic(
+      `${actor.displayName} code_intel ${action.op} via ${result.mode}${result.toolName ? `:${result.toolName}` : ""} - ${kbOf(result.content)}`,
+      actor
+    );
+    return result;
+  };
+
+  const autoCodeIntelPack = async (
+    action: CodeIntelAction,
+    options: { id: string; title: string; priority: number }
+  ): Promise<ContextPack[]> => {
+    if (!codeIntelProvider?.status.available || codeIntelCallsLeftThisPhase() <= 0) {
+      return [];
+    }
+    try {
+      const result = await runCodeIntelQuery(action);
+      const pack = codeIntelResultToContextPack(result, options);
+      return pack ? [pack] : [];
+    } catch (err) {
+      emit({
+        type: "diagnostic",
+        phase: "model_failed",
+        message: `Code intelligence ${action.op} failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      });
+      return [];
+    }
+  };
+
+  const planCodeIntelPacks = async (): Promise<ContextPack[]> => {
+    const files = currentProjectFiles();
+    if (
+      !codeIntelProvider ||
+      !shouldAutoIncludeCodeIntelArchitecture(files, codeIntelProvider.status)
+    ) {
+      return [];
+    }
+    return autoCodeIntelPack(
+      {
+        action: "code_intel",
+        op: "architecture",
+        limit: 8,
+        reason: "auto-include large-repo architecture digest for planning",
+      },
+      {
+        id: "plan-code-intel-architecture",
+        title: "Code intelligence architecture digest",
+        priority: 75,
+      }
+    );
+  };
+
+  const reviewCodeIntelPacks = async (
+    paths: string[],
+    cycle: number
+  ): Promise<ContextPack[]> => {
+    const uniquePaths = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
+    if (uniquePaths.length === 0) return [];
+    return autoCodeIntelPack(
+      {
+        action: "code_intel",
+        op: "detect_change_impact",
+        paths: uniquePaths,
+        limit: 8,
+        reason: "auto-include changed-file impact digest for review",
+      },
+      {
+        id: `review-code-intel-impact-wave-${cycle}`,
+        title: "Code intelligence change-impact digest",
+        priority: 145,
+      }
+    );
+  };
+
   const buildCompactionPlaceholder =
     (label: string) =>
     ({ omitted }: { omitted: ChatMessage[] }): ChatMessage => {
@@ -3494,6 +3645,26 @@ export async function runBuildDiscussion(
     if (action.action === "context_retrieve") {
       return {
         result: executeContextRetrieve(action, "Architect", architect),
+        exhausted: false,
+      };
+    }
+    if (action.action === "code_intel") {
+      if (!codeIntelProvider?.status.available) {
+        return {
+          result: "Code intelligence is unavailable. Use read/search tools instead.",
+          exhausted: true,
+        };
+      }
+      if (codeIntelCallsLeftThisPhase() <= 0) {
+        return {
+          result:
+            "No code_intel calls left in this phase. Use read/search, or produce your decision JSON now.",
+          exhausted: true,
+        };
+      }
+      const result = await runCodeIntelQuery(action);
+      return {
+        result: storeLongToolResult("text", result.title, result.content),
         exhausted: false,
       };
     }
@@ -4031,6 +4202,7 @@ export async function runBuildDiscussion(
       planSkills.evidenceRequired
     );
     const planSkillContext = renderSkillContext(planSkills);
+    const planningCodeIntelPacks = await planCodeIntelPacks();
     const planAssembledContext = buildContextManager.buildPlanContext({
       modelContextProfile: modelContextProfile(architect),
       request: discussion.topic,
@@ -4040,6 +4212,7 @@ export async function runBuildDiscussion(
       userNotes: userNotesText(),
       memoryRecords: activeBuildMemories(),
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
+      contextPacks: planningCodeIntelPacks,
     });
     const planResult = await runArchitectInspectionLoop({
       terminal: "plan",
@@ -4057,6 +4230,8 @@ export async function runBuildDiscussion(
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
+        codeIntelStatus: codeIntelStatusForPrompt(),
+        codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         userNotes: "",
@@ -5190,6 +5365,13 @@ export async function runBuildDiscussion(
     const reviewSkillContext = renderSkillContext(reviewSkills);
     const reviewSkillEvidenceText = formatSkillEvidenceDigest(waveSkillEvidence);
     const reviewOutstandingTasks = buildOutstandingTasksDigest(tasks);
+    const reviewChangedFiles = [
+      ...new Set(executed.flatMap(({ files }) => files)),
+    ];
+    const reviewImpactPacks = await reviewCodeIntelPacks(
+      reviewChangedFiles,
+      cycle
+    );
     const reviewAssembledContext = buildContextManager.buildReviewContext({
       modelContextProfile: modelContextProfile(architect),
       request: discussion.topic,
@@ -5202,6 +5384,7 @@ export async function runBuildDiscussion(
       memoryRecords: activeBuildMemories(),
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       skillEvidenceText: reviewSkillEvidenceText,
+      contextPacks: reviewImpactPacks,
     });
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
@@ -5225,6 +5408,8 @@ export async function runBuildDiscussion(
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
+        codeIntelStatus: codeIntelStatusForPrompt(),
+        codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         userNotes: "",

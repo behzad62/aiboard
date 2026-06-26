@@ -86,6 +86,21 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       isBuildToolAction(a),
   ],
   [
+    "code_intel search_symbols action",
+    '{"action":"code_intel","op":"search_symbols","query":"BuildContextManager","limit":99,"reason":"find definitions"}',
+    (a) =>
+      a?.action === "code_intel" &&
+      (a as { op: string }).op === "search_symbols" &&
+      (a as { query?: string }).query === "BuildContextManager" &&
+      (a as { limit?: number }).limit === 10 &&
+      isBuildToolAction(a),
+  ],
+  [
+    "code_intel rejects unknown op",
+    '{"action":"code_intel","op":"index_repository","query":"x"}',
+    (a) => a === null,
+  ],
+  [
     "skill_request rejects empty ids",
     '{"action":"skill_request","ids":[],"reason":"nothing"}',
     (a) => a === null,

@@ -13,6 +13,7 @@ import {
   renderAssembledContext,
   type BuildPromptContextInput,
 } from "@/lib/build-context/prompt-assembly";
+import type { CodeIntelOperation } from "@/lib/build-context/code-intel";
 import {
   clampContextRetrieveOffsetChars,
   clampContextRetrieveMaxTokens,
@@ -351,6 +352,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "read",
             "read_range",
             "context_retrieve",
+            "code_intel",
             "plan",
             "review",
             "run",
@@ -384,6 +386,16 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
           type: "number",
           description: "Optional character offset for paging through a context blob.",
         },
+        op: {
+          type: "string",
+          enum: [
+            "architecture",
+            "search_symbols",
+            "trace_symbol",
+            "detect_change_impact",
+          ],
+          description: "Code intelligence operation.",
+        },
         startLine: { type: "number" },
         lineCount: { type: "number" },
         tasks: { type: "array", items: taskSchema },
@@ -407,6 +419,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         command: stringSchema("Shell command to run."),
         reason: stringSchema("Short reason for the requested action."),
         query: stringSchema("Search query."),
+        symbol: stringSchema("Symbol name for code_intel trace_symbol."),
         server: stringSchema("MCP server name."),
         tool: stringSchema("MCP tool name."),
         args: {
@@ -602,6 +615,17 @@ export interface SearchAction {
   reason?: string;
 }
 
+/** Read-only structural code intelligence via native fallback or MCP. */
+export interface CodeIntelAction {
+  action: "code_intel";
+  op: CodeIntelOperation;
+  query?: string;
+  symbol?: string;
+  paths?: string[];
+  limit?: number;
+  reason?: string;
+}
+
 /** Call an MCP tool exposed by the user's local runner bridge. */
 export interface ToolAction {
   action: "tool";
@@ -772,6 +796,7 @@ export type ArchitectAction =
   | ReviewAction
   | RunAction
   | SearchAction
+  | CodeIntelAction
   | ToolAction
   | FetchAction
   | SkillRequestAction
@@ -1205,6 +1230,37 @@ function cleanRepoLabels(value: unknown): string[] | undefined {
   return labels.length > 0 ? labels : undefined;
 }
 
+const CODE_INTEL_OPS: CodeIntelOperation[] = [
+  "architecture",
+  "search_symbols",
+  "trace_symbol",
+  "detect_change_impact",
+];
+
+function isCodeIntelOperation(value: unknown): value is CodeIntelOperation {
+  return (
+    typeof value === "string" &&
+    CODE_INTEL_OPS.includes(value as CodeIntelOperation)
+  );
+}
+
+function cleanCodeIntelPaths(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const paths = value
+    .filter((path): path is string => typeof path === "string")
+    .map((path) =>
+      path.trim().replace(/\\/g, "/").replace(/^\.?\//, "").replace(/^\/+/, "")
+    )
+    .filter(Boolean)
+    .slice(0, 20);
+  return paths.length > 0 ? paths : undefined;
+}
+
+function cleanCodeIntelLimit(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.min(10, Math.round(value)));
+}
+
 function parseActionCandidate(candidate: string): ArchitectAction | null {
   try {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
@@ -1288,6 +1344,30 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         (parsed as SearchAction).query.trim()
       ) {
         return parsed as SearchAction;
+      }
+      if (parsed.action === "code_intel") {
+        const action = parsed as CodeIntelAction;
+        if (!isCodeIntelOperation(action.op)) return null;
+        const query =
+          typeof action.query === "string" && action.query.trim()
+            ? action.query.trim()
+            : undefined;
+        const symbol =
+          typeof action.symbol === "string" && action.symbol.trim()
+            ? action.symbol.trim()
+            : query;
+        if (action.op === "search_symbols" && !query && !symbol) return null;
+        if (action.op === "trace_symbol" && !symbol) return null;
+        return {
+          action: "code_intel",
+          op: action.op,
+          query,
+          symbol,
+          paths: cleanCodeIntelPaths(action.paths),
+          limit: cleanCodeIntelLimit(action.limit),
+          reason:
+            typeof action.reason === "string" ? action.reason : undefined,
+        };
       }
       if (
         parsed.action === "tool" &&
@@ -1550,6 +1630,7 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "context_retrieve" ||
+    action.action === "code_intel" ||
     action.action === "search" ||
     action.action === "patch" ||
     action.action === "append" ||
@@ -1594,6 +1675,7 @@ export function isSafeFirstToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "context_retrieve" ||
+    action.action === "code_intel" ||
     action.action === "search" ||
     action.action === "skill_request" ||
     // Non-mutating repo inspection — safe to auto-run as the first action.
@@ -1711,7 +1793,7 @@ export function inspectStrictToolActionBatchOutput(
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|context_retrieve|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|context_retrieve|code_intel|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -1768,6 +1850,11 @@ export function exactToolKey(action: ArchitectAction): string | null {
         .join("|")}`;
     case "context_retrieve":
       return `context_retrieve:${action.ref.trim()}:${clampContextRetrieveMaxTokens(action.maxTokens)}:${clampContextRetrieveOffsetChars(action.offsetChars)}`;
+    case "code_intel":
+      return `code_intel:${action.op}:${(action.query ?? "").trim().toLowerCase()}:${(action.symbol ?? "").trim().toLowerCase()}:${(action.paths ?? [])
+        .map((path) => path.trim().toLowerCase())
+        .sort()
+        .join("|")}:${action.limit ?? ""}`;
     case "search":
       return `search:${action.query.trim().toLowerCase()}`;
     case "run":
@@ -2032,6 +2119,22 @@ function contextRetrieveToolDoc(): string {
   ].join("\n");
 }
 
+function codeIntelToolDoc(
+  status?: string,
+  callsLeft?: number
+): string {
+  if (!status?.trim() || !callsLeft || callsLeft <= 0) return "";
+  return [
+    "TOOL - code intelligence: use read-only structural codebase intelligence before broad file-by-file exploration. Respond with ONLY one JSON action:",
+    '{"action":"code_intel","op":"architecture","reason":"orient on the repo structure"}',
+    '{"action":"code_intel","op":"search_symbols","query":"BuildContextManager","limit":8,"reason":"find definitions/usages"}',
+    '{"action":"code_intel","op":"trace_symbol","symbol":"runBuildDiscussion","limit":8,"reason":"trace callers/callees"}',
+    '{"action":"code_intel","op":"detect_change_impact","paths":["lib/client/build-engine.ts"],"limit":8,"reason":"review blast radius"}',
+    `Status: ${status.trim()}`,
+    `Operations are bounded and read-only; if MCP code intelligence is unavailable or errors, AIBoard falls back to native tree/search summaries. ${callsLeft} code_intel call${callsLeft === 1 ? "" : "s"} left in this phase.`,
+  ].join("\n");
+}
+
 /**
  * How models modify EXISTING files: targeted SEARCH/REPLACE edit blocks
  * instead of re-emitting whole files (cheaper, and immune to truncation
@@ -2259,6 +2362,8 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
   readHopsLeft: number;
   runsLeft?: number;
   searchesLeft?: number;
+  codeIntelStatus?: string;
+  codeIntelCallsLeft?: number;
   fetchesLeft?: number;
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
@@ -2308,6 +2413,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     readOption,
     skillRequestDoc(),
     contextRetrieveToolDoc(),
+    codeIntelToolDoc(input.codeIntelStatus, input.codeIntelCallsLeft),
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
@@ -2397,6 +2503,8 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   rangeReadsLeft?: number;
   runsLeft?: number;
   searchesLeft?: number;
+  codeIntelStatus?: string;
+  codeIntelCallsLeft?: number;
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   fetchesLeft?: number;
@@ -2455,6 +2563,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
       ? `If you need to see an existing file's contents before deciding, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left in this review). You may combine a few independent reads/searches in one turn. Never guess at a file's contents — read it.`
       : "",
     readRangeToolDoc(input.rangeReadsLeft),
+    codeIntelToolDoc(input.codeIntelStatus, input.codeIntelCallsLeft),
     searchToolDoc(input.searchesLeft),
     runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
     fetchToolDoc(input.fetchesLeft),
