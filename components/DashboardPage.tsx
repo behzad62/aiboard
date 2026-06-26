@@ -63,6 +63,9 @@ import {
   DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
+import { getCapabilityProfiles } from "@/lib/client/capability-api";
+import { selectBuildModelIdsByCapabilities } from "@/lib/client/build-capabilities";
+import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
 import { AlertTriangle, Sparkles } from "lucide-react";
 
 interface DashboardData {
@@ -116,6 +119,9 @@ export default function DashboardPage() {
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capabilityProfiles, setCapabilityProfiles] = useState<
+    Record<string, ModelCapabilityProbeProfile>
+  >({});
 
   const requiredInputTypes = useMemo(
     () => getRequiredCapabilityTypes(attachments.map((a) => a.category)),
@@ -140,6 +146,7 @@ export default function DashboardPage() {
       const d = loadDashboard();
       {
         setData(d);
+        setCapabilityProfiles(getCapabilityProfiles());
         setMode(d.settings.defaultMode);
         setEffort(d.settings.defaultEffort);
         setVerbosity(d.settings.defaultVerbosity ?? "balanced");
@@ -195,6 +202,14 @@ export default function DashboardPage() {
   const compatibleSelected = selectedModels.filter((id) =>
     supportsInputTypes(capabilitiesById.get(id), requiredInputTypes)
   );
+  const buildCapabilityDecision = useMemo(
+    () =>
+      mode === "build"
+        ? selectBuildModelIdsByCapabilities(compatibleSelected, capabilityProfiles)
+        : { modelIds: compatibleSelected, diagnostics: [] },
+    [mode, compatibleSelected, capabilityProfiles]
+  );
+  const effectiveSelectedModels = buildCapabilityDecision.modelIds;
   const compatibleJudgeOptions =
     data?.enabledModels.filter((model) =>
       supportsInputTypes(model.capabilities, requiredInputTypes)
@@ -202,13 +217,13 @@ export default function DashboardPage() {
   const effectiveEffort = mode === "build" ? "high" : effort;
 
   const costEstimate =
-    compatibleSelected.length > 0
-      ? estimateDiscussionCost(compatibleSelected.length, effectiveEffort, mode)
+    effectiveSelectedModels.length > 0
+      ? estimateDiscussionCost(effectiveSelectedModels.length, effectiveEffort, mode)
       : null;
   const usdEstimate =
-    compatibleSelected.length > 0
+    effectiveSelectedModels.length > 0
       ? estimateDiscussionCostUsd(
-          compatibleSelected.map((id) =>
+          effectiveSelectedModels.map((id) =>
             getModelPricing(id, data?.settings.modelPricingOverrides)
           ),
           effectiveEffort,
@@ -221,9 +236,9 @@ export default function DashboardPage() {
   const hasTopic = topic.trim().length > 0;
   const hasEnoughModels = hasEnoughParticipatingModels(
     mode,
-    compatibleSelected.length
+    effectiveSelectedModels.length
   );
-  const hasJudge = Boolean(judgeModelId || compatibleSelected[0]);
+  const hasJudge = Boolean(judgeModelId || effectiveSelectedModels[0]);
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =
     totalEnabledModels === 0
@@ -245,8 +260,8 @@ export default function DashboardPage() {
         topic,
         mode,
         effort: mode === "build" ? "high" : effort,
-        modelIds: compatibleSelected,
-        judgeModelId: judgeModelId || compatibleSelected[0],
+        modelIds: effectiveSelectedModels,
+        judgeModelId: judgeModelId || effectiveSelectedModels[0],
         attachmentIds: attachments.map((a) => a.id),
         verbosity,
         styleNote: styleNote.trim() || undefined,
@@ -418,6 +433,14 @@ export default function DashboardPage() {
               requiredInputTypes={requiredInputTypes}
             />
 
+            {mode === "build" && buildCapabilityDecision.diagnostics.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+                {buildCapabilityDecision.diagnostics.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
+              </div>
+            )}
+
             {compatibleJudgeOptions.length > 0 && (
               <div className="space-y-2">
                 <Label>
@@ -454,8 +477,7 @@ export default function DashboardPage() {
                 <div>
                   {usdEstimate ? (
                     <p>
-                      Estimated API cost:{" "}
-                      <strong>
+                      Estimated API cost: <strong>
                         {usdEstimate.minUsd === usdEstimate.maxUsd
                           ? formatUsd(usdEstimate.maxUsd)
                           : `${formatUsd(usdEstimate.minUsd)}–${formatUsd(usdEstimate.maxUsd)}`}
@@ -487,7 +509,7 @@ export default function DashboardPage() {
               className="w-full"
               size="lg"
             >
-              {loading ? "Starting..." : `Start Discussion${compatibleSelected.length > 0 ? ` with ${compatibleSelected.length} model${compatibleSelected.length === 1 ? "" : "s"}` : ""}`}
+              {loading ? "Starting..." : `Start Discussion${effectiveSelectedModels.length > 0 ? ` with ${effectiveSelectedModels.length} model${effectiveSelectedModels.length === 1 ? "" : "s"}` : ""}`}
             </Button>
             <p className="text-sm text-muted-foreground">
               {canStart
