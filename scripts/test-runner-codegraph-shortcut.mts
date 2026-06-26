@@ -252,7 +252,61 @@ async function testPanelSetupEndpoint() {
   }
 }
 
+async function testPanelSetupFindsStandardWindowsInstallWhenPathIsStale() {
+  if (process.platform !== "win32") return;
+
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "adb-runner-codegraph-standard-"));
+  const root = path.join(temp, "project");
+  const localAppData = path.join(temp, "LocalAppData");
+  const fakeBin = path.join(localAppData, "codegraph", "current", "bin");
+  const recordPath = path.join(temp, "fake-codegraph-record.jsonl");
+  fs.mkdirSync(root, { recursive: true });
+  writeFakeCodeGraph(fakeBin, recordPath);
+
+  const port = 22_000 + Math.floor(Math.random() * 1_000);
+  const token = "test-token";
+  let child: ChildProcessWithoutNullStreams | null = null;
+
+  try {
+    child = spawn(
+      process.execPath,
+      ["scripts/runner.mjs", root, "--port", String(port), "--token", token, "--no-default-mcp"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          LOCALAPPDATA: localAppData,
+          PATH: process.env.SystemRoot ? `${process.env.SystemRoot}\\System32` : "",
+          FAKE_CODEGRAPH_RECORD: recordPath,
+        },
+        windowsHide: true,
+      }
+    );
+
+    await waitForRunner(port, token);
+    const setupRes = await fetch(`http://127.0.0.1:${port}/api/codegraph/setup`, {
+      method: "POST",
+      headers: { "x-runner-token": token },
+    });
+    const setup = await setupRes.json();
+
+    check("codegraph setup endpoint finds standard Windows install path", setupRes.status === 200, setup);
+    check("standard Windows install setup reports ok", setup.ok === true, setup);
+    check("standard Windows install setup adds server", setup.server?.name === "codegraph", setup);
+  } catch (err) {
+    check(
+      "runner codegraph standard Windows install fallback",
+      false,
+      err instanceof Error ? err.message : String(err)
+    );
+  } finally {
+    await stopRunner(child);
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 await testCliShortcut();
 await testPanelSetupEndpoint();
+await testPanelSetupFindsStandardWindowsInstallWhenPathIsStale();
 
 process.exit(failed === 0 ? 0 : 1);

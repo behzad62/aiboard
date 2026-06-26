@@ -321,13 +321,56 @@ function listProjectFiles() {
   return files.sort();
 }
 
+function pathEnvName() {
+  return Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+}
+
+function appendPathEntries(env, entries) {
+  const key = pathEnvName();
+  const existing = env[key] ?? "";
+  const parts = existing.split(path.delimiter).filter(Boolean);
+  const seen = new Set(parts.map((entry) => entry.toLowerCase()));
+  for (const entry of entries) {
+    if (!entry || !fs.existsSync(entry)) continue;
+    const normalized = entry.toLowerCase();
+    if (seen.has(normalized)) continue;
+    parts.push(entry);
+    seen.add(normalized);
+  }
+  return { ...env, [key]: parts.join(path.delimiter) };
+}
+
+function codeGraphPathEntries() {
+  if (process.platform !== "win32") return [];
+  return [
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "codegraph", "current", "bin")
+      : null,
+    process.env.USERPROFILE
+      ? path.join(process.env.USERPROFILE, "AppData", "Local", "codegraph", "current", "bin")
+      : null,
+  ].filter(Boolean);
+}
+
+function codeGraphEnv() {
+  return appendPathEntries(process.env, codeGraphPathEntries());
+}
+
+function refreshProcessPathForCodeGraph() {
+  const env = codeGraphEnv();
+  const key = pathEnvName();
+  process.env[key] = env[key];
+}
+
 function runCodeGraph(args, opts = {}) {
+  refreshProcessPathForCodeGraph();
   const result = spawnSync("codegraph", args, {
     cwd: projectDir,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 5 * 60 * 1000,
     maxBuffer: MAX_OUTPUT_BYTES,
     shell: process.platform === "win32",
+    env: codeGraphEnv(),
     windowsHide: true,
   });
 
@@ -389,6 +432,7 @@ function ensureCodeGraphInitialized() {
 }
 
 function codeGraphMcpCommand() {
+  refreshProcessPathForCodeGraph();
   return "codegraph serve --mcp";
 }
 
