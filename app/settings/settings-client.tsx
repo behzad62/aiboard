@@ -36,6 +36,7 @@ import type {
 } from "@/lib/db/schema";
 import { getModeInfo, getModeLabel } from "@/lib/orchestrator/config";
 import type { ModelInfo } from "@/lib/providers/base";
+import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
 import type { ModelPricingOverride } from "@/lib/providers/pricing";
 import { AlertTriangle, CheckCircle2, KeyRound } from "lucide-react";
@@ -65,6 +66,7 @@ interface SettingsData {
     defaultReasoningEffort?: ReasoningEffort;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
     modelContextOverrides?: ModelContextOverrides;
+    modelCapabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
   };
 }
 
@@ -302,7 +304,11 @@ export default function SettingsPage() {
             </Tabs>
           </div>
 
-          <CapabilityLab providers={effectiveProviders} onChanged={load} />
+          <CapabilityLab
+            providers={effectiveProviders}
+            capabilityProfiles={data?.settings.modelCapabilityProfiles}
+            onChanged={load}
+          />
         </TabsContent>
 
         {/* ── Pricing ───────────────────────────────────────────── */}
