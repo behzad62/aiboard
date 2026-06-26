@@ -79,7 +79,6 @@ function scoreMemory(record: BuildMemoryRecord, options: BuildMemoryRankingOptio
   const weights =
     options.audience === "architect" ? ARCHITECT_KIND_WEIGHT : WORKER_KIND_WEIGHT;
   let score = weights[record.kind];
-  if (options.taskId && (record.taskIds ?? []).includes(options.taskId)) score += 80;
   if (isMemoryRelevantToPaths(record, options.paths ?? [])) score += 70;
   score += Math.min(25, Math.max(0, record.hitCount - 1) * 5);
   score += Math.min(15, record.evidence.length * 2);
@@ -94,7 +93,6 @@ export function rankBuildMemories(
     .filter(isActiveBuildMemory)
     .filter((record) => {
       if (options.audience === "architect") return true;
-      if (options.taskId && (record.taskIds ?? []).includes(options.taskId)) return true;
       return isMemoryRelevantToPaths(record, options.paths ?? []);
     })
     .sort((a, b) => {

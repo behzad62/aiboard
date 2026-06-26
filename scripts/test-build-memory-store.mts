@@ -5,6 +5,7 @@ import {
 } from "../lib/build-context/memory-store";
 import {
   extractCommandMemories,
+  extractCommandMemoriesForExecution,
   extractProblemMemories,
   extractReviewMemories,
   extractSkillViolationMemories,
@@ -186,6 +187,62 @@ check(
   commandMemories.some((m) => m.kind === "reliable_command" && m.command === "npx tsc --noEmit") &&
     commandMemories.some((m) => m.kind === "failed_approach" && m.command === "npm run lint"),
   commandMemories
+);
+
+__resetClientStoreForTests();
+const firstTsc = {
+  command: "npx tsc --noEmit",
+  exitCode: 0,
+  outputPreview: "tsc ok 1",
+  createdAt: "2026-06-26T00:02:00.000Z",
+};
+const secondTsc = {
+  command: "npx tsc --noEmit",
+  exitCode: 0,
+  outputPreview: "tsc ok 2",
+  createdAt: "2026-06-26T00:03:00.000Z",
+};
+const unrelatedLint = {
+  command: "npm run lint",
+  exitCode: 0,
+  outputPreview: "lint ok",
+  createdAt: "2026-06-26T00:04:00.000Z",
+};
+const reliableTsc = extractCommandMemoriesForExecution({
+  projectKey,
+  discussionId: "disc-34",
+  current: secondTsc,
+  history: [firstTsc, secondTsc],
+});
+check(
+  "distinct successful executions of the same command create reliable_command memory",
+  reliableTsc.length === 1 &&
+    reliableTsc[0].kind === "reliable_command" &&
+    reliableTsc[0].evidence.length === 2 &&
+    new Set(reliableTsc[0].evidence.map((e) => e.ref)).size === 2,
+  reliableTsc
+);
+for (const memory of reliableTsc) upsertBuildMemory(memory);
+const storedReliableTsc = listBuildMemories(projectKey).find(
+  (memory) => memory.kind === "reliable_command" && memory.command === "npx tsc --noEmit"
+);
+const unrelatedMemories = extractCommandMemoriesForExecution({
+  projectKey,
+  discussionId: "disc-34",
+  current: unrelatedLint,
+  history: [firstTsc, secondTsc, unrelatedLint],
+});
+for (const memory of unrelatedMemories) upsertBuildMemory(memory);
+const afterUnrelatedReliableTsc = listBuildMemories(projectKey).find(
+  (memory) => memory.kind === "reliable_command" && memory.command === "npx tsc --noEmit"
+);
+check(
+  "adding an unrelated later command does not increase reliable command hitCount or evidence",
+  !!storedReliableTsc &&
+    !!afterUnrelatedReliableTsc &&
+    afterUnrelatedReliableTsc.hitCount === storedReliableTsc.hitCount &&
+    afterUnrelatedReliableTsc.evidence.length === storedReliableTsc.evidence.length,
+  { storedReliableTsc, afterUnrelatedReliableTsc, unrelatedMemories }
 );
 
 const skillMemories = extractSkillViolationMemories({

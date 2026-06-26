@@ -229,7 +229,7 @@ import {
 } from "@/lib/build-context/memory-store";
 import {
   commandProblemsToMemoryResults,
-  extractCommandMemories,
+  extractCommandMemoriesForExecution,
   extractProblemMemories,
   extractReviewMemories,
   extractSkillViolationMemories,
@@ -732,10 +732,11 @@ export async function runBuildDiscussion(
       commandMemoryResults.splice(0, commandMemoryResults.length - 80);
     }
     persistBuildMemories(
-      extractCommandMemories({
+      extractCommandMemoriesForExecution({
         projectKey: buildMemoryProjectKey,
         discussionId: discussion.id,
-        commandResults: commandMemoryResults,
+        current: result,
+        history: commandMemoryResults,
       })
     );
   };
@@ -834,15 +835,19 @@ export async function runBuildDiscussion(
     if (commandProblems.length > 40) {
       commandProblems.splice(0, commandProblems.length - 40);
     }
-    persistBuildMemories(
-      extractCommandMemories({
-        projectKey: buildMemoryProjectKey,
-        discussionId: discussion.id,
-        commandResults: commandProblemsToMemoryResults(
-          commandProblems.filter((item) => !item.denied)
-        ),
-      })
-    );
+    if (!problem.denied) {
+      const current = commandProblemsToMemoryResults([problem])[0];
+      persistBuildMemories(
+        extractCommandMemoriesForExecution({
+          projectKey: buildMemoryProjectKey,
+          discussionId: discussion.id,
+          current,
+          history: commandProblemsToMemoryResults(
+            commandProblems.filter((item) => !item.denied)
+          ),
+        })
+      );
+    }
     return problem;
   };
 

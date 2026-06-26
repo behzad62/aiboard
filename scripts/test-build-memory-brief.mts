@@ -65,6 +65,12 @@ const records: BuildMemoryRecord[] = [
     paths: ["docs/notes.md"],
     createdAt: "2026-06-26T00:06:00.000Z",
   }),
+  rec({
+    kind: "failed_approach",
+    summary: "Prior discussion task T2 failed on unrelated files.",
+    taskIds: ["T2"],
+    createdAt: "2026-06-26T00:06:30.000Z",
+  }),
   { ...rec({ kind: "decision", summary: "Stale decision", createdAt: "2026-06-26T00:07:00.000Z" }), status: "stale" },
   { ...rec({ kind: "decision", summary: "Dismissed decision", createdAt: "2026-06-26T00:08:00.000Z" }), status: "dismissed" },
   { ...rec({ kind: "decision", summary: "Superseded decision", createdAt: "2026-06-26T00:09:00.000Z" }), status: "superseded" },
@@ -89,6 +95,7 @@ check(
     !rankedForWorker.some((m) => m.summary.includes("PowerShell")) &&
     !rankedForWorker.some((m) => m.summary.includes("native to AIBoard")) &&
     !rankedForWorker.some((m) => m.summary.includes("npx tsc")) &&
+    !rankedForWorker.some((m) => m.summary.includes("Prior discussion task T2")) &&
     !rankedForWorker.some((m) => m.summary.includes("Stale decision")) &&
     !rankedForWorker.some((m) => m.summary.includes("Dismissed decision")) &&
     !rankedForWorker.some((m) => m.summary.includes("Superseded decision")),
@@ -126,6 +133,7 @@ check(
     !workerBrief.text.includes("PowerShell") &&
     !workerBrief.text.includes("native to AIBoard") &&
     !workerBrief.text.includes("npx tsc --noEmit") &&
+    !workerBrief.text.includes("Prior discussion task T2") &&
     !workerBrief.text.includes("Unrelated docs patch failed") &&
     estimateTokens(workerBrief.text) <= 180,
   workerBrief

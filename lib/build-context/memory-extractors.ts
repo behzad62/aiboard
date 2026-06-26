@@ -5,6 +5,7 @@ import type {
 import {
   buildMemoryRecord,
   compactOneLine,
+  stableHash,
   type BuildMemoryRecord,
 } from "./memory-store";
 
@@ -150,6 +151,35 @@ export interface CommandMemoryResult {
   exitCode: number;
   outputPreview: string;
   createdAt?: string;
+  executionId?: string;
+}
+
+function commandKey(command: string): string {
+  return command.trim().toLowerCase();
+}
+
+function commandExecutionRef(result: CommandMemoryResult): string {
+  if (result.executionId?.trim()) return result.executionId.trim();
+  return `cmd_${stableHash(
+    [
+      commandKey(result.command),
+      result.createdAt ?? "",
+      result.exitCode,
+      result.outputPreview,
+    ].join("|")
+  ).slice(0, 12)}`;
+}
+
+function distinctCommandResults(results: CommandMemoryResult[]): CommandMemoryResult[] {
+  const seen = new Set<string>();
+  const out: CommandMemoryResult[] = [];
+  for (const result of results) {
+    const ref = commandExecutionRef(result);
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    out.push(result);
+  }
+  return out;
 }
 
 export function extractCommandMemories(
@@ -160,7 +190,7 @@ export function extractCommandMemories(
   for (const result of input.commandResults) {
     const command = result.command.trim();
     if (!command) continue;
-    const key = command.toLowerCase();
+    const key = commandKey(command);
     if (result.exitCode === 0) {
       successful.set(key, [...(successful.get(key) ?? []), result]);
     } else {
@@ -175,7 +205,7 @@ export function extractCommandMemories(
           evidence: [
             {
               kind: "command",
-              ref: command,
+              ref: commandExecutionRef(result),
               excerpt: evidenceExcerpt(result.outputPreview),
             },
           ],
@@ -184,7 +214,8 @@ export function extractCommandMemories(
       );
     }
   }
-  for (const results of successful.values()) {
+  for (const rawResults of successful.values()) {
+    const results = distinctCommandResults(rawResults);
     if (results.length < 2) continue;
     const latest = results.reduce((best, result) =>
       (result.createdAt ?? "") > (best.createdAt ?? "") ? result : best
@@ -196,9 +227,9 @@ export function extractCommandMemories(
         kind: "reliable_command",
         command: latest.command,
         summary: `${latest.command} passed repeatedly for this project.`,
-        evidence: results.slice(-3).map((result, index) => ({
+        evidence: results.slice(-3).map((result) => ({
           kind: "command",
-          ref: `${result.command}#pass-${index + 1}`,
+          ref: commandExecutionRef(result),
           excerpt: evidenceExcerpt(result.outputPreview || "exit 0"),
         })),
         createdAt: latest.createdAt ?? input.createdAt,
@@ -206,6 +237,41 @@ export function extractCommandMemories(
     );
   }
   return memories;
+}
+
+export function extractCommandMemoriesForExecution(
+  input: ExtractorBaseInput & {
+    current: CommandMemoryResult;
+    history: CommandMemoryResult[];
+  }
+): BuildMemoryRecord[] {
+  const command = input.current.command.trim();
+  if (!command) return [];
+  if (input.current.exitCode !== 0) {
+    return extractCommandMemories({
+      projectKey: input.projectKey,
+      discussionId: input.discussionId,
+      createdAt: input.createdAt,
+      commandResults: [input.current],
+    });
+  }
+
+  const key = commandKey(command);
+  const sameCommandSuccesses = distinctCommandResults(
+    input.history.filter(
+      (result) => result.exitCode === 0 && commandKey(result.command) === key
+    )
+  );
+  if (!sameCommandSuccesses.some((result) => commandExecutionRef(result) === commandExecutionRef(input.current))) {
+    sameCommandSuccesses.push(input.current);
+  }
+  if (sameCommandSuccesses.length < 2) return [];
+  return extractCommandMemories({
+    projectKey: input.projectKey,
+    discussionId: input.discussionId,
+    createdAt: input.createdAt,
+    commandResults: sameCommandSuccesses,
+  });
 }
 
 export function extractSkillViolationMemories(
