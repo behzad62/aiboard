@@ -155,6 +155,17 @@ check(
   gpt55
 );
 
+const chatGpt55 = resolveModelContextProfile("gpt-5.5", "chatgpt");
+check(
+  "ChatGPT GPT-5.5 account profile uses long-context Build budget",
+  chatGpt55.contextWindowTokens === 1_050_000 &&
+    chatGpt55.maxOutputTokens === 128_000 &&
+    chatGpt55.buildOutputReserveTokens === 128_000 &&
+    chatGpt55.effectiveBuildInputCeilingTokens === 922_000 &&
+    chatGpt55.source === "registry",
+  chatGpt55
+);
+
 const gpt54Mini = resolveModelContextProfile("gpt-5.4-mini", "openai");
 check(
   "OpenAI GPT-5.4 Mini profile uses current documented context and max output",
@@ -162,6 +173,16 @@ check(
     gpt54Mini.maxOutputTokens === 128_000 &&
     gpt54Mini.buildOutputReserveTokens === 128_000,
   gpt54Mini
+);
+
+const chatGpt54Mini = resolveModelContextProfile("gpt-5.4-mini", "chatgpt");
+check(
+  "ChatGPT GPT-5.4 Mini account profile uses mini context budget",
+  chatGpt54Mini.contextWindowTokens === 400_000 &&
+    chatGpt54Mini.maxOutputTokens === 128_000 &&
+    chatGpt54Mini.buildOutputReserveTokens === 128_000 &&
+    chatGpt54Mini.source === "registry",
+  chatGpt54Mini
 );
 
 process.exit(failed === 0 ? 0 : 1);
