@@ -18,7 +18,7 @@ import type { BuildMemoryRecord } from "./memory-store";
 
 export * from "./budgets";
 export * from "./context-packs";
-export * from "./code-intel";
+export * from "./code-intel-plus";
 export * from "./memory-brief";
 export * from "./memory-extractors";
 export * from "./memory-store";
