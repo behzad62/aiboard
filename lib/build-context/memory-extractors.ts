@@ -227,7 +227,7 @@ export function extractCommandMemories(
         kind: "reliable_command",
         command: latest.command,
         summary: `${latest.command} passed repeatedly for this project.`,
-        evidence: results.slice(-3).map((result) => ({
+        evidence: results.map((result) => ({
           kind: "command",
           ref: commandExecutionRef(result),
           excerpt: evidenceExcerpt(result.outputPreview || "exit 0"),

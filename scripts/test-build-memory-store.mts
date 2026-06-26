@@ -83,7 +83,7 @@ const displayOnlyB = deriveBuildMemoryProjectKey({
   discussionId: "disc-display-b",
 });
 check(
-  "projectFolderName-only fallback does not create a shared folder key",
+  "runner health/display basename alone does not create a shared folder key",
   displayOnlyA === "discussion:disc-display-a" &&
     displayOnlyB === "discussion:disc-display-b" &&
     displayOnlyA !== displayOnlyB &&
@@ -208,6 +208,18 @@ const unrelatedLint = {
   outputPreview: "lint ok",
   createdAt: "2026-06-26T00:04:00.000Z",
 };
+const thirdTsc = {
+  command: "npx tsc --noEmit",
+  exitCode: 0,
+  outputPreview: "tsc ok 3",
+  createdAt: "2026-06-26T00:05:00.000Z",
+};
+const fourthTsc = {
+  command: "npx tsc --noEmit",
+  exitCode: 0,
+  outputPreview: "tsc ok 4",
+  createdAt: "2026-06-26T00:06:00.000Z",
+};
 const reliableTsc = extractCommandMemoriesForExecution({
   projectKey,
   discussionId: "disc-34",
@@ -221,6 +233,21 @@ check(
     reliableTsc[0].evidence.length === 2 &&
     new Set(reliableTsc[0].evidence.map((e) => e.ref)).size === 2,
   reliableTsc
+);
+const reliableFourTsc = extractCommandMemoriesForExecution({
+  projectKey,
+  discussionId: "disc-34",
+  current: fourthTsc,
+  history: [firstTsc, secondTsc, thirdTsc, fourthTsc],
+});
+check(
+  "four distinct successful executions produce hitCount and evidence of four",
+  reliableFourTsc.length === 1 &&
+    reliableFourTsc[0].kind === "reliable_command" &&
+    reliableFourTsc[0].hitCount === 4 &&
+    reliableFourTsc[0].evidence.length === 4 &&
+    new Set(reliableFourTsc[0].evidence.map((e) => e.ref)).size === 4,
+  reliableFourTsc
 );
 for (const memory of reliableTsc) upsertBuildMemory(memory);
 const storedReliableTsc = listBuildMemories(projectKey).find(
@@ -277,13 +304,42 @@ const first = buildMemoryRecord({
 upsertBuildMemory(first);
 upsertBuildMemory({ ...first, lastSeenAt: "2026-06-26T00:01:00.000Z" });
 check(
-  "client store dedupes build memory upserts by deterministic id",
+  "client store dedupes identical evidence without incrementing hitCount",
   listBuildMemories(projectKey).length === 1 &&
-    getBuildMemory(first.id)?.hitCount === 2 &&
+    getBuildMemory(first.id)?.hitCount === 1 &&
     getBuildMemory(first.id)?.lastSeenAt === "2026-06-26T00:01:00.000Z",
   listBuildMemories(projectKey)
 );
 
+const failedCommand = extractCommandMemoriesForExecution({
+  projectKey,
+  discussionId: "disc-34",
+  current: {
+    command: "npm test",
+    exitCode: 1,
+    outputPreview: "test failed",
+    createdAt: "2026-06-26T00:07:00.000Z",
+  },
+  history: [],
+})[0];
+upsertBuildMemory(failedCommand);
+upsertBuildMemory(failedCommand);
+const storedFailedCommand = getBuildMemory(failedCommand.id);
+check(
+  "duplicate failed command evidence does not double hitCount or evidence",
+  storedFailedCommand?.hitCount === 1 && storedFailedCommand.evidence.length === 1,
+  storedFailedCommand
+);
+
+__resetClientStoreForTests();
+const activeForStatus = buildMemoryRecord({
+  projectKey,
+  kind: "user_correction",
+  summary: "Keep active memory visible.",
+  evidence: [{ kind: "user_note", ref: "active-status" }],
+  createdAt: now,
+});
+upsertBuildMemory(activeForStatus);
 const stale = buildMemoryRecord({
   projectKey,
   kind: "decision",
@@ -318,6 +374,26 @@ check(
   listBuildMemories(oldKey).length === 0 &&
     listBuildMemories(newKey).some((memory) => memory.summary.includes("PowerShell")),
   { old: listBuildMemories(oldKey), next: listBuildMemories(newKey) }
+);
+
+__resetClientStoreForTests();
+for (let index = 0; index < 505; index++) {
+  upsertBuildMemory(
+    buildMemoryRecord({
+      projectKey: oldKey,
+      discussionId: "disc-34",
+      kind: "failed_approach",
+      summary: `Old key capped memory ${index}`,
+      evidence: [{ kind: "problem", ref: `cap-${index}` }],
+      createdAt: `2026-06-26T00:${String(index % 60).padStart(2, "0")}:00.000Z`,
+    })
+  );
+}
+migrateBuildMemoriesProjectKey(oldKey, newKey);
+check(
+  "migration reapplies the build memory cap",
+  listBuildMemories(newKey).length <= 500,
+  listBuildMemories(newKey).length
 );
 
 console.log(failed === 0 ? "\nAll build memory store checks passed." : `\n${failed} check(s) failed.`);

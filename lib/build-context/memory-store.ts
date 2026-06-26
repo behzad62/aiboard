@@ -206,6 +206,7 @@ export function buildMemoryRecord(input: {
   const taskIds = uniqueStrings(input.taskIds ?? []);
   const summary = compactOneLine(input.summary);
   const command = input.command?.trim() || undefined;
+  const hitCount = input.kind === "reliable_command" ? evidence.length : 1;
   return {
     id: `mem_${stableHash(
       identityFor({
@@ -230,7 +231,7 @@ export function buildMemoryRecord(input: {
     createdAt,
     updatedAt: createdAt,
     lastSeenAt: createdAt,
-    hitCount: 1,
+    hitCount,
   };
 }
 
@@ -242,6 +243,12 @@ export function mergeBuildMemoryRecord(
   const lastSeenAt =
     incoming.lastSeenAt > existing.lastSeenAt ? incoming.lastSeenAt : existing.lastSeenAt;
   const status = existing.status === "active" ? incoming.status : existing.status;
+  const evidence = uniqueEvidence([...existing.evidence, ...incoming.evidence]);
+  const addedEvidence = evidence.length > existing.evidence.length;
+  const hitCount =
+    existing.kind === "reliable_command"
+      ? evidence.length
+      : existing.hitCount + (addedEvidence ? Math.max(1, incoming.hitCount) : 0);
   return {
     ...existing,
     discussionId: existing.discussionId ?? incoming.discussionId,
@@ -251,10 +258,10 @@ export function mergeBuildMemoryRecord(
     paths: uniqueStrings([...(existing.paths ?? []), ...(incoming.paths ?? [])]),
     taskIds: uniqueStrings([...(existing.taskIds ?? []), ...(incoming.taskIds ?? [])]),
     command: existing.command ?? incoming.command,
-    evidence: uniqueEvidence([...existing.evidence, ...incoming.evidence]),
+    evidence,
     updatedAt,
     lastSeenAt,
-    hitCount: existing.hitCount + Math.max(1, incoming.hitCount),
+    hitCount,
   };
 }
 

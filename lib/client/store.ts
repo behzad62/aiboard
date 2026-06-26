@@ -542,12 +542,16 @@ export function upsertBuildMemory(record: BuildMemoryRecord): void {
   } else {
     s.buildMemories.push(record);
   }
-  if (s.buildMemories.length > 500) {
+  enforceBuildMemoryCap(s);
+  schedulePersist();
+}
+
+function enforceBuildMemoryCap(s: ClientStore): void {
+  if ((s.buildMemories ?? []).length > 500) {
     s.buildMemories = s.buildMemories
       .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))
       .slice(0, 500);
   }
-  schedulePersist();
 }
 export function updateBuildMemoryStatus(
   id: string,
@@ -590,6 +594,7 @@ export function migrateBuildMemoriesProjectKey(
       s.buildMemories.push(rekeyed);
     }
   }
+  enforceBuildMemoryCap(s);
   schedulePersist();
 }
 export function deleteBuildCheckpoint(discussionId: string): void {

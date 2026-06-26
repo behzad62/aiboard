@@ -702,16 +702,12 @@ export async function runBuildDiscussion(
   let buildMemoryRepoRemoteUrl: string | null = null;
   let buildMemoryProjectKey = deriveBuildMemoryProjectKey({
     repoRemoteUrl: buildMemoryRepoRemoteUrl,
-    runnerProjectRoot: runnerDirName,
-    projectFolderName: discussion.projectFolderName,
     discussionId: discussion.id,
   });
   const refreshBuildMemoryProjectKey = (): void => {
     const previousKey = buildMemoryProjectKey;
     const nextKey = deriveBuildMemoryProjectKey({
       repoRemoteUrl: buildMemoryRepoRemoteUrl,
-      runnerProjectRoot: runnerDirName,
-      projectFolderName: discussion.projectFolderName,
       discussionId: discussion.id,
     });
     if (previousKey !== nextKey) {
@@ -2147,7 +2143,7 @@ export async function runBuildDiscussion(
     event: Omit<Extract<OrchestratorEvent, { type: "command_run" }>, "type">
   ): void => {
     emit({ type: "command_run", ...event });
-    if (!event.denied) {
+    if (!event.denied && event.exitCode === 0) {
       rememberCommandMemory({
         command: event.command,
         exitCode: event.exitCode,
