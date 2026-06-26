@@ -1,5 +1,11 @@
 import type { AttachmentPayload } from "@/lib/attachments/types";
-import type { ChatMessage, ModelInfo, StreamChunk, StructuredOutputFormat } from "@/lib/providers/base";
+import type {
+  ChatMessage,
+  ModelCapabilities,
+  ModelInfo,
+  StreamChunk,
+  StructuredOutputFormat,
+} from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
   CAPABILITY_PROBES,
@@ -48,6 +54,15 @@ interface CollectedProbeOutput {
   chunks: number;
   error?: string;
 }
+
+const DEFAULT_PROBE_CAPABILITIES: ModelCapabilities = {
+  image: false,
+  document: false,
+  audio: false,
+  video: false,
+};
+
+const EXACT_MARKER_PROBE_MAX_TOKENS = 256;
 
 function updateCapabilitySettings(patch: CapabilitySettingsExtension): void {
   updateUserSettings(patch as unknown as Parameters<typeof updateUserSettings>[0]);
@@ -161,6 +176,47 @@ function fail(id: CapabilityProbeId, detail: string, output?: CollectedProbeOutp
   return { id, status: "fail", detail, preview: outputPreview(output ?? { text: "", chunks: 0 }) };
 }
 
+function markerMatches(text: string, marker: string | RegExp): boolean {
+  return typeof marker === "string" ? text.includes(marker) : marker.test(text);
+}
+
+export function evaluateMarkerProbeResult(input: {
+  id: CapabilityProbeId;
+  output: CollectedProbeOutput;
+  marker: string | RegExp;
+  passDetail: string;
+  failDetail: string;
+}): CapabilityProbeResult {
+  if (input.output.error) return fail(input.id, input.output.error, input.output);
+  return markerMatches(input.output.text, input.marker)
+    ? pass(input.id, input.passDetail, input.output)
+    : fail(input.id, input.failDetail, input.output);
+}
+
+export function evaluateParameterAcceptanceProbeResult(input: {
+  id: CapabilityProbeId;
+  output: CollectedProbeOutput;
+  marker: string | RegExp;
+  passDetail: string;
+  acceptedWithoutMarkerDetail: string;
+}): CapabilityProbeResult {
+  if (input.output.error) return fail(input.id, input.output.error, input.output);
+  return markerMatches(input.output.text, input.marker)
+    ? pass(input.id, input.passDetail, input.output)
+    : pass(input.id, input.acceptedWithoutMarkerDetail, input.output);
+}
+
+export function capabilityProbeCapabilities(
+  capabilities: ModelCapabilities | undefined,
+  id: CapabilityProbeId
+): ModelCapabilities {
+  const base = capabilities ?? DEFAULT_PROBE_CAPABILITIES;
+  if (id === "imageInput") {
+    return { ...base, image: true };
+  }
+  return base;
+}
+
 async function runProbeCall(input: {
   target: ProbeTarget;
   messages: ChatMessage[];
@@ -168,6 +224,7 @@ async function runProbeCall(input: {
   maxTokens?: number;
   temperature?: number;
   structuredOutput?: StructuredOutputFormat;
+  capabilities?: ModelCapabilities;
 }): Promise<CollectedProbeOutput> {
   const { target } = input;
   if (target.providerId === CUSTOM_PROVIDER_ID) {
@@ -182,6 +239,7 @@ async function runProbeCall(input: {
         maxTokens: input.maxTokens,
         temperature: input.temperature,
         structuredOutput: input.structuredOutput,
+        capabilities: input.capabilities ?? custom.capabilities,
       })
     );
   }
@@ -199,6 +257,7 @@ async function runProbeCall(input: {
       maxTokens: input.maxTokens,
       temperature: input.temperature,
       structuredOutput: input.structuredOutput,
+      capabilities: input.capabilities,
     })
   );
 }
@@ -222,11 +281,18 @@ async function runOneProbe(
   id: CapabilityProbeId
 ): Promise<CapabilityProbeResult> {
   if (id === "text") {
-    const output = await runProbeCall({ target, messages: TEXT_PROBE_MESSAGES, maxTokens: 64 });
-    if (output.error) return fail(id, output.error, output);
-    return output.text.includes("AIBOARD_TEXT_OK")
-      ? pass(id, "Text prompt passed", output)
-      : fail(id, "Expected exact marker was not returned", output);
+    const output = await runProbeCall({
+      target,
+      messages: TEXT_PROBE_MESSAGES,
+      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
+    });
+    return evaluateMarkerProbeResult({
+      id,
+      output,
+      marker: "AIBOARD_TEXT_OK",
+      passDetail: "Text prompt passed",
+      failDetail: "Expected exact marker was not returned",
+    });
   }
 
   if (id === "structuredOutput") {
@@ -256,7 +322,8 @@ async function runOneProbe(
       target,
       messages: IMAGE_PROBE_MESSAGES,
       attachments: [PROBE_IMAGE_ATTACHMENT],
-      maxTokens: 64,
+      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
+      capabilities: capabilityProbeCapabilities(target.modelInfo.capabilities, id),
     });
     if (output.error) return fail(id, output.error, output);
     return /red/i.test(output.text)
@@ -269,7 +336,7 @@ async function runOneProbe(
       target,
       messages: DOCUMENT_PROBE_MESSAGES,
       attachments: [PROBE_TEXT_ATTACHMENT],
-      maxTokens: 64,
+      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
     });
     if (output.error) return fail(id, output.error, output);
     return /blue-river/i.test(output.text)
@@ -285,7 +352,7 @@ async function runOneProbe(
     const response = await runProbeCall({
       target,
       messages: toolResultProbeMessages(request.text),
-      maxTokens: 64,
+      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
     });
     if (response.error) return fail(id, response.error, response);
     return response.text.includes("AIBOARD_TOOL_OK=5")
@@ -295,8 +362,16 @@ async function runOneProbe(
 
   if (id === "concurrency") {
     const [a, b] = await Promise.all([
-      runProbeCall({ target, messages: CONCURRENCY_A_MESSAGES, maxTokens: 64 }),
-      runProbeCall({ target, messages: CONCURRENCY_B_MESSAGES, maxTokens: 64 }),
+      runProbeCall({
+        target,
+        messages: CONCURRENCY_A_MESSAGES,
+        maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
+      }),
+      runProbeCall({
+        target,
+        messages: CONCURRENCY_B_MESSAGES,
+        maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
+      }),
     ]);
     if (a.error || b.error) {
       return fail(id, a.error ?? b.error ?? "Parallel probe failed", {
@@ -320,21 +395,29 @@ async function runOneProbe(
     const output = await runProbeCall({
       target,
       messages: TEMPERATURE_PROBE_MESSAGES,
-      maxTokens: 64,
+      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
       temperature: 0.7,
     });
-    if (output.error) return fail(id, output.error, output);
-    return output.text.includes("AIBOARD_TEMPERATURE_OK")
-      ? pass(id, "Temperature parameter was accepted", output)
-      : fail(id, "Temperature request succeeded but marker was missing", output);
+    return evaluateParameterAcceptanceProbeResult({
+      id,
+      output,
+      marker: "AIBOARD_TEMPERATURE_OK",
+      passDetail: "Temperature parameter was accepted",
+      acceptedWithoutMarkerDetail:
+        "Temperature request succeeded but marker was missing",
+    });
   }
 
   if (id === "maxTokens") {
     const output = await runProbeCall({ target, messages: MAX_TOKENS_PROBE_MESSAGES, maxTokens: 8 });
-    if (output.error) return fail(id, output.error, output);
-    return /OK/i.test(output.text)
-      ? pass(id, "Max-token parameter was accepted", output)
-      : fail(id, "Small max-token request succeeded but expected reply was missing", output);
+    return evaluateParameterAcceptanceProbeResult({
+      id,
+      output,
+      marker: /^OK$/i,
+      passDetail: "Max-token parameter was accepted",
+      acceptedWithoutMarkerDetail:
+        "Small max-token request succeeded but expected reply was missing",
+    });
   }
 
   return { id, status: "skipped", detail: "Probe is not implemented yet" };

@@ -218,7 +218,7 @@ export const PROBE_TEXT_ATTACHMENT: AttachmentPayload = {
 
 export const PROBE_IMAGE_ATTACHMENT: AttachmentPayload = {
   id: "aiboard-capability-red-square",
-  filename: "aiboard-red-square.png",
+  filename: "aiboard-capability-image.png",
   mimeType: "image/png",
   category: "image",
   base64Data:
