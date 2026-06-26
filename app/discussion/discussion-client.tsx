@@ -16,6 +16,11 @@ import {
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
 import {
+  BuildContextPanel,
+  EMPTY_BUILD_CONTEXT_PANEL_STATE,
+  reduceBuildContextPanelState,
+} from "@/components/BuildContextPanel";
+import {
   BuildSkillsPanel,
   type BuildSkillEventView,
 } from "@/components/BuildSkillsPanel";
@@ -180,6 +185,9 @@ function DiscussionPageInner() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
+  const [buildContextState, setBuildContextState] = useState(
+    EMPTY_BUILD_CONTEXT_PANEL_STATE
+  );
   const [buildSkillEvents, setBuildSkillEvents] = useState<BuildSkillEventView[]>([]);
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [buildStopReport, setBuildStopReport] =
@@ -367,6 +375,14 @@ function DiscussionPageInner() {
           break;
         case "build_usage":
           setBuildUsage(event.usage);
+          break;
+        case "context_assembled":
+        case "memory_event":
+        case "context_blob":
+        case "code_intel_status":
+          setBuildContextState((prev) =>
+            reduceBuildContextPanelState(prev, event)
+          );
           break;
         case "build_stopped":
           setBuildUsage(event.usage ?? null);
@@ -560,6 +576,7 @@ function DiscussionPageInner() {
           ? createBuildUsageWindow(new Date().toISOString())
           : null
       );
+      setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
       setBuildSkillEvents(data.discussion.mode === "build" ? checkpoint?.skillEvents ?? [] : []);
       // Restore the tab-session activity log so it survives navigation.
       setDiagnostics(loadDiagnostics(id));
@@ -769,6 +786,7 @@ function DiscussionPageInner() {
     );
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
+    setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     setBuildSkillEvents([]);
     setWrittenFiles([]);
     setCommandRuns([]);
@@ -794,6 +812,7 @@ function DiscussionPageInner() {
     setFinalResult(null);
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
+    setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     startedRef.current = false;
     setStatus("pending");
   };
@@ -829,6 +848,7 @@ function DiscussionPageInner() {
       setError(null);
       setBuildStopReport(null);
       setBuildToolReviewReport(null);
+      setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
       startedRef.current = false;
       setStatus("pending");
     }
@@ -1237,6 +1257,10 @@ function DiscussionPageInner() {
           prUrl={repoWorkflow?.prUrl ?? null}
           usage={buildUsage}
         />
+      )}
+
+      {discussion.mode === "build" && (
+        <BuildContextPanel state={buildContextState} />
       )}
 
       {discussion.mode === "build" && (

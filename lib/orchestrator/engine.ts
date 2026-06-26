@@ -87,6 +87,90 @@ export type OrchestratorEvent =
       usage: BuildUsageWindow;
     }
   | {
+      type: "context_assembled";
+      role: "architect" | "worker" | "reviewer" | "summary";
+      phase: "plan" | "worker" | "review" | "summary";
+      label: string;
+      taskId?: string;
+      modelId: string;
+      modelName: string;
+      providerId: string;
+      contextTier: "tiny" | "standard" | "large" | "huge";
+      totalInputBudgetTokens: number;
+      modelContextWindowTokens?: number;
+      modelInputCeilingTokens?: number;
+      estimatedInputTokens: number;
+      contextPackBudgetTokens: number;
+      contextPackUsedTokens: number;
+      selectedPackCount: number;
+      omittedPackCount: number;
+      droppedPacks: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        reason: string;
+        estimatedTokens: number;
+      }>;
+      retrieveRefs: Array<{
+        id: string;
+        label?: string;
+        kind?: string;
+        tokenEstimate?: number;
+      }>;
+      notes?: string[];
+    }
+  | {
+      type: "memory_event";
+      activeDecisions: Array<{
+        id: string;
+        summary: string;
+        paths?: string[];
+        taskIds?: string[];
+        hitCount?: number;
+      }>;
+      failedApproaches: Array<{
+        id: string;
+        summary: string;
+        paths?: string[];
+        taskIds?: string[];
+        hitCount?: number;
+      }>;
+      fragileFiles: Array<{
+        id: string;
+        summary: string;
+        paths?: string[];
+        taskIds?: string[];
+        hitCount?: number;
+      }>;
+      warnings: string[];
+    }
+  | {
+      type: "context_blob";
+      action: "created" | "retrieved";
+      ref: string;
+      label: string;
+      kind: string;
+      source?: string;
+      charCount: number;
+      tokenEstimate: number;
+      offsetChars?: number;
+      returnedChars?: number;
+      returnedTokens?: number;
+      truncated?: boolean;
+    }
+  | {
+      type: "code_intel_status";
+      provider: "native" | "codebase-memory-mcp" | "none";
+      status: "available" | "unavailable" | "fallback" | "auto_included" | "error";
+      available: boolean;
+      detail: string;
+      tools?: string[];
+      capabilities?: string[];
+      architectureDigestIncluded: boolean;
+      changeImpactDigestIncluded: boolean;
+      callsLeft?: number;
+    }
+  | {
       type: "build_stopped";
       reason: BuildStopReason;
       message: string;
