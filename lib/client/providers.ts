@@ -21,6 +21,8 @@ import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
+import { chatgptProvider } from "@/lib/providers/chatgpt";
+import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { CustomModel } from "@/lib/db/schema";
@@ -33,6 +35,8 @@ import {
 
 export const CUSTOM_PROVIDER_ID = "custom";
 export const FOUNDRY_PROVIDER_ID = "foundry";
+export const CHATGPT_PROVIDER_ID = "chatgpt";
+export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 
 const TEXT_ONLY = {
   image: false,
@@ -55,6 +59,8 @@ const providers: Record<string, AIProvider> = {
   foundry: foundryProvider,
   google: googleProvider,
   openrouter: openrouterProvider,
+  chatgpt: chatgptProvider,
+  "github-copilot": githubCopilotProvider,
 };
 
 export function getProvider(id: string): AIProvider | undefined {
@@ -134,7 +140,7 @@ export function getDecryptedApiKey(providerId: string): string | null {
   return row.apiKey ?? null;
 }
 
-/** Endpoint override saved with the key (gateway providers, e.g. Foundry). */
+/** Endpoint override saved with the key (gateway providers, e.g. Foundry/account runners). */
 export function getProviderBaseURL(providerId: string): string | undefined {
   return getProviderKey(providerId)?.baseURL ?? undefined;
 }
@@ -172,6 +178,10 @@ export function resolveModelName(fullId: string): string {
   }
   // Foundry model ids are user-defined (not in the catalog) — show the id.
   if (providerId === FOUNDRY_PROVIDER_ID) return model;
+  const providerModel = getProvider(providerId)
+    ?.listModels()
+    .find((m) => m.id === model);
+  if (providerModel) return providerModel.name;
   return getModelDisplayName(fullId);
 }
 
@@ -185,7 +195,10 @@ export function resolveModelCapabilities(fullId: string) {
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
   }
-  return null; // use the catalog registry
+  const providerModel = getProvider(providerId)
+    ?.listModels()
+    .find((m) => m.id === model);
+  return providerModel?.capabilities ?? null; // otherwise use the catalog registry
 }
 
 export function getCustomModelByFullId(fullId: string): CustomModel | null {
