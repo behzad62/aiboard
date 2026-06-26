@@ -49,6 +49,28 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
         promptCachingNote:
           "The app requests OpenAI prompt caching with 24h retention and a cache key derived from the stable prompt prefix. Cache hits still require exact shared prefixes and typically begin once prompts reach 1024+ tokens.",
       };
+    case "chatgpt":
+      return {
+        temperatureLabel: "Temperature is bridge-dependent",
+        temperatureNote:
+          "ChatGPT account mode routes through the local account-provider runner. The first release forwards model prompts but keeps parameter support conservative.",
+        promptCachingLabel: "Account-provider dependent",
+        promptCachingNote:
+          "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",
+        concurrencyNote:
+          "This uses the user's ChatGPT account entitlement. Respect account-side limits and expect behavior to differ from OpenAI API billing.",
+      };
+    case "github-copilot":
+      return {
+        temperatureLabel: "Temperature is bridge-dependent",
+        temperatureNote:
+          "GitHub Copilot account mode routes through the local account-provider runner and forwards temperature only where the bridge can do so safely.",
+        promptCachingLabel: "Account-provider dependent",
+        promptCachingNote:
+          "Caching and rate limits are controlled by GitHub Copilot, not by AI Board.",
+        concurrencyNote:
+          "Copilot model access depends on the signed-in account and may be throttled or limited by GitHub account policy.",
+      };
     case "openrouter":
       return {
         temperatureLabel: "Temperature is sent",
