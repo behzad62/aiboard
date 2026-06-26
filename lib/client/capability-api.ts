@@ -3,6 +3,8 @@ import type { ChatMessage, ModelInfo, StreamChunk, StructuredOutputFormat } from
 import { parseModelId } from "@/lib/providers/base";
 import {
   CAPABILITY_PROBES,
+  CONCURRENCY_A_MESSAGES,
+  CONCURRENCY_B_MESSAGES,
   DOCUMENT_PROBE_MESSAGES,
   IMAGE_PROBE_MESSAGES,
   MAX_TOKENS_PROBE_MESSAGES,
@@ -13,7 +15,9 @@ import {
   STRUCTURED_PROBE_MESSAGES,
   TEMPERATURE_PROBE_MESSAGES,
   TEXT_PROBE_MESSAGES,
+  TOOL_CALL_PROBE_MESSAGES,
   defaultCapabilityProfile,
+  toolResultProbeMessages,
   type CapabilityProbeId,
   type CapabilityProbeResult,
   type ModelCapabilityProbeProfile,
@@ -199,6 +203,20 @@ async function runProbeCall(input: {
   );
 }
 
+function parseHelperRequest(text: string): { a: number; b: number } | null {
+  const parsed = extractJson(text) as {
+    action?: string;
+    helper?: string;
+    input?: { a?: number; b?: number };
+    args?: { a?: number; b?: number };
+  } | null;
+  if (!parsed) return null;
+  const input = parsed.input ?? parsed.args;
+  if (parsed.action !== "use_helper" || parsed.helper !== "sum") return null;
+  if (input?.a !== 2 || input.b !== 3) return null;
+  return { a: input.a, b: input.b };
+}
+
 async function runOneProbe(
   target: ProbeTarget,
   id: CapabilityProbeId
@@ -259,6 +277,45 @@ async function runOneProbe(
       : fail(id, "The model did not read the generated text attachment", output);
   }
 
+  if (id === "toolCalls") {
+    const request = await runProbeCall({ target, messages: TOOL_CALL_PROBE_MESSAGES, maxTokens: 256 });
+    if (request.error) return fail(id, request.error, request);
+    const helper = parseHelperRequest(request.text);
+    if (!helper) return fail(id, "Model did not emit the expected safe build-action JSON", request);
+    const response = await runProbeCall({
+      target,
+      messages: toolResultProbeMessages(request.text),
+      maxTokens: 64,
+    });
+    if (response.error) return fail(id, response.error, response);
+    return response.text.includes("AIBOARD_TOOL_OK=5")
+      ? pass(id, "Build action protocol passed", response)
+      : fail(id, "Model emitted the action JSON but did not use the returned helper result", response);
+  }
+
+  if (id === "concurrency") {
+    const [a, b] = await Promise.all([
+      runProbeCall({ target, messages: CONCURRENCY_A_MESSAGES, maxTokens: 64 }),
+      runProbeCall({ target, messages: CONCURRENCY_B_MESSAGES, maxTokens: 64 }),
+    ]);
+    if (a.error || b.error) {
+      return fail(id, a.error ?? b.error ?? "Parallel probe failed", {
+        text: [a.text, b.text].filter(Boolean).join("\n"),
+        chunks: a.chunks + b.chunks,
+        error: a.error ?? b.error,
+      });
+    }
+    return a.text.includes("AIBOARD_CONCURRENCY_A") && b.text.includes("AIBOARD_CONCURRENCY_B")
+      ? pass(id, "Two parallel requests completed successfully", {
+          text: `${a.text}\n${b.text}`,
+          chunks: a.chunks + b.chunks,
+        })
+      : fail(id, "Parallel requests completed but expected markers were missing", {
+          text: `${a.text}\n${b.text}`,
+          chunks: a.chunks + b.chunks,
+        });
+  }
+
   if (id === "temperature") {
     const output = await runProbeCall({
       target,
@@ -308,8 +365,12 @@ export async function runCapabilityProbes(input: {
   profile.capabilities.streaming = results.some((r) => r.id === "streaming" && r.status === "pass");
   profile.capabilities.imageInput = results.some((r) => r.id === "imageInput" && r.status === "pass");
   profile.capabilities.documentInput = results.some((r) => r.id === "documentInput" && r.status === "pass");
+  profile.capabilities.toolCalls = results.some((r) => r.id === "toolCalls" && r.status === "pass");
   profile.capabilities.temperature = results.some((r) => r.id === "temperature" && r.status === "pass");
   profile.capabilities.maxTokens = results.some((r) => r.id === "maxTokens" && r.status === "pass");
+  profile.capabilities.parallelRequests = results.some((r) => r.id === "concurrency" && r.status === "pass")
+    ? 2
+    : 1;
 
   saveCapabilityProfile(profile);
   return profile;
