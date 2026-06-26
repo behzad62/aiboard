@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +41,7 @@ interface ProviderConfig {
 
 interface CapabilityLabProps {
   providers: ProviderConfig[];
+  capabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
   onChanged?: () => Promise<void> | void;
 }
 
@@ -56,7 +57,11 @@ function resultVariant(status: string) {
   return "secondary" as const;
 }
 
-export function CapabilityLab({ providers, onChanged }: CapabilityLabProps) {
+export function CapabilityLab({
+  providers,
+  capabilityProfiles,
+  onChanged,
+}: CapabilityLabProps) {
   const models = useMemo(
     () =>
       providers
@@ -75,7 +80,7 @@ export function CapabilityLab({ providers, onChanged }: CapabilityLabProps) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Record<string, ModelCapabilityProbeProfile>>(
-    () => getCapabilityProfiles()
+    () => capabilityProfiles ?? {}
   );
 
   useEffect(() => {
@@ -83,6 +88,10 @@ export function CapabilityLab({ providers, onChanged }: CapabilityLabProps) {
       setSelectedModelId(models[0].fullId);
     }
   }, [models, selectedModelId]);
+
+  useEffect(() => {
+    setProfiles(capabilityProfiles ?? {});
+  }, [capabilityProfiles]);
 
   const currentProfile = selectedModelId ? profiles[selectedModelId] : undefined;
   const enabledProbeIds = CAPABILITY_PROBES.filter((probe) => selectedProbes[probe.id]).map(
