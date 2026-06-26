@@ -3,6 +3,10 @@
 // (merging node: imports) and the control-panel HTML, so the runner still
 // distributes as ONE zero-dependency file. Replaces the old copy-runner copy.
 //
+// Also publishes the optional account-provider runner so hosted/static builds
+// can offer a direct download for ChatGPT Plus/Pro and GitHub Copilot account
+// provider setup.
+//
 // Run: node scripts/build-runner.mjs   (invoked by predev/prebuild)
 
 import fs from "node:fs";
@@ -17,6 +21,8 @@ const LIB = path.join(here, "runner-lib.mjs");
 const PANEL = path.join(here, "runner-panel.html");
 const HELP = path.join(here, "runner-help.html");
 const OUT = path.join(repo, "public", "runner.mjs");
+const ACCOUNT_SRC = path.join(repo, "lib", "account-provider-runner.mjs");
+const ACCOUNT_OUT = path.join(repo, "public", "account-provider-runner.mjs");
 
 const SINGLE_IMPORT = /^import\s+(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*["'](node:[^"']+)["'];?\s*$/;
 
@@ -96,6 +102,9 @@ const output = `${shebang}${banner}${mergedImports}\n\n// ── inlined helpers
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, output);
+if (fs.existsSync(ACCOUNT_SRC)) {
+  fs.copyFileSync(ACCOUNT_SRC, ACCOUNT_OUT);
+}
 
 // Release manifest: the app reads it to show the download version + an "update
 // available" nudge; the runner's self-update verifies the SHA-256 (and, later,
@@ -117,3 +126,6 @@ fs.writeFileSync(path.join(repo, "public", "runner-manifest.json"), JSON.stringi
 console.log(
   `Built ${path.relative(repo, OUT)} v${version} — ${(output.length / 1024).toFixed(1)} kB (panel ${(panel.length / 1024).toFixed(1)} kB); manifest sha256 ${sha256.slice(0, 12)}…`
 );
+if (fs.existsSync(ACCOUNT_OUT)) {
+  console.log(`Copied ${path.relative(repo, ACCOUNT_OUT)} for account-provider setup.`);
+}
