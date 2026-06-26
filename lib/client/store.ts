@@ -8,6 +8,8 @@
 import type {
   BuildCheckpoint,
   BuildFileRecord,
+  BuildMemoryRecord,
+  BuildMemoryStatus,
   ContextBlob,
   CustomModel,
   Discussion,
@@ -46,6 +48,11 @@ import {
   unwrap,
   wrap,
 } from "./crypto-box";
+import {
+  isActiveBuildMemory,
+  mergeBuildMemoryRecord,
+  rekeyBuildMemoryRecord,
+} from "@/lib/build-context/memory-store";
 
 export interface ClientStore {
   userSettings: UserSettings;
@@ -58,6 +65,7 @@ export interface ClientStore {
   buildFiles: BuildFileRecord[];
   buildCheckpoints: BuildCheckpoint[];
   contextBlobs: ContextBlob[];
+  buildMemories: BuildMemoryRecord[];
   gameSessions: GameSessionRecord[];
   gameMatchRecords: GenericGameMatchRecord[];
   gameStatsLegacyImportAttempted: boolean;
@@ -97,6 +105,7 @@ const DEFAULT_STORE: ClientStore = {
   buildFiles: [],
   buildCheckpoints: [],
   contextBlobs: [],
+  buildMemories: [],
   gameSessions: [],
   gameMatchRecords: [],
   gameStatsLegacyImportAttempted: false,
@@ -307,6 +316,17 @@ export function getContextBlobsForDiscussion(discussionId: string): ContextBlob[
     (blob) => blob.discussionId === discussionId
   );
 }
+export function getBuildMemory(id: string): BuildMemoryRecord | undefined {
+  return (store().buildMemories ?? []).find((memory) => memory.id === id);
+}
+export function listBuildMemories(projectKey: string): BuildMemoryRecord[] {
+  return (store().buildMemories ?? [])
+    .filter((memory) => memory.projectKey === projectKey)
+    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+}
+export function listActiveBuildMemories(projectKey: string): BuildMemoryRecord[] {
+  return listBuildMemories(projectKey).filter(isActiveBuildMemory);
+}
 export function getGameSessions(): GameSessionRecord[] {
   const s = store();
   s.gameSessions ??= [];
@@ -396,6 +416,9 @@ export function deleteDiscussion(id: string): void {
   );
   s.contextBlobs = (s.contextBlobs ?? []).filter(
     (blob) => blob.discussionId !== id
+  );
+  s.buildMemories = (s.buildMemories ?? []).filter(
+    (memory) => memory.discussionId !== id
   );
   schedulePersist();
 }
@@ -504,6 +527,74 @@ export function upsertContextBlob(blob: ContextBlob): void {
   const existing = s.contextBlobs.findIndex((item) => item.id === blob.id);
   if (existing >= 0) s.contextBlobs[existing] = blob;
   else s.contextBlobs.push(blob);
+  schedulePersist();
+}
+export function upsertBuildMemory(record: BuildMemoryRecord): void {
+  if (record.evidence.length === 0) return;
+  const s = store();
+  if (!s.buildMemories) s.buildMemories = [];
+  const existing = s.buildMemories.findIndex((item) => item.id === record.id);
+  if (existing >= 0) {
+    s.buildMemories[existing] = mergeBuildMemoryRecord(
+      s.buildMemories[existing],
+      record
+    );
+  } else {
+    s.buildMemories.push(record);
+  }
+  enforceBuildMemoryCap(s);
+  schedulePersist();
+}
+
+function enforceBuildMemoryCap(s: ClientStore): void {
+  if ((s.buildMemories ?? []).length > 500) {
+    s.buildMemories = s.buildMemories
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))
+      .slice(0, 500);
+  }
+}
+export function updateBuildMemoryStatus(
+  id: string,
+  status: BuildMemoryStatus
+): void {
+  const s = store();
+  if (!s.buildMemories) s.buildMemories = [];
+  const existing = s.buildMemories.findIndex((item) => item.id === id);
+  if (existing < 0) return;
+  s.buildMemories[existing] = {
+    ...s.buildMemories[existing],
+    status,
+    updatedAt: new Date().toISOString(),
+  };
+  schedulePersist();
+}
+export function migrateBuildMemoriesProjectKey(
+  oldProjectKey: string,
+  newProjectKey: string
+): void {
+  if (!oldProjectKey || !newProjectKey || oldProjectKey === newProjectKey) return;
+  const s = store();
+  if (!s.buildMemories) s.buildMemories = [];
+  const moving = s.buildMemories.filter(
+    (memory) => memory.projectKey === oldProjectKey
+  );
+  if (moving.length === 0) return;
+  s.buildMemories = s.buildMemories.filter(
+    (memory) => memory.projectKey !== oldProjectKey
+  );
+  for (const memory of moving) {
+    const rekeyed = rekeyBuildMemoryRecord(memory, newProjectKey);
+    const existing = s.buildMemories.findIndex((item) => item.id === rekeyed.id);
+    if (existing >= 0) {
+      s.buildMemories[existing] = mergeBuildMemoryRecord(
+        s.buildMemories[existing],
+        rekeyed
+      );
+    } else {
+      s.buildMemories.push(rekeyed);
+    }
+  }
+  enforceBuildMemoryCap(s);
   schedulePersist();
 }
 export function deleteBuildCheckpoint(discussionId: string): void {

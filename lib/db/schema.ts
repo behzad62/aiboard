@@ -18,6 +18,13 @@ export type {
   ContextBlobKind,
   ContextBlobMetadata,
 } from "@/lib/build-context/context-store";
+export type {
+  BuildMemoryEvidenceKind,
+  BuildMemoryEvidenceRef,
+  BuildMemoryKind,
+  BuildMemoryRecord,
+  BuildMemoryStatus,
+} from "@/lib/build-context/memory-store";
 export type { BuildSkillMode } from "@/lib/skills/types";
 
 export interface ModelPricingOverride {
