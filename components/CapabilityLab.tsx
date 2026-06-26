@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,6 +78,12 @@ export function CapabilityLab({ providers, onChanged }: CapabilityLabProps) {
     () => getCapabilityProfiles()
   );
 
+  useEffect(() => {
+    if (!selectedModelId && models[0]) {
+      setSelectedModelId(models[0].fullId);
+    }
+  }, [models, selectedModelId]);
+
   const currentProfile = selectedModelId ? profiles[selectedModelId] : undefined;
   const enabledProbeIds = CAPABILITY_PROBES.filter((probe) => selectedProbes[probe.id]).map(
     (probe) => probe.id
@@ -118,7 +124,7 @@ export function CapabilityLab({ providers, onChanged }: CapabilityLabProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Account Provider Capability Lab</CardTitle>
+        <CardTitle>Provider Capability Lab</CardTitle>
         <CardDescription>
           Live-test the exact provider, model, key, deployment, or account you configured. Advanced
           probes are opt-in because they can consume provider quota or subscription messages.
