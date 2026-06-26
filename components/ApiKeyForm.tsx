@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Copy } from "lucide-react";
 import type { ModelInfo } from "@/lib/providers/base";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import { saveProviderKey, validateProvider } from "@/lib/client/settings-api";
@@ -80,8 +81,18 @@ const ACCOUNT_RUNNER_PROVIDERS: Record<
 interface AccountRunnerLoginResponse {
   ok?: boolean;
   url?: string;
+  verificationUrl?: string;
+  deviceCode?: string;
+  userCode?: string;
+  expiresIn?: number;
   instructions?: string;
   error?: string;
+}
+
+interface DeviceLoginPrompt {
+  code: string;
+  verificationUrl?: string;
+  copied: boolean;
 }
 
 interface ApiKeyFormProps {
@@ -101,6 +112,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [loggingIn, setLoggingIn] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [deviceLoginPrompt, setDeviceLoginPrompt] = useState<DeviceLoginPrompt | null>(null);
   const baseUrlField = NEEDS_BASE_URL[provider.providerId];
   const modelIdsField = NEEDS_MODEL_IDS[provider.providerId];
   const accountRunner = ACCOUNT_RUNNER_PROVIDERS[provider.providerId];
@@ -180,6 +192,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     if (!accountRunner) return;
     setLoggingIn(true);
     setMessage(null);
+    setDeviceLoginPrompt(null);
     try {
       const saved = getProviderKey(provider.providerId);
       const runnerBaseURL = (baseURL || saved?.baseURL || "").trim().replace(/\/$/, "");
@@ -198,11 +211,31 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       if (!response.ok || data.error) {
         throw new Error(data.error ?? `Login failed (${response.status})`);
       }
-      if (data.url) window.open(data.url, "_blank", "noopener,noreferrer");
+      const deviceCode = data.deviceCode ?? data.userCode;
+      let copied = false;
+      if (deviceCode && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(deviceCode);
+          copied = true;
+        } catch {
+          copied = false;
+        }
+      }
+      if (deviceCode) {
+        setDeviceLoginPrompt({
+          code: deviceCode,
+          verificationUrl: data.verificationUrl ?? data.url,
+          copied,
+        });
+      }
+      const loginUrl = data.verificationUrl ?? data.url;
+      if (loginUrl) window.open(loginUrl, "_blank", "noopener,noreferrer");
       setMessage(
         [
-          data.instructions,
-          data.url ? "Opened the provider login in a new tab." : null,
+          deviceCode
+            ? `${copied ? "Copied" : "Use"} GitHub code ${deviceCode}.`
+            : data.instructions,
+          loginUrl ? "Opened the provider login in a new tab." : null,
           "After approval finishes, click Test connection.",
         ]
           .filter(Boolean)
@@ -212,6 +245,17 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       setMessage(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoggingIn(false);
+    }
+  };
+
+  const copyDeviceCode = async () => {
+    if (!deviceLoginPrompt) return;
+    try {
+      await navigator.clipboard.writeText(deviceLoginPrompt.code);
+      setDeviceLoginPrompt({ ...deviceLoginPrompt, copied: true });
+      setMessage(`Copied GitHub code ${deviceLoginPrompt.code}. Paste it into the GitHub device page.`);
+    } catch {
+      setMessage(`Copy failed. Type GitHub code ${deviceLoginPrompt.code} into the GitHub device page.`);
     }
   };
 
@@ -349,6 +393,21 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               {loggingIn ? "Starting login..." : accountRunner.loginLabel}
             </Button>
           </div>
+          {deviceLoginPrompt && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-background/80 p-3 text-foreground">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">GitHub device code</p>
+                <p className="font-mono text-lg font-semibold tracking-normal">{deviceLoginPrompt.code}</p>
+                <p className="text-xs text-muted-foreground">
+                  Paste this code into the GitHub device page{deviceLoginPrompt.verificationUrl ? ` at ${deviceLoginPrompt.verificationUrl}` : ""}.
+                </p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={copyDeviceCode}>
+                <Copy className="h-4 w-4" aria-hidden="true" />
+                {deviceLoginPrompt.copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
