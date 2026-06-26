@@ -7,6 +7,13 @@ export const ACCOUNT_RUNNER_TEXT_ONLY = {
   video: false,
 } as const;
 
+export const ACCOUNT_RUNNER_TEXT_AND_IMAGE_ATTACHMENTS = {
+  image: true,
+  document: true,
+  audio: false,
+  video: false,
+} as const;
+
 interface AccountRunnerProviderOptions {
   id: string;
   name: string;
@@ -35,8 +42,19 @@ async function parseRunnerResponse(response: Response): Promise<AccountRunnerRes
   }
 }
 
-function hasUnsupportedAttachments(params: ChatParams): boolean {
-  return (params.attachments ?? []).some((a) => a.category !== "text_inline");
+function unsupportedAttachmentReason(params: ChatParams): string | undefined {
+  for (const attachment of params.attachments ?? []) {
+    if (attachment.category === "image") {
+      if (attachment.mimeType.startsWith("image/") && attachment.base64Data) continue;
+      return `${attachment.filename} is missing image data`;
+    }
+    if (attachment.category === "text_inline" || attachment.category === "document") {
+      if (typeof attachment.textContent === "string") continue;
+      return `${attachment.filename} is not a text-readable document`;
+    }
+    return `${attachment.category} attachments are not supported by ${params.model}`;
+  }
+  return undefined;
 }
 
 export function createAccountRunnerProvider(
@@ -72,10 +90,11 @@ export function createAccountRunnerProvider(
         };
         return;
       }
-      if (hasUnsupportedAttachments(params)) {
+      const unsupported = unsupportedAttachmentReason(params);
+      if (unsupported) {
         yield {
           type: "error",
-          error: `${options.name} account-provider runner is text-only in this release`,
+          error: `${options.name} account-provider runner cannot send this attachment yet: ${unsupported}`,
         };
         return;
       }
@@ -96,7 +115,7 @@ export function createAccountRunnerProvider(
               temperature: params.temperature,
               reasoningEffort: params.reasoningEffort,
               structuredOutput: params.structuredOutput,
-              attachments: [],
+              attachments: params.attachments ?? [],
             }),
           }
         );
