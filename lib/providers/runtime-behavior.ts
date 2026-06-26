@@ -51,9 +51,9 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
       };
     case "chatgpt":
       return {
-        temperatureLabel: "Text-only account mode",
+        temperatureLabel: "Account runner mode",
         temperatureNote:
-          "ChatGPT account mode currently sends text conversation prompts through the local account runner. Attachments, tool calls, and true token streaming are not enabled yet.",
+          "ChatGPT account mode sends prompts through the local account runner. Image attachments and text-readable documents are forwarded; binary documents, tool calls, and true token streaming are not enabled yet.",
         promptCachingLabel: "Account-provider dependent",
         promptCachingNote:
           "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",
@@ -62,9 +62,9 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
       };
     case "github-copilot":
       return {
-        temperatureLabel: "Text-only account mode",
+        temperatureLabel: "Account runner mode",
         temperatureNote:
-          "GitHub Copilot account mode currently sends text conversation prompts through the local account runner. Attachments, tool calls, and true token streaming are not enabled yet.",
+          "GitHub Copilot account mode sends prompts through the local account runner. Image attachments and text-readable documents are forwarded; binary documents, tool calls, and true token streaming are not enabled yet.",
         promptCachingLabel: "Account-provider dependent",
         promptCachingNote:
           "Caching and rate limits are controlled by GitHub Copilot, not by AI Board.",

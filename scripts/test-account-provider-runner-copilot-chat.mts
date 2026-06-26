@@ -1,4 +1,4 @@
-/** Account-provider runner ChatGPT chat regression (run: npx tsx scripts/test-account-provider-runner-chat.mts) */
+/** Account-provider runner GitHub Copilot chat attachment regression (run: npx tsx scripts/test-account-provider-runner-copilot-chat.mts) */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -39,11 +39,12 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
 }
 
 interface CapturedRequest {
+  url: string | undefined;
   headers: http.IncomingHttpHeaders;
   body: Record<string, unknown>;
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "aiboard-account-runner-chat-"));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "aiboard-account-runner-copilot-chat-"));
 const token = "test-token";
 const runnerPort = await getFreePort();
 const fakeBackendPort = await getFreePort();
@@ -54,12 +55,11 @@ fs.writeFileSync(
   authFile,
   JSON.stringify(
     {
-      chatgpt: {
+      githubCopilot: {
         type: "oauth",
-        refresh: "fake-refresh-token",
-        access: "fake-access-token",
-        expires: Date.now() + 60 * 60 * 1000,
-        accountId: "fake-account-id",
+        access: "fake-copilot-token",
+        refresh: "fake-copilot-token",
+        expires: 0,
         updatedAt: new Date().toISOString(),
       },
     },
@@ -71,34 +71,9 @@ fs.writeFileSync(
 const fakeBackend = http.createServer(async (req, res) => {
   const raw = await readRequestBody(req);
   const body = raw ? JSON.parse(raw) : {};
-  capturedRequests.push({
-    headers: req.headers,
-    body,
-  });
-  if (body.store !== false) {
-    res.writeHead(400, { "content-type": "application/json" });
-    res.end(JSON.stringify({ detail: "Store must be set to false" }));
-    return;
-  }
-  if (body.stream !== true) {
-    res.writeHead(400, { "content-type": "application/json" });
-    res.end(JSON.stringify({ detail: "Stream must be set to true" }));
-    return;
-  }
+  capturedRequests.push({ url: req.url, headers: req.headers, body });
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(
-    [
-      "event: response.created",
-      'data: {"type":"response.created","sequence_number":0}',
-      "",
-      "event: response.output_text.delta",
-      'data: {"type":"response.output_text.delta","delta":"ok","sequence_number":1}',
-      "",
-      "event: response.completed",
-      'data: {"type":"response.completed","sequence_number":2}',
-      "",
-    ].join("\n")
-  );
+  res.end(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }));
 });
 
 await new Promise<void>((resolve) => fakeBackend.listen(fakeBackendPort, "127.0.0.1", resolve));
@@ -110,7 +85,7 @@ const runner = spawn(
     cwd: process.cwd(),
     env: {
       ...process.env,
-      AIBOARD_CHATGPT_CODEX_ENDPOINT: `http://127.0.0.1:${fakeBackendPort}/codex/responses`,
+      AIBOARD_GITHUB_COPILOT_API_BASE: `http://127.0.0.1:${fakeBackendPort}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -166,15 +141,12 @@ async function stopRunner(): Promise<void> {
 try {
   await waitForRunner();
 
-  const response = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
+  const response = await fetch(`${baseUrl}/providers/github-copilot/chat`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: "gpt-5.5",
-      messages: [
-        { role: "system", content: "You are validating a model connection." },
-        { role: "user", content: "Reply with exactly: ok" },
-      ],
+      model: "claude-sonnet-4.5",
+      messages: [{ role: "user", content: "Read the attachments." }],
       attachments: [
         {
           id: "img-1",
@@ -195,29 +167,71 @@ try {
   });
   const data = await response.json();
   const captured = capturedRequests[0];
+  const userMessage = Array.isArray(captured?.body.messages)
+    ? captured?.body.messages.find((message) => message.role === "user")
+    : undefined;
+  const userContent = Array.isArray(userMessage?.content) ? userMessage.content : [];
 
-  check("ChatGPT chat returns HTTP 200 from fake backend", response.ok, data);
-  check("ChatGPT chat returns response text", data.content === "ok", data);
-  check("runner sends one ChatGPT backend request", capturedRequests.length === 1, capturedRequests);
-  check("runner sends store false to Codex backend", captured?.body.store === false, captured?.body);
-  check("runner requests the Codex backend stream", captured?.body.stream === true, captured?.body);
-  check("runner sends selected model", captured?.body.model === "gpt-5.5", captured?.body);
-  const userInput = Array.isArray(captured?.body.input) ? captured?.body.input.find((item) => item.role === "user") : undefined;
-  const userContent = Array.isArray(userInput?.content) ? userInput.content : [];
+  check("GitHub Copilot chat returns HTTP 200 from fake backend", response.ok, data);
+  check("GitHub Copilot chat returns response text", data.content === "ok", data);
+  check("runner sends one GitHub Copilot backend request", capturedRequests.length === 1, capturedRequests);
+  check("runner uses configured GitHub Copilot API base for non-GPT-5 chat models", captured?.url === "/chat/completions", captured);
   check(
-    "runner sends ChatGPT text attachments as input_text",
-    userContent.some((part) => part?.type === "input_text" && String(part.text).includes("AIBOARD_DOCUMENT_SECRET=blue-river")),
+    "runner sends Copilot text attachments in text part",
+    userContent.some((part) => part?.type === "text" && String(part.text).includes("AIBOARD_DOCUMENT_SECRET=blue-river")),
     userContent
   );
   check(
-    "runner sends ChatGPT images as input_image data URLs",
-    userContent.some((part) => part?.type === "input_image" && part.image_url === "data:image/png;base64,AAECAw=="),
+    "runner sends Copilot images as image_url data URLs",
+    userContent.some((part) => part?.type === "image_url" && part.image_url?.url === "data:image/png;base64,AAECAw=="),
     userContent
   );
-  check("runner sends account id header", captured?.headers["chatgpt-account-id"] === "fake-account-id", captured?.headers);
-  check("runner sends bearer token header", captured?.headers.authorization === "Bearer fake-access-token", captured?.headers);
+
+  const responsesResponse = await fetch(`${baseUrl}/providers/github-copilot/chat`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: "gpt-5.4-mini",
+      messages: [{ role: "user", content: "Read the attachments." }],
+      attachments: [
+        {
+          id: "img-2",
+          filename: "red.png",
+          mimeType: "image/png",
+          category: "image",
+          base64Data: "AAECAw==",
+        },
+        {
+          id: "doc-2",
+          filename: "note.txt",
+          mimeType: "text/plain",
+          category: "document",
+          textContent: "AIBOARD_DOCUMENT_SECRET=blue-river",
+        },
+      ],
+    }),
+  });
+  const responsesData = await responsesResponse.json();
+  const responsesCaptured = capturedRequests[1];
+  const responsesUserInput = Array.isArray(responsesCaptured?.body.input)
+    ? responsesCaptured?.body.input.find((item) => item.role === "user")
+    : undefined;
+  const responsesContent = Array.isArray(responsesUserInput?.content) ? responsesUserInput.content : [];
+
+  check("GitHub Copilot responses route returns HTTP 200 from fake backend", responsesResponse.ok, responsesData);
+  check("runner uses Copilot responses path for GPT-5-class models including mini", responsesCaptured?.url === "/responses", responsesCaptured);
+  check(
+    "runner sends Copilot responses text attachments as input_text",
+    responsesContent.some((part) => part?.type === "input_text" && String(part.text).includes("AIBOARD_DOCUMENT_SECRET=blue-river")),
+    responsesContent
+  );
+  check(
+    "runner sends Copilot responses images as input_image data URLs",
+    responsesContent.some((part) => part?.type === "input_image" && part.image_url === "data:image/png;base64,AAECAw=="),
+    responsesContent
+  );
 } catch (err) {
-  check("account-provider runner ChatGPT chat integration", false, err instanceof Error ? err.message : String(err));
+  check("account-provider runner GitHub Copilot chat integration", false, err instanceof Error ? err.message : String(err));
 } finally {
   await stopRunner();
   await new Promise<void>((resolve) => fakeBackend.close(() => resolve()));
