@@ -64,7 +64,10 @@ import {
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 import { getCapabilityProfiles } from "@/lib/client/capability-api";
-import { selectBuildModelIdsByCapabilities } from "@/lib/client/build-capabilities";
+import {
+  selectBuildModelIdsByCapabilities,
+  selectedModelIdsForMode,
+} from "@/lib/client/build-capabilities";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
 import { AlertTriangle, Sparkles } from "lucide-react";
 
@@ -210,6 +213,11 @@ export default function DashboardPage() {
     [mode, compatibleSelected, capabilityProfiles]
   );
   const effectiveSelectedModels = buildCapabilityDecision.modelIds;
+  const visibleSelectedModels = selectedModelIdsForMode(
+    mode,
+    selectedModels,
+    buildCapabilityDecision
+  );
   const compatibleJudgeOptions =
     data?.enabledModels.filter((model) =>
       supportsInputTypes(model.capabilities, requiredInputTypes)
@@ -428,7 +436,7 @@ export default function DashboardPage() {
 
             <ModelSelector
               models={modelsForSelector}
-              selected={selectedModels}
+              selected={visibleSelectedModels}
               onChange={setSelectedModels}
               requiredInputTypes={requiredInputTypes}
             />

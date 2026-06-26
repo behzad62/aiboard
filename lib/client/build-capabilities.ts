@@ -1,4 +1,5 @@
 import type { SelectedModel } from "@/lib/providers/base";
+import type { DiscussionMode } from "@/lib/db/schema";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
 
 export interface BuildCapabilityDecision {
@@ -68,6 +69,14 @@ export function selectBuildModelIdsByCapabilities(
   }
 
   return { modelIds, diagnostics };
+}
+
+export function selectedModelIdsForMode(
+  mode: DiscussionMode,
+  selectedModelIds: string[],
+  buildDecision: BuildModelIdCapabilityDecision
+): string[] {
+  return mode === "build" ? buildDecision.modelIds : selectedModelIds;
 }
 
 export function selectBuildWorkersByCapabilities(
