@@ -125,6 +125,40 @@ function optionalPack(
   return content ? [{ ...pack, content }] : [];
 }
 
+function userNotesRequirementText(notes: string | undefined): string {
+  const trimmed = notes?.trim();
+  return trimmed
+    ? `NOTES FROM THE USER (added while the team was building - treat them as requirements and address every one):\n${trimmed}`
+    : "";
+}
+
+function reviewUserNotesRequirementText(notes: string | undefined): string {
+  const base = userNotesRequirementText(notes);
+  return base
+    ? `${base}\nThe user's notes above are requirements: turn any that aren't covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.`
+    : "";
+}
+
+function reviewUserNotesDirective(notes: string | undefined): string {
+  return notes?.trim()
+    ? `The user's notes above are requirements: turn any that aren't covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.`
+    : "";
+}
+
+function followUpSummaryText(summary: string | undefined): string {
+  const trimmed = summary?.trim();
+  return trimmed
+    ? `This is a FOLLOW-UP pass: a previous build already delivered the project summarized below. Everything delivered is still a requirement - preserve it. Plan ONLY the delta (changes the notes/request ask for), editing existing files where possible instead of rebuilding.\nPrevious hand-off summary:\n${trimmed}`
+    : "";
+}
+
+function reviewFileContextText(fileContext: string | undefined): string {
+  const trimmed = fileContext?.trim();
+  return trimmed
+    ? `File contents you have already read - ground every decision in these; NEVER invent replacement content for an existing file:\n${trimmed}`
+    : "";
+}
+
 function taskPaths(task: BuildContextTask): string[] {
   return [
     ...(task.contextFiles ?? []),
@@ -199,9 +233,9 @@ export class BuildContextManager {
         id: "plan-user-notes",
         title: "User notes",
         kind: "note",
-        content: input.userNotes,
+        content: userNotesRequirementText(input.userNotes),
         required: true,
-        priority: 120,
+        priority: 135,
       }),
       ...optionalPack({
         id: "plan-file-context",
@@ -227,8 +261,9 @@ export class BuildContextManager {
         id: "plan-previous-summary",
         title: "Previous hand-off summary",
         kind: "summary",
-        content: input.previousSummary,
-        priority: 70,
+        content: followUpSummaryText(input.previousSummary),
+        required: true,
+        priority: 130,
       }),
       ...optionalPack({
         id: "plan-scoreboard",
@@ -312,9 +347,10 @@ export class BuildContextManager {
         id: "review-file-context",
         title: "Already inspected project files",
         kind: "source",
-        content: input.fileContext,
+        content: reviewFileContextText(input.fileContext),
         exact: true,
-        priority: 100,
+        required: true,
+        priority: 140,
       }),
       ...optionalPack({
         id: "review-executed-work",
@@ -343,10 +379,19 @@ export class BuildContextManager {
         priority: 120,
       }),
       ...optionalPack({
+        id: "review-user-notes-directive",
+        title: "User notes requirement rule",
+        kind: "note",
+        content: reviewUserNotesDirective(input.userNotes),
+        required: true,
+        exact: true,
+        priority: 160,
+      }),
+      ...optionalPack({
         id: "review-user-notes",
         title: "User notes",
         kind: "note",
-        content: input.userNotes,
+        content: reviewUserNotesRequirementText(input.userNotes),
         required: true,
         priority: 115,
       }),
@@ -412,7 +457,7 @@ export class BuildContextManager {
         id: "summary-user-notes",
         title: "User notes",
         kind: "note",
-        content: input.userNotes,
+        content: userNotesRequirementText(input.userNotes),
         required: true,
         priority: 110,
       }),

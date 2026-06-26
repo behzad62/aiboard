@@ -42,6 +42,7 @@ function profileFor(
 
 const standardProfile = profileFor("openai:standard-64k", 64_000, 56_000);
 const hugeProfile = profileFor("openai:frontier-1m", 1_048_576, 920_000);
+const constrainedProfile = profileFor("custom:constrained", 8_192, 2_400);
 
 const manager = new BuildContextManager();
 const sharedPacks: ContextPack[] = Array.from({ length: 24 }, (_, index) => ({
@@ -183,6 +184,53 @@ const reviewPrompt = buildArchitectReviewPrompt({
 });
 assert.match(reviewPrompt, /npx tsc --noEmit failed/);
 assert.match(reviewPrompt, /Required tasks still not done/);
+
+const budgetPressedReview = manager.buildReviewContext({
+  modelContextProfile: constrainedProfile,
+  request: "Keep the parser API compatible",
+  treeText: "src/parser.ts",
+  fileContext: `CRITICAL_FILE_FACT: parse() currently returns a Result object and existing callers rely on that shape.\n${text("large_file", 500)}`,
+  executedText: "T1 changed src/parser.ts",
+  outstandingTasks: "T2 (planned): update parser tests",
+  verificationText: "npx tsc --noEmit failed",
+  userNotes: "Do not break existing parser callers.",
+});
+const budgetPressedReviewPrompt = buildArchitectReviewPrompt({
+  request: "Keep the parser API compatible",
+  treeText: "src/parser.ts",
+  executedText: "",
+  maxNewTasks: 2,
+  cyclesLeft: 1,
+  assembledContext: budgetPressedReview,
+});
+assert.match(budgetPressedReviewPrompt, /CRITICAL_FILE_FACT/);
+assert.match(budgetPressedReviewPrompt, /ground every decision/i);
+assert.match(budgetPressedReviewPrompt, /NEVER invent replacement content/);
+assert.match(budgetPressedReviewPrompt, /user's notes above are requirements/i);
+assert.match(budgetPressedReviewPrompt, /turn any that aren't covered yet into fix instructions or new tasks/i);
+assert.match(budgetPressedReviewPrompt, /do NOT set "done": true while one remains unaddressed/);
+
+const budgetPressedFollowUp = manager.buildPlanContext({
+  modelContextProfile: constrainedProfile,
+  request: "Add parser diagnostics",
+  treeText: "src/parser.ts",
+  previousSummary: `DELIVERED_FEATURE: the previous build shipped a public parse() API and CLI wiring.\n${text("previous_delivery", 500)}`,
+  userNotes: "Keep public API compatibility.",
+});
+const budgetPressedFollowUpPrompt = buildArchitectPlanPrompt({
+  request: "Add parser diagnostics",
+  treeText: "src/parser.ts",
+  fileContext: "",
+  maxTasks: 3,
+  workerNames: ["Worker A"],
+  readHopsLeft: 0,
+  assembledContext: budgetPressedFollowUp,
+});
+assert.match(budgetPressedFollowUpPrompt, /FOLLOW-UP pass/i);
+assert.match(budgetPressedFollowUpPrompt, /preserve it/i);
+assert.match(budgetPressedFollowUpPrompt, /Plan ONLY the delta/i);
+assert.match(budgetPressedFollowUpPrompt, /DELIVERED_FEATURE/);
+assert.match(budgetPressedFollowUpPrompt, /treat them as requirements and address every one/i);
 
 const memory = buildMemoryRecord({
   projectKey: "repo:example/parser",
