@@ -156,4 +156,38 @@ check(
   formatBuildStopReportMarkdown(missingCommandReport)
 );
 
+const truncatedCommandReport = createBuildStopReport({
+  discussionId: "d3",
+  topic: "Fix tests.",
+  status: "blocked",
+  stopReason: "blocked",
+  stopMessage: "Blocked after repeated verification failures.",
+  wave: 2,
+  verifyCommand: "npm test",
+  tasks: [{ id: "T1", title: "Fix test", status: "fixing", failCount: 1 }],
+  problems: [],
+  commandProblems: [
+    {
+      command: "npm test",
+      exitCode: 1,
+      durationMs: 800,
+      outputPreview:
+        "[runner output truncated to its size cap; preview keeps the received tail]\nstdout:\n...\nstderr:\nSyntaxError: Unexpected token",
+      createdAt: "2026-06-22T20:00:00.000Z",
+    },
+  ],
+  failureFingerprints: {
+    "npm test|SyntaxError": 3,
+  },
+  recoveryLog: [],
+  createdAt: "2026-06-22T20:01:00.000Z",
+});
+
+check(
+  "truncated failed command report asks for narrower reproduction",
+  /output was capped/i.test(truncatedCommandReport.nextAction) &&
+    /rerun a narrower command/i.test(truncatedCommandReport.nextAction),
+  truncatedCommandReport.nextAction
+);
+
 process.exit(failed === 0 ? 0 : 1);

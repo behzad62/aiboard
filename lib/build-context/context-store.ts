@@ -100,6 +100,11 @@ export interface BuildCheckOutputSectionsInput {
   stderr?: string | null;
 }
 
+export interface BuildCheckCommandPreviewInput extends BuildCheckOutputSectionsInput {
+  truncated?: boolean;
+  maxChars?: number;
+}
+
 export interface ContextBlobPromptFormatOptions {
   thresholdChars?: number;
 }
@@ -120,6 +125,26 @@ export function formatBuildCheckOutputSections(
   if (stdout) parts.push(`stdout:\n${stdout}`);
   if (stderr) parts.push(`stderr:\n${stderr}`);
   return parts.length > 0 ? parts.join("\n") : "(no output)";
+}
+
+function headTailPreview(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const marker = "\n[middle omitted from preview; tail kept for latest error]\n";
+  const remaining = Math.max(0, maxChars - marker.length);
+  const headChars = Math.max(0, Math.floor(remaining * 0.35));
+  const tailChars = Math.max(0, remaining - headChars);
+  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
+}
+
+export function formatBuildCheckCommandPreview(
+  input: BuildCheckCommandPreviewInput
+): string {
+  const maxChars = Math.max(200, Math.floor(input.maxChars ?? 4_000));
+  const sections = formatBuildCheckOutputSections(input);
+  const note = input.truncated
+    ? "[runner output truncated to its size cap; preview keeps the received tail]\n"
+    : "";
+  return `${note}${headTailPreview(sections, maxChars)}`;
 }
 
 export function formatFetchContextText(input: FetchContextTextInput): string {

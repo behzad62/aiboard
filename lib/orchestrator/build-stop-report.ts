@@ -154,10 +154,21 @@ function buildSummary(input: BuildStopReportInput, primary: BuildProblem | null)
 
 function buildNextAction(primary: BuildProblem | null, fallback: string): string {
   if (!primary) return fallback;
+  const details = primary.details ?? "";
+  const outputWasCapped =
+    /\boutput truncated\b|\brunner output truncated\b|TRUNCATED to the runner size cap|…\[truncated\]|\[truncated\]/i.test(
+      details
+    );
   if (primary.code === "verification_failed" && primary.action) {
+    if (outputWasCapped) {
+      return `Fix the failing command \`${primary.action}\` first. The output was capped, so rerun a narrower command or the specific failing test/file to get the complete reproduction before editing.`;
+    }
     return `Fix the failing command \`${primary.action}\` first; use the latest output in this report as the reproduction.`;
   }
   if (primary.code === "verification_repeated" && primary.action) {
+    if (outputWasCapped) {
+      return `Fix the repeatedly failing command \`${primary.action}\` first. The output was capped, so rerun a narrower command or the specific failing test/file to get the complete reproduction before editing.`;
+    }
     return `Fix the repeatedly failing command \`${primary.action}\` first; use the latest output in this report as the reproduction.`;
   }
   if (primary.code === "malformed_tool_call") {

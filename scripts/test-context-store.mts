@@ -6,6 +6,7 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatBuildCheckCommandPreview,
   formatBuildCheckOutputSections,
   formatFetchContextText,
   formatMcpToolContextText,
@@ -236,6 +237,20 @@ check(
     verifyPromptText.includes('"action":"context_retrieve"') &&
     verifyPromptText.length < fullVerifyText.length,
   { promptLength: verifyPromptText.length, fullLength: fullVerifyText.length }
+);
+
+const failedCommandTailPreview = formatBuildCheckCommandPreview({
+  stdout: `${"stdout noise\n".repeat(200)}\nfrontend-contract.test.js:517\n}ould describe the server component');`,
+  stderr: "SyntaxError: Unexpected identifier 'ould'",
+  truncated: false,
+  maxChars: 600,
+});
+check(
+  "failed command preview preserves actionable output tail",
+  failedCommandTailPreview.includes("}ould describe the server component") &&
+    failedCommandTailPreview.includes("SyntaxError: Unexpected identifier") &&
+    failedCommandTailPreview.includes("[middle omitted"),
+  failedCommandTailPreview
 );
 
 __resetClientStoreForTests();

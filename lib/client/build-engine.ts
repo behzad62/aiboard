@@ -84,6 +84,7 @@ import {
   buildRepoDiffDigest,
   buildToolExchangeDigest,
   createContextBlob,
+  formatBuildCheckCommandPreview,
   formatBuildCheckContextText,
   formatBuildCheckOutputSections,
   formatContextBlobForPrompt,
@@ -2416,6 +2417,7 @@ export async function runBuildDiscussion(
   };
 
   const VERIFY_FEEDBACK_DIGEST_THRESHOLD_CHARS = 6_000;
+  const VERIFY_COMMAND_PREVIEW_CHARS = 4_000;
 
   type BuildVerifyResult = {
     feedback: string;
@@ -2462,22 +2464,23 @@ export async function runBuildDiscussion(
     });
     try {
       const result = await runCommand(runner, command);
+      const resultStdout = stripAnsi(result.stdout);
+      const resultStderr = stripAnsi(result.stderr);
       emitBuildCheckCommandRun({
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
         background: result.background,
-        outputPreview: truncate(
-          formatBuildCheckOutputSections({
-            stdout: stripAnsi(result.stdout),
-            stderr: stripAnsi(result.stderr),
-          }),
-          400
-        ),
+        outputPreview: formatBuildCheckCommandPreview({
+          stdout: resultStdout,
+          stderr: resultStderr,
+          truncated: !!result.truncated,
+          maxChars: VERIFY_COMMAND_PREVIEW_CHARS,
+        }),
       });
       let finalCommand = command;
       let finalResult = result;
-      const combinedOutput = stripAnsi(`${result.stdout}\n${result.stderr}`);
+      const combinedOutput = `${resultStdout}\n${resultStderr}`;
       const tscShimFailure =
         result.exitCode !== 0 &&
         detectedVerifyCommand &&
@@ -2521,18 +2524,19 @@ export async function runBuildDiscussion(
         });
         finalResult = await runCommand(runner, detectedVerifyCommand);
         finalCommand = detectedVerifyCommand;
+        const retryStdout = stripAnsi(finalResult.stdout);
+        const retryStderr = stripAnsi(finalResult.stderr);
         emitBuildCheckCommandRun({
           command: detectedVerifyCommand,
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
           background: finalResult.background,
-          outputPreview: truncate(
-            formatBuildCheckOutputSections({
-              stdout: stripAnsi(finalResult.stdout),
-              stderr: stripAnsi(finalResult.stderr),
-            }),
-            400
-          ),
+          outputPreview: formatBuildCheckCommandPreview({
+            stdout: retryStdout,
+            stderr: retryStderr,
+            truncated: !!finalResult.truncated,
+            maxChars: VERIFY_COMMAND_PREVIEW_CHARS,
+          }),
         });
       }
       const ok = finalResult.exitCode === 0;
