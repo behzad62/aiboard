@@ -5,6 +5,8 @@
  * build only gives up after repeated recovery attempts truly stall.
  */
 
+import type { BuildTask } from "./build";
+
 export interface BuildProgressSignals {
   filesWritten: number;
   tasksAdvanced: number;
@@ -52,4 +54,92 @@ export function shouldStopForNoProgress(input: {
   noProgressWaves: number;
 }): boolean {
   return input.repeatedFailureCount >= 3 || input.noProgressWaves >= 4;
+}
+
+function normalizePathForMatch(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+export function extractVerificationFailurePaths(
+  output: string,
+  knownFiles: string[]
+): string[] {
+  const haystack = normalizePathForMatch(output);
+  const seen = new Set<string>();
+  const matches: string[] = [];
+  const candidates = knownFiles
+    .map((path) => ({ original: path, normalized: normalizePathForMatch(path) }))
+    .filter(({ normalized }) => normalized.length > 0)
+    .sort((a, b) => b.normalized.length - a.normalized.length);
+
+  for (const candidate of candidates) {
+    if (!haystack.includes(candidate.normalized)) continue;
+    const key = candidate.normalized;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    matches.push(candidate.original);
+  }
+
+  return matches;
+}
+
+function taskOwnsPath(task: BuildTask, path: string): boolean {
+  const target = normalizePathForMatch(path);
+  return (task.outputPaths ?? []).some(
+    (outputPath) => normalizePathForMatch(outputPath) === target
+  );
+}
+
+function nextVerificationTaskId(tasks: BuildTask[]): string {
+  const existing = new Set(tasks.map((task) => task.id));
+  for (let i = 1; i <= tasks.length + 10; i += 1) {
+    const id = `TV${i}`;
+    if (!existing.has(id)) return id;
+  }
+  return `TV${Date.now().toString(36)}`;
+}
+
+function truncateForTask(text: string, max = 1400): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated]`;
+}
+
+export function buildVerificationFailureTask(input: {
+  tasks: BuildTask[];
+  verifyCommand: string;
+  verifyFeedback: string;
+  knownFiles: string[];
+  maxFiles?: number;
+}): BuildTask | null {
+  const paths = extractVerificationFailurePaths(
+    input.verifyFeedback,
+    input.knownFiles
+  ).slice(0, input.maxFiles ?? 4);
+  if (paths.length === 0) return null;
+  const hasIncompleteOwner = input.tasks.some(
+    (task) => task.status !== "done" && paths.some((path) => taskOwnsPath(task, path))
+  );
+  if (hasIncompleteOwner) return null;
+
+  const id = nextVerificationTaskId(input.tasks);
+  const pathList = paths.join(", ");
+  return {
+    id,
+    title: `Fix failing verification for ${paths[0]}`,
+    instructions: [
+      `The automated verification command is failing: ${input.verifyCommand}.`,
+      `Repair only the failing verification path(s): ${pathList}.`,
+      "Use the failure output below as the reproduction, make the smallest targeted correction, then rerun the verification command.",
+      "Include Skill evidence with RED test/check failure before implementation, root cause or reproduction identified before the fix, and GREEN test/check pass after implementation.",
+      "Failure output:",
+      "```",
+      truncateForTask(input.verifyFeedback),
+      "```",
+    ].join("\n"),
+    contextFiles: paths,
+    outputPaths: paths,
+    expectedOutputs: `Targeted fix for ${pathList} so ${input.verifyCommand} passes.`,
+    dependsOn: [],
+    difficulty: 3,
+    status: "planned",
+  };
 }

@@ -5,6 +5,7 @@ import {
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
 } from "../lib/orchestrator/build-evidence-gates";
+import { createSkillEvidence } from "../lib/skills/evidence";
 import type { SkillEvidence } from "../lib/skills/types";
 
 let failed = 0;
@@ -95,6 +96,39 @@ check(
   "missing evidence-only retry does not carry prior files",
   blockedEvidenceOnlyFiles.length === 0,
   blockedEvidenceOnlyFiles
+);
+
+const incompleteSecurityEvidence = createSkillEvidence({
+  taskId: "T3",
+  actor: "worker",
+  activeSkillIds: ["agent:security-and-hardening"],
+  workerOutput: [
+    "Skill evidence:",
+    "- RED: npm test failed before implementation.",
+    "- GREEN: npm test passed after implementation.",
+  ].join("\n"),
+});
+check(
+  "security evidence requires explicit trust-boundary evidence, not any evidence line",
+  incompleteSecurityEvidence[0]?.missingEvidence.includes(
+    "Trust boundary reviewed and unsafe case considered"
+  ),
+  incompleteSecurityEvidence
+);
+
+const completeSecurityEvidence = createSkillEvidence({
+  taskId: "T3",
+  actor: "worker",
+  activeSkillIds: ["agent:security-and-hardening"],
+  workerOutput: [
+    "Skill evidence:",
+    "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: local repository path is untrusted input; unsafe traversal and secret logging cases were considered.",
+  ].join("\n"),
+});
+check(
+  "explicit trust-boundary evidence satisfies security gate",
+  completeSecurityEvidence[0]?.missingEvidence.length === 0,
+  completeSecurityEvidence
 );
 
 process.exit(failed === 0 ? 0 : 1);

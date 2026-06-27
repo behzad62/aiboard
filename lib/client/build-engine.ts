@@ -41,6 +41,7 @@ import {
   shouldStopForBuildGuardrail,
 } from "@/lib/orchestrator/build-policy";
 import {
+  buildVerificationFailureTask,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
   recordBuildFailure,
@@ -730,6 +731,14 @@ export async function runBuildDiscussion(
   // Paths actually written THIS run — grounds the hand-off summary so it can
   // only describe changes that really happened.
   const writtenThisRun = new Set<string>();
+  // Paths changed by this Build job across current and restored passes. The
+  // final quality gate uses this to decide whether browser acceptance is needed
+  // after a resume that performs no additional writes.
+  const buildChangedFiles = new Set<string>();
+  const recordWrittenPath = (path: string): void => {
+    writtenThisRun.add(path);
+    buildChangedFiles.add(path);
+  };
   // Normalized path → writer label ("T3"/"Architect") for the CURRENT wave only
   // (cleared each cycle). Detects two workers writing the same path concurrently
   // — last-write-wins silently destroys the earlier output otherwise.
@@ -741,6 +750,7 @@ export async function runBuildDiscussion(
   // must see the existing files instead of re-planning from an "empty" tree.
   for (const file of getBuildFiles(discussion.id)) {
     virtualFs.set(file.path, file.content);
+    buildChangedFiles.add(file.path);
   }
   if (virtualFs.size > 0) {
     emit({
@@ -2839,7 +2849,7 @@ export async function runBuildDiscussion(
   ): Promise<void> => {
     const before = beforeOverride !== undefined ? beforeOverride : await readFile(path);
     virtualFs.set(path, content);
-    writtenThisRun.add(path);
+    recordWrittenPath(path);
     // Persist so follow-up passes and resumes still see this file.
     upsertBuildFile({
       discussionId: discussion.id,
@@ -3308,7 +3318,7 @@ export async function runBuildDiscussion(
         const result = await patchFileViaRunner(runner, path, ops);
         if (result.content != null && result.applied > 0) {
           virtualFs.set(path, result.content);
-          writtenThisRun.add(path);
+          recordWrittenPath(path);
           upsertBuildFile({
             discussionId: discussion.id,
             path,
@@ -3417,7 +3427,7 @@ export async function runBuildDiscussion(
         const result = await appendFileViaRunner(runner, path, content, reset);
         if (result.content != null) {
           virtualFs.set(path, result.content);
-          writtenThisRun.add(path);
+          recordWrittenPath(path);
           upsertBuildFile({
             discussionId: discussion.id,
             path,
@@ -6071,12 +6081,46 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
     }
 
+    const verificationFixTask = shouldRecordAutomatedBuildCheckFailure(verifyResult)
+      ? buildVerificationFailureTask({
+          tasks,
+          verifyCommand,
+          verifyFeedback,
+          knownFiles: currentProjectFiles(),
+        })
+      : null;
+    if (verificationFixTask) {
+      tasks.push(verificationFixTask);
+      recoveryLog.push(
+        `Added ${verificationFixTask.id} to repair automated verification failure from wave ${cycle}.`
+      );
+      architectNotes = [
+        architectNotes,
+        `The automated verification command failed after wave ${cycle}; the engine added ${verificationFixTask.id} with scoped output paths ${verificationFixTask.outputPaths?.join(", ")}. Complete this task before marking the build done.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      emit({
+        type: "task_status",
+        taskId: verificationFixTask.id,
+        title: verificationFixTask.title,
+        status: "planned",
+        cycle,
+      });
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Added ${verificationFixTask.id} to fix the failing verification path(s): ${verificationFixTask.outputPaths?.join(", ")}.`,
+      });
+    }
+
     // Did this wave change anything real? Files written, tasks advanced or added,
     // a failure that changed shape, or repo/branch/PR state moving all count as
     // progress and reset the no-progress run.
     const waveProgressed = hasMeaningfulBuildProgress({
       filesWritten: executed.reduce((sum, item) => sum + item.files.length, 0),
-      tasksAdvanced: action.results.length + novelTasks.accepted.length,
+      tasksAdvanced:
+        action.results.length + novelTasks.accepted.length + (verificationFixTask ? 1 : 0),
       failureChanged: recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),
       repoAdvanced: !!repoActiveBranch || repoCommits.length > 0 || !!repoPrUrl,
     });
@@ -6282,6 +6326,7 @@ export async function runBuildDiscussion(
     const browserAcceptanceRequired = shouldRequireBrowserAcceptance({
       request: discussion.topic,
       treeText: treeText(),
+      changedFiles: [...buildChangedFiles],
     });
     const qualityGate = evaluateBuildQualityGate({
       githubWorkflow,
@@ -6472,6 +6517,8 @@ export async function runBuildDiscussion(
   });
   updateDiscussion(discussion.id, {
     status: "completed",
+    buildStopReason: "completed",
+    buildStoppedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
   // Final checkpoint: a completed run is not resumed (resume skips "completed"),

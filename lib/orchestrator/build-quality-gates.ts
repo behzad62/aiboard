@@ -70,10 +70,24 @@ export interface BuildQualityGateResult {
 export function shouldRequireBrowserAcceptance(input: {
   request: string;
   treeText?: string;
+  changedFiles?: string[];
 }): boolean {
   const request = input.request.toLowerCase();
   const treeText = input.treeText ?? "";
   const tree = treeText.toLowerCase();
+  const uiPath = /(^|\/)(app\/page\.(tsx|jsx|ts|js)|pages\/|public\/index\.html|public\/app\.js|src\/app\/|src\/main\.(tsx|jsx|ts|js)|src\/app\.(tsx|jsx|ts|js)|vite\.config\.|next\.config\.)|(^|\/)(components|app|pages|public)\/|\.((tsx|jsx|css|scss|html))$/i;
+  const changedFiles = input.changedFiles;
+  const changedFilesAffectUi = changedFiles?.some((file) => uiPath.test(file)) ?? false;
+  const verificationOnlyRequest =
+    /\b(verification|test|tests|check|lint|typecheck|compile|syntax|contract)\b/.test(
+      request
+    ) &&
+    (/\bonly\b/.test(request) ||
+      /\bcurrent\b/.test(request) ||
+      /do not implement unrelated/.test(request));
+  if (changedFiles && !changedFilesAffectUi && verificationOnlyRequest) {
+    return false;
+  }
   if (
     /\b(web app|website|browser app|frontend|front-end|user interface|ui|dashboard|landing page|single page app|spa)\b/.test(
       request
@@ -84,9 +98,10 @@ export function shouldRequireBrowserAcceptance(input: {
   if (/\b(react|next\.?js|vite|vue|svelte|angular)\b/.test(request)) {
     return true;
   }
-  return /(^|\n)(app\/page\.(tsx|jsx|ts|js)|pages\/|public\/index\.html|public\/app\.js|src\/app\/|src\/main\.(tsx|jsx|ts|js)|src\/app\.(tsx|jsx|ts|js)|vite\.config\.|next\.config\.)/i.test(
-    tree
-  );
+  if (changedFiles) {
+    return changedFilesAffectUi;
+  }
+  return /(^|\n)(app\/page\.(tsx|jsx|ts|js)|pages\/|public\/index\.html|public\/app\.js|src\/app\/|src\/main\.(tsx|jsx|ts|js)|src\/app\.(tsx|jsx|ts|js)|vite\.config\.|next\.config\.)/i.test(tree);
 }
 
 function uniqueSortedIssues(issueNumbers: number[] | undefined): number[] {

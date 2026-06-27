@@ -106,14 +106,26 @@ function taskPaths(input: SkillActivationInput): string[] {
   ].map((path) => path.toLowerCase());
 }
 
+function writableTaskPaths(input: SkillActivationInput): string[] {
+  const outputs = input.task?.outputPaths ?? [];
+  return (outputs.length > 0 ? outputs : taskPaths(input)).map((path) =>
+    path.toLowerCase()
+  );
+}
+
 function docsOnlyTask(input: SkillActivationInput): boolean {
-  const paths = taskPaths(input);
+  const paths = writableTaskPaths(input);
   const text = taskText(input.task);
   if (paths.length === 0) return /\bdocs?\b|documentation|readme|adr/.test(text);
   const docsOnlyPaths = paths.every((path) =>
     /\.(md|mdx|txt|rst)$/.test(path) || path.includes("/docs/") || path.startsWith("docs/")
   );
-  return docsOnlyPaths && !/\bbug|fix|behavior|logic|component|api|test|runner\b/.test(text);
+  return (
+    docsOnlyPaths &&
+    !/\bbehavior change|implementation|source code|code path|component logic|api handler|test file|runner code\b/.test(
+      text
+    )
+  );
 }
 
 function configOnlyTask(input: SkillActivationInput): boolean {
@@ -207,30 +219,16 @@ function touchesDocs(input: SkillActivationInput): boolean {
   return docsOnlyTask(input) || /\bdocs?\b|documentation|readme|adr|handoff/.test(text);
 }
 
-function evidenceFor(ids: string[], input: SkillActivationInput): string[] {
-  const requirements = getSkillCards(ids).flatMap((skill) =>
+function evidenceFor(ids: string[]): string[] {
+  return getSkillCards(ids).flatMap((skill) =>
     (skill.evidenceRequirements ?? []).map((item) => `${skill.id}: ${item}`)
   );
-  if (
-    input.phase === "worker" &&
-    !ids.includes("agent:test-driven-development") &&
-    (docsOnlyTask(input) || configOnlyTask(input))
-  ) {
-    requirements.push(
-      "TDD exemption: state why this task is docs/config-only and list the verification used instead"
-    );
-  }
-  return requirements;
 }
 
 function selectWorkerOverlays(input: SkillActivationInput): string[] {
   const skillMode = input.skillMode ?? "balanced";
   if (docsOnlyTask(input)) {
-    const docs = ["agent:incremental-implementation", "agent:documentation-and-adrs"];
-    if (skillMode === "safe" && (input.runnerAvailable || input.repoAvailable)) {
-      docs.push("agent:security-and-hardening");
-    }
-    return docs;
+    return ["agent:incremental-implementation", "agent:documentation-and-adrs"];
   }
 
   const workflow = ["agent:incremental-implementation"];
@@ -298,7 +296,7 @@ export function selectSkills(input: SkillActivationInput): SkillActivation {
     always: ALWAYS_SKILLS,
     index: compactSkillIndexIds(),
     overlays,
-    evidenceRequired: evidenceFor(overlays, input),
+    evidenceRequired: evidenceFor(overlays),
     warnings: resolved.warnings,
   };
 }

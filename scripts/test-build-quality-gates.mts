@@ -190,6 +190,32 @@ check(
     treeText: "src/index.ts\ntests/run-tests.ts",
   }),
 );
+check(
+  "test-only verification fixes in web repos do not require browser acceptance",
+  !shouldRequireBrowserAcceptance({
+    request:
+      "Fix the current CodeSketch verification failure only. Do not implement unrelated features.",
+    treeText: "server/server.js\npublic/index.html\npublic/app.js\ntests/frontend-contract.test.js",
+    changedFiles: ["tests/frontend-contract.test.js"],
+  }),
+);
+check(
+  "test-only web-app verification fixes do not require browser acceptance",
+  !shouldRequireBrowserAcceptance({
+    request:
+      "Fix the web app verification failure only. Reproduce npm run check && npm test and do not implement unrelated features.",
+    treeText: "server/server.js\npublic/index.html\npublic/app.js\ntests/frontend-contract.test.js",
+    changedFiles: ["tests/frontend-contract.test.js"],
+  }),
+);
+check(
+  "ui file changes in web repos require browser acceptance",
+  shouldRequireBrowserAcceptance({
+    request: "Fix the current CodeSketch verification failure only.",
+    treeText: "server/server.js\npublic/index.html\npublic/app.js",
+    changedFiles: ["public/app.js"],
+  }),
+);
 
 const summary = formatBuildQualityGateSummary(missingChecks);
 check("summary has quality gate heading", summary.includes("Build quality gate"), summary);

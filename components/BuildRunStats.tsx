@@ -33,6 +33,16 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
+export function formatBuildRunStatusText(
+  status: string,
+  stopReason?: BuildStopReason | null
+): string {
+  if (status === "completed" || !stopReason || stopReason === "completed") {
+    return status;
+  }
+  return `${status} (${stopReason})`;
+}
+
 export function BuildRunStats({
   status,
   policy,
@@ -58,7 +68,7 @@ export function BuildRunStats({
           <div className="min-w-0">
             <h2 className="text-sm font-semibold">Build run stats</h2>
             <p className="truncate text-xs text-muted-foreground">
-              {buildRunPolicyLabel(policy)} · {stopReason ? `${status} (${stopReason})` : status}
+              {buildRunPolicyLabel(policy)} · {formatBuildRunStatusText(status, stopReason)}
             </p>
           </div>
         </div>

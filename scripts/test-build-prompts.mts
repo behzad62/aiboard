@@ -96,6 +96,7 @@ check(
     /GREEN test\/check pass after implementation/i.test(skillEvidencePrompt) &&
     /Root cause or reproduction identified before the fix/i.test(skillEvidencePrompt) &&
     /Fix verified against the reproduced failure/i.test(skillEvidencePrompt) &&
+    /Trust boundary reviewed and unsafe case considered/i.test(skillEvidencePrompt) &&
     /browser_navigate/i.test(skillEvidencePrompt) &&
     /browser_console_messages/i.test(skillEvidencePrompt),
   skillEvidencePrompt

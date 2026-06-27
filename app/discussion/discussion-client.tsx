@@ -510,6 +510,20 @@ function DiscussionPageInner() {
           });
           setBuildToolReviewReport(event.toolReviewReport ?? null);
           setStatus("completed");
+          setDiscussion((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: "completed",
+                  buildStopReason:
+                    prev.mode === "build" ? "completed" : prev.buildStopReason,
+                  buildStoppedAt:
+                    prev.mode === "build"
+                      ? new Date().toISOString()
+                      : prev.buildStoppedAt,
+                }
+              : prev
+          );
           if (discussion) notifyComplete(discussion.topic);
           break;
         case "complete":

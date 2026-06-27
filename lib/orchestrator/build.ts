@@ -2147,6 +2147,7 @@ const WORKER_SKILL_EVIDENCE_INSTRUCTION = [
   "Skill evidence:",
   "- agent:test-driven-development: RED test/check failure before implementation: <command or check and failing result>; GREEN test/check pass after implementation: <command or check and passing result>.",
   "- superpowers:systematic-debugging: Root cause or reproduction identified before the fix: <root cause, reproduction, hypothesis, or trace>; Fix verified against the reproduced failure: <command, test, or browser result>.",
+  "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: <untrusted input, secret, file path, shell, network, or storage boundary and the unsafe case considered>.",
   "- aiboard:browser-acceptance: browser_navigate <exact local URL>; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
   "Only include lines for active/applicable skills or explicit exemption reasons.",
 ].join("\n");

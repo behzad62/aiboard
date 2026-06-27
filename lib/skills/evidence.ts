@@ -64,6 +64,16 @@ function missingForSkill(skillId: string, required: string[], reported: string[]
     }
     return missing;
   }
+  if (skillId === "agent:security-and-hardening") {
+    if (
+      !/(trust boundary|unsafe case|untrusted|secret|api key|token|path traversal|file path|shell|command|network|storage|sanitize|validated|rejected)/.test(
+        joined
+      )
+    ) {
+      return required;
+    }
+    return [];
+  }
   return [];
 }
 

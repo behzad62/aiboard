@@ -6,7 +6,7 @@ import {
 } from "../lib/client/build-usage";
 import type { BuildUsageCallInput } from "../lib/client/build-usage";
 import { formatTokenCount } from "../lib/client/token-usage";
-import { BuildRunStats } from "../components/BuildRunStats";
+import { BuildRunStats, formatBuildRunStatusText } from "../components/BuildRunStats";
 import { BuildTranscriptPanel } from "../components/BuildTranscriptPanel";
 
 let failed = 0;
@@ -21,6 +21,14 @@ check("formats thousands compactly", formatTokenCount(18_734) === "18.7k");
 check("formats millions compactly", formatTokenCount(1_234_567) === "1.2M");
 check("exports Build usage stats component", typeof BuildRunStats === "function");
 check("exports collapsed Build transcript component", typeof BuildTranscriptPanel === "function");
+check(
+  "completed run label ignores stale blocked stop reason",
+  formatBuildRunStatusText("completed", "blocked") === "completed"
+);
+check(
+  "stopped run label includes stop reason",
+  formatBuildRunStatusText("stopped", "blocked") === "stopped (blocked)"
+);
 
 const usd = estimatedUsdForTokens({
   inputTokens: 500_000,
