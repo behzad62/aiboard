@@ -14,7 +14,7 @@ export function BenchmarkReportSummary({
 }: {
   counts: BenchmarkReportCounts;
 }) {
-  const rows = [
+  const labRows = [
     ["Suites", counts.suites],
     ["Runs", counts.runs],
     ["Cases", counts.cases],
@@ -27,30 +27,55 @@ export function BenchmarkReportSummary({
     ["Build checkpoints", counts.buildCheckpoints],
     ["Build model stats", counts.buildStats],
   ] as const;
+  const certifiedRows = [
+    ["Certified cases", counts.certifiedCases],
+    ["Certified attempts", counts.certifiedAttempts],
+    ["Verifier results", counts.verifierResults],
+    ["Run events", counts.runEvents],
+    ["Tool-call traces", counts.toolCallTraces],
+    ["Team compositions", counts.teamCompositions],
+    ["Harness certifications", counts.harnessCertifications],
+  ] as const;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Export Contents</CardTitle>
         <CardDescription>
-          These records are included in the JSON bundle and summarized in the
-          Markdown report.
+          Lab evidence and certified v2 records are exported together when v2
+          store support is available.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {rows.map(([label, value]) => (
-            <div key={label} className="rounded-md border bg-muted/20 px-3 py-2">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {label}
-              </div>
-              <div className="mt-1 text-xl font-semibold tabular-nums">
-                {value}
-              </div>
-            </div>
-          ))}
-        </div>
+      <CardContent className="space-y-5">
+        <ReportCountGroup title="Lab evidence" rows={labRows} />
+        <ReportCountGroup title="Certified v2" rows={certifiedRows} />
       </CardContent>
     </Card>
+  );
+}
+
+function ReportCountGroup({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: readonly (readonly [string, number])[];
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">{title}</h3>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {label}
+            </div>
+            <div className="mt-1 text-xl font-semibold tabular-nums">
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

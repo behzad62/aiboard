@@ -167,9 +167,10 @@ export function BuildLeaderboard() {
     <section className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Build leaderboard</h2>
+          <h2 className="text-xl font-semibold tracking-tight">Build Lab leaderboard</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Quality, speed, and reliability accumulated from Build runs in this browser.
+            Architect-reviewed quality, speed, and reliability accumulated from
+            Build runs in this browser.
           </p>
         </div>
         {!loading && !isEmpty && (
@@ -206,10 +207,10 @@ export function BuildLeaderboard() {
             onResetModel={(modelId) => reset(modelId)}
           />
           <p className="text-xs text-muted-foreground">
-            Accumulated locally from your Build runs. Quality is difficulty-weighted;
-            quality/attempt normalizes for usage volume; speed is output throughput,
-            never raw task time; provider denials are tracked separately and never
-            count against model quality.
+            Accumulated locally from your Build runs. Architect-reviewed quality
+            is difficulty-weighted; quality/attempt normalizes for usage volume;
+            speed is output throughput, never raw task time; provider denials are
+            tracked separately and never count against model quality.
           </p>
         </>
       )}

@@ -2,7 +2,6 @@
 
 import { BenchmarkLab } from "@/components/BenchmarkLab";
 import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
-import { GamesBenchmark } from "@/components/games/GamesBenchmark";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function BenchmarkPage() {
@@ -21,9 +20,13 @@ export function BenchmarkPage() {
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="evidence">Evidence</TabsTrigger>
-          <TabsTrigger value="build">Build</TabsTrigger>
-          <TabsTrigger value="games">Game Benchmarks</TabsTrigger>
+          <TabsTrigger value="lab-evidence">Lab Evidence</TabsTrigger>
+          <TabsTrigger value="certified">Certified</TabsTrigger>
+          <TabsTrigger value="workbench">WorkBench</TabsTrigger>
+          <TabsTrigger value="gameiq">GameIQ</TabsTrigger>
+          <TabsTrigger value="teamiq">TeamIQ</TabsTrigger>
+          <TabsTrigger value="toolreliability">Tool Reliability</TabsTrigger>
+          <TabsTrigger value="build-lab">Build Lab</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
 
@@ -31,16 +34,32 @@ export function BenchmarkPage() {
           <BenchmarkLab view="overview" />
         </TabsContent>
 
-        <TabsContent value="evidence" className="space-y-6">
-          <BenchmarkLab view="evidence" />
+        <TabsContent value="lab-evidence" className="space-y-6">
+          <BenchmarkLab view="lab-evidence" />
         </TabsContent>
 
-        <TabsContent value="build" className="space-y-6">
+        <TabsContent value="certified" className="space-y-6">
+          <BenchmarkLab view="certified" />
+        </TabsContent>
+
+        <TabsContent value="workbench" className="space-y-6">
+          <BenchmarkLab view="workbench" />
+        </TabsContent>
+
+        <TabsContent value="gameiq" className="space-y-6">
+          <BenchmarkLab view="gameiq" />
+        </TabsContent>
+
+        <TabsContent value="teamiq" className="space-y-6">
+          <BenchmarkLab view="teamiq" />
+        </TabsContent>
+
+        <TabsContent value="toolreliability" className="space-y-6">
+          <BenchmarkLab view="toolreliability" />
+        </TabsContent>
+
+        <TabsContent value="build-lab" className="space-y-6">
           <BuildLeaderboard />
-        </TabsContent>
-
-        <TabsContent value="games" className="space-y-6">
-          <GamesBenchmark />
         </TabsContent>
 
         <TabsContent value="reports" className="space-y-6">

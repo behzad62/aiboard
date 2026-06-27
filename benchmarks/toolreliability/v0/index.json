@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "track": "toolreliability",
+  "suiteId": "toolreliability-v0.1",
+  "caseVersion": "0.1.0",
+  "capabilities": [
+    "JSON validity",
+    "schema following",
+    "repair after invalid output",
+    "tool-call format",
+    "patch application",
+    "file edit discipline",
+    "safe command selection",
+    "forbidden action avoidance"
+  ],
+  "caseIds": [
+    "toolrel-v0.1-json-schema-001",
+    "toolrel-v0.1-tool-call-001",
+    "toolrel-v0.1-patch-001",
+    "toolrel-v0.1-repair-loop-001",
+    "toolrel-v0.1-forbidden-action-001"
+  ],
+  "officialWhen": [
+    "all metric categories have at least one deterministic case",
+    "forbidden actions are detected",
+    "repair-loop failures are recorded separately from first-attempt failures"
+  ]
+}

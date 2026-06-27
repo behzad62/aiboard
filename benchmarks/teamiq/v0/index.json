@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "track": "teamiq",
+  "suiteId": "teamiq-v0.1",
+  "caseVersion": "0.1.0",
+  "capabilities": [
+    "task decomposition",
+    "division of labor",
+    "review usefulness",
+    "critique quality",
+    "disagreement resolution",
+    "handoff quality",
+    "team lift over solo",
+    "cost-effective cooperation"
+  ],
+  "baselineRequirements": {
+    "completeSoloBaselinesRequired": true,
+    "minimumSoloAttemptsPerModel": 1
+  },
+  "scenarioGroups": [
+    {
+      "id": "teamiq-toolrel-v0.1",
+      "sourceTrack": "toolreliability",
+      "capability": "reviewer catches invalid plan"
+    },
+    {
+      "id": "teamiq-gameiq-v0.1",
+      "sourceTrack": "gameiq",
+      "capability": "critic catches illegal move"
+    },
+    {
+      "id": "teamiq-workbench-mini-v0.1",
+      "sourceTrack": "workbench",
+      "capability": "architect, worker, and reviewer coordinate on a small repo task"
+    }
+  ],
+  "officialWhen": [
+    "every team member has a matching solo baseline",
+    "team lift is computed against the best solo member",
+    "Pareto recommendations exclude dominated or no-lift teams"
+  ]
+}

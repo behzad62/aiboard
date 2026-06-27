@@ -5,10 +5,27 @@ import type {
 } from "@/lib/db/schema";
 import type {
   BenchmarkCase,
+  BenchmarkAttemptV2,
+  BenchmarkCaseV2,
   BenchmarkFailure,
   BenchmarkMetricValue,
   BenchmarkRun,
+  BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
+import {
+  aggregateCertifiedRunScores,
+  rankByCostPerPass,
+  rankByEfficiency,
+  rankBySpeedPerPass,
+  rankByTeamLift,
+  rankByToolReliability,
+  rankByVerifiedQuality,
+} from "@/lib/benchmark/scoring/aggregate";
+import { computeParetoFrontier } from "@/lib/benchmark/scoring/pareto";
+import type {
+  CertifiedBenchmarkDashboardData,
+  CertifiedBenchmarkDashboardInput,
+} from "@/lib/benchmark/scoring/types";
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
@@ -407,6 +424,246 @@ export function buildBenchmarkDashboardData(
     ),
     evidenceByModel,
   };
+}
+
+export function buildCertifiedBenchmarkDashboardData(
+  input: CertifiedBenchmarkDashboardInput
+): CertifiedBenchmarkDashboardData {
+  const attempts = input.attemptsV2.filter(isCertifiedAttempt);
+  const certifiedAttemptIds = new Set(attempts.map((attempt) => attempt.id));
+  const verifierResults = input.verifierResults.filter((result) =>
+    certifiedAttemptIds.has(result.attemptId)
+  );
+  const verifierByAttemptId = new Map(
+    verifierResults.map((result) => [result.attemptId, result])
+  );
+  const leaderboard = rankByVerifiedQuality(
+    aggregateCertifiedRunScores({
+      attempts,
+      cases: input.caseV2,
+      teamCompositions: input.teamCompositions,
+      verifierResults,
+    })
+  );
+  const paretoFrontier = computeParetoFrontier(leaderboard, [
+    {
+      key: "verifiedQuality",
+      direction: "higher",
+      value: (item) => item.verifiedQuality,
+    },
+    {
+      key: "costPerPass",
+      direction: "lower",
+      value: (item) => item.costPerPass ?? Number.POSITIVE_INFINITY,
+    },
+    {
+      key: "speedPerPassMs",
+      direction: "lower",
+      value: (item) => item.speedPerPassMs ?? Number.POSITIVE_INFINITY,
+    },
+  ]);
+
+  return {
+    summary: {
+      certifiedRuns: countCertifiedRuns(attempts),
+      certifiedAttempts: attempts.length,
+      certifiedCases: input.caseV2.length,
+      certifiedTeams: leaderboard.length,
+      verifiedPassRate: rate(
+        attempts.filter((attempt) =>
+          isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))
+        ).length,
+        attempts.length
+      ),
+      averageVerifiedQuality: averageNumbers(
+        attempts.map((attempt) => finiteMetric(attempt.verifiedQuality))
+      ),
+      averageEfficiencyScore: averageNumbers(
+        attempts.map((attempt) => finiteMetric(attempt.efficiencyScore))
+      ),
+      averageCostUsd: averageNumbers(
+        attempts.map((attempt) => finiteMetric(attempt.costUsd))
+      ),
+      averageDurationMs: averageNumbers(
+        attempts.map((attempt) => finiteMetric(attempt.durationMs))
+      ),
+      harnessCertificationPassRate: rate(
+        input.harnessCertifications.filter((certification) => certification.passed)
+          .length,
+        input.harnessCertifications.length
+      ),
+    },
+    leaderboard,
+    efficiencyLeaderboard: rankByEfficiency(leaderboard),
+    costPerPassLeaderboard: rankByCostPerPass(leaderboard),
+    speedPerPassLeaderboard: rankBySpeedPerPass(leaderboard),
+    teamLiftLeaderboard: rankByTeamLift(leaderboard),
+    toolReliabilityLeaderboard: rankByToolReliability(leaderboard),
+    paretoFrontier,
+    trackRows: buildCertifiedTrackRows(
+      input.caseV2,
+      attempts,
+      verifierByAttemptId
+    ),
+    verifierAssertionRows: buildVerifierAssertionRows(verifierResults),
+  };
+}
+
+function isCertifiedAttempt(attempt: BenchmarkAttemptV2): boolean {
+  return attempt.mode === "certified";
+}
+
+function isVerifiedPassed(
+  attempt: BenchmarkAttemptV2,
+  verifier: BenchmarkVerifierResult | undefined
+): boolean {
+  if (verifier) return verifier.passed;
+  return attempt.status === "passed";
+}
+
+function countCertifiedRuns(attempts: BenchmarkAttemptV2[]): number {
+  const runIds = new Set(
+    attempts
+      .map((attempt) => attempt.runId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+  );
+  return runIds.size > 0 ? runIds.size : attempts.length;
+}
+
+function buildCertifiedTrackRows(
+  cases: BenchmarkCaseV2[],
+  attempts: BenchmarkAttemptV2[],
+  verifierByAttemptId: Map<string, BenchmarkVerifierResult>
+): CertifiedBenchmarkDashboardData["trackRows"] {
+  const caseById = new Map(cases.map((item) => [item.id, item]));
+  const rows = new Map<
+    string,
+    {
+      track: string;
+      caseIds: Set<string>;
+      attempts: number;
+      passed: number;
+      verifiedQualitySum: number;
+    }
+  >();
+
+  for (const item of cases) {
+    const row = trackRowFor(rows, item.track);
+    row.caseIds.add(item.id);
+  }
+
+  for (const attempt of attempts) {
+    const track = attempt.track ?? caseById.get(attempt.caseId)?.track ?? "unknown";
+    const row = trackRowFor(rows, track);
+    if (attempt.caseId) row.caseIds.add(attempt.caseId);
+    row.attempts += 1;
+    if (isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))) {
+      row.passed += 1;
+    }
+    row.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
+  }
+
+  return Array.from(rows.values())
+    .map((row) => ({
+      track: row.track,
+      cases: row.caseIds.size,
+      attempts: row.attempts,
+      passed: row.passed,
+      verifiedPassRate: rate(row.passed, row.attempts),
+      averageVerifiedQuality:
+        row.attempts > 0 ? round(row.verifiedQualitySum / row.attempts, 4) : null,
+    }))
+    .sort((a, b) => a.track.localeCompare(b.track));
+}
+
+function trackRowFor(
+  rows: Map<
+    string,
+    {
+      track: string;
+      caseIds: Set<string>;
+      attempts: number;
+      passed: number;
+      verifiedQualitySum: number;
+    }
+  >,
+  track: string
+) {
+  const existing = rows.get(track);
+  if (existing) return existing;
+  const created = {
+    track,
+    caseIds: new Set<string>(),
+    attempts: 0,
+    passed: 0,
+    verifiedQualitySum: 0,
+  };
+  rows.set(track, created);
+  return created;
+}
+
+function buildVerifierAssertionRows(
+  verifierResults: BenchmarkVerifierResult[]
+): CertifiedBenchmarkDashboardData["verifierAssertionRows"] {
+  const rows = new Map<
+    string,
+    {
+      id: string;
+      label: string;
+      passed: number;
+      failed: number;
+      weightSum: number;
+      weightSamples: number;
+    }
+  >();
+
+  for (const result of verifierResults) {
+    for (const assertion of result.assertionResults ?? []) {
+      const row =
+        rows.get(assertion.id) ??
+        {
+          id: assertion.id,
+          label: assertion.label,
+          passed: 0,
+          failed: 0,
+          weightSum: 0,
+          weightSamples: 0,
+        };
+      if (assertion.passed) row.passed += 1;
+      else row.failed += 1;
+      const weight = finiteMetric(assertion.weight);
+      if (weight != null) {
+        row.weightSum += weight;
+        row.weightSamples += 1;
+      }
+      rows.set(assertion.id, row);
+    }
+  }
+
+  return Array.from(rows.values())
+    .map((row) => ({
+      id: row.id,
+      label: row.label,
+      passed: row.passed,
+      failed: row.failed,
+      passRate: rate(row.passed, row.passed + row.failed),
+      weight:
+        row.weightSamples > 0 ? round(row.weightSum / row.weightSamples, 4) : null,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function averageNumbers(values: Array<number | null>): number | null {
+  const finiteValues = values.filter((value): value is number => value != null);
+  if (finiteValues.length === 0) return null;
+  return round(
+    finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length,
+    4
+  );
+}
+
+function finiteMetric(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function addGameMatch(input: {

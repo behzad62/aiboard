@@ -83,12 +83,12 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <div className="min-h-screen bg-background">
           <header className="border-b bg-background">
-            <div className="mx-auto flex h-14 max-w-[100rem] items-center justify-between px-4">
-              <Link href="/" className="flex items-center gap-2 font-semibold">
+            <div className="mx-auto flex min-h-14 max-w-[100rem] flex-wrap items-center justify-between gap-2 px-4 py-2 md:flex-nowrap">
+              <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold">
                 <MessageSquare className="h-5 w-5 text-primary" />
                 {SITE_NAME}
               </Link>
-              <nav className="flex items-center gap-1">
+              <nav className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1">
                 {/* Project */}
                 <Link href="/about" className={navLink}>
                   <Info className="h-4 w-4" />

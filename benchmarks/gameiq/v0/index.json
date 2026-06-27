@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "track": "gameiq",
+  "suiteId": "gameiq-v0.1",
+  "caseVersion": "0.1.0",
+  "capabilities": [
+    "legal action selection",
+    "tactical reasoning",
+    "strategic planning",
+    "hidden-information reasoning",
+    "state tracking",
+    "role adherence",
+    "structured output reliability"
+  ],
+  "packIds": [
+    "gameiq-v0.1-connect-four",
+    "gameiq-v0.1-chess",
+    "gameiq-v0.1-battleship",
+    "gameiq-v0.1-codenames"
+  ],
+  "officialWhen": [
+    "scenario pack digest recorded",
+    "perfect deterministic model scores 100",
+    "invalid action model scores low",
+    "fallback and schema failures are recorded separately"
+  ]
+}

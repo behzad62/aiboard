@@ -4,7 +4,7 @@ import { BenchmarkPage } from "@/components/BenchmarkPage";
 export const metadata: Metadata = {
   title: "Model benchmark",
   description:
-    "How each worker model has performed across all your Build runs — quality, speed, and reliability, accumulated locally in your browser.",
+    "How each worker model has performed across all your Build runs - Architect-reviewed quality, speed, and reliability, accumulated locally in your browser.",
   alternates: { canonical: "/benchmark" },
 };
 
