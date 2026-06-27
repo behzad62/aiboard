@@ -79,6 +79,28 @@ check(
   prompt
 );
 
+const skillEvidencePrompt = buildWorkerTaskPrompt({
+  request: "Fix a failing web app test.",
+  treeText: "server/app.js\ntests/app.test.js",
+  task: fixingTask,
+  contextFileText: "",
+  architectNotes: "",
+  skillContext:
+    "Active skills: agent:test-driven-development, superpowers:systematic-debugging, aiboard:browser-acceptance",
+  toolInstructions: "",
+});
+check(
+  "worker prompt gives exact skill evidence template for TDD/debug/browser gates",
+  /Skill evidence:/i.test(skillEvidencePrompt) &&
+    /RED test\/check failure before implementation/i.test(skillEvidencePrompt) &&
+    /GREEN test\/check pass after implementation/i.test(skillEvidencePrompt) &&
+    /Root cause or reproduction identified before the fix/i.test(skillEvidencePrompt) &&
+    /Fix verified against the reproduced failure/i.test(skillEvidencePrompt) &&
+    /browser_navigate/i.test(skillEvidencePrompt) &&
+    /browser_console_messages/i.test(skillEvidencePrompt),
+  skillEvidencePrompt
+);
+
 const scoreboard = scoreboardSection("- claude-opus-4-5: score 3\n- Gemini 3.5 Flash: score 0");
 check(
   "scoreboard prompt tells Architect assignTo is a sparse preference",
@@ -90,6 +112,7 @@ const workerTools = buildWorkerToolInstructions({
   reads: 1,
   rangeReads: 1,
   searches: 1,
+  runs: 1,
   patches: 1,
   appends: 1,
   mcpToolsDoc:
@@ -126,6 +149,21 @@ check(
   workerTools
 );
 check(
+  "worker tool policy allows advertised run actions",
+  isWorkerBuildToolAction({
+    action: "run",
+    command: "npm test",
+    reason: "verify the reproduced failure",
+  }),
+);
+check(
+  "worker tool instructions constrain shell checks to simple project-root commands",
+  /project-root commands only/i.test(workerTools) &&
+    /no cd, pipes, redirects/i.test(workerTools) &&
+    /no installs/i.test(workerTools),
+  workerTools
+);
+check(
   "worker tool instructions constrain Playwright navigation and console levels",
   /never navigate to about:blank/i.test(workerTools) &&
     /browser_console_messages/i.test(workerTools) &&
@@ -151,6 +189,23 @@ check(
   /Do not emit bare.*browser_snapshot/i.test(workerTools) &&
     /Do not use "arguments"/i.test(workerTools) &&
     /Do not put MCP actions in arrays/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions prevent oversized malformed JSON tool calls",
+  /keep each JSON tool action small/i.test(workerTools) &&
+    /one smaller JSON tool action/i.test(workerTools) &&
+    /split.*patch/i.test(workerTools) &&
+    /append chunks/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions show Playwright target refs for form/click/type actions",
+  /browser_fill_form/i.test(workerTools) &&
+    /"target":"e19"/.test(workerTools) &&
+    /Do not use "ref"/i.test(workerTools) &&
+    /browser_type/i.test(workerTools) &&
+    /browser_click/i.test(workerTools),
   workerTools
 );
 

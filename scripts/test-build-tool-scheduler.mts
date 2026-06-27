@@ -5,6 +5,7 @@ import {
   packToolBatchResult,
   createToolReplayCache,
   scheduleBuildToolActions,
+  skippedOnlyToolBatchRecoveryInstruction,
 } from "../lib/orchestrator/build-tool-scheduler";
 import { inspectStrictToolActionBatchOutput } from "../lib/orchestrator/build";
 
@@ -78,6 +79,16 @@ const packed = packToolBatchResult({
 check("packed result lists served", /Served/.test(packed), packed);
 check("packed result lists skipped", /Skipped/.test(packed), packed);
 check("packed result caps output", packed.length < 500, packed);
+check(
+  "skipped-only tool batches instruct worker to finalize without more tools",
+  /stop using tools now/i.test(
+    skippedOnlyToolBatchRecoveryInstruction({ servedCount: 0, skippedCount: 1 })
+  ),
+);
+check(
+  "partially served tool batches do not force final output",
+  skippedOnlyToolBatchRecoveryInstruction({ servedCount: 1, skippedCount: 1 }) === "",
+);
 
 const replayCache = createToolReplayCache();
 const rangeAction = {

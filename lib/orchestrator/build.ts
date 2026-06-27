@@ -878,6 +878,48 @@ export function outputPathsForTask(task: {
   return paths;
 }
 
+const SUSPICIOUS_BUILD_ARTIFACT_PATHS = new Set([
+  "actions/result",
+  "actions/results",
+  "action/result",
+  "result",
+  "results",
+  "summary",
+  "notes",
+  "evidence",
+]);
+
+export function isSuspiciousBuildArtifactPath(rawPath: string): boolean {
+  const path = normalizeExplicitOutputPath(rawPath);
+  if (!path) return true;
+  const lower = path.toLowerCase();
+  if (SUSPICIOUS_BUILD_ARTIFACT_PATHS.has(lower)) return true;
+  return /^(?:actions?\/)?(?:result|results|summary|notes|evidence)\.(?:txt|md|json)$/i.test(lower);
+}
+
+function normalizedPathSet(paths: string[]): Set<string> {
+  return new Set(
+    paths
+      .map((path) => normalizeExplicitOutputPath(path)?.toLowerCase())
+      .filter((path): path is string => !!path)
+  );
+}
+
+export function isTaskWritePathAllowed(
+  task: Pick<BuildTask, "contextFiles" | "outputPaths" | "expectedOutputs">,
+  rawPath: string
+): boolean {
+  const path = normalizeExplicitOutputPath(rawPath);
+  if (!path || isSuspiciousBuildArtifactPath(path)) return false;
+  const outputPaths = outputPathsForTask(task);
+  const scope =
+    outputPaths.length > 0
+      ? normalizedPathSet(outputPaths)
+      : normalizedPathSet(task.contextFiles ?? []);
+  if (scope.size === 0) return false;
+  return scope.has(path.toLowerCase());
+}
+
 export function findIncompleteBuildTasks(tasks: BuildTask[]): BuildTask[] {
   return tasks.filter((task) => task.status !== "done");
 }
@@ -1659,6 +1701,7 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
     action.action === "search" ||
     action.action === "patch" ||
     action.action === "append" ||
+    action.action === "run" ||
     action.action === "tool"
   );
 }
@@ -2099,6 +2142,15 @@ const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
   "Verify expected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If you cannot run browser acceptance, say exactly what was not verified and do not claim it passed.",
 ].join(" ");
 
+const WORKER_SKILL_EVIDENCE_INSTRUCTION = [
+  "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose. Use the exact gate wording that applies; do not invent evidence you did not actually gather.",
+  "Skill evidence:",
+  "- agent:test-driven-development: RED test/check failure before implementation: <command or check and failing result>; GREEN test/check pass after implementation: <command or check and passing result>.",
+  "- superpowers:systematic-debugging: Root cause or reproduction identified before the fix: <root cause, reproduction, hypothesis, or trace>; Fix verified against the reproduced failure: <command, test, or browser result>.",
+  "- aiboard:browser-acceptance: browser_navigate <exact local URL>; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
+  "Only include lines for active/applicable skills or explicit exemption reasons.",
+].join("\n");
+
 function searchToolDoc(searchesLeft?: number): string {
   if (!searchesLeft || searchesLeft <= 0) return "";
   return [
@@ -2179,6 +2231,11 @@ function playwrightWorkerToolDoc(
     `- Navigate with exactly: {"action":"tool","server":"playwright","tool":"browser_navigate","args":{"url":"${url}"},"reason":"open the app under test"}`,
     '- Inspect visible UI with exactly: {"action":"tool","server":"playwright","tool":"browser_snapshot","args":{},"reason":"capture settled UI state"}',
     '- Check console errors with exactly: {"action":"tool","server":"playwright","tool":"browser_console_messages","args":{"level":"error"},"reason":"check browser console errors"}',
+    '- After browser_snapshot, use exact element refs from the snapshot as "target" for user interactions; do not guess labels, CSS selectors, or accessible names when a ref is available.',
+    '- Type into a control with exactly: {"action":"tool","server":"playwright","tool":"browser_type","args":{"target":"e19","element":"Local Repository Path textbox","text":"C:\\\\Users\\\\...\\\\CodeSketch"},"reason":"enter repository path"}',
+    '- Click a control with exactly: {"action":"tool","server":"playwright","tool":"browser_click","args":{"target":"e24","element":"Analyze Repository button"},"reason":"start analysis"}',
+    '- Fill a form with exactly: {"action":"tool","server":"playwright","tool":"browser_fill_form","args":{"fields":[{"name":"Local Repository Path","type":"textbox","target":"e19","value":"C:\\\\Users\\\\...\\\\CodeSketch"}]},"reason":"fill form from snapshot refs"}',
+    '- For browser_fill_form fields, use "target". Do not use "ref". If a Playwright error says the target is invalid, call browser_snapshot again and use the latest ref.',
     '- Use browser_evaluate only for DOM/page-state checks after browser_navigate; never put require, child_process, process, fs, npm, shell commands, or project file reads in browser_evaluate.',
     '- Do not emit bare calls such as {"action":"browser_snapshot"}. Do not use "arguments" instead of "args". Do not put MCP actions in arrays. Do not concatenate multiple JSON objects without waiting for tool results when the next action depends on the prior result.',
     "- Browser acceptance evidence must name the URL, the action performed, the visible settled result, stuck-loading/error/blank/overlay absence, and console result.",
@@ -2220,6 +2277,7 @@ export function buildWorkerToolInstructions(budget: {
   reads: number;
   rangeReads: number;
   searches: number;
+  runs?: number;
   patches: number;
   appends: number;
   mcpToolsDoc?: string;
@@ -2238,6 +2296,9 @@ export function buildWorkerToolInstructions(budget: {
     budget.searches > 0
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
+    budget.runs && budget.runs > 0
+      ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs, file writes, or long-running dev servers.`
+      : "",
     `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text from that character offset up to the cap; use read/read_range for current source files.`,
     budget.patches > 0
       ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
@@ -2245,10 +2306,15 @@ export function buildWorkerToolInstructions(budget: {
     budget.appends > 0
       ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
       : "",
+    "TOOL SIZE RULE: keep each JSON tool action small. If a tool call would be long or was rejected as incomplete, reply with one smaller JSON tool action; split large patch changes into smaller SEARCH/REPLACE patch ops or use append chunks for large/missing files.",
     mcpToolDoc(budget.mcpToolsDoc, budget.mcpCallsLeft),
     playwrightWorkerToolDoc(budget.mcpToolsDoc, localServers),
     budget.mcpToolsDoc?.toLowerCase().includes("playwright")
-      ? 'MCP browser/Playwright tools are for browser/page inspection only. Do NOT use Playwright/MCP tools to run npm, shell, Node, tests, read project files, or inspect the filesystem; use {"action":"run"} for shell checks and read/read_range/search for files. For Playwright browser_navigate, use the exact app URL and never navigate to about:blank. For browser_console_messages, use level error, warning, info, or debug only.'
+      ? `MCP browser/Playwright tools are for browser/page inspection only. Do NOT use Playwright/MCP tools to run npm, shell, Node, tests, read project files, or inspect the filesystem; ${
+          budget.runs && budget.runs > 0
+            ? 'use {"action":"run"} for shell checks'
+            : "do not request shell checks when no run action is listed"
+        } and read/read_range/search for files. For Playwright browser_navigate, use the exact app URL and never navigate to about:blank. For browser_console_messages, use level error, warning, info, or debug only.`
       : "",
     budget.mcpToolsDoc?.toLowerCase().includes("playwright")
       ? "REAL-BROWSER ACCEPTANCE: for web apps, use the active local server URL for real-browser acceptance. Exercise the main workflow and verify the post-action settled state: expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay, and no console errors."
@@ -2501,7 +2567,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
     input.skillContext?.trim()
-      ? "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose with RED/GREEN checks, root-cause notes, review notes, or exemption reasons as applicable."
+      ? WORKER_SKILL_EVIDENCE_INSTRUCTION
       : "",
     "Do not add or import a new test framework, browser automation package, or config file unless this task explicitly includes updating dependency files such as package.json and the lockfile. For browser verification, prefer MCP browser tools when available instead of creating Playwright/Cypress test files; if you must create tests that import a package, add the dependency and keep the verify command passing.",
     WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION,

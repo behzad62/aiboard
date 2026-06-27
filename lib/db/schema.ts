@@ -81,6 +81,7 @@ export type BuildProblemCode =
   | "patch_failed"
   | "edit_failed"
   | "write_conflict"
+  | "write_scope_rejected"
   | "suspicious_rewrite"
   | "truncated_output"
   | "command_failed"

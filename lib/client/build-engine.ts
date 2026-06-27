@@ -50,6 +50,7 @@ import {
   createToolReplayCache,
   packToolBatchResult,
   scheduleBuildToolActions,
+  skippedOnlyToolBatchRecoveryInstruction,
 } from "@/lib/orchestrator/build-tool-scheduler";
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
@@ -132,6 +133,7 @@ import {
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
+  isTaskWritePathAllowed,
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
   outputPathsForTask,
@@ -293,6 +295,7 @@ const TOTAL_FETCHES = 12;
 const WORKER_READS_PER_TASK = 4;
 const WORKER_RANGE_READS_PER_TASK = 8;
 const WORKER_SEARCHES_PER_TASK = 4;
+const WORKER_RUNS_PER_TASK = 2;
 const WORKER_PATCHES_PER_TASK = 8;
 const WORKER_APPENDS_PER_TASK = 12;
 const WORKER_TOOL_TURNS_PER_TASK = 24;
@@ -3269,6 +3272,26 @@ export async function runBuildDiscussion(
     return null;
   };
 
+  const rejectWorkerWriteOutsideTaskScope = (
+    task: BuildTask,
+    path: string
+  ): string | null => {
+    if (isTaskWritePathAllowed(task, path)) return null;
+    const allowed = outputPathsForTask(task);
+    const fallback = allowed.length > 0 ? allowed : task.contextFiles;
+    const issue = `WRITE REJECTED: ${task.id} attempted to write ${path}, but this task may only write ${fallback.length > 0 ? fallback.join(", ") : "its declared output files"}. Evidence and browser-acceptance notes belong in the worker response, not in ad hoc result files.`;
+    recordBuildProblem({
+      code: "write_scope_rejected",
+      severity: "error",
+      source: "file_writer",
+      taskId: task.id,
+      path,
+      message: issue,
+    });
+    emit({ type: "diagnostic", phase: "model_failed", message: issue });
+    return issue;
+  };
+
   const applyPatchAction = async (
     path: string,
     ops: Array<{ search: string; replace: string }>,
@@ -3463,6 +3486,9 @@ export async function runBuildDiscussion(
     const written: string[] = [];
     const issues: string[] = [];
     const writer = taskId ?? "Architect";
+    const taskForScope = taskId ? tasks.find((task) => task.id === taskId) : undefined;
+    const rejectOutOfScope = (path: string): string | null =>
+      taskForScope ? rejectWorkerWriteOutsideTaskScope(taskForScope, path) : null;
 
     // Record a landed write and flag it LOUDLY when a different writer already
     // touched the same path this wave (a same-writer re-emit or fix is fine).
@@ -3505,6 +3531,11 @@ export async function runBuildDiscussion(
     }
 
     for (const file of files) {
+      const scopeIssue = rejectOutOfScope(file.path);
+      if (scopeIssue) {
+        issues.push(scopeIssue);
+        continue;
+      }
       // A full-file rewrite that shrinks an existing file drastically is far
       // more often a truncated/lazy rewrite ("// rest unchanged") than a real
       // refactor — refuse it and tell the model to use edit blocks instead.
@@ -3548,6 +3579,11 @@ export async function runBuildDiscussion(
     }
 
     for (const edit of edits) {
+      const scopeIssue = rejectOutOfScope(edit.path);
+      if (scopeIssue) {
+        issues.push(scopeIssue);
+        continue;
+      }
       const current = await readFile(edit.path);
       if (current == null) {
         issues.push(`Edit to ${edit.path} skipped — the file doesn't exist.`);
@@ -4891,6 +4927,7 @@ export async function runBuildDiscussion(
       reads: number;
       rangeReads: number;
       searches: number;
+      runs: number;
       patches: number;
       appends: number;
     }): string =>
@@ -4983,6 +5020,7 @@ export async function runBuildDiscussion(
                 reads: WORKER_READS_PER_TASK,
                 rangeReads: WORKER_RANGE_READS_PER_TASK,
                 searches: WORKER_SEARCHES_PER_TASK,
+                runs: Math.min(WORKER_RUNS_PER_TASK, runsLeftThisPhase()),
                 patches: WORKER_PATCHES_PER_TASK,
                 appends: WORKER_APPENDS_PER_TASK,
               }),
@@ -4996,12 +5034,14 @@ export async function runBuildDiscussion(
           reads: WORKER_READS_PER_TASK,
           rangeReads: WORKER_RANGE_READS_PER_TASK,
           searches: WORKER_SEARCHES_PER_TASK,
+          runs: Math.min(WORKER_RUNS_PER_TASK, runsLeftThisPhase()),
           patches: WORKER_PATCHES_PER_TASK,
           appends: WORKER_APPENDS_PER_TASK,
         };
         const tracker = createToolCallTracker();
         const replayCache = createToolReplayCache();
         let badToolCalls = 0;
+        let skippedOnlyToolBatches = 0;
 
         // Dispatch a batch of worker tool actions in one turn: safe reads run
         // together; writes (patch/append) apply in order; MCP stays approval-gated;
@@ -5078,6 +5118,51 @@ export async function runBuildDiscussion(
               });
               continue;
             }
+            if (action.action === "run") {
+              const replayed = replayCache.replay(action);
+              if (replayed) {
+                served.push({
+                  label: `${item.label} (replayed)`,
+                  result: replayed,
+                });
+                continue;
+              }
+              const serveRunResult = (result: string): void => {
+                recordToolCall(tracker, action);
+                replayCache.remember(action, result);
+                served.push({
+                  label: item.label,
+                  result,
+                });
+              };
+              if (!runner) {
+                serveRunResult(
+                  "No local runner is available for command runs. Continue using the provided context and produce the smallest useful final output."
+                );
+                continue;
+              }
+              if (budgets.runs <= 0) {
+                serveRunResult(
+                  "No worker command runs left for this task. Stop requesting run tools and produce your final task output using the evidence already gathered."
+                );
+                continue;
+              }
+              if (!canExecuteRunAction(action.command)) {
+                serveRunResult(
+                  "No command runs left in this phase. Stop requesting run tools and produce your final task output using the evidence already gathered."
+                );
+                continue;
+              }
+              budgets.runs -= 1;
+              const result = await executeRun(action.command, action.reason);
+              const packedResult = storeLongToolResult(
+                "command_output",
+                `Command: ${action.command}`,
+                result
+              );
+              serveRunResult(packedResult);
+              continue;
+            }
             if (action.action === "read" && budgets.reads > 0) {
               budgets.reads -= 1;
               const paths = action.paths.slice(0, 6);
@@ -5121,6 +5206,14 @@ export async function runBuildDiscussion(
               replayCache.remember(action, result);
               served.push({ label: item.label, result });
               continue;
+            }
+            if (action.action === "patch" || action.action === "append") {
+              const scopeIssue = rejectWorkerWriteOutsideTaskScope(task, action.path);
+              if (scopeIssue) {
+                toolIssues.push(scopeIssue);
+                served.push({ label: item.label, result: scopeIssue });
+                continue;
+              }
             }
             if (action.action === "patch" && budgets.patches > 0) {
               budgets.patches -= 1;
@@ -5258,7 +5351,11 @@ export async function runBuildDiscussion(
           }
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
-          workerMessages.push({ role: "user", content: `${warning}${batch.message}` });
+          const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
+          workerMessages.push({
+            role: "user",
+            content: `${warning}${batch.message}${skippedOnlyRecovery}`,
+          });
           if (batch.servedCount > 0 && batch.skippedCount > 0) {
             recordBuildProblem({
               code: "tool_warning",
@@ -5273,8 +5370,29 @@ export async function runBuildDiscussion(
               details: batch.message,
             });
           }
+          if (batch.servedCount > 0) {
+            skippedOnlyToolBatches = 0;
+          }
           if (batch.servedCount === 0) {
-            // Nothing ran (all duplicate, unsupported, or budget-exhausted).
+            if (batch.skippedCount > 0) {
+              skippedOnlyToolBatches += 1;
+              if (skippedOnlyToolBatches === 1) {
+                recordBuildProblem({
+                  code: "tool_warning",
+                  severity: "warning",
+                  source: "worker",
+                  modelId: worker.modelId,
+                  modelName: worker.displayName,
+                  providerId: parseModelId(worker.modelId).providerId,
+                  taskId: task.id,
+                  wave: cycle,
+                  message: `${worker.displayName} tool batch for ${task.id} served nothing; requested actions were skipped and the worker was told to finalize without more tools.`,
+                  details: batch.message,
+                });
+                continue;
+              }
+            }
+            // Nothing ran repeatedly (all duplicate, unsupported, or budget-exhausted).
             // Count it like a malformed turn so a stuck worker still bails out.
             badToolCalls += 1;
             recordBuildProblem({

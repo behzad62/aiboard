@@ -169,6 +169,14 @@ export function scheduleBuildToolActions(
   return { served, skipped };
 }
 
+export function skippedOnlyToolBatchRecoveryInstruction(input: {
+  servedCount: number;
+  skippedCount: number;
+}): string {
+  if (input.servedCount !== 0 || input.skippedCount <= 0) return "";
+  return "\n\nNo requested tools were run. If the skipped actions were duplicate, unsupported, or out of budget, stop using tools now and provide the final task output from the context already available.";
+}
+
 function requestedRange(action: Extract<ArchitectAction, { action: "read_range" }>): {
   path: string;
   startLine: number;
