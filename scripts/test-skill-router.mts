@@ -177,6 +177,34 @@ assert.ok(
   "safe mode should keep security active for runner/repo-enabled builds"
 );
 
+const browserAcceptanceWorker = selectSkills({
+  ...baseInput,
+  phase: "worker",
+  actor: "worker",
+  mcpServers: ["playwright"],
+  task: {
+    id: "T6",
+    title: "Verify web app workflow in browser",
+    instructions:
+      "Start the local web app and use Playwright to verify the main UI workflow.",
+    contextFiles: ["public/app.js", "public/index.html"],
+    outputPaths: [],
+    expectedOutputs: "Browser acceptance evidence.",
+    status: "planned",
+  },
+});
+
+assert.ok(
+  browserAcceptanceWorker.overlays.includes("aiboard:browser-acceptance"),
+  "web/UI worker tasks with Playwright MCP should load browser-acceptance guidance"
+);
+assert.ok(
+  browserAcceptanceWorker.evidenceRequired.some((item) =>
+    item.includes("Browser action evidence")
+  ),
+  "browser-acceptance tasks should require explicit browser evidence"
+);
+
 const resolved = resolveSkillSet(
   ["agent:test-driven-development", "superpowers:strict-test-driven-development"],
   { skillMode: "strict" }
@@ -220,6 +248,38 @@ const missing = createSkillEvidence({
 assert.ok(
   missing[0].missingEvidence.length > 0,
   "missing evidence should be visible to the Architect/UI"
+);
+
+const missingBrowserEvidence = createSkillEvidence({
+  taskId: "T6",
+  actor: "worker",
+  activeSkillIds: ["aiboard:browser-acceptance"],
+  workerOutput:
+    "Done.\n\nSkill evidence:\n- Browser acceptance attempted but not completed.",
+});
+assert.ok(
+  missingBrowserEvidence[0].missingEvidence.length >= 2,
+  "vague browser acceptance claims should not satisfy the browser evidence gate"
+);
+
+const completeBrowserEvidence = createSkillEvidence({
+  taskId: "T6",
+  actor: "worker",
+  activeSkillIds: ["aiboard:browser-acceptance"],
+  workerOutput:
+    [
+      "Done.",
+      "",
+      "Skill evidence:",
+      "- Browser action evidence: browser_navigate opened http://localhost:3001 and browser_snapshot captured the app.",
+      "- Post-action settled evidence: expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay.",
+      "- Console evidence: browser_console_messages level error returned no console errors.",
+    ].join("\n"),
+});
+assert.deepEqual(
+  completeBrowserEvidence[0].missingEvidence,
+  [],
+  "concrete browser acceptance evidence should satisfy the browser gate"
 );
 
 console.log("PASS skill router tests");

@@ -139,6 +139,20 @@ check(
     /post-action settled state/i.test(workerTools),
   workerTools
 );
+check(
+  "worker tool instructions include exact Playwright action examples",
+  /"server":"playwright","tool":"browser_navigate","args":\{"url":"http:\/\/localhost:3001"\}/.test(workerTools) &&
+    /"tool":"browser_snapshot","args":\{\}/.test(workerTools) &&
+    /"tool":"browser_console_messages","args":\{"level":"error"\}/.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions call out malformed Playwright action shapes",
+  /Do not emit bare.*browser_snapshot/i.test(workerTools) &&
+    /Do not use "arguments"/i.test(workerTools) &&
+    /Do not put MCP actions in arrays/i.test(workerTools),
+  workerTools
+);
 
 const reviewPrompt = buildArchitectReviewPrompt({
   request: "Create a web app for exploring a local git repository.",

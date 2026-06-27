@@ -44,6 +44,26 @@ function missingForSkill(skillId: string, required: string[], reported: string[]
     }
     return missing;
   }
+  if (skillId === "aiboard:browser-acceptance") {
+    const missing: string[] = [];
+    if (!/browser_navigate/.test(joined) || !/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)/.test(joined)) {
+      missing.push("Browser action evidence: exact app URL navigated with browser_navigate");
+    }
+    if (
+      !/(browser_snapshot|browser_evaluate|snapshot|evaluate)/.test(joined) ||
+      !/(expected content|content visible|visible)/.test(joined) ||
+      !/(no visible stuck loading|no stuck loading|no loading)/.test(joined) ||
+      !/(no error|no error banner|no visible error)/.test(joined) ||
+      !/(no blank screen|not blank)/.test(joined) ||
+      !/(no blocking overlay|no overlay)/.test(joined)
+    ) {
+      missing.push("Post-action settled evidence: expected content visible and no visible stuck loading, error banner, blank screen, or blocking overlay");
+    }
+    if (!/browser_console_messages/.test(joined) || !/(no console errors|console.*no errors|0 console errors|returned no)/.test(joined)) {
+      missing.push("Console evidence: browser_console_messages checked for errors");
+    }
+    return missing;
+  }
   return [];
 }
 

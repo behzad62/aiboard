@@ -146,12 +146,28 @@ function pathsIncludeUi(input: SkillActivationInput): boolean {
   const text = taskText(input.task);
   const paths = taskPaths(input);
   return (
-    /\bui\b|frontend|component|layout|css|accessibility|render|tsx|jsx/.test(text) ||
+    /\bui\b|frontend|web app|browser|playwright|component|layout|css|accessibility|render|tsx|jsx/.test(text) ||
     paths.some((path) =>
+      path.startsWith("public/") ||
       path.startsWith("app/") ||
       path.startsWith("components/") ||
-      /\.(tsx|jsx|css|scss)$/.test(path)
+      /\.(tsx|jsx|css|scss|html)$/.test(path)
     )
+  );
+}
+
+function hasBrowserMcp(input: SkillActivationInput): boolean {
+  return (input.mcpServers ?? []).some((server) =>
+    /playwright|browser/i.test(server)
+  );
+}
+
+function needsBrowserAcceptance(input: SkillActivationInput): boolean {
+  if (!hasBrowserMcp(input)) return false;
+  const text = taskText(input.task);
+  return (
+    pathsIncludeUi(input) ||
+    /\bweb app|browser acceptance|playwright|localhost|local server|ui workflow\b/.test(text)
   );
 }
 
@@ -235,10 +251,11 @@ function selectWorkerOverlays(input: SkillActivationInput): string[] {
     domains.push("agent:security-and-hardening");
   }
   if (pathsIncludeUi(input)) domains.push("agent:frontend-ui-engineering");
+  if (needsBrowserAcceptance(input)) domains.push("aiboard:browser-acceptance");
   if (touchesApiOrContract(input)) domains.push("agent:api-and-interface-design");
   if (touchesDocs(input)) domains.push("agent:documentation-and-adrs");
 
-  return dedupe([...workflow, ...domains]).slice(0, 3);
+  return dedupe([...workflow, ...domains]).slice(0, 4);
 }
 
 export function selectSkills(input: SkillActivationInput): SkillActivation {

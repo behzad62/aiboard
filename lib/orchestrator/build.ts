@@ -2168,6 +2168,23 @@ function mcpToolDoc(mcpToolsDoc?: string, mcpCallsLeft?: number): string {
   ].join("\n");
 }
 
+function playwrightWorkerToolDoc(
+  mcpToolsDoc: string | undefined,
+  localServers: string[]
+): string {
+  if (!mcpToolsDoc?.toLowerCase().includes("playwright")) return "";
+  const url = localServers[0] ?? "http://localhost:<port>";
+  return [
+    "PLAYWRIGHT MCP CONTRACT:",
+    `- Navigate with exactly: {"action":"tool","server":"playwright","tool":"browser_navigate","args":{"url":"${url}"},"reason":"open the app under test"}`,
+    '- Inspect visible UI with exactly: {"action":"tool","server":"playwright","tool":"browser_snapshot","args":{},"reason":"capture settled UI state"}',
+    '- Check console errors with exactly: {"action":"tool","server":"playwright","tool":"browser_console_messages","args":{"level":"error"},"reason":"check browser console errors"}',
+    '- Use browser_evaluate only for DOM/page-state checks after browser_navigate; never put require, child_process, process, fs, npm, shell commands, or project file reads in browser_evaluate.',
+    '- Do not emit bare calls such as {"action":"browser_snapshot"}. Do not use "arguments" instead of "args". Do not put MCP actions in arrays. Do not concatenate multiple JSON objects without waiting for tool results when the next action depends on the prior result.',
+    "- Browser acceptance evidence must name the URL, the action performed, the visible settled result, stuck-loading/error/blank/overlay absence, and console result.",
+  ].join("\n");
+}
+
 function skillRequestDoc(): string {
   return [
     "TOOL — skill request: if the compact skill index shows a relevant skill that is not currently active, the Architect may request it for a future turn. AIBoard validates ids, conflicts, and budgets; workers cannot self-load skills. Respond with ONLY:",
@@ -2229,6 +2246,7 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
       : "",
     mcpToolDoc(budget.mcpToolsDoc, budget.mcpCallsLeft),
+    playwrightWorkerToolDoc(budget.mcpToolsDoc, localServers),
     budget.mcpToolsDoc?.toLowerCase().includes("playwright")
       ? 'MCP browser/Playwright tools are for browser/page inspection only. Do NOT use Playwright/MCP tools to run npm, shell, Node, tests, read project files, or inspect the filesystem; use {"action":"run"} for shell checks and read/read_range/search for files. For Playwright browser_navigate, use the exact app URL and never navigate to about:blank. For browser_console_messages, use level error, warning, info, or debug only.'
       : "",

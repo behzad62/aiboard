@@ -2962,7 +2962,12 @@ export async function runBuildDiscussion(
     skillMode: buildSettings.skillMode,
     runnerAvailable: !!runner,
     repoAvailable: !!runner && repoIsGit,
-    mcpServers: mcpToolsDoc ? ["runner-mcp"] : [],
+    mcpServers:
+      mcpServersForCodeIntel.length > 0
+        ? mcpServersForCodeIntel.map((server) => server.name)
+        : mcpToolsDoc
+          ? ["runner-mcp"]
+          : [],
     riskFlags: [
       ...(githubWorkflow ? ["github-workflow"] : []),
       ...(runner ? ["runner"] : []),
