@@ -2014,7 +2014,7 @@ export const DUPLICATE_TOOL_CALL_FEEDBACK =
 export const FORCED_REVIEW_INSTRUCTION = [
   "STOP USING TOOLS. You have used your inspection budget for this review (or repeated the same lookups). Any further read/search/command requests will be IGNORED.",
   "Using ONLY the file contents, change digests, and tool results already in this conversation, produce your final review now as exactly ONE fenced ```json block matching the review schema.",
-  "If a detail you wanted to inspect is still unknown, do NOT block on it: approve what demonstrably works and add a precise follow-up fix task (or a `fix` verdict with concrete instructions) for the rest.",
+  "If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, or is a web app without browser acceptance evidence, return a `fix` verdict with concrete instructions. Approve only tasks that are demonstrably complete.",
 ].join("\n");
 
 export const FORCED_PLAN_INSTRUCTION = [
@@ -2092,6 +2092,12 @@ function userNotesSection(notes?: string): string {
     ? `NOTES FROM THE USER (added while the team was building — treat them as requirements and address every one):\n${notes}`
     : "";
 }
+
+const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
+  "For web apps or UI-affecting tasks, browser acceptance is required when a local server and browser/MCP tools are available.",
+  "Exercise the main user workflow in a real browser after starting the app: load the page, perform the primary form/click/navigation actions, and inspect the post-action settled state.",
+  "Verify expected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If you cannot run browser acceptance, say exactly what was not verified and do not claim it passed.",
+].join(" ");
 
 function searchToolDoc(searchesLeft?: number): string {
   if (!searchesLeft || searchesLeft <= 0) return "";
@@ -2223,6 +2229,12 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Create or extend a large/missing file in chunks: {"action":"append","path":"tests/run-tests.ts","content":"chunk text","reset":true,"reason":"start file"} then more append actions with reset false/omitted (${budget.appends} left).`
       : "",
     mcpToolDoc(budget.mcpToolsDoc, budget.mcpCallsLeft),
+    budget.mcpToolsDoc?.toLowerCase().includes("playwright")
+      ? 'MCP browser/Playwright tools are for browser/page inspection only. Do NOT use Playwright/MCP tools to run npm, shell, Node, tests, read project files, or inspect the filesystem; use {"action":"run"} for shell checks and read/read_range/search for files. For Playwright browser_navigate, use the exact app URL and never navigate to about:blank. For browser_console_messages, use level error, warning, info, or debug only.'
+      : "",
+    budget.mcpToolsDoc?.toLowerCase().includes("playwright")
+      ? "REAL-BROWSER ACCEPTANCE: for web apps, use the active local server URL for real-browser acceptance. Exercise the main workflow and verify the post-action settled state: expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay, and no console errors."
+      : "",
     localServers.length > 0
       ? `Active local server URL${localServers.length === 1 ? "" : "s"} for browser MCP navigation: ${localServers.join(", ")}. Use these exact URL(s) instead of guessing localhost ports.`
       : "",
@@ -2474,6 +2486,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
       ? "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose with RED/GREEN checks, root-cause notes, review notes, or exemption reasons as applicable."
       : "",
     "Do not add or import a new test framework, browser automation package, or config file unless this task explicitly includes updating dependency files such as package.json and the lockfile. For browser verification, prefer MCP browser tools when available instead of creating Playwright/Cypress test files; if you must create tests that import a package, add the dependency and keep the verify command passing.",
+    WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION,
     input.task.status === "fixing"
       ? "This is a FIX round: the Architect reviewed previous output and the instructions above tell you what to correct. Use read_range/search plus patch for existing files. If a file is missing or too large for one response, use append chunks. Do not emit full-file blocks for existing files."
       : "",
@@ -2546,7 +2559,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
       : "",
     !hasAssembledContext ? input.executedText : "",
     !hasAssembledContext && input.skillEvidenceText?.trim()
-      ? `\n${input.skillEvidenceText}\nTreat missing skill evidence as a review signal: request a fix unless the task is clearly exempt and otherwise verified.`
+      ? `\n${input.skillEvidenceText}\nMissing required skill evidence is a blocking review issue: return a fix verdict unless the task is clearly exempt and the exemption evidence is present.`
       : "",
     !hasAssembledContext && input.outstandingTasks?.trim()
       ? `\nRequired tasks still not done:\n${input.outstandingTasks}\nDo NOT set "done": true while any required task is listed here. Approve completed outstanding tasks, send unfinished ones back with precise fix instructions, or create replacement tasks that explicitly cover the missing work.`
@@ -2557,6 +2570,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     input.skillContext,
     "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
+    `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
     skillRequestDoc(),
     contextRetrieveToolDoc(),
     input.readHopsLeft && input.readHopsLeft > 0

@@ -31,6 +31,8 @@ const REVIEW_CODES = new Set<BuildProblemCode>([
   "command_failed",
   "tool_denied",
   "no_output",
+  "skill_evidence_missing",
+  "browser_acceptance_missing",
 ]);
 
 function isReviewProblem(problem: BuildProblem): boolean {

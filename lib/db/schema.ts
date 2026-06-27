@@ -86,6 +86,8 @@ export type BuildProblemCode =
   | "command_failed"
   | "tool_denied"
   | "no_output"
+  | "skill_evidence_missing"
+  | "browser_acceptance_missing"
   | "repeated_no_progress"
   | "incomplete_tasks"
   | "quality_gate_failed";

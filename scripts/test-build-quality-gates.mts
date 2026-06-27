@@ -2,6 +2,7 @@
 import {
   evaluateBuildQualityGate,
   formatBuildQualityGateSummary,
+  shouldRequireBrowserAcceptance,
 } from "../lib/orchestrator/build-quality-gates";
 
 let failed = 0;
@@ -88,6 +89,81 @@ const missingChecks = evaluateBuildQualityGate({
 check("missing and failed checks block completion", missingChecks.blockers.length === 2, missingChecks);
 check("failed check includes output preview", missingChecks.blockers.some((b) => b.details?.includes("prefer-const")), missingChecks);
 
+const missingSkillEvidence = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: cleanStatus,
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+  ],
+  skillEvidence: [
+    {
+      taskId: "T1",
+      skillId: "agent:test-driven-development",
+      actor: "worker",
+      required: [
+        "RED test/check failure before implementation",
+        "GREEN test/check pass after implementation",
+      ],
+      reportedEvidence: [],
+      missingEvidence: ["RED test/check failure before implementation"],
+      violations: [
+        "Missing required evidence for agent:test-driven-development: RED test/check failure before implementation",
+      ],
+    },
+  ],
+});
+
+check("missing skill evidence blocks final completion", missingSkillEvidence.status === "blocked", missingSkillEvidence);
+check(
+  "skill evidence blocker names the task",
+  missingSkillEvidence.blockers.some((b) => b.code === "skill_evidence_missing" && b.message.includes("T1")),
+  missingSkillEvidence
+);
+
+const missingBrowserAcceptance = evaluateBuildQualityGate({
+  githubWorkflow: false,
+  expectedPr: false,
+  repoStatus: null,
+  repoPrUrl: null,
+  repoPushedBranch: null,
+  requiredChecks: [
+    { name: "Tests", command: "npm test", status: "passed" },
+  ],
+  browserAcceptance: {
+    required: true,
+    observed: false,
+    reason: "web app request with local server",
+  },
+});
+
+check(
+  "missing browser acceptance blocks web app completion",
+  missingBrowserAcceptance.status === "blocked" &&
+    missingBrowserAcceptance.blockers.some((b) => b.code === "browser_acceptance_missing"),
+  missingBrowserAcceptance
+);
+
+const presentBrowserAcceptance = evaluateBuildQualityGate({
+  githubWorkflow: false,
+  expectedPr: false,
+  repoStatus: null,
+  repoPrUrl: null,
+  repoPushedBranch: null,
+  requiredChecks: [
+    { name: "Tests", command: "npm test", status: "passed" },
+  ],
+  browserAcceptance: {
+    required: true,
+    observed: true,
+    reason: "browser snapshot after main flow",
+  },
+});
+
+check("observed browser acceptance allows web app completion", presentBrowserAcceptance.status === "ready", presentBrowserAcceptance);
+
 const noRunner = evaluateBuildQualityGate({
   githubWorkflow: true,
   expectedPr: true,
@@ -99,6 +175,21 @@ const noRunner = evaluateBuildQualityGate({
 
 check("missing repo status blocks GitHub workflow", noRunner.status === "blocked", noRunner);
 check("missing repo status explains runner requirement", noRunner.blockers.some((b) => /runner/i.test(b.message)), noRunner);
+
+check(
+  "web app requests require browser acceptance",
+  shouldRequireBrowserAcceptance({
+    request: "Create a web app that visualizes local git repos.",
+    treeText: "server/server.js\npublic/index.html\npublic/app.js",
+  }),
+);
+check(
+  "non-UI libraries do not require browser acceptance",
+  !shouldRequireBrowserAcceptance({
+    request: "Build a strict TypeScript CSV library and CLI.",
+    treeText: "src/index.ts\ntests/run-tests.ts",
+  }),
+);
 
 const summary = formatBuildQualityGateSummary(missingChecks);
 check("summary has quality gate heading", summary.includes("Build quality gate"), summary);

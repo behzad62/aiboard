@@ -1,3 +1,9 @@
+import {
+  formatBlockingSkillEvidence,
+  getBlockingSkillEvidence,
+} from "@/lib/orchestrator/build-evidence-gates";
+import type { SkillEvidence } from "@/lib/skills/types";
+
 export type BuildQualityCheckStatus = "passed" | "failed" | "missing";
 export type BuildQualityGateStatus = "ready" | "blocked";
 
@@ -32,6 +38,8 @@ export interface BuildQualityGateItem {
     | "pr_missing"
     | "check_missing"
     | "check_failed"
+    | "skill_evidence_missing"
+    | "browser_acceptance_missing"
     | "issues_close_on_merge";
   message: string;
   details?: string;
@@ -45,12 +53,40 @@ export interface BuildQualityGateInput {
   repoPushedBranch?: string | null;
   requiredChecks: BuildQualityRequiredCheck[];
   issueNumbers?: number[];
+  skillEvidence?: SkillEvidence[];
+  browserAcceptance?: {
+    required: boolean;
+    observed: boolean;
+    reason?: string;
+  };
 }
 
 export interface BuildQualityGateResult {
   status: BuildQualityGateStatus;
   blockers: BuildQualityGateItem[];
   warnings: BuildQualityGateItem[];
+}
+
+export function shouldRequireBrowserAcceptance(input: {
+  request: string;
+  treeText?: string;
+}): boolean {
+  const request = input.request.toLowerCase();
+  const treeText = input.treeText ?? "";
+  const tree = treeText.toLowerCase();
+  if (
+    /\b(web app|website|browser app|frontend|front-end|user interface|ui|dashboard|landing page|single page app|spa)\b/.test(
+      request
+    )
+  ) {
+    return true;
+  }
+  if (/\b(react|next\.?js|vite|vue|svelte|angular)\b/.test(request)) {
+    return true;
+  }
+  return /(^|\n)(app\/page\.(tsx|jsx|ts|js)|pages\/|public\/index\.html|public\/app\.js|src\/app\/|src\/main\.(tsx|jsx|ts|js)|src\/app\.(tsx|jsx|ts|js)|vite\.config\.|next\.config\.)/i.test(
+    tree
+  );
 }
 
 function uniqueSortedIssues(issueNumbers: number[] | undefined): number[] {
@@ -167,6 +203,35 @@ export function evaluateBuildQualityGate(
         details: check.outputPreview,
       });
     }
+  }
+
+  const blockingEvidence = getBlockingSkillEvidence(input.skillEvidence ?? []);
+  if (blockingEvidence.length > 0) {
+    const taskIds = [
+      ...new Set(blockingEvidence.map((record) => record.taskId).filter(Boolean)),
+    ];
+    blockers.push({
+      code: "skill_evidence_missing",
+      message:
+        taskIds.length > 0
+          ? `Required skill evidence is missing for ${taskIds.join(", ")}.`
+          : "Required skill evidence is missing.",
+      details: formatBlockingSkillEvidence(blockingEvidence),
+    });
+  }
+
+  if (
+    input.browserAcceptance?.required &&
+    !input.browserAcceptance.observed
+  ) {
+    blockers.push({
+      code: "browser_acceptance_missing",
+      message:
+        "A web app or UI-affecting build cannot be marked done because no real-browser acceptance evidence was recorded.",
+      details:
+        input.browserAcceptance.reason ??
+        "Start the app, navigate to the local server in a browser, exercise the main workflow, and verify the settled UI has no visible stuck loading, error state, blank screen, blocking overlay, or console errors.",
+    });
   }
 
   const issues = uniqueSortedIssues(input.issueNumbers);

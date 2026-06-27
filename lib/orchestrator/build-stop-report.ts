@@ -119,6 +119,7 @@ function pickPrimaryCause(
       }
       if (
         problem.code === "quality_gate_failed" ||
+        problem.code === "browser_acceptance_missing" ||
         problem.code === "command_failed"
       ) {
         return 4;

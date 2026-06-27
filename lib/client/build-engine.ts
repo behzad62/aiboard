@@ -53,8 +53,18 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
+  buildSkillEvidenceFixInstructions,
+  evidenceOnlyRetryFiles,
+  getBlockingSkillEvidence,
+} from "@/lib/orchestrator/build-evidence-gates";
+import {
+  filterBuildMcpToolsForPrompt,
+  validateBuildMcpToolAction,
+} from "@/lib/orchestrator/build-tool-safety";
+import {
   evaluateBuildQualityGate,
   formatBuildQualityGateSummary,
+  shouldRequireBrowserAcceptance,
   type BuildQualityGateRepoStatus,
   type BuildQualityRequiredCheck,
 } from "@/lib/orchestrator/build-quality-gates";
@@ -881,6 +891,9 @@ export async function runBuildDiscussion(
   let mcpToolsDoc = "";
   let mcpServersForCodeIntel: Awaited<ReturnType<typeof listMcpServers>> = [];
   let totalMcpCalls = 0;
+  let playwrightNavigated = false;
+  let browserAcceptanceObserved = false;
+  let browserAcceptanceEvidence: string | null = null;
   let codeIntelProvider: CodeIntelProvider | null = null;
   const codeIntelBudget = createCodeIntelPhaseBudget({
     perPhase: CODE_INTEL_CALLS_PER_PHASE,
@@ -1207,6 +1220,7 @@ export async function runBuildDiscussion(
         const ready = servers.filter((s) => s.status === "ready" && s.tools.length > 0);
         const readyForDocs = ready
           .map((server) => filterCodebaseMemoryMcpToolsForGenericUse(server))
+          .map((server) => filterBuildMcpToolsForPrompt(server))
           .filter((server) => server.tools.length > 0);
         if (readyForDocs.length > 0) {
           mcpToolsDoc = readyForDocs
@@ -1368,6 +1382,36 @@ export async function runBuildDiscussion(
     if (!runner) return { text: "No runner is available.", status: "error" };
     const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
     const providerId = parseModelId(actor.modelId).providerId;
+    const safety = validateBuildMcpToolAction(action, {
+      playwrightNavigated,
+    });
+    if (!safety.allowed) {
+      const message = safety.message ?? `MCP ${action.server}.${action.tool} is not allowed.`;
+      const details = safety.guidance ?? message;
+      recordBuildProblem({
+        code: "tool_denied",
+        severity: "warning",
+        source: "mcp",
+        action: label,
+        modelId: actor.modelId,
+        modelName: actor.displayName,
+        providerId,
+        message,
+        details,
+      });
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: `${message}\n${details}`,
+        denied: true,
+      });
+      return {
+        text: `${label}\n${message}\n${details}`,
+        status: "denied",
+      };
+    }
     const requestedServer = mcpServersForCodeIntel.find(
       (server) => server.name === action.server
     );
@@ -1443,6 +1487,18 @@ export async function runBuildDiscussion(
         action.tool,
         action.args ?? {}
       );
+      if (!result.isError && action.server.toLowerCase().includes("playwright")) {
+        const toolName = action.tool.toLowerCase();
+        if (toolName === "browser_navigate") {
+          playwrightNavigated = true;
+        } else if (
+          playwrightNavigated &&
+          /(snapshot|evaluate|screenshot)/i.test(toolName)
+        ) {
+          browserAcceptanceObserved = true;
+          browserAcceptanceEvidence = `${action.server}.${action.tool}`;
+        }
+      }
       emit({
         type: "command_run",
         command: label,
@@ -5266,6 +5322,21 @@ export async function runBuildDiscussion(
         });
         if (skillEvidence.length > 0) {
           skillEvidenceRecords.push(...skillEvidence);
+          const blockingSkillEvidence = getBlockingSkillEvidence(skillEvidence, task.id);
+          for (const record of blockingSkillEvidence) {
+            recordBuildProblem({
+              code: "skill_evidence_missing",
+              severity: "warning",
+              source: "worker",
+              taskId: task.id,
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              wave: cycle,
+              message: `Required skill evidence is missing for ${task.id} (${record.skillId}).`,
+              details: record.violations.join("\n") || record.missingEvidence.join("\n"),
+            });
+          }
           persistBuildMemories(
             extractSkillViolationMemories({
               projectKey: buildMemoryProjectKey,
@@ -5294,7 +5365,14 @@ export async function runBuildDiscussion(
         }
         // The model DID respond — a no-files result is a quality failure
         // (bad output), distinct from a provider denial.
-        if (files.length === 0) {
+        const reviewFiles = evidenceOnlyRetryFiles({
+          emittedFiles: files,
+          priorFiles: task.contextFiles,
+          evidence: skillEvidence,
+          taskId: task.id,
+          maxFiles: MAX_CONTEXT_FILES,
+        });
+        if (reviewFiles.length === 0) {
           failTask(
             task,
             stat,
@@ -5322,8 +5400,14 @@ export async function runBuildDiscussion(
         executed.push({
           task,
           worker,
-          files,
-          notes: truncate(prose, 1_500) + (skillNotes ? `\n\n${skillNotes}` : "") + issueNotes,
+          files: reviewFiles,
+          notes:
+            truncate(prose, 1_500) +
+            (files.length === 0
+              ? `\n\nEvidence-only retry: no new files were emitted; reviewing previously landed file(s): ${reviewFiles.join(", ")}.`
+              : "") +
+            (skillNotes ? `\n\n${skillNotes}` : "") +
+            issueNotes,
           changes: waveChangeSummaries.get(task.id) ?? [],
         });
         emit({
@@ -5707,13 +5791,58 @@ export async function runBuildDiscussion(
 
     if (action.notes?.trim()) architectNotes = action.notes;
 
+    const reviewedTaskIds = new Set<string>();
+    const sendTaskBackForFix = (
+      task: BuildTask,
+      fixInstructions: string,
+      problemMessage?: string
+    ): void => {
+      if (task.workerIndex != null) {
+        const st = scoreboard[task.workerIndex];
+        st.fixes += 1;
+        st.wFixes += difficultyWeight(task);
+      }
+      const prior = executed.find((e) => e.task.id === task.id);
+      Object.assign(
+        task,
+        buildReviewFixTaskUpdate(
+          task,
+          fixInstructions,
+          prior?.files ?? [],
+          MAX_CONTEXT_FILES
+        )
+      );
+      if (problemMessage) {
+        recordBuildProblem({
+          code: "skill_evidence_missing",
+          severity: "error",
+          source: "engine",
+          taskId: task.id,
+          wave: cycle,
+          message: problemMessage,
+          details: fixInstructions,
+        });
+      }
+      emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
+    };
+
     for (const result of action.results) {
       const task = tasks.find((t) => t.id === result.taskId);
       if (!task || task.status === "done") continue;
+      reviewedTaskIds.add(task.id);
       // Credit/debit the worker that produced this task's output.
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (result.verdict === "approve") {
+        const evidenceFix = buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        if (evidenceFix) {
+          sendTaskBackForFix(
+            task,
+            evidenceFix,
+            `Architect approval for ${task.id} was blocked because required skill evidence is missing.`
+          );
+          continue;
+        }
         if (verdictStat) {
           verdictStat.approvals += 1;
           verdictStat.wApprovals += difficultyWeight(task);
@@ -5738,9 +5867,31 @@ export async function runBuildDiscussion(
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
       }
     }
-    // Tasks the review didn't mention count as approved.
+    // Tasks the review didn't mention count as approved only when the review
+    // was explicit and no deterministic gate found a problem.
     for (const { task } of executed) {
       if (task.status === "review") {
+        const evidenceFix = buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        if (evidenceFix) {
+          sendTaskBackForFix(
+            task,
+            evidenceFix,
+            `Review omitted ${task.id}, but required skill evidence is missing.`
+          );
+          continue;
+        }
+        if (reviewResult.forced || !reviewedTaskIds.has(task.id)) {
+          sendTaskBackForFix(
+            task,
+            reviewResult.forced
+              ? "Architect review did not return an explicit verdict before the inspection budget ended. Inspect the landed files, run the relevant verification, and return a concrete approval or fix with evidence."
+              : "Architect review omitted this task. Inspect the landed files, run the relevant verification, and return an explicit approval or fix verdict.",
+            reviewResult.forced
+              ? `Forced review could not explicitly approve ${task.id}.`
+              : `Review omitted explicit verdict for ${task.id}.`
+          );
+          continue;
+        }
         if (task.workerIndex != null) {
           const st = scoreboard[task.workerIndex];
           st.approvals += 1;
@@ -5984,6 +6135,10 @@ export async function runBuildDiscussion(
       ...(repoIssueNumber == null ? [] : [repoIssueNumber]),
       ...repoCreatedIssues.map((item) => item.issue),
     ];
+    const browserAcceptanceRequired = shouldRequireBrowserAcceptance({
+      request: discussion.topic,
+      treeText: treeText(),
+    });
     const qualityGate = evaluateBuildQualityGate({
       githubWorkflow,
       expectedPr: prExpected,
@@ -5994,13 +6149,24 @@ export async function runBuildDiscussion(
       repoPushedBranch,
       requiredChecks: finalChecks,
       issueNumbers,
+      skillEvidence: skillEvidenceRecords,
+      browserAcceptance: {
+        required: browserAcceptanceRequired,
+        observed: browserAcceptanceObserved,
+        reason: browserAcceptanceObserved
+          ? `Observed via ${browserAcceptanceEvidence ?? "browser MCP tool"} after browser navigation.`
+          : "This appears to be a web app or UI-affecting build; Build mode must record a real-browser acceptance pass before completion.",
+      },
     });
     finalQualityGateSummary = formatBuildQualityGateSummary(qualityGate);
 
     if (qualityGate.status === "blocked") {
       for (const blocker of qualityGate.blockers) {
         recordBuildProblem({
-          code: "quality_gate_failed",
+          code:
+            blocker.code === "browser_acceptance_missing"
+              ? "browser_acceptance_missing"
+              : "quality_gate_failed",
           severity: "blocked",
           source: "engine",
           wave: wavesRun,
