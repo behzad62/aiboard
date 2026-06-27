@@ -24,12 +24,19 @@ import type {
 import type {
   BenchmarkArtifact,
   BenchmarkAttempt,
+  BenchmarkAttemptV2,
   BenchmarkCase,
+  BenchmarkCaseV2,
   BenchmarkFailure,
   BenchmarkMetricValue,
   BenchmarkModelCallTrace,
+  BenchmarkRunEvent,
   BenchmarkRun,
   BenchmarkSuite,
+  BenchmarkTeamComposition,
+  BenchmarkToolCallTrace,
+  BenchmarkVerifierResult,
+  HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
 import {
@@ -72,11 +79,18 @@ export interface ClientStore {
   benchmarkSuites: BenchmarkSuite[];
   benchmarkRuns: BenchmarkRun[];
   benchmarkCases: BenchmarkCase[];
+  benchmarkCaseV2: BenchmarkCaseV2[];
   benchmarkAttempts: BenchmarkAttempt[];
+  benchmarkAttemptsV2: BenchmarkAttemptV2[];
   benchmarkMetricValues: BenchmarkMetricValue[];
   benchmarkArtifacts: BenchmarkArtifact[];
   benchmarkFailures: BenchmarkFailure[];
   benchmarkTraces: BenchmarkModelCallTrace[];
+  benchmarkRunEvents: BenchmarkRunEvent[];
+  benchmarkToolCallTraces: BenchmarkToolCallTrace[];
+  benchmarkVerifierResults: BenchmarkVerifierResult[];
+  benchmarkTeamCompositions: BenchmarkTeamComposition[];
+  benchmarkHarnessCertifications: HarnessCertificationResult[];
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
 }
@@ -112,11 +126,18 @@ const DEFAULT_STORE: ClientStore = {
   benchmarkSuites: [],
   benchmarkRuns: [],
   benchmarkCases: [],
+  benchmarkCaseV2: [],
   benchmarkAttempts: [],
+  benchmarkAttemptsV2: [],
   benchmarkMetricValues: [],
   benchmarkArtifacts: [],
   benchmarkFailures: [],
   benchmarkTraces: [],
+  benchmarkRunEvents: [],
+  benchmarkToolCallTraces: [],
+  benchmarkVerifierResults: [],
+  benchmarkTeamCompositions: [],
+  benchmarkHarnessCertifications: [],
   modelStats: [],
 };
 
@@ -352,10 +373,20 @@ export function getBenchmarkCases(): BenchmarkCase[] {
   s.benchmarkCases ??= [];
   return s.benchmarkCases;
 }
+export function getBenchmarkCaseV2(): BenchmarkCaseV2[] {
+  const s = store();
+  s.benchmarkCaseV2 ??= [];
+  return s.benchmarkCaseV2;
+}
 export function getBenchmarkAttempts(): BenchmarkAttempt[] {
   const s = store();
   s.benchmarkAttempts ??= [];
   return s.benchmarkAttempts;
+}
+export function getBenchmarkAttemptsV2(): BenchmarkAttemptV2[] {
+  const s = store();
+  s.benchmarkAttemptsV2 ??= [];
+  return s.benchmarkAttemptsV2;
 }
 export function getBenchmarkMetricValues(): BenchmarkMetricValue[] {
   const s = store();
@@ -376,6 +407,31 @@ export function getBenchmarkTraces(): BenchmarkModelCallTrace[] {
   const s = store();
   s.benchmarkTraces ??= [];
   return s.benchmarkTraces;
+}
+export function getBenchmarkRunEvents(): BenchmarkRunEvent[] {
+  const s = store();
+  s.benchmarkRunEvents ??= [];
+  return s.benchmarkRunEvents;
+}
+export function getBenchmarkToolCallTraces(): BenchmarkToolCallTrace[] {
+  const s = store();
+  s.benchmarkToolCallTraces ??= [];
+  return s.benchmarkToolCallTraces;
+}
+export function getBenchmarkVerifierResults(): BenchmarkVerifierResult[] {
+  const s = store();
+  s.benchmarkVerifierResults ??= [];
+  return s.benchmarkVerifierResults;
+}
+export function getBenchmarkTeamCompositions(): BenchmarkTeamComposition[] {
+  const s = store();
+  s.benchmarkTeamCompositions ??= [];
+  return s.benchmarkTeamCompositions;
+}
+export function getBenchmarkHarnessCertifications(): HarnessCertificationResult[] {
+  const s = store();
+  s.benchmarkHarnessCertifications ??= [];
+  return s.benchmarkHarnessCertifications;
 }
 export function hasAttemptedGameStatsLegacyImport(): boolean {
   return store().gameStatsLegacyImportAttempted ?? false;
@@ -637,8 +693,16 @@ export function upsertBenchmarkCase(record: BenchmarkCase): void {
   upsertById(getBenchmarkCases(), record);
   schedulePersist();
 }
+export function upsertBenchmarkCaseV2(record: BenchmarkCaseV2): void {
+  upsertById(getBenchmarkCaseV2(), record);
+  schedulePersist();
+}
 export function upsertBenchmarkAttempt(record: BenchmarkAttempt): void {
   upsertById(getBenchmarkAttempts(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkAttemptV2(record: BenchmarkAttemptV2): void {
+  upsertById(getBenchmarkAttemptsV2(), record);
   schedulePersist();
 }
 export function upsertBenchmarkMetricValue(record: BenchmarkMetricValue): void {
@@ -655,6 +719,32 @@ export function upsertBenchmarkFailure(record: BenchmarkFailure): void {
 }
 export function upsertBenchmarkTrace(record: BenchmarkModelCallTrace): void {
   upsertById(getBenchmarkTraces(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkRunEvent(record: BenchmarkRunEvent): void {
+  upsertById(getBenchmarkRunEvents(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkToolCallTrace(record: BenchmarkToolCallTrace): void {
+  upsertById(getBenchmarkToolCallTraces(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkVerifierResult(
+  record: BenchmarkVerifierResult
+): void {
+  upsertById(getBenchmarkVerifierResults(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkTeamComposition(
+  record: BenchmarkTeamComposition
+): void {
+  upsertById(getBenchmarkTeamCompositions(), record);
+  schedulePersist();
+}
+export function upsertBenchmarkHarnessCertification(
+  record: HarnessCertificationResult
+): void {
+  upsertById(getBenchmarkHarnessCertifications(), record);
   schedulePersist();
 }
 export function markGameStatsLegacyImportAttempted(): void {

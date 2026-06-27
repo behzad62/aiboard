@@ -78,6 +78,11 @@ import {
   type GameAIDiagnosticLike,
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
+import type {
+  BenchmarkRunEvent,
+  BenchmarkToolCallTrace,
+  HarnessProfile,
+} from "@/lib/benchmark/types";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
@@ -284,6 +289,112 @@ export interface BuildHooks {
     command: string,
     reason?: string
   ) => Promise<CommandApprovalDecision>;
+  benchmark?: {
+    attemptId: string;
+    runId?: string;
+    caseId: string;
+    harnessProfile: HarnessProfile;
+    noHumanApproval: boolean;
+    runnerOnly: boolean;
+    disableMcp: boolean;
+    allowedCommands?: string[];
+    recordEvent?: (event: BenchmarkRunEvent) => void;
+    recordToolCall?: (trace: BenchmarkToolCallTrace) => void;
+  };
+  modelCallOverride?: (input: {
+    model: SelectedModel;
+    messages: ChatMessage[];
+    maxTokens: number;
+    label: string;
+    structuredOutput?: StructuredOutputFormat;
+  }) => Promise<string>;
+}
+
+export function validateBuildBenchmarkCommand(
+  command: string,
+  benchmark: BuildHooks["benchmark"] | undefined
+): { allowed: boolean; reason?: string } {
+  if (!benchmark) return { allowed: true };
+  const trimmed = command.trim();
+  const allowedCommands = benchmark.allowedCommands?.map((item) => item.trim());
+  if (allowedCommands && !allowedCommands.includes(trimmed)) {
+    return {
+      allowed: false,
+      reason: `Command is not in the certified benchmark allowlist: ${trimmed}`,
+    };
+  }
+  return { allowed: true };
+}
+
+export function shouldBlockBuildBenchmarkAction(
+  action: string,
+  benchmark: BuildHooks["benchmark"] | undefined
+): { blocked: boolean; reason?: string } {
+  if (!benchmark) return { blocked: false };
+  if (benchmark.disableMcp && action === "tool") {
+    return {
+      blocked: true,
+      reason: "MCP tool calls are disabled for this certified benchmark.",
+    };
+  }
+  if (action === "fetch") {
+    return {
+      blocked: true,
+      reason: "External fetches are disabled for certified benchmark runs.",
+    };
+  }
+  if (
+    [
+      "repo_branch_create",
+      "repo_commit",
+      "repo_milestone_create",
+      "repo_issue_create",
+      "repo_push",
+      "repo_pr_create",
+    ].includes(action)
+  ) {
+    return {
+      blocked: true,
+      reason: "Repository side-effect actions are disabled for certified benchmark runs.",
+    };
+  }
+  return { blocked: false };
+}
+
+export function buildBenchmarkTraceContext(
+  benchmark: BuildHooks["benchmark"] | undefined
+): { attemptId?: string; runId?: string; caseId?: string } {
+  return benchmark
+    ? {
+        attemptId: benchmark.attemptId,
+        ...(benchmark.runId ? { runId: benchmark.runId } : {}),
+        caseId: benchmark.caseId,
+      }
+    : {};
+}
+
+export async function resolveBuildModelContent(input: {
+  model: SelectedModel;
+  messages: ChatMessage[];
+  maxTokens: number;
+  label: string;
+  structuredOutput?: StructuredOutputFormat;
+  hooks?: BuildHooks;
+  collect: () => Promise<string>;
+  emitToken?: (token: string) => void;
+}): Promise<{ content: string; overrideUsed: boolean }> {
+  if (input.hooks?.modelCallOverride) {
+    const content = await input.hooks.modelCallOverride({
+      model: input.model,
+      messages: input.messages,
+      maxTokens: input.maxTokens,
+      label: input.label,
+      structuredOutput: input.structuredOutput,
+    });
+    input.emitToken?.(content);
+    return { content, overrideUsed: true };
+  }
+  return { content: await input.collect(), overrideUsed: false };
 }
 
 const SEARCHES_PER_PHASE = 4;
@@ -444,6 +555,32 @@ export async function runBuildDiscussion(
   const config = EFFORT_CONFIG[effort];
   const buildSettings = normalizeBuildSettings(discussion);
   const settings = getUserSettings();
+  const benchmark = hooks?.benchmark;
+  const benchmarkApprovalsBypassed = (): boolean =>
+    benchmark?.noHumanApproval === true || allowAllCommands;
+  const emitBenchmarkEvent = (
+    input: Omit<BenchmarkRunEvent, "id" | "attemptId" | "caseId" | "at">
+  ): void => {
+    if (!benchmark?.recordEvent) return;
+    benchmark.recordEvent({
+      ...input,
+      id: uuidv4(),
+      attemptId: benchmark.attemptId,
+      caseId: benchmark.caseId,
+      at: new Date().toISOString(),
+    });
+  };
+  const recordBenchmarkToolTrace = (
+    input: Omit<BenchmarkToolCallTrace, "id" | "attemptId" | "caseId">
+  ): void => {
+    if (!benchmark?.recordToolCall) return;
+    benchmark.recordToolCall({
+      ...input,
+      id: uuidv4(),
+      attemptId: benchmark.attemptId,
+      caseId: benchmark.caseId,
+    });
+  };
 
   // The active budget window. Resume always starts a fresh window (USD spent and
   // elapsed time reset to 0); historical spend lives in the saved checkpoint.
@@ -726,7 +863,7 @@ export async function runBuildDiscussion(
   // A folder problem (no permission, moved, or — common on Documents —
   // OneDrive "online-only" placeholder files that throw NotFoundError) must
   // never fail the build. Any error here degrades to in-app/virtual files.
-  const dirHandle = await getProjectHandle(discussion.id);
+  const dirHandle = benchmark ? null : await getProjectHandle(discussion.id);
   const virtualFs = new Map<string, string>();
   // Paths actually written THIS run — grounds the hand-off summary so it can
   // only describe changes that really happened.
@@ -900,7 +1037,8 @@ export async function runBuildDiscussion(
   // the platform is unknown (old runner) — no hint then.
   let shellHint = "";
   let allowAllCommands = discussion.runnerAccess === "full";
-  const shouldRequestRepoMutationApproval = () => !allowAllCommands && !githubWorkflow;
+  const shouldRequestRepoMutationApproval = () =>
+    !benchmarkApprovalsBypassed() && !githubWorkflow;
   let totalRuns = 0;
   let totalFetches = 0;
   let mcpToolsDoc = "";
@@ -1155,9 +1293,9 @@ export async function runBuildDiscussion(
       emit({
         type: "diagnostic",
         phase: "initializing",
-        message: `Local runner connected (folder "${health.dir}") — the Architect can run commands${allowAllCommands ? "" : " with your approval"}`,
+        message: `Local runner connected (folder "${health.dir}") — the Architect can run commands${benchmarkApprovalsBypassed() ? "" : " with your approval"}`,
       });
-      if (githubWorkflow && !allowAllCommands) {
+      if (githubWorkflow && !benchmarkApprovalsBypassed()) {
         emit({
           type: "diagnostic",
           phase: "initializing",
@@ -1223,7 +1361,13 @@ export async function runBuildDiscussion(
           .map(([key, def]) => `${key}${required.has(key) ? "" : "?"}: ${def?.type ?? "any"}`);
         return `${t.name}({${params.join(", ")}})`;
       };
-      if (!supportsSafeMcpBridge(health.version)) {
+      if (benchmark?.disableMcp) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: "MCP bridge disabled for certified benchmark mode.",
+        });
+      } else if (!supportsSafeMcpBridge(health.version)) {
         emit({
           type: "diagnostic",
           phase: "initializing",
@@ -1289,6 +1433,15 @@ export async function runBuildDiscussion(
         message: `Local runner not reachable (${health.error}) — continuing without command execution`,
       });
     }
+  }
+  if (benchmark?.runnerOnly && !runner) {
+    const message = "Certified benchmark run requires a connected bench runner.";
+    emitBenchmarkEvent({
+      type: "run_blocked",
+      phase: "initializing",
+      message,
+    });
+    throw new Error(message);
   }
 
   const currentRunBudget = () =>
@@ -1397,6 +1550,39 @@ export async function runBuildDiscussion(
     if (!runner) return { text: "No runner is available.", status: "error" };
     const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
     const providerId = parseModelId(actor.modelId).providerId;
+    const benchmarkBlock = shouldBlockBuildBenchmarkAction("tool", benchmark);
+    if (benchmarkBlock.blocked) {
+      const message = benchmarkBlock.reason ?? "MCP tool call blocked.";
+      recordBenchmarkToolTrace({
+        toolName: "mcp",
+        command: label,
+        status: "blocked",
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: 0,
+        inputJson: JSON.stringify(action),
+        outputPreview: message,
+      });
+      emitBenchmarkEvent({
+        type: "tool_call_blocked",
+        phase: "model_streaming",
+        message,
+        modelId: actor.modelId,
+        providerId,
+      });
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return {
+        text: `${label}\n${message}`,
+        status: "denied",
+      };
+    }
     const safety = validateBuildMcpToolAction(action, {
       playwrightNavigated,
     });
@@ -1455,7 +1641,7 @@ export async function runBuildDiscussion(
         status: "denied",
       };
     }
-    if (!allowAllCommands) {
+    if (!benchmarkApprovalsBypassed()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
         : "deny";
@@ -1495,6 +1681,7 @@ export async function runBuildDiscussion(
       message: `MCP tool: ${action.server}.${action.tool}`,
     });
     const startedAt = Date.now();
+    const traceStartedAt = new Date().toISOString();
     try {
       const result = await callMcpTool(
         runner,
@@ -1522,6 +1709,17 @@ export async function runBuildDiscussion(
         outputPreview: result.truncated
           ? `${truncate(result.text.trim(), 340)}\n[TRUNCATED to runner size cap]`
           : truncate(result.text.trim(), 400),
+      });
+      recordBenchmarkToolTrace({
+        toolName: "mcp",
+        command: label,
+        status: result.isError ? "failed" : "ok",
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        inputJson: JSON.stringify(action),
+        outputPreview: truncate(result.text.trim(), 400),
+        error: result.isError ? truncate(result.text.trim(), 1_500) : undefined,
       });
       if (result.isError) {
         recordBuildProblem({
@@ -1566,6 +1764,17 @@ export async function runBuildDiscussion(
         durationMs: Date.now() - startedAt,
         outputPreview: message,
       });
+      recordBenchmarkToolTrace({
+        toolName: "mcp",
+        command: label,
+        status: "failed",
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        inputJson: JSON.stringify(action),
+        outputPreview: message,
+        error: message,
+      });
       return {
         text: `MCP ${action.server}.${action.tool} failed: ${message}`,
         status: "error",
@@ -1579,6 +1788,36 @@ export async function runBuildDiscussion(
     reason?: string
   ): Promise<string> => {
     if (!runner) return "No runner is available.";
+    const traceStartedAt = new Date().toISOString();
+    const traceStartMs = Date.now();
+    const benchmarkCommand = validateBuildBenchmarkCommand(command, benchmark);
+    if (!benchmarkCommand.allowed) {
+      const message = benchmarkCommand.reason ?? "Command blocked by benchmark policy.";
+      recordBenchmarkToolTrace({
+        toolName: "run",
+        command,
+        status: "blocked",
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: 0,
+        outputPreview: message,
+      });
+      emitBenchmarkEvent({
+        type: "tool_call_blocked",
+        phase: "model_streaming",
+        message,
+        detailsJson: JSON.stringify({ command }),
+      });
+      emit({
+        type: "command_run",
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return `$ ${command}\nCOMMAND REJECTED: ${message}`;
+    }
     // NRW-006: block raw `git commit`/`git add` through the normal run path when
     // the runner folder is a Git repo. Commits must go through the typed,
     // user-approved repo_commit action (which gates on a safe feature branch).
@@ -1608,7 +1847,7 @@ export async function runBuildDiscussion(
       });
       return `$ ${command}\nCOMMAND REJECTED: ${message}`;
     }
-    if (!allowAllCommands) {
+    if (!benchmarkApprovalsBypassed()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(command, reason)
         : "deny";
@@ -1646,6 +1885,10 @@ export async function runBuildDiscussion(
           400
         ),
       });
+      const outputPreview = truncate(
+        stripAnsi(result.stdout || result.stderr).trim(),
+        800
+      );
       if (result.exitCode === 0) {
         rememberLocalServerUrls(
           [command, result.stdout, result.stderr].filter(Boolean).join("\n")
@@ -1654,8 +1897,21 @@ export async function runBuildDiscussion(
       rememberCommandMemory({
         command,
         exitCode: result.exitCode,
-        outputPreview: truncate(stripAnsi(result.stdout || result.stderr).trim(), 800),
+        outputPreview,
         createdAt: new Date().toISOString(),
+      });
+      recordBenchmarkToolTrace({
+        toolName: "run",
+        command,
+        status: result.exitCode === 0 ? "ok" : "failed",
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - traceStartMs,
+        outputPreview: truncate(outputPreview, 400),
+        error:
+          result.exitCode === 0
+            ? undefined
+            : truncate(stripAnsi(result.stderr || result.stdout).trim(), 1_500),
       });
       // Commands can create files (scaffolders, installs) — refresh the tree.
       const refreshed = await listFilesViaRunner(runner);
@@ -1676,6 +1932,16 @@ export async function runBuildDiscussion(
         outputPreview: message,
         createdAt: new Date().toISOString(),
       });
+      recordBenchmarkToolTrace({
+        toolName: "run",
+        command,
+        status: "failed",
+        startedAt: traceStartedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - traceStartMs,
+        outputPreview: message,
+        error: message,
+      });
       return `$ ${command}\nRunner error: ${message}`;
     }
   };
@@ -1684,7 +1950,26 @@ export async function runBuildDiscussion(
   const executeFetch = async (action: FetchAction): Promise<string> => {
     if (!runner) return "No runner is available.";
     const label = `fetch ${action.url}`;
-    if (!allowAllCommands) {
+    const benchmarkBlock = shouldBlockBuildBenchmarkAction("fetch", benchmark);
+    if (benchmarkBlock.blocked) {
+      const message = benchmarkBlock.reason ?? "Fetch blocked by benchmark policy.";
+      emitBenchmarkEvent({
+        type: "tool_call_blocked",
+        phase: "model_streaming",
+        message,
+        detailsJson: JSON.stringify({ url: action.url }),
+      });
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      return `${label}\n${message}`;
+    }
+    if (!benchmarkApprovalsBypassed()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(label, action.reason)
         : "deny";
@@ -2440,6 +2725,33 @@ export async function runBuildDiscussion(
 
   const runVerify = async (command: string): Promise<BuildVerifyResult> => {
     if (!runner || !command) return { feedback: "", failed: false };
+    emitBenchmarkEvent({
+      type: "verifier_started",
+      phase: "verifier",
+      message: command,
+      detailsJson: JSON.stringify({ command }),
+    });
+    const benchmarkCommand = validateBuildBenchmarkCommand(command, benchmark);
+    if (!benchmarkCommand.allowed) {
+      const message = benchmarkCommand.reason ?? "Verification command blocked by benchmark policy.";
+      emitBuildCheckCommandRun({
+        command,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+        denied: true,
+      });
+      emitBenchmarkEvent({
+        type: "verifier_completed",
+        phase: "verifier",
+        message,
+        detailsJson: JSON.stringify({ command, passed: false }),
+      });
+      return {
+        feedback: `AUTOMATED BUILD CHECK - \`${command}\` was rejected before execution. ${message}`,
+        failed: true,
+      };
+    }
     const safety = classifyRunCommand(command);
     if (!safety.allowed) {
       const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
@@ -2450,12 +2762,18 @@ export async function runBuildDiscussion(
         outputPreview: message,
         denied: true,
       });
+      emitBenchmarkEvent({
+        type: "verifier_completed",
+        phase: "verifier",
+        message,
+        detailsJson: JSON.stringify({ command, passed: false }),
+      });
       return {
         feedback: `AUTOMATED BUILD CHECK - \`${command}\` was rejected before execution. ${message}`,
         failed: true,
       };
     }
-    if (!allowAllCommands) {
+    if (!benchmarkApprovalsBypassed()) {
       const decision = hooks?.requestCommandApproval
         ? await hooks.requestCommandApproval(command, "Automated build check")
         : "deny";
@@ -2504,7 +2822,7 @@ export async function runBuildDiscussion(
           combinedOutput
         );
       if (tscShimFailure) {
-        if (!allowAllCommands) {
+        if (!benchmarkApprovalsBypassed()) {
           const decision = hooks?.requestCommandApproval
             ? await hooks.requestCommandApproval(
                 detectedVerifyCommand,
@@ -2536,6 +2854,35 @@ export async function runBuildDiscussion(
           phase: "model_streaming",
           message: `Retrying build check with detected command: ${detectedVerifyCommand}`,
         });
+        const retryBenchmarkCommand = validateBuildBenchmarkCommand(
+          detectedVerifyCommand,
+          benchmark
+        );
+        if (!retryBenchmarkCommand.allowed) {
+          const message =
+            retryBenchmarkCommand.reason ??
+            "Detected verifier retry blocked by benchmark policy.";
+          emitBuildCheckCommandRun({
+            command: detectedVerifyCommand,
+            exitCode: -1,
+            durationMs: 0,
+            outputPreview: message,
+            denied: true,
+          });
+          emitBenchmarkEvent({
+            type: "verifier_completed",
+            phase: "verifier",
+            message,
+            detailsJson: JSON.stringify({
+              command: detectedVerifyCommand,
+              passed: false,
+            }),
+          });
+          return {
+            feedback: `AUTOMATED BUILD CHECK - \`${detectedVerifyCommand}\` was rejected before execution. ${message}`,
+            failed: true,
+          };
+        }
         finalResult = await runCommand(runner, detectedVerifyCommand);
         finalCommand = detectedVerifyCommand;
         const retryStdout = stripAnsi(finalResult.stdout);
@@ -2554,6 +2901,16 @@ export async function runBuildDiscussion(
         });
       }
       const ok = finalResult.exitCode === 0;
+      emitBenchmarkEvent({
+        type: "verifier_completed",
+        phase: "verifier",
+        message: `${finalCommand} ${ok ? "passed" : "failed"}`,
+        detailsJson: JSON.stringify({
+          command: finalCommand,
+          exitCode: finalResult.exitCode,
+          passed: ok,
+        }),
+      });
       // Remember the latest resolved build-check outcome for the final summary's
       // Verification line (bounded; only the command + pass/fail verdict).
       repoVerification = `${finalCommand} ${ok ? "passed" : "failed"}`;
@@ -2576,11 +2933,18 @@ export async function runBuildDiscussion(
         failed: !ok,
       };
     } catch (err) {
+      const message = err instanceof Error ? err.message : "build check failed";
       emitBuildCheckCommandRun({
         command,
         exitCode: -1,
         durationMs: 0,
         outputPreview: err instanceof Error ? err.message : "build check failed",
+      });
+      emitBenchmarkEvent({
+        type: "verifier_completed",
+        phase: "verifier",
+        message,
+        detailsJson: JSON.stringify({ command, passed: false }),
       });
       return {
         feedback: `AUTOMATED BUILD CHECK — \`${command}\` could not run: ${err instanceof Error ? err.message : "error"}.`,
@@ -3108,34 +3472,75 @@ export async function runBuildDiscussion(
       providerId,
       message: opts.label,
     });
+    emitBenchmarkEvent({
+      type: "model_call_started",
+      phase: "model_streaming",
+      message: opts.label,
+      modelId: model.modelId,
+      providerId,
+    });
     let content: string;
     try {
-      content = await collectStream(
-        model.modelId,
-        providerId,
-        rawModel,
+      const resolved = await resolveBuildModelContent({
+        model,
         messages,
-        opts.maxTokens,
-        0.4,
-        reasoningEffort,
-        [],
-        (token) => emit({ type: "message_token", messageId, token }),
-        signal,
-        opts.stopWhen,
-        opts.structuredOutput,
-        (retry) =>
-          diagnostics.push({
-            attempt: retry.attempt,
-            type: "request",
-            message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
-          }),
-        modelContextProfile(model)
-      );
+        maxTokens: opts.maxTokens,
+        label: opts.label,
+        structuredOutput: opts.structuredOutput,
+        hooks,
+        emitToken: (token) => emit({ type: "message_token", messageId, token }),
+        collect: () =>
+          collectStream(
+            model.modelId,
+            providerId,
+            rawModel,
+            messages,
+            opts.maxTokens,
+            0.4,
+            reasoningEffort,
+            [],
+            (token) => emit({ type: "message_token", messageId, token }),
+            signal,
+            opts.stopWhen,
+            opts.structuredOutput,
+            (retry) =>
+              diagnostics.push({
+                attempt: retry.attempt,
+                type: "request",
+                message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
+              }),
+            modelContextProfile(model)
+          ),
+      });
+      content = resolved.content;
+      if (resolved.overrideUsed) {
+        diagnostics.push({
+          attempt: 1,
+          type: "request",
+          message: "Model call served by benchmark override.",
+        });
+      }
+      emitBenchmarkEvent({
+        type: "model_call_completed",
+        phase: "model_streaming",
+        message: opts.label,
+        modelId: model.modelId,
+        providerId,
+        detailsJson: JSON.stringify({ overrideUsed: resolved.overrideUsed }),
+      });
     } catch (error) {
+      emitBenchmarkEvent({
+        type: "model_call_failed",
+        phase: "model_streaming",
+        message: error instanceof Error ? error.message : String(error),
+        modelId: model.modelId,
+        providerId,
+      });
       await recordBenchmarkModelCallTrace(
         createGameModelCallTrace({
           modelId: model.modelId,
           providerId,
+          ...buildBenchmarkTraceContext(benchmark),
           participantId: opts.label,
           reasoningEffort,
           schemaMode: opts.structuredOutput ? "structured" : "text",
@@ -3186,6 +3591,7 @@ export async function runBuildDiscussion(
       createGameModelCallTrace({
         modelId: model.modelId,
         providerId,
+        ...buildBenchmarkTraceContext(benchmark),
         participantId: opts.label,
         reasoningEffort,
         schemaMode: opts.structuredOutput ? "structured" : "text",
@@ -3929,6 +4335,17 @@ export async function runBuildDiscussion(
     budgets: InspectionBudgets,
     appendContext: (text: string) => void
   ): Promise<ArchitectDispatch> => {
+    const benchmarkBlock = shouldBlockBuildBenchmarkAction(action.action, benchmark);
+    if (benchmarkBlock.blocked) {
+      const message = benchmarkBlock.reason ?? "Action blocked by benchmark policy.";
+      emitBenchmarkEvent({
+        type: "tool_call_blocked",
+        phase: "model_streaming",
+        message,
+        detailsJson: JSON.stringify({ action: action.action }),
+      });
+      return { result: message, exhausted: false, toolStatus: "denied" };
+    }
     if (action.action === "search") {
       if (budgets.searches <= 0)
         return {
@@ -4157,7 +4574,7 @@ export async function runBuildDiscussion(
     skippedCount: number;
   }> => {
     const schedule = scheduleBuildToolActions(actions, {
-      allowSafeRunQueue: allowAllCommands,
+      allowSafeRunQueue: benchmarkApprovalsBypassed(),
       maxSafeRuns: SAFE_RUN_QUEUE_LIMIT,
     });
     const served: Array<{

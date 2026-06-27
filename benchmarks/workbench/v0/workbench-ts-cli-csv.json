@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "workbench-ts-cli-csv-0001",
+  "title": "TypeScript CLI CSV report output",
+  "description": "Add a CSV output option to a report command while preserving the existing JSON output.",
+  "difficulty": "medium",
+  "tags": ["typescript", "cli", "formatting"],
+  "caseVersion": "0.1.0",
+  "prompt": {
+    "userRequest": "Add --format csv to the report command. Preserve the existing JSON output exactly.",
+    "publicContext": "CSV output must include a header row and escape quotes according to RFC 4180.",
+    "hiddenNotesHash": "hidden:workbench-ts-cli-csv-v0.1"
+  },
+  "repo": {
+    "url": "fixture://workbench-ts-cli-csv-0001",
+    "baseCommit": "fixture-base",
+    "shallowClone": true,
+    "fixtureHash": "fixture:workbench-ts-cli-csv-v0.1"
+  },
+  "environment": {
+    "timeoutSeconds": 1200,
+    "memoryMb": 2048,
+    "network": "dependency-only",
+    "setupCommand": "npm ci"
+  },
+  "verifier": {
+    "command": "npm test -- --runInBand",
+    "resultFile": "verifier-result.json",
+    "timeoutSeconds": 120,
+    "publicCommand": "npm test"
+  },
+  "budget": {
+    "maxUsd": 2,
+    "maxWallClockSeconds": 1200,
+    "maxModelCalls": 20,
+    "maxToolCalls": 100,
+    "maxInputTokens": 200000,
+    "maxOutputTokens": 50000
+  },
+  "scoring": {
+    "scoringVersion": "certified-v0.1",
+    "costTargetUsd": 1,
+    "timeTargetSeconds": 600
+  },
+  "contamination": {
+    "originalTask": true,
+    "canary": "AIBENCH-WORKBENCH-TS-CLI-CSV-0001",
+    "referenceSolutionPrivate": true,
+    "publicAfter": "2027-01-01"
+  }
+}

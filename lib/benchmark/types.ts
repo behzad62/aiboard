@@ -30,11 +30,44 @@ export type BenchmarkAttemptStatus =
 export type BenchmarkArtifactKind =
   | "json"
   | "markdown"
+  | "patch"
   | "transcript"
   | "raw-response"
   | "screenshot"
   | "log";
 export type BenchmarkMetricDirection = "higher" | "lower" | "neutral";
+
+export type BenchmarkTrack =
+  | "workbench"
+  | "gameiq"
+  | "teamiq"
+  | "toolreliability"
+  | "harnessbench";
+export type BenchmarkMode =
+  | "lab"
+  | "certified"
+  | "publish";
+export type HarnessProfile =
+  | "raw-single-model"
+  | "aiboard-single-model"
+  | "aiboard-panel"
+  | "aiboard-debate"
+  | "aiboard-specialist"
+  | "aiboard-build-single-worker"
+  | "aiboard-build-multi-worker"
+  | "external-mini-swe-agent"
+  | "external-custom";
+export type CertifiedAttemptStatus =
+  | "passed"
+  | "failed_model"
+  | "failed_verifier"
+  | "failed_tool_use"
+  | "failed_budget"
+  | "provider_unavailable"
+  | "invalid_harness"
+  | "invalid_environment"
+  | "invalid_case"
+  | "aborted_user";
 
 export interface BenchmarkSuite {
   id: string;
@@ -80,6 +113,216 @@ export interface BenchmarkCase {
   tags: string[];
   configJson: string;
   expectedJson?: string;
+}
+
+export interface BenchmarkCaseV2 {
+  id: string;
+  schemaVersion: 2;
+  track: BenchmarkTrack;
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard" | "expert";
+  tags: string[];
+  caseVersion: string;
+  createdAt: string;
+  updatedAt: string;
+  prompt: {
+    userRequest: string;
+    publicContext?: string;
+    hiddenNotesHash?: string;
+    systemPromptHash?: string;
+    attachmentIds?: string[];
+  };
+  repo?: {
+    url: string;
+    baseCommit: string;
+    shallowClone: boolean;
+    fixtureHash?: string;
+  };
+  environment: {
+    type: "browser" | "local-runner" | "docker" | "modal" | "github-actions";
+    image?: string;
+    imageDigest?: string;
+    setupCommand?: string;
+    timeoutSeconds: number;
+    memoryMb?: number;
+    network: "none" | "dependency-only" | "open";
+  };
+  verifier: {
+    command?: string;
+    resultFile?: string;
+    publicCommand?: string;
+    hiddenCommandHash?: string;
+    timeoutSeconds?: number;
+    scorer: "verifier-json" | "game-engine" | "rule-checker";
+  };
+  budget: {
+    maxUsd?: number;
+    maxWallClockSeconds?: number;
+    maxModelCalls?: number;
+    maxToolCalls?: number;
+    maxInputTokens?: number;
+    maxOutputTokens?: number;
+  };
+  scoring: {
+    scoringVersion: string;
+    primary:
+      | "verified_quality"
+      | "game_iq"
+      | "team_lift"
+      | "tool_reliability";
+    costTargetUsd?: number;
+    timeTargetSeconds?: number;
+  };
+  contamination: {
+    originalTask: boolean;
+    canary: string;
+    referenceSolutionPrivate: boolean;
+    publicAfter?: string;
+  };
+}
+
+export interface BenchmarkTeamCompositionRole {
+  role:
+    | "single"
+    | "architect"
+    | "worker"
+    | "reviewer"
+    | "critic"
+    | "judge"
+    | "player"
+    | "specialist";
+  slot: string;
+  modelId: string;
+  providerId: string;
+  displayName: string;
+  reasoningEffort?: ReasoningEffort | string;
+  temperature: number;
+  maxTokens?: number;
+}
+
+export interface BenchmarkTeamComposition {
+  id: string;
+  name: string;
+  comboHash: string;
+  roles: BenchmarkTeamCompositionRole[];
+}
+
+export interface BenchmarkVerifierAssertionResult {
+  id: string;
+  label: string;
+  passed: boolean;
+  weight: number;
+  message?: string;
+}
+
+export interface BenchmarkVerifierResult {
+  id: string;
+  attemptId: string;
+  caseId: string;
+  command?: string;
+  passed: boolean;
+  score: number;
+  durationMs: number;
+  exitCode?: number;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  resultJson: string;
+  assertionResults: BenchmarkVerifierAssertionResult[];
+  artifactIds: string[];
+}
+
+export interface BenchmarkAttemptV2 {
+  id: string;
+  runId: string;
+  caseId: string;
+  teamCompositionId: string;
+  mode: BenchmarkMode;
+  track: BenchmarkTrack;
+  harnessProfile: HarnessProfile;
+  status: CertifiedAttemptStatus;
+  startedAt: string;
+  completedAt?: string;
+  verifiedQuality: number;
+  jobSuccessScore: number;
+  efficiencyScore: number;
+  gameIqScore?: number;
+  teamLift?: number;
+  toolReliabilityScore?: number;
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  modelCalls: number;
+  toolCalls: number;
+  durationMs: number;
+  verifierResultId?: string;
+  artifactIds: string[];
+  traceIds: string[];
+  failureIds: string[];
+  harnessVersion: string;
+  promptSetVersion: string;
+  scoringVersion: string;
+}
+
+export type BenchmarkRunEventType =
+  | "model_call_started"
+  | "model_call_completed"
+  | "model_call_failed"
+  | "tool_call_started"
+  | "tool_call_completed"
+  | "tool_call_blocked"
+  | "verifier_started"
+  | "verifier_completed"
+  | "run_blocked"
+  | "run_failed";
+
+export interface BenchmarkRunEvent {
+  id: string;
+  attemptId: string;
+  caseId: string;
+  type: BenchmarkRunEventType;
+  phase: string;
+  at: string;
+  message: string;
+  modelId?: string;
+  providerId?: string;
+  detailsJson?: string;
+}
+
+export interface BenchmarkToolCallTrace {
+  id: string;
+  attemptId: string;
+  caseId: string;
+  toolName: string;
+  command?: string;
+  status: "ok" | "failed" | "blocked" | "denied";
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  inputJson?: string;
+  outputPreview?: string;
+  error?: string;
+}
+
+export interface HarnessCertificationCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  message?: string;
+  detailsJson?: string;
+}
+
+export interface HarnessCertificationResult {
+  id: string;
+  createdAt: string;
+  aiboardVersion: string;
+  benchmarkEngineVersion: string;
+  harnessProfile: HarnessProfile;
+  harnessVersion: string;
+  promptSetVersion: string;
+  passed: boolean;
+  checks: HarnessCertificationCheck[];
+  artifactIds?: string[];
 }
 
 export interface BenchmarkAttempt {
@@ -192,6 +435,24 @@ export interface BenchmarkReportBundle {
     gameMatches: GenericGameMatchRecord[];
     buildCheckpoints: BuildCheckpoint[];
     buildStats: ModelBuildStat[];
+  };
+}
+
+export interface BenchmarkReportBundleV2
+  extends Omit<BenchmarkReportBundle, "version"> {
+  version: 2;
+  caseV2: BenchmarkCaseV2[];
+  attemptsV2: BenchmarkAttemptV2[];
+  verifierResults: BenchmarkVerifierResult[];
+  runEvents: BenchmarkRunEvent[];
+  toolCallTraces: BenchmarkToolCallTrace[];
+  teamCompositions: BenchmarkTeamComposition[];
+  harnessCertifications: HarnessCertificationResult[];
+  bundleHash?: string;
+  redactionSummary?: {
+    scannedArtifacts: number;
+    redactedSecrets: number;
+    warnings: string[];
   };
 }
 

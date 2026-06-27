@@ -15,8 +15,8 @@ export const BUILD_LEADERBOARD_COLUMNS: {
   align?: "right";
 }[] = [
   { key: "model", label: "Model" },
-  { key: "quality", label: "Quality", align: "right" },
-  { key: "qualityPerAttempt", label: "Quality/att.", align: "right" },
+  { key: "quality", label: "Architect-reviewed quality", align: "right" },
+  { key: "qualityPerAttempt", label: "Architect-reviewed quality/att.", align: "right" },
   { key: "approval", label: "Approval", align: "right" },
   { key: "speed", label: "Speed", align: "right" },
   { key: "availability", label: "Avail.", align: "right" },
