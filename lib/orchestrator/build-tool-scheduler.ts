@@ -7,6 +7,7 @@
  */
 
 import type { ArchitectAction } from "@/lib/orchestrator/build";
+import { exactToolKey } from "@/lib/orchestrator/build";
 
 export type BuildToolScheduleClass =
   | "batch_read"
@@ -24,6 +25,13 @@ export interface SkippedToolAction {
   action: ArchitectAction;
   label: string;
   reason: string;
+}
+
+interface ReplayRangeEntry {
+  path: string;
+  startLine: number;
+  endLine: number;
+  result: string;
 }
 
 export function classifyBuildToolActionForScheduling(
@@ -159,6 +167,93 @@ export function scheduleBuildToolActions(
   }
 
   return { served, skipped };
+}
+
+function requestedRange(action: Extract<ArchitectAction, { action: "read_range" }>): {
+  path: string;
+  startLine: number;
+  endLine: number;
+} {
+  const startLine = Math.max(1, Math.round(action.startLine));
+  return {
+    path: action.path.trim().toLowerCase(),
+    startLine,
+    endLine: startLine + Math.max(1, Math.round(action.lineCount)) - 1,
+  };
+}
+
+function rangeCoverage(
+  delivered: Pick<ReplayRangeEntry, "startLine" | "endLine">,
+  requested: Pick<ReplayRangeEntry, "startLine" | "endLine">
+): number {
+  const requestedLines = requested.endLine - requested.startLine + 1;
+  if (requestedLines <= 0) return 1;
+  const coveredStart = Math.max(delivered.startLine, requested.startLine);
+  const coveredEnd = Math.min(delivered.endLine, requested.endLine);
+  if (coveredEnd < coveredStart) return 0;
+  return (coveredEnd - coveredStart + 1) / requestedLines;
+}
+
+function replayableExactKey(action: ArchitectAction): string | null {
+  if (
+    action.action !== "read" &&
+    action.action !== "search" &&
+    action.action !== "context_retrieve" &&
+    action.action !== "code_intel"
+  ) {
+    return null;
+  }
+  return exactToolKey(action);
+}
+
+export function createToolReplayCache(): {
+  remember: (
+    action: ArchitectAction,
+    result: string,
+    deliveredRange?: { startLine: number; endLine: number }
+  ) => void;
+  replay: (action: ArchitectAction) => string | null;
+} {
+  const exact = new Map<string, string>();
+  const ranges: ReplayRangeEntry[] = [];
+  const replayPrefix =
+    "REPLAYED DUPLICATE TOOL RESULT - this result was already delivered earlier in the task and is repeated here without spending tool budget.\n";
+
+  return {
+    remember(action, result, deliveredRange) {
+      if (action.action === "read_range") {
+        const requested = requestedRange(action);
+        const startLine = deliveredRange?.startLine ?? requested.startLine;
+        const endLine = deliveredRange?.endLine ?? requested.endLine;
+        if (endLine >= startLine) {
+          ranges.push({
+            path: requested.path,
+            startLine,
+            endLine,
+            result,
+          });
+        }
+        return;
+      }
+      const key = replayableExactKey(action);
+      if (key) exact.set(key, result);
+    },
+    replay(action) {
+      if (action.action === "read_range") {
+        const requested = requestedRange(action);
+        const entry = ranges.find(
+          (candidate) =>
+            candidate.path === requested.path &&
+            rangeCoverage(candidate, requested) >= 0.9
+        );
+        return entry ? `${replayPrefix}${entry.result}` : null;
+      }
+      const key = replayableExactKey(action);
+      if (!key) return null;
+      const result = exact.get(key);
+      return result ? `${replayPrefix}${result}` : null;
+    },
+  };
 }
 
 export function packToolBatchResult(input: {

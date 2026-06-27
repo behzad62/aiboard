@@ -47,6 +47,7 @@ import {
   shouldStopForNoProgress,
 } from "@/lib/orchestrator/build-progress";
 import {
+  createToolReplayCache,
   packToolBatchResult,
   scheduleBuildToolActions,
 } from "@/lib/orchestrator/build-tool-scheduler";
@@ -4999,6 +5000,7 @@ export async function runBuildDiscussion(
           appends: WORKER_APPENDS_PER_TASK,
         };
         const tracker = createToolCallTracker();
+        const replayCache = createToolReplayCache();
         let badToolCalls = 0;
 
         // Dispatch a batch of worker tool actions in one turn: safe reads run
@@ -5034,12 +5036,22 @@ export async function runBuildDiscussion(
               continue;
             }
             if (isRedundantToolCall(tracker, action)) {
+              const replayed = replayCache.replay(action);
+              if (replayed) {
+                served.push({
+                  label: `${item.label} (replayed)`,
+                  result: replayed,
+                  preserveFullResult: action.action === "context_retrieve",
+                });
+                continue;
+              }
               skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
               continue;
             }
             if (action.action === "context_retrieve") {
               const result = executeContextRetrieve(action, actor, worker);
               recordToolCall(tracker, action);
+              replayCache.remember(action, result);
               served.push({
                 label: item.label,
                 result,
@@ -5080,6 +5092,7 @@ export async function runBuildDiscussion(
                 worker
               );
               recordToolCall(tracker, action);
+              replayCache.remember(action, joined);
               served.push({ label: item.label, result: truncate(joined, 18_000) });
               continue;
             }
@@ -5090,7 +5103,9 @@ export async function runBuildDiscussion(
                 `${formatBuildFileToolDiagnostic({ actor, action: "read_range", path: action.path, startLine: action.startLine, lineCount: action.lineCount })} · ${kbOf(out)} · ${budgets.rangeReads} range read(s) left`,
                 worker
               );
-              recordToolCall(tracker, action, parseDeliveredRange(out));
+              const deliveredRange = parseDeliveredRange(out);
+              recordToolCall(tracker, action, deliveredRange);
+              replayCache.remember(action, out, deliveredRange);
               served.push({ label: item.label, result: out });
               continue;
             }
@@ -5102,7 +5117,9 @@ export async function runBuildDiscussion(
                 worker
               );
               recordToolCall(tracker, action);
-              served.push({ label: item.label, result: `Search results for "${action.query}":\n${out}` });
+              const result = `Search results for "${action.query}":\n${out}`;
+              replayCache.remember(action, result);
+              served.push({ label: item.label, result });
               continue;
             }
             if (action.action === "patch" && budgets.patches > 0) {

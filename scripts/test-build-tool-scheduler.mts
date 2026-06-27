@@ -3,6 +3,7 @@ import {
   classifyBuildToolActionForScheduling,
   isSafeQueuedRunCommand,
   packToolBatchResult,
+  createToolReplayCache,
   scheduleBuildToolActions,
 } from "../lib/orchestrator/build-tool-scheduler";
 import { inspectStrictToolActionBatchOutput } from "../lib/orchestrator/build";
@@ -77,5 +78,38 @@ const packed = packToolBatchResult({
 check("packed result lists served", /Served/.test(packed), packed);
 check("packed result lists skipped", /Skipped/.test(packed), packed);
 check("packed result caps output", packed.length < 500, packed);
+
+const replayCache = createToolReplayCache();
+const rangeAction = {
+  action: "read_range" as const,
+  path: "public/app.js",
+  startLine: 520,
+  lineCount: 80,
+};
+replayCache.remember(rangeAction, "line 520 result", { startLine: 520, endLine: 599 });
+const exactReplay = replayCache.replay(rangeAction);
+check(
+  "read_range duplicate can be replayed from cache",
+  exactReplay?.includes("REPLAYED") && exactReplay.includes("line 520 result"),
+  exactReplay
+);
+const overlappingReplay = replayCache.replay({
+  action: "read_range",
+  path: "public/app.js",
+  startLine: 535,
+  lineCount: 40,
+});
+check(
+  "overlapping read_range duplicate can be replayed from cache",
+  overlappingReplay?.includes("line 520 result"),
+  overlappingReplay
+);
+const searchAction = { action: "search" as const, query: "drawConnectors" };
+replayCache.remember(searchAction, "search hit public/app.js:520");
+check(
+  "exact read/search duplicate can be replayed from cache",
+  replayCache.replay(searchAction)?.includes("search hit"),
+  replayCache.replay(searchAction)
+);
 
 process.exit(failed === 0 ? 0 : 1);
