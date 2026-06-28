@@ -6,6 +6,10 @@ import type { GameIqScoreInput } from "@/lib/benchmark/scoring/types";
 import type { BattleshipCoordinate } from "@/lib/games/battleship/types";
 import type { CodenamesClue } from "@/lib/games/codenames/types";
 import type { ConnectFourGameState } from "@/lib/games/connect-four/types";
+import type {
+  FireworksAction,
+  FireworksPlayerView,
+} from "@/lib/games/fireworks/types";
 import type { Move, PieceType } from "@/lib/games/chess/types";
 
 export const GAMEIQ_SCORING_VERSION = "certified-gameiq-v0.1";
@@ -16,7 +20,8 @@ export type GameIqGameId =
   | "connect-four"
   | "chess"
   | "battleship"
-  | "codenames";
+  | "codenames"
+  | "fireworks";
 
 export type GameIqCertificationTier = "first-class" | "lightweight";
 
@@ -28,7 +33,8 @@ export type GameIqScenarioCategory =
   | "mate-in-one"
   | "legal-tactic"
   | "target-priority"
-  | "clue-selection";
+  | "clue-selection"
+  | "hidden-cooperation";
 
 export interface GameIqExpectedAction<TAction = GameIqAction> {
   action: TAction;
@@ -135,7 +141,8 @@ export type GameIqAction =
   | ConnectFourGameIqAction
   | ChessGameIqAction
   | BattleshipGameIqAction
-  | CodenamesGameIqAction;
+  | CodenamesGameIqAction
+  | FireworksAction;
 
 export type ConnectFourGameIqScenario = GameIqScenario<
   ConnectFourGameState,
@@ -155,6 +162,11 @@ export type BattleshipGameIqScenario = GameIqScenario<
 export type CodenamesGameIqScenario = GameIqScenario<
   unknown,
   CodenamesGameIqAction
+>;
+
+export type FireworksGameIqScenario = GameIqScenario<
+  FireworksPlayerView,
+  FireworksAction
 >;
 
 export function statusFromScore(score: number): CertifiedAttemptStatus {

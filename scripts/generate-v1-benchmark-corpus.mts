@@ -22,6 +22,7 @@ const gameFileById = new Map([
   ["chess", "chess.json"],
   ["battleship", "battleship.json"],
   ["codenames", "codenames.json"],
+  ["fireworks", "fireworks.json"],
 ]);
 
 interface WorkBenchFixtureSpec {

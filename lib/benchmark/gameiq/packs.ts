@@ -2,6 +2,7 @@ import { BATTLESHIP_GAMEIQ_SCENARIOS } from "./battleship";
 import { CHESS_GAMEIQ_SCENARIOS } from "./chess";
 import { CODENAMES_GAMEIQ_SCENARIOS } from "./codenames";
 import { CONNECT_FOUR_GAMEIQ_SCENARIOS } from "./connect-four";
+import { FIREWORKS_GAMEIQ_SCENARIOS } from "./fireworks";
 import type { GameIqGameId, GameIqScenario, GameIqScenarioPack } from "./types";
 
 const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
@@ -36,6 +37,14 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     version: "0.1.0",
     certificationTier: "lightweight",
     scenarios: CODENAMES_GAMEIQ_SCENARIOS,
+  },
+  {
+    id: "gameiq-fireworks-solo-v0.1",
+    gameId: "fireworks",
+    label: "Certified GameIQ v0.1: Fireworks Solo Control",
+    version: "0.1.0",
+    certificationTier: "lightweight",
+    scenarios: FIREWORKS_GAMEIQ_SCENARIOS,
   },
 ];
 

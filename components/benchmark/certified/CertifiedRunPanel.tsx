@@ -46,6 +46,14 @@ import {
   runCertifiedTeamIq,
 } from "@/lib/benchmark/teamiq";
 import {
+  FIREWORKS_FULL_GAME_CASES,
+  FIREWORKS_MEMORY_SCENARIOS,
+  FIREWORKS_TACTICS_SCENARIOS,
+  fireworksCaseToBenchmarkCaseV2,
+  type FireworksBenchmarkCase,
+  type FireworksBenchmarkSuite,
+} from "@/lib/benchmark/fireworks";
+import {
   getGameIqScenarioPack,
   runCertifiedGameIq,
 } from "@/lib/benchmark/gameiq";
@@ -102,6 +110,8 @@ export function CertifiedRunPanel({
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
   const [teamIqStrategy, setTeamIqStrategy] =
     useState<TeamIqUiStrategy>("architect_worker_reviewer");
+  const [fireworksPlayerCount, setFireworksPlayerCount] = useState<2 | 3>(2);
+  const [includeSoloBaselines, setIncludeSoloBaselines] = useState(true);
   const [suiteId, setSuiteId] = useState("");
   const [harnessProfile, setHarnessProfile] =
     useState<HarnessProfile>("raw-single-model");
@@ -217,13 +227,45 @@ export function CertifiedRunPanel({
             />
           </div>
           {selectedTrack === "teamiq" && (
-            <TeamCompositionBuilder
-              models={models}
-              selectedModelIds={teamModelIds}
-              strategy={teamIqStrategy}
-              onChange={setTeamModelIds}
-              onStrategyChange={setTeamIqStrategy}
-            />
+            <div className="space-y-4">
+              <TeamCompositionBuilder
+                models={models}
+                selectedModelIds={teamModelIds}
+                strategy={teamIqStrategy}
+                onChange={setTeamModelIds}
+                onStrategyChange={setTeamIqStrategy}
+              />
+              {isFireworksSuite(suiteId) && (
+                <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
+                  <label className="space-y-1">
+                    <span className="font-medium">Players</span>
+                    <select
+                      value={fireworksPlayerCount}
+                      onChange={(event) =>
+                        setFireworksPlayerCount(Number(event.target.value) as 2 | 3)
+                      }
+                      className="w-full rounded-md border bg-background px-3 py-2"
+                    >
+                      <option value={2}>2-player</option>
+                      <option value={3}>3-player</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 pt-6">
+                    <input
+                      type="checkbox"
+                      checked={includeSoloBaselines}
+                      onChange={(event) =>
+                        setIncludeSoloBaselines(event.target.checked)
+                      }
+                    />
+                    <span>Run solo self-play baselines</span>
+                  </label>
+                  <div className="pt-6 text-muted-foreground">
+                    {fireworksCaseCountForSuite(suiteId, fireworksPlayerCount)} Fireworks cases
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {selectedTrack === "workbench" && (
             <WorkBenchRunPanel
@@ -353,11 +395,10 @@ export function CertifiedRunPanel({
           return runCertifiedTeamIq({
             context,
             teamCompositions: [team],
-            task: {
-              kind: "toolreliability",
-              casePack: teamIqCasePackForSuite(suiteId),
-            },
-            includeSoloBaselines: true,
+            task: teamIqTaskForSuite(suiteId, fireworksPlayerCount),
+            includeSoloBaselines: isFireworksSuite(suiteId)
+              ? includeSoloBaselines
+              : true,
           });
         },
       });
@@ -401,6 +442,22 @@ function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
         id: "teamiq-toolreliability-v0.1-quick",
         label: "TeamIQ ToolReliability quick",
       },
+      {
+        id: "fireworks-teamiq-tactics-v0.1",
+        label: "Fireworks Tactics",
+      },
+      {
+        id: "fireworks-teamiq-memory-v0.1",
+        label: "Fireworks Memory",
+      },
+      {
+        id: "fireworks-teamiq-full-v0.1",
+        label: "Fireworks Full",
+      },
+      {
+        id: "fireworks-teamiq-mixed-v0.1",
+        label: "Fireworks Mixed",
+      },
     ];
   }
   if (track === "workbench") {
@@ -409,7 +466,7 @@ function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
       label: item.label,
     }));
   }
-  return ["connect-four", "chess", "battleship", "codenames"]
+  return ["connect-four", "chess", "battleship", "codenames", "fireworks"]
     .map((gameId) => getGameIqScenarioPack(gameId as never))
     .filter((pack): pack is NonNullable<ReturnType<typeof getGameIqScenarioPack>> => Boolean(pack))
     .map((pack) => ({ id: pack.id, label: pack.label }));
@@ -449,6 +506,12 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
     };
   }
   if (track === "teamiq") {
+    if (isFireworksSuite(suiteId)) {
+      return fireworksCaseToBenchmarkCaseV2(
+        suiteId,
+        fireworksSuiteForSuiteId(suiteId)
+      );
+    }
     return {
       id: suiteId,
       schemaVersion: 2,
@@ -476,9 +539,10 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       },
     };
   }
-  const pack = getGameIqScenarioPack(
-    suiteId.replace("gameiq-v0.1-", "") as never
-  );
+  const pack =
+    ["connect-four", "chess", "battleship", "codenames", "fireworks"]
+      .map((gameId) => getGameIqScenarioPack(gameId as never))
+      .find((candidate) => candidate?.id === suiteId) ?? null;
   return {
     id: suiteId,
     schemaVersion: 2,
@@ -509,9 +573,64 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
   };
 }
 
-function teamIqCasePackForSuite(suiteId: string) {
-  if (suiteId === "teamiq-toolreliability-v0.1-quick") {
-    return TOOL_RELIABILITY_V0_1_CASES.slice(0, 5);
+function teamIqTaskForSuite(
+  suiteId: string,
+  fireworksPlayerCount: 2 | 3
+) {
+  if (isFireworksSuite(suiteId)) {
+    return {
+      kind: "fireworks" as const,
+      suite: fireworksSuiteForSuiteId(suiteId),
+      cases: fireworksCasesForSuiteId(suiteId, fireworksPlayerCount),
+    };
   }
-  return TOOL_RELIABILITY_V0_1_CASES;
+  if (suiteId === "teamiq-toolreliability-v0.1-quick") {
+    return {
+      kind: "toolreliability" as const,
+      casePack: TOOL_RELIABILITY_V0_1_CASES.slice(0, 5),
+    };
+  }
+  return {
+    kind: "toolreliability" as const,
+    casePack: TOOL_RELIABILITY_V0_1_CASES,
+  };
+}
+
+function isFireworksSuite(suiteId: string): boolean {
+  return suiteId.startsWith("fireworks-teamiq-");
+}
+
+function fireworksSuiteForSuiteId(suiteId: string): FireworksBenchmarkSuite {
+  if (suiteId.includes("-tactics-")) return "tactics";
+  if (suiteId.includes("-memory-")) return "memory";
+  if (suiteId.includes("-full-")) return "full";
+  return "mixed";
+}
+
+function fireworksCasesForSuiteId(
+  suiteId: string,
+  playerCount: 2 | 3
+): FireworksBenchmarkCase[] {
+  const suite = fireworksSuiteForSuiteId(suiteId);
+  if (suite === "tactics") return FIREWORKS_TACTICS_SCENARIOS.slice(0, 20);
+  if (suite === "memory") return FIREWORKS_MEMORY_SCENARIOS.slice(0, 10);
+  if (suite === "full") {
+    return FIREWORKS_FULL_GAME_CASES.filter(
+      (benchmarkCase) => benchmarkCase.playerCount === playerCount
+    );
+  }
+  return [
+    ...FIREWORKS_TACTICS_SCENARIOS.slice(0, 20),
+    ...FIREWORKS_MEMORY_SCENARIOS.slice(0, 10),
+    ...FIREWORKS_FULL_GAME_CASES.filter(
+      (benchmarkCase) => benchmarkCase.playerCount === playerCount
+    ).slice(0, 5),
+  ];
+}
+
+function fireworksCaseCountForSuite(
+  suiteId: string,
+  playerCount: 2 | 3
+): number {
+  return fireworksCasesForSuiteId(suiteId, playerCount).length;
 }

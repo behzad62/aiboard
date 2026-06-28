@@ -23,11 +23,22 @@ import {
 } from "@/lib/benchmark/toolreliability";
 import { deriveSoloTeamComposition, getTeamCompositionModelIds } from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
+import {
+  runCertifiedFireworksTeamIq,
+  type FireworksBenchmarkCase,
+  type FireworksBenchmarkSuite,
+} from "@/lib/benchmark/fireworks";
 
-export type TeamIqCertifiedTask = {
-  kind: "toolreliability";
-  casePack: ToolReliabilityCase[];
-};
+export type TeamIqCertifiedTask =
+  | {
+      kind: "toolreliability";
+      casePack: ToolReliabilityCase[];
+    }
+  | {
+      kind: "fireworks";
+      suite: FireworksBenchmarkSuite;
+      cases: FireworksBenchmarkCase[];
+    };
 
 export interface RunCertifiedTeamIqInput {
   context: CertifiedRunContext;
@@ -61,6 +72,18 @@ const CERTIFIED_REASONING_EFFORTS = new Set<ReasoningEffort>([
 export async function runCertifiedTeamIq(
   input: RunCertifiedTeamIqInput
 ): Promise<BenchmarkAttemptV2[]> {
+  if (input.task.kind === "fireworks") {
+    return runCertifiedFireworksTeamIq({
+      context: input.context,
+      teamCompositions: input.teamCompositions,
+      cases: input.task.cases,
+      includeSoloBaselines: input.includeSoloBaselines,
+      maxTokens: input.maxTokens,
+      streamChat: input.streamChat,
+      pricing: input.pricing,
+    });
+  }
+
   if (input.task.casePack.length === 0) {
     throw new Error("Certified TeamIQ requires at least one task case.");
   }
@@ -68,7 +91,9 @@ export async function runCertifiedTeamIq(
   const allTeams = await expandTeamIqCompositions(input);
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
-    attempts.push(await runTeamIqToolReliabilityAttempt(input, team));
+    attempts.push(
+      await runTeamIqToolReliabilityAttempt(input, team, input.task.casePack)
+    );
   }
 
   const links = linkTeamLiftBaselines({
@@ -119,13 +144,14 @@ async function expandTeamIqCompositions(
 
 async function runTeamIqToolReliabilityAttempt(
   input: RunCertifiedTeamIqInput,
-  team: BenchmarkTeamComposition
+  team: BenchmarkTeamComposition,
+  casePack: ToolReliabilityCase[]
 ): Promise<BenchmarkAttemptV2> {
   const attemptId = `teamiq-attempt:${input.context.runId}:${team.id}`;
   const calls: TeamIqParticipantCall[] = [];
   const outputs: ToolReliabilityCandidate["outputs"] = {};
 
-  for (const benchmarkCase of input.task.casePack) {
+  for (const benchmarkCase of casePack) {
     const caseOutputs: string[] = [];
     const callsForCase = benchmarkCase.category === "repair-loop" ? 2 : 1;
     for (let attemptIndex = 0; attemptIndex < callsForCase; attemptIndex++) {
@@ -165,7 +191,7 @@ async function runTeamIqToolReliabilityAttempt(
     teamCompositionId: team.id,
     outputs,
   };
-  const result = runToolReliabilityPack(candidate, input.task.casePack);
+  const result = runToolReliabilityPack(candidate, casePack);
   const verifier = createTeamIqVerifierResult({
     attemptId,
     caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-v0.1-pack",

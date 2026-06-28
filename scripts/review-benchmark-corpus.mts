@@ -30,6 +30,7 @@ const expectedGameIqCounts = new Map([
   ["chess", 60],
   ["battleship", 25],
   ["codenames", 25],
+  ["fireworks", 20],
 ]);
 
 const gamePacks = listGameIqScenarioPacks();

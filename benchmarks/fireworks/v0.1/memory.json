@@ -1,0 +1,12 @@
+{
+  "id": "fireworks-memory-v0.1",
+  "version": "0.1.0",
+  "caseCount": 40,
+  "categories": [
+    "combine_color_and_rank",
+    "old_clue_recall",
+    "negative_information",
+    "timing_inference"
+  ],
+  "source": "Generated from lib/benchmark/fireworks/scenario-packs.ts"
+}

@@ -14,6 +14,7 @@ import {
   getBenchmarkTraces,
   getBenchmarkVerifierResults,
 } from "@/lib/client/store";
+import { FireworksBenchmarkSummary } from "@/components/benchmark/fireworks/FireworksBenchmarkSummary";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
 
 export function AttemptDetailPanel({
@@ -85,6 +86,17 @@ export function AttemptDetailPanel({
         <Section title="Verifier assertions">
           <VerifierAssertionTable verifier={verifier} />
         </Section>
+
+        {detail.artifacts.some((artifact) =>
+          artifact.id.endsWith(":fireworks-summary")
+        ) && (
+          <Section title="Fireworks TeamIQ">
+            <FireworksBenchmarkSummary
+              attempt={attempt}
+              artifacts={detail.artifacts}
+            />
+          </Section>
+        )}
 
         <Section title="Traces">
           <div className="grid gap-2 md:grid-cols-2">

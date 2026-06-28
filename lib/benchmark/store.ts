@@ -111,6 +111,22 @@ export async function listBenchmarkAttemptsV2(): Promise<BenchmarkAttemptV2[]> {
   return [...getBenchmarkAttemptsV2()];
 }
 
+export async function listBenchmarkArtifacts(): Promise<BenchmarkArtifact[]> {
+  if (!isInitialized()) {
+    const { needsPassphrase } = await initStore();
+    if (needsPassphrase) return [];
+  }
+  return [...getBenchmarkArtifacts()];
+}
+
+export async function listBenchmarkFailures(): Promise<BenchmarkFailure[]> {
+  if (!isInitialized()) {
+    const { needsPassphrase } = await initStore();
+    if (needsPassphrase) return [];
+  }
+  return [...getBenchmarkFailures()];
+}
+
 export async function listBenchmarkVerifierResults(): Promise<
   BenchmarkVerifierResult[]
 > {

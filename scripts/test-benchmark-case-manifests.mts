@@ -63,6 +63,7 @@ const gameIqV1Files = new Map([
   ["chess.json", { gameId: "chess", count: 60 }],
   ["battleship.json", { gameId: "battleship", count: 25 }],
   ["codenames.json", { gameId: "codenames", count: 25 }],
+  ["fireworks.json", { gameId: "fireworks", count: 20 }],
 ]);
 const canonicalGamePacks = new Map(
   listGameIqScenarioPacks().map((pack) => [pack.gameId, pack])

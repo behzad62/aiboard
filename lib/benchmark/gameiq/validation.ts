@@ -25,11 +25,17 @@ import {
   validateCodenamesClue,
 } from "@/lib/games/codenames/engine";
 import type { CodenamesGameState } from "@/lib/games/codenames/types";
+import { fireworksActionsEqual } from "@/lib/games/fireworks/engine";
+import type {
+  FireworksAction,
+  FireworksPlayerView,
+} from "@/lib/games/fireworks/types";
 import type {
   BattleshipGameIqAction,
   ChessGameIqAction,
   CodenamesGameIqAction,
   ConnectFourGameIqAction,
+  FireworksGameIqScenario,
   GameIqAction,
   GameIqScenario,
   GameIqValidationResult,
@@ -104,6 +110,8 @@ export function isStructuredGameIqAction(
         typeof action.clue.word === "string" &&
         Number.isInteger(action.clue.count)
       );
+    case "fireworks":
+      return isStructuredFireworksAction(action);
     default:
       return false;
   }
@@ -137,6 +145,11 @@ export function validateGameIqAction(
       return validateCodenamesAction(
         scenario.initialState as CodenamesGameState,
         action as CodenamesGameIqAction
+      );
+    case "fireworks":
+      return validateFireworksAction(
+        scenario as FireworksGameIqScenario,
+        action as FireworksAction
       );
     default:
       return fail(`Unsupported GameIQ game: ${scenario.gameId}`);
@@ -210,6 +223,18 @@ function validateCodenamesAction(
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }
+}
+
+function validateFireworksAction(
+  scenario: FireworksGameIqScenario,
+  action: FireworksAction
+): GameIqValidationResult {
+  const view = scenario.initialState as FireworksPlayerView;
+  return view.legalActions.some((legalAction) =>
+    fireworksActionsEqual(legalAction, action)
+  )
+    ? ok()
+    : fail(`Illegal Fireworks action: ${JSON.stringify(action)}.`);
 }
 
 function validateScenarioCategory(
@@ -342,7 +367,35 @@ function actionsEqual(
           String(right.clue.word ?? "").toUpperCase() &&
         left.clue.count === right.clue.count
       );
+    case "fireworks":
+      return isStructuredFireworksAction(left) && isStructuredFireworksAction(right)
+        ? fireworksActionsEqual(left, right)
+        : false;
     default:
       return false;
   }
+}
+
+function isStructuredFireworksAction(action: unknown): action is FireworksAction {
+  if (!isRecord(action)) return false;
+  if (action.action === "play" || action.action === "discard") {
+    return Number.isInteger(action.cardIndex);
+  }
+  if (action.action === "clue_color") {
+    return (
+      typeof action.targetPlayerId === "string" &&
+      (action.color === "red" || action.color === "blue" || action.color === "green")
+    );
+  }
+  if (action.action === "clue_rank") {
+    return (
+      typeof action.targetPlayerId === "string" &&
+      (action.rank === 1 ||
+        action.rank === 2 ||
+        action.rank === 3 ||
+        action.rank === 4 ||
+        action.rank === 5)
+    );
+  }
+  return false;
 }

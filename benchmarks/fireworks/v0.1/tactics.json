@@ -1,0 +1,14 @@
+{
+  "id": "fireworks-tactics-v0.1",
+  "version": "0.1.0",
+  "caseCount": 60,
+  "categories": [
+    "safe_play",
+    "needed_clue",
+    "avoid_bad_play",
+    "safe_discard",
+    "critical_discard_avoidance",
+    "endgame_play"
+  ],
+  "source": "Generated from lib/benchmark/fireworks/scenario-packs.ts"
+}

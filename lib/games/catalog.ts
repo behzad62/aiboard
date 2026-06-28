@@ -42,6 +42,14 @@ const GAME_CATALOG: GameDescriptor[] = [
     accent: "red-blue",
     modes: ["pvp", "pvai", "aivai"],
   },
+  {
+    id: "fireworks",
+    title: "Fireworks",
+    summary: "Cooperate with hidden hands, limited clues, and objective team scoring.",
+    status: "ready",
+    accent: "red-yellow",
+    modes: ["pvp", "pvai", "aivai"],
+  },
 ];
 
 function copyDescriptor(descriptor: GameDescriptor): GameDescriptor {

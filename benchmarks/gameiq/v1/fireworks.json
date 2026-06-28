@@ -1,0 +1,5120 @@
+{
+  "schemaVersion": 1,
+  "track": "gameiq",
+  "packId": "gameiq-fireworks-solo-v0.1",
+  "gameId": "fireworks",
+  "label": "Certified GameIQ v0.1: Fireworks Solo Control",
+  "version": "1.0.0",
+  "sourcePackVersion": "0.1.0",
+  "certificationTier": "lightweight",
+  "scenarioCount": 20,
+  "digest": "gameiq-v0.1:fireworks:52f8a26e",
+  "scenarios": [
+    {
+      "id": "gameiq-fireworks-solo-v0.1-01",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #1",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-1",
+        "seed": "fireworks-tactics-safe_play-1",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 1,
+              "knowledge": {
+                "color": "red",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-1:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-1:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-1:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-1:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-02",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #2",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-2",
+        "seed": "fireworks-tactics-safe_play-2",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 2,
+              "knowledge": {
+                "color": "blue",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-2:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-2:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-2:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-2:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 1,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-03",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #3",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-3",
+        "seed": "fireworks-tactics-safe_play-3",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 3,
+              "knowledge": {
+                "color": "green",
+                "rank": 3,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 3,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-3:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-3:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-3:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-3:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 2
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-04",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #4",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-4",
+        "seed": "fireworks-tactics-safe_play-4",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 4,
+              "knowledge": {
+                "color": "red",
+                "rank": 4,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 4,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-4:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-4:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-4:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-4:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 3,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-05",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #5",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-5",
+        "seed": "fireworks-tactics-safe_play-5",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 1,
+              "knowledge": {
+                "color": "blue",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-5:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-5:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-5:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-5:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-06",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #6",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-6",
+        "seed": "fireworks-tactics-safe_play-6",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 2,
+              "knowledge": {
+                "color": "green",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-6:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-6:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-6:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-6:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 1
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-07",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #7",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-7",
+        "seed": "fireworks-tactics-safe_play-7",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 3,
+              "knowledge": {
+                "color": "red",
+                "rank": 3,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 3,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-7:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-7:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-7:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-7:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 2,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-08",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #8",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-8",
+        "seed": "fireworks-tactics-safe_play-8",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 4,
+              "knowledge": {
+                "color": "blue",
+                "rank": 4,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 4,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-8:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-8:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-8:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-8:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 3,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-09",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #9",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-9",
+        "seed": "fireworks-tactics-safe_play-9",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 1,
+              "knowledge": {
+                "color": "green",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-9:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-9:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-9:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-9:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-10",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Play a card proven playable by clues #10",
+      "category": "hidden-cooperation",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-tactics-safe_play-10",
+        "seed": "fireworks-tactics-safe_play-10",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 2,
+              "knowledge": {
+                "color": "red",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-tactics-safe_play-10:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-tactics-safe_play-10:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-tactics-safe_play-10:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-tactics-safe_play-10:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 1,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "red"
+            },
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 2
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Known playable card",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-11",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #1",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-1",
+        "seed": "fireworks-memory-combine_color_and_rank-1",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 1,
+              "knowledge": {
+                "color": "red",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: red",
+                  "Turn 3: rank 1"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: red",
+                "Turn 3: rank 1"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-1:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-1:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-1:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-1:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-1:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "red"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: red",
+            "resultingScore": 0
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-1:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 1
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 1",
+            "resultingScore": 0
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-12",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #2",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-2",
+        "seed": "fireworks-memory-combine_color_and_rank-2",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 2,
+              "knowledge": {
+                "color": "blue",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: blue",
+                  "Turn 3: rank 2"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: blue",
+                "Turn 3: rank 2"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-2:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-2:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-2:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-2:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 1,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-2:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "blue"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: blue",
+            "resultingScore": 1
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-2:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 2
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 2",
+            "resultingScore": 1
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-13",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #3",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-3",
+        "seed": "fireworks-memory-combine_color_and_rank-3",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 3,
+              "knowledge": {
+                "color": "green",
+                "rank": 3,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: green",
+                  "Turn 3: rank 3"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 3,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: green",
+                "Turn 3: rank 3"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-3:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-3:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-3:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-3:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 2
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-3:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "green"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: green",
+            "resultingScore": 2
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-3:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 3
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 3",
+            "resultingScore": 2
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-14",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #4",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-4",
+        "seed": "fireworks-memory-combine_color_and_rank-4",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 4,
+              "knowledge": {
+                "color": "red",
+                "rank": 4,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: red",
+                  "Turn 3: rank 4"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 4,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: red",
+                "Turn 3: rank 4"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-4:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-4:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-4:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-4:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 3,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-4:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "red"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: red",
+            "resultingScore": 3
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-4:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 4
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 4",
+            "resultingScore": 3
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-15",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #5",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-5",
+        "seed": "fireworks-memory-combine_color_and_rank-5",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 1,
+              "knowledge": {
+                "color": "blue",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: blue",
+                  "Turn 3: rank 1"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: blue",
+                "Turn 3: rank 1"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-5:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-5:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-5:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-5:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-5:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "blue"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: blue",
+            "resultingScore": 0
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-5:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 1
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 1",
+            "resultingScore": 0
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-16",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #6",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-6",
+        "seed": "fireworks-memory-combine_color_and_rank-6",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 2,
+              "knowledge": {
+                "color": "green",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: green",
+                  "Turn 3: rank 2"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: green",
+                "Turn 3: rank 2"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-6:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-6:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-6:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-6:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 1
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-6:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "green"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: green",
+            "resultingScore": 1
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-6:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 2
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 2",
+            "resultingScore": 1
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-17",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #7",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-7",
+        "seed": "fireworks-memory-combine_color_and_rank-7",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 3,
+              "knowledge": {
+                "color": "red",
+                "rank": 3,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: red",
+                  "Turn 3: rank 3"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 3,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: red",
+                "Turn 3: rank 3"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-7:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-7:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-7:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-7:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 2,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-7:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "red"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: red",
+            "resultingScore": 2
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-7:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 3
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 3",
+            "resultingScore": 2
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-18",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #8",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-8",
+        "seed": "fireworks-memory-combine_color_and_rank-8",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "blue",
+              "rank": 4,
+              "knowledge": {
+                "color": "blue",
+                "rank": 4,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: blue",
+                  "Turn 3: rank 4"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "blue",
+              "rank": 4,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: blue",
+                "Turn 3: rank 4"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-8:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-8:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-8:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-8:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 3,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-8:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "blue"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: blue",
+            "resultingScore": 3
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-8:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 4
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 4",
+            "resultingScore": 3
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-19",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #9",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-9",
+        "seed": "fireworks-memory-combine_color_and_rank-9",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "green",
+              "rank": 1,
+              "knowledge": {
+                "color": "green",
+                "rank": 1,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: green",
+                  "Turn 3: rank 1"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "green",
+              "rank": 1,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: green",
+                "Turn 3: rank 1"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-9:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-9:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-9:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-9:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 0,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-9:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "green"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: green",
+            "resultingScore": 0
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-9:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 1
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 1",
+            "resultingScore": 0
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-fireworks-solo-v0.1-20",
+      "gameId": "fireworks",
+      "title": "Fireworks Solo Control: Combine color and rank clues #10",
+      "category": "hidden-cooperation",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
+      "initialState": {
+        "gameId": "fireworks:fireworks-memory-combine_color_and_rank-10",
+        "seed": "fireworks-memory-combine_color_and_rank-10",
+        "playerId": "P1",
+        "playerLabel": "Player 1",
+        "currentPlayerId": "P1",
+        "ownHand": {
+          "playerId": "P1",
+          "count": 4,
+          "cards": [
+            {
+              "id": null,
+              "color": "red",
+              "rank": 2,
+              "knowledge": {
+                "color": "red",
+                "rank": 2,
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": [
+                  "Turn 1: red",
+                  "Turn 3: rank 2"
+                ]
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            },
+            {
+              "id": null,
+              "color": null,
+              "rank": null,
+              "knowledge": {
+                "notColors": [],
+                "notRanks": [],
+                "clueHistory": []
+              }
+            }
+          ],
+          "knowledge": [
+            {
+              "color": "red",
+              "rank": 2,
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": [
+                "Turn 1: red",
+                "Turn 3: rank 2"
+              ]
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            },
+            {
+              "notColors": [],
+              "notRanks": [],
+              "clueHistory": []
+            }
+          ]
+        },
+        "otherHands": [
+          {
+            "playerId": "P2",
+            "label": "Player 2",
+            "cards": [
+              {
+                "id": "fireworks-memory-combine_color_and_rank-10:p2-0:blue-1",
+                "color": "blue",
+                "rank": 1
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-10:p2-1:red-2",
+                "color": "red",
+                "rank": 2
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-10:p2-2:green-4",
+                "color": "green",
+                "rank": 4
+              },
+              {
+                "id": "fireworks-memory-combine_color_and_rank-10:p2-3:blue-5",
+                "color": "blue",
+                "rank": 5
+              }
+            ]
+          }
+        ],
+        "stacks": {
+          "red": 1,
+          "blue": 0,
+          "green": 0
+        },
+        "discardPile": [],
+        "clueTokens": 6,
+        "maxClueTokens": 6,
+        "mistakeTokens": 3,
+        "maxMistakeTokens": 3,
+        "turn": 0,
+        "status": "playing",
+        "deckCount": 0,
+        "events": [
+          {
+            "id": "fireworks-memory-combine_color_and_rank-10:history:1",
+            "turn": 1,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_color",
+              "targetPlayerId": "P1",
+              "color": "red"
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 1: red",
+            "resultingScore": 1
+          },
+          {
+            "id": "fireworks-memory-combine_color_and_rank-10:history:2",
+            "turn": 2,
+            "playerId": "P2",
+            "action": {
+              "action": "clue_rank",
+              "targetPlayerId": "P1",
+              "rank": 2
+            },
+            "legal": true,
+            "useful": true,
+            "memoryConsistent": true,
+            "message": "Turn 3: rank 2",
+            "resultingScore": 1
+          }
+        ],
+        "legalActions": [
+          {
+            "action": "play",
+            "cardIndex": 0
+          },
+          {
+            "action": "discard",
+            "cardIndex": 0
+          },
+          {
+            "action": "play",
+            "cardIndex": 1
+          },
+          {
+            "action": "discard",
+            "cardIndex": 1
+          },
+          {
+            "action": "play",
+            "cardIndex": 2
+          },
+          {
+            "action": "discard",
+            "cardIndex": 2
+          },
+          {
+            "action": "play",
+            "cardIndex": 3
+          },
+          {
+            "action": "discard",
+            "cardIndex": 3
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "red"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "blue"
+          },
+          {
+            "action": "clue_color",
+            "targetPlayerId": "P2",
+            "color": "green"
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 1
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 2
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 4
+          },
+          {
+            "action": "clue_rank",
+            "targetPlayerId": "P2",
+            "rank": 5
+          }
+        ],
+        "recommendations": {
+          "knownPlayableCards": [
+            0
+          ],
+          "visiblePlayableClues": [
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "red"
+            },
+            {
+              "action": "clue_color",
+              "targetPlayerId": "P2",
+              "color": "blue"
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 1
+            },
+            {
+              "action": "clue_rank",
+              "targetPlayerId": "P2",
+              "rank": 2
+            }
+          ],
+          "safeDiscards": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "action": "play",
+            "cardIndex": 0
+          },
+          "label": "Use remembered clues to play",
+          "weight": 1
+        }
+      ],
+      "tags": [
+        "fireworks",
+        "solo-control",
+        "hidden-information"
+      ],
+      "maxResponseMs": 15000
+    }
+  ]
+}

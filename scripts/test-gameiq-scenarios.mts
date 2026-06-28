@@ -28,7 +28,7 @@ check(
 const packKeys = firstListing.map((pack) => pack.gameId);
 check(
   "GameIQ v0.1 exposes shipped game packs",
-  ["connect-four", "chess", "battleship", "codenames"].every((gameId) =>
+  ["connect-four", "chess", "battleship", "codenames", "fireworks"].every((gameId) =>
     packKeys.includes(gameId)
   ),
   packKeys
@@ -39,6 +39,7 @@ const expectedPackCounts = new Map([
   ["chess", 60],
   ["battleship", 25],
   ["codenames", 25],
+  ["fireworks", 20],
 ]);
 for (const pack of firstListing) {
   check(
@@ -50,6 +51,7 @@ for (const pack of firstListing) {
 
 const connectFourPack = getGameIqScenarioPack("connect-four");
 const chessPack = getGameIqScenarioPack("chess");
+const fireworksPack = getGameIqScenarioPack("fireworks");
 check(
   "Connect Four and Chess are first-class packs",
   connectFourPack?.certificationTier === "first-class" &&
@@ -94,6 +96,20 @@ check(
   (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
     .length ?? 0) >= 15,
   chessPack?.scenarios.map((scenario) => scenario.category)
+);
+
+check(
+  "Fireworks GameIQ pack uses hidden-safe player views",
+  fireworksPack?.scenarios.every((scenario) => {
+    const text = JSON.stringify(scenario.initialState);
+    return (
+      text.includes("ownHand") &&
+      text.includes("otherHands") &&
+      !text.includes("\"deck\"") &&
+      !text.includes("own-play")
+    );
+  }) === true,
+  fireworksPack?.scenarios.map((scenario) => scenario.initialState)
 );
 
 const knightQueenTactic = chessPack?.scenarios.find(
