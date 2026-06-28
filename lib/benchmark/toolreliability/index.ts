@@ -3,6 +3,24 @@ export {
   validateToolReliabilityCasePack,
 } from "./cases";
 export {
+  TOOL_RELIABILITY_V0_2_CASES,
+  TOOL_RELIABILITY_V0_2_LARGE_FILE_CASES,
+  TOOL_RELIABILITY_V0_2_STRESS_CASES,
+  TOOL_RELIABILITY_V0_2_TOOL_STRESS_CASES,
+  type LargeFilePatchReliabilityCase,
+  type LargeFilePatchStressPolicy,
+  type LargeFileStressKind,
+  type ToolReliabilityV0_2StressCase,
+} from "./stress-cases";
+export {
+  evaluateLargeFilePatchStressCase,
+  runLargeFilePatchStressPack,
+  stressPatchOutputForCase,
+  wholeFileRewriteOutputForCase,
+  type LargeFilePatchStressResult,
+  type LargeFilePatchStressRunResult,
+} from "./stress-evaluator";
+export {
   buildForbiddenToolReliabilityCandidate,
   buildPerfectToolReliabilityCandidate,
   runToolReliabilityPack,
