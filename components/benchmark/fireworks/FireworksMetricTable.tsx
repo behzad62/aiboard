@@ -1,14 +1,37 @@
 "use client";
 
 import type { FireworksGameMetrics } from "@/lib/games/fireworks/types";
+import { computeFireworksMetricRates } from "@/lib/games/fireworks/scoring";
 
 export function FireworksMetricTable({ metrics }: { metrics: FireworksGameMetrics }) {
+  const rates = computeFireworksMetricRates({ metrics });
   const rows = [
-    ["Legal actions", `${metrics.legalActions}`],
+    [
+      "Legal actions",
+      rates.legalActionSampled
+        ? `${metrics.legalActions} (${percent(rates.legalActionRate)})`
+        : "not sampled",
+    ],
     ["Fallback actions", `${metrics.fallbackActions}`],
-    ["Useful clues", `${metrics.usefulClues} / ${metrics.cluesGiven}`],
+    [
+      "Useful clues",
+      rates.usefulClueSampled
+        ? `${metrics.usefulClues} / ${metrics.cluesGiven} (${percent(rates.usefulClueRate)})`
+        : "not sampled",
+    ],
+    [
+      "Safe plays",
+      rates.safePlaySampled
+        ? `${metrics.safePlays} / ${metrics.plays} (${percent(rates.safePlayRate)})`
+        : "not sampled",
+    ],
     ["Bad plays", `${metrics.badPlays}`],
-    ["Critical discards", `${metrics.criticalDiscards}`],
+    [
+      "Critical discard safety",
+      rates.criticalDiscardSampled
+        ? `${metrics.criticalDiscards} critical (${percent(rates.criticalDiscardSafety)})`
+        : "not sampled",
+    ],
     ["Model calls", `${metrics.modelCalls}`],
     ["Tokens", `${metrics.inputTokens} in / ${metrics.outputTokens} out`],
     ["Duration", `${(metrics.durationMs / 1000).toFixed(1)}s`],
@@ -25,4 +48,8 @@ export function FireworksMetricTable({ metrics }: { metrics: FireworksGameMetric
       ))}
     </div>
   );
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 1000) / 10}%`;
 }

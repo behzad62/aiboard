@@ -25,12 +25,19 @@ const state = createFireworksGame({
 state.hands[1].cards[0] = { id: "red-one", color: "red", rank: 1 };
 
 const schema = buildFireworksActionSchema();
+const schemaProperties = schema.schema.properties as Record<string, unknown>;
 check(
   "structured schema is strict and names Fireworks actions",
   schema.name === "fireworks_action" &&
     schema.strict === true &&
-    (schema.schema.properties as Record<string, unknown>).action !== undefined,
+    schemaProperties.action !== undefined,
   schema
+);
+check(
+  "structured schema restricts clue rank to Fireworks ranks",
+  JSON.stringify((schemaProperties.rank as { enum?: unknown }).enum) ===
+    JSON.stringify([1, 2, 3, 4, 5]),
+  schemaProperties.rank
 );
 
 check(

@@ -125,6 +125,8 @@ export function fireworksCaseToBenchmarkCaseV2(
       publicContext: JSON.stringify({
         suite,
         caseCount: cases.length,
+        deckEmptyRule:
+          "In AI Board Fireworks, when the deck is empty, play continues until hands are empty or the benchmark maxTurns limit is reached.",
         digest: stableFireworksScenarioPackDigest({
           id: `fireworks-${suite}-v0.1`,
           scenarios: cases.filter(isScenario),

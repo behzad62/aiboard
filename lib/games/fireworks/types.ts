@@ -153,6 +153,10 @@ export interface FireworksAiActionResult {
 }
 
 export interface FireworksGameMetrics {
+  scoreKind: "scenario" | "full_game" | "mixed";
+  scenarioQualityScore: number | null;
+  fullGameStackScore: number | null;
+  fullGameTeamScore: number | null;
   finalScore: number;
   maxScore: number;
   normalizedScore: number;

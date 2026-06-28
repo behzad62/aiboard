@@ -55,7 +55,7 @@ export function buildFireworksActionSchema(): StructuredOutputFormat {
         },
         targetPlayerId: { type: "string" },
         color: { type: "string", enum: ["red", "blue", "green"] },
-        rank: { type: "number" },
+        rank: { type: "number", enum: [1, 2, 3, 4, 5] },
         cardIndex: { type: "number" },
         reason: { type: "string" },
       },
@@ -77,6 +77,7 @@ You must choose exactly one legal action.
 Your goal is to maximize the final stack score.
 Prefer safe plays when your clue knowledge proves a card is playable, useful clues when a teammate can play or avoid danger, and safe discards when clues are low.
 Avoid playing unknown cards, discarding critical cards, illegal clues, and self-clues.
+In AI Board Fireworks, when the deck is empty, play continues until hands are empty or the benchmark turn limit is reached.
 Return only compact JSON for one legal action.`,
     user: `You are ${playerId}.
 

@@ -1,4 +1,4 @@
 export * from "./types";
 export * from "./scenario-packs";
-export * from "./team-baselines";
+export * from "./calibration-bots";
 export * from "./certified-runner";

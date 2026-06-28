@@ -93,6 +93,23 @@ const artifacts = await listBenchmarkArtifacts();
 const teamCompositions = await listBenchmarkTeamCompositions();
 const bundle = exportBenchmarkReportBundleV2();
 const teamAttempt = attempts.find((attempt) => attempt.teamCompositionId === team.id);
+const teamSummaryArtifact = artifacts.find(
+  (artifact) =>
+    artifact.attemptId === teamAttempt?.id &&
+    artifact.id.endsWith(":fireworks-summary")
+);
+const teamSummary = teamSummaryArtifact
+  ? JSON.parse(teamSummaryArtifact.content) as {
+      metrics?: {
+        scoreKind?: unknown;
+        scenarioQualityScore?: unknown;
+        fullGameStackScore?: unknown;
+      };
+    }
+  : null;
+const teamVerifier = verifiers.find(
+  (verifier) => verifier.attemptId === teamAttempt?.id
+);
 
 check(
   "certified Fireworks run completes with solo baselines and team attempt",
@@ -120,6 +137,23 @@ check(
     teamAttempt.teamLift === 0 &&
     teamAttempt.jobSuccessScore >= 90,
   teamAttempt
+);
+check(
+  "scenario-only Fireworks summaries expose scenario quality, not stack score",
+  teamSummary?.metrics?.scoreKind === "scenario" &&
+    typeof teamSummary.metrics.scenarioQualityScore === "number" &&
+    teamSummary.metrics.fullGameStackScore === null,
+  teamSummary
+);
+check(
+  "scenario-only Fireworks verifier labels scenario quality",
+  teamVerifier?.assertionResults.some(
+    (assertion) => assertion.id === "scenario-quality"
+  ) === true &&
+    teamVerifier?.assertionResults.every(
+      (assertion) => assertion.id !== "final-score"
+    ) === true,
+  teamVerifier
 );
 
 __resetBenchmarkStoreForTests();

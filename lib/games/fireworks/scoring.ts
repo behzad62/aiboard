@@ -6,6 +6,20 @@ export interface FireworksTeamScoreInput {
   targetCostPerPoint?: number;
 }
 
+export interface FireworksMetricRates {
+  legalActionRate: number;
+  legalActionSampled: boolean;
+  usefulClueRate: number;
+  usefulClueSampled: boolean;
+  safePlayRate: number;
+  safePlaySampled: boolean;
+  criticalDiscardSafety: number;
+  criticalDiscardSampled: boolean;
+  memoryConsistencyRate: number;
+  memoryConsistencySampled: boolean;
+  efficiencyFactor: number;
+}
+
 export function computeFireworksGameMetrics(input: {
   state: FireworksGameState;
   modelCalls?: number;
@@ -33,6 +47,10 @@ export function computeFireworksGameMetrics(input: {
   ).length;
 
   return {
+    scoreKind: "full_game",
+    scenarioQualityScore: null,
+    fullGameStackScore: finalScore,
+    fullGameTeamScore: finalScore / FIREWORKS_MAX_SCORE,
     finalScore,
     maxScore: FIREWORKS_MAX_SCORE,
     normalizedScore: finalScore / FIREWORKS_MAX_SCORE,
@@ -60,15 +78,27 @@ export function computeFireworksGameMetrics(input: {
 
 export function scoreFireworksTeamIq(input: FireworksTeamScoreInput): number {
   const metrics = input.metrics;
-  const legalActionRate = rate(metrics.legalActions, metrics.legalActions + metrics.illegalActions);
-  const usefulClueRate = rate(metrics.usefulClues, metrics.cluesGiven);
-  const safePlayRate = rate(metrics.safePlays, metrics.plays);
-  const criticalDiscardRate = rate(metrics.criticalDiscards, metrics.discards);
-  const memoryConsistencyRate = rate(
-    metrics.memoryConsistentActions,
-    metrics.memoryConsistentActions + metrics.memoryInconsistentActions
+  const rates = computeFireworksMetricRates(input);
+
+  return roundScore(
+    100 *
+      (0.4 * metrics.normalizedScore +
+        0.15 * rates.legalActionRate +
+        0.15 * rates.usefulClueRate +
+        0.1 * rates.safePlayRate +
+        0.1 * rates.criticalDiscardSafety +
+        0.05 * rates.memoryConsistencyRate +
+        0.05 * rates.efficiencyFactor)
   );
-  const criticalDiscardSafety = 1 - criticalDiscardRate;
+}
+
+export function computeFireworksMetricRates(
+  input: FireworksTeamScoreInput
+): FireworksMetricRates {
+  const metrics = input.metrics;
+  const legalActionDenominator = metrics.legalActions + metrics.illegalActions;
+  const memoryDenominator =
+    metrics.memoryConsistentActions + metrics.memoryInconsistentActions;
   const actualCostPerPoint =
     metrics.costUsd !== null && metrics.finalScore > 0
       ? metrics.costUsd / metrics.finalScore
@@ -78,20 +108,31 @@ export function scoreFireworksTeamIq(input: FireworksTeamScoreInput): number {
       ? Math.min(1, input.targetCostPerPoint / actualCostPerPoint)
       : 1;
 
-  return roundScore(
-    100 *
-      (0.4 * metrics.normalizedScore +
-        0.15 * legalActionRate +
-        0.15 * usefulClueRate +
-        0.1 * safePlayRate +
-        0.1 * criticalDiscardSafety +
-        0.05 * memoryConsistencyRate +
-        0.05 * efficiencyFactor)
-  );
+  return {
+    legalActionRate: rate(metrics.legalActions, legalActionDenominator, 0),
+    legalActionSampled: legalActionDenominator > 0,
+    usefulClueRate: rate(metrics.usefulClues, metrics.cluesGiven, 0),
+    usefulClueSampled: metrics.cluesGiven > 0,
+    safePlayRate: rate(metrics.safePlays, metrics.plays, 0),
+    safePlaySampled: metrics.plays > 0,
+    criticalDiscardSafety: 1 - rate(metrics.criticalDiscards, metrics.discards, 0),
+    criticalDiscardSampled: metrics.discards > 0,
+    memoryConsistencyRate: rate(
+      metrics.memoryConsistentActions,
+      memoryDenominator,
+      1
+    ),
+    memoryConsistencySampled: memoryDenominator > 0,
+    efficiencyFactor,
+  };
 }
 
-function rate(numerator: number, denominator: number): number {
-  return denominator > 0 ? numerator / denominator : 1;
+function rate(
+  numerator: number,
+  denominator: number,
+  unsampledDefault: number
+): number {
+  return denominator > 0 ? numerator / denominator : unsampledDefault;
 }
 
 function roundScore(value: number): number {

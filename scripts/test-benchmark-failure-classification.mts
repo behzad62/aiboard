@@ -65,6 +65,51 @@ expectClassification("provider_429_before_output", {
   status: "provider_unavailable",
   invalidRun: true,
 });
+expectClassification("fireworks_invalid_json", {
+  group: "tool",
+  status: "failed_tool_use",
+  invalidRun: false,
+}, "parser");
+expectClassification("fireworks_illegal_action", {
+  group: "tool",
+  status: "failed_tool_use",
+  invalidRun: false,
+}, "rules");
+expectClassification("fireworks_illegal_clue", {
+  group: "tool",
+  status: "failed_tool_use",
+  invalidRun: false,
+});
+expectClassification("fireworks_bad_play", {
+  group: "model",
+  status: "failed_model",
+  invalidRun: false,
+});
+expectClassification("fireworks_critical_discard", {
+  group: "model",
+  status: "failed_model",
+  invalidRun: false,
+});
+expectClassification("fireworks_memory_contradiction", {
+  group: "model",
+  status: "failed_model",
+  invalidRun: false,
+});
+expectClassification("fireworks_provider_failure", {
+  group: "provider",
+  status: "provider_unavailable",
+  invalidRun: true,
+});
+expectClassification("fireworks_budget_exceeded", {
+  group: "model",
+  status: "failed_budget",
+  invalidRun: false,
+});
+expectClassification("fireworks_harness_error", {
+  group: "harness",
+  status: "invalid_harness",
+  invalidRun: true,
+});
 expectClassification("aborted_user", {
   group: "user",
   status: "aborted_user",

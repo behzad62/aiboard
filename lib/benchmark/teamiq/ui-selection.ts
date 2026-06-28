@@ -7,6 +7,8 @@ export interface CreateTeamIqCompositionSelectionInput {
   models: SelectedModel[];
   selectedModelIds: string[];
   strategy?: Exclude<TeamIqStrategy, "solo">;
+  roleMode?: "default" | "fireworks_players";
+  playerCount?: 2 | 3;
 }
 
 export function createTeamIqCompositionFromSelection(
@@ -16,7 +18,7 @@ export function createTeamIqCompositionFromSelection(
   const selectedModels = input.selectedModelIds
     .map((modelId) => input.models.find((model) => model.modelId === modelId))
     .filter((model): model is SelectedModel => Boolean(model))
-    .slice(0, maxModelsForStrategy(strategy));
+    .slice(0, maxModelsForSelection(strategy, input));
   if (selectedModels.length < 2) {
     throw new Error("TeamIQ requires at least two selected models.");
   }
@@ -25,13 +27,33 @@ export function createTeamIqCompositionFromSelection(
     name: selectedModels
       .map((model) => model.displayName || model.modelId)
       .join(" + "),
-    strategy,
-    roles: rolesForStrategy(strategy, selectedModels),
+    strategy: input.roleMode === "fireworks_players" ? "panel" : strategy,
+    roles:
+      input.roleMode === "fireworks_players"
+        ? rolesForFireworksPlayers(selectedModels, input.playerCount ?? 3)
+        : rolesForStrategy(strategy, selectedModels),
   });
+}
+
+function maxModelsForSelection(
+  strategy: Exclude<TeamIqStrategy, "solo">,
+  input: CreateTeamIqCompositionSelectionInput
+): number {
+  if (input.roleMode === "fireworks_players") return input.playerCount ?? 3;
+  return maxModelsForStrategy(strategy);
 }
 
 function maxModelsForStrategy(strategy: Exclude<TeamIqStrategy, "solo">): number {
   return strategy === "panel" || strategy === "cheap_swarm_strong_judge" ? 4 : 3;
+}
+
+function rolesForFireworksPlayers(
+  models: SelectedModel[],
+  playerCount: 2 | 3
+): BenchmarkTeamCompositionRole[] {
+  return models.slice(0, playerCount).map((model, index) =>
+    roleFor("player", `P${index + 1}`, model)
+  );
 }
 
 function rolesForStrategy(

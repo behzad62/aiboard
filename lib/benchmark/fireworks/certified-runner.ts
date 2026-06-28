@@ -85,6 +85,7 @@ interface FireworksActionCall {
 
 interface FireworksCaseRunResult {
   caseId: string;
+  kind: "scenario" | "full_game";
   score: number;
   state: FireworksGameState;
   transcript: unknown;
@@ -313,6 +314,7 @@ async function runScenarioCase(params: {
   ];
   return {
     caseId: params.benchmarkCase.id,
+    kind: "scenario",
     score,
     state: nextState,
     transcript: {
@@ -383,6 +385,7 @@ async function runFullGameCase(params: {
   const score = scoreFireworksTeamIq({ metrics }) / 100;
   return {
     caseId: params.benchmarkCase.id,
+    kind: "full_game",
     score,
     state,
     transcript: {
@@ -557,13 +560,29 @@ function createFireworksVerifierResult(input: {
 }): BenchmarkVerifierResult {
   const caseAssertions = input.caseResults.flatMap((result) => result.assertions);
   const normalizedScore = input.score / 100;
+  const primaryAssertion =
+    input.metrics.scoreKind === "scenario"
+      ? {
+          id: "scenario-quality",
+          label: "Scenario quality",
+          passed: (input.metrics.scenarioQualityScore ?? 0) >= 0.7,
+          weight: 0.4,
+        }
+      : input.metrics.scoreKind === "full_game"
+        ? {
+            id: "full-game-team-score",
+            label: "Full-game team score",
+            passed: (input.metrics.fullGameTeamScore ?? 0) >= 0.7,
+            weight: 0.4,
+          }
+        : {
+            id: "mixed-benchmark-score",
+            label: "Mixed benchmark score",
+            passed: input.metrics.normalizedScore >= 0.7,
+            weight: 0.4,
+          };
   const assertions = [
-    {
-      id: "final-score",
-      label: "Final stack score",
-      passed: input.metrics.normalizedScore >= 0.7 || normalizedScore >= 0.7,
-      weight: 0.4,
-    },
+    primaryAssertion,
     {
       id: "legal-actions",
       label: "Legal action rate",
@@ -606,6 +625,16 @@ function aggregateMetrics(
   durationMs: number
 ): FireworksGameMetrics {
   const eventStates = caseResults.map((result) => result.state);
+  const scenarioResults = caseResults.filter((result) => result.kind === "scenario");
+  const fullGameResults = caseResults.filter(
+    (result) => result.kind === "full_game"
+  );
+  const scoreKind =
+    scenarioResults.length > 0 && fullGameResults.length > 0
+      ? "mixed"
+      : fullGameResults.length > 0
+        ? "full_game"
+        : "scenario";
   const legalActions = eventStates.reduce(
     (sum, state) => sum + state.events.filter((event) => event.legal).length,
     0
@@ -624,10 +653,26 @@ function aggregateMetrics(
   const discardEvents = eventStates.flatMap((state) =>
     state.events.filter((event) => event.action.action === "discard")
   );
-  const finalScore = average(
-    caseResults.map((result) => scoreFireworksState(result.state))
-  );
+  const scenarioQualityScore =
+    scenarioResults.length > 0
+      ? average(scenarioResults.map((result) => result.score))
+      : null;
+  const fullGameStackScore =
+    fullGameResults.length > 0
+      ? average(fullGameResults.map((result) => scoreFireworksState(result.state)))
+      : null;
+  const fullGameTeamScore =
+    fullGameResults.length > 0
+      ? average(fullGameResults.map((result) => result.score))
+      : null;
+  const finalScore =
+    fullGameStackScore ??
+    average(caseResults.map((result) => scoreFireworksState(result.state)));
   return {
+    scoreKind,
+    scenarioQualityScore,
+    fullGameStackScore,
+    fullGameTeamScore,
     finalScore,
     maxScore: 15,
     normalizedScore: average(caseResults.map((result) => result.score)),

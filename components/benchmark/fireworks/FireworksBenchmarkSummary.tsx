@@ -29,27 +29,60 @@ export function FireworksBenchmarkSummary({
   if (!summary) return null;
 
   const metrics = summary.metrics;
+  const tiles = scoreTiles(summary, attempt);
   return (
     <section className="space-y-3 rounded-md border border-sky-200 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
       <div className="grid gap-2 sm:grid-cols-4">
-        <Tile label="Team score" value={summary.score.toFixed(1)} />
-        <Tile
-          label="Stack score"
-          value={`${round(metrics.finalScore)} / ${metrics.maxScore}`}
-        />
-        <Tile
-          label="Team lift"
-          value={attempt.teamLift == null ? "n/a" : signed(attempt.teamLift)}
-        />
-        <Tile
-          label="Cost per point"
-          value={costPerPoint(metrics.costUsd, metrics.finalScore)}
-        />
+        {tiles.map((tile) => (
+          <Tile key={tile.label} label={tile.label} value={tile.value} />
+        ))}
       </div>
       <FireworksMetricTable metrics={metrics} />
       {transcript !== null && <FireworksTranscriptViewer transcript={transcript} />}
     </section>
   );
+}
+
+function scoreTiles(
+  summary: FireworksSummaryArtifact,
+  attempt: BenchmarkAttemptV2
+): Array<{ label: string; value: string }> {
+  const metrics = summary.metrics;
+  const tiles = [{ label: "Team score", value: summary.score.toFixed(1) }];
+  if (metrics.scoreKind === "scenario" || metrics.scoreKind === "mixed") {
+    tiles.push({
+      label: "Scenario quality",
+      value:
+        metrics.scenarioQualityScore == null
+          ? "n/a"
+          : percent(metrics.scenarioQualityScore),
+    });
+  }
+  if (metrics.scoreKind === "full_game" || metrics.scoreKind === "mixed") {
+    tiles.push({
+      label: "Stack score",
+      value:
+        metrics.fullGameStackScore == null
+          ? "n/a"
+          : `${round(metrics.fullGameStackScore)} / ${metrics.maxScore}`,
+    });
+    tiles.push({
+      label: "Full-game team",
+      value:
+        metrics.fullGameTeamScore == null
+          ? "n/a"
+          : percent(metrics.fullGameTeamScore),
+    });
+  }
+  tiles.push({
+    label: "Team lift",
+    value: attempt.teamLift == null ? "n/a" : signed(attempt.teamLift),
+  });
+  tiles.push({
+    label: "Cost per point",
+    value: costPerPoint(metrics.costUsd, summary.score),
+  });
+  return tiles;
 }
 
 function Tile({ label, value }: { label: string; value: string }) {
@@ -91,4 +124,8 @@ function costPerPoint(costUsd: number | null, score: number): string {
 
 function round(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 1000) / 10}%`;
 }

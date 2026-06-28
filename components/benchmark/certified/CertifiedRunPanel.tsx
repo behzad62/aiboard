@@ -263,6 +263,13 @@ export function CertifiedRunPanel({
                   <div className="pt-6 text-muted-foreground">
                     {fireworksCaseCountForSuite(suiteId, fireworksPlayerCount)} Fireworks cases
                   </div>
+                  <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground md:col-span-3">
+                    {fireworksPlayerAssignments(
+                      models,
+                      teamModelIds,
+                      fireworksPlayerCount
+                    ).join(" · ")}
+                  </div>
                 </div>
               )}
             </div>
@@ -335,6 +342,10 @@ export function CertifiedRunPanel({
               models,
               selectedModelIds: teamModelIds,
               strategy: teamIqStrategy,
+              roleMode: isFireworksSuite(suiteId)
+                ? "fireworks_players"
+                : "default",
+              playerCount: fireworksPlayerCount,
             })
           : deriveSoloTeamComposition({
               modelId: model!.modelId,
@@ -633,4 +644,17 @@ function fireworksCaseCountForSuite(
   playerCount: 2 | 3
 ): number {
   return fireworksCasesForSuiteId(suiteId, playerCount).length;
+}
+
+function fireworksPlayerAssignments(
+  models: SelectedModel[],
+  selectedModelIds: string[],
+  playerCount: 2 | 3
+): string[] {
+  return Array.from({ length: playerCount }, (_, index) => {
+    const modelId = selectedModelIds[index];
+    if (!modelId) return `P${index + 1} select model ${index + 1}`;
+    const model = models.find((candidate) => candidate.modelId === modelId);
+    return `P${index + 1} ${model?.displayName ?? modelId}`;
+  });
 }
