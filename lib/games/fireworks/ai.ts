@@ -38,7 +38,12 @@ export interface FireworksAIModelOption {
 
 export type FireworksAIParseResult =
   | { ok: true; action: FireworksAction; parsedResponseJson: string }
-  | { ok: false; type: "parse" | "illegal"; message: string };
+  | {
+      ok: false;
+      type: "parse" | "illegal";
+      message: string;
+      action?: FireworksAction;
+    };
 
 export function buildFireworksActionSchema(): StructuredOutputFormat {
   return {
@@ -119,6 +124,7 @@ export function parseFireworksActionResponseResult(
       ok: false,
       type: "illegal",
       message: `Fireworks action is illegal for ${playerId}: ${JSON.stringify(action)}`,
+      action,
     };
   }
 

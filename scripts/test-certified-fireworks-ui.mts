@@ -1,5 +1,8 @@
 /* Certified Fireworks UI gate checks (run: npx tsx scripts/test-certified-fireworks-ui.mts) */
-import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
+import {
+  adjustFireworksPlayerSelectionForPlayerCount,
+  getCertifiedRunGate,
+} from "../lib/benchmark/certified/ui-gates";
 import type { HarnessCertificationResult } from "../lib/benchmark/types";
 
 let failures = 0;
@@ -69,7 +72,7 @@ const threePlayerBlockedGate = getCertifiedRunGate({
 check(
   "3-player Fireworks blocks two selected models",
   !threePlayerBlockedGate.canRun &&
-    threePlayerBlockedGate.reason === "Select three models for 3-player Fireworks.",
+    threePlayerBlockedGate.reason === "Select one more model for 3-player Fireworks.",
   threePlayerBlockedGate
 );
 
@@ -88,6 +91,47 @@ const threePlayerGate = getCertifiedRunGate({
   fireworksPlayerCount: 3,
 });
 check("3-player Fireworks allows three selected models", threePlayerGate.canRun, threePlayerGate);
+
+check(
+  "switching Fireworks to 2-player trims selected models to two",
+  JSON.stringify(
+    adjustFireworksPlayerSelectionForPlayerCount(
+      [
+        "openai:gpt-fireworks-a",
+        "anthropic:claude-fireworks-b",
+        "google:gemini-fireworks-c",
+      ],
+      2
+    )
+  ) ===
+    JSON.stringify([
+      "openai:gpt-fireworks-a",
+      "anthropic:claude-fireworks-b",
+    ]),
+  adjustFireworksPlayerSelectionForPlayerCount(
+    [
+      "openai:gpt-fireworks-a",
+      "anthropic:claude-fireworks-b",
+      "google:gemini-fireworks-c",
+    ],
+    2
+  )
+);
+
+check(
+  "switching Fireworks to 3-player preserves two selected models for the gate copy",
+  JSON.stringify(
+    adjustFireworksPlayerSelectionForPlayerCount(
+      ["openai:gpt-fireworks-a", "anthropic:claude-fireworks-b"],
+      3
+    )
+  ) ===
+    JSON.stringify(["openai:gpt-fireworks-a", "anthropic:claude-fireworks-b"]),
+  adjustFireworksPlayerSelectionForPlayerCount(
+    ["openai:gpt-fireworks-a", "anthropic:claude-fireworks-b"],
+    3
+  )
+);
 
 const toolReliabilityGate = getCertifiedRunGate({
   suiteId: "teamiq-toolreliability-v0.1-quick",

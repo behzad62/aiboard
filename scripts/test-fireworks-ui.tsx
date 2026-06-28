@@ -159,6 +159,13 @@ const transcriptMarkup = renderToStaticMarkup(
           suite: "fireworks-memory-v0.1",
           category: "combine_color_and_rank",
           score: 0.5,
+          expectedActions: [
+            {
+              label: "Clue P1 blue",
+              action: { action: "clue_color", targetPlayerId: "P1", color: "blue" },
+              weight: 1,
+            },
+          ],
           action: { action: "play", cardIndex: 1 },
           fallbackUsed: true,
           finalState: {
@@ -197,6 +204,9 @@ check(
     transcriptMarkup.includes("fireworks-memory-001") &&
     transcriptMarkup.includes("combine_color_and_rank") &&
     transcriptMarkup.includes("Final score") &&
+    transcriptMarkup.includes("Expected action") &&
+    transcriptMarkup.includes("clued P1 blue") &&
+    transcriptMarkup.includes("Received action") &&
     transcriptMarkup.includes("Turn 1") &&
     !transcriptMarkup.includes("Turn 0") &&
     transcriptMarkup.includes("Fallback") &&

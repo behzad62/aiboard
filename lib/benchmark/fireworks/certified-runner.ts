@@ -343,6 +343,7 @@ async function runScenarioCase(params: {
       suite: params.benchmarkCase.suite,
       category: params.benchmarkCase.category,
       actingPlayerId: params.benchmarkCase.actingPlayerId,
+      expectedActions: params.benchmarkCase.expectedActions,
       action: call.action,
       rawResponse: call.rawResponse,
       parsedResponseJson: call.parsedResponseJson,
@@ -502,7 +503,7 @@ async function callFireworksAction(params: {
       params.state,
       params.playerId
     );
-    const failureCode = isIllegalClueResponse(call.rawResponse)
+    const failureCode = isClueAction(parsed.action)
       ? "fireworks_illegal_clue"
       : "fireworks_illegal_action";
     const record: FireworksCallRecord = {
@@ -852,8 +853,8 @@ function failureSequence(
   ).length + 1;
 }
 
-function isIllegalClueResponse(rawResponse: string): boolean {
-  return /"action"\s*:\s*"clue_(?:color|rank)"/.test(rawResponse);
+function isClueAction(action: FireworksAction | undefined): boolean {
+  return action?.action === "clue_color" || action?.action === "clue_rank";
 }
 
 function traceIdsForAttempt(

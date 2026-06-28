@@ -39,7 +39,9 @@ export function getCertifiedRunGate(
       const playerCount = input.fireworksPlayerCount ?? 2;
       if (input.teamModelIds.length !== playerCount) {
         return blocked(
-          playerCount === 3
+          playerCount === 3 && input.teamModelIds.length === 2
+            ? "Select one more model for 3-player Fireworks."
+            : playerCount === 3
             ? "Select three models for 3-player Fireworks."
             : "Select exactly two models for 2-player Fireworks."
         );
@@ -68,6 +70,13 @@ export function getCertifiedRunGate(
   };
 }
 
-function isFireworksSuite(suiteId: string): boolean {
+export function adjustFireworksPlayerSelectionForPlayerCount(
+  selectedModelIds: string[],
+  playerCount: 2 | 3
+): string[] {
+  return playerCount === 2 ? selectedModelIds.slice(0, 2) : selectedModelIds;
+}
+
+export function isFireworksSuite(suiteId: string): boolean {
   return suiteId.startsWith("fireworks-teamiq-");
 }

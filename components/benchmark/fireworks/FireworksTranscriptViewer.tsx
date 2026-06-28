@@ -36,6 +36,22 @@ export function FireworksTranscriptViewer({ transcript }: { transcript: unknown 
               <div className="mt-2 text-xs text-muted-foreground">
                 Final stacks: {formatStacks(benchmarkCase.finalState)}
               </div>
+              {hasScenarioDebugSummary(benchmarkCase) && (
+                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                  <ScenarioDebugDetail
+                    label="Expected action"
+                    value={formatExpectedActions(benchmarkCase.expectedActions)}
+                  />
+                  <ScenarioDebugDetail
+                    label="Received action"
+                    value={formatAction(benchmarkCase.action)}
+                  />
+                  <ScenarioDebugDetail
+                    label="Score"
+                    value={formatScore(benchmarkCase.score)}
+                  />
+                </dl>
+              )}
               <ol className="mt-3 space-y-2">
                 {caseTurns(benchmarkCase).map((turn, index) => (
                   <li
@@ -73,6 +89,7 @@ interface TranscriptCase {
   suite?: string;
   category?: string;
   score?: number;
+  expectedActions?: unknown[];
   action?: unknown;
   fallbackUsed?: boolean;
   actions?: unknown[];
@@ -99,6 +116,9 @@ function transcriptCases(transcript: unknown): TranscriptCase[] {
     suite: optionalString(item.suite),
     category: optionalString(item.category),
     score: optionalNumber(item.score),
+    expectedActions: Array.isArray(item.expectedActions)
+      ? item.expectedActions
+      : undefined,
     action: item.action,
     fallbackUsed: item.fallbackUsed === true,
     actions: Array.isArray(item.actions) ? item.actions : undefined,
@@ -155,6 +175,37 @@ function Badge({ children }: { children: React.ReactNode }) {
       {children}
     </span>
   );
+}
+
+function ScenarioDebugDetail({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div>
+      <dt className="text-xs font-medium uppercase text-muted-foreground">
+        {label}
+      </dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function hasScenarioDebugSummary(benchmarkCase: TranscriptCase): boolean {
+  return Boolean(benchmarkCase.action || benchmarkCase.expectedActions?.length);
+}
+
+function formatExpectedActions(expectedActions: unknown[] | undefined): string {
+  if (!expectedActions?.length) return "n/a";
+  return expectedActions
+    .map((expectedAction) => {
+      if (!isRecord(expectedAction)) return "unknown action";
+      return formatAction(expectedAction.action);
+    })
+    .join(" or ");
 }
 
 function formatScore(score: number | undefined): string {

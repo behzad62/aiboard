@@ -33,7 +33,11 @@ import {
 } from "@/lib/benchmark/store";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
-import { getCertifiedRunGate } from "@/lib/benchmark/certified/ui-gates";
+import {
+  adjustFireworksPlayerSelectionForPlayerCount,
+  getCertifiedRunGate,
+  isFireworksSuite,
+} from "@/lib/benchmark/certified/ui-gates";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import type {
   BenchmarkCaseV2,
@@ -246,9 +250,16 @@ export function CertifiedRunPanel({
                     <span className="font-medium">Players</span>
                     <select
                       value={fireworksPlayerCount}
-                      onChange={(event) =>
-                        setFireworksPlayerCount(Number(event.target.value) as 2 | 3)
-                      }
+                      onChange={(event) => {
+                        const nextPlayerCount = Number(event.target.value) as 2 | 3;
+                        setFireworksPlayerCount(nextPlayerCount);
+                        setTeamModelIds((current) =>
+                          adjustFireworksPlayerSelectionForPlayerCount(
+                            current,
+                            nextPlayerCount
+                          )
+                        );
+                      }}
                       className="w-full rounded-md border bg-background px-3 py-2"
                     >
                       <option value={2}>2-player</option>
@@ -610,10 +621,6 @@ function teamIqTaskForSuite(
     kind: "toolreliability" as const,
     casePack: TOOL_RELIABILITY_V0_1_CASES,
   };
-}
-
-function isFireworksSuite(suiteId: string): boolean {
-  return suiteId.startsWith("fireworks-teamiq-");
 }
 
 function fireworksSuiteForSuiteId(suiteId: string): FireworksBenchmarkSuite {

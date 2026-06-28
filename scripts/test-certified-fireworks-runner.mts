@@ -108,6 +108,16 @@ const teamSummary = teamSummaryArtifact
       };
     }
   : null;
+const teamTranscriptArtifact = artifacts.find(
+  (artifact) =>
+    artifact.attemptId === teamAttempt?.id &&
+    artifact.id.endsWith(":fireworks-transcript")
+);
+const teamTranscript = teamTranscriptArtifact
+  ? JSON.parse(teamTranscriptArtifact.content) as {
+      cases?: Array<{ expectedActions?: unknown }>;
+    }
+  : null;
 const teamVerifier = verifiers.find(
   (verifier) => verifier.attemptId === teamAttempt?.id
 );
@@ -167,6 +177,12 @@ check(
     typeof teamVerifierResult.metricRates.usefulClueRate === "number",
   teamVerifierResult
 );
+check(
+  "scenario Fireworks transcript records expected actions for debugging",
+  Array.isArray(teamTranscript?.cases?.[0]?.expectedActions) &&
+    teamTranscript?.cases?.[0]?.expectedActions.length > 0,
+  teamTranscript
+);
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
@@ -202,7 +218,7 @@ await runCertifiedBenchmark({
       streamChat: async function* (): AsyncIterable<StreamChunk> {
         yield {
           type: "token",
-          content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
+          content: '{"\\u0061ction":"clue_color","targetPlayerId":"P1","color":"red"}',
         };
         yield { type: "done" };
       },
@@ -238,7 +254,7 @@ async function runIllegalFailureIds(): Promise<string[]> {
         streamChat: async function* (): AsyncIterable<StreamChunk> {
           yield {
             type: "token",
-            content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
+            content: '{"\\u0061ction":"clue_color","targetPlayerId":"P1","color":"red"}',
           };
           yield { type: "done" };
         },
