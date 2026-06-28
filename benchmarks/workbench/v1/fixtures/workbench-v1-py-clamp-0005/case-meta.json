@@ -1,0 +1,12 @@
+{
+  "id": "workbench-v1-py-clamp-0005",
+  "language": "python",
+  "filePath": "src/clamp.py",
+  "checks": [
+    {
+      "id": "clamp-expression",
+      "label": "Uses both minimum and maximum bounds",
+      "contains": "return max(minimum, min(maximum, value))"
+    }
+  ]
+}

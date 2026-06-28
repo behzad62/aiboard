@@ -11,13 +11,21 @@ const VERSION = 1;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const META_FILE = ".bench-run.json";
+const DEFAULT_APP_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "https://aiboard.me",
+];
 
 const options = parseArgs(process.argv.slice(2));
-const host = options.host ?? "127.0.0.1";
-const port = Number(options.port ?? 8797);
-const token = options.token ?? process.env.AIBOARD_BENCH_TOKEN ?? randomBytes(18).toString("hex");
-const root = resolve(options.root ?? join(process.cwd(), ".aiboard-bench", "runs"));
+const host = optionValue(options.host) ?? "127.0.0.1";
+const port = Number(optionValue(options.port) ?? 8797);
+const token = optionValue(options.token) ?? process.env.AIBOARD_BENCH_TOKEN ?? randomBytes(18).toString("hex");
+const root = resolve(optionValue(options.root) ?? join(process.cwd(), ".aiboard-bench", "runs"));
 const fixtureRoot = resolve(fileURLToPath(new URL("../benchmarks/workbench/v0/fixtures", import.meta.url)));
+const appOrigins = parseAppOrigins(optionValues(options["app-origin"]));
 
 if (!isLoopbackHost(host)) {
   console.error("bench-runner refuses to bind non-loopback hosts.");
@@ -37,17 +45,24 @@ const server = createServer(async (req, res) => {
     if (!url.pathname.startsWith("/bench/")) {
       throw new HttpError(404, "Unknown bench endpoint.");
     }
+    if (req.method === "OPTIONS") {
+      sendNoContent(req, res, 204);
+      return;
+    }
     if (req.headers["x-runner-token"] !== token) {
       throw new HttpError(401, "Bench runner token required.");
+    }
+    if (req.method !== "GET" && req.method !== "POST") {
+      throw new HttpError(405, "Bench runner only accepts GET, POST, and OPTIONS.");
     }
 
     const body = req.method === "GET" ? {} : await readJsonBody(req);
     const data = await route(url.pathname, body);
-    sendJson(res, 200, data);
+    sendJson(req, res, 200, data);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof Error ? error.message : String(error);
-    sendJson(res, status, { error: message });
+    sendJson(req, res, status, { error: message });
   }
 });
 
@@ -65,6 +80,9 @@ server.listen(port, host, () => {
 });
 
 async function route(pathname, body) {
+  const compat = parseCompatRoute(pathname);
+  if (compat) return routeCompat(compat.attemptId, compat.endpoint, body);
+
   switch (pathname) {
     case "/bench/health":
       return {
@@ -126,6 +144,50 @@ async function route(pathname, body) {
       return cleanup(body);
     default:
       throw new HttpError(404, "Unknown bench endpoint.");
+  }
+}
+
+async function routeCompat(attemptId, endpoint, body) {
+  const attemptRoot = resolveSafeChild(root, attemptId);
+  const meta = await readMeta(attemptRoot);
+  switch (endpoint) {
+    case "/health":
+      return {
+        ok: true,
+        service: "aiboard-bench-runner-compat",
+        version: VERSION,
+        dir: attemptRoot,
+        platform: process.platform,
+      };
+    case "/ls":
+      return { files: await listWorkspaceFiles(attemptRoot) };
+    case "/read": {
+      const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+      const content = await readFile(file, "utf8");
+      return { content, bytes: Buffer.byteLength(content) };
+    }
+    case "/read-range":
+      return readFileRange(attemptRoot, body);
+    case "/write": {
+      const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+      const content = requiredString(body, "content");
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, content, "utf8");
+      return { bytes: Buffer.byteLength(content) };
+    }
+    case "/patch":
+      return patchFile(attemptRoot, body);
+    case "/append":
+      return appendFile(attemptRoot, body);
+    case "/search":
+      return searchFiles(attemptRoot, body);
+    case "/run": {
+      const command = requiredString(body, "command");
+      assertAllowedCommand(meta, command);
+      return runCommand(command, attemptRoot, optionalTimeout(body));
+    }
+    default:
+      throw new HttpError(404, "Unknown bench compatibility endpoint.");
   }
 }
 
@@ -237,6 +299,73 @@ async function patchFile(attemptRoot, body) {
     bytes: Buffer.byteLength(content),
     content,
   };
+}
+
+async function appendFile(attemptRoot, body) {
+  const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+  const content = requiredString(body, "content");
+  const reset = body.reset === true;
+  let next = content;
+  if (!reset) {
+    try {
+      next = `${await readFile(file, "utf8")}${content}`;
+    } catch {
+      next = content;
+    }
+  }
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, next, "utf8");
+  return {
+    content: next,
+    bytes: Buffer.byteLength(content),
+    totalBytes: Buffer.byteLength(next),
+  };
+}
+
+async function readFileRange(attemptRoot, body) {
+  const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+  const content = await readFile(file, "utf8");
+  const lines = content.split(/\r?\n/);
+  const startLine = Math.max(1, Math.floor(optionalNumber(body, "startLine") ?? 1));
+  const lineCount = Math.max(1, Math.floor(optionalNumber(body, "lineCount") ?? 80));
+  const startIndex = Math.min(lines.length, startLine - 1);
+  const selected = lines.slice(startIndex, startIndex + lineCount);
+  const endLine = selected.length > 0 ? startIndex + selected.length : startLine - 1;
+  return {
+    content: selected.join("\n"),
+    startLine,
+    endLine,
+    totalLines: lines.length,
+    truncated: startIndex + lineCount < lines.length,
+    hasMoreBefore: startIndex > 0,
+    hasMoreAfter: startIndex + lineCount < lines.length,
+  };
+}
+
+async function searchFiles(attemptRoot, body) {
+  const query = requiredString(body, "query").toLowerCase();
+  const matches = [];
+  await walk(attemptRoot, async (file) => {
+    if (matches.length >= 100) return;
+    let content = "";
+    try {
+      content = await readFile(file, "utf8");
+    } catch {
+      return;
+    }
+    const relPath = toWorkspacePath(attemptRoot, file);
+    const lines = content.split(/\r?\n/);
+    for (let index = 0; index < lines.length && matches.length < 100; index++) {
+      if (lines[index].toLowerCase().includes(query)) {
+        matches.push({
+          path: relPath,
+          line: index + 1,
+          text: lines[index].slice(0, 500),
+        });
+      }
+    }
+  });
+  return { results: matches };
 }
 
 async function runVerifier(attemptRoot, meta, body) {
@@ -501,13 +630,55 @@ async function readJsonBody(req) {
   }
 }
 
-function sendJson(res, status, data) {
+function sendJson(req, res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
+    ...corsHeaders(req),
   });
   res.end(body);
+}
+
+function sendNoContent(req, res, status) {
+  res.writeHead(status, corsHeaders(req));
+  res.end();
+}
+
+function corsHeaders(req) {
+  const headers = {
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,x-runner-token",
+    "access-control-max-age": "600",
+    vary: "Origin",
+  };
+  const origin = allowedOriginForRequest(req);
+  if (origin) headers["access-control-allow-origin"] = origin;
+  return headers;
+}
+
+function allowedOriginForRequest(req) {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string") return null;
+  try {
+    const normalized = new URL(origin).origin;
+    return appOrigins.has(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseCompatRoute(pathname) {
+  const prefix = "/bench/compat/";
+  if (!pathname.startsWith(prefix)) return null;
+  const rest = pathname.slice(prefix.length);
+  const slashIndex = rest.indexOf("/");
+  if (slashIndex <= 0) {
+    throw new HttpError(404, "Unknown bench compatibility endpoint.");
+  }
+  const attemptId = validateAttemptId(decodeURIComponent(rest.slice(0, slashIndex)));
+  const endpoint = rest.slice(slashIndex) || "/";
+  return { attemptId, endpoint };
 }
 
 function requiredString(record, key) {
@@ -628,14 +799,46 @@ function parseArgs(args) {
     if (!arg.startsWith("--")) continue;
     const key = arg.slice(2);
     const next = args[index + 1];
-    if (!next || next.startsWith("--")) {
-      parsed[key] = "true";
+    const value = !next || next.startsWith("--") ? "true" : next;
+    if (parsed[key] === undefined) {
+      parsed[key] = value;
+    } else if (Array.isArray(parsed[key])) {
+      parsed[key].push(value);
     } else {
-      parsed[key] = next;
+      parsed[key] = [parsed[key], value];
+    }
+    if (value === next) {
       index++;
     }
   }
   return parsed;
+}
+
+function optionValue(value) {
+  if (Array.isArray(value)) return value[value.length - 1];
+  return value;
+}
+
+function optionValues(value) {
+  if (Array.isArray(value)) return value;
+  return value === undefined ? [] : [value];
+}
+
+function parseAppOrigins(extraOrigins) {
+  const origins = new Set(DEFAULT_APP_ORIGINS);
+  for (const extraOrigin of extraOrigins) {
+    if (typeof extraOrigin !== "string" || !extraOrigin.trim()) continue;
+    try {
+      const url = new URL(extraOrigin);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error("invalid protocol");
+      }
+      origins.add(url.origin);
+    } catch {
+      console.error(`Ignoring invalid --app-origin value: ${extraOrigin}`);
+    }
+  }
+  return origins;
 }
 
 class HttpError extends Error {

@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "saturating-add",
+      "label": "Uses saturating addition",
+      "passed": true,
+      "weight": 1
+    }
+  ]
+}

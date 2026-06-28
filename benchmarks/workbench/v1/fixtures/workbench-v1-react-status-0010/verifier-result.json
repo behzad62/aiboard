@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "status-role",
+      "label": "Adds status role",
+      "passed": true,
+      "weight": 0.5
+    },
+    {
+      "id": "polite-live-region",
+      "label": "Adds polite live region",
+      "passed": true,
+      "weight": 0.5
+    }
+  ]
+}

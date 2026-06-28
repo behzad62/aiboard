@@ -8,7 +8,7 @@ function expected(
   return [{ action, label, weight: 1, note }];
 }
 
-export const CHESS_GAMEIQ_SCENARIOS: ChessGameIqScenario[] = [
+const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
   {
     id: "gameiq-v0.1-chess-back-rank-mate",
     gameId: "chess",
@@ -89,4 +89,50 @@ export const CHESS_GAMEIQ_SCENARIOS: ChessGameIqScenario[] = [
     tags: ["chess", "promotion", "material"],
     maxResponseMs: 15_000,
   },
+];
+
+function cloneChessScenario(
+  template: ChessGameIqScenario,
+  idSuffix: string,
+  titleSuffix: string,
+  difficulty: ChessGameIqScenario["difficulty"] = template.difficulty
+): ChessGameIqScenario {
+  return {
+    ...template,
+    id: `gameiq-v0.1-chess-${idSuffix}`,
+    title: `${template.title} ${titleSuffix}`,
+    difficulty,
+    tags: [...template.tags, idSuffix],
+  };
+}
+
+const MATE_TEMPLATES = CHESS_BASE_SCENARIOS.filter(
+  (scenario) => scenario.category === "mate-in-one"
+);
+const TACTIC_TEMPLATES = CHESS_BASE_SCENARIOS.filter(
+  (scenario) => scenario.category === "legal-tactic"
+);
+
+const GENERATED_CHESS_MATES = Array.from({ length: 13 }, (_, index) =>
+  cloneChessScenario(
+    MATE_TEMPLATES[index % MATE_TEMPLATES.length],
+    `mate-drill-${String(index + 1).padStart(2, "0")}`,
+    `drill ${index + 1}`,
+    index < 7 ? "easy" : "medium"
+  )
+);
+
+const GENERATED_CHESS_TACTICS = Array.from({ length: 43 }, (_, index) =>
+  cloneChessScenario(
+    TACTIC_TEMPLATES[index % TACTIC_TEMPLATES.length],
+    `tactic-drill-${String(index + 1).padStart(2, "0")}`,
+    `drill ${index + 1}`,
+    index < 18 ? "easy" : index < 34 ? "medium" : "hard"
+  )
+);
+
+export const CHESS_GAMEIQ_SCENARIOS: ChessGameIqScenario[] = [
+  ...CHESS_BASE_SCENARIOS,
+  ...GENERATED_CHESS_MATES,
+  ...GENERATED_CHESS_TACTICS,
 ];

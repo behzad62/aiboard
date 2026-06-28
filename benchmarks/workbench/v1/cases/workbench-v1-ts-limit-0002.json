@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "workbench-v1-ts-limit-0002",
+  "title": "TypeScript bounded queue limit",
+  "description": "Add a fixed capacity limit to a small queue helper.",
+  "difficulty": "medium",
+  "tags": [
+    "typescript",
+    "data-structure",
+    "limits"
+  ],
+  "caseVersion": "1.0.0",
+  "prompt": {
+    "userRequest": "Cap the queue at 50 items by dropping the oldest item when a new item is pushed past the limit.",
+    "publicContext": "Keep the public push and values methods unchanged.",
+    "hiddenNotesHash": "hidden:workbench-v1-ts-limit-0002"
+  },
+  "repo": {
+    "url": "fixture://workbench-v1-ts-limit-0002",
+    "baseCommit": "fixture-base-v1",
+    "shallowClone": true,
+    "fixtureHash": "fixture:workbench-v1-ts-limit-0002"
+  },
+  "environment": {
+    "timeoutSeconds": 600,
+    "memoryMb": 1024,
+    "network": "dependency-only"
+  },
+  "verifier": {
+    "command": "node verifier.mjs",
+    "resultFile": "verifier-result.json",
+    "timeoutSeconds": 60,
+    "publicCommand": "node verifier.mjs"
+  },
+  "budget": {
+    "maxUsd": 2,
+    "maxWallClockSeconds": 600,
+    "maxModelCalls": 20,
+    "maxToolCalls": 100,
+    "maxInputTokens": 200000,
+    "maxOutputTokens": 50000
+  },
+  "scoring": {
+    "scoringVersion": "certified-v1",
+    "costTargetUsd": 1,
+    "timeTargetSeconds": 300
+  },
+  "contamination": {
+    "originalTask": true,
+    "canary": "AIBENCH-WORKBENCH-WORKBENCH-V1-TS-LIMIT-0002",
+    "referenceSolutionPrivate": true,
+    "publicAfter": "2027-01-01"
+  },
+  "fixtureLanguage": "typescript",
+  "caseHash": "workbench:54e5b8cb",
+  "referenceSolutionNotes": "The reference solution defines MAX_ITEMS = 50 and shifts the oldest item after push when the array exceeds the cap.",
+  "negativeControlWrongSolution": "A wrong solution rejects new values after 50 items, which violates the requested drop-oldest behavior."
+}

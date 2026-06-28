@@ -220,7 +220,11 @@ const markdown = formatBenchmarkMarkdownReport(bundle, {
 
 check("markdown report includes certified run summary", markdown.includes("Certified Run Summary"), markdown);
 check("markdown report includes verifier assertion summary", markdown.includes("Verifier Assertion Summary"), markdown);
-check("markdown report includes certified tradeoffs", markdown.includes("Cost Speed Quality Tradeoffs"), markdown);
+check(
+  "markdown report includes certified tradeoffs",
+  markdown.includes("Cost Speed Verified Quality Tradeoffs"),
+  markdown
+);
 check("markdown report includes team lift matrix", markdown.includes("Team Lift Matrix"), markdown);
 check("markdown report includes failure taxonomy", markdown.includes("Failure Taxonomy"), markdown);
 check("markdown report filters certified attempts", markdown.includes("Certified attempts: 2") && !markdown.includes("Certified attempts: 3"), markdown);

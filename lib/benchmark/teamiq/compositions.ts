@@ -1,6 +1,7 @@
 import type {
   BenchmarkTeamComposition,
   BenchmarkTeamCompositionRole,
+  TeamIqStrategy,
 } from "@/lib/benchmark/types";
 
 export interface TeamIqSoloCompositionInput {
@@ -13,6 +14,7 @@ export interface TeamIqSoloCompositionInput {
   name?: string;
   id?: string;
   comboHash?: string;
+  strategy?: Extract<TeamIqStrategy, "solo">;
 }
 
 export interface TeamIqCompositionInput {
@@ -20,6 +22,7 @@ export interface TeamIqCompositionInput {
   roles: BenchmarkTeamCompositionRole[];
   id?: string;
   comboHash?: string;
+  strategy?: Exclude<TeamIqStrategy, "solo">;
 }
 
 export function deriveSoloTeamComposition(
@@ -38,13 +41,15 @@ export function deriveSoloTeamComposition(
     maxTokens: input.maxTokens,
   };
   const roles = normalizeTeamRoles([role]);
-  const comboHash = input.comboHash ?? comboHashFor("solo", roles);
+  const strategy = input.strategy ?? "solo";
+  const comboHash = input.comboHash ?? comboHashFor("solo", roles, strategy);
 
   return {
     id: input.id ?? idFor("solo", comboHash),
     name: input.name ?? `${displayName} solo`,
     comboHash,
     roles,
+    strategy,
   };
 }
 
@@ -52,13 +57,14 @@ export function deriveTeamComposition(
   input: TeamIqCompositionInput
 ): BenchmarkTeamComposition {
   const roles = normalizeTeamRoles(input.roles);
-  const comboHash = input.comboHash ?? comboHashFor("team", roles);
+  const comboHash = input.comboHash ?? comboHashFor("team", roles, input.strategy);
 
   return {
     id: input.id ?? idFor("team", comboHash),
     name: input.name,
     comboHash,
     roles,
+    strategy: input.strategy,
   };
 }
 
@@ -109,17 +115,21 @@ export function inferProviderId(modelId: string): string {
 
 function comboHashFor(
   prefix: "solo" | "team",
-  roles: BenchmarkTeamCompositionRole[]
+  roles: BenchmarkTeamCompositionRole[],
+  strategy?: TeamIqStrategy
 ): string {
-  const payload = roles.map((role) => ({
-    role: role.role,
-    slot: role.slot,
-    modelId: role.modelId,
-    providerId: role.providerId,
-    reasoningEffort: role.reasoningEffort ?? null,
-    temperature: role.temperature,
-    maxTokens: role.maxTokens ?? null,
-  }));
+  const payload = {
+    strategy: strategy ?? null,
+    roles: roles.map((role) => ({
+      role: role.role,
+      slot: role.slot,
+      modelId: role.modelId,
+      providerId: role.providerId,
+      reasoningEffort: role.reasoningEffort ?? null,
+      temperature: role.temperature,
+      maxTokens: role.maxTokens ?? null,
+    })),
+  };
   return `${prefix}:${stableHash(stableStringify(payload))}`;
 }
 

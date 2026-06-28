@@ -60,7 +60,7 @@ export function PerformanceTrendChart({
                   yAxisId="right"
                   type="monotone"
                   dataKey="quality"
-                  name="Quality"
+                  name="Architect-reviewed quality"
                   stroke="#22c55e"
                 />
               </LineChart>

@@ -45,6 +45,14 @@ check(
   perfect.attempt
 );
 check(
+  "GameIQ default timestamps reflect the actual run",
+  !perfect.attempt.startedAt.startsWith("1970-") &&
+    typeof perfect.attempt.completedAt === "string" &&
+    Date.parse(perfect.attempt.completedAt) >= Date.parse(perfect.attempt.startedAt) &&
+    perfect.attempt.durationMs >= 0,
+  perfect.attempt
+);
+check(
   "perfect run records all actions as structured, legal, and correct",
   perfect.metrics.structuredReliability === 1 &&
     perfect.metrics.legalActionRate === 1 &&

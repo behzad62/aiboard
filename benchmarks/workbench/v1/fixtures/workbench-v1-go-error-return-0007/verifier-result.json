@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "error-propagated",
+      "label": "Propagates parse error",
+      "passed": true,
+      "weight": 1
+    }
+  ]
+}

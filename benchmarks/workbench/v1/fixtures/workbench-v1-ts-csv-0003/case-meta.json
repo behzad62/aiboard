@@ -1,0 +1,19 @@
+{
+  "id": "workbench-v1-ts-csv-0003",
+  "language": "typescript",
+  "filePath": "src/csv.ts",
+  "checks": [
+    {
+      "id": "quote-doubling",
+      "label": "Doubles embedded quotes",
+      "contains": "replaceAll('\"', '\"\"')",
+      "weight": 0.5
+    },
+    {
+      "id": "special-character-check",
+      "label": "Checks for CSV special characters",
+      "contains": "includes(\",\")",
+      "weight": 0.5
+    }
+  ]
+}

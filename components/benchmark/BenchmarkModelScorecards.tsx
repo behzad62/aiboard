@@ -32,7 +32,7 @@ export function BenchmarkModelScorecards({
               <thead>
                 <tr className="border-b text-muted-foreground">
                   <th className="py-2 text-left">Model</th>
-                  <th className="py-2 text-right">Quality</th>
+                  <th className="py-2 text-right">Architect-reviewed quality</th>
                   <th className="py-2 text-right">Win</th>
                   <th className="py-2 text-right">Legal</th>
                   <th className="py-2 text-right">Schema</th>

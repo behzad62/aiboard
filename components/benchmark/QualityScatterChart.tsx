@@ -57,7 +57,12 @@ export function QualityScatterChart({
               <ScatterChart>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey={xKey} name={xLabel} type="number" />
-                <YAxis dataKey="quality" name="Quality" type="number" domain={[0, 100]} />
+                <YAxis
+                  dataKey="quality"
+                  name="Architect-reviewed quality"
+                  type="number"
+                  domain={[0, 100]}
+                />
                 <Tooltip
                   cursor={{ strokeDasharray: "3 3" }}
                   formatter={(value, name) => [value, name]}

@@ -8,11 +8,13 @@ export function BenchmarkReportActions({
   onRefresh,
   onCopyReport,
   onExportJson,
+  onExportLegacyJson,
   onImportJson,
 }: {
   onRefresh: () => void;
   onCopyReport: () => void;
   onExportJson: () => void;
+  onExportLegacyJson: () => void;
   onImportJson: (file: File) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -25,11 +27,15 @@ export function BenchmarkReportActions({
       </Button>
       <Button variant="outline" size="sm" onClick={onCopyReport}>
         <ClipboardCopy className="mr-2 h-4 w-4" />
-        Copy v2 report
+        Copy Markdown report
       </Button>
       <Button variant="outline" size="sm" onClick={onExportJson}>
         <Download className="mr-2 h-4 w-4" />
-        Export v2 JSON
+        Export Benchmark Bundle v2
+      </Button>
+      <Button variant="outline" size="sm" onClick={onExportLegacyJson}>
+        <Download className="mr-2 h-4 w-4" />
+        Export Legacy Lab Bundle v1
       </Button>
       <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
         <Upload className="mr-2 h-4 w-4" />

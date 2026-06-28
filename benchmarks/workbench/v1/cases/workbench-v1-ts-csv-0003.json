@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "workbench-v1-ts-csv-0003",
+  "title": "TypeScript CSV escaping helper",
+  "description": "Add RFC 4180 quote escaping to a CSV utility.",
+  "difficulty": "medium",
+  "tags": [
+    "typescript",
+    "csv",
+    "formatting"
+  ],
+  "caseVersion": "1.0.0",
+  "prompt": {
+    "userRequest": "Implement escapeCsv so values containing commas, quotes, or newlines are quoted and internal quotes are doubled.",
+    "publicContext": "Plain values without special characters should not be quoted.",
+    "hiddenNotesHash": "hidden:workbench-v1-ts-csv-0003"
+  },
+  "repo": {
+    "url": "fixture://workbench-v1-ts-csv-0003",
+    "baseCommit": "fixture-base-v1",
+    "shallowClone": true,
+    "fixtureHash": "fixture:workbench-v1-ts-csv-0003"
+  },
+  "environment": {
+    "timeoutSeconds": 600,
+    "memoryMb": 1024,
+    "network": "dependency-only"
+  },
+  "verifier": {
+    "command": "node verifier.mjs",
+    "resultFile": "verifier-result.json",
+    "timeoutSeconds": 60,
+    "publicCommand": "node verifier.mjs"
+  },
+  "budget": {
+    "maxUsd": 2,
+    "maxWallClockSeconds": 600,
+    "maxModelCalls": 20,
+    "maxToolCalls": 100,
+    "maxInputTokens": 200000,
+    "maxOutputTokens": 50000
+  },
+  "scoring": {
+    "scoringVersion": "certified-v1",
+    "costTargetUsd": 1,
+    "timeTargetSeconds": 300
+  },
+  "contamination": {
+    "originalTask": true,
+    "canary": "AIBENCH-WORKBENCH-WORKBENCH-V1-TS-CSV-0003",
+    "referenceSolutionPrivate": true,
+    "publicAfter": "2027-01-01"
+  },
+  "fixtureLanguage": "typescript",
+  "caseHash": "workbench:4f879a51",
+  "referenceSolutionNotes": "The reference solution checks for comma, quote, CR, or LF and returns a quoted value with value.replaceAll('\"', '\"\"').",
+  "negativeControlWrongSolution": "A wrong solution wraps every value in quotes but does not double embedded quotes."
+}

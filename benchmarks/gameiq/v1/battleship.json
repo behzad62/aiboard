@@ -1,0 +1,6315 @@
+{
+  "schemaVersion": 1,
+  "track": "gameiq",
+  "packId": "gameiq-v0.1-battleship",
+  "gameId": "battleship",
+  "label": "Certified GameIQ v0.1: Battleship Targeting",
+  "version": "1.0.0",
+  "sourcePackVersion": "0.1.0",
+  "certificationTier": "lightweight",
+  "scenarioCount": 25,
+  "digest": "gameiq-v0.1:battleship:d6133633",
+  "scenarios": [
+    {
+      "id": "gameiq-v0.1-battleship-corner-carrier-hit",
+      "gameId": "battleship",
+      "title": "Battleship: hit the known carrier corner",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move. Return the target coordinate for the known highest-value carrier hit.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 0
+            }
+          },
+          "label": "A1",
+          "weight": 1,
+          "note": "The default orange carrier occupies A1-E1."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "targeting",
+        "hit"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-follow-line",
+      "gameId": "battleship",
+      "title": "Battleship: follow up after a carrier hit",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Orange to move after blue hit A1. Return a legal target that follows the known carrier line.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": [
+              {
+                "target": {
+                  "row": 0,
+                  "column": 0
+                },
+                "result": "hit",
+                "shipId": "carrier",
+                "timestamp": 0
+              }
+            ]
+          }
+        },
+        "turn": "orange",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [
+          {
+            "target": {
+              "row": 0,
+              "column": 0
+            },
+            "result": "hit",
+            "shipId": "carrier",
+            "timestamp": 0,
+            "player": "blue",
+            "displayTarget": "A1"
+          }
+        ]
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 1
+            }
+          },
+          "label": "A2",
+          "weight": 1,
+          "note": "Continue along the carrier row."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "targeting",
+        "follow-up"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-carrier-second-cell",
+      "gameId": "battleship",
+      "title": "Battleship: follow the carrier line at B1",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 1
+            }
+          },
+          "label": "A2",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-carrier-third-cell",
+      "gameId": "battleship",
+      "title": "Battleship: continue the carrier line at C1",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 2
+            }
+          },
+          "label": "A3",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-carrier-fourth-cell",
+      "gameId": "battleship",
+      "title": "Battleship: continue the carrier line at D1",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 3
+            }
+          },
+          "label": "A4",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-carrier-end-cell",
+      "gameId": "battleship",
+      "title": "Battleship: finish the carrier line at E1",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 4
+            }
+          },
+          "label": "A5",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "sink-completion"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-battleship-top",
+      "gameId": "battleship",
+      "title": "Battleship: target the battleship top at B3",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 2,
+              "column": 1
+            }
+          },
+          "label": "C2",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-battleship-middle-1",
+      "gameId": "battleship",
+      "title": "Battleship: target the battleship middle at B4",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 3,
+              "column": 1
+            }
+          },
+          "label": "D2",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-battleship-middle-2",
+      "gameId": "battleship",
+      "title": "Battleship: target the battleship middle at B5",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 4,
+              "column": 1
+            }
+          },
+          "label": "E2",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-battleship-bottom",
+      "gameId": "battleship",
+      "title": "Battleship: finish the battleship at B6",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 5,
+              "column": 1
+            }
+          },
+          "label": "F2",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "sink-completion"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-cruiser-left",
+      "gameId": "battleship",
+      "title": "Battleship: target the cruiser left at F5",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 4,
+              "column": 5
+            }
+          },
+          "label": "E6",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-cruiser-center",
+      "gameId": "battleship",
+      "title": "Battleship: target the cruiser center at G5",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 4,
+              "column": 6
+            }
+          },
+          "label": "E7",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-cruiser-right",
+      "gameId": "battleship",
+      "title": "Battleship: finish the cruiser at H5",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 4,
+              "column": 7
+            }
+          },
+          "label": "E8",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "sink-completion"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-submarine-top",
+      "gameId": "battleship",
+      "title": "Battleship: target the submarine top at I7",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 6,
+              "column": 8
+            }
+          },
+          "label": "G9",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-submarine-middle",
+      "gameId": "battleship",
+      "title": "Battleship: target the submarine middle at I8",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 7,
+              "column": 8
+            }
+          },
+          "label": "H9",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-submarine-bottom",
+      "gameId": "battleship",
+      "title": "Battleship: finish the submarine at I9",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 8,
+              "column": 8
+            }
+          },
+          "label": "I9",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "sink-completion"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-destroyer-left",
+      "gameId": "battleship",
+      "title": "Battleship: target the destroyer left at C9",
+      "category": "target-priority",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 8,
+              "column": 2
+            }
+          },
+          "label": "I3",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "target-priority"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-destroyer-right",
+      "gameId": "battleship",
+      "title": "Battleship: finish the destroyer at D9",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 8,
+              "column": 3
+            }
+          },
+          "label": "I4",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "sink-completion"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-parity-corner",
+      "gameId": "battleship",
+      "title": "Battleship: choose unrepeated parity corner J10",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 9,
+              "column": 9
+            }
+          },
+          "label": "J10",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "repeat-avoidance",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-parity-edge",
+      "gameId": "battleship",
+      "title": "Battleship: choose unrepeated parity edge A10",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 0,
+              "column": 9
+            }
+          },
+          "label": "A10",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "repeat-avoidance",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-parity-center",
+      "gameId": "battleship",
+      "title": "Battleship: choose central information target E5",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 4,
+              "column": 4
+            }
+          },
+          "label": "E5",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-parity-diagonal",
+      "gameId": "battleship",
+      "title": "Battleship: choose diagonal information target F6",
+      "category": "target-priority",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 5,
+              "column": 5
+            }
+          },
+          "label": "F6",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-edge-scan",
+      "gameId": "battleship",
+      "title": "Battleship: choose legal edge scan J1",
+      "category": "target-priority",
+      "difficulty": "hard",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 9,
+              "column": 0
+            }
+          },
+          "label": "J1",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-center-scan",
+      "gameId": "battleship",
+      "title": "Battleship: choose legal center scan E6",
+      "category": "target-priority",
+      "difficulty": "hard",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 5,
+              "column": 4
+            }
+          },
+          "label": "F5",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "information-gain"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-battleship-late-safe-target",
+      "gameId": "battleship",
+      "title": "Battleship: avoid repeats with a legal safe target H8",
+      "category": "target-priority",
+      "difficulty": "hard",
+      "version": "0.1.0",
+      "prompt": "Blue to move on the fixed default board. Return the target coordinate that best advances the stated targeting objective.",
+      "initialState": {
+        "boards": {
+          "blue": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          },
+          "orange": {
+            "ships": [
+              {
+                "id": "carrier",
+                "name": "Carrier",
+                "size": 5,
+                "cells": [
+                  {
+                    "row": 0,
+                    "column": 0
+                  },
+                  {
+                    "row": 0,
+                    "column": 1
+                  },
+                  {
+                    "row": 0,
+                    "column": 2
+                  },
+                  {
+                    "row": 0,
+                    "column": 3
+                  },
+                  {
+                    "row": 0,
+                    "column": 4
+                  }
+                ]
+              },
+              {
+                "id": "battleship",
+                "name": "Battleship",
+                "size": 4,
+                "cells": [
+                  {
+                    "row": 2,
+                    "column": 1
+                  },
+                  {
+                    "row": 3,
+                    "column": 1
+                  },
+                  {
+                    "row": 4,
+                    "column": 1
+                  },
+                  {
+                    "row": 5,
+                    "column": 1
+                  }
+                ]
+              },
+              {
+                "id": "cruiser",
+                "name": "Cruiser",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 4,
+                    "column": 5
+                  },
+                  {
+                    "row": 4,
+                    "column": 6
+                  },
+                  {
+                    "row": 4,
+                    "column": 7
+                  }
+                ]
+              },
+              {
+                "id": "submarine",
+                "name": "Submarine",
+                "size": 3,
+                "cells": [
+                  {
+                    "row": 6,
+                    "column": 8
+                  },
+                  {
+                    "row": 7,
+                    "column": 8
+                  },
+                  {
+                    "row": 8,
+                    "column": 8
+                  }
+                ]
+              },
+              {
+                "id": "destroyer",
+                "name": "Destroyer",
+                "size": 2,
+                "cells": [
+                  {
+                    "row": 8,
+                    "column": 2
+                  },
+                  {
+                    "row": 8,
+                    "column": 3
+                  }
+                ]
+              }
+            ],
+            "shotsReceived": []
+          }
+        },
+        "turn": "blue",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": []
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "target": {
+              "row": 7,
+              "column": 7
+            }
+          },
+          "label": "H8",
+          "weight": 1,
+          "note": "The coordinate is legal and tied to the deterministic default board."
+        }
+      ],
+      "tags": [
+        "battleship",
+        "repeat-avoidance"
+      ],
+      "maxResponseMs": 15000
+    }
+  ]
+}

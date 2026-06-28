@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution logs the error but still returns anonymous with nil error.",
+  "assertions": [
+    {
+      "id": "error-propagated",
+      "label": "Propagates parse error",
+      "passed": false,
+      "weight": 1,
+      "message": "A wrong solution logs the error but still returns anonymous with nil error."
+    }
+  ]
+}

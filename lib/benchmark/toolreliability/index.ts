@@ -8,6 +8,7 @@ export {
   runToolReliabilityPack,
   runToolReliabilityV0_1,
 } from "./runner";
+export { runCertifiedToolReliability } from "./certified-runner";
 export {
   TOOL_RELIABILITY_CASE_CATEGORIES,
   type ForbiddenActionReliabilityCase,

@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution replaces spaces but forgets to strip and lowercase the value.",
+  "assertions": [
+    {
+      "id": "slug-expression",
+      "label": "Strips, lowercases, and replaces spaces",
+      "passed": false,
+      "weight": 1,
+      "message": "A wrong solution replaces spaces but forgets to strip and lowercase the value."
+    }
+  ]
+}

@@ -113,6 +113,8 @@ async function evaluateScenario(
 export async function runGameIqScenarios(
   input: RunGameIqScenariosInput
 ): Promise<GameIqRunResult> {
+  const runStartedMs = Date.now();
+  const startedAt = input.startedAt ?? new Date(runStartedMs).toISOString();
   const caseResults: GameIqScenarioResult[] = [];
 
   for (let index = 0; index < input.scenarios.length; index++) {
@@ -146,9 +148,13 @@ export async function runGameIqScenarios(
     latencyFactor: average(caseResults.map((result) => result.latencyFactor)),
   };
   const score = scoreGameIqAttempt(metrics);
-  const startedAt = input.startedAt ?? "1970-01-01T00:00:00.000Z";
+  const completedAt = new Date().toISOString();
+  const measuredDurationMs = Math.max(0, Date.now() - runStartedMs);
   const durationMs = round(
-    caseResults.reduce((sum, result) => sum + result.latencyMs, 0)
+    Math.max(
+      measuredDurationMs,
+      caseResults.reduce((sum, result) => sum + result.latencyMs, 0)
+    )
   );
 
   return {
@@ -165,7 +171,7 @@ export async function runGameIqScenarios(
       harnessProfile: input.harnessProfile ?? "raw-single-model",
       status: statusFromScore(score),
       startedAt,
-      completedAt: startedAt,
+      completedAt,
       verifiedQuality: score / 100,
       jobSuccessScore: round(metrics.outcomeScore * 100),
       efficiencyScore: score,

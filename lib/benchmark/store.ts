@@ -640,6 +640,14 @@ const TEAM_ROLES = new Set<BenchmarkTeamComposition["roles"][number]["role"]>([
   "player",
   "specialist",
 ]);
+const TEAM_IQ_STRATEGIES = new Set<NonNullable<BenchmarkTeamComposition["strategy"]>>([
+  "solo",
+  "panel",
+  "debate",
+  "architect_worker",
+  "architect_worker_reviewer",
+  "cheap_swarm_strong_judge",
+]);
 const BENCHMARK_RUN_EVENT_TYPES = new Set<BenchmarkRunEvent["type"]>([
   "model_call_started",
   "model_call_completed",
@@ -902,6 +910,7 @@ function validateBenchmarkTeamComposition(
     !isNonEmptyString(record.id) ||
     !isNonEmptyString(record.name) ||
     !isNonEmptyString(record.comboHash) ||
+    (record.strategy !== undefined && !TEAM_IQ_STRATEGIES.has(record.strategy)) ||
     !Array.isArray(record.roles) ||
     record.roles.length === 0 ||
     !record.roles.every(isTeamCompositionRole)

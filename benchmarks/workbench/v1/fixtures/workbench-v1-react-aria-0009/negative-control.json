@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution adds a title attribute only, which is not a robust accessible name.",
+  "assertions": [
+    {
+      "id": "aria-label",
+      "label": "Adds accessible button label",
+      "passed": false,
+      "weight": 1,
+      "message": "A wrong solution adds a title attribute only, which is not a robust accessible name."
+    }
+  ]
+}

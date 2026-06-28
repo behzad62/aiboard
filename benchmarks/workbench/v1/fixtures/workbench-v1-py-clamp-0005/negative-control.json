@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution only checks the lower bound and allows oversized values through.",
+  "assertions": [
+    {
+      "id": "clamp-expression",
+      "label": "Uses both minimum and maximum bounds",
+      "passed": false,
+      "weight": 1,
+      "message": "A wrong solution only checks the lower bound and allows oversized values through."
+    }
+  ]
+}

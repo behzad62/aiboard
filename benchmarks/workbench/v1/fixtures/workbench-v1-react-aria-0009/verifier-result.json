@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "aria-label",
+      "label": "Adds accessible button label",
+      "passed": true,
+      "weight": 1
+    }
+  ]
+}
