@@ -5,4 +5,5 @@ export * from "./build-adapter";
 export * from "./executor";
 export * from "./types";
 export * from "./v1-corpus";
+export * from "./v2-challenges";
 export * from "./verifier";
