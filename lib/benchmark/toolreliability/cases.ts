@@ -172,8 +172,8 @@ export function validateToolReliabilityCasePack(
   }
 
   for (const item of cases) {
-    if (!item.id.startsWith("toolrel-v0.1-")) {
-      errors.push(`Case ${item.id} is not namespaced for v0.1.`);
+    if (!/^toolrel-v0\.[12]-/.test(item.id)) {
+      errors.push(`Case ${item.id} is not namespaced for a supported ToolReliability version.`);
     }
     if (ids.has(item.id)) errors.push(`Duplicate case id ${item.id}.`);
     ids.add(item.id);
