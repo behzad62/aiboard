@@ -39,6 +39,20 @@ export interface StructuredOutputFormat {
   strict?: boolean;
 }
 
+export interface NativeToolDefinition {
+  name: string;
+  description: string;
+  parameters: JsonSchemaObject;
+  strict?: boolean;
+}
+
+export interface NativeToolCall {
+  id?: string;
+  name: string;
+  arguments?: Record<string, unknown>;
+  argumentsJson?: string;
+}
+
 export interface ChatParams {
   apiKey: string;
   model: string;
@@ -50,6 +64,10 @@ export interface ChatParams {
   structuredOutput?: StructuredOutputFormat;
   /** Provider-native web search/grounding is available for this call. */
   webSearch?: boolean;
+  /** Provider-native function/tool definitions available for this call. */
+  nativeTools?: NativeToolDefinition[];
+  /** Provider-native Build tools gated by the user's full-access runner choice. */
+  hostedBuildTools?: boolean;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */
@@ -59,9 +77,10 @@ export interface ChatParams {
 }
 
 export interface StreamChunk {
-  type: "token" | "done" | "error";
+  type: "token" | "done" | "error" | "tool_call";
   content?: string;
   error?: string;
+  toolCall?: NativeToolCall;
 }
 
 export interface AIProvider {

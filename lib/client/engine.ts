@@ -34,6 +34,7 @@ import {
   parseModelId,
   type ChatMessage,
   type ModelContextProfile,
+  type NativeToolDefinition,
   type SelectedModel,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
@@ -63,6 +64,7 @@ import {
   shouldEnableProviderNativeWebSearch,
   withWebSearchCapabilityNote,
 } from "@/lib/providers/web-search";
+import { nativeToolCallsToActionText } from "@/lib/orchestrator/build";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -164,7 +166,9 @@ export async function collectStream(
     message: string;
   }) => void,
   contextProfile?: ModelContextProfile,
-  allowWebSearch = true
+  allowWebSearch = true,
+  nativeTools?: NativeToolDefinition[],
+  hostedBuildTools = false
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -194,12 +198,25 @@ export async function collectStream(
           reasoningEffort,
           structuredOutput,
           contextProfile,
+          nativeTools,
+          hostedBuildTools,
         })) {
           if (signal?.aborted) throw abortError();
           if (chunk.type === "token" && chunk.content) {
             customContent += chunk.content;
             onToken?.(chunk.content);
             if (stopWhen?.(customContent)) break;
+          }
+          if (chunk.type === "tool_call" && chunk.toolCall) {
+            const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+            if (actionText) {
+              const serialized =
+                customContent.length > 0 && !customContent.endsWith("\n")
+                  ? `\n${actionText}`
+                  : actionText;
+              customContent += serialized;
+              onToken?.(serialized);
+            }
           }
           if (chunk.type === "error") {
             throw new Error(chunk.error ?? "Stream error");
@@ -253,6 +270,8 @@ export async function collectStream(
         reasoningEffort,
         structuredOutput,
         webSearch,
+        nativeTools,
+        hostedBuildTools,
         contextProfile,
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
@@ -261,6 +280,17 @@ export async function collectStream(
           content += chunk.content;
           onToken?.(chunk.content);
           if (stopWhen?.(content)) break;
+        }
+        if (chunk.type === "tool_call" && chunk.toolCall) {
+          const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+          if (actionText) {
+            const serialized =
+              content.length > 0 && !content.endsWith("\n")
+                ? `\n${actionText}`
+                : actionText;
+            content += serialized;
+            onToken?.(serialized);
+          }
         }
         if (chunk.type === "error") {
           throw new Error(chunk.error ?? "Stream error");

@@ -3,6 +3,7 @@ import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type { ChatParams } from "./base";
 import type { ModelCapabilities } from "./base";
+import type { NativeToolCall, NativeToolDefinition } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import type { StreamChunk } from "./base";
@@ -123,6 +124,31 @@ export function openAICompatibleWebSearchField(
     };
   }
   return {};
+}
+
+export function openAICompatibleNativeToolField(
+  providerId: string,
+  tools: NativeToolDefinition[] | undefined
+): Record<string, unknown> {
+  if (
+    !tools?.length ||
+    !["openai", "openrouter", "custom"].includes(providerId)
+  ) {
+    return {};
+  }
+  return {
+    tools: tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: tool.strict ?? false,
+      },
+    })),
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+  };
 }
 
 /**
@@ -256,8 +282,32 @@ export async function* streamOpenAICompatibleChat(
     providerId,
     params.webSearch && !params.structuredOutput
   );
+  const nativeToolField = openAICompatibleNativeToolField(
+    providerId,
+    params.structuredOutput ? undefined : params.nativeTools
+  );
+  const combinedTools = [
+    ...((webSearchField.tools as unknown[] | undefined) ?? []),
+    ...((nativeToolField.tools as unknown[] | undefined) ?? []),
+  ];
+  const combinedToolField =
+    combinedTools.length > 0
+      ? {
+          tools: combinedTools,
+          ...(nativeToolField.tool_choice
+            ? { tool_choice: nativeToolField.tool_choice }
+            : {}),
+          ...(nativeToolField.parallel_tool_calls
+            ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
+            : {}),
+        }
+      : {};
 
   try {
+    const pendingToolCalls = new Map<
+      number,
+      NativeToolCall & { argumentsJson: string }
+    >();
     const stream = await client.chat.completions.create({
       model: params.model,
       messages,
@@ -266,15 +316,35 @@ export async function* streamOpenAICompatibleChat(
       ...openAIPromptCaching,
       ...(reasoningField as Record<string, never>),
       ...(structuredOutputField as Record<string, never>),
-      ...(webSearchField as Record<string, never>),
+      ...(combinedToolField as Record<string, never>),
       stream: true,
     });
 
     for await (const chunk of stream) {
-      const token = chunk.choices[0]?.delta?.content;
+      const delta = chunk.choices[0]?.delta;
+      const token = delta?.content;
       if (token) {
         yield { type: "token", content: token };
       }
+      for (const toolCall of delta?.tool_calls ?? []) {
+        const index = toolCall.index;
+        const current =
+          pendingToolCalls.get(index) ??
+          ({
+            id: toolCall.id,
+            name: toolCall.function?.name ?? "",
+            argumentsJson: "",
+          } satisfies NativeToolCall & { argumentsJson: string });
+        current.id = current.id ?? toolCall.id;
+        current.name = current.name || toolCall.function?.name || "";
+        current.argumentsJson += toolCall.function?.arguments ?? "";
+        pendingToolCalls.set(index, current);
+      }
+    }
+    for (const toolCall of [...pendingToolCalls.values()].filter(
+      (call) => call.name
+    )) {
+      yield { type: "tool_call", toolCall };
     }
     yield { type: "done" };
   } catch (err) {

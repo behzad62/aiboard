@@ -8,7 +8,12 @@
  */
 
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
-import type { JsonSchemaObject, StructuredOutputFormat } from "../providers/base";
+import type {
+  JsonSchemaObject,
+  NativeToolCall,
+  NativeToolDefinition,
+  StructuredOutputFormat,
+} from "../providers/base";
 import {
   renderAssembledContext,
   type BuildPromptContextInput,
@@ -476,6 +481,179 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
       additionalProperties: false,
     },
   };
+}
+
+type NativeBuildToolProfile =
+  | "architect_plan"
+  | "architect_review"
+  | "worker";
+
+const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
+  read: "Read one or more small project files.",
+  read_range: "Read a bounded line range from one project file.",
+  context_retrieve: "Retrieve exact text from a previously compacted context blob.",
+  code_intel: "Run read-only structural code intelligence.",
+  plan: "Return the Architect implementation plan.",
+  review: "Return the Architect review verdict for completed worker tasks.",
+  run: "Run a bounded project check command through the AI Board runner.",
+  search: "Search project text.",
+  tool: "Call an MCP tool exposed through the local runner.",
+  fetch: "Fetch a known public http(s) URL through the local runner.",
+  skill_request: "Request an AI Board skill overlay for a future Build turn.",
+  patch: "Apply exact SEARCH/REPLACE operations to one existing file.",
+  append: "Create or append a bounded content chunk to a project file.",
+  repo_status: "Inspect the Git working tree status through the runner.",
+  repo_diff: "Inspect a bounded Git diff through the runner.",
+  repo_branch_create: "Create and optionally check out a Git branch through the runner.",
+  repo_commit: "Stage and commit changes through the runner after approval.",
+  repo_issue_list: "List open GitHub issues through the runner.",
+  repo_milestone_create: "Create a GitHub milestone through the runner.",
+  repo_issue_create: "Create a GitHub issue through the runner.",
+  repo_issue_read: "Read a GitHub issue through the runner.",
+  repo_push: "Push a branch through the runner after approval.",
+  repo_pr_create: "Open a GitHub pull request through the runner after approval.",
+};
+
+const ARCHITECT_PLAN_NATIVE_ACTIONS = [
+  "read",
+  "read_range",
+  "context_retrieve",
+  "code_intel",
+  "plan",
+  "run",
+  "search",
+  "tool",
+  "fetch",
+  "skill_request",
+  "patch",
+  "append",
+  "repo_status",
+  "repo_diff",
+  "repo_branch_create",
+  "repo_commit",
+  "repo_issue_list",
+  "repo_milestone_create",
+  "repo_issue_create",
+  "repo_issue_read",
+  "repo_push",
+  "repo_pr_create",
+] as const;
+
+const ARCHITECT_REVIEW_NATIVE_ACTIONS = [
+  "read",
+  "read_range",
+  "context_retrieve",
+  "code_intel",
+  "review",
+  "run",
+  "search",
+  "tool",
+  "fetch",
+  "skill_request",
+  "patch",
+  "append",
+  "repo_status",
+  "repo_diff",
+  "repo_branch_create",
+  "repo_commit",
+  "repo_issue_list",
+  "repo_milestone_create",
+  "repo_issue_create",
+  "repo_issue_read",
+  "repo_push",
+  "repo_pr_create",
+] as const;
+
+const WORKER_NATIVE_ACTIONS = [
+  "read",
+  "read_range",
+  "context_retrieve",
+  "search",
+  "patch",
+  "append",
+  "run",
+  "tool",
+] as const;
+
+const NATIVE_BUILD_TOOL_REQUIRED: Record<string, string[]> = {
+  read: ["paths"],
+  read_range: ["path", "startLine", "lineCount"],
+  context_retrieve: ["ref"],
+  code_intel: ["op"],
+  plan: ["tasks"],
+  review: ["results", "done"],
+  run: ["command"],
+  search: ["query"],
+  tool: ["server", "tool"],
+  fetch: ["url"],
+  skill_request: ["ids", "reason"],
+  patch: ["path", "ops"],
+  append: ["path", "content"],
+  repo_branch_create: ["name"],
+  repo_commit: ["message"],
+  repo_issue_list: ["repo"],
+  repo_milestone_create: ["repo", "title"],
+  repo_issue_create: ["repo", "title", "body"],
+  repo_issue_read: ["repo", "issue"],
+  repo_push: ["branch"],
+  repo_pr_create: ["title", "body"],
+};
+
+function nativeActionNames(profile: NativeBuildToolProfile): readonly string[] {
+  if (profile === "architect_plan") return ARCHITECT_PLAN_NATIVE_ACTIONS;
+  if (profile === "architect_review") return ARCHITECT_REVIEW_NATIVE_ACTIONS;
+  return WORKER_NATIVE_ACTIONS;
+}
+
+export function buildNativeBuildToolDefinitions(
+  profile: NativeBuildToolProfile
+): NativeToolDefinition[] {
+  const schema = buildArchitectActionResponseFormat().schema;
+  const properties = schema.properties ?? {};
+  return nativeActionNames(profile).map((action) => {
+    const toolProperties = Object.fromEntries(
+      Object.entries(properties).filter(([key]) => key !== "action")
+    );
+    return {
+      name: action,
+      description:
+        NATIVE_BUILD_TOOL_DESCRIPTIONS[action] ??
+        `Run the AI Board Build action "${action}".`,
+      parameters: {
+        type: "object",
+        properties: toolProperties,
+        required: NATIVE_BUILD_TOOL_REQUIRED[action] ?? [],
+        additionalProperties: false,
+      },
+      strict: false,
+    };
+  });
+}
+
+function parseNativeToolArguments(call: NativeToolCall): Record<string, unknown> {
+  if (call.arguments && typeof call.arguments === "object") {
+    return call.arguments;
+  }
+  if (!call.argumentsJson?.trim()) return {};
+  try {
+    const parsed = JSON.parse(call.argumentsJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function nativeToolCallsToActionText(calls: NativeToolCall[]): string {
+  return calls
+    .map((call) =>
+      JSON.stringify({
+        action: call.name,
+        ...parseNativeToolArguments(call),
+      })
+    )
+    .join("\n");
 }
 
 /**

@@ -21,11 +21,13 @@ import type {
 } from "@/lib/db/schema";
 import type {
   ChatMessage,
+  NativeToolDefinition,
   SelectedModel,
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
+  CUSTOM_PROVIDER_ID,
   resolveClientModelContextProfile,
   resolveModelName,
 } from "./providers";
@@ -117,6 +119,7 @@ import {
 import {
   buildArchitectPlanPrompt,
   buildArchitectActionResponseFormat,
+  buildNativeBuildToolDefinitions,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
   buildIncompleteTaskFailure,
@@ -419,6 +422,19 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 // safe verification commands (read-only git / rg / npm scripts) per batch.
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
+
+const PROVIDER_NATIVE_BUILD_TOOL_IDS = new Set([
+  "openai",
+  "anthropic",
+  "foundry",
+  "google",
+  "openrouter",
+  CUSTOM_PROVIDER_ID,
+]);
+
+function supportsProviderNativeBuildTools(providerId: string): boolean {
+  return PROVIDER_NATIVE_BUILD_TOOL_IDS.has(providerId);
+}
 
 const MANIFEST_CANDIDATES = [
   "README.md",
@@ -3443,12 +3459,19 @@ export async function runBuildDiscussion(
       label: string;
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
+      nativeTools?: NativeToolDefinition[];
       validateStructuredOutput?: (content: string) => StructuredTraceValidation;
     }
   ): Promise<string> => {
     round += 1;
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
+    const nativeTools =
+      opts.nativeTools?.length && supportsProviderNativeBuildTools(providerId)
+        ? opts.nativeTools
+        : undefined;
+    const hostedBuildTools = !!runner && allowAllCommands && !benchmark;
+    const structuredOutput = nativeTools ? undefined : opts.structuredOutput;
     const traceStartedAt = new Date().toISOString();
     const traceStartMs = Date.now();
     const tracePrompt = messages
@@ -3502,7 +3525,7 @@ export async function runBuildDiscussion(
             (token) => emit({ type: "message_token", messageId, token }),
             signal,
             opts.stopWhen,
-            opts.structuredOutput,
+            structuredOutput,
             (retry) =>
               diagnostics.push({
                 attempt: retry.attempt,
@@ -3510,10 +3533,27 @@ export async function runBuildDiscussion(
                 message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
               }),
             modelContextProfile(model),
-            !benchmark
+            !benchmark,
+            nativeTools,
+            hostedBuildTools
           ),
       });
       content = resolved.content;
+      if (nativeTools) {
+        diagnostics.push({
+          attempt: 1,
+          type: "request",
+          message: "Provider-native Build tools were offered for this call.",
+        });
+      }
+      if (hostedBuildTools) {
+        diagnostics.push({
+          attempt: 1,
+          type: "request",
+          message:
+            "Provider-hosted Build tools were permitted because runner full-access is active.",
+        });
+      }
       if (resolved.overrideUsed) {
         diagnostics.push({
           attempt: 1,
@@ -3544,7 +3584,7 @@ export async function runBuildDiscussion(
           ...buildBenchmarkTraceContext(benchmark),
           participantId: opts.label,
           reasoningEffort,
-          schemaMode: opts.structuredOutput ? "structured" : "text",
+          schemaMode: opts.structuredOutput || nativeTools ? "structured" : "text",
           promptText: tracePrompt,
           startedAt: traceStartedAt,
           completedAt: new Date().toISOString(),
@@ -3595,7 +3635,7 @@ export async function runBuildDiscussion(
         ...buildBenchmarkTraceContext(benchmark),
         participantId: opts.label,
         reasoningEffort,
-        schemaMode: opts.structuredOutput ? "structured" : "text",
+        schemaMode: opts.structuredOutput || nativeTools ? "structured" : "text",
         promptText: tracePrompt,
         startedAt: traceStartedAt,
         completedAt: new Date().toISOString(),
@@ -4702,6 +4742,9 @@ export async function runBuildDiscussion(
         label: forced ? `${args.label} (final verdict)` : args.label,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
         structuredOutput: architectActionResponseFormat,
+        nativeTools: buildNativeBuildToolDefinitions(
+          terminal === "review" ? "architect_review" : "architect_plan"
+        ),
         validateStructuredOutput: (content) => {
           const parsed = parseArchitectAction(content);
           return parsed
@@ -5710,6 +5753,7 @@ export async function runBuildDiscussion(
                 ? `${worker.displayName} working on ${task.id}: ${task.title}`
                 : `${worker.displayName} continuing ${task.id}: ${task.title}`,
             stopWhen: hasCompleteBuildToolAction,
+            nativeTools: buildNativeBuildToolDefinitions("worker"),
           });
           workerMessages.push({ role: "assistant", content: output });
           const inspected = inspectStrictToolActionBatchOutput(output);

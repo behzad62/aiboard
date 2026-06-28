@@ -6,7 +6,13 @@ import {
 } from "@google/generative-ai";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
-import type { AIProvider, ChatParams, StreamChunk } from "./base";
+import type {
+  AIProvider,
+  ChatParams,
+  NativeToolCall,
+  NativeToolDefinition,
+  StreamChunk,
+} from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import { geminiThinkingConfig } from "./reasoning";
@@ -62,6 +68,33 @@ export function googleWebSearchTools(
   return [{ googleSearch: {} } as unknown as Tool];
 }
 
+export function googleNativeToolConfig(
+  tools: NativeToolDefinition[] | undefined
+): { tools?: Tool[]; toolConfig?: unknown } {
+  if (!tools?.length) return {};
+  return {
+    tools: [
+      {
+        functionDeclarations: tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      } as unknown as Tool,
+    ],
+    toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+  };
+}
+
+export function googleHostedBuildToolConfig(
+  enabled?: boolean
+): { tools?: Tool[] } {
+  if (!enabled) return {};
+  return {
+    tools: [{ codeExecution: {} } as unknown as Tool],
+  };
+}
+
 export const googleProvider: AIProvider = {
   id: "google",
   name: "Google Gemini",
@@ -92,9 +125,20 @@ export const googleProvider: AIProvider = {
         params.model,
         params.webSearch && !params.structuredOutput
       );
+      const nativeToolConfig = googleNativeToolConfig(
+        params.structuredOutput ? undefined : params.nativeTools
+      );
+      const hostedBuildToolConfig = googleHostedBuildToolConfig(
+        params.hostedBuildTools && !params.structuredOutput
+      );
+      const tools = [
+        ...(webSearchTools ?? []),
+        ...(nativeToolConfig.tools ?? []),
+        ...(hostedBuildToolConfig.tools ?? []),
+      ];
       const model = genAI.getGenerativeModel({
         model: params.model,
-        ...(webSearchTools ? { tools: webSearchTools } : {}),
+        ...(tools.length > 0 ? { tools } : {}),
       });
       const caps = getModelCapabilities(formatModelId("google", params.model));
 
@@ -125,6 +169,9 @@ export const googleProvider: AIProvider = {
           parts: [{ text: m.content }],
         })),
         generationConfig,
+        ...(nativeToolConfig.toolConfig
+          ? { toolConfig: nativeToolConfig.toolConfig as never }
+          : {}),
         systemInstruction: systemMessage
           ? {
               role: "system",
@@ -139,12 +186,79 @@ export const googleProvider: AIProvider = {
         caps
       );
       const result = await chat.sendMessageStream(parts);
+      const pendingToolCalls: NativeToolCall[] = [];
 
       for await (const chunk of result.stream) {
-        const text = chunk.text();
+        const chunkWithCalls = chunk as unknown as {
+          functionCalls?: () => Array<{
+            name?: string;
+            args?: Record<string, unknown>;
+          }>;
+          response?: {
+            candidates?: Array<{
+              content?: {
+                parts?: Array<{
+                  functionCall?: {
+                    name?: string;
+                    args?: Record<string, unknown>;
+                  };
+                }>;
+              };
+            }>;
+          };
+        };
+        const functionCalls =
+          chunkWithCalls.functionCalls?.() ??
+          chunkWithCalls.response?.candidates
+            ?.flatMap((candidate) => candidate.content?.parts ?? [])
+            .map((part) => part.functionCall)
+            .filter(
+              (call): call is { name?: string; args?: Record<string, unknown> } =>
+                !!call
+            ) ??
+          [];
+        for (const call of functionCalls) {
+          if (call.name) {
+            pendingToolCalls.push({
+              name: call.name,
+              arguments: call.args,
+              argumentsJson: call.args ? JSON.stringify(call.args) : undefined,
+            });
+          }
+        }
+        let text = "";
+        try {
+          text = chunk.text();
+        } catch {
+          text = "";
+        }
         if (text) {
           yield { type: "token", content: text };
         }
+      }
+      const responseWithCalls = (await result.response) as unknown as {
+        functionCalls?: () => Array<{
+          name?: string;
+          args?: Record<string, unknown>;
+        }>;
+      };
+      for (const call of responseWithCalls.functionCalls?.() ?? []) {
+        const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`;
+        const alreadyCaptured = pendingToolCalls.some(
+          (existing) =>
+            `${existing.name}:${JSON.stringify(existing.arguments ?? {})}` ===
+            signature
+        );
+        if (call.name && !alreadyCaptured) {
+          pendingToolCalls.push({
+            name: call.name,
+            arguments: call.args,
+            argumentsJson: call.args ? JSON.stringify(call.args) : undefined,
+          });
+        }
+      }
+      for (const toolCall of pendingToolCalls) {
+        yield { type: "tool_call", toolCall };
       }
       yield { type: "done" };
     } catch (err) {

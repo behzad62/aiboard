@@ -1,7 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
-import type { AIProvider, ChatParams, StreamChunk } from "./base";
+import type {
+  AIProvider,
+  ChatParams,
+  NativeToolCall,
+  NativeToolDefinition,
+  StreamChunk,
+} from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import { anthropicEffort } from "./reasoning";
@@ -137,6 +143,20 @@ export function anthropicWebSearchField(
   };
 }
 
+export function anthropicNativeToolField(
+  tools: NativeToolDefinition[] | undefined
+): Record<string, unknown> {
+  if (!tools?.length) return {};
+  return {
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    })),
+    tool_choice: { type: "auto" },
+  };
+}
+
 /**
  * Shared Anthropic-API streaming — used by the native Anthropic provider and
  * by gateways exposing the same API (Azure AI Foundry via params.baseURL).
@@ -193,16 +213,38 @@ export async function* streamAnthropicChat(
     const webSearchField = anthropicWebSearchField(
       providerId === "anthropic" && params.webSearch && !params.structuredOutput
     );
+    const nativeToolField = anthropicNativeToolField(
+      params.structuredOutput ? undefined : params.nativeTools
+    );
+    const combinedTools = params.structuredOutput
+      ? ((structuredToolConfig.tools as unknown[] | undefined) ?? [])
+      : [
+          ...((webSearchField.tools as unknown[] | undefined) ?? []),
+          ...((nativeToolField.tools as unknown[] | undefined) ?? []),
+        ];
+    const combinedToolChoice = params.structuredOutput
+      ? structuredToolConfig.tool_choice
+      : nativeToolField.tool_choice ?? webSearchField.tool_choice;
+    const combinedToolField =
+      combinedTools.length > 0
+        ? {
+            tools: combinedTools,
+            ...(combinedToolChoice ? { tool_choice: combinedToolChoice } : {}),
+          }
+        : {};
 
     try {
+      const pendingToolCalls = new Map<
+        number,
+        NativeToolCall & { argumentsJson: string }
+      >();
       const stream = await client.messages.stream({
         model: params.model,
         max_tokens: params.maxTokens ?? 1500,
         system: systemMessage?.content,
         messages: chatMessages,
         ...(effortField as Record<string, never>),
-        ...(structuredToolConfig as Record<string, never>),
-        ...(webSearchField as Record<string, never>),
+        ...(combinedToolField as Record<string, never>),
       });
 
       for await (const event of stream) {
@@ -215,7 +257,41 @@ export async function* streamAnthropicChat(
           event.type === "content_block_delta" &&
           event.delta.type === "input_json_delta"
         ) {
-          yield { type: "token", content: event.delta.partial_json };
+          if (params.structuredOutput) {
+            yield { type: "token", content: event.delta.partial_json };
+          } else {
+            const index = event.index;
+            const current =
+              pendingToolCalls.get(index) ??
+              ({
+                name: "",
+                argumentsJson: "",
+              } satisfies NativeToolCall & { argumentsJson: string });
+            current.argumentsJson += event.delta.partial_json;
+            pendingToolCalls.set(index, current);
+          }
+        } else if (event.type === "content_block_start") {
+          const block = event.content_block as unknown as {
+            type?: string;
+            id?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+          };
+          if (!params.structuredOutput && block.type === "tool_use") {
+            pendingToolCalls.set(event.index, {
+              id: block.id,
+              name: block.name ?? "",
+              arguments: block.input,
+              argumentsJson: block.input ? JSON.stringify(block.input) : "",
+            });
+          }
+        }
+      }
+      if (!params.structuredOutput) {
+        for (const toolCall of [...pendingToolCalls.values()].filter(
+          (call) => call.name
+        )) {
+          yield { type: "tool_call", toolCall };
         }
       }
       yield { type: "done" };
