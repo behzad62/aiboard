@@ -45,8 +45,8 @@ function metrics(overrides: Partial<FireworksGameMetrics>): FireworksGameMetrics
 
 const emptyScore = scoreFireworksTeamIq({ metrics: metrics({}) });
 check(
-  "empty Fireworks action history is not rewarded with perfect positive rates",
-  emptyScore === 20,
+  "no actions and no model calls score zero",
+  emptyScore === 0,
   emptyScore
 );
 

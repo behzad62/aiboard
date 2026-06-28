@@ -12,6 +12,7 @@ export interface CertifiedRunGateInput {
   selectedTrack: CertifiedRunnableTrack;
   modelId: string;
   teamModelIds: string[];
+  fireworksPlayerCount?: 2 | 3;
   workBenchRunnerReady: boolean;
   certification: HarnessCertificationResult;
 }
@@ -34,7 +35,16 @@ export function getCertifiedRunGate(
   if (input.running) return blocked("A certified run is already in progress.");
   if (!input.suiteId) return blocked("Select a benchmark suite or case.");
   if (input.selectedTrack === "teamiq") {
-    if (input.teamModelIds.length < 2) {
+    if (isFireworksSuite(input.suiteId)) {
+      const playerCount = input.fireworksPlayerCount ?? 2;
+      if (input.teamModelIds.length !== playerCount) {
+        return blocked(
+          playerCount === 3
+            ? "Select three models for 3-player Fireworks."
+            : "Select exactly two models for 2-player Fireworks."
+        );
+      }
+    } else if (input.teamModelIds.length < 2) {
       return blocked("Select at least two models for TeamIQ.");
     }
   } else if (!input.modelId) {
@@ -56,4 +66,8 @@ export function getCertifiedRunGate(
     reason: null,
     certification: input.certification,
   };
+}
+
+function isFireworksSuite(suiteId: string): boolean {
+  return suiteId.startsWith("fireworks-teamiq-");
 }

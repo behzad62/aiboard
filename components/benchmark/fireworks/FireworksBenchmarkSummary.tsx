@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import type { BenchmarkArtifact, BenchmarkAttemptV2 } from "@/lib/benchmark/types";
 import type { FireworksGameMetrics } from "@/lib/games/fireworks/types";
 import { FireworksMetricTable } from "./FireworksMetricTable";
@@ -79,9 +80,15 @@ function scoreTiles(
     value: attempt.teamLift == null ? "n/a" : signed(attempt.teamLift),
   });
   tiles.push({
-    label: "Cost per point",
+    label: "Cost / benchmark point",
     value: costPerPoint(metrics.costUsd, summary.score),
   });
+  if (metrics.scoreKind === "full_game" || metrics.scoreKind === "mixed") {
+    tiles.push({
+      label: "Cost / stack point",
+      value: costPerPoint(metrics.costUsd, metrics.fullGameStackScore),
+    });
+  }
   return tiles;
 }
 
@@ -117,9 +124,9 @@ function signed(value: number): string {
   return value > 0 ? `+${value.toFixed(1)}` : value.toFixed(1);
 }
 
-function costPerPoint(costUsd: number | null, score: number): string {
-  if (costUsd === null || score <= 0) return "n/a";
-  return `$${(costUsd / score).toFixed(4)}`;
+function costPerPoint(costUsd: number | null, points: number | null): string {
+  if (costUsd === null || points == null || points <= 0) return "n/a";
+  return `$${(costUsd / points).toFixed(4)}`;
 }
 
 function round(value: number): number {

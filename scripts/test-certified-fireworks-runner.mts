@@ -13,6 +13,7 @@ import {
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
+  FIREWORKS_FULL_GAME_CASES,
   FIREWORKS_TACTICS_SCENARIOS,
   fireworksCaseToBenchmarkCaseV2,
 } from "../lib/benchmark/fireworks/scenario-packs";
@@ -110,6 +111,11 @@ const teamSummary = teamSummaryArtifact
 const teamVerifier = verifiers.find(
   (verifier) => verifier.attemptId === teamAttempt?.id
 );
+const teamVerifierResult = teamVerifier
+  ? JSON.parse(teamVerifier.resultJson) as {
+      metricRates?: Record<string, unknown>;
+    }
+  : null;
 
 check(
   "certified Fireworks run completes with solo baselines and team attempt",
@@ -155,6 +161,12 @@ check(
     ) === true,
   teamVerifier
 );
+check(
+  "Fireworks verifier result JSON includes sampled metric rates",
+  typeof teamVerifierResult?.metricRates?.legalActionRate === "number" &&
+    typeof teamVerifierResult.metricRates.usefulClueRate === "number",
+  teamVerifierResult
+);
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
@@ -199,10 +211,80 @@ await runCertifiedBenchmark({
 const illegalAttempts = await listBenchmarkAttemptsV2();
 const illegalFailures = await listBenchmarkFailures();
 check(
-  "illegal Fireworks action records failed_tool_use and classified failure",
+  "illegal Fireworks clue records failed_tool_use and classified failure",
   illegalAttempts[0]?.status === "failed_tool_use" &&
-    illegalFailures.some((failure) => failure.code === "fireworks_illegal_action"),
+    illegalFailures.some((failure) => failure.code === "fireworks_illegal_clue"),
   { illegalAttempts, illegalFailures }
+);
+
+async function runIllegalFailureIds(): Promise<string[]> {
+  __resetBenchmarkStoreForTests();
+  await saveBenchmarkCaseV2(caseV2);
+  await saveBenchmarkTeamComposition(illegalTeam);
+  await runCertifiedBenchmark({
+    runId: "run-certified-fireworks-deterministic-illegal",
+    suiteId: "suite-certified-fireworks",
+    track: "teamiq",
+    harnessProfile: "raw-single-model",
+    caseIds: [caseV2.id],
+    teamCompositionIds: [illegalTeam.id],
+    certification: runHarnessCertification("raw-single-model"),
+    runner: (context) =>
+      runCertifiedFireworksTeamIq({
+        context,
+        teamCompositions: [illegalTeam],
+        cases: selectedCases.slice(0, 1),
+        includeSoloBaselines: false,
+        streamChat: async function* (): AsyncIterable<StreamChunk> {
+          yield {
+            type: "token",
+            content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
+          };
+          yield { type: "done" };
+        },
+      }),
+  });
+  return (await listBenchmarkFailures()).map((failure) => failure.id);
+}
+
+const firstIllegalFailureIds = await runIllegalFailureIds();
+const secondIllegalFailureIds = await runIllegalFailureIds();
+check(
+  "same deterministic failing Fireworks run creates the same failure IDs",
+  firstIllegalFailureIds.length > 0 &&
+    JSON.stringify(firstIllegalFailureIds) === JSON.stringify(secondIllegalFailureIds),
+  { firstIllegalFailureIds, secondIllegalFailureIds }
+);
+
+__resetBenchmarkStoreForTests();
+const fullCase = { ...FIREWORKS_FULL_GAME_CASES[0], id: "fireworks-full-calibration-test", maxTurns: 1 };
+await saveBenchmarkCaseV2(fireworksCaseToBenchmarkCaseV2("fireworks-teamiq-full-calibration-test", "full"));
+await saveBenchmarkTeamComposition(illegalTeam);
+await runCertifiedBenchmark({
+  runId: "run-certified-fireworks-full-calibration",
+  suiteId: "suite-certified-fireworks",
+  track: "teamiq",
+  harnessProfile: "raw-single-model",
+  caseIds: ["fireworks-teamiq-full-calibration-test"],
+  teamCompositionIds: [illegalTeam.id],
+  certification: runHarnessCertification("raw-single-model"),
+  runner: (context) =>
+    runCertifiedFireworksTeamIq({
+      context,
+      teamCompositions: [illegalTeam],
+      cases: [fullCase],
+      includeSoloBaselines: false,
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "token", content: '{"action":"discard","cardIndex":0}' };
+        yield { type: "done" };
+      },
+    }),
+});
+const fullArtifacts = await listBenchmarkArtifacts();
+check(
+  "full-game Fireworks run records calibration summary artifact",
+  fullArtifacts.some((artifact) => artifact.id.endsWith(":fireworks-calibration-summary")),
+  fullArtifacts.map((artifact) => artifact.id)
 );
 
 if (failures === 0) {

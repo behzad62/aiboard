@@ -4,6 +4,7 @@ import {
   exportBenchmarkReportBundleV2,
   importBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
+  listBenchmarkFailures,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
@@ -80,7 +81,10 @@ const summary = await runCertifiedBenchmark({
       },
       includeSoloBaselines: true,
       streamChat: async function* (): AsyncIterable<StreamChunk> {
-        yield { type: "token", content: '{"action":"play","cardIndex":0}' };
+        yield {
+          type: "token",
+          content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
+        };
         yield { type: "done" };
       },
     }),
@@ -97,6 +101,7 @@ const importedBundle = exportBenchmarkReportBundleV2();
 const importedAttempt = (await listBenchmarkAttemptsV2()).find(
   (attempt) => attempt.id === teamAttempt?.id
 );
+const importedFailures = await listBenchmarkFailures();
 
 check(
   "Fireworks TeamIQ route creates solo baselines, mixed attempt, and team lift",
@@ -106,23 +111,26 @@ check(
   { summary, attempts, teamAttempt }
 );
 check(
-  "v2 bundle export includes Fireworks attempts, verifiers, traces, and artifacts",
+  "v2 bundle export includes Fireworks attempts, verifiers, traces, artifacts, and failures",
   bundle.attemptsV2.length === roles.length + 1 &&
     bundle.verifierResults.length === roles.length + 1 &&
     bundle.traces.length >= cases.length * (roles.length + 1) &&
-    bundle.artifacts.some((artifact) => artifact.id.endsWith(":fireworks-transcript")),
+    bundle.artifacts.some((artifact) => artifact.id.endsWith(":fireworks-transcript")) &&
+    bundle.failures.length > 0,
   {
     attempts: bundle.attemptsV2.length,
     verifiers: bundle.verifierResults.length,
     traces: bundle.traces.length,
     artifacts: bundle.artifacts.length,
+    failures: bundle.failures.length,
   }
 );
 check(
-  "imported bundle reproduces Fireworks score",
+  "imported bundle reproduces Fireworks score and failures",
   importedBundle.attemptsV2.length === bundle.attemptsV2.length &&
-    importedAttempt?.jobSuccessScore === scoreBeforeImport,
-  { importedAttempt, scoreBeforeImport }
+    importedAttempt?.jobSuccessScore === scoreBeforeImport &&
+    importedFailures.length === bundle.failures.length,
+  { importedAttempt, scoreBeforeImport, importedFailures, bundleFailures: bundle.failures }
 );
 
 if (failures === 0) {

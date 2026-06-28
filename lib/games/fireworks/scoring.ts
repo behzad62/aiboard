@@ -78,6 +78,12 @@ export function computeFireworksGameMetrics(input: {
 
 export function scoreFireworksTeamIq(input: FireworksTeamScoreInput): number {
   const metrics = input.metrics;
+  if (
+    metrics.modelCalls === 0 &&
+    metrics.legalActions + metrics.illegalActions === 0
+  ) {
+    return 0;
+  }
   const rates = computeFireworksMetricRates(input);
 
   return roundScore(

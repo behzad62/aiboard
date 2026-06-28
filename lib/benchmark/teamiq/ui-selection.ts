@@ -22,6 +22,14 @@ export function createTeamIqCompositionFromSelection(
   if (selectedModels.length < 2) {
     throw new Error("TeamIQ requires at least two selected models.");
   }
+  if (
+    input.roleMode === "fireworks_players" &&
+    selectedModels.length !== (input.playerCount ?? 3)
+  ) {
+    throw new Error(
+      `Fireworks ${input.playerCount ?? 3}-player runs require exactly ${input.playerCount ?? 3} selected models.`
+    );
+  }
 
   return deriveTeamComposition({
     name: selectedModels

@@ -38,6 +38,7 @@ import {
 } from "@/lib/games/fireworks/ai";
 import {
   computeFireworksGameMetrics,
+  computeFireworksMetricRates,
   scoreFireworksTeamIq,
 } from "@/lib/games/fireworks/scoring";
 import type {
@@ -48,6 +49,7 @@ import type {
 import {
   scoreFireworksScenarioAction,
 } from "./scenario-packs";
+import { runFireworksCalibrationBots } from "./calibration-bots";
 import type {
   FireworksBenchmarkCase,
   FireworksFullGameCase,
@@ -231,6 +233,17 @@ async function runFireworksAttempt(
   });
   await input.context.recordArtifact(transcriptArtifact);
   await input.context.recordArtifact(summaryArtifact);
+  const calibrationArtifact =
+    createFireworksCalibrationArtifactIfNeeded({
+      input,
+      team,
+      attemptId,
+      caseId,
+      cases: input.cases,
+    });
+  if (calibrationArtifact) {
+    await input.context.recordArtifact(calibrationArtifact);
+  }
 
   const verifier = createFireworksVerifierResult({
     attemptId,
@@ -238,7 +251,11 @@ async function runFireworksAttempt(
     score,
     metrics,
     caseResults,
-    artifactIds: [transcriptArtifact.id, summaryArtifact.id],
+    artifactIds: [
+      transcriptArtifact.id,
+      summaryArtifact.id,
+      ...(calibrationArtifact ? [calibrationArtifact.id] : []),
+    ],
   });
   await input.context.recordVerifier(verifier);
 
@@ -268,7 +285,11 @@ async function runFireworksAttempt(
       calls.reduce((sum, call) => sum + call.latencyMs, 0)
     ),
     verifierResultId: verifier.id,
-    artifactIds: [transcriptArtifact.id, summaryArtifact.id],
+    artifactIds: [
+      transcriptArtifact.id,
+      summaryArtifact.id,
+      ...(calibrationArtifact ? [calibrationArtifact.id] : []),
+    ],
     traceIds,
     failureIds: failures.map((failure) => failure.id),
     harnessVersion: FIREWORKS_HARNESS_VERSION,
@@ -481,6 +502,9 @@ async function callFireworksAction(params: {
       params.state,
       params.playerId
     );
+    const failureCode = isIllegalClueResponse(call.rawResponse)
+      ? "fireworks_illegal_clue"
+      : "fireworks_illegal_action";
     const record: FireworksCallRecord = {
       traceId: call.traceId,
       latencyMs: call.latencyMs,
@@ -489,7 +513,7 @@ async function callFireworksAction(params: {
       estimatedUsd: call.estimatedUsd,
       legal: false,
       fallbackUsed: true,
-      failureCode: "fireworks_illegal_action",
+      failureCode,
       error: parsed.message,
     };
     params.calls.push(record);
@@ -499,9 +523,10 @@ async function callFireworksAction(params: {
         attemptId: params.attemptId,
         caseId: params.caseId,
         modelId: role.modelId,
-        code: "fireworks_illegal_action",
+        code: failureCode,
         source: "rules",
         message: parsed.message,
+        sequence: failureSequence(params.failures, params.caseId, failureCode),
       })
     );
     return {
@@ -540,6 +565,7 @@ async function callFireworksAction(params: {
         code: failureCode,
         source: failureCode === "fireworks_provider_failure" ? "provider" : "parser",
         message,
+        sequence: failureSequence(params.failures, params.caseId, failureCode),
       })
     );
     return {
@@ -598,6 +624,7 @@ function createFireworksVerifierResult(input: {
     ...caseAssertions,
   ];
   const passed = input.score >= 70 && assertions.every((assertion) => assertion.passed);
+  const metricRates = computeFireworksMetricRates({ metrics: input.metrics });
   return {
     id: `${input.attemptId}:verifier`,
     attemptId: input.attemptId,
@@ -613,10 +640,51 @@ function createFireworksVerifierResult(input: {
         : "Fireworks TeamIQ cases failed.",
       assertions,
       metrics: input.metrics,
+      metricRates,
     }),
     assertionResults: assertions,
     artifactIds: input.artifactIds,
   };
+}
+
+function createFireworksCalibrationArtifactIfNeeded(input: {
+  input: RunCertifiedFireworksTeamIqInput;
+  team: BenchmarkTeamComposition;
+  attemptId: string;
+  caseId: string;
+  cases: FireworksBenchmarkCase[];
+}) {
+  const fullGameCases = input.cases.filter(isFullGameCase);
+  if (fullGameCases.length === 0) return null;
+
+  const groups = [2, 3].flatMap((playerCount) => {
+    const cases = fullGameCases.filter(
+      (benchmarkCase) => benchmarkCase.playerCount === playerCount
+    );
+    if (cases.length === 0) return [];
+    return [
+      {
+        playerCount,
+        cases: cases.map((benchmarkCase) => benchmarkCase.id),
+        baselines: runFireworksCalibrationBots({
+          cases,
+          playerCount: playerCount as 2 | 3,
+        }),
+      },
+    ];
+  });
+
+  return createJsonArtifact({
+    id: `${input.attemptId}:fireworks-calibration-summary`,
+    runId: input.input.context.runId,
+    caseId: input.caseId,
+    attemptId: input.attemptId,
+    label: "Fireworks calibration summary",
+    content: {
+      team: input.team.name,
+      groups,
+    },
+  });
 }
 
 function aggregateMetrics(
@@ -714,7 +782,7 @@ function statusForAttempt(
   if (calls.some((call) => call.failureCode === "fireworks_provider_failure")) {
     return "provider_unavailable";
   }
-  if (calls.some((call) => call.failureCode === "fireworks_invalid_json" || call.failureCode === "fireworks_illegal_action")) {
+  if (calls.some((call) => call.failureCode === "fireworks_invalid_json" || call.failureCode === "fireworks_illegal_action" || call.failureCode === "fireworks_illegal_clue")) {
     return "failed_tool_use";
   }
   if (metrics.badPlays > 0 || metrics.criticalDiscards > 0) return "failed_model";
@@ -757,9 +825,10 @@ function createFireworksFailure(input: {
   code: string;
   source: BenchmarkFailure["source"];
   message: string;
+  sequence: number;
 }): BenchmarkFailure {
   return {
-    id: `${input.attemptId}:failure:${input.caseId}:${input.code}:${Math.random().toString(16).slice(2, 8)}`,
+    id: `${input.attemptId}:failure:${input.caseId}:${input.code}:${String(input.sequence).padStart(3, "0")}`,
     runId: input.context.runId,
     caseId: input.caseId,
     attemptId: input.attemptId,
@@ -771,6 +840,20 @@ function createFireworksFailure(input: {
     message: input.message,
     createdAt: new Date().toISOString(),
   };
+}
+
+function failureSequence(
+  failures: BenchmarkFailure[],
+  caseId: string,
+  code: string
+): number {
+  return failures.filter(
+    (failure) => failure.caseId === caseId && failure.code === code
+  ).length + 1;
+}
+
+function isIllegalClueResponse(rawResponse: string): boolean {
+  return /"action"\s*:\s*"clue_(?:color|rank)"/.test(rawResponse);
 }
 
 function traceIdsForAttempt(
@@ -794,6 +877,10 @@ function traceIdsForAttempt(
 
 function isScenarioCase(value: FireworksBenchmarkCase): value is FireworksScenario {
   return "state" in value;
+}
+
+function isFullGameCase(value: FireworksBenchmarkCase): value is FireworksFullGameCase {
+  return !isScenarioCase(value);
 }
 
 function costTotal(values: Array<number | null>): number | null {

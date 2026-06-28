@@ -101,6 +101,22 @@ check(
   fireworksTeam
 );
 
+let underfilledFireworksRejected = false;
+try {
+  createTeamIqCompositionFromSelection({
+    models,
+    selectedModelIds: models.slice(0, 2).map((model) => model.modelId),
+    roleMode: "fireworks_players",
+    playerCount: 3,
+  } as Parameters<typeof createTeamIqCompositionFromSelection>[0]);
+} catch {
+  underfilledFireworksRejected = true;
+}
+check(
+  "TeamIQ UI selection rejects underfilled 3-player Fireworks teams",
+  underfilledFireworksRejected
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {

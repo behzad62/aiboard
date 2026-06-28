@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import type { FireworksGameMetrics } from "@/lib/games/fireworks/types";
 import { computeFireworksMetricRates } from "@/lib/games/fireworks/scoring";
 

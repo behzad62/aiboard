@@ -174,6 +174,9 @@ export function CertifiedRunPanel({
     selectedTrack,
     modelId,
     teamModelIds,
+    fireworksPlayerCount: isFireworksSuite(suiteId)
+      ? fireworksPlayerCount
+      : undefined,
     workBenchRunnerReady:
       selectedTrack !== "workbench" ||
       Boolean(
@@ -213,7 +216,9 @@ export function CertifiedRunPanel({
               <div className="md:col-span-1">
                 <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
                   {teamModelIds.length >= 2
-                    ? `${teamModelIds.length} models selected`
+                    ? isFireworksSuite(suiteId)
+                      ? `${teamModelIds.length} / ${fireworksPlayerCount} Fireworks players selected`
+                      : `${teamModelIds.length} models selected`
                     : "Select at least two models"}
                 </div>
               </div>
