@@ -18,6 +18,7 @@ import {
   CertifiedBenchmarkOverview,
   type CertifiedTrackView,
 } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
+import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
 import { FailureTaxonomyPanel } from "@/components/benchmark/certified/FailureTaxonomyPanel";
 import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { useBenchmarkReportActions } from "@/components/benchmark/useBenchmarkReportActions";
@@ -51,11 +52,12 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] =
     useState<BenchmarkEvidenceItem | null>(null);
-  const { exportJson, exportMarkdown, importJson } = useBenchmarkReportActions({
-    dashboard,
-    reload: refresh,
-    setMessage,
-  });
+  const { exportJson, exportLegacyJson, exportMarkdown, importJson } =
+    useBenchmarkReportActions({
+      dashboard,
+      reload: refresh,
+      setMessage,
+    });
 
   const selectedModel = useMemo(
     () =>
@@ -107,6 +109,7 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
         onRefresh={() => void refresh()}
         onCopyReport={() => void exportMarkdown().catch(reportError)}
         onExportJson={exportJson}
+        onExportLegacyJson={exportLegacyJson}
         onImportJson={(file) => void importJson(file).catch(reportError)}
       />
 
@@ -133,6 +136,19 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
 
       {showCertified && (
         <div className="space-y-4">
+          {(view === "certified" ||
+            view === "gameiq" ||
+            view === "teamiq" ||
+            view === "workbench" ||
+            view === "toolreliability" ||
+            view === "full") && (
+            <CertifiedRunPanel
+              track={certifiedTrack ?? "all"}
+              counts={reportCounts}
+              onComplete={refresh}
+              setMessage={setMessage}
+            />
+          )}
           <CertifiedBenchmarkOverview
             certified={certifiedDashboard}
             counts={reportCounts}
@@ -221,12 +237,14 @@ function BenchmarkLabHeader({
   onRefresh,
   onCopyReport,
   onExportJson,
+  onExportLegacyJson,
   onImportJson,
 }: {
   view: BenchmarkLabView;
   onRefresh: () => void;
   onCopyReport: () => void;
   onExportJson: () => void;
+  onExportLegacyJson: () => void;
   onImportJson: (file: File) => void;
 }) {
   const header = headerCopyForView(view);
@@ -245,6 +263,7 @@ function BenchmarkLabHeader({
         onRefresh={onRefresh}
         onCopyReport={onCopyReport}
         onExportJson={onExportJson}
+        onExportLegacyJson={onExportLegacyJson}
         onImportJson={onImportJson}
       />
     </div>

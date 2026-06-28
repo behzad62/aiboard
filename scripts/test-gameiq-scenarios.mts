@@ -34,6 +34,20 @@ check(
   packKeys
 );
 
+const expectedPackCounts = new Map([
+  ["connect-four", 40],
+  ["chess", 60],
+  ["battleship", 25],
+  ["codenames", 25],
+]);
+for (const pack of firstListing) {
+  check(
+    `${pack.gameId} meets v1-sized scenario count`,
+    pack.scenarios.length === expectedPackCounts.get(pack.gameId),
+    { actual: pack.scenarios.length, expected: expectedPackCounts.get(pack.gameId) }
+  );
+}
+
 const connectFourPack = getGameIqScenarioPack("connect-four");
 const chessPack = getGameIqScenarioPack("chess");
 check(
@@ -53,6 +67,19 @@ check(
   ),
   Array.from(connectFourCategories)
 );
+for (const category of [
+  "win-in-one",
+  "block-win",
+  "trap-setup",
+  "avoid-losing-move",
+]) {
+  check(
+    `Connect Four has 10 ${category} scenarios`,
+    connectFourPack?.scenarios.filter((scenario) => scenario.category === category)
+      .length === 10,
+    connectFourPack?.scenarios.map((scenario) => scenario.category)
+  );
+}
 
 const chessCategories = new Set(
   chessPack?.scenarios.map((scenario) => scenario.category) ?? []
@@ -61,6 +88,12 @@ check(
   "Chess covers mate-in-one plus legal tactics",
   chessCategories.has("mate-in-one") && chessCategories.has("legal-tactic"),
   Array.from(chessCategories)
+);
+check(
+  "Chess has at least 15 mate-in-one scenarios",
+  (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
+    .length ?? 0) >= 15,
+  chessPack?.scenarios.map((scenario) => scenario.category)
 );
 
 const knightQueenTactic = chessPack?.scenarios.find(

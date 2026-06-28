@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "quote-doubling",
+      "label": "Doubles embedded quotes",
+      "passed": true,
+      "weight": 0.5
+    },
+    {
+      "id": "special-character-check",
+      "label": "Checks for CSV special characters",
+      "passed": true,
+      "weight": 0.5
+    }
+  ]
+}

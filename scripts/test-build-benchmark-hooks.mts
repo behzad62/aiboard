@@ -1,4 +1,5 @@
 /* Build benchmark hook checks (run: npx tsx scripts/test-build-benchmark-hooks.mts) */
+import { createServer, type Server, type ServerResponse } from "node:http";
 import {
   buildBenchmarkTraceContext,
   resolveBuildModelContent,
@@ -6,7 +7,14 @@ import {
   validateBuildBenchmarkCommand,
   type BuildHooks,
 } from "../lib/client/build-engine";
+import {
+  createWorkBenchBenchmarkHooks,
+  runWorkBenchModelPatchBuild,
+  runWorkBenchBuild,
+} from "../lib/benchmark/workbench/build-adapter";
 import type { SelectedModel, StructuredOutputFormat } from "../lib/providers/base";
+import type { WorkBenchCase } from "../lib/benchmark/workbench/types";
+import type { CertifiedRunContext } from "../lib/benchmark/certified/run-context";
 
 let failures = 0;
 
@@ -134,6 +142,315 @@ check(
   !fallback.overrideUsed && fallback.content === "provider-content",
   fallback
 );
+
+const workBenchCase: WorkBenchCase = {
+  schemaVersion: 1,
+  id: "workbench-hook-case",
+  title: "Hook case",
+  description: "Hook case",
+  difficulty: "easy",
+  tags: ["hook"],
+  caseVersion: "0.1.0",
+  prompt: { userRequest: "Fix it." },
+  repo: {
+    url: "fixture://inline",
+    baseCommit: "fixture-base",
+    shallowClone: true,
+  },
+  environment: {
+    type: "local-runner",
+    timeoutSeconds: 30,
+    network: "dependency-only",
+  },
+  verifier: {
+    command: "node verifier.js",
+  },
+  budget: {},
+  scoring: { scoringVersion: "certified-v0.1" },
+  contamination: {
+    originalTask: true,
+    canary: "AIBENCH-WORKBENCH-HOOK",
+    referenceSolutionPrivate: true,
+  },
+  allowedCommands: ["node verifier.js"],
+};
+const workBenchBuildInput = {
+  case: workBenchCase,
+  runner: { url: "http://127.0.0.1:8797", token: "token" },
+  attemptId: "attempt-workbench-hook",
+  runId: "run-workbench-hook",
+  teamCompositionId: "team-workbench-hook",
+  harnessProfile: "aiboard-build-multi-worker" as const,
+  allowedCommands: ["node verifier.js"],
+};
+const workBenchHooks = createWorkBenchBenchmarkHooks(workBenchBuildInput);
+check(
+  "WorkBench build adapter creates locked certified benchmark hooks",
+  workBenchHooks.noHumanApproval &&
+    workBenchHooks.runnerOnly &&
+    workBenchHooks.disableMcp &&
+    workBenchHooks.allowedCommands?.includes("node verifier.js") === true,
+  workBenchHooks
+);
+const workBenchBuild = await runWorkBenchBuild({
+  ...workBenchBuildInput,
+  executeBuild: async ({ benchmark }) => ({
+    traceIds: [`${benchmark.attemptId}:trace:model`],
+    modelCalls: 1,
+    toolCalls: 1,
+    validToolCalls: 1,
+  }),
+});
+check(
+  "WorkBench build adapter delegates to injected build executor",
+  workBenchBuild.modelCalls === 1 &&
+    workBenchBuild.traceIds.includes("attempt-workbench-hook:trace:model"),
+  workBenchBuild
+);
+
+const directEvents: unknown[] = [];
+const directToolCalls: unknown[] = [];
+const directTraces: unknown[] = [];
+const directTraceStore: Array<{
+  id: string;
+  runId?: string;
+  attemptId?: string;
+  caseId?: string;
+  modelId: string;
+  providerId: string;
+  participantId?: string;
+  schemaMode: "structured" | "json-instructions" | "text";
+  startedAt: string;
+  completedAt?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedUsd?: number | null;
+  retryHistory: Array<{ attempt: number; status: "parsed"; message: string }>;
+}> = [];
+let directRunCalled = false;
+const directBuild = await runWorkBenchBuild({
+  ...workBenchBuildInput,
+  context: {
+    runId: "run-workbench-hook",
+    mode: "certified",
+    track: "workbench",
+    harnessProfile: "aiboard-build-multi-worker",
+    suiteId: "suite-workbench-hook",
+    startedAt: "2026-06-28T10:00:00.000Z",
+    caseIds: [workBenchCase.id],
+    teamCompositionIds: ["team-workbench-hook"],
+    modelBudget: {},
+    recordAttempt: async () => undefined,
+    recordVerifier: async () => undefined,
+    recordArtifact: async () => undefined,
+    recordTrace: async (trace) => {
+      directTraces.push(trace);
+    },
+    recordEvent: async (event) => {
+      directEvents.push(event);
+    },
+    recordToolCall: async (trace) => {
+      directToolCalls.push(trace);
+    },
+    recordFailure: async () => undefined,
+  },
+  models: [model],
+  runBuildDiscussion: async (discussion, models, emit, hooks) => {
+    directRunCalled = true;
+    const benchmarkHook = hooks?.benchmark;
+    if (!benchmarkHook) throw new Error("missing benchmark hook");
+    benchmarkHook.recordEvent?.({
+      id: "direct-event",
+      attemptId: benchmarkHook.attemptId,
+      caseId: benchmarkHook.caseId,
+      type: "model_call_started",
+      phase: "plan",
+      at: "2026-06-28T10:00:00.000Z",
+      message: "direct build started",
+    });
+    benchmarkHook.recordToolCall?.({
+      id: "direct-tool",
+      attemptId: benchmarkHook.attemptId,
+      caseId: benchmarkHook.caseId,
+      toolName: "run",
+      status: "ok",
+      startedAt: "2026-06-28T10:00:00.000Z",
+    });
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `${discussion.mode}:${models.length}:${discussion.runnerUrl}`,
+    });
+    directTraceStore.push({
+      id: `${benchmarkHook.attemptId}:trace:direct`,
+      runId: benchmarkHook.runId,
+      attemptId: benchmarkHook.attemptId,
+      caseId: benchmarkHook.caseId,
+      modelId: model.modelId,
+      providerId: model.providerId,
+      participantId: "architect",
+      schemaMode: "text",
+      startedAt: "2026-06-28T10:00:00.000Z",
+      completedAt: "2026-06-28T10:00:01.000Z",
+      inputTokens: 12,
+      outputTokens: 8,
+      estimatedUsd: 0.001,
+      retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
+    });
+  },
+  getBenchmarkTraces: () => directTraceStore,
+});
+check(
+  "WorkBench build adapter calls Build discussion with benchmark recorders",
+  directRunCalled &&
+    directBuild.modelCalls === 1 &&
+    directBuild.traceIds.includes("attempt-workbench-hook:trace:direct") &&
+    directBuild.inputTokens === 12 &&
+    directBuild.outputTokens === 8 &&
+    directEvents.length === 1 &&
+    directToolCalls.length === 1 &&
+    directTraces.length === 1,
+  { directRunCalled, directBuild, directEvents, directToolCalls, directTraces }
+);
+
+async function startPatchBenchRunner(): Promise<{
+  url: string;
+  token: string;
+  stop: () => Promise<void>;
+  requests: Array<{ path: string; body: Record<string, unknown> }>;
+}> {
+  const token = `patch-runner-${Date.now()}`;
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const server = createServer(async (req, res) => {
+    const path = req.url ?? "/";
+    const body = await readJsonRequest(req);
+    requests.push({ path, body });
+    if (req.headers["x-runner-token"] !== token) {
+      sendJsonResponse(res, 401, { error: "token required" });
+      return;
+    }
+    switch (path) {
+      case "/bench/read-tree":
+        sendJsonResponse(res, 200, {
+          files: ["src/fix.ts", "verifier.mjs", "verifier-result.json"],
+        });
+        return;
+      case "/bench/read-file":
+        sendJsonResponse(res, 200, {
+          content: "export const value = \"old\";\n",
+          bytes: 28,
+        });
+        return;
+      case "/bench/patch-file":
+        sendJsonResponse(res, 200, {
+          applied: body.path === "src/fix.ts" ? 1 : 0,
+          bytes: 28,
+          content: "export const value = \"new\";\n",
+        });
+        return;
+      default:
+        sendJsonResponse(res, 404, { error: `unknown endpoint ${path}` });
+    }
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("fake runner did not bind");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    token,
+    requests,
+    stop: () => stopServer(server),
+  };
+}
+
+async function readJsonRequest(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw.trim()) return {};
+  const parsed = JSON.parse(raw) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
+function sendJsonResponse(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
+}
+
+function stopServer(server: Server): Promise<void> {
+  return new Promise((resolveStop, rejectStop) => {
+    server.close((error) => {
+      if (error) rejectStop(error);
+      else resolveStop();
+    });
+  });
+}
+
+const traces: unknown[] = [];
+const toolCalls: unknown[] = [];
+const context: CertifiedRunContext = {
+  runId: "run-workbench-patch",
+  mode: "certified",
+  track: "workbench",
+  harnessProfile: "aiboard-build-multi-worker",
+  suiteId: "suite-workbench-patch",
+  startedAt: "2026-06-28T10:00:00.000Z",
+  caseIds: [workBenchCase.id],
+  teamCompositionIds: ["team-workbench-hook"],
+  modelBudget: {},
+  recordAttempt: async () => undefined,
+  recordVerifier: async () => undefined,
+  recordArtifact: async () => undefined,
+  recordTrace: async (trace) => {
+    traces.push(trace);
+  },
+  recordEvent: async () => undefined,
+  recordToolCall: async (trace) => {
+    toolCalls.push(trace);
+  },
+  recordFailure: async () => undefined,
+};
+const patchRunner = await startPatchBenchRunner();
+try {
+  const patchBuild = await runWorkBenchModelPatchBuild({
+    ...workBenchBuildInput,
+    runner: { url: patchRunner.url, token: patchRunner.token },
+    context,
+    model,
+    apiKey: "test-api-key",
+    pricing: null,
+    streamChat: async function* () {
+      yield {
+        type: "token",
+        content: JSON.stringify({
+          path: "src/fix.ts",
+          search: "export const value = \"old\";",
+          replace: "export const value = \"new\";",
+          summary: "Update the fixture value.",
+        }),
+      };
+    },
+  });
+  check(
+    "WorkBench model patch build reads, patches, and returns evidence",
+    patchBuild.modelCalls === 1 &&
+      patchBuild.traceIds.length === 1 &&
+      patchBuild.toolCalls === 3 &&
+      patchBuild.validToolCalls === 3 &&
+      patchRunner.requests.some((request) => request.path === "/bench/patch-file") &&
+      traces.length === 1 &&
+      toolCalls.length === 3,
+    { patchBuild, requests: patchRunner.requests, traces, toolCalls }
+  );
+} finally {
+  await patchRunner.stop();
+}
 
 if (failures === 0) {
   console.log("PASS");

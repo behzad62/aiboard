@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "score": 1,
+  "summary": "Reference solution satisfies all assertions.",
+  "assertions": [
+    {
+      "id": "clamp-expression",
+      "label": "Uses both minimum and maximum bounds",
+      "passed": true,
+      "weight": 1
+    }
+  ]
+}

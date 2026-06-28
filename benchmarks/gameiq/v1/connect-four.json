@@ -1,0 +1,3703 @@
+{
+  "schemaVersion": 1,
+  "track": "gameiq",
+  "packId": "gameiq-v0.1-connect-four",
+  "gameId": "connect-four",
+  "label": "Certified GameIQ v0.1: Connect Four",
+  "version": "1.0.0",
+  "sourcePackVersion": "0.1.0",
+  "certificationTier": "first-class",
+  "scenarioCount": 40,
+  "digest": "gameiq-v0.1:connect-four:cd80f3fb",
+  "scenarios": [
+    {
+      "id": "gameiq-v0.1-connect-four-win-horizontal",
+      "gameId": "connect-four",
+      "title": "Connect Four: complete the bottom-row four",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Red to move. Return the column index that wins immediately for red.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "red",
+            null,
+            "yellow",
+            "yellow",
+            null
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Drop in column 4 to make four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "tactical",
+        "win"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-horizontal",
+      "gameId": "connect-four",
+      "title": "Connect Four: block the bottom-row threat",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "Yellow to move. Red threatens a bottom-row win; return the blocking column index.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "red",
+            null,
+            "yellow",
+            null,
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Block red's immediate four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-open-three-trap",
+      "gameId": "connect-four",
+      "title": "Connect Four: build an open-ended three",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Red to move. Return the column index that creates two bottom-row threats.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Create red threats on both column 1 and column 5."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "tempo"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-loss",
+      "gameId": "connect-four",
+      "title": "Connect Four: avoid allowing a vertical loss",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "Red to move. Yellow has a vertical threat; return the only safe blocking column index.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            "yellow",
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            null,
+            null,
+            "yellow",
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            null,
+            null,
+            "yellow",
+            null,
+            null
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Occupy column 5 before yellow completes the vertical four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-left-edge",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-left-edge",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "red",
+            null,
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-center-gap",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-center-gap",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "yellow",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-right-edge",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-right-edge",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            "red",
+            "red",
+            "red",
+            null
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 6
+          },
+          "label": "Column 7",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-open-left",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-open-left",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow",
+            "yellow",
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-open-right",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-open-right",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            "red",
+            "red",
+            "red",
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-middle-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-middle-red",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "red",
+            "red",
+            null,
+            "red",
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-middle-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-middle-yellow",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            null,
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 1
+          },
+          "label": "Column 2",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-wide-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-wide-red",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            "red",
+            null,
+            "red",
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-win-wide-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: immediate horizontal win win-wide-yellow",
+      "category": "win-in-one",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that completes an immediate horizontal four.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            "yellow",
+            "yellow",
+            "yellow",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 5
+          },
+          "label": "Column 6",
+          "weight": 1,
+          "note": "Complete the only four-in-a-row available this turn."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "win",
+        "horizontal"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-left-edge",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-left-edge",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "red",
+            null,
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-center-gap",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-center-gap",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "yellow",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-right-edge",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-right-edge",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "yellow",
+            "red",
+            "red",
+            "red",
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 6
+          },
+          "label": "Column 7",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-open-left",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-open-left",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow",
+            "yellow",
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-open-right",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-open-right",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            "red",
+            "red",
+            "red",
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-middle-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-middle-red",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "red",
+            "red",
+            null,
+            "red",
+            "yellow"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-middle-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-middle-yellow",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            null,
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 1
+          },
+          "label": "Column 2",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-wide-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-wide-red",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            "red",
+            null,
+            "red",
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-block-wide-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: block horizontal threat block-wide-yellow",
+      "category": "block-win",
+      "difficulty": "easy",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that blocks the opponent's immediate horizontal win.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "yellow",
+            "yellow",
+            "yellow",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 5
+          },
+          "label": "Column 6",
+          "weight": 1,
+          "note": "Occupy the gap before the opponent completes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "block"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-center-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-center-red",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-center-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-center-yellow",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow",
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-left-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-left-red",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "red",
+            "red",
+            null,
+            "yellow",
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 1
+          },
+          "label": "Column 2",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-right-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-right-yellow",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            "yellow",
+            "yellow",
+            null,
+            null,
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 5
+          },
+          "label": "Column 6",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-spread-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-spread-red",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            "red",
+            "red",
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-spread-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-spread-yellow",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            null,
+            "red"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-low-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-low-red",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            "red",
+            null,
+            null,
+            "yellow",
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 0
+          },
+          "label": "Column 1",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-high-yellow",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-high-yellow",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "red",
+            "red",
+            null,
+            "yellow",
+            "yellow",
+            null,
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 6
+          },
+          "label": "Column 7",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-trap-balanced-red",
+      "gameId": "connect-four",
+      "title": "Connect Four: create open threat trap-balanced-red",
+      "category": "trap-setup",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the column index that creates the strongest open-ended bottom-row threat.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "red",
+            "red",
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Build a three-stone threat with more than one follow-up."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "trap",
+        "planning"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-1",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-1",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "red",
+            null,
+            "red",
+            null,
+            null
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 0
+          },
+          "label": "Column 1",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-2",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-2",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            null,
+            "yellow",
+            null,
+            "yellow",
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 1
+          },
+          "label": "Column 2",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-3",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-3",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "yellow",
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "yellow",
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "yellow",
+            null,
+            "red",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-4",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-4",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            "red",
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            "red",
+            null,
+            null,
+            null
+          ],
+          [
+            "yellow",
+            null,
+            null,
+            "red",
+            null,
+            "yellow",
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 3
+          },
+          "label": "Column 4",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-5",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-5",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            "yellow",
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            "yellow",
+            null,
+            null
+          ],
+          [
+            null,
+            "red",
+            null,
+            null,
+            "yellow",
+            null,
+            "red"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 4
+          },
+          "label": "Column 5",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-6",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-6",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            "red",
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            "red",
+            null
+          ],
+          [
+            "yellow",
+            null,
+            "yellow",
+            null,
+            null,
+            "red",
+            null
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 5
+          },
+          "label": "Column 6",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-7",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-7",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "yellow"
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "yellow"
+          ],
+          [
+            null,
+            "red",
+            null,
+            "red",
+            null,
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 6
+          },
+          "label": "Column 7",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-8",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-8",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "yellow to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "red",
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "red",
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            "red",
+            null,
+            "yellow",
+            null,
+            "yellow"
+          ]
+        ],
+        "turn": "yellow",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 2
+          },
+          "label": "Column 3",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    },
+    {
+      "id": "gameiq-v0.1-connect-four-avoid-vertical-9",
+      "gameId": "connect-four",
+      "title": "Connect Four: stop vertical loss avoid-vertical-9",
+      "category": "avoid-losing-move",
+      "difficulty": "medium",
+      "version": "0.1.0",
+      "prompt": "red to move. Return the only column index that prevents an immediate vertical loss.",
+      "initialState": {
+        "board": [
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            "yellow",
+            null
+          ],
+          [
+            null,
+            null,
+            null,
+            null,
+            null,
+            "yellow",
+            null
+          ],
+          [
+            "red",
+            null,
+            "red",
+            null,
+            null,
+            "yellow",
+            null
+          ]
+        ],
+        "turn": "red",
+        "status": "playing",
+        "winner": null,
+        "moveHistory": [],
+        "clock": {
+          "redElapsedMs": 0,
+          "yellowElapsedMs": 0,
+          "turnStartedAt": 0
+        }
+      },
+      "expectedActions": [
+        {
+          "action": {
+            "column": 5
+          },
+          "label": "Column 6",
+          "weight": 1,
+          "note": "Play on top of the three-stack before it becomes four."
+        }
+      ],
+      "tags": [
+        "connect-four",
+        "defense",
+        "avoid-loss",
+        "vertical"
+      ],
+      "maxResponseMs": 15000
+    }
+  ]
+}

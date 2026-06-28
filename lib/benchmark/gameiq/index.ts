@@ -5,6 +5,7 @@ export {
   stableGameIqScenarioPackDigest,
 } from "./packs";
 export { runGameIqScenarios } from "./runner";
+export { runCertifiedGameIq } from "./certified-runner";
 export {
   actionMatchesExpected,
   isStructuredGameIqAction,

@@ -9,6 +9,7 @@ import {
   type BenchmarkReportBundleAny,
 } from "@/lib/benchmark/reports";
 import {
+  exportBenchmarkReportBundle,
   exportBenchmarkReportBundleV2,
   importBenchmarkReportBundle,
   importBenchmarkReportBundleV2,
@@ -78,7 +79,18 @@ export function useBenchmarkReportActions({
     if (!dashboard) return;
     const bundle = exportBenchmarkReportBundleV2();
     downloadBenchmarkJson(bundle);
-    setMessage("Benchmark v2 JSON exported.");
+    setMessage(
+      `Benchmark Bundle v2 exported. Redaction scanned ${
+        bundle.redactionSummary?.scannedArtifacts ?? 0
+      } artifact(s).`
+    );
+  }, [dashboard, setMessage]);
+
+  const exportLegacyJson = useCallback(() => {
+    if (!dashboard) return;
+    const bundle = exportBenchmarkReportBundle();
+    downloadBenchmarkJson(bundle);
+    setMessage("Legacy Lab Bundle v1 exported.");
   }, [dashboard, setMessage]);
 
   const exportMarkdown = useCallback(async () => {
@@ -114,5 +126,5 @@ export function useBenchmarkReportActions({
     [reload, setMessage]
   );
 
-  return { exportJson, exportMarkdown, importJson };
+  return { exportJson, exportLegacyJson, exportMarkdown, importJson };
 }

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "workbench-v1-py-slugify-0004",
+  "title": "Python slugify helper",
+  "description": "Convert a display title into a lowercase URL slug.",
+  "difficulty": "easy",
+  "tags": [
+    "python",
+    "utility",
+    "string"
+  ],
+  "caseVersion": "1.0.0",
+  "prompt": {
+    "userRequest": "Make slugify strip whitespace, lowercase the value, and replace spaces with dashes.",
+    "publicContext": "Do not add third-party dependencies.",
+    "hiddenNotesHash": "hidden:workbench-v1-py-slugify-0004"
+  },
+  "repo": {
+    "url": "fixture://workbench-v1-py-slugify-0004",
+    "baseCommit": "fixture-base-v1",
+    "shallowClone": true,
+    "fixtureHash": "fixture:workbench-v1-py-slugify-0004"
+  },
+  "environment": {
+    "timeoutSeconds": 600,
+    "memoryMb": 1024,
+    "network": "dependency-only"
+  },
+  "verifier": {
+    "command": "node verifier.mjs",
+    "resultFile": "verifier-result.json",
+    "timeoutSeconds": 60,
+    "publicCommand": "node verifier.mjs"
+  },
+  "budget": {
+    "maxUsd": 2,
+    "maxWallClockSeconds": 600,
+    "maxModelCalls": 20,
+    "maxToolCalls": 100,
+    "maxInputTokens": 200000,
+    "maxOutputTokens": 50000
+  },
+  "scoring": {
+    "scoringVersion": "certified-v1",
+    "costTargetUsd": 1,
+    "timeTargetSeconds": 300
+  },
+  "contamination": {
+    "originalTask": true,
+    "canary": "AIBENCH-WORKBENCH-WORKBENCH-V1-PY-SLUGIFY-0004",
+    "referenceSolutionPrivate": true,
+    "publicAfter": "2027-01-01"
+  },
+  "fixtureLanguage": "python",
+  "caseHash": "workbench:d941d79a",
+  "referenceSolutionNotes": "The reference solution returns value.strip().lower().replace(\" \", \"-\") from slugify.",
+  "negativeControlWrongSolution": "A wrong solution replaces spaces but forgets to strip and lowercase the value."
+}

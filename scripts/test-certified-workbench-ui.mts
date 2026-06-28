@@ -1,0 +1,282 @@
+/* Certified WorkBench UI data checks (run: npx tsx scripts/test-certified-workbench-ui.mts) */
+import {
+  listWorkBenchV1CaseOptions,
+  workBenchCaseToBenchmarkCaseV2,
+} from "../lib/benchmark/workbench/v1-corpus";
+import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
+import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
+import type {
+  BenchmarkArtifact,
+  BenchmarkAttemptV2,
+  BenchmarkCaseV2,
+  BenchmarkFailure,
+  BenchmarkModelCallTrace,
+  BenchmarkTeamComposition,
+  BenchmarkToolCallTrace,
+  BenchmarkVerifierResult,
+} from "../lib/benchmark/types";
+
+let failures = 0;
+
+function check(name: string, ok: boolean, detail?: unknown): void {
+  if (!ok) failures++;
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+}
+
+const cases = listWorkBenchV1CaseOptions();
+const languageCounts = new Map<string, number>();
+for (const item of cases) {
+  languageCounts.set(item.fixtureLanguage, (languageCounts.get(item.fixtureLanguage) ?? 0) + 1);
+}
+
+check("WorkBench UI loader exposes 10 v1 cases", cases.length === 10, cases.map((item) => item.case.id));
+check("WorkBench UI loader labels cases", cases.every((item) => item.label.includes(item.case.title)), cases);
+check(
+  "WorkBench UI loader preserves v1 language mix",
+  languageCounts.get("typescript") === 3 &&
+    languageCounts.get("python") === 2 &&
+    languageCounts.get("go") === 2 &&
+    languageCounts.get("rust") === 1 &&
+    languageCounts.get("react-ui") === 2,
+  Object.fromEntries(languageCounts)
+);
+check(
+  "WorkBench UI loader exposes stable hashes",
+  cases.every((item) => item.caseHash.startsWith("workbench:")),
+  cases.map((item) => item.caseHash)
+);
+
+const firstCase = cases[0];
+const caseV2 = firstCase ? workBenchCaseToBenchmarkCaseV2(firstCase) : null;
+check(
+  "WorkBench UI case converts to BenchmarkCaseV2",
+  Boolean(caseV2 && caseV2.track === "workbench" && caseV2.id === firstCase?.case.id),
+  caseV2
+);
+
+const failedGate = getCertifiedRunGate({
+  suiteId: "workbench-case",
+  running: false,
+  selectedTrack: "workbench",
+  modelId: "openai:gpt-workbench",
+  teamModelIds: [],
+  workBenchRunnerReady: true,
+  certification: {
+    id: "cert-failed",
+    createdAt: "2026-06-28T10:00:00.000Z",
+    aiboardVersion: "test",
+    benchmarkEngineVersion: "test",
+    harnessProfile: "aiboard-build-multi-worker",
+    harnessVersion: "test",
+    promptSetVersion: "test",
+    passed: false,
+    checks: [
+      {
+        id: "bad-json",
+        label: "Bad JSON is classified as failed_tool_use",
+        passed: false,
+        message: "Received invalid_harness instead.",
+      },
+    ],
+  },
+});
+check(
+  "certified run gate blocks failed harness certification",
+  !failedGate.canRun &&
+    failedGate.reason?.includes("Bad JSON is classified as failed_tool_use") === true &&
+    failedGate.reason?.includes("Received invalid_harness instead.") === true,
+  failedGate
+);
+
+const passingGate = getCertifiedRunGate({
+  suiteId: "workbench-case",
+  running: false,
+  selectedTrack: "workbench",
+  modelId: "openai:gpt-workbench",
+  teamModelIds: [],
+  workBenchRunnerReady: true,
+  certification: { ...failedGate.certification, passed: true, checks: [] },
+});
+check("certified run gate allows passing certification", passingGate.canRun, passingGate);
+
+const detailAttempt: BenchmarkAttemptV2 = {
+  id: "attempt-detail",
+  runId: "run-detail",
+  caseId: "case-detail",
+  teamCompositionId: "team-detail",
+  mode: "certified",
+  track: "workbench",
+  harnessProfile: "aiboard-build-multi-worker",
+  status: "failed_verifier",
+  startedAt: "2026-06-28T10:00:00.000Z",
+  completedAt: "2026-06-28T10:00:10.000Z",
+  verifiedQuality: 0.5,
+  jobSuccessScore: 50,
+  efficiencyScore: 40,
+  costUsd: 0.02,
+  inputTokens: 100,
+  outputTokens: 40,
+  modelCalls: 1,
+  toolCalls: 2,
+  durationMs: 10_000,
+  verifierResultId: "verifier-detail",
+  artifactIds: ["patch-detail", "artifact-detail"],
+  traceIds: ["trace-detail"],
+  failureIds: ["failure-detail"],
+  harnessVersion: "workbench-runner-v0.1",
+  promptSetVersion: "workbench-prompts-v0.1",
+  scoringVersion: "workbench-v0.1",
+};
+const detailCase: BenchmarkCaseV2 = {
+  id: "case-detail",
+  schemaVersion: 2,
+  track: "workbench",
+  title: "Detail case",
+  description: "A case with complete details.",
+  difficulty: "easy",
+  tags: ["detail"],
+  caseVersion: "0.1.0",
+  createdAt: "2026-06-28T10:00:00.000Z",
+  updatedAt: "2026-06-28T10:00:00.000Z",
+  prompt: { userRequest: "Fix the detail fixture.", publicContext: "Use the public docs." },
+  environment: { type: "local-runner", timeoutSeconds: 30, network: "dependency-only" },
+  verifier: { command: "npm test", scorer: "verifier-json" },
+  budget: { maxUsd: 1 },
+  scoring: { scoringVersion: "workbench-v0.1", primary: "verified_quality" },
+  contamination: {
+    originalTask: true,
+    canary: "AIBENCH-DETAIL",
+    referenceSolutionPrivate: true,
+  },
+};
+const detailTeam: BenchmarkTeamComposition = {
+  id: "team-detail",
+  name: "Detail team",
+  comboHash: "team:detail",
+  strategy: "architect_worker",
+  roles: [
+    {
+      role: "architect",
+      slot: "01-architect",
+      modelId: "openai:gpt-detail",
+      providerId: "openai",
+      displayName: "GPT Detail",
+      temperature: 0,
+    },
+  ],
+};
+const detailVerifier: BenchmarkVerifierResult = {
+  id: "verifier-detail",
+  attemptId: "attempt-detail",
+  caseId: "case-detail",
+  passed: false,
+  score: 0.5,
+  durationMs: 1000,
+  resultJson: "{}",
+  assertionResults: [
+    { id: "assertion-detail", label: "Verifier assertion", passed: false, weight: 1 },
+  ],
+  artifactIds: ["artifact-detail"],
+};
+const detailTrace: BenchmarkModelCallTrace = {
+  id: "trace-detail",
+  runId: "run-detail",
+  caseId: "case-detail",
+  attemptId: "attempt-detail",
+  modelId: "openai:gpt-detail",
+  providerId: "openai",
+  startedAt: "2026-06-28T10:00:01.000Z",
+  inputTokens: 100,
+  outputTokens: 40,
+  retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
+};
+const detailToolTrace: BenchmarkToolCallTrace = {
+  id: "tool-detail",
+  attemptId: "attempt-detail",
+  caseId: "case-detail",
+  toolName: "bench.patch-file",
+  status: "ok",
+  startedAt: "2026-06-28T10:00:02.000Z",
+};
+const detailPatch: BenchmarkArtifact = {
+  id: "patch-detail",
+  runId: "run-detail",
+  caseId: "case-detail",
+  attemptId: "attempt-detail",
+  kind: "patch",
+  label: "Patch diff",
+  mimeType: "text/x-patch",
+  content: "--- a/file.ts\n+++ b/file.ts\n+fixed",
+  createdAt: "2026-06-28T10:00:03.000Z",
+};
+const detailArtifact: BenchmarkArtifact = {
+  id: "artifact-detail",
+  runId: "run-detail",
+  caseId: "case-detail",
+  attemptId: "attempt-detail",
+  kind: "json",
+  label: "Verifier artifact",
+  mimeType: "application/json",
+  content: "{}",
+  createdAt: "2026-06-28T10:00:04.000Z",
+};
+const detailFailure: BenchmarkFailure = {
+  id: "failure-detail",
+  runId: "run-detail",
+  caseId: "case-detail",
+  attemptId: "attempt-detail",
+  domain: "build",
+  source: "benchmark",
+  code: "verification_failed",
+  severity: "error",
+  message: "Verifier failed.",
+  createdAt: "2026-06-28T10:00:05.000Z",
+};
+const detail = buildAttemptDetailViewModel({
+  summary: {
+    runId: "run-detail",
+    status: "completed",
+    attemptCount: 1,
+    verifierCount: 1,
+    artifactCount: 2,
+    traceCount: 1,
+    eventCount: 0,
+    toolCallCount: 1,
+    failureCount: 1,
+    dashboard: passingGate.certification as never,
+  },
+  cases: [detailCase],
+  attempts: [detailAttempt],
+  teams: [detailTeam],
+  verifiers: [detailVerifier],
+  traces: [detailTrace],
+  toolCalls: [detailToolTrace],
+  artifacts: [detailPatch, detailArtifact],
+  failures: [detailFailure],
+});
+check(
+  "attempt detail view model exposes certified evidence categories",
+  detail?.caseRecord?.prompt.userRequest === "Fix the detail fixture." &&
+    detail.team?.strategy === "architect_worker" &&
+    detail.verifier?.assertionResults[0]?.id === "assertion-detail" &&
+    detail.modelTraces.length === 1 &&
+    detail.toolCalls.length === 1 &&
+    detail.patchArtifacts[0]?.content.includes("+fixed") &&
+    detail.artifacts.length === 2 &&
+    detail.failures[0]?.message === "Verifier failed." &&
+    detail.metrics.costUsd === 0.02 &&
+    detail.metrics.inputTokens === 100 &&
+    detail.metrics.outputTokens === 40 &&
+    detail.metrics.durationMs === 10_000 &&
+    detail.versions.harnessVersion === "workbench-runner-v0.1" &&
+    detail.versions.scoringVersion === "workbench-v0.1",
+  detail
+);
+
+if (failures === 0) {
+  console.log("PASS");
+} else {
+  console.log(`FAIL ${failures} check(s) failed`);
+}
+
+process.exit(failures === 0 ? 0 : 1);

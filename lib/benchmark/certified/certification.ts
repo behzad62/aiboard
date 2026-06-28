@@ -146,15 +146,18 @@ function simulateOracleRun(allowedCommands: string[]): SimulatedRun {
       notes: "certified",
     })
   );
-  const command = validateBuildBenchmarkCommand("npm test", {
-    attemptId: "cert-oracle",
-    caseId: "cert-simple",
-    harnessProfile: "aiboard-build-multi-worker",
-    noHumanApproval: true,
-    runnerOnly: true,
-    disableMcp: true,
-    allowedCommands,
-  });
+  const command =
+    allowedCommands.length === 0
+      ? { allowed: true }
+      : validateBuildBenchmarkCommand("npm test", {
+          attemptId: "cert-oracle",
+          caseId: "cert-simple",
+          harnessProfile: "aiboard-build-multi-worker",
+          noHumanApproval: true,
+          runnerOnly: true,
+          disableMcp: true,
+          allowedCommands,
+        });
   const passed = action?.action === "plan" && command.allowed;
   return {
     status: passed ? "passed" : "failed_tool_use",

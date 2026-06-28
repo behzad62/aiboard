@@ -58,6 +58,77 @@ for (const track of ["workbench", "gameiq", "toolreliability", "teamiq"]) {
   check(`benchmark track directory exists: ${track}`, await exists(join(benchmarksRoot, track, "v0")));
 }
 
+const gameIqV1Files = new Map([
+  ["connect-four.json", { gameId: "connect-four", count: 40 }],
+  ["chess.json", { gameId: "chess", count: 60 }],
+  ["battleship.json", { gameId: "battleship", count: 25 }],
+  ["codenames.json", { gameId: "codenames", count: 25 }],
+]);
+const canonicalGamePacks = new Map(
+  listGameIqScenarioPacks().map((pack) => [pack.gameId, pack])
+);
+for (const [file, expected] of gameIqV1Files) {
+  const filePath = join(benchmarksRoot, "gameiq", "v1", file);
+  check(`GameIQ v1 file exists: ${file}`, await exists(filePath));
+  if (!(await exists(filePath))) continue;
+
+  const artifact = await readJson(filePath);
+  const pack = canonicalGamePacks.get(expected.gameId);
+  const scenarios = Array.isArray(artifact.scenarios) ? artifact.scenarios : [];
+  const scenarioIds = scenarios
+    .map((scenario) =>
+      scenario && typeof scenario === "object"
+        ? (scenario as { id?: unknown }).id
+        : undefined
+    )
+    .filter((id): id is string => typeof id === "string");
+  check(`${file} has v1 pack metadata`, artifact.schemaVersion === 1 && artifact.track === "gameiq" && artifact.gameId === expected.gameId, artifact);
+  check(`${file} contains expected scenario count`, scenarios.length === expected.count && artifact.scenarioCount === expected.count, {
+    scenarioCount: artifact.scenarioCount,
+    scenarios: scenarios.length,
+    expected: expected.count,
+  });
+  check(`${file} scenario ids are unique`, new Set(scenarioIds).size === scenarioIds.length && scenarioIds.length === expected.count, scenarioIds);
+  check(
+    `${file} mirrors canonical implemented pack`,
+    Boolean(
+      pack &&
+        artifact.packId === pack.id &&
+        artifact.digest === stableGameIqScenarioPackDigest(pack) &&
+        scenarioIds.every((id, index) => id === pack.scenarios[index]?.id)
+    ),
+    { packId: artifact.packId, digest: artifact.digest, scenarioIds }
+  );
+}
+
+const toolReliabilityV1Path = join(benchmarksRoot, "toolreliability", "v1", "cases.json");
+check("ToolReliability v1 cases file exists", await exists(toolReliabilityV1Path));
+if (await exists(toolReliabilityV1Path)) {
+  const artifact = await readJson(toolReliabilityV1Path);
+  const cases = Array.isArray(artifact.cases) ? artifact.cases : [];
+  const caseIds = cases
+    .map((item) =>
+      item && typeof item === "object" ? (item as { id?: unknown }).id : undefined
+    )
+    .filter((id): id is string => typeof id === "string");
+  const validation = validateToolReliabilityCasePack(cases as typeof TOOL_RELIABILITY_V0_1_CASES);
+  check(
+    "ToolReliability v1 file has metadata and 75 cases",
+    artifact.schemaVersion === 1 &&
+      artifact.track === "toolreliability" &&
+      artifact.caseCount === 75 &&
+      cases.length === 75,
+    { caseCount: artifact.caseCount, cases: cases.length }
+  );
+  check("ToolReliability v1 cases validate", validation.valid, validation);
+  check(
+    "ToolReliability v1 mirrors canonical implemented cases",
+    caseIds.length === TOOL_RELIABILITY_V0_1_CASES.length &&
+      caseIds.every((id, index) => id === TOOL_RELIABILITY_V0_1_CASES[index]?.id),
+    caseIds
+  );
+}
+
 const workbenchDir = join(benchmarksRoot, "workbench", "v0");
 const workbenchFiles = (await readdir(workbenchDir))
   .filter((file) => file.endsWith(".json"))
@@ -85,6 +156,63 @@ for (const file of workbenchFiles) {
   }
 }
 check("WorkBench v0 has at least one manifest", workbenchCases.length > 0, workbenchFiles);
+
+const workbenchV1CasesDir = join(benchmarksRoot, "workbench", "v1", "cases");
+const workbenchV1FixturesDir = join(benchmarksRoot, "workbench", "v1", "fixtures");
+check("WorkBench v1 cases directory exists", await exists(workbenchV1CasesDir));
+check("WorkBench v1 fixtures directory exists", await exists(workbenchV1FixturesDir));
+if ((await exists(workbenchV1CasesDir)) && (await exists(workbenchV1FixturesDir))) {
+  const v1CaseFiles = (await readdir(workbenchV1CasesDir))
+    .filter((file) => file.endsWith(".json"))
+    .sort();
+  check("WorkBench v1 has 10 fixture case manifests", v1CaseFiles.length === 10, v1CaseFiles);
+
+  const languageCounts = new Map<string, number>();
+  for (const file of v1CaseFiles) {
+    const filePath = join(workbenchV1CasesDir, file);
+    const raw = await readFile(filePath, "utf8");
+    const artifact = await readJson(filePath);
+    const loaded = loadWorkBenchCaseFromJson(raw);
+    const hash = createWorkBenchCaseHash(loaded);
+    const fixtureId = loaded.repo.url.startsWith("fixture://")
+      ? loaded.repo.url.slice("fixture://".length)
+      : "";
+    const fixtureDir = join(workbenchV1FixturesDir, fixtureId);
+    const language =
+      typeof artifact.fixtureLanguage === "string"
+        ? artifact.fixtureLanguage
+        : "unknown";
+    languageCounts.set(language, (languageCounts.get(language) ?? 0) + 1);
+
+    check(`${file} is a valid WorkBench case`, loaded.schemaVersion === 1 && loaded.id === file.replace(/\.json$/, ""), loaded);
+    check(`${file} has a stable case hash`, artifact.caseHash === hash && hash.startsWith("workbench:"), {
+      actual: artifact.caseHash,
+      expected: hash,
+    });
+    check(
+      `${file} has reference notes and negative control metadata`,
+      typeof artifact.referenceSolutionNotes === "string" &&
+        artifact.referenceSolutionNotes.length > 20 &&
+        typeof artifact.negativeControlWrongSolution === "string" &&
+        artifact.negativeControlWrongSolution.length > 20,
+      {
+        referenceSolutionNotes: artifact.referenceSolutionNotes,
+        negativeControlWrongSolution: artifact.negativeControlWrongSolution,
+      }
+    );
+    check(`${file} has canary contamination marker`, loaded.contamination.canary.startsWith("AIBENCH-WORKBENCH-"), loaded.contamination);
+    check(`${file} fixture directory exists`, fixtureId.length > 0 && (await exists(fixtureDir)), loaded.repo.url);
+    check(`${file} fixture has reference solution notes`, await exists(join(fixtureDir, "reference-solution.md")));
+    check(`${file} fixture has verifier result JSON`, await exists(join(fixtureDir, "verifier-result.json")));
+    check(`${file} fixture has negative control JSON`, await exists(join(fixtureDir, "negative-control.json")));
+  }
+
+  check("WorkBench v1 has 3 TypeScript cases", languageCounts.get("typescript") === 3, Object.fromEntries(languageCounts));
+  check("WorkBench v1 has 2 Python cases", languageCounts.get("python") === 2, Object.fromEntries(languageCounts));
+  check("WorkBench v1 has 2 Go cases", languageCounts.get("go") === 2, Object.fromEntries(languageCounts));
+  check("WorkBench v1 has 1 Rust case", languageCounts.get("rust") === 1, Object.fromEntries(languageCounts));
+  check("WorkBench v1 has 2 React UI cases", languageCounts.get("react-ui") === 2, Object.fromEntries(languageCounts));
+}
 
 const gameIqManifest = await readJson(join(benchmarksRoot, "gameiq", "v0", "index.json"));
 const gameIqPackIds = new Set(listGameIqScenarioPacks().map((pack) => pack.id));

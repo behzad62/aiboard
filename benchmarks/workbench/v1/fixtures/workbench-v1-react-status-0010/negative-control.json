@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution changes only the text content, leaving no status semantics.",
+  "assertions": [
+    {
+      "id": "status-role",
+      "label": "Adds status role",
+      "passed": false,
+      "weight": 0.5,
+      "message": "A wrong solution changes only the text content, leaving no status semantics."
+    },
+    {
+      "id": "polite-live-region",
+      "label": "Adds polite live region",
+      "passed": false,
+      "weight": 0.5,
+      "message": "A wrong solution changes only the text content, leaving no status semantics."
+    }
+  ]
+}

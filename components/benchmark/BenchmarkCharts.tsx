@@ -23,7 +23,7 @@ export function BenchmarkCharts({
 
       <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
         <QualityScatterChart
-          title="Quality vs Cost"
+          title="Architect-reviewed quality vs Cost"
           description="Use this to find cheap models that still perform well."
           data={dashboard.costQualityPoints}
           xKey="cost"
@@ -32,7 +32,7 @@ export function BenchmarkCharts({
           onSelectModel={onSelectModel}
         />
         <QualityScatterChart
-          title="Quality vs Latency"
+          title="Architect-reviewed quality vs Latency"
           description="Use this to find models that are both strong and responsive."
           data={dashboard.latencyQualityPoints}
           xKey="latency"

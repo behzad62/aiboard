@@ -26,6 +26,10 @@ import type {
   CertifiedBenchmarkDashboardData,
   CertifiedBenchmarkDashboardInput,
 } from "@/lib/benchmark/scoring/types";
+import {
+  buildTeamIqComboMatrixRows,
+  buildTeamIqRecommendationCards,
+} from "@/lib/benchmark/teamiq";
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
@@ -462,6 +466,11 @@ export function buildCertifiedBenchmarkDashboardData(
       value: (item) => item.speedPerPassMs ?? Number.POSITIVE_INFINITY,
     },
   ]);
+  const teamIqComboMatrixRows = buildTeamIqComboMatrixRows({
+    attempts,
+    teamCompositions: input.teamCompositions,
+    track: "teamiq",
+  });
 
   return {
     summary: {
@@ -500,6 +509,9 @@ export function buildCertifiedBenchmarkDashboardData(
     teamLiftLeaderboard: rankByTeamLift(leaderboard),
     toolReliabilityLeaderboard: rankByToolReliability(leaderboard),
     paretoFrontier,
+    teamIqComboMatrixRows,
+    teamIqRecommendationCards:
+      buildTeamIqRecommendationCards(teamIqComboMatrixRows),
     trackRows: buildCertifiedTrackRows(
       input.caseV2,
       attempts,

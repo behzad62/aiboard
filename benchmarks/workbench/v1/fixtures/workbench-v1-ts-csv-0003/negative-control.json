@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution wraps every value in quotes but does not double embedded quotes.",
+  "assertions": [
+    {
+      "id": "quote-doubling",
+      "label": "Doubles embedded quotes",
+      "passed": false,
+      "weight": 0.5,
+      "message": "A wrong solution wraps every value in quotes but does not double embedded quotes."
+    },
+    {
+      "id": "special-character-check",
+      "label": "Checks for CSV special characters",
+      "passed": false,
+      "weight": 0.5,
+      "message": "A wrong solution wraps every value in quotes but does not double embedded quotes."
+    }
+  ]
+}

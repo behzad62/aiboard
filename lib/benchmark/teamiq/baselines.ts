@@ -92,7 +92,9 @@ function bestSoloAttemptForModel(
     (candidate) =>
       candidate.modelId === modelId &&
       candidate.attempt.caseId === teamAttempt.caseId &&
-      candidate.attempt.track === teamAttempt.track
+      candidate.attempt.track === teamAttempt.track &&
+      candidate.attempt.harnessVersion === teamAttempt.harnessVersion &&
+      candidate.attempt.scoringVersion === teamAttempt.scoringVersion
   );
   if (matches.length === 0) return null;
   return matches.reduce((best, candidate) =>

@@ -5,6 +5,10 @@ import type {
   BenchmarkVerifierResult,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
+import type {
+  TeamIqComboMatrixRow,
+  TeamIqRecommendationCard,
+} from "@/lib/benchmark/teamiq";
 
 export type NullableNumber = number | null | undefined;
 
@@ -142,6 +146,8 @@ export interface CertifiedBenchmarkDashboardData {
   teamLiftLeaderboard: CertifiedRunScore[];
   toolReliabilityLeaderboard: CertifiedRunScore[];
   paretoFrontier: CertifiedRunScore[];
+  teamIqComboMatrixRows: TeamIqComboMatrixRow[];
+  teamIqRecommendationCards: TeamIqRecommendationCard[];
   trackRows: Array<{
     track: string;
     cases: number;

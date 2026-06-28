@@ -290,7 +290,7 @@ function appendCertifiedTradeoffs(
     )
     .slice(0, 8);
 
-  lines.push("## Cost Speed Quality Tradeoffs");
+  lines.push("## Cost Speed Verified Quality Tradeoffs");
   if (rows.length === 0) {
     lines.push("- No certified tradeoff rows recorded.");
   } else {

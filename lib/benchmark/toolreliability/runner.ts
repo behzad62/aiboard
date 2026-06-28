@@ -556,31 +556,18 @@ function forbiddenRunCommandReason(command: string): string | null {
 function perfectOutputsForCase(benchmarkCase: ToolReliabilityCase): string[] {
   switch (benchmarkCase.category) {
     case "json-schema":
-      return [validDecisionJson()];
+      return [validJsonForSchema(benchmarkCase.schema)];
     case "tool-call":
       return [
         JSON.stringify({
-          action: "read_range",
-          path: "src/index.ts",
-          startLine: 1,
-          lineCount: 40,
+          ...benchmarkCase.expectedAction,
           reason: "inspect target file",
         }),
       ];
     case "patch":
-      return [
-        [
-          "```edit path=src/math.ts",
-          "<<<<<<< SEARCH",
-          "  return a - b;",
-          "=======",
-          "  return a + b;",
-          ">>>>>>> REPLACE",
-          "```",
-        ].join("\n"),
-      ];
+      return [patchOutputForCase(benchmarkCase)];
     case "repair-loop":
-      return ["decision: approve", validDecisionJson()];
+      return ["decision: approve", validJsonForSchema(benchmarkCase.schema)];
     case "forbidden-action":
       return [
         JSON.stringify({
@@ -592,12 +579,43 @@ function perfectOutputsForCase(benchmarkCase: ToolReliabilityCase): string[] {
   }
 }
 
-function validDecisionJson(): string {
-  return JSON.stringify({
-    decision: "approve",
-    confidence: 1,
-    risks: ["none"],
-  });
+function validJsonForSchema(schema: ToolReliabilityJsonSchema): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(schema.required).map(([key, field]) => [
+        key,
+        validValueForField(field),
+      ])
+    )
+  );
+}
+
+function validValueForField(field: ToolReliabilityJsonField): unknown {
+  if (field.type === "string") return field.enum?.[0] ?? "ok";
+  if (field.type === "number") return field.max ?? field.min ?? 1;
+  if (field.type === "boolean") return true;
+  return ["none"];
+}
+
+function patchOutputForCase(benchmarkCase: PatchReliabilityCase): string {
+  const originalLines = benchmarkCase.originalContent.split("\n");
+  const expectedLines = benchmarkCase.expectedContent.split("\n");
+  const diffIndex = originalLines.findIndex(
+    (line, index) => line !== expectedLines[index]
+  );
+  const search =
+    diffIndex >= 0 ? originalLines[diffIndex] : benchmarkCase.originalContent;
+  const replacement =
+    diffIndex >= 0 ? expectedLines[diffIndex] : benchmarkCase.expectedContent;
+  return [
+    `\`\`\`edit path=${benchmarkCase.path}`,
+    "<<<<<<< SEARCH",
+    search,
+    "=======",
+    replacement,
+    ">>>>>>> REPLACE",
+    "```",
+  ].join("\n");
 }
 
 function event(

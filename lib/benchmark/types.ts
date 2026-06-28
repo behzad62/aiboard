@@ -201,11 +201,20 @@ export interface BenchmarkTeamCompositionRole {
   maxTokens?: number;
 }
 
+export type TeamIqStrategy =
+  | "solo"
+  | "panel"
+  | "debate"
+  | "architect_worker"
+  | "architect_worker_reviewer"
+  | "cheap_swarm_strong_judge";
+
 export interface BenchmarkTeamComposition {
   id: string;
   name: string;
   comboHash: string;
   roles: BenchmarkTeamCompositionRole[];
+  strategy?: TeamIqStrategy;
 }
 
 export interface BenchmarkVerifierAssertionResult {

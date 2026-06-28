@@ -6,6 +6,7 @@ import {
   groupFailureClassifications,
   isInvalidCertifiedRun,
 } from "../lib/benchmark/certified/classify-failure";
+import { classifyCertifiedRunResult } from "../lib/benchmark/certified/classify-run-result";
 
 let failures = 0;
 
@@ -124,6 +125,39 @@ check(
     invalidHarness: explainCertifiedFailureStatus("invalid_harness"),
     providerUnavailable: explainCertifiedFailureStatus("provider_unavailable"),
   }
+);
+
+const missingFailure = classifyCertifiedRunResult({
+  attempt: { status: "failed_verifier", failureIds: [] },
+  failures: [],
+});
+check(
+  "failed certified attempt without failure record is flagged",
+  missingFailure.missingFailureRecord &&
+    missingFailure.modelAccountable &&
+    !missingFailure.invalidRun,
+  missingFailure
+);
+
+const invalidRunClassification = classifyCertifiedRunResult({
+  attempt: { status: "invalid_environment", failureIds: ["failure-1"] },
+  failures: [
+    {
+      id: "failure-1",
+      code: "runner_crash",
+      source: "runner",
+      message: "bench runner crashed",
+      details: "",
+    },
+  ],
+});
+check(
+  "invalid run result inherits taxonomy classification",
+  invalidRunClassification.invalidRun &&
+    !invalidRunClassification.modelAccountable &&
+    !invalidRunClassification.missingFailureRecord &&
+    invalidRunClassification.classifications[0]?.group === "environment",
+  invalidRunClassification
 );
 
 if (failures === 0) {

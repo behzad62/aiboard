@@ -9,6 +9,14 @@ import {
 } from "@/components/ui/card";
 import { duration, pct, usd } from "@/components/benchmark/format";
 import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
+import { ComboMatrix } from "@/components/benchmark/teamiq/ComboMatrix";
+import { ParetoFrontier } from "@/components/benchmark/teamiq/ParetoFrontier";
+import type { BenchmarkTrack } from "@/lib/benchmark/types";
+import type {
+  TeamIqComboMatrixRow,
+  TeamIqRecommendationCard,
+  TeamIqRecommendationLabel,
+} from "@/lib/benchmark/teamiq";
 
 export type CertifiedTrackView =
   | "all"
@@ -36,6 +44,8 @@ export function CertifiedBenchmarkOverview({
 }) {
   const summary = readCertifiedSummary(certified, counts);
   const leaderboard = readLeaderboard(certified, track);
+  const teamIqRows = readTeamIqComboMatrixRows(certified);
+  const teamIqCards = readTeamIqRecommendationCards(certified);
   const isTrackView = track !== "all";
   const hasCertifiedData = counts.certifiedCases > 0 || counts.certifiedAttempts > 0;
   const hasTrackData = leaderboard.length > 0 || (!isTrackView && hasCertifiedData);
@@ -58,7 +68,10 @@ export function CertifiedBenchmarkOverview({
         <CertifiedStat label="Cases" value={String(summary.certifiedCases)} />
         <CertifiedStat label="Attempts" value={String(counts.certifiedAttempts)} />
         <CertifiedStat label="Verified pass" value={pct(summary.verifiedPassRate)} />
-        <CertifiedStat label="Avg quality" value={formatScore(summary.averageQuality)} />
+        <CertifiedStat
+          label="Avg verified quality"
+          value={formatScore(summary.averageQuality)}
+        />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -73,7 +86,16 @@ export function CertifiedBenchmarkOverview({
       ) : !hasTrackData ? (
         <CertifiedTrackEmptyState track={track} />
       ) : (
-        <CertifiedLeaderboard rows={leaderboard} track={track} />
+        <>
+          <CertifiedRecommendationCards rows={leaderboard} />
+          {track === "teamiq" && teamIqRows.length > 0 && (
+            <div className="space-y-4">
+              <ParetoFrontier rows={teamIqRows} cards={teamIqCards} />
+              <ComboMatrix rows={teamIqRows} />
+            </div>
+          )}
+          <CertifiedLeaderboard rows={leaderboard} track={track} />
+        </>
       )}
     </section>
   );
@@ -158,7 +180,9 @@ function CertifiedLeaderboard({
               <th className="py-2 pr-3 font-medium">Team or model</th>
               <th className="px-3 py-2 font-medium">Track</th>
               <th className="px-3 py-2 text-right font-medium">Attempts</th>
-              <th className="px-3 py-2 text-right font-medium">Quality</th>
+              <th className="px-3 py-2 text-right font-medium">
+                Verified quality
+              </th>
               <th className="px-3 py-2 text-right font-medium">Pass</th>
               <th className="px-3 py-2 text-right font-medium">Efficiency</th>
               <th className="px-3 py-2 text-right font-medium">Tool</th>
@@ -204,6 +228,106 @@ function CertifiedLeaderboard({
   );
 }
 
+function CertifiedRecommendationCards({
+  rows,
+}: {
+  rows: CertifiedLeaderboardRow[];
+}) {
+  const recommendations = buildRecommendations(rows);
+  if (recommendations.length === 0) return null;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      {recommendations.map((item) => (
+        <div key={item.label} className="rounded-lg border bg-card px-4 py-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {item.label}
+          </div>
+          <div className="mt-1 truncate text-sm font-semibold">{item.name}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{item.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function buildRecommendations(rows: CertifiedLeaderboardRow[]) {
+  const recommendations: Array<{ label: string; name: string; value: string }> = [];
+  const quality = maxBy(rows, (row) => row.verifiedQuality);
+  const value = maxBy(rows, (row) =>
+    row.averageCostUsd && row.verifiedQuality
+      ? (row.verifiedQuality <= 1 ? row.verifiedQuality * 100 : row.verifiedQuality) /
+        row.averageCostUsd
+      : null
+  );
+  const fastest = minBy(rows, (row) => row.averageDurationMs);
+  const tool = maxBy(rows, (row) => row.toolReliabilityScore);
+  const lift = maxBy(rows, (row) => row.teamLift);
+
+  if (quality) {
+    recommendations.push({
+      label: "Best quality",
+      name: quality.label,
+      value: `Verified quality ${formatScore(quality.verifiedQuality)}`,
+    });
+  }
+  if (value) {
+    recommendations.push({
+      label: "Best value",
+      name: value.label,
+      value: `${formatScore(value.verifiedQuality)} quality at ${usd(value.averageCostUsd)}`,
+    });
+  }
+  if (fastest) {
+    recommendations.push({
+      label: "Fastest",
+      name: fastest.label,
+      value: duration(fastest.averageDurationMs),
+    });
+  }
+  if (tool) {
+    recommendations.push({
+      label: "Best tool reliability",
+      name: tool.label,
+      value: formatScore(tool.toolReliabilityScore),
+    });
+  }
+  if (lift) {
+    recommendations.push({
+      label: "Best team lift",
+      name: lift.label,
+      value: formatScore(lift.teamLift),
+    });
+  }
+  return recommendations;
+}
+
+function maxBy(
+  rows: CertifiedLeaderboardRow[],
+  read: (row: CertifiedLeaderboardRow) => number | null
+): CertifiedLeaderboardRow | null {
+  return rows.reduce<CertifiedLeaderboardRow | null>((best, row) => {
+    const value = read(row);
+    if (value == null || !Number.isFinite(value)) return best;
+    if (!best) return row;
+    const bestValue = read(best);
+    return bestValue == null || value > bestValue ? row : best;
+  }, null);
+}
+
+function minBy(
+  rows: CertifiedLeaderboardRow[],
+  read: (row: CertifiedLeaderboardRow) => number | null
+): CertifiedLeaderboardRow | null {
+  return rows.reduce<CertifiedLeaderboardRow | null>((best, row) => {
+    const value = read(row);
+    if (value == null || !Number.isFinite(value)) return best;
+    if (!best) return row;
+    const bestValue = read(best);
+    return bestValue == null || value < bestValue ? row : best;
+  }, null);
+}
+
 interface CertifiedSummary {
   certifiedRuns: number;
   certifiedCases: number;
@@ -224,6 +348,8 @@ interface CertifiedLeaderboardRow {
   efficiencyScore: number | null;
   toolReliabilityScore: number | null;
   averageCostUsd: number | null;
+  averageDurationMs: number | null;
+  teamLift: number | null;
 }
 
 function readCertifiedSummary(
@@ -300,7 +426,149 @@ function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | null {
       readNumber(row.toolReliabilityScore) ??
       readNumber(row.averageToolReliabilityScore),
     averageCostUsd: readNumber(row.averageCostUsd) ?? readNumber(row.costUsd),
+    averageDurationMs:
+      readNumber(row.averageDurationMs) ??
+      readNumber(row.averageLatencyMs) ??
+      readNumber(row.durationMs),
+    teamLift: readNumber(row.teamLift) ?? readNumber(row.averageTeamLift),
   };
+}
+
+function readTeamIqComboMatrixRows(certified: unknown): TeamIqComboMatrixRow[] {
+  return readArray(readRecord(certified).teamIqComboMatrixRows)
+    .map(readTeamIqComboMatrixRow)
+    .filter((row): row is TeamIqComboMatrixRow => row !== null);
+}
+
+function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow | null {
+  const row = readRecord(value);
+  const id = readString(row.id);
+  const teamCompositionId = readString(row.teamCompositionId);
+  const teamName = readString(row.teamName);
+  const comboHash = readString(row.comboHash);
+  const track = readString(row.track);
+  const recommendationLabel = readTeamIqRecommendationLabel(
+    readString(row.recommendationLabel)
+  );
+  if (
+    !id ||
+    !teamCompositionId ||
+    !teamName ||
+    !comboHash ||
+    !track ||
+    !recommendationLabel
+  ) {
+    return null;
+  }
+  const modelIds = readArray(row.modelIds).filter(
+    (item): item is string => typeof item === "string" && item.length > 0
+  );
+  return {
+    id,
+    teamCompositionId,
+    teamName,
+    comboHash,
+    track: readBenchmarkTrack(track) ?? "teamiq",
+    modelIds,
+    attempts: readNumber(row.attempts) ?? 0,
+    verifiedQuality: readNumber(row.verifiedQuality) ?? 0,
+    jobSuccessScore: readNumber(row.jobSuccessScore) ?? 0,
+    costUsd: readNumber(row.costUsd),
+    averageCostUsd: readNumber(row.averageCostUsd),
+    durationMs: readNumber(row.durationMs),
+    averageDurationMs: readNumber(row.averageDurationMs),
+    bestSoloScore: readNumber(row.bestSoloScore),
+    teamLift: readNumber(row.teamLift),
+    teamLiftLabel: readTeamLiftLabel(readString(row.teamLiftLabel)),
+    isParetoRecommended: row.isParetoRecommended === true,
+    recommendationLabel,
+  };
+}
+
+function readBenchmarkTrack(value: string | null): BenchmarkTrack | null {
+  const normalized = normalizeTrack(value ?? undefined);
+  return normalized && normalized !== "all" ? normalized : null;
+}
+
+function readTeamIqRecommendationCards(
+  certified: unknown
+): TeamIqRecommendationCard[] {
+  return readArray(readRecord(certified).teamIqRecommendationCards)
+    .map(readTeamIqRecommendationCard)
+    .filter((card): card is TeamIqRecommendationCard => card !== null);
+}
+
+function readTeamIqRecommendationCard(
+  value: unknown
+): TeamIqRecommendationCard | null {
+  const card = readRecord(value);
+  const kind = readString(card.kind);
+  const title = readString(card.title);
+  const teamCompositionId = readString(card.teamCompositionId);
+  const teamName = readString(card.teamName);
+  const recommendationLabel = readTeamIqRecommendationLabel(
+    readString(card.recommendationLabel)
+  );
+  if (
+    !kind ||
+    !title ||
+    !teamCompositionId ||
+    !teamName ||
+    !recommendationLabel
+  ) {
+    return null;
+  }
+  if (
+    ![
+      "best_team_lift",
+      "best_quality",
+      "best_value",
+      "fastest",
+      "watchlist",
+    ].includes(kind)
+  ) {
+    return null;
+  }
+  return {
+    kind: kind as TeamIqRecommendationCard["kind"],
+    title,
+    teamCompositionId,
+    teamName,
+    value: readString(card.value) ?? "n/a",
+    detail: readString(card.detail) ?? "",
+    recommendationLabel,
+  };
+}
+
+function readTeamIqRecommendationLabel(
+  value: string | null
+): TeamIqRecommendationLabel | null {
+  if (
+    value === "recommended" ||
+    value === "tradeoff" ||
+    value === "watch" ||
+    value === "dominated" ||
+    value === "solo_baseline" ||
+    value === "insufficient_data"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function readTeamLiftLabel(
+  value: string | null
+): TeamIqComboMatrixRow["teamLiftLabel"] {
+  if (
+    value === "strong_positive" ||
+    value === "positive" ||
+    value === "neutral" ||
+    value === "negative" ||
+    value === "wasteful"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function normalizeTrack(track: string | undefined): CertifiedTrackView | undefined {

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "workbench-v1-rs-saturating-0008",
+  "title": "Rust saturating increment",
+  "description": "Avoid overflow in a counter increment helper.",
+  "difficulty": "medium",
+  "tags": [
+    "rust",
+    "overflow",
+    "utility"
+  ],
+  "caseVersion": "1.0.0",
+  "prompt": {
+    "userRequest": "Update increment_count to use saturating arithmetic instead of wrapping on overflow.",
+    "publicContext": "Keep the function signature unchanged.",
+    "hiddenNotesHash": "hidden:workbench-v1-rs-saturating-0008"
+  },
+  "repo": {
+    "url": "fixture://workbench-v1-rs-saturating-0008",
+    "baseCommit": "fixture-base-v1",
+    "shallowClone": true,
+    "fixtureHash": "fixture:workbench-v1-rs-saturating-0008"
+  },
+  "environment": {
+    "timeoutSeconds": 600,
+    "memoryMb": 1024,
+    "network": "dependency-only"
+  },
+  "verifier": {
+    "command": "node verifier.mjs",
+    "resultFile": "verifier-result.json",
+    "timeoutSeconds": 60,
+    "publicCommand": "node verifier.mjs"
+  },
+  "budget": {
+    "maxUsd": 2,
+    "maxWallClockSeconds": 600,
+    "maxModelCalls": 20,
+    "maxToolCalls": 100,
+    "maxInputTokens": 200000,
+    "maxOutputTokens": 50000
+  },
+  "scoring": {
+    "scoringVersion": "certified-v1",
+    "costTargetUsd": 1,
+    "timeTargetSeconds": 300
+  },
+  "contamination": {
+    "originalTask": true,
+    "canary": "AIBENCH-WORKBENCH-WORKBENCH-V1-RS-SATURATING-0008",
+    "referenceSolutionPrivate": true,
+    "publicAfter": "2027-01-01"
+  },
+  "fixtureLanguage": "rust",
+  "caseHash": "workbench:f6f73b53",
+  "referenceSolutionNotes": "The reference solution returns value.saturating_add(1), preserving u32::MAX at the maximum value.",
+  "negativeControlWrongSolution": "A wrong solution uses wrapping_add, which keeps overflow behavior instead of preventing it."
+}

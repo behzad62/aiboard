@@ -16,18 +16,20 @@ async function request(
   baseUrl: string,
   path: string,
   token: string | null,
-  body?: unknown
-): Promise<{ status: number; data: Record<string, unknown> }> {
+  body?: unknown,
+  options: { method?: string; origin?: string } = {}
+): Promise<{ status: number; data: Record<string, unknown>; headers: Headers }> {
   const headers: Record<string, string> = {};
   if (token) headers["x-runner-token"] = token;
+  if (options.origin) headers.origin = options.origin;
   if (body !== undefined) headers["content-type"] = "application/json";
   const response = await fetch(`${baseUrl}${path}`, {
-    method: body === undefined ? "GET" : "POST",
+    method: options.method ?? (body === undefined ? "GET" : "POST"),
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  return { status: response.status, data };
+  return { status: response.status, data, headers: response.headers };
 }
 
 async function waitForHealth(baseUrl: string, token: string): Promise<Record<string, unknown>> {
@@ -75,6 +77,8 @@ const child = spawn(process.execPath, [
   token,
   "--root",
   runsRoot,
+  "--app-origin",
+  "http://app.example.test",
 ], {
   cwd: repoRoot,
   stdio: ["ignore", "pipe", "pipe"],
@@ -92,6 +96,25 @@ try {
 
   const unauthorized = await request(baseUrl, "/bench/health", null);
   check("runner requires token for health", unauthorized.status === 401, unauthorized);
+  check("unauthorized CORS still allows browser to read failure", unauthorized.headers.get("access-control-allow-methods") === "GET,POST,OPTIONS", Object.fromEntries(unauthorized.headers));
+
+  const corsHealth = await request(baseUrl, "/bench/health", token, undefined, { origin: "http://localhost:3000" });
+  check("runner echoes allowed app origin", corsHealth.status === 200 && corsHealth.headers.get("access-control-allow-origin") === "http://localhost:3000", Object.fromEntries(corsHealth.headers));
+  const extraOriginHealth = await request(baseUrl, "/bench/health", token, undefined, { origin: "http://app.example.test" });
+  check("runner allows extra --app-origin", extraOriginHealth.status === 200 && extraOriginHealth.headers.get("access-control-allow-origin") === "http://app.example.test", Object.fromEntries(extraOriginHealth.headers));
+  const disallowedOriginHealth = await request(baseUrl, "/bench/health", token, undefined, { origin: "https://evil.example.test" });
+  check("runner does not echo disallowed origins", disallowedOriginHealth.status === 200 && disallowedOriginHealth.headers.get("access-control-allow-origin") !== "https://evil.example.test", Object.fromEntries(disallowedOriginHealth.headers));
+  const optionsPreflight = await request(baseUrl, "/bench/health", token, undefined, {
+    method: "OPTIONS",
+    origin: "http://localhost:3001",
+  });
+  check(
+    "runner handles OPTIONS preflight for allowed origins",
+    optionsPreflight.status === 204 &&
+      optionsPreflight.headers.get("access-control-allow-origin") === "http://localhost:3001" &&
+      optionsPreflight.headers.get("access-control-allow-headers")?.includes("x-runner-token") === true,
+    { status: optionsPreflight.status, headers: Object.fromEntries(optionsPreflight.headers) }
+  );
 
   const rejectedNetworkNone = await request(baseUrl, "/bench/prepare", token, {
     caseId: "workbench-contract-network-none",
@@ -157,6 +180,25 @@ try {
   const denied = await request(baseUrl, "/bench/run-command", token, { attemptId, command: "git push", timeoutSeconds: 10 });
   check("run-command rejects commands outside allowlist", denied.status === 403, denied);
 
+  const compatBase = `/bench/compat/${attemptId}`;
+  const compatHealth = await request(baseUrl, `${compatBase}/health`, token);
+  check("compat health exposes prepared attempt as runner", compatHealth.status === 200 && compatHealth.data.ok === true && String(compatHealth.data.dir).includes(attemptId), compatHealth);
+  const compatLs = await request(baseUrl, `${compatBase}/ls`, token);
+  check("compat ls lists prepared attempt files", compatLs.status === 200 && Array.isArray(compatLs.data.files) && (compatLs.data.files as string[]).includes("input.txt"), compatLs);
+  const compatRead = await request(baseUrl, `${compatBase}/read`, token, { path: "input.txt" });
+  check("compat read returns prepared attempt file", compatRead.status === 200 && compatRead.data.content === "hello world\n", compatRead);
+  const compatWrite = await request(baseUrl, `${compatBase}/write`, token, { path: "build-output.txt", content: "compat" });
+  check("compat write updates prepared attempt workspace", compatWrite.status === 200 && compatWrite.data.bytes === 6, compatWrite);
+  const compatPatch = await request(baseUrl, `${compatBase}/patch`, token, {
+    path: "build-output.txt",
+    ops: [{ search: "compat", replace: "compat patched" }],
+  });
+  check("compat patch applies Build engine edit ops", compatPatch.status === 200 && compatPatch.data.applied === 1, compatPatch);
+  const compatRun = await request(baseUrl, `${compatBase}/run`, token, { command, timeoutSeconds: 10 });
+  check("compat run executes allowlisted Build command", compatRun.status === 200 && compatRun.data.exitCode === 0, compatRun);
+  const compatRunDenied = await request(baseUrl, `${compatBase}/run`, token, { command: "git push", timeoutSeconds: 10 });
+  check("compat run rejects commands outside allowlist", compatRunDenied.status === 403, compatRunDenied);
+
   const verifier = await request(baseUrl, "/bench/run-verifier", token, { attemptId });
   check("run-verifier executes configured verifier", verifier.status === 200 && verifier.data.passed === true && verifier.data.score === 1, verifier);
   check("run-verifier returns verifier result JSON", typeof verifier.data.resultJson === "string" && verifier.data.resultJson.includes("\"passed\":true"), verifier);
@@ -181,6 +223,31 @@ try {
   await stop(child);
   await rm(root, { recursive: true, force: true });
 }
+
+const badHost = spawn(process.execPath, [
+  join(repoRoot, "scripts", "bench-runner.mjs"),
+  "--host",
+  "0.0.0.0",
+  "--port",
+  String(port + 1),
+  "--token",
+  token,
+  "--root",
+  join(root, "bad-host"),
+], {
+  cwd: repoRoot,
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let badHostStderr = "";
+badHost.stderr.on("data", (chunk) => {
+  badHostStderr += String(chunk);
+});
+const badHostExit = await new Promise<number | null>((resolveExit) => {
+  badHost.once("exit", (code) => resolveExit(code));
+  setTimeout(() => resolveExit(null), 2000).unref();
+});
+check("runner refuses non-loopback bind with CORS enabled", badHostExit !== 0 && badHostStderr.includes("refuses to bind non-loopback"), { badHostExit, badHostStderr });
+await stop(badHost);
 
 if (failures === 0) {
   console.log("PASS");

@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "score": 0,
+  "summary": "A wrong solution uses wrapping_add, which keeps overflow behavior instead of preventing it.",
+  "assertions": [
+    {
+      "id": "saturating-add",
+      "label": "Uses saturating addition",
+      "passed": false,
+      "weight": 1,
+      "message": "A wrong solution uses wrapping_add, which keeps overflow behavior instead of preventing it."
+    }
+  ]
+}
