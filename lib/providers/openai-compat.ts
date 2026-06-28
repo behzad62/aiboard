@@ -104,6 +104,27 @@ function needsExplicitCacheControl(providerId: string, model: string): boolean {
   );
 }
 
+export function openAICompatibleWebSearchField(
+  providerId: string,
+  enabled?: boolean
+): Record<string, unknown> {
+  if (!enabled) return {};
+  if (providerId === "openai") {
+    return { web_search_options: { search_context_size: "medium" } };
+  }
+  if (providerId === "openrouter") {
+    return {
+      tools: [
+        {
+          type: "openrouter:web_search",
+          parameters: { search_context_size: "medium" },
+        },
+      ],
+    };
+  }
+  return {};
+}
+
 /**
  * Mark the stable prompt prefix of the last user message as ephemeral
  * cacheable content (mirrors the native Anthropic provider's split at the
@@ -231,6 +252,10 @@ export async function* streamOpenAICompatibleChat(
     providerId,
     params.structuredOutput
   );
+  const webSearchField = openAICompatibleWebSearchField(
+    providerId,
+    params.webSearch && !params.structuredOutput
+  );
 
   try {
     const stream = await client.chat.completions.create({
@@ -241,6 +266,7 @@ export async function* streamOpenAICompatibleChat(
       ...openAIPromptCaching,
       ...(reasoningField as Record<string, never>),
       ...(structuredOutputField as Record<string, never>),
+      ...(webSearchField as Record<string, never>),
       stream: true,
     });
 

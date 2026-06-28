@@ -34,6 +34,9 @@ async function* streamOpenAIResponses(
   const structuredOutputField = openAIResponsesTextFormatField(
     params.structuredOutput
   );
+  const webSearchField = openAIResponsesWebSearchField(
+    params.webSearch && !params.structuredOutput
+  );
 
   try {
     const stream = await client.responses.create({
@@ -45,6 +48,7 @@ async function* streamOpenAIResponses(
         ? { reasoning: { effort: reasoningValue as "low" | "medium" | "high" } }
         : {}),
       ...(structuredOutputField as Record<string, never>),
+      ...(webSearchField as Record<string, never>),
       stream: true,
     });
 
@@ -67,6 +71,16 @@ async function* streamOpenAIResponses(
       error: err instanceof Error ? err.message : "OpenAI request failed",
     };
   }
+}
+
+export function openAIResponsesWebSearchField(
+  enabled?: boolean
+): Record<string, unknown> {
+  if (!enabled) return {};
+  return {
+    tools: [{ type: "web_search_preview" }],
+    tool_choice: "auto",
+  };
 }
 
 export const openaiProvider: AIProvider = {

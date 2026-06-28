@@ -3509,7 +3509,8 @@ export async function runBuildDiscussion(
                 type: "request",
                 message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
               }),
-            modelContextProfile(model)
+            modelContextProfile(model),
+            !benchmark
           ),
       });
       content = resolved.content;

@@ -48,6 +48,8 @@ export interface ChatParams {
   temperature?: number;
   reasoningEffort?: ReasoningEffort;
   structuredOutput?: StructuredOutputFormat;
+  /** Provider-native web search/grounding is available for this call. */
+  webSearch?: boolean;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */

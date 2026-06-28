@@ -127,6 +127,16 @@ export function anthropicCacheBreakpointIndices(
   return indices;
 }
 
+export function anthropicWebSearchField(
+  enabled?: boolean
+): Record<string, unknown> {
+  if (!enabled) return {};
+  return {
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    tool_choice: { type: "auto" },
+  };
+}
+
 /**
  * Shared Anthropic-API streaming — used by the native Anthropic provider and
  * by gateways exposing the same API (Azure AI Foundry via params.baseURL).
@@ -180,6 +190,9 @@ export async function* streamAnthropicChat(
     const structuredToolConfig = anthropicStructuredToolConfig(
       params.structuredOutput
     );
+    const webSearchField = anthropicWebSearchField(
+      providerId === "anthropic" && params.webSearch && !params.structuredOutput
+    );
 
     try {
       const stream = await client.messages.stream({
@@ -189,6 +202,7 @@ export async function* streamAnthropicChat(
         messages: chatMessages,
         ...(effortField as Record<string, never>),
         ...(structuredToolConfig as Record<string, never>),
+        ...(webSearchField as Record<string, never>),
       });
 
       for await (const event of stream) {

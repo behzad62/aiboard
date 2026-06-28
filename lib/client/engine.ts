@@ -59,6 +59,10 @@ import {
   type GameAIDiagnosticLike,
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
+import {
+  shouldEnableProviderNativeWebSearch,
+  withWebSearchCapabilityNote,
+} from "@/lib/providers/web-search";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -159,7 +163,8 @@ export async function collectStream(
     delayMs: number;
     message: string;
   }) => void,
-  contextProfile?: ModelContextProfile
+  contextProfile?: ModelContextProfile,
+  allowWebSearch = true
 ): Promise<string> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -224,6 +229,15 @@ export async function collectStream(
       ? resolvedCaps[a.category]
       : modelSupportsInputTypes(modelId, [a.category]);
   });
+  const webSearch = shouldEnableProviderNativeWebSearch({
+    providerId,
+    model,
+    structuredOutput,
+    allowWebSearch,
+  });
+  const providerMessages = webSearch
+    ? withWebSearchCapabilityNote(messages)
+    : messages;
 
   let content = "";
   return withTransientRetry(
@@ -232,12 +246,13 @@ export async function collectStream(
         apiKey,
         baseURL: getProviderBaseURL(providerId),
         model,
-        messages,
+        messages: providerMessages,
         attachments: modelAttachments,
         maxTokens,
         temperature,
         reasoningEffort,
         structuredOutput,
+        webSearch,
         contextProfile,
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {

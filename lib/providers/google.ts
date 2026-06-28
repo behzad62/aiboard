@@ -2,6 +2,7 @@ import {
   GoogleGenerativeAI,
   type GenerationConfig,
   type Part,
+  type Tool,
 } from "@google/generative-ai";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
@@ -50,6 +51,17 @@ function buildGeminiParts(
   return parts;
 }
 
+export function googleWebSearchTools(
+  model: string,
+  enabled?: boolean
+): Tool[] | undefined {
+  if (!enabled) return undefined;
+  if (model.startsWith("gemini-2.")) {
+    return [{ googleSearchRetrieval: {} }];
+  }
+  return [{ googleSearch: {} } as unknown as Tool];
+}
+
 export const googleProvider: AIProvider = {
   id: "google",
   name: "Google Gemini",
@@ -76,7 +88,14 @@ export const googleProvider: AIProvider = {
   async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
     try {
       const genAI = new GoogleGenerativeAI(params.apiKey);
-      const model = genAI.getGenerativeModel({ model: params.model });
+      const webSearchTools = googleWebSearchTools(
+        params.model,
+        params.webSearch && !params.structuredOutput
+      );
+      const model = genAI.getGenerativeModel({
+        model: params.model,
+        ...(webSearchTools ? { tools: webSearchTools } : {}),
+      });
       const caps = getModelCapabilities(formatModelId("google", params.model));
 
       const systemMessage = params.messages.find((m) => m.role === "system");
