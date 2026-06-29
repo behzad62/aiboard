@@ -189,7 +189,7 @@ function csharpEmailNormalizer(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/csharp/EmailNormalizer${id}.cs`;
   const base = `namespace Bench;\npublic static class EmailNormalizer${id}\n{\n    public static string Normalize(string input)\n    {\n        if (input == null) return string.Empty;\n        return input;\n    }\n}\n`;
-  const reference = `namespace Bench;\npublic static class EmailNormalizer${id}\n{\n    public static string Normalize(string input)\n    {\n        if (input == null) return string.Empty;\n        return input.Trim().ToLowerInvariant();\n    }\n}\n`;
+  const reference = base.replace("return input;", "return input.Trim().ToLowerInvariant();");
   const negative = base.replace("return input;", "return input.ToLowerInvariant();");
   return simpleChallenge({
     id: `workbench-v2-cs-email-${id}`,
@@ -211,7 +211,7 @@ function csharpRoleClaim(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/csharp/RoleClaims${id}.cs`;
   const base = `namespace Bench;\npublic sealed record UserClaim(string Type, string Value);\npublic static class RoleClaims${id}\n{\n    public static bool HasAdminRole(IEnumerable<UserClaim> claims)\n    {\n        return claims.Any(claim => claim.Value == "admin");\n    }\n}\n`;
-  const reference = `namespace Bench;\npublic sealed record UserClaim(string Type, string Value);\npublic static class RoleClaims${id}\n{\n    public static bool HasAdminRole(IEnumerable<UserClaim> claims)\n    {\n        return claims.Any(claim => claim.Type == "role" && string.Equals(claim.Value, "admin", StringComparison.OrdinalIgnoreCase));\n    }\n}\n`;
+  const reference = base.replace("claim.Value == \"admin\"", "claim.Type == \"role\" && string.Equals(claim.Value, \"admin\", StringComparison.OrdinalIgnoreCase)");
   const negative = base.replace("claim.Value == \"admin\"", "claim.Value.Contains(\"admin\")");
   return simpleChallenge({
     id: `workbench-v2-cs-role-${id}`,
@@ -233,7 +233,7 @@ function cppClampScore(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/cpp/score_${id}.cpp`;
   const base = `#include <algorithm>\nint normalize_score_${id}(int score) {\n  return score;\n}\n`;
-  const reference = `#include <algorithm>\nint normalize_score_${id}(int score) {\n  return std::clamp(score, 0, 100);\n}\n`;
+  const reference = base.replace("return score;", "return std::clamp(score, 0, 100);");
   const negative = base.replace("return score;", "return std::max(score, 0);");
   return simpleChallenge({
     id: `workbench-v2-cpp-clamp-${id}`,
@@ -277,7 +277,7 @@ function goRetryStatus(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/go/retry_${id}.go`;
   const base = `package bench\nfunc shouldRetry${id}(status int) bool {\n\treturn status == 500\n}\n`;
-  const reference = `package bench\nfunc shouldRetry${id}(status int) bool {\n\treturn status == 500 || status == 502 || status == 503 || status == 504\n}\n`;
+  const reference = base.replace("status == 500", "status == 500 || status == 502 || status == 503 || status == 504");
   const negative = base.replace("status == 500", "status >= 400");
   return simpleChallenge({
     id: `workbench-v2-go-retry-${id}`,
@@ -297,8 +297,8 @@ function goRetryStatus(number: number): WorkBenchV2Challenge {
 function goErrorWrapping(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/go/errors_${id}.go`;
-  const base = `package bench\nimport \"errors\"\nfunc wrap${id}(err error) error {\n\tif err == nil { return nil }\n\treturn errors.New(\"load failed\")\n}\n`;
-  const reference = `package bench\nimport \"fmt\"\nfunc wrap${id}(err error) error {\n\tif err == nil { return nil }\n\treturn fmt.Errorf(\"load failed: %w\", err)\n}\n`;
+  const base = `package bench\nimport "errors"\nfunc wrap${id}(err error) error {\n\tif err == nil { return nil }\n\treturn errors.New("load failed")\n}\n`;
+  const reference = `package bench\nimport "fmt"\nfunc wrap${id}(err error) error {\n\tif err == nil { return nil }\n\treturn fmt.Errorf("load failed: %w", err)\n}\n`;
   const negative = base.replace("errors.New(\"load failed\")", "fmt.Errorf(\"load failed: %v\", err)");
   return simpleChallenge({
     id: `workbench-v2-go-error-${id}`,
@@ -319,7 +319,7 @@ function rustSaturatingAdd(number: number): WorkBenchV2Challenge {
   const id = String(number).padStart(4, "0");
   const path = `src/rust/counter_${id}.rs`;
   const base = `pub fn add_count_${id}(left: u32, right: u32) -> u32 {\n    left + right\n}\n`;
-  const reference = `pub fn add_count_${id}(left: u32, right: u32) -> u32 {\n    left.saturating_add(right)\n}\n`;
+  const reference = base.replace("left + right", "left.saturating_add(right)");
   const negative = base.replace("left + right", "left.wrapping_add(right)");
   return simpleChallenge({
     id: `workbench-v2-rs-saturating-${id}`,
@@ -442,7 +442,7 @@ if (typeof meta.verifier.maxChangedLines === "number") {
     label: "Diff is surgical",
     passed: changedLines <= meta.verifier.maxChangedLines,
     weight: 2,
-    message: changedLines <= meta.verifier.maxChangedLines ? undefined : `Changed ${changedLines} lines, limit is ${meta.verifier.maxChangedLines}.`,
+    message: changedLines <= meta.verifier.maxChangedLines ? undefined : "Changed " + changedLines + " lines, limit is " + meta.verifier.maxChangedLines + ".",
   });
 }
 
