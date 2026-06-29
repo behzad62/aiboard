@@ -10,8 +10,8 @@ import {
 import type { HarnessProfile } from "@/lib/benchmark/types";
 
 const BROWSER_PROFILES: Array<{ id: HarnessProfile; label: string }> = [
-  { id: "raw-single-model", label: "Raw single model" },
-  { id: "aiboard-single-model", label: "AI Board single model" },
+  { id: "raw-single-model", label: "Direct model call" },
+  { id: "aiboard-single-model", label: "AI Board single-agent harness" },
 ];
 
 export function HarnessProfilePicker({
@@ -26,7 +26,7 @@ export function HarnessProfilePicker({
   return (
     <Select value={value} onValueChange={(next) => onChange(next as HarnessProfile)}>
       <SelectTrigger>
-        <SelectValue placeholder="Harness" />
+        <SelectValue placeholder="Execution mode" />
       </SelectTrigger>
       <SelectContent>
         {profiles.map((profile) => (
