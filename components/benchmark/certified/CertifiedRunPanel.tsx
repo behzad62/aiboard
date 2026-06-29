@@ -59,6 +59,7 @@ import {
 } from "@/lib/benchmark/fireworks";
 import {
   getGameIqScenarioPack,
+  listGameIqScenarioPacks,
   runCertifiedGameIq,
 } from "@/lib/benchmark/gameiq";
 import {
@@ -510,10 +511,10 @@ function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
       label: item.label,
     }));
   }
-  return ["connect-four", "chess", "battleship", "codenames", "fireworks"]
-    .map((gameId) => getGameIqScenarioPack(gameId as never))
-    .filter((pack): pack is NonNullable<ReturnType<typeof getGameIqScenarioPack>> => Boolean(pack))
-    .map((pack) => ({ id: pack.id, label: gameIqSuiteLabel(pack.gameId) }));
+  return listGameIqScenarioPacks().map((pack) => ({
+    id: pack.id,
+    label: pack.label,
+  }));
 }
 
 function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV2 {
@@ -583,18 +584,15 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       },
     };
   }
-  const pack =
-    ["connect-four", "chess", "battleship", "codenames", "fireworks"]
-      .map((gameId) => getGameIqScenarioPack(gameId as never))
-      .find((candidate) => candidate?.id === suiteId) ?? null;
+  const pack = listGameIqScenarioPacks().find((candidate) => candidate.id === suiteId) ?? null;
   return {
     id: suiteId,
     schemaVersion: 2,
     track: "gameiq",
-    title: pack ? gameIqSuiteLabel(pack.gameId) : suiteId,
+    title: pack?.label ?? suiteId,
     description: "Certified GameIQ scenario pack.",
-    difficulty: "easy",
-    tags: ["gameiq"],
+    difficulty: pack?.certificationTier === "first-class" ? "medium" : "easy",
+    tags: ["gameiq", pack?.gameId ?? "unknown"],
     caseVersion: "1.0.0",
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -603,6 +601,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       publicContext: JSON.stringify({
         gameId: pack?.gameId ?? "connect-four",
         scenarioPackId: suiteId,
+        scenarioCount: pack?.scenarios.length ?? 0,
       }),
     },
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
@@ -690,23 +689,6 @@ function fireworksPlayerAssignments(
 
 function trackLabel(track: RunnableTrack): string {
   return TRACK_OPTIONS.find((option) => option.id === track)?.label ?? track;
-}
-
-function gameIqSuiteLabel(gameId: string): string {
-  switch (gameId) {
-    case "connect-four":
-      return "GameIQ v1: Connect Four";
-    case "chess":
-      return "GameIQ v1: Chess Tactics";
-    case "battleship":
-      return "GameIQ v1: Battleship Targeting";
-    case "codenames":
-      return "GameIQ v1: Codenames Clues";
-    case "fireworks":
-      return "GameIQ v1: Fireworks Solo Control";
-    default:
-      return `GameIQ v1: ${gameId}`;
-  }
 }
 
 function executionModeCopy(track: RunnableTrack, harnessProfile: HarnessProfile): {
