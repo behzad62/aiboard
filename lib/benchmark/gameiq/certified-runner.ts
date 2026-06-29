@@ -16,14 +16,66 @@ const GAMEIQ_ACTION_OUTPUT: StructuredOutputFormat = {
   strict: true,
   schema: {
     type: "object",
+    additionalProperties: false,
+    required: ["action"],
     properties: {
       action: {
         type: "object",
-        additionalProperties: true,
+        additionalProperties: false,
+        required: [
+          "action",
+          "column",
+          "from",
+          "to",
+          "promotion",
+          "target",
+          "type",
+          "clue",
+          "cardId",
+          "targetPlayerId",
+          "color",
+          "rank",
+          "cardIndex",
+        ],
+        properties: {
+          action: {
+            type: ["string", "null"],
+            enum: ["play", "discard", "clue_color", "clue_rank", null],
+          },
+          column: { type: ["integer", "null"] },
+          from: { type: ["string", "null"] },
+          to: { type: ["string", "null"] },
+          promotion: {
+            type: ["string", "null"],
+            enum: ["queen", "rook", "bishop", "knight", null],
+          },
+          target: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["row", "column"],
+            properties: {
+              row: { type: "integer" },
+              column: { type: "integer" },
+            },
+          },
+          type: { type: ["string", "null"], enum: ["clue", "guess", null] },
+          clue: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["word", "count"],
+            properties: {
+              word: { type: "string" },
+              count: { type: "integer" },
+            },
+          },
+          cardId: { type: ["string", "null"] },
+          targetPlayerId: { type: ["string", "null"] },
+          color: { type: ["string", "null"], enum: ["red", "blue", "green", null] },
+          rank: { type: ["integer", "null"], enum: [1, 2, 3, 4, 5, null] },
+          cardIndex: { type: ["integer", "null"] },
+        },
       },
     },
-    required: ["action"],
-    additionalProperties: false,
   },
 };
 

@@ -12,7 +12,12 @@ import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import { getGameIqScenarioPack } from "../lib/benchmark/gameiq";
 import { runCertifiedGameIq } from "../lib/benchmark/gameiq/certified-runner";
 import type { BenchmarkCaseV2, BenchmarkTeamComposition } from "../lib/benchmark/types";
-import type { SelectedModel, StreamChunk } from "../lib/providers/base";
+import type {
+  JsonSchemaObject,
+  SelectedModel,
+  StreamChunk,
+  StructuredOutputFormat,
+} from "../lib/providers/base";
 
 let failures = 0;
 
@@ -99,6 +104,7 @@ await saveBenchmarkCaseV2(caseV2);
 await saveBenchmarkTeamComposition(team);
 
 let callIndex = 0;
+let observedStructuredOutput: StructuredOutputFormat | undefined;
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-gameiq",
   suiteId: "suite-certified-gameiq",
@@ -118,7 +124,8 @@ const summary = await runCertifiedBenchmark({
         inputUsdPer1M: 1,
         outputUsdPer1M: 1,
       },
-      streamChat: async function* (): AsyncIterable<StreamChunk> {
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        observedStructuredOutput = params.structuredOutput;
         const scenario = pack.scenarios[callIndex++];
         yield {
           type: "token",
@@ -144,6 +151,36 @@ check("certified GameIQ attempt accumulates traces and cost", attempt?.traceIds.
 check("certified GameIQ verifier records scenario assertions", verifier?.attemptId === attempt?.id && verifier.assertionResults.length === pack.scenarios.length && verifier.passed, verifier);
 check("certified GameIQ dashboard updates", summary.dashboard.summary.certifiedAttempts === 1 && summary.dashboard.summary.verifiedPassRate === 1, summary.dashboard.summary);
 check("certified GameIQ traces export", bundle.traces.length === pack.scenarios.length && bundle.traces.every((trace) => trace.runId === "run-certified-gameiq"), bundle.traces);
+check(
+  "certified GameIQ structured output has no open object schemas",
+  !!observedStructuredOutput &&
+    schemaObjectNodes(observedStructuredOutput.schema).every(
+      (node) => node.additionalProperties === false
+    ),
+  observedStructuredOutput
+);
+check(
+  "certified GameIQ structured output requires every object property",
+  !!observedStructuredOutput &&
+    schemaObjectNodes(observedStructuredOutput.schema).every((node) => {
+      const keys = Object.keys(node.properties ?? {});
+      return keys.every((key) => node.required?.includes(key));
+    }),
+  observedStructuredOutput
+);
+
+function schemaObjectNodes(schema: JsonSchemaObject | undefined): JsonSchemaObject[] {
+  if (!schema) return [];
+  const isObjectNode = schema.type === "object" || !!schema.properties;
+  const nodes = isObjectNode ? [schema] : [];
+  for (const child of Object.values(schema.properties ?? {})) {
+    nodes.push(...schemaObjectNodes(child));
+  }
+  if (schema.items) {
+    nodes.push(...schemaObjectNodes(schema.items));
+  }
+  return nodes;
+}
 
 if (failures === 0) {
   console.log("PASS");

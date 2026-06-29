@@ -23,8 +23,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build runner download artifacts
+        run: npm run copy-runner
+
       - name: Build static export
         run: npm run build
+
+      - name: Verify runner download artifacts
+        run: |
+          npx tsx scripts/test-deploy-workflow-runner-artifacts.mts
+          npx tsx scripts/test-deploy-runner-artifacts.mts
 
       - name: Upload static export to VPS
         uses: appleboy/scp-action@v0.1.7

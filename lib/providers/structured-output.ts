@@ -76,7 +76,14 @@ export function anthropicStructuredToolConfig(
 
 function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   const next: JsonSchemaObject = {};
-  if (schema.type) next.type = schema.type;
+  if (Array.isArray(schema.type)) {
+    const nonNullTypes = schema.type.filter((type) => type !== "null");
+    if (nonNullTypes.length === 1) next.type = nonNullTypes[0];
+    else if (nonNullTypes.length > 1) next.type = nonNullTypes;
+    if (schema.type.includes("null")) next.nullable = true;
+  } else if (schema.type) {
+    next.type = schema.type;
+  }
   if (schema.description) next.description = schema.description;
   if (schema.maxLength !== undefined) next.maxLength = schema.maxLength;
   if (schema.enum) next.enum = schema.enum;

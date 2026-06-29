@@ -22,7 +22,7 @@ export interface ChatMessage {
 }
 
 export interface JsonSchemaObject {
-  type?: string;
+  type?: string | string[];
   description?: string;
   maxLength?: number;
   properties?: Record<string, JsonSchemaObject>;

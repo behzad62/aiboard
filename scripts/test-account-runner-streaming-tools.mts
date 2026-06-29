@@ -410,7 +410,12 @@ async function testLocalRunnerStreamsCompletedOutputText(): Promise<void> {
             properties: {
               action: {
                 type: "object",
-                additionalProperties: true,
+                additionalProperties: false,
+                required: ["action", "cardIndex"],
+                properties: {
+                  action: { type: "string", enum: ["play"] },
+                  cardIndex: { type: "integer" },
+                },
               },
             },
           },
