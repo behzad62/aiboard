@@ -4,6 +4,10 @@ import {
   toBenchmarkCaseV2,
 } from "./case-loader";
 import type { WorkBenchCase } from "./types";
+import {
+  listWorkBenchV2CaseOptions,
+  type WorkBenchV2CaseOption,
+} from "./v2-corpus";
 import goErrorReturn from "../../../benchmarks/workbench/v1/cases/workbench-v1-go-error-return-0007.json";
 import goPositiveSum from "../../../benchmarks/workbench/v1/cases/workbench-v1-go-positive-sum-0006.json";
 import pyClamp from "../../../benchmarks/workbench/v1/cases/workbench-v1-py-clamp-0005.json";
@@ -32,6 +36,8 @@ export interface WorkBenchV1CaseOption {
   case: WorkBenchCase;
 }
 
+export type WorkBenchCaseOption = WorkBenchV1CaseOption | WorkBenchV2CaseOption;
+
 interface WorkBenchV1CaseArtifact {
   fixtureLanguage: WorkBenchFixtureLanguage;
   caseHash: string;
@@ -52,13 +58,13 @@ const WORKBENCH_V1_ARTIFACTS = [
   reactStatus,
 ] as const;
 
-export function listWorkBenchV1CaseOptions(): WorkBenchV1CaseOption[] {
-  return WORKBENCH_V1_ARTIFACTS.map((artifact) => {
+export function listWorkBenchV1CaseOptions(): WorkBenchCaseOption[] {
+  const v1Cases: WorkBenchV1CaseOption[] = WORKBENCH_V1_ARTIFACTS.map((artifact) => {
     const loaded = loadWorkBenchCase(artifact);
     const metadata = artifact as WorkBenchV1CaseArtifact;
     return {
       id: loaded.id,
-      label: `${loaded.title} (${metadata.fixtureLanguage})`,
+      label: `${loaded.title} (${metadata.fixtureLanguage}, v1)`,
       fixtureLanguage: metadata.fixtureLanguage,
       caseHash: metadata.caseHash,
       referenceSolutionNotes: metadata.referenceSolutionNotes,
@@ -66,16 +72,17 @@ export function listWorkBenchV1CaseOptions(): WorkBenchV1CaseOption[] {
       case: loaded,
     };
   });
+  return [...v1Cases, ...listWorkBenchV2CaseOptions()];
 }
 
 export function getWorkBenchV1CaseOption(
   id: string
-): WorkBenchV1CaseOption | null {
+): WorkBenchCaseOption | null {
   return listWorkBenchV1CaseOptions().find((item) => item.id === id) ?? null;
 }
 
 export function workBenchCaseToBenchmarkCaseV2(
-  option: WorkBenchV1CaseOption,
+  option: WorkBenchCaseOption,
   timestamp?: string
 ): BenchmarkCaseV2 {
   return toBenchmarkCaseV2(option.case, timestamp);
