@@ -1,9 +1,11 @@
 "use client";
 
 import type { BenchRunnerHealth } from "@/lib/client/bench-runner";
-import type { WorkBenchV1CaseOption } from "@/lib/benchmark/workbench";
 import { WorkBenchAttemptDetail } from "./WorkBenchAttemptDetail";
-import { WorkBenchCasePicker } from "./WorkBenchCasePicker";
+import {
+  WorkBenchCasePicker,
+  type WorkBenchCasePickerOption,
+} from "./WorkBenchCasePicker";
 import { WorkBenchRunnerStatus } from "./WorkBenchRunnerStatus";
 
 export function WorkBenchRunPanel({
@@ -18,7 +20,7 @@ export function WorkBenchRunPanel({
   onRunnerTokenChange,
   onCheckRunner,
 }: {
-  cases: WorkBenchV1CaseOption[];
+  cases: WorkBenchCasePickerOption[];
   selectedCaseId: string;
   runnerUrl: string;
   runnerToken: string;
@@ -31,6 +33,7 @@ export function WorkBenchRunPanel({
 }) {
   const selectedCase =
     cases.find((item) => item.id === selectedCaseId) ?? cases[0] ?? null;
+  const v2Count = cases.filter((item) => item.case.caseVersion.startsWith("2")).length;
 
   return (
     <div className="space-y-3">
@@ -41,7 +44,7 @@ export function WorkBenchRunPanel({
           onChange={onCaseChange}
         />
         <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-          {cases.length} certified v1 fixture cases
+          {cases.length} certified fixture cases · {v2Count} v2 challenges
         </div>
       </div>
       <WorkBenchRunnerStatus
