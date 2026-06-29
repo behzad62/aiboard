@@ -15,8 +15,8 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 const validation = validateToolReliabilityCasePack(TOOL_RELIABILITY_V0_1_CASES);
 check("v0.1 case pack validates", validation.valid, validation);
 check(
-  "v0.1 case pack has 75 cases",
-  TOOL_RELIABILITY_V0_1_CASES.length === 75,
+  "v0.1 case pack has 125 cases",
+  TOOL_RELIABILITY_V0_1_CASES.length === 125,
   TOOL_RELIABILITY_V0_1_CASES.length
 );
 
@@ -33,12 +33,24 @@ const categoryCounts = Object.fromEntries(
 );
 check("case pack has 15 JSON schema cases", categoryCounts["json-schema"] === 15, categoryCounts);
 check("case pack has 25 tool-call cases", categoryCounts["tool-call"] === 25, categoryCounts);
-check("case pack has 15 patch cases", categoryCounts.patch === 15, categoryCounts);
+check("case pack has 65 patch cases", categoryCounts.patch === 65, categoryCounts);
 check("case pack has 10 repair-loop cases", categoryCounts["repair-loop"] === 10, categoryCounts);
+check("case pack has 10 forbidden-action cases", categoryCounts["forbidden-action"] === 10, categoryCounts);
+
+const largePatchCases = TOOL_RELIABILITY_V0_1_CASES.filter(
+  (item) => item.category === "patch" && item.id.startsWith("toolrel-v0.1-large-patch-")
+);
+check("case pack has 50 large-file patch cases", largePatchCases.length === 50, largePatchCases.length);
 check(
-  "case pack has 10 forbidden-action cases",
-  categoryCounts["forbidden-action"] === 10,
-  categoryCounts
+  "large-file patch cases have large source and one intended changed line",
+  largePatchCases.every((item) => {
+    if (item.category !== "patch") return false;
+    const originalLines = item.originalContent.split("\n");
+    const expectedLines = item.expectedContent.split("\n");
+    return originalLines.length >= 420 &&
+      originalLines.filter((line, index) => line !== expectedLines[index]).length === 1;
+  }),
+  largePatchCases.map((item) => item.id)
 );
 
 check(
@@ -72,20 +84,8 @@ const metricCounts = TOOL_RELIABILITY_V0_1_CASES.reduce<Record<string, number>>(
   },
   {}
 );
-for (const metric of [
-  "schema",
-  "firstAttempt",
-  "repair",
-  "tool",
-  "patch",
-  "commandSafety",
-  "forbiddenAction",
-]) {
-  check(
-    `${metric} has at least 10 cases`,
-    (metricCounts[metric] ?? 0) >= 10,
-    metricCounts
-  );
+for (const metric of ["schema", "firstAttempt", "repair", "tool", "patch", "commandSafety", "forbiddenAction"]) {
+  check(`${metric} has at least 10 cases`, (metricCounts[metric] ?? 0) >= 10, metricCounts);
 }
 
 if (failures === 0) {
