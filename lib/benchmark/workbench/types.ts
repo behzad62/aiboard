@@ -78,6 +78,8 @@ export interface WorkBenchCase {
   scoring: WorkBenchScoring;
   contamination: WorkBenchContamination;
   allowedCommands: string[];
+  /** Inline fixture files for generated/local-only benchmark cases. */
+  fixtureFiles?: Record<string, string>;
 }
 
 export interface WorkBenchVerifierAssertionInput {
