@@ -190,6 +190,15 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://openrouter.ai/z-ai/glm-5.2",
     verifiedAt: "2026-06-17",
   },
+  [formatModelId("openrouter", "moonshotai/kimi-k2.7-code")]: {
+    inputUsdPer1M: 0.74,
+    cachedInputUsdPer1M: 0.15,
+    outputUsdPer1M: 3.5,
+    notes: "OpenRouter marks reasoning as enabled by default for this model.",
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/moonshotai/kimi-k2.7-code",
+    verifiedAt: "2026-06-29",
+  },
 };
 
 export function getModelPricing(

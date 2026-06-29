@@ -2886,6 +2886,7 @@ const bindHost = host ?? "127.0.0.1";
 server.listen(port, bindHost, () => {
   console.log("AI Board — local runner");
   console.log("──────────────────────────────────");
+  console.log(`Version        : v${VERSION}`);
   console.log(`Project folder : ${projectDir}`);
   console.log(`URL            : http://${bindHost}:${port}`);
   console.log(`Token          : ${token}`);

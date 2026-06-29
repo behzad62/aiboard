@@ -300,6 +300,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     promptCaching: true,
     recommendedBuildRoles: ["worker", "reviewer"],
   },
+  "openrouter:moonshotai/kimi-k2.7-code": {
+    contextWindowTokens: 262_144,
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "worker", "reviewer"],
+  },
   "openrouter:nex-agi/nex-n2-pro:free": {
     contextWindowTokens: 262_144,
     maxOutputTokens: 16_384,

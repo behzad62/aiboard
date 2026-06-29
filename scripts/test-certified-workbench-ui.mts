@@ -23,7 +23,9 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-const cases = listWorkBenchV1CaseOptions();
+const cases = listWorkBenchV1CaseOptions().filter((item) =>
+  item.id.startsWith("workbench-v1-")
+);
 const languageCounts = new Map<string, number>();
 for (const item of cases) {
   languageCounts.set(item.fixtureLanguage, (languageCounts.get(item.fixtureLanguage) ?? 0) + 1);

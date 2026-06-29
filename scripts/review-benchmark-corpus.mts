@@ -13,8 +13,8 @@ import {
 } from "../lib/benchmark/toolreliability";
 import {
   listWorkBenchV1CaseOptions,
-  listWorkBenchV2CaseOptions,
-} from "../lib/benchmark/workbench";
+} from "../lib/benchmark/workbench/v1-corpus";
+import { listWorkBenchV2CaseOptions } from "../lib/benchmark/workbench/v2-corpus";
 
 let failures = 0;
 

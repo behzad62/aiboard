@@ -2,7 +2,7 @@
 import {
   WORKBENCH_V2_CHALLENGES,
   runWorkBenchV2ChallengeVerifier,
-} from "../lib/benchmark/workbench";
+} from "../lib/benchmark/workbench/v2-challenges";
 
 let failures = 0;
 

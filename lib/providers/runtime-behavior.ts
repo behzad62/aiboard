@@ -53,7 +53,7 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
       return {
         temperatureLabel: "Account runner mode",
         temperatureNote:
-          "ChatGPT account mode sends prompts through the local account runner. Image attachments and text-readable documents are forwarded; binary documents, tool calls, and true token streaming are not enabled yet.",
+          "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, and raw document files are forwarded; Responses streaming and native Build tool calls are supported through the runner.",
         promptCachingLabel: "Account-provider dependent",
         promptCachingNote:
           "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",
@@ -64,7 +64,7 @@ export function getModelRuntimeBehavior(fullModelId: string): ModelRuntimeBehavi
       return {
         temperatureLabel: "Account runner mode",
         temperatureNote:
-          "GitHub Copilot account mode sends prompts through the local account runner. Image attachments and text-readable documents are forwarded; binary documents, tool calls, and true token streaming are not enabled yet.",
+          "GitHub Copilot account mode sends prompts through the local account runner. Image attachments, text-readable documents, and raw document files are forwarded; tool calls and true token streaming are not enabled yet.",
         promptCachingLabel: "Account-provider dependent",
         promptCachingNote:
           "Caching and rate limits are controlled by GitHub Copilot, not by AI Board.",

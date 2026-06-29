@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type {
   AIProvider,
   ChatParams,
+  ModelCapabilities,
   NativeToolCall,
   NativeToolDefinition,
   StreamChunk,
@@ -10,6 +11,18 @@ import { getCatalogModelsForProvider, MODEL_CATALOG } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
 import { openAIReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
+import { buildAttachmentPromptSection } from "../attachments/prompt-text";
+
+type OpenAIResponseInputMessage = {
+  role: "user" | "assistant";
+  content:
+    | string
+    | Array<
+        | { type: "input_text"; text: string }
+        | { type: "input_image"; image_url: string }
+        | { type: "input_file"; filename: string; file_data: string }
+      >;
+};
 
 function shellCommandPartsToString(parts: unknown): string {
   if (typeof parts === "string") return parts;
@@ -32,6 +45,53 @@ function usesResponsesApi(model: string): boolean {
   );
 }
 
+export function buildOpenAIResponsesInput(
+  params: ChatParams,
+  caps: ModelCapabilities
+): OpenAIResponseInputMessage[] {
+  const messages = params.messages.filter((m) => m.role !== "system");
+  const lastUserIndex = messages
+    .map((m, i) => (m.role === "user" ? i : -1))
+    .filter((i) => i >= 0)
+    .at(-1);
+
+  return messages.map((m, index) => {
+    const role = m.role as "user" | "assistant";
+    if (role !== "user" || index !== lastUserIndex || !params.attachments?.length) {
+      return { role, content: m.content };
+    }
+
+    const text = m.content + buildAttachmentPromptSection(params.attachments);
+    const content: OpenAIResponseInputMessage["content"] = [
+      ...params.attachments
+        .filter(
+          (file) =>
+            file.category === "document" && caps.document && !!file.base64Data
+        )
+        .map((file) => ({
+          type: "input_file" as const,
+          filename: file.filename,
+          file_data: `data:${file.mimeType};base64,${file.base64Data}`,
+        })),
+      ...(text ? [{ type: "input_text" as const, text }] : []),
+      ...params.attachments
+        .filter(
+          (file) => file.category === "image" && caps.image && !!file.base64Data
+        )
+        .map((file) => ({
+          type: "input_image" as const,
+          image_url: `data:${file.mimeType};base64,${file.base64Data}`,
+        })),
+    ];
+
+    return {
+      role,
+      content:
+        content.length === 1 && content[0].type === "input_text" ? text : content,
+    };
+  });
+}
+
 /**
  * Stream via the Responses API. Attachments aren't mapped here — the only
  * models on this path are text-only Codex models, and the engine filters
@@ -45,9 +105,16 @@ async function* streamOpenAIResponses(
     .filter((m) => m.role === "system")
     .map((m) => m.content)
     .join("\n\n");
-  const input = params.messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+  const caps =
+    params.capabilities ??
+    MODEL_CATALOG.find((m) => m.providerId === "openai" && m.id === params.model)
+      ?.capabilities ?? {
+      image: false,
+      document: false,
+      audio: false,
+      video: false,
+    };
+  const input = buildOpenAIResponsesInput(params, caps);
 
   const reasoningValue = openAIReasoningEffort(params.reasoningEffort ?? "default");
   const structuredOutputField = openAIResponsesTextFormatField(
@@ -86,7 +153,7 @@ async function* streamOpenAIResponses(
     const stream = await client.responses.create({
       model: params.model,
       ...(instructions ? { instructions } : {}),
-      input,
+      input: input as never,
       ...(params.maxTokens != null ? { max_output_tokens: params.maxTokens } : {}),
       ...(reasoningValue
         ? { reasoning: { effort: reasoningValue as "low" | "medium" | "high" } }

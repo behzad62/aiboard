@@ -1,6 +1,5 @@
 import { cleanupBenchRun, getBenchDiff, prepareBenchCase, runBenchVerifier } from "@/lib/client/bench-runner";
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatus } from "@/lib/benchmark/types";
-import type { WorkBenchScore } from "@/lib/benchmark/scoring/types";
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
 import {
   createWorkBenchLogArtifact,
@@ -390,7 +389,7 @@ function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatu
   if (/runner|connect|network|fetch|workspace/.test(message)) {
     return { status: "invalid_environment", code: "runner_unavailable" };
   }
-  if (/case|manifest|fixture|verifier/.test(message)) {
+  if (/case|manifest|fixture|setup|verifier/.test(message)) {
     return { status: "invalid_case", code: "case_setup_failed" };
   }
   return { status: "invalid_harness", code: "workbench_prepare_failed" };

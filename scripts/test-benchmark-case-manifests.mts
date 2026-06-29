@@ -12,9 +12,9 @@ import {
 } from "../lib/benchmark/toolreliability/cases";
 import {
   listWorkBenchV1CaseOptions,
-  listWorkBenchV2CaseOptions,
-  toBenchmarkCaseV2,
-} from "../lib/benchmark/workbench";
+} from "../lib/benchmark/workbench/v1-corpus";
+import { listWorkBenchV2CaseOptions } from "../lib/benchmark/workbench/v2-corpus";
+import { toBenchmarkCaseV2 } from "../lib/benchmark/workbench/case-loader";
 
 let failures = 0;
 

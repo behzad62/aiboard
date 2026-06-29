@@ -25,28 +25,28 @@ export const MODEL_CATALOG: CatalogModel[] = [
     name: "GPT-5.5",
     providerId: "openai",
     description: "Newest frontier model for coding and professional work",
-    capabilities: { image: true, document: false, audio: false, video: false },
+    capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
     id: "gpt-5.5-pro",
     name: "GPT-5.5 Pro",
     providerId: "openai",
     description: "Highest-intelligence GPT-5.5 variant for complex tasks",
-    capabilities: { image: true, document: false, audio: false, video: false },
+    capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
     id: "gpt-5.4",
     name: "GPT-5.4",
     providerId: "openai",
     description: "Frontier model with coding, reasoning, and computer-use",
-    capabilities: { image: true, document: false, audio: false, video: false },
+    capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
     id: "gpt-5.4-pro",
     name: "GPT-5.4 Pro",
     providerId: "openai",
     description: "Maximum-performance GPT-5.4 for complex professional work",
-    capabilities: { image: true, document: false, audio: false, video: false },
+    capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
     id: "gpt-5.3-codex",
@@ -61,7 +61,7 @@ export const MODEL_CATALOG: CatalogModel[] = [
     name: "GPT-5.4 Mini",
     providerId: "openai",
     description: "Cost-optimized model for fast responses",
-    capabilities: { image: true, document: false, audio: false, video: false },
+    capabilities: { image: true, document: true, audio: false, video: false },
     validationCandidate: true,
   },
 
@@ -169,6 +169,14 @@ export const MODEL_CATALOG: CatalogModel[] = [
     providerId: "openrouter",
     description: "Z.ai flagship for coding and tool use across long-running agentic tasks (1M context)",
     capabilities: { image: false, document: false, audio: false, video: false },
+  },
+  {
+    id: "moonshotai/kimi-k2.7-code",
+    name: "Kimi K2.7 Code",
+    providerId: "openrouter",
+    description:
+      "MoonshotAI coding-focused Kimi K2 model for reliable long-context programming tasks (262K context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
   },
   {
     id: "nex-agi/nex-n2-pro:free",

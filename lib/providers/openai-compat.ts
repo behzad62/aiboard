@@ -73,24 +73,35 @@ function buildOpenAIPromptCacheKey(
 
 export function buildOpenAIUserContent(
   text: string,
-  attachments?: AttachmentPayload[]
+  attachments?: AttachmentPayload[],
+  caps?: ModelCapabilities
 ) {
-  const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+  const parts: Array<Record<string, unknown>> = [
     { type: "text", text },
   ];
 
   for (const file of attachments ?? []) {
-    if (file.category === "image" && file.base64Data) {
+    if (file.category === "image" && (!caps || caps.image) && file.base64Data) {
       parts.push({
         type: "image_url",
         image_url: {
           url: `data:${file.mimeType};base64,${file.base64Data}`,
         },
       });
+    } else if (file.category === "document" && caps?.document && file.base64Data) {
+      parts.push({
+        type: "file",
+        file: {
+          filename: file.filename,
+          file_data: `data:${file.mimeType};base64,${file.base64Data}`,
+        },
+      });
     }
   }
 
-  return parts.length === 1 && parts[0].type === "text" ? text : parts;
+  return parts.length === 1 && parts[0].type === "text"
+    ? text
+    : (parts as unknown as OpenAI.Chat.Completions.ChatCompletionContentPart[]);
 }
 
 // OpenRouter caches OpenAI/DeepSeek/Grok-style models automatically, but
@@ -206,12 +217,14 @@ export function buildOpenAIMessages(
     if (isLastUser && params.attachments?.length) {
       const text = m.content + buildAttachmentPromptSection(params.attachments);
       const multimodal = params.attachments.some(
-        (a) => a.category === "image" && caps.image
+        (a) =>
+          (a.category === "image" && caps.image && !!a.base64Data) ||
+          (a.category === "document" && caps.document && !!a.base64Data)
       );
       return {
         role: "user",
         content: multimodal
-          ? buildOpenAIUserContent(text, params.attachments)
+          ? buildOpenAIUserContent(text, params.attachments, caps)
           : text,
       };
     }

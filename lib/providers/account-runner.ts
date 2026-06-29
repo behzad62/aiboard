@@ -27,6 +27,12 @@ interface AccountRunnerResponse {
   error?: string;
 }
 
+type AccountRunnerEvent =
+  | { type: "token"; content?: string }
+  | { type: "tool_call"; toolCall?: StreamChunk["toolCall"] }
+  | { type: "error"; error?: string }
+  | { type: "done" };
+
 function joinRunnerUrl(baseURL: string, path: string): string {
   const trimmed = baseURL.trim().replace(/\/$/, "");
   return `${trimmed}${path.startsWith("/") ? path : `/${path}`}`;
@@ -49,12 +55,85 @@ function unsupportedAttachmentReason(params: ChatParams): string | undefined {
       return `${attachment.filename} is missing image data`;
     }
     if (attachment.category === "text_inline" || attachment.category === "document") {
-      if (typeof attachment.textContent === "string") continue;
-      return `${attachment.filename} is not a text-readable document`;
+      if (typeof attachment.textContent === "string" || attachment.base64Data) continue;
+      return `${attachment.filename} is missing document data`;
     }
     return `${attachment.category} attachments are not supported by ${params.model}`;
   }
   return undefined;
+}
+
+function buildAccountRunnerRequestBody(params: ChatParams): Record<string, unknown> {
+  return {
+    model: params.model,
+    messages: params.messages,
+    maxTokens: params.maxTokens,
+    temperature: params.temperature,
+    reasoningEffort: params.reasoningEffort,
+    structuredOutput: params.structuredOutput,
+    nativeTools: params.nativeTools,
+    hostedBuildTools: params.hostedBuildTools,
+    webSearch: params.webSearch,
+    attachments: params.attachments ?? [],
+    stream: true,
+  };
+}
+
+function parseSseBlock(block: string): AccountRunnerEvent | null {
+  const data = block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data || data === "[DONE]") return null;
+  try {
+    return JSON.parse(data) as AccountRunnerEvent;
+  } catch {
+    return { type: "token", content: data };
+  }
+}
+
+async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChunk> {
+  const reader = response.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    for (;;) {
+      const match = buffer.match(/\r?\n\r?\n/);
+      if (!match) break;
+      const index = match.index ?? 0;
+      const end = index + match[0].length;
+      const block = buffer.slice(0, index);
+      buffer = buffer.slice(end);
+      const event = parseSseBlock(block);
+      if (!event) continue;
+      if (event.type === "token" && event.content) {
+        yield { type: "token", content: event.content };
+      } else if (event.type === "tool_call" && event.toolCall) {
+        yield { type: "tool_call", toolCall: event.toolCall };
+      } else if (event.type === "error") {
+        yield { type: "error", error: event.error ?? "Account runner stream failed" };
+        return;
+      } else if (event.type === "done") {
+        yield { type: "done" };
+        return;
+      }
+    }
+  }
+  const tail = parseSseBlock(buffer);
+  if (tail?.type === "token" && tail.content) {
+    yield { type: "token", content: tail.content };
+  } else if (tail?.type === "tool_call" && tail.toolCall) {
+    yield { type: "tool_call", toolCall: tail.toolCall };
+  } else if (tail?.type === "error") {
+    yield { type: "error", error: tail.error ?? "Account runner stream failed" };
+    return;
+  }
+  yield { type: "done" };
 }
 
 export function createAccountRunnerProvider(
@@ -108,17 +187,16 @@ export function createAccountRunnerProvider(
               "content-type": "application/json",
               "x-runner-token": params.apiKey,
             },
-            body: JSON.stringify({
-              model: params.model,
-              messages: params.messages,
-              maxTokens: params.maxTokens,
-              temperature: params.temperature,
-              reasoningEffort: params.reasoningEffort,
-              structuredOutput: params.structuredOutput,
-              attachments: params.attachments ?? [],
-            }),
+            body: JSON.stringify(buildAccountRunnerRequestBody(params)),
           }
         );
+        if (
+          response.ok &&
+          response.headers.get("content-type")?.includes("text/event-stream")
+        ) {
+          yield* streamRunnerEvents(response);
+          return;
+        }
         const data = await parseRunnerResponse(response);
         if (!response.ok || data.error) {
           yield {

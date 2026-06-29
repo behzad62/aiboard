@@ -43,12 +43,12 @@ const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint:
   chatgpt: {
     label: "Account runner URL",
     placeholder: "http://127.0.0.1:1455",
-    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
+    hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
   },
   "github-copilot": {
     label: "Account runner URL",
     placeholder: "http://127.0.0.1:1455",
-    hint: "Download account-provider-runner.mjs from this card, run it with Node, then paste the printed URL here.",
+    hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here.",
   },
 };
 
@@ -67,14 +67,14 @@ const ACCOUNT_RUNNER_PROVIDERS: Record<
   chatgpt: {
     path: "chatgpt",
     loginLabel: "Log in with OpenAI",
-    tokenLabel: "Runner token",
-    tokenPlaceholder: "Paste the token printed by the account runner",
+    tokenLabel: "Runner session token",
+    tokenPlaceholder: "Paste the current token printed by the account runner",
   },
   "github-copilot": {
     path: "github-copilot",
     loginLabel: "Log in with GitHub",
-    tokenLabel: "Runner token",
-    tokenPlaceholder: "Paste the token printed by the account runner",
+    tokenLabel: "Runner session token",
+    tokenPlaceholder: "Paste the current token printed by the account runner",
   },
 };
 
@@ -362,7 +362,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         />
         {accountRunner && (
           <p className="text-xs text-muted-foreground">
-            This token is printed in the terminal when the account runner starts.
+            This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved ChatGPT/GitHub login stays in the auth file.
           </p>
         )}
       </div>
@@ -371,7 +371,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Account runner and login</p>
           <p className="mt-1">
-            Download the runner, run it with Node, paste its printed URL/token above, save, then authorize your account.
+            Download the runner, run it with Node, paste its current URL/session token above, save, then authorize your account if it is not already connected.
           </p>
           <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
             node account-provider-runner.mjs

@@ -359,7 +359,7 @@ export function CustomModelsManager({
           </div>
           <p className="text-xs text-muted-foreground">
             Text is always supported. Enable what this endpoint accepts — image
-            attachments are sent over the OpenAI-compatible API.
+            and document attachments are sent over the OpenAI-compatible API.
           </p>
         </div>
 

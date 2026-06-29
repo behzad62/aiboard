@@ -19,6 +19,7 @@ import type {
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
+import type { AttachmentPayload } from "@/lib/attachments/types";
 import type {
   ChatMessage,
   NativeToolDefinition,
@@ -222,6 +223,7 @@ import {
   writeFileViaRunner,
   type RunnerConfig,
 } from "./runner";
+import { loadAttachmentPayloads } from "./attachments";
 import {
   accumulateModelStats,
   getBuildCheckpoint,
@@ -310,6 +312,7 @@ export interface BuildHooks {
     maxTokens: number;
     label: string;
     structuredOutput?: StructuredOutputFormat;
+    attachments?: AttachmentPayload[];
   }) => Promise<string>;
 }
 
@@ -382,6 +385,7 @@ export async function resolveBuildModelContent(input: {
   maxTokens: number;
   label: string;
   structuredOutput?: StructuredOutputFormat;
+  attachments?: AttachmentPayload[];
   hooks?: BuildHooks;
   collect: () => Promise<string>;
   emitToken?: (token: string) => void;
@@ -393,6 +397,7 @@ export async function resolveBuildModelContent(input: {
       maxTokens: input.maxTokens,
       label: input.label,
       structuredOutput: input.structuredOutput,
+      attachments: input.attachments,
     });
     input.emitToken?.(content);
     return { content, overrideUsed: true };
@@ -422,6 +427,42 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 // safe verification commands (read-only git / rg / npm scripts) per batch.
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
+
+function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildBuildAttachmentManifest(attachments: AttachmentPayload[]): string {
+  if (attachments.length === 0) return "";
+  const lines = attachments.map((attachment) => {
+    const details = [
+      attachment.mimeType,
+      `category: ${attachment.category}`,
+      attachment.textContent
+        ? `extracted text available: ${attachment.textContent.length} chars`
+        : "",
+      attachment.base64Data ? "raw bytes attached" : "raw bytes unavailable",
+    ].filter(Boolean);
+    return `- ${attachment.filename} (${details.join("; ")})`;
+  });
+  return [
+    "User-attached build files:",
+    "The raw files are attached only to the initial Architect planning call. They are not automatically sent to worker, review, or summary calls. During planning, summarize requirements, create tasks, or scaffold project files/assets that workers need later.",
+    ...lines,
+  ].join("\n");
+}
+
+function joinBuildContextSections(...sections: Array<string | undefined>): string {
+  return sections.map((section) => section?.trim() ?? "").filter(Boolean).join("\n\n");
+}
 
 const PROVIDER_NATIVE_BUILD_TOOL_IDS = new Set([
   "openai",
@@ -571,6 +612,10 @@ export async function runBuildDiscussion(
   const config = EFFORT_CONFIG[effort];
   const buildSettings = normalizeBuildSettings(discussion);
   const settings = getUserSettings();
+  const buildAttachments = loadAttachmentPayloads(
+    parseDiscussionAttachmentIds(discussion.attachmentIds)
+  );
+  const buildAttachmentManifest = buildBuildAttachmentManifest(buildAttachments);
   const benchmark = hooks?.benchmark;
   const benchmarkApprovalsBypassed = (): boolean =>
     benchmark?.noHumanApproval === true || allowAllCommands;
@@ -3460,6 +3505,7 @@ export async function runBuildDiscussion(
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
       nativeTools?: NativeToolDefinition[];
+      attachments?: AttachmentPayload[];
       validateStructuredOutput?: (content: string) => StructuredTraceValidation;
     }
   ): Promise<string> => {
@@ -3510,6 +3556,7 @@ export async function runBuildDiscussion(
         maxTokens: opts.maxTokens,
         label: opts.label,
         structuredOutput: opts.structuredOutput,
+        attachments: opts.attachments,
         hooks,
         emitToken: (token) => emit({ type: "message_token", messageId, token }),
         collect: () =>
@@ -3521,7 +3568,7 @@ export async function runBuildDiscussion(
             opts.maxTokens,
             0.4,
             reasoningEffort,
-            [],
+            opts.attachments ?? [],
             (token) => emit({ type: "message_token", messageId, token }),
             signal,
             opts.stopWhen,
@@ -4680,6 +4727,7 @@ export async function runBuildDiscussion(
     terminal: "plan" | "review";
     label: string;
     initialUser: string;
+    initialAttachments?: AttachmentPayload[];
     budgets: InspectionBudgets;
     /** Accumulate delivered read/search results for cross-phase memory. */
     appendContext: (text: string) => void;
@@ -4740,6 +4788,7 @@ export async function runBuildDiscussion(
       const text = await streamConversation(architect, messages, {
         maxTokens: architectMaxTokens,
         label: forced ? `${args.label} (final verdict)` : args.label,
+        attachments: turn === 0 ? args.initialAttachments : undefined,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
         structuredOutput: architectActionResponseFormat,
         nativeTools: buildNativeBuildToolDefinitions(
@@ -5011,7 +5060,7 @@ export async function runBuildDiscussion(
       modelContextProfile: modelContextProfile(architect),
       request: discussion.topic,
       treeText: treeText(),
-      fileContext: extraFileContext,
+      fileContext: joinBuildContextSections(buildAttachmentManifest, extraFileContext),
       previousSummary: truncate(previousSummary, 6_000),
       userNotes: userNotesText(),
       memoryRecords: activeBuildMemories(),
@@ -5053,6 +5102,7 @@ export async function runBuildDiscussion(
         skillContext: planSkillContext,
         assembledContext: planAssembledContext,
       }),
+      initialAttachments: buildAttachments,
       // read_range isn't offered during planning, so reads + searches only.
       budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
       appendContext: (text) => {
