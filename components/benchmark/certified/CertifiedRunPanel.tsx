@@ -74,6 +74,9 @@ import {
 } from "@/lib/benchmark/workbench";
 import type { SelectedModel } from "@/lib/providers/base";
 
+const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
+const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
+
 type RunnableTrack = "gameiq" | "toolreliability" | "teamiq" | "workbench";
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
 
@@ -100,14 +103,8 @@ export function CertifiedRunPanel({
   onComplete: () => Promise<void>;
   setMessage: (message: string | null) => void;
 }) {
-  const initialTrack: RunnableTrack =
-    track === "toolreliability"
-      ? "toolreliability"
-      : track === "teamiq"
-        ? "teamiq"
-        : track === "workbench"
-          ? "workbench"
-        : "gameiq";
+  const lockedTrack = track === "all" ? null : (track as RunnableTrack);
+  const initialTrack: RunnableTrack = lockedTrack ?? "gameiq";
   const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
   const [models, setModels] = useState<SelectedModel[]>([]);
   const [modelId, setModelId] = useState("");
@@ -118,7 +115,7 @@ export function CertifiedRunPanel({
   const [includeSoloBaselines, setIncludeSoloBaselines] = useState(true);
   const [suiteId, setSuiteId] = useState("");
   const [harnessProfile, setHarnessProfile] =
-    useState<HarnessProfile>("raw-single-model");
+    useState<HarnessProfile>(DIRECT_MODEL_HARNESS);
   const [workBenchRunnerUrl, setWorkBenchRunnerUrl] = useState(
     DEFAULT_BENCH_RUNNER_URL
   );
@@ -131,8 +128,18 @@ export function CertifiedRunPanel({
 
   const suites = useMemo(() => suiteOptions(selectedTrack), [selectedTrack]);
   const workBenchCases = useMemo(() => listWorkBenchV1CaseOptions(), []);
-  const harnessProfiles =
-    selectedTrack === "workbench" ? WORKBENCH_HARNESS_PROFILES : undefined;
+  const executionMode = executionModeCopy(selectedTrack, harnessProfile);
+  const certification = useMemo(
+    () => runHarnessCertification(harnessProfile),
+    [harnessProfile]
+  );
+
+  useEffect(() => {
+    if (lockedTrack && selectedTrack !== lockedTrack) {
+      setSelectedTrack(lockedTrack);
+    }
+  }, [lockedTrack, selectedTrack]);
+
   useEffect(() => {
     const enabled = getEnabledModels().map((model) => ({
       modelId: `${model.providerId}:${model.id}`,
@@ -150,28 +157,27 @@ export function CertifiedRunPanel({
         : enabled.slice(0, 3).map((model) => model.modelId)
     );
   }, []);
+
   useEffect(() => {
     setSuiteId(suites[0]?.id ?? "");
   }, [suites]);
+
   useEffect(() => {
-    if (
-      selectedTrack === "workbench" &&
-      !WORKBENCH_HARNESS_PROFILES.some((profile) => profile.id === harnessProfile)
-    ) {
-      setHarnessProfile("aiboard-build-single-worker");
+    if (selectedTrack === "workbench") {
+      if (!WORKBENCH_HARNESS_PROFILES.some((profile) => profile.id === harnessProfile)) {
+        setHarnessProfile("aiboard-build-single-worker");
+      }
+      return;
     }
-    if (
-      selectedTrack !== "workbench" &&
-      WORKBENCH_HARNESS_PROFILES.some((profile) => profile.id === harnessProfile)
-    ) {
-      setHarnessProfile("raw-single-model");
+    if (selectedTrack === "teamiq") {
+      if (harnessProfile !== TEAM_HARNESS) setHarnessProfile(TEAM_HARNESS);
+      return;
+    }
+    if (harnessProfile !== DIRECT_MODEL_HARNESS) {
+      setHarnessProfile(DIRECT_MODEL_HARNESS);
     }
   }, [selectedTrack, harnessProfile]);
 
-  const certification = useMemo(
-    () => runHarnessCertification(harnessProfile),
-    [harnessProfile]
-  );
   const runGate = getCertifiedRunGate({
     suiteId,
     running,
@@ -204,36 +210,47 @@ export function CertifiedRunPanel({
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-4">
-            <CaseSuitePicker
-              value={selectedTrack}
-              options={TRACK_OPTIONS}
-              onChange={(value) => setSelectedTrack(value as RunnableTrack)}
-            />
+            {lockedTrack ? (
+              <StaticField label="Track" value={trackLabel(selectedTrack)} />
+            ) : (
+              <CaseSuitePicker
+                value={selectedTrack}
+                options={TRACK_OPTIONS}
+                onChange={(value) => setSelectedTrack(value as RunnableTrack)}
+              />
+            )}
             {selectedTrack === "workbench" ? (
-              <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-                WorkBench v1 fixtures
-              </div>
+              <StaticField label="Case set" value="Choose WorkBench case below" />
             ) : (
               <CaseSuitePicker value={suiteId} options={suites} onChange={setSuiteId} />
             )}
             {selectedTrack === "teamiq" ? (
-              <div className="md:col-span-1">
-                <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-                  {teamModelIds.length >= 2
+              <StaticField
+                label="Models"
+                value={
+                  teamModelIds.length >= 2
                     ? isFireworksSuite(suiteId)
                       ? `${teamModelIds.length} / ${fireworksPlayerCount} Fireworks players selected`
                       : `${teamModelIds.length} models selected`
-                    : "Select at least two models"}
-                </div>
-              </div>
+                    : "Select at least two models"
+                }
+              />
             ) : (
               <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
             )}
-            <HarnessProfilePicker
-              value={harnessProfile}
-              onChange={setHarnessProfile}
-              profiles={harnessProfiles}
-            />
+            {selectedTrack === "workbench" ? (
+              <HarnessProfilePicker
+                value={harnessProfile}
+                onChange={setHarnessProfile}
+                profiles={WORKBENCH_HARNESS_PROFILES}
+              />
+            ) : (
+              <StaticField
+                label="Execution"
+                value={executionMode.title}
+                description={executionMode.description}
+              />
+            )}
           </div>
           {selectedTrack === "teamiq" && (
             <div className="space-y-4">
@@ -430,7 +447,7 @@ export function CertifiedRunPanel({
         },
       });
       setSummary(result);
-      setMessage(`Certified ${selectedTrack} run completed.`);
+      setMessage(`Certified ${trackLabel(selectedTrack)} run completed.`);
       await onComplete();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -461,29 +478,29 @@ export function CertifiedRunPanel({
 
 function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
   if (track === "toolreliability") {
-    return [{ id: "toolreliability-v0.1-pack", label: "ToolReliability v0.1" }];
+    return [{ id: "toolreliability-v0.1-pack", label: "ToolReliability v1: Full tool-use pack" }];
   }
   if (track === "teamiq") {
     return [
       {
         id: "teamiq-toolreliability-v0.1-quick",
-        label: "TeamIQ ToolReliability quick",
+        label: "TeamIQ v1: ToolReliability quick",
       },
       {
         id: "fireworks-teamiq-tactics-v0.1",
-        label: "Fireworks Tactics",
+        label: "Fireworks v1: Tactics",
       },
       {
         id: "fireworks-teamiq-memory-v0.1",
-        label: "Fireworks Memory",
+        label: "Fireworks v1: Memory",
       },
       {
         id: "fireworks-teamiq-full-v0.1",
-        label: "Fireworks Full",
+        label: "Fireworks v1: Full games",
       },
       {
         id: "fireworks-teamiq-mixed-v0.1",
-        label: "Fireworks Mixed",
+        label: "Fireworks v1: Mixed suite",
       },
     ];
   }
@@ -496,7 +513,7 @@ function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
   return ["connect-four", "chess", "battleship", "codenames", "fireworks"]
     .map((gameId) => getGameIqScenarioPack(gameId as never))
     .filter((pack): pack is NonNullable<ReturnType<typeof getGameIqScenarioPack>> => Boolean(pack))
-    .map((pack) => ({ id: pack.id, label: pack.label }));
+    .map((pack) => ({ id: pack.id, label: gameIqSuiteLabel(pack.gameId) }));
 }
 
 function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV2 {
@@ -513,18 +530,18 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       id: "toolreliability-v0.1-pack",
       schemaVersion: 2,
       track: "toolreliability",
-      title: "ToolReliability v0.1 pack",
-      description: "Schema, tool-call, patch, repair, and safety checks.",
-      difficulty: "easy",
+      title: "ToolReliability v1 pack",
+      description: "Schema, tool-call, large-file patch, repair, and safety checks.",
+      difficulty: "medium",
       tags: ["toolreliability"],
-      caseVersion: "0.1.0",
+      caseVersion: "1.0.0",
       createdAt: timestamp,
       updatedAt: timestamp,
       prompt: { userRequest: "Complete each ToolReliability case." },
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
-      budget: { maxUsd: 5, maxModelCalls: 100 },
-      scoring: { scoringVersion: "toolreliability-v0.1", primary: "tool_reliability" },
+      budget: { maxUsd: 5, maxModelCalls: 150 },
+      scoring: { scoringVersion: "toolreliability-v1", primary: "tool_reliability" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TOOLREL",
@@ -543,12 +560,12 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       id: suiteId,
       schemaVersion: 2,
       track: "teamiq",
-      title: "TeamIQ ToolReliability quick",
+      title: "TeamIQ v1 ToolReliability quick",
       description:
         "TeamIQ solo baselines and team attempt over deterministic ToolReliability cases.",
       difficulty: "medium",
       tags: ["teamiq", "toolreliability"],
-      caseVersion: "0.1.0",
+      caseVersion: "1.0.0",
       createdAt: timestamp,
       updatedAt: timestamp,
       prompt: {
@@ -558,7 +575,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
       budget: { maxUsd: 5, maxModelCalls: 100 },
-      scoring: { scoringVersion: "teamiq-toolreliability-v0.1", primary: "team_lift" },
+      scoring: { scoringVersion: "teamiq-toolreliability-v1", primary: "team_lift" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TEAMIQ",
@@ -574,11 +591,11 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
     id: suiteId,
     schemaVersion: 2,
     track: "gameiq",
-    title: pack?.label ?? suiteId,
+    title: pack ? gameIqSuiteLabel(pack.gameId) : suiteId,
     description: "Certified GameIQ scenario pack.",
     difficulty: "easy",
     tags: ["gameiq"],
-    caseVersion: "0.1.0",
+    caseVersion: "1.0.0",
     createdAt: timestamp,
     updatedAt: timestamp,
     prompt: {
@@ -591,7 +608,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: { maxUsd: 5, maxModelCalls: 100 },
-    scoring: { scoringVersion: "certified-gameiq-v0.1", primary: "game_iq" },
+    scoring: { scoringVersion: "certified-gameiq-v1", primary: "game_iq" },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-UI-GAMEIQ",
@@ -669,4 +686,79 @@ function fireworksPlayerAssignments(
     const model = models.find((candidate) => candidate.modelId === modelId);
     return `P${index + 1} ${model?.displayName ?? modelId}`;
   });
+}
+
+function trackLabel(track: RunnableTrack): string {
+  return TRACK_OPTIONS.find((option) => option.id === track)?.label ?? track;
+}
+
+function gameIqSuiteLabel(gameId: string): string {
+  switch (gameId) {
+    case "connect-four":
+      return "GameIQ v1: Connect Four";
+    case "chess":
+      return "GameIQ v1: Chess Tactics";
+    case "battleship":
+      return "GameIQ v1: Battleship Targeting";
+    case "codenames":
+      return "GameIQ v1: Codenames Clues";
+    case "fireworks":
+      return "GameIQ v1: Fireworks Solo Control";
+    default:
+      return `GameIQ v1: ${gameId}`;
+  }
+}
+
+function executionModeCopy(track: RunnableTrack, harnessProfile: HarnessProfile): {
+  title: string;
+  description: string;
+} {
+  if (track === "gameiq") {
+    return {
+      title: "Direct model call",
+      description: "The model receives the game state and returns one structured move. No AI Board discussion layer is added.",
+    };
+  }
+  if (track === "toolreliability") {
+    return {
+      title: "Direct tool-use call",
+      description: "Each case is a direct schema/tool/patch prompt scored by deterministic validators.",
+    };
+  }
+  if (track === "teamiq") {
+    return {
+      title: "AI Board team harness",
+      description: "Models are assigned team roles, then compared against required solo baselines when applicable.",
+    };
+  }
+  return {
+    title:
+      WORKBENCH_HARNESS_PROFILES.find((profile) => profile.id === harnessProfile)?.label ??
+      "Build harness",
+    description: "WorkBench uses the local bench runner and Build-mode tool protocol.",
+  };
+}
+
+function StaticField({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+}) {
+  return (
+    <div className="rounded-md border px-3 py-2 text-sm">
+      <div className="text-xs font-medium uppercase text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 font-medium leading-snug">{value}</div>
+      {description && (
+        <div className="mt-1 text-xs leading-snug text-muted-foreground">
+          {description}
+        </div>
+      )}
+    </div>
+  );
 }
