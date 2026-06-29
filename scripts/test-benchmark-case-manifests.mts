@@ -50,21 +50,23 @@ for (const track of ["workbench", "gameiq", "toolreliability", "teamiq"]) {
 }
 
 const expectedGameIqCounts = new Map([
-  ["connect-four", 40],
-  ["chess", 60],
-  ["battleship", 25],
-  ["codenames", 25],
-  ["fireworks", 20],
+  ["gameiq-v0.1-connect-four", 40],
+  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-battleship", 25],
+  ["gameiq-v0.1-codenames", 25],
+  ["gameiq-fireworks-basic-v1", 20],
+  ["gameiq-fireworks-hard-v1", 40],
+  ["gameiq-fireworks-memory-v1", 30],
 ]);
 for (const pack of listGameIqScenarioPacks()) {
   check(
-    `${pack.gameId} has expected canonical scenario count`,
-    pack.scenarios.length === expectedGameIqCounts.get(pack.gameId),
-    { gameId: pack.gameId, count: pack.scenarios.length }
+    `${pack.id} has expected canonical scenario count`,
+    pack.scenarios.length === expectedGameIqCounts.get(pack.id),
+    { id: pack.id, gameId: pack.gameId, count: pack.scenarios.length }
   );
   check(
-    `${pack.gameId} has stable digest`,
-    stableGameIqScenarioPackDigest(pack).startsWith(`gameiq-v0.1:${pack.gameId}:`),
+    `${pack.id} has stable digest`,
+    stableGameIqScenarioPackDigest(pack).startsWith(`gameiq-v1:${pack.id}:`),
     stableGameIqScenarioPackDigest(pack)
   );
 }
