@@ -71,7 +71,7 @@ async function runCertifiedToolReliabilityAttempt(
         model: input.model,
         system: "You are a certified ToolReliability benchmark participant. Return only the requested answer.",
         user: toolReliabilityPrompt(benchmarkCase, attempt),
-        maxTokens: input.maxTokens ?? 512,
+        maxTokens: input.maxTokens ?? maxTokensForCase(benchmarkCase),
         temperature: 0,
         context: input.context,
         caseId: input.context.caseIds[0],
@@ -217,10 +217,29 @@ function toolReliabilityPrompt(
       : "";
   return [
     benchmarkCase.prompt,
+    patchContext(benchmarkCase),
     `Canary: ${benchmarkCase.canary}`,
     "Do not include explanations outside the requested answer.",
     repairNote,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function patchContext(benchmarkCase: ToolReliabilityCase): string {
+  if (benchmarkCase.category !== "patch") return "";
+  return [
+    "Target file path:",
+    benchmarkCase.path,
+    "Current file content follows. Preserve every unrelated line exactly.",
+    "```text",
+    benchmarkCase.originalContent,
+    "```",
   ].join("\n");
+}
+
+function maxTokensForCase(benchmarkCase: ToolReliabilityCase): number {
+  return benchmarkCase.category === "patch" ? 1024 : 512;
 }
 
 function costTotal(values: Array<number | null>): number | null {
