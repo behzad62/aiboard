@@ -52,12 +52,11 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] =
     useState<BenchmarkEvidenceItem | null>(null);
-  const { exportJson, exportLegacyJson, exportMarkdown, importJson } =
-    useBenchmarkReportActions({
-      dashboard,
-      reload: refresh,
-      setMessage,
-    });
+  const { exportJson, exportMarkdown, importJson } = useBenchmarkReportActions({
+    dashboard,
+    reload: refresh,
+    setMessage,
+  });
 
   const selectedModel = useMemo(
     () =>
@@ -109,7 +108,6 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
         onRefresh={() => void refresh()}
         onCopyReport={() => void exportMarkdown().catch(reportError)}
         onExportJson={exportJson}
-        onExportLegacyJson={exportLegacyJson}
         onImportJson={(file) => void importJson(file).catch(reportError)}
       />
 
@@ -237,14 +235,12 @@ function BenchmarkLabHeader({
   onRefresh,
   onCopyReport,
   onExportJson,
-  onExportLegacyJson,
   onImportJson,
 }: {
   view: BenchmarkLabView;
   onRefresh: () => void;
   onCopyReport: () => void;
   onExportJson: () => void;
-  onExportLegacyJson: () => void;
   onImportJson: (file: File) => void;
 }) {
   const header = headerCopyForView(view);
@@ -263,7 +259,6 @@ function BenchmarkLabHeader({
         onRefresh={onRefresh}
         onCopyReport={onCopyReport}
         onExportJson={onExportJson}
-        onExportLegacyJson={onExportLegacyJson}
         onImportJson={onImportJson}
       />
     </div>
@@ -323,13 +318,12 @@ function headerCopyForView(view: BenchmarkLabView): {
         description:
           "Local lab evidence and certified benchmark records are summarized separately.",
       };
+    case "full":
     default:
       return {
         title: "Benchmark Lab",
         description:
-          "Local-first model scorecards from game matches, Build-mode results, saved benchmark cases, raw failures, and imported reports.",
+          "Local scorecards, certified benchmark runs, evidence, and reports in one place.",
       };
   }
 }
-
-export default BenchmarkLab;
