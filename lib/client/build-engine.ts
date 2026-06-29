@@ -229,6 +229,7 @@ import {
   getBuildCheckpoint,
   getBuildFiles,
   getContextBlob,
+  getDiscussionById,
   getFinalResult,
   getMessagesForDiscussion,
   getUserSettings,
@@ -612,10 +613,30 @@ export async function runBuildDiscussion(
   const config = EFFORT_CONFIG[effort];
   const buildSettings = normalizeBuildSettings(discussion);
   const settings = getUserSettings();
-  const buildAttachments = loadAttachmentPayloads(
+  let buildAttachments = loadAttachmentPayloads(
     parseDiscussionAttachmentIds(discussion.attachmentIds)
   );
-  const buildAttachmentManifest = buildBuildAttachmentManifest(buildAttachments);
+  let buildAttachmentManifest = buildBuildAttachmentManifest(buildAttachments);
+  const sentRawBuildAttachmentIds = new Set<string>();
+  const refreshBuildAttachments = (): AttachmentPayload[] => {
+    const latestDiscussion = getDiscussionById(discussion.id);
+    buildAttachments = loadAttachmentPayloads(
+      parseDiscussionAttachmentIds(
+        latestDiscussion?.attachmentIds ?? discussion.attachmentIds
+      )
+    );
+    buildAttachmentManifest = buildBuildAttachmentManifest(buildAttachments);
+    return buildAttachments.filter(
+      (attachment) => !sentRawBuildAttachmentIds.has(attachment.id)
+    );
+  };
+  const claimRawBuildAttachmentsForArchitect = (): AttachmentPayload[] => {
+    const unsent = refreshBuildAttachments();
+    for (const attachment of unsent) {
+      sentRawBuildAttachmentIds.add(attachment.id);
+    }
+    return unsent;
+  };
   const benchmark = hooks?.benchmark;
   const benchmarkApprovalsBypassed = (): boolean =>
     benchmark?.noHumanApproval === true || allowAllCommands;
@@ -3738,6 +3759,7 @@ export async function runBuildDiscussion(
       label: string;
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
+      attachments?: AttachmentPayload[];
     }
   ): Promise<string> =>
     streamConversation(
@@ -3749,6 +3771,7 @@ export async function runBuildDiscussion(
       {
         maxTokens: opts.maxTokens,
         label: opts.label,
+        attachments: opts.attachments,
         stopWhen: opts.stopWhen,
         structuredOutput: opts.structuredOutput,
       }
@@ -5054,6 +5077,7 @@ export async function runBuildDiscussion(
       planSkills.evidenceRequired
     );
     const planSkillContext = renderSkillContext(planSkills);
+    const planAttachments = claimRawBuildAttachmentsForArchitect();
     codeIntelBudget.resetPhase();
     const planningCodeIntelPacks = await planCodeIntelPacks();
     const planAssembledContext = buildContextManager.buildPlanContext({
@@ -5102,7 +5126,7 @@ export async function runBuildDiscussion(
         skillContext: planSkillContext,
         assembledContext: planAssembledContext,
       }),
-      initialAttachments: buildAttachments,
+      initialAttachments: planAttachments,
       // read_range isn't offered during planning, so reads + searches only.
       budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
       appendContext: (text) => {
@@ -6357,6 +6381,7 @@ export async function runBuildDiscussion(
     if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
       return;
     const reviewSkillContext = renderSkillContext(reviewSkills);
+    const reviewAttachments = claimRawBuildAttachmentsForArchitect();
     const reviewSkillEvidenceText = formatSkillEvidenceDigest(waveSkillEvidence);
     const reviewOutstandingTasks = buildOutstandingTasksDigest(tasks);
     const reviewChangedFiles = [
@@ -6371,7 +6396,10 @@ export async function runBuildDiscussion(
       modelContextProfile: modelContextProfile(architect),
       request: discussion.topic,
       treeText: treeText(),
-      fileContext: truncate(extraFileContext, TOTAL_REVIEW_CHARS),
+      fileContext: truncate(
+        joinBuildContextSections(buildAttachmentManifest, extraFileContext),
+        TOTAL_REVIEW_CHARS
+      ),
       executedText,
       outstandingTasks: reviewOutstandingTasks,
       verificationText: verifyFeedback,
@@ -6422,6 +6450,7 @@ export async function runBuildDiscussion(
         skillEvidenceText: "",
         assembledContext: reviewAssembledContext,
       }),
+      initialAttachments: reviewAttachments,
       budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
       appendContext: (textChunk) => {
         extraFileContext += textChunk;
@@ -6956,6 +6985,7 @@ export async function runBuildDiscussion(
   ]
     .filter(Boolean)
     .join("\n");
+  const summaryAttachments = claimRawBuildAttachmentsForArchitect();
   const summaryAssembledContext = buildContextManager.buildSummaryContext({
     modelContextProfile: modelContextProfile(architect),
     request: discussion.topic,
@@ -6994,6 +7024,7 @@ export async function runBuildDiscussion(
         "You are the Architect writing the final hand-off summary in Markdown.",
       maxTokens: architectMaxTokens,
       label: "Architect is writing the build summary",
+      attachments: summaryAttachments,
     }
   );
 

@@ -50,10 +50,12 @@ import {
   Bell,
   Download,
   Gavel,
+  Paperclip,
   Play,
   RotateCcw,
   Square,
   StickyNote,
+  X,
 } from "lucide-react";
 import type {
   BuildStopReport,
@@ -71,6 +73,7 @@ import {
   createBuildUsageWindow,
 } from "@/lib/client/build-usage";
 import {
+  addDiscussionAttachments,
   addBuildNote,
   continueDiscussion,
   ensureReady,
@@ -82,6 +85,7 @@ import {
   stopDiscussion,
   updateDiscussionConfig,
 } from "@/lib/client/api";
+import { saveAttachmentFile } from "@/lib/client/settings-api";
 import {
   getProjectHandle,
   queryProjectPermission,
@@ -165,6 +169,20 @@ function clearDiagnostics(discussionId: string) {
   }
 }
 
+function mergeAttachmentSummaries(
+  current: AttachmentSummary[],
+  added: AttachmentSummary[]
+): AttachmentSummary[] {
+  const seen = new Set(current.map((attachment) => attachment.id));
+  const next = [...current];
+  for (const attachment of added) {
+    if (seen.has(attachment.id)) continue;
+    seen.add(attachment.id);
+    next.push(attachment);
+  }
+  return next;
+}
+
 function DiscussionPageInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
@@ -205,6 +223,8 @@ function DiscussionPageInner() {
     resolve: (decision: CommandApprovalDecision) => void;
   } | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [noteFiles, setNoteFiles] = useState<File[]>([]);
+  const [noteSending, setNoteSending] = useState(false);
   const [folderGrant, setFolderGrant] = useState<"checking" | "needed" | "ready">(
     "checking"
   );
@@ -214,6 +234,7 @@ function DiscussionPageInner() {
   const [activeTab, setActiveTab] = useState("activity");
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
+  const noteFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const requestNotificationPermission = useCallback(async () => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -831,20 +852,61 @@ function DiscussionPageInner() {
     setStatus("pending");
   };
 
+  const handleNoteFileSelection = (files: FileList | null) => {
+    const selected = Array.from(files ?? []);
+    if (selected.length === 0) return;
+    setNoteFiles((prev) => [...prev, ...selected]);
+  };
+
+  const removeNoteFile = (index: number) => {
+    setNoteFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
   // Send a note to the Architect: queued for its next plan/review/summary
   // turn. If the build already finished (or stopped/failed), kick off a
   // follow-up pass so the note actually gets acted on.
-  const submitNote = () => {
+  const submitNote = async () => {
     const note = noteDraft.trim();
-    if (!note) return;
+    if (!note && noteFiles.length === 0) return;
+    if (noteSending) return;
+
+    setNoteSending(true);
     let saved: { id: string; round: number };
+    let noteForArchitect = note;
     try {
-      saved = addBuildNote(id, note);
+      let addedAttachments: AttachmentSummary[] = [];
+      if (noteFiles.length > 0) {
+        const savedAttachments = await Promise.all(
+          noteFiles.map((file) => saveAttachmentFile(file))
+        );
+        addedAttachments = addDiscussionAttachments(
+          id,
+          savedAttachments.map((attachment) => attachment.id)
+        );
+        const fresh = getDiscussionData(id);
+        if (fresh) {
+          setDiscussion(fresh.discussion);
+          setAttachments(fresh.attachments);
+        } else {
+          setAttachments((prev) =>
+            mergeAttachmentSummaries(prev, addedAttachments)
+          );
+        }
+        const filenames = savedAttachments
+          .map((attachment) => attachment.filename)
+          .join(", ");
+        const fileNote = `Attached files for this follow-up pass: ${filenames}.`;
+        noteForArchitect = note ? `${note}\n\n${fileNote}` : fileNote;
+      }
+
+      saved = addBuildNote(id, noteForArchitect);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't add the note");
+      setNoteSending(false);
       return;
     }
     setNoteDraft("");
+    setNoteFiles([]);
     setMessages((prev) => [
       ...prev,
       {
@@ -852,7 +914,7 @@ function DiscussionPageInner() {
         round: saved.round,
         modelId: "user",
         modelName: "Your note",
-        content: note,
+        content: noteForArchitect,
       },
     ]);
     if (status === "completed" || status === "stopped" || status === "failed") {
@@ -866,6 +928,7 @@ function DiscussionPageInner() {
       startedRef.current = false;
       setStatus("pending");
     }
+    setNoteSending(false);
   };
 
   // Export the whole conversation — meta, every round's responses, and the
@@ -1321,23 +1384,70 @@ function DiscussionPageInner() {
                 ? "Picked up at the Architect's next planning or review step — use it to steer the build while it runs."
                 : "The build is finished — sending a note starts a follow-up pass in which the Architect addresses it."}
             </p>
-            <div className="mt-2 flex items-end gap-2">
-              <textarea
-                value={noteDraft}
-                onChange={(e) => setNoteDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    submitNote();
+            <div className="mt-2 space-y-2">
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      void submitNote();
+                    }
+                  }}
+                  rows={2}
+                  placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle…"
+                  className="flex-1 resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <Button
+                  size="sm"
+                  onClick={() => void submitNote()}
+                  disabled={
+                    noteSending || (!noteDraft.trim() && noteFiles.length === 0)
                   }
-                }}
-                rows={2}
-                placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle…"
-                className="flex-1 resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <Button size="sm" onClick={submitNote} disabled={!noteDraft.trim()}>
-                Send note
-              </Button>
+                >
+                  {noteSending ? "Sending..." : "Send note"}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={noteFileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    handleNoteFileSelection(event.currentTarget.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => noteFileInputRef.current?.click()}
+                  disabled={noteSending}
+                >
+                  <Paperclip className="h-4 w-4" />
+                  Attach files
+                </Button>
+                {noteFiles.map((file, index) => (
+                  <span
+                    key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
+                    className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
+                  >
+                    <span className="truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => removeNoteFile(index)}
+                      aria-label={`Remove ${file.name}`}
+                      disabled={noteSending}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         )}

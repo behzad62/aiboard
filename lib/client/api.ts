@@ -15,6 +15,7 @@ import type {
   UserSettings,
   Verbosity,
 } from "@/lib/db/schema";
+import type { AttachmentSummary } from "@/lib/attachments/types";
 import type { ModelInfo } from "@/lib/providers/base";
 import {
   clearDiscussionRun,
@@ -47,6 +48,28 @@ import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
 export { runClientDiscussion as runDiscussion, stopDiscussion };
 export type { OrchestratorEvent } from "./engine";
+
+function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function summarizeAttachment(record: ReturnType<typeof getAttachments>[number]): AttachmentSummary {
+  return {
+    id: record.id,
+    filename: record.filename,
+    mimeType: record.mimeType,
+    category: record.category,
+    size: record.size,
+  };
+}
 
 /**
  * Reset a stopped/failed discussion so it can run again from the start:
@@ -94,6 +117,39 @@ export function addBuildNote(
   };
   insertMessage(message);
   return { id: message.id, round };
+}
+
+/**
+ * Add newly uploaded files to an existing discussion so a resumed build or
+ * continued panel run can include them in subsequent provider calls.
+ */
+export function addDiscussionAttachments(
+  discussionId: string,
+  attachmentIds: string[]
+): AttachmentSummary[] {
+  const discussion = getDiscussionById(discussionId);
+  if (!discussion) throw new Error("Discussion not found.");
+
+  const existingIds = parseDiscussionAttachmentIds(discussion.attachmentIds);
+  const uniqueIds = Array.from(
+    new Set(attachmentIds.map((id) => id.trim()).filter(Boolean))
+  );
+  const candidateIds = uniqueIds.filter((id) => !existingIds.includes(id));
+  if (candidateIds.length === 0) return [];
+
+  const records = getAttachments(candidateIds);
+  if (records.length !== candidateIds.length) {
+    const found = new Set(records.map((record) => record.id));
+    const missing = candidateIds.filter((id) => !found.has(id));
+    throw new Error(`Attachment not found: ${missing.join(", ")}`);
+  }
+
+  updateDiscussion(discussionId, {
+    attachmentIds: JSON.stringify([...existingIds, ...candidateIds]),
+    updatedAt: new Date().toISOString(),
+  });
+
+  return records.map(summarizeAttachment);
 }
 
 /**
@@ -345,9 +401,7 @@ export function getDiscussionData(id: string) {
   const discussion = getDiscussionById(id);
   if (!discussion) return null;
   const modelIds: string[] = JSON.parse(discussion.modelIds);
-  const attachmentIds: string[] = discussion.attachmentIds
-    ? JSON.parse(discussion.attachmentIds)
-    : [];
+  const attachmentIds = parseDiscussionAttachmentIds(discussion.attachmentIds);
   const rawFinal = getFinalResult(id);
   let finalResult: { answer: string; confidence: number; dissent: string[] } | null =
     null;
@@ -372,13 +426,7 @@ export function getDiscussionData(id: string) {
     modelNames: Object.fromEntries(
       modelIds.map((fullId) => [fullId, resolveModelName(fullId)])
     ),
-    attachments: getAttachments(attachmentIds).map((a) => ({
-      id: a.id,
-      filename: a.filename,
-      mimeType: a.mimeType,
-      category: a.category,
-      size: a.size,
-    })),
+    attachments: getAttachments(attachmentIds).map(summarizeAttachment),
   };
 }
 
