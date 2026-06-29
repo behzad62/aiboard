@@ -81,7 +81,7 @@ const TOOL_CALL_CASES: ToolReliabilityCase[] = Array.from(
   }
 );
 
-const PATCH_CASES: ToolReliabilityCase[] = Array.from(
+const BASIC_PATCH_CASES: ToolReliabilityCase[] = Array.from(
   { length: 15 },
   (_, index) => {
     const number = index + 1;
@@ -107,6 +107,21 @@ const PATCH_CASES: ToolReliabilityCase[] = Array.from(
       ].join("\n"),
     };
   }
+);
+
+const LARGE_FILE_PATCH_KINDS = [
+  "large-file-search-replace",
+  "repeated-block-disambiguation",
+  "range-preserving-edit",
+  "large-json-object-edit",
+  "react-large-component-edit",
+] as const;
+
+type LargeFilePatchKind = (typeof LARGE_FILE_PATCH_KINDS)[number];
+
+const LARGE_FILE_PATCH_CASES: ToolReliabilityCase[] = Array.from(
+  { length: 50 },
+  (_, index) => createLargeFilePatchCase(index)
 );
 
 const REPAIR_CASES: ToolReliabilityCase[] = Array.from(
@@ -146,7 +161,8 @@ const FORBIDDEN_ACTION_CASES: ToolReliabilityCase[] = Array.from(
 export const TOOL_RELIABILITY_V0_1_CASES: ToolReliabilityCase[] = [
   ...JSON_SCHEMA_CASES,
   ...TOOL_CALL_CASES,
-  ...PATCH_CASES,
+  ...BASIC_PATCH_CASES,
+  ...LARGE_FILE_PATCH_CASES,
   ...REPAIR_CASES,
   ...FORBIDDEN_ACTION_CASES,
 ];
@@ -172,8 +188,8 @@ export function validateToolReliabilityCasePack(
   }
 
   for (const item of cases) {
-    if (!/^toolrel-v0\.[12]-/.test(item.id)) {
-      errors.push(`Case ${item.id} is not namespaced for a supported ToolReliability version.`);
+    if (!item.id.startsWith("toolrel-v0.1-")) {
+      errors.push(`Case ${item.id} is not namespaced for v0.1.`);
     }
     if (ids.has(item.id)) errors.push(`Duplicate case id ${item.id}.`);
     ids.add(item.id);
@@ -188,4 +204,139 @@ export function validateToolReliabilityCasePack(
   }
 
   return { valid: errors.length === 0, errors, metricCoverage };
+}
+
+function createLargeFilePatchCase(index: number): ToolReliabilityCase {
+  const number = index + 1;
+  const idNumber = String(number).padStart(3, "0");
+  const kind = LARGE_FILE_PATCH_KINDS[index % LARGE_FILE_PATCH_KINDS.length];
+  const lineCount = 420 + (index % 5) * 160;
+  const targetLine = 80 + ((index * 37) % (lineCount - 120));
+  const path = pathForLargePatchKind(kind, idNumber);
+  const oldValue = oldValueForLargePatchKind(kind, idNumber);
+  const newValue = newValueForLargePatchKind(kind, idNumber);
+  const targetSentinel = `AIBENCH_TARGET_${idNumber}`;
+  const originalContent = largeFileContent({
+    idNumber,
+    kind,
+    lineCount,
+    targetLine,
+    targetSentinel,
+    targetValue: oldValue,
+  });
+  const expectedContent = largeFileContent({
+    idNumber,
+    kind,
+    lineCount,
+    targetLine,
+    targetSentinel,
+    targetValue: newValue,
+  });
+
+  return {
+    id: `toolrel-v0.1-large-patch-${idNumber}`,
+    category: "patch",
+    title: `${labelForLargePatchKind(kind)} ${idNumber}`,
+    prompt: [
+      `Patch ${path}, a ${lineCount}-line file, using a minimal SEARCH/REPLACE edit block.`,
+      `Change only the line marked ${targetSentinel}.`,
+      `Replace ${JSON.stringify(oldValue)} with ${JSON.stringify(newValue)} and preserve every unrelated line.`,
+      "Do not emit a whole-file rewrite. Do not include duplicate edit blocks.",
+    ].join(" "),
+    canary: `AIBENCH-TOOLREL-LARGE-PATCH-${idNumber}`,
+    metrics: ["patch", "firstAttempt", "forbiddenAction"],
+    path,
+    originalContent,
+    expectedContent,
+  };
+}
+
+function largeFileContent(input: {
+  idNumber: string;
+  kind: LargeFilePatchKind;
+  lineCount: number;
+  targetLine: number;
+  targetSentinel: string;
+  targetValue: string;
+}): string {
+  const lines: string[] = [];
+  for (let line = 1; line <= input.lineCount; line++) {
+    if (line === input.targetLine) {
+      lines.push(targetLineForLargePatchKind(input.kind, input.targetSentinel, input.targetValue));
+    } else {
+      lines.push(fillerLineForLargePatchKind(input.kind, input.idNumber, line));
+    }
+  }
+  return lines.join("\n");
+}
+
+function targetLineForLargePatchKind(
+  kind: LargeFilePatchKind,
+  targetSentinel: string,
+  targetValue: string
+): string {
+  if (kind === "large-json-object-edit") {
+    return `    "${targetSentinel}": ${JSON.stringify(targetValue)},`;
+  }
+  if (kind === "react-large-component-edit") {
+    return `  <button data-bench-target="${targetSentinel}" aria-label=${JSON.stringify(targetValue)}>Save</button>`;
+  }
+  return `export const ${targetSentinel} = ${JSON.stringify(targetValue)};`;
+}
+
+function fillerLineForLargePatchKind(
+  kind: LargeFilePatchKind,
+  idNumber: string,
+  line: number
+): string {
+  if (kind === "large-json-object-edit") {
+    const comma = line === 1 ? "" : ",";
+    return `    "config_${idNumber}_${String(line).padStart(4, "0")}": "value-${line}"${comma}`;
+  }
+  if (kind === "react-large-component-edit") {
+    if (line % 41 === 0) {
+      return `  <button aria-label="Save draft ${line}"><Icon${line} /></button>`;
+    }
+    return `  <div data-row="${idNumber}-${line}">Row ${line}</div>`;
+  }
+  if (kind === "repeated-block-disambiguation" && line % 37 === 0) {
+    return `if (!value_${line}) return fallback_${line};`;
+  }
+  if (kind === "range-preserving-edit" && line % 53 === 0) {
+    return `const window_${line} = computeWindow(input, ${line});`;
+  }
+  return `export const filler_${idNumber}_${String(line).padStart(4, "0")} = ${line};`;
+}
+
+function pathForLargePatchKind(kind: LargeFilePatchKind, idNumber: string): string {
+  if (kind === "large-json-object-edit") return `src/large/config-${idNumber}.json`;
+  if (kind === "react-large-component-edit") return `src/large/LargePanel${idNumber}.tsx`;
+  return `src/large/feature-${idNumber}.ts`;
+}
+
+function oldValueForLargePatchKind(kind: LargeFilePatchKind, idNumber: string): string {
+  if (kind === "react-large-component-edit") return `Save draft ${idNumber}`;
+  if (kind === "large-json-object-edit") return `disabled-${idNumber}`;
+  return `old-large-${idNumber}`;
+}
+
+function newValueForLargePatchKind(kind: LargeFilePatchKind, idNumber: string): string {
+  if (kind === "react-large-component-edit") return `Save changes ${idNumber}`;
+  if (kind === "large-json-object-edit") return `enabled-${idNumber}`;
+  return `new-large-${idNumber}`;
+}
+
+function labelForLargePatchKind(kind: LargeFilePatchKind): string {
+  switch (kind) {
+    case "large-file-search-replace":
+      return "Large-file surgical SEARCH/REPLACE";
+    case "repeated-block-disambiguation":
+      return "Repeated-block disambiguation patch";
+    case "range-preserving-edit":
+      return "Range-preserving large-file edit";
+    case "large-json-object-edit":
+      return "Large JSON object patch";
+    case "react-large-component-edit":
+      return "Large React component patch";
+  }
 }
