@@ -49,6 +49,7 @@ export async function executeWorkBenchVerifierOnly(
       verifierCommand: input.case.verifier.command,
       verifierResultFile: input.case.verifier.resultFile,
       allowedCommands: input.case.allowedCommands,
+      files: input.case.fixtureFiles,
     });
     attemptId = preparedAttempt.attemptId || input.attemptId;
     prepared = true;
@@ -258,46 +259,13 @@ export function createFailedWorkBenchAttempt(
   const completedAt = new Date().toISOString();
   const durationMs = Math.max(0, Date.now() - startedMs);
   const harnessProfile = context.harnessProfile ?? input.harnessProfile ?? "aiboard-build-multi-worker";
-  const costUsd = context.buildResult?.costUsd ?? input.costUsd ?? null;
-  const inputTokens = context.buildResult?.inputTokens ?? input.inputTokens ?? 0;
-  const outputTokens = context.buildResult?.outputTokens ?? input.outputTokens ?? 0;
-  const modelCalls = context.buildResult?.modelCalls ?? input.modelCalls ?? 0;
-  const toolCalls = context.buildResult?.toolCalls ?? input.toolCalls ?? 0;
-  const validToolCalls = context.buildResult?.validToolCalls ?? input.validToolCalls ?? 0;
-  const traceIds = uniqueStrings(context.buildResult?.traceIds);
-  const failureId = `${attemptId}:failure:${code}`;
-  const assertion = {
-    id: code,
-    label: failureSummaryForStatus(status),
-    passed: false,
-    weight: 1,
-    message,
-  };
-  const rawJson = JSON.stringify({
-    passed: false,
-    score: 0,
-    summary: message,
-    assertions: [assertion],
-  });
-  const parsedVerifierResult: ParsedWorkBenchVerifierResult = {
-    passed: false,
-    score: 0,
-    summary: message,
-    assertions: [assertion],
-    rawJson,
-  };
-  const score: WorkBenchScore = scoreWorkBenchAttempt({
-    verifierScore: 0,
-    verifierPassed: false,
-    actualCostUsd: costUsd,
-    targetCostUsd: input.case.scoring.costTargetUsd,
-    actualDurationMs: durationMs,
-    targetDurationMs:
-      typeof input.case.scoring.timeTargetSeconds === "number"
-        ? input.case.scoring.timeTargetSeconds * 1000
-        : undefined,
-    validToolCalls,
-    totalToolCalls: toolCalls,
+  const logArtifact = createWorkBenchLogArtifact({
+    id: `${attemptId}:failure-log`,
+    attemptId,
+    caseId: input.case.id,
+    label: "WorkBench failure",
+    content: message,
+    createdAt: completedAt,
   });
   const verifierResult: BenchmarkVerifierResult = {
     id: `${attemptId}:verifier`,
@@ -307,45 +275,47 @@ export function createFailedWorkBenchAttempt(
     passed: false,
     score: 0,
     durationMs,
+    exitCode: 1,
     stdoutPreview: "",
     stderrPreview: message,
-    resultJson: rawJson,
-    assertionResults: parsedVerifierResult.assertions,
-    artifactIds: [`${attemptId}:verifier-result`],
-  };
-  const artifacts = [
-    createWorkBenchVerifierArtifact({
-      id: `${attemptId}:verifier-result`,
-      attemptId,
-      caseId: input.case.id,
-      result: verifierArtifactContent(rawJson),
-      createdAt: completedAt,
-    }),
-    createWorkBenchLogArtifact({
-      id: `${attemptId}:failure-log`,
-      attemptId,
-      caseId: input.case.id,
-      label: "WorkBench failure log",
-      content: JSON.stringify(
+    resultJson: JSON.stringify({
+      passed: false,
+      score: 0,
+      summary: message,
+      assertions: [
         {
-          status,
-          code,
+          id: code,
+          label: failureSummaryForStatus(status),
+          passed: false,
+          weight: 1,
           message,
-          failureId,
-          attemptId,
-          caseId: input.case.id,
         },
-        null,
-        2
-      ),
-      createdAt: completedAt,
+      ],
     }),
-  ];
-  const artifactIds = uniqueStrings([
-    ...(context.buildResult?.artifactIds ?? []),
-    ...verifierResult.artifactIds,
-    ...artifacts.map((artifact) => artifact.id),
-  ]);
+    assertionResults: [
+      {
+        id: code,
+        label: failureSummaryForStatus(status),
+        passed: false,
+        weight: 1,
+        message,
+      },
+    ],
+    artifactIds: [logArtifact.id],
+  };
+  const score = scoreWorkBenchAttempt({
+    verifierScore: 0,
+    verifierPassed: false,
+    actualCostUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
+    targetCostUsd: input.case.scoring.costTargetUsd,
+    actualDurationMs: durationMs,
+    targetDurationMs:
+      typeof input.case.scoring.timeTargetSeconds === "number"
+        ? input.case.scoring.timeTargetSeconds * 1000
+        : undefined,
+    validToolCalls: context.buildResult?.validToolCalls ?? input.validToolCalls ?? 0,
+    totalToolCalls: context.buildResult?.toolCalls ?? input.toolCalls ?? 0,
+  });
   const attempt: BenchmarkAttemptV2 = {
     id: attemptId,
     runId: input.runId,
@@ -360,70 +330,27 @@ export function createFailedWorkBenchAttempt(
     verifiedQuality: score.verifiedQuality,
     jobSuccessScore: score.jobSuccessScore,
     efficiencyScore: score.efficiencyScore,
-    costUsd,
-    inputTokens,
-    outputTokens,
-    modelCalls,
-    toolCalls,
+    costUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
+    inputTokens: context.buildResult?.inputTokens ?? input.inputTokens ?? 0,
+    outputTokens: context.buildResult?.outputTokens ?? input.outputTokens ?? 0,
+    modelCalls: context.buildResult?.modelCalls ?? input.modelCalls ?? 0,
+    toolCalls: context.buildResult?.toolCalls ?? input.toolCalls ?? 0,
     durationMs,
     verifierResultId: verifierResult.id,
-    artifactIds,
-    traceIds,
-    failureIds: [failureId],
+    artifactIds: [logArtifact.id],
+    traceIds: context.buildResult?.traceIds ?? [],
+    failureIds: [`${attemptId}:failure:${code}`],
     harnessVersion: "workbench-runner-v0.1",
     promptSetVersion: "workbench-prompts-v0.1",
     scoringVersion: input.case.scoring.scoringVersion,
   };
-
-  return { attempt, verifierResult, parsedVerifierResult, score, artifacts };
-}
-
-function verifierArtifactContent(rawJson: string): unknown {
-  try {
-    return JSON.parse(rawJson);
-  } catch {
-    return { rawJson };
-  }
-}
-
-function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
-  const message = errorMessage(error).toLowerCase();
-  if (
-    message.includes("fetch failed") ||
-    message.includes("failed to fetch") ||
-    message.includes("econnrefused") ||
-    message.includes("connect") ||
-    message.includes("runner")
-  ) {
-    return { status: "invalid_environment", code: "runner_unavailable" };
-  }
-  if (
-    message.includes("setup command failed") ||
-    message.includes("fixture") ||
-    message.includes("manifest") ||
-    message.includes("repository") ||
-    message.includes("verifier")
-  ) {
-    return { status: "invalid_case", code: "case_setup_failed" };
-  }
-  return { status: "invalid_environment", code: "environment_prepare_failed" };
-}
-
-function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
-  const message = errorMessage(error).toLowerCase();
-  if (
-    message.includes("provider") ||
-    message.includes("429") ||
-    message.includes("rate limit") ||
-    message.includes("quota") ||
-    message.includes("api key") ||
-    message.includes("unauthorized") ||
-    message.includes("503") ||
-    message.includes("502")
-  ) {
-    return { status: "provider_unavailable", code: "provider_error_before_output" };
-  }
-  return { status: "invalid_harness", code: "run_build_crashed" };
+  return {
+    attempt,
+    verifierResult,
+    parsedVerifierResult: parseVerifierResult("", verifierResult.resultJson),
+    score,
+    artifacts: [logArtifact],
+  };
 }
 
 function findBudgetFailure(
@@ -432,76 +359,93 @@ function findBudgetFailure(
   durationMs: number
 ): { code: string; message: string } | null {
   const budget = input.case.budget;
-  const modelCalls = buildResult.modelCalls ?? input.modelCalls ?? 0;
-  const toolCalls = buildResult.toolCalls ?? input.toolCalls ?? 0;
-  const inputTokens = buildResult.inputTokens ?? input.inputTokens ?? 0;
-  const outputTokens = buildResult.outputTokens ?? input.outputTokens ?? 0;
   const costUsd = buildResult.costUsd ?? input.costUsd ?? null;
-  const wallClockMs = Math.max(durationMs, buildResult.durationMs ?? 0);
-
-  if (exceeds(modelCalls, budget.maxModelCalls)) {
-    return {
-      code: "budget_model_calls_exceeded",
-      message: `Model calls exceeded budget (${modelCalls} > ${budget.maxModelCalls}).`,
-    };
+  if (typeof budget.maxUsd === "number" && costUsd !== null && costUsd > budget.maxUsd) {
+    return { code: "budget_cost_exceeded", message: `Cost ${costUsd} exceeded maxUsd ${budget.maxUsd}.` };
   }
-  if (exceeds(toolCalls, budget.maxToolCalls)) {
-    return {
-      code: "budget_tool_calls_exceeded",
-      message: `Tool calls exceeded budget (${toolCalls} > ${budget.maxToolCalls}).`,
-    };
+  const modelCalls = buildResult.modelCalls ?? input.modelCalls ?? 0;
+  if (typeof budget.maxModelCalls === "number" && modelCalls > budget.maxModelCalls) {
+    return { code: "budget_model_calls_exceeded", message: `Model calls ${modelCalls} exceeded maxModelCalls ${budget.maxModelCalls}.` };
   }
-  if (exceeds(inputTokens, budget.maxInputTokens)) {
-    return {
-      code: "budget_input_tokens_exceeded",
-      message: `Input tokens exceeded budget (${inputTokens} > ${budget.maxInputTokens}).`,
-    };
+  const toolCalls = buildResult.toolCalls ?? input.toolCalls ?? 0;
+  if (typeof budget.maxToolCalls === "number" && toolCalls > budget.maxToolCalls) {
+    return { code: "budget_tool_calls_exceeded", message: `Tool calls ${toolCalls} exceeded maxToolCalls ${budget.maxToolCalls}.` };
   }
-  if (exceeds(outputTokens, budget.maxOutputTokens)) {
-    return {
-      code: "budget_output_tokens_exceeded",
-      message: `Output tokens exceeded budget (${outputTokens} > ${budget.maxOutputTokens}).`,
-    };
+  const inputTokens = buildResult.inputTokens ?? input.inputTokens ?? 0;
+  if (typeof budget.maxInputTokens === "number" && inputTokens > budget.maxInputTokens) {
+    return { code: "budget_input_tokens_exceeded", message: `Input tokens ${inputTokens} exceeded maxInputTokens ${budget.maxInputTokens}.` };
   }
-  if (exceeds(costUsd, budget.maxUsd)) {
-    return {
-      code: "budget_cost_exceeded",
-      message: `Cost exceeded budget (${costUsd} > ${budget.maxUsd}).`,
-    };
+  const outputTokens = buildResult.outputTokens ?? input.outputTokens ?? 0;
+  if (typeof budget.maxOutputTokens === "number" && outputTokens > budget.maxOutputTokens) {
+    return { code: "budget_output_tokens_exceeded", message: `Output tokens ${outputTokens} exceeded maxOutputTokens ${budget.maxOutputTokens}.` };
   }
-  if (exceeds(wallClockMs / 1000, budget.maxWallClockSeconds)) {
-    return {
-      code: "budget_wall_clock_exceeded",
-      message: `Wall clock exceeded budget (${Math.round(wallClockMs / 1000)}s > ${budget.maxWallClockSeconds}s).`,
-    };
+  if (typeof budget.maxWallClockSeconds === "number" && durationMs > budget.maxWallClockSeconds * 1000) {
+    return { code: "budget_wall_clock_exceeded", message: `Duration ${durationMs}ms exceeded maxWallClockSeconds ${budget.maxWallClockSeconds}.` };
   }
   return null;
 }
 
-function exceeds(actual: number | null | undefined, limit: number | null | undefined): boolean {
-  return (
-    typeof actual === "number" &&
-    Number.isFinite(actual) &&
-    typeof limit === "number" &&
-    Number.isFinite(limit) &&
-    actual > limit
-  );
+function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
+  const message = errorMessage(error).toLowerCase();
+  if (/runner|connect|network|fetch|workspace/.test(message)) {
+    return { status: "invalid_environment", code: "runner_unavailable" };
+  }
+  if (/case|manifest|fixture|verifier/.test(message)) {
+    return { status: "invalid_case", code: "case_setup_failed" };
+  }
+  return { status: "invalid_harness", code: "workbench_prepare_failed" };
+}
+
+function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
+  const message = errorMessage(error).toLowerCase();
+  if (/provider|api key|unauthorized|rate.?limit|quota|timeout/.test(message)) {
+    return { status: "provider_unavailable", code: "provider_unavailable" };
+  }
+  if (/budget|token limit|cost limit|wall.?clock/.test(message)) {
+    return { status: "failed_budget", code: "budget_exhausted" };
+  }
+  if (/tool|patch|command|forbidden|malformed/.test(message)) {
+    return { status: "failed_tool_use", code: "tool_execution_failed" };
+  }
+  return { status: "invalid_harness", code: "workbench_build_failed" };
 }
 
 function failureSummaryForStatus(status: CertifiedAttemptStatus): string {
   switch (status) {
+    case "failed_model":
+      return "Model failed task";
+    case "failed_verifier":
+      return "Verifier rejected output";
+    case "failed_tool_use":
+      return "Tool use failed";
     case "failed_budget":
-      return "Certified budget exceeded";
+      return "Budget exhausted";
     case "provider_unavailable":
       return "Provider unavailable";
     case "invalid_environment":
-      return "Benchmark environment invalid";
+      return "Environment invalid";
     case "invalid_case":
-      return "Benchmark case invalid";
+      return "Case invalid";
+    case "aborted_user":
+      return "User aborted";
+    case "passed":
+      return "Passed";
     case "invalid_harness":
     default:
-      return "Benchmark harness invalid";
+      return "Harness invalid";
   }
+}
+
+function verifierArtifactContent(rawJson: string): string {
+  try {
+    return JSON.stringify(JSON.parse(rawJson), null, 2);
+  } catch {
+    return rawJson;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sanitizeFailureCode(value: string): string {
@@ -512,10 +456,6 @@ function sanitizeFailureCode(value: string): string {
     .replace(/^_+|_+$/g, "") || "workbench_failure";
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function uniqueStrings(values: string[] | undefined): string[] {
-  return Array.from(new Set((values ?? []).filter(Boolean))).sort();
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
