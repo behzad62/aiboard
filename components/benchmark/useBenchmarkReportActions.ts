@@ -6,35 +6,25 @@ import {
   downloadBenchmarkJson,
   downloadBenchmarkMarkdown,
   formatBenchmarkMarkdownReport,
-  type BenchmarkReportBundleAny,
 } from "@/lib/benchmark/reports";
 import {
-  exportBenchmarkReportBundle,
   exportBenchmarkReportBundleV2,
-  importBenchmarkReportBundle,
   importBenchmarkReportBundleV2,
 } from "@/lib/benchmark/store";
-import type {
-  BenchmarkReportBundle,
-  BenchmarkReportBundleV2,
-} from "@/lib/benchmark/types";
+import type { BenchmarkReportBundleV2 } from "@/lib/benchmark/types";
 
-type ImportCandidate = Omit<Partial<BenchmarkReportBundle>, "version"> &
-  Omit<Partial<BenchmarkReportBundleV2>, "version"> & {
-    version?: unknown;
-  };
+type ImportCandidate = Omit<Partial<BenchmarkReportBundleV2>, "version"> & {
+  version?: unknown;
+};
 
-function readBundle(value: unknown): BenchmarkReportBundleAny {
+function readBundle(value: unknown): BenchmarkReportBundleV2 {
   if (!value || typeof value !== "object") {
     throw new Error("Benchmark import must be a JSON object.");
   }
   const bundle = value as ImportCandidate;
-  if (!isBaseBundleShape(bundle)) {
-    throw new Error("File is not an AI Board benchmark report bundle.");
-  }
-  if (bundle.version === 1) return bundle as BenchmarkReportBundle;
   if (
     bundle.version === 2 &&
+    isBaseBundleShape(bundle) &&
     Array.isArray(bundle.caseV2) &&
     Array.isArray(bundle.attemptsV2) &&
     Array.isArray(bundle.verifierResults) &&
@@ -45,16 +35,12 @@ function readBundle(value: unknown): BenchmarkReportBundleAny {
   ) {
     return bundle as BenchmarkReportBundleV2;
   }
-  throw new Error("File is not a supported AI Board benchmark report bundle.");
+  throw new Error("Only AI Board Benchmark Bundle v2 imports are supported.");
 }
 
-function isBaseBundleShape(
-  bundle: ImportCandidate
-): bundle is ImportCandidate & {
-  version: 1 | 2;
-} {
+function isBaseBundleShape(bundle: ImportCandidate): boolean {
   return (
-    (bundle.version === 1 || bundle.version === 2) &&
+    bundle.version === 2 &&
     Array.isArray(bundle.suites) &&
     Array.isArray(bundle.runs) &&
     Array.isArray(bundle.cases) &&
@@ -86,13 +72,6 @@ export function useBenchmarkReportActions({
     );
   }, [dashboard, setMessage]);
 
-  const exportLegacyJson = useCallback(() => {
-    if (!dashboard) return;
-    const bundle = exportBenchmarkReportBundle();
-    downloadBenchmarkJson(bundle);
-    setMessage("Legacy Lab Bundle v1 exported.");
-  }, [dashboard, setMessage]);
-
   const exportMarkdown = useCallback(async () => {
     if (!dashboard) return;
     const bundle = exportBenchmarkReportBundleV2();
@@ -106,25 +85,17 @@ export function useBenchmarkReportActions({
     async (file: File) => {
       const text = await file.text();
       const bundle = readBundle(JSON.parse(text));
-      if (bundle.version === 2) {
-        await importBenchmarkReportBundleV2(bundle);
-      } else {
-        await importBenchmarkReportBundle(bundle);
-      }
+      await importBenchmarkReportBundleV2(bundle);
       await reload();
-      const certified =
-        bundle.version === 2
-          ? `, ${
-              bundle.attemptsV2.filter((attempt) => attempt.mode === "certified")
-                .length
-            } certified attempt(s)`
-          : "";
+      const certified = bundle.attemptsV2.filter(
+        (attempt) => attempt.mode === "certified"
+      ).length;
       setMessage(
-        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s)${certified}.`
+        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s).`
       );
     },
     [reload, setMessage]
   );
 
-  return { exportJson, exportLegacyJson, exportMarkdown, importJson };
+  return { exportJson, exportMarkdown, importJson };
 }
