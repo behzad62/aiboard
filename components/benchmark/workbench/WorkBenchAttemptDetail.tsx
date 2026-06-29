@@ -1,11 +1,11 @@
 "use client";
 
-import type { WorkBenchV1CaseOption } from "@/lib/benchmark/workbench";
+import type { WorkBenchCasePickerOption } from "./WorkBenchCasePicker";
 
 export function WorkBenchAttemptDetail({
   selectedCase,
 }: {
-  selectedCase: WorkBenchV1CaseOption | null;
+  selectedCase: WorkBenchCasePickerOption | null;
 }) {
   if (!selectedCase) {
     return (
@@ -21,6 +21,9 @@ export function WorkBenchAttemptDetail({
         <span className="font-medium">{selectedCase.case.title}</span>
         <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
           {selectedCase.fixtureLanguage}
+        </span>
+        <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          {selectedCase.case.caseVersion.startsWith("2") ? "v2" : "v1"}
         </span>
         <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
           {selectedCase.case.difficulty}
