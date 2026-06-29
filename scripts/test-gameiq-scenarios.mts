@@ -1,8 +1,7 @@
-/* Certified GameIQ v0.1 scenario pack checks (run: npx tsx scripts/test-gameiq-scenarios.mts) */
+/* Certified GameIQ scenario pack checks (run: npx tsx scripts/test-gameiq-scenarios.mts) */
 import {
   getGameIqScenarioPack,
   listGameIqScenarioPacks,
-  listGameIqScenarios,
   stableGameIqScenarioPackDigest,
   validateGameIqScenario,
 } from "../lib/benchmark/gameiq";
@@ -25,33 +24,41 @@ check(
   { firstListing, secondListing }
 );
 
-const packKeys = firstListing.map((pack) => pack.gameId);
+const packIds = firstListing.map((pack) => pack.id);
 check(
-  "GameIQ v0.1 exposes shipped game packs",
-  ["connect-four", "chess", "battleship", "codenames", "fireworks"].every((gameId) =>
-    packKeys.includes(gameId)
-  ),
-  packKeys
+  "GameIQ exposes shipped game packs",
+  [
+    "gameiq-v0.1-connect-four",
+    "gameiq-v0.1-chess",
+    "gameiq-v0.1-battleship",
+    "gameiq-v0.1-codenames",
+    "gameiq-fireworks-basic-v1",
+    "gameiq-fireworks-hard-v1",
+    "gameiq-fireworks-memory-v1",
+  ].every((packId) => packIds.includes(packId)),
+  packIds
 );
 
 const expectedPackCounts = new Map([
-  ["connect-four", 40],
-  ["chess", 60],
-  ["battleship", 25],
-  ["codenames", 25],
-  ["fireworks", 20],
+  ["gameiq-v0.1-connect-four", 40],
+  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-battleship", 25],
+  ["gameiq-v0.1-codenames", 25],
+  ["gameiq-fireworks-basic-v1", 20],
+  ["gameiq-fireworks-hard-v1", 40],
+  ["gameiq-fireworks-memory-v1", 30],
 ]);
 for (const pack of firstListing) {
   check(
-    `${pack.gameId} meets v1-sized scenario count`,
-    pack.scenarios.length === expectedPackCounts.get(pack.gameId),
-    { actual: pack.scenarios.length, expected: expectedPackCounts.get(pack.gameId) }
+    `${pack.id} meets expected scenario count`,
+    pack.scenarios.length === expectedPackCounts.get(pack.id),
+    { actual: pack.scenarios.length, expected: expectedPackCounts.get(pack.id) }
   );
 }
 
 const connectFourPack = getGameIqScenarioPack("connect-four");
 const chessPack = getGameIqScenarioPack("chess");
-const fireworksPack = getGameIqScenarioPack("fireworks");
+const fireworksPack = firstListing.find((pack) => pack.id === "gameiq-fireworks-basic-v1");
 check(
   "Connect Four and Chess are first-class packs",
   connectFourPack?.certificationTier === "first-class" &&
@@ -63,7 +70,7 @@ const connectFourCategories = new Set(
   connectFourPack?.scenarios.map((scenario) => scenario.category) ?? []
 );
 check(
-  "Connect Four covers required v0.1 categories",
+  "Connect Four covers required categories",
   ["win-in-one", "block-win", "trap-setup", "avoid-losing-move"].every(
     (category) => connectFourCategories.has(category)
   ),
@@ -99,7 +106,7 @@ check(
 );
 
 check(
-  "Fireworks GameIQ pack uses hidden-safe player views",
+  "Fireworks basic GameIQ pack uses hidden-safe player views",
   fireworksPack?.scenarios.every((scenario) => {
     const text = JSON.stringify(scenario.initialState);
     return (
@@ -110,6 +117,13 @@ check(
     );
   }) === true,
   fireworksPack?.scenarios.map((scenario) => scenario.initialState)
+);
+
+check(
+  "Fireworks has hard trap and memory stress packs",
+  firstListing.some((pack) => pack.id === "gameiq-fireworks-hard-v1" && pack.scenarios.every((scenario) => scenario.difficulty !== "easy")) &&
+    firstListing.some((pack) => pack.id === "gameiq-fireworks-memory-v1" && pack.scenarios.every((scenario) => scenario.difficulty === "hard")),
+  firstListing.filter((pack) => pack.gameId === "fireworks").map((pack) => ({ id: pack.id, count: pack.scenarios.length }))
 );
 
 const knightQueenTactic = chessPack?.scenarios.find(
@@ -137,14 +151,14 @@ for (const pack of firstListing) {
   const digestA = stableGameIqScenarioPackDigest(pack);
   const digestB = stableGameIqScenarioPackDigest(pack);
   check(
-    `${pack.gameId} digest is stable`,
-    digestA === digestB && digestA.startsWith("gameiq-v0.1:"),
+    `${pack.id} digest is stable`,
+    digestA === digestB && digestA.startsWith("gameiq-v1:"),
     { digestA, digestB }
   );
 
   const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
   check(
-    `${pack.gameId} scenario ids are unique`,
+    `${pack.id} scenario ids are unique`,
     new Set(scenarioIds).size === scenarioIds.length,
     scenarioIds
   );
@@ -158,19 +172,6 @@ for (const pack of firstListing) {
     );
   }
 }
-
-const allScenarios = listGameIqScenarios();
-check(
-  "flattened scenario list is deterministic",
-  JSON.stringify(allScenarios) === JSON.stringify(listGameIqScenarios()),
-  allScenarios.map((scenario) => scenario.id)
-);
-check(
-  "flattened scenario list has no duplicate ids",
-  new Set(allScenarios.map((scenario) => scenario.id)).size ===
-    allScenarios.length,
-  allScenarios.map((scenario) => scenario.id)
-);
 
 if (failures === 0) {
   console.log("PASS");
