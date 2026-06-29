@@ -35,23 +35,25 @@ for (const doc of [
 }
 
 const expectedGameIqCounts = new Map([
-  ["connect-four", 40],
-  ["chess", 60],
-  ["battleship", 25],
-  ["codenames", 25],
-  ["fireworks", 20],
+  ["gameiq-v0.1-connect-four", 40],
+  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-battleship", 25],
+  ["gameiq-v0.1-codenames", 25],
+  ["gameiq-fireworks-basic-v1", 20],
+  ["gameiq-fireworks-hard-v1", 40],
+  ["gameiq-fireworks-memory-v1", 30],
 ]);
 const gamePacks = listGameIqScenarioPacks();
 const allScenarioIds = gamePacks.flatMap((pack) => pack.scenarios.map((scenario) => scenario.id));
 check("GameIQ scenario ids are globally unique", new Set(allScenarioIds).size === allScenarioIds.length, allScenarioIds);
 for (const pack of gamePacks) {
   check(
-    `GameIQ ${pack.gameId} has required scenario count`,
-    pack.scenarios.length === expectedGameIqCounts.get(pack.gameId),
-    { actual: pack.scenarios.length, expected: expectedGameIqCounts.get(pack.gameId) }
+    `GameIQ ${pack.id} has required scenario count`,
+    pack.scenarios.length === expectedGameIqCounts.get(pack.id),
+    { actual: pack.scenarios.length, expected: expectedGameIqCounts.get(pack.id) }
   );
   check(
-    `GameIQ ${pack.gameId} digest is stable`,
+    `GameIQ ${pack.id} digest is stable`,
     stableGameIqScenarioPackDigest(pack) === stableGameIqScenarioPackDigest(pack),
     stableGameIqScenarioPackDigest(pack)
   );
