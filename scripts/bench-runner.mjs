@@ -24,7 +24,8 @@ const host = optionValue(options.host) ?? "127.0.0.1";
 const port = Number(optionValue(options.port) ?? 8797);
 const token = optionValue(options.token) ?? process.env.AIBOARD_BENCH_TOKEN ?? randomBytes(18).toString("hex");
 const root = resolve(optionValue(options.root) ?? join(process.cwd(), ".aiboard-bench", "runs"));
-const fixtureRoot = resolve(fileURLToPath(new URL("../benchmarks/workbench/v0/fixtures", import.meta.url)));
+const fixtureRootOption = optionValue(options["fixture-root"]);
+const fixtureRoot = fixtureRootOption ? resolve(fixtureRootOption) : null;
 const appOrigins = parseAppOrigins(optionValues(options["app-origin"]));
 
 if (!isLoopbackHost(host)) {
@@ -740,6 +741,12 @@ function validateAttemptId(value) {
 }
 
 function resolveFixtureRepo(repoUrl) {
+  if (!fixtureRoot) {
+    throw new HttpError(
+      400,
+      "Named fixture repositories are not bundled. Use fixture://inline or pass --fixture-root."
+    );
+  }
   const id = repoUrl.slice("fixture://".length);
   if (!/^[a-zA-Z0-9._-]+$/.test(id)) {
     throw new HttpError(400, "Fixture id must contain only letters, numbers, dot, underscore, or dash.");

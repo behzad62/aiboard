@@ -23,9 +23,6 @@ export function WorkBenchAttemptDetail({
           {selectedCase.fixtureLanguage}
         </span>
         <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {selectedCase.case.caseVersion.startsWith("2") ? "v2" : "v1"}
-        </span>
-        <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
           {selectedCase.case.difficulty}
         </span>
       </div>

@@ -1,4 +1,7 @@
-import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
+import {
+  isScoredCertifiedAttempt,
+  type BenchmarkDashboardData,
+} from "@/lib/benchmark/metrics";
 import {
   classifyBenchmarkFailure,
   explainCertifiedFailureStatus,
@@ -9,19 +12,14 @@ import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
   BenchmarkFailure,
-  BenchmarkReportBundle,
   BenchmarkReportBundleV2,
   BenchmarkTeamComposition,
   BenchmarkVerifierResult,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 
-export type BenchmarkReportBundleAny =
-  | BenchmarkReportBundle
-  | BenchmarkReportBundleV2;
-
 export function formatBenchmarkMarkdownReport(
-  bundle: BenchmarkReportBundleAny,
+  bundle: BenchmarkReportBundleV2,
   dashboard: BenchmarkDashboardData
 ): string {
   const lines: string[] = [];
@@ -77,9 +75,7 @@ export function formatBenchmarkMarkdownReport(
   }
   lines.push("");
 
-  if (isBenchmarkReportBundleV2(bundle)) {
   appendCertifiedReportSections(lines, bundle);
-  }
 
   lines.push("## Raw Bundle Counts");
   lines.push(`- Suites: ${bundle.suites.length}`);
@@ -106,7 +102,7 @@ export function formatBenchmarkMarkdownReport(
   return lines.join("\n");
 }
 
-export function downloadBenchmarkJson(bundle: BenchmarkReportBundleAny): void {
+export function downloadBenchmarkJson(bundle: BenchmarkReportBundleV2): void {
   downloadText(
     `ai-board-benchmark-${bundle.exportedAt.slice(0, 10)}.json`,
     "application/json",
@@ -124,14 +120,18 @@ function appendCertifiedReportSections(
   bundle: BenchmarkReportBundleV2
 ): void {
   const certifiedAttempts = bundle.attemptsV2.filter(isCertifiedModeAttempt);
-  const certifiedAttemptIds = new Set(certifiedAttempts.map((attempt) => attempt.id));
-  const certifiedVerifierResults = bundle.verifierResults.filter((result) =>
-    certifiedAttemptIds.has(result.attemptId)
+  const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
+  const excludedAttempts = certifiedAttempts.filter(
+    (attempt) => !isScoredCertifiedAttempt(attempt)
   );
-  const completedAttempts = certifiedAttempts.filter((attempt) =>
+  const scoredAttemptIds = new Set(scoredAttempts.map((attempt) => attempt.id));
+  const certifiedVerifierResults = bundle.verifierResults.filter((result) =>
+    scoredAttemptIds.has(result.attemptId)
+  );
+  const completedAttempts = scoredAttempts.filter((attempt) =>
     isCertifiedAttemptComplete(attempt.status)
   );
-  const passedAttempts = certifiedAttempts.filter(
+  const passedAttempts = scoredAttempts.filter(
     (attempt) => attempt.status === "passed"
   );
   const verifiedAttempts = certifiedVerifierResults.filter(
@@ -159,19 +159,34 @@ function appendCertifiedReportSections(
   lines.push(`- Certified runs: ${uniqueRunIds.length}`);
   lines.push(`- Certified cases: ${uniqueCaseIds.length}`);
   lines.push(`- Certified attempts: ${certifiedAttempts.length}`);
+  lines.push(`- Scored attempts: ${scoredAttempts.length}`);
+  lines.push(
+    `- Excluded attempts: ${excludedAttempts.length} (provider ${
+      excludedAttempts.filter((attempt) => attempt.status === "provider_unavailable")
+        .length
+    }, harness ${
+      excludedAttempts.filter((attempt) => attempt.status === "invalid_harness")
+        .length
+    }, environment ${
+      excludedAttempts.filter((attempt) => attempt.status === "invalid_environment")
+        .length
+    }, user ${
+      excludedAttempts.filter((attempt) => attempt.status === "aborted_user").length
+    })`
+  );
   lines.push(
     `- Completed attempts: ${completedAttempts.length} (${formatPct(
-      rate(completedAttempts.length, certifiedAttempts.length)
+      rate(completedAttempts.length, scoredAttempts.length)
     )})`
   );
   lines.push(
     `- Verified pass rate: ${formatPct(
-      rate(verifiedAttempts.length, certifiedVerifierResults.length)
+      rate(verifiedAttempts.length, scoredAttempts.length)
     )}`
   );
   lines.push(
     `- Attempt pass rate: ${formatPct(
-      rate(passedAttempts.length, certifiedAttempts.length)
+      rate(passedAttempts.length, scoredAttempts.length)
     )}`
   );
   lines.push(`- Average verified quality: ${formatScore(averageQuality)}`);
@@ -179,13 +194,13 @@ function appendCertifiedReportSections(
   lines.push(`- Average duration: ${formatDuration(averageDuration)}`);
   lines.push("");
 
-  appendTopCertifiedTeams(lines, bundle, certifiedAttempts);
-  appendTopCertifiedModels(lines, bundle, certifiedAttempts);
-  appendCertifiedTradeoffs(lines, bundle, certifiedAttempts);
-  appendTeamLiftMatrix(lines, bundle, certifiedAttempts);
+  appendTopCertifiedTeams(lines, bundle, scoredAttempts);
+  appendTopCertifiedModels(lines, bundle, scoredAttempts);
+  appendCertifiedTradeoffs(lines, bundle, scoredAttempts);
+  appendTeamLiftMatrix(lines, bundle, scoredAttempts);
   appendCertifiedFailureTaxonomy(lines, bundle, certifiedAttempts);
   appendVerifierAssertionSummary(lines, certifiedVerifierResults);
-  appendHarnessVersions(lines, bundle, certifiedAttempts);
+  appendHarnessVersions(lines, bundle, scoredAttempts);
   appendCaseVersions(lines, bundle.caseV2);
   appendReproducibilityHashes(lines, bundle);
   appendRawV2Counts(lines, bundle);
@@ -528,11 +543,6 @@ function appendRawV2Counts(
   lines.push("");
 }
 
-function isBenchmarkReportBundleV2(
-  bundle: BenchmarkReportBundleAny
-): bundle is BenchmarkReportBundleV2 {
-  return bundle.version === 2;
-}
 
 function isCertifiedModeAttempt(attempt: BenchmarkAttemptV2): boolean {
   return attempt.mode === "certified";
@@ -681,8 +691,14 @@ function downloadText(filename: string, mimeType: string, content: string): void
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 0);
 }
 
 function formatPct(value: number | null): string {

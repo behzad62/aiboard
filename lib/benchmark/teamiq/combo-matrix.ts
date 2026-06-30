@@ -32,6 +32,7 @@ export interface TeamIqComboMatrixRow {
   comboHash: string;
   track: BenchmarkAttemptV2["track"];
   modelIds: string[];
+  isSolo: boolean;
   attempts: number;
   verifiedQuality: number;
   jobSuccessScore: number;
@@ -63,6 +64,7 @@ interface MutableComboRow {
   teamLiftSum: number;
   teamLiftSamples: number;
   teamLiftLabels: Map<TeamLiftLabel, number>;
+  isSolo: boolean;
 }
 
 export function buildTeamIqComboMatrixRows(
@@ -81,8 +83,7 @@ export function buildTeamIqComboMatrixRows(
   );
   const teamAttempts = filteredAttempts.filter(
     (attempt) =>
-      getTeamCompositionModelIds(teamsById.get(attempt.teamCompositionId))
-        .length > 1
+      !isSoloTeamComposition(teamsById.get(attempt.teamCompositionId))
   );
   const liftByAttemptId = new Map(
     linkTeamLiftBaselines({
@@ -97,10 +98,11 @@ export function buildTeamIqComboMatrixRows(
   for (const attempt of filteredAttempts) {
     const team = teamsById.get(attempt.teamCompositionId);
     const modelIds = getTeamCompositionModelIds(team);
-    if (!input.includeSolos && modelIds.length <= 1) continue;
+    const isSolo = isSoloTeamComposition(team);
+    if (!input.includeSolos && isSolo) continue;
     if (modelIds.length === 0) continue;
 
-    const group = groupFor(groups, attempt, team, modelIds);
+    const group = groupFor(groups, attempt, team, modelIds, isSolo);
     group.attempts += 1;
     group.verifiedQualitySum += finiteNumber(attempt.verifiedQuality);
     group.jobSuccessScoreSum += scoreForAttempt(attempt);
@@ -137,7 +139,8 @@ function groupFor(
   groups: Map<string, MutableComboRow>,
   attempt: BenchmarkAttemptV2,
   team: BenchmarkTeamComposition | undefined,
-  modelIds: string[]
+  modelIds: string[],
+  isSolo: boolean
 ): MutableComboRow {
   const key = `${attempt.teamCompositionId}\u0000${attempt.track}`;
   const existing = groups.get(key);
@@ -160,13 +163,13 @@ function groupFor(
     teamLiftSum: 0,
     teamLiftSamples: 0,
     teamLiftLabels: new Map(),
+    isSolo,
   };
   groups.set(key, created);
   return created;
 }
 
 function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
-  const isSolo = group.modelIds.length === 1;
   const row: TeamIqComboMatrixRow = {
     id: `${group.comboHash}:${group.track}`,
     teamCompositionId: group.teamCompositionId,
@@ -174,6 +177,7 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     comboHash: group.comboHash,
     track: group.track,
     modelIds: group.modelIds,
+    isSolo: group.isSolo,
     attempts: group.attempts,
     verifiedQuality: average(group.verifiedQualitySum, group.attempts, 4),
     jobSuccessScore: average(group.jobSuccessScoreSum, group.attempts, 2),
@@ -199,14 +203,14 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     teamLiftLabel:
       group.teamLiftSamples > 0 ? mostCommonLabel(group.teamLiftLabels) : null,
     isParetoRecommended: false,
-    recommendationLabel: isSolo ? "solo_baseline" : "insufficient_data",
+    recommendationLabel: group.isSolo ? "solo_baseline" : "insufficient_data",
   };
   return row;
 }
 
 function applyParetoRecommendations(rows: TeamIqComboMatrixRow[]): void {
   const candidates = rows.filter(
-    (row) => row.modelIds.length > 1 && row.attempts > 0 && row.teamLift !== null
+    (row) => !row.isSolo && row.attempts > 0 && row.teamLift !== null
   );
   const frontier = new Set(
     computeParetoFrontier(candidates, [
@@ -234,7 +238,7 @@ function applyParetoRecommendations(rows: TeamIqComboMatrixRow[]): void {
   );
 
   for (const row of rows) {
-    if (row.modelIds.length <= 1) {
+    if (row.isSolo) {
       row.recommendationLabel = "solo_baseline";
       continue;
     }

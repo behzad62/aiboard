@@ -35,5 +35,11 @@ export type {
   TeamIqCertifiedTask,
 } from "./certified-runner";
 
-export { createTeamIqCompositionFromSelection } from "./ui-selection";
+export {
+  TEAMIQ_TOOL_BENCH_STRATEGIES,
+  createTeamIqCompositionFromSelection,
+  createTeamIqToolBenchCompositionsFromSelection,
+} from "./ui-selection";
 export type { CreateTeamIqCompositionSelectionInput } from "./ui-selection";
+
+export { TEAMIQ_TOOL_RELIABILITY_QUICK_CASES } from "./toolreliability-quick";

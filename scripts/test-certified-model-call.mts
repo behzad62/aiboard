@@ -114,6 +114,26 @@ await expectReject(
   /provider 503/i
 );
 
+await expectReject(
+  "empty certified provider responses are rejected after trace recording",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context,
+      caseId: "case-model-call",
+      attemptId: "attempt-model-call-empty",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "done" };
+      },
+    }),
+  /empty response|no output|provider/i
+);
+
 const customServer = await startOpenAICompatibleServer();
 try {
   const require = createRequire(import.meta.url);
@@ -182,9 +202,149 @@ try {
 const bundle = exportBenchmarkReportBundleV2();
 const successTrace = bundle.traces.find((trace) => trace.id === result.traceId);
 const errorTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-error");
+const emptyTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-empty");
 check("successful model call trace persisted", successTrace?.rawResponse === "{\"move\":3}" && successTrace.parsedResponseJson?.includes("\"move\":3") === true, successTrace);
 check("model call trace links certified run metadata", successTrace?.runId === context.runId && successTrace.caseId === "case-model-call" && successTrace.attemptId === "attempt-model-call", successTrace);
 check("provider error trace persisted", errorTrace?.error?.includes("Provider 503") === true && errorTrace.retryHistory.some((attempt) => attempt.status === "provider_error"), errorTrace);
+check(
+  "empty response trace persisted as provider error",
+  emptyTrace?.rawResponse === "" &&
+    emptyTrace.error?.toLowerCase().includes("empty response") === true &&
+    emptyTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
+  emptyTrace
+);
+const modelCallEvents = context.snapshot().events.filter(
+  (event) => event.attemptId === "attempt-model-call"
+);
+check(
+  "successful model call emits started and completed run events",
+  modelCallEvents.some((event) => event.type === "model_call_started") &&
+    modelCallEvents.some((event) => event.type === "model_call_completed"),
+  modelCallEvents
+);
+const failedModelCallEvents = context.snapshot().events.filter(
+  (event) => event.attemptId === "attempt-model-call-error"
+);
+check(
+  "failed model call emits failed run event",
+  failedModelCallEvents.some((event) => event.type === "model_call_failed"),
+  failedModelCallEvents
+);
+const emptyModelCallEvents = context.snapshot().events.filter(
+  (event) => event.attemptId === "attempt-model-call-empty"
+);
+check(
+  "empty response emits failed run event",
+  emptyModelCallEvents.some((event) => event.type === "model_call_failed"),
+  emptyModelCallEvents
+);
+
+const preflightBudgetContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-budget-preflight",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-budget-preflight"],
+  teamCompositionIds: ["team-budget-preflight"],
+  modelBudget: { maxModelCalls: 0 },
+});
+let preflightStreamCalled = false;
+await expectReject(
+  "certified budget blocks model calls before provider stream starts",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context: preflightBudgetContext,
+      caseId: "case-budget-preflight",
+      attemptId: "attempt-budget-preflight",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        preflightStreamCalled = true;
+        yield { type: "token", content: "{}" };
+      },
+    }),
+  /budget|model calls/i
+);
+check("budget preflight does not call provider stream", !preflightStreamCalled, preflightStreamCalled);
+
+const postCallBudgetContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-budget-post",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-budget-post"],
+  teamCompositionIds: ["team-budget-post"],
+  modelBudget: { maxOutputTokens: 1 },
+});
+await expectReject(
+  "certified budget records trace then rejects over-budget output",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 64,
+      temperature: 0,
+      context: postCallBudgetContext,
+      caseId: "case-budget-post",
+      attemptId: "attempt-budget-post",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "token", content: "This response intentionally uses several tokens." };
+      },
+    }),
+  /budget|output tokens/i
+);
+check(
+  "budget post-call trace is still persisted",
+  postCallBudgetContext.snapshot().traces.some((trace) => trace.attemptId === "attempt-budget-post"),
+  postCallBudgetContext.snapshot().traces
+);
+
+const timeoutContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-timeout",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-timeout"],
+  teamCompositionIds: ["team-timeout"],
+  modelBudget: { maxModelCallMs: 25 },
+});
+await expectReject(
+  "certified model call times out stalled provider streams",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context: timeoutContext,
+      caseId: "case-timeout",
+      attemptId: "attempt-timeout",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        await new Promise<void>(() => undefined);
+      },
+    }),
+  /timed out|timeout|budget/i
+);
+const timeoutTrace = timeoutContext
+  .snapshot()
+  .traces.find((trace) => trace.attemptId === "attempt-timeout");
+check(
+  "timeout trace records provider error evidence",
+  timeoutTrace?.error?.toLowerCase().includes("timed out") === true &&
+    timeoutTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
+  timeoutTrace
+);
 
 if (failures === 0) {
   console.log("PASS");

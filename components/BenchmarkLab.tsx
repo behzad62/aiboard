@@ -151,6 +151,8 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
             certified={certifiedDashboard}
             counts={reportCounts}
             track={certifiedTrack ?? "all"}
+            onRefresh={refresh}
+            setMessage={setMessage}
           />
           {(view === "certified" || view === "full") && (
             <FailureTaxonomyPanel failures={benchmarkFailures} />

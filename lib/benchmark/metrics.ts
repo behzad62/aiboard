@@ -25,6 +25,7 @@ import { computeParetoFrontier } from "@/lib/benchmark/scoring/pareto";
 import type {
   CertifiedBenchmarkDashboardData,
   CertifiedBenchmarkDashboardInput,
+  WorkBenchRoleLeaderboardRow,
 } from "@/lib/benchmark/scoring/types";
 import {
   buildTeamIqComboMatrixRows,
@@ -433,8 +434,12 @@ export function buildBenchmarkDashboardData(
 export function buildCertifiedBenchmarkDashboardData(
   input: CertifiedBenchmarkDashboardInput
 ): CertifiedBenchmarkDashboardData {
-  const attempts = input.attemptsV2.filter(isCertifiedAttempt);
-  const certifiedAttemptIds = new Set(attempts.map((attempt) => attempt.id));
+  const certifiedAttempts = input.attemptsV2.filter(isCertifiedAttempt);
+  const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
+  const excludedAttempts = certifiedAttempts.filter(
+    (attempt) => !isScoredCertifiedAttempt(attempt)
+  );
+  const certifiedAttemptIds = new Set(scoredAttempts.map((attempt) => attempt.id));
   const verifierResults = input.verifierResults.filter((result) =>
     certifiedAttemptIds.has(result.attemptId)
   );
@@ -443,7 +448,7 @@ export function buildCertifiedBenchmarkDashboardData(
   );
   const leaderboard = rankByVerifiedQuality(
     aggregateCertifiedRunScores({
-      attempts,
+      attempts: scoredAttempts,
       cases: input.caseV2,
       teamCompositions: input.teamCompositions,
       verifierResults,
@@ -467,34 +472,48 @@ export function buildCertifiedBenchmarkDashboardData(
     },
   ]);
   const teamIqComboMatrixRows = buildTeamIqComboMatrixRows({
-    attempts,
+    attempts: scoredAttempts,
     teamCompositions: input.teamCompositions,
     track: "teamiq",
   });
 
   return {
     summary: {
-      certifiedRuns: countCertifiedRuns(attempts),
-      certifiedAttempts: attempts.length,
+      certifiedRuns: countCertifiedRuns(certifiedAttempts),
+      certifiedAttempts: certifiedAttempts.length,
+      scoredAttempts: scoredAttempts.length,
+      excludedAttempts: excludedAttempts.length,
+      excludedProviderAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "provider_unavailable"
+      ).length,
+      excludedHarnessAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "invalid_harness"
+      ).length,
+      excludedEnvironmentAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "invalid_environment"
+      ).length,
+      excludedUserAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "aborted_user"
+      ).length,
       certifiedCases: input.caseV2.length,
       certifiedTeams: leaderboard.length,
       verifiedPassRate: rate(
-        attempts.filter((attempt) =>
+        scoredAttempts.filter((attempt) =>
           isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))
         ).length,
-        attempts.length
+        scoredAttempts.length
       ),
       averageVerifiedQuality: averageNumbers(
-        attempts.map((attempt) => finiteMetric(attempt.verifiedQuality))
+        scoredAttempts.map((attempt) => finiteMetric(attempt.verifiedQuality))
       ),
       averageEfficiencyScore: averageNumbers(
-        attempts.map((attempt) => finiteMetric(attempt.efficiencyScore))
+        scoredAttempts.map((attempt) => finiteMetric(attempt.efficiencyScore))
       ),
       averageCostUsd: averageNumbers(
-        attempts.map((attempt) => finiteMetric(attempt.costUsd))
+        scoredAttempts.map((attempt) => finiteMetric(attempt.costUsd))
       ),
       averageDurationMs: averageNumbers(
-        attempts.map((attempt) => finiteMetric(attempt.durationMs))
+        scoredAttempts.map((attempt) => finiteMetric(attempt.durationMs))
       ),
       harnessCertificationPassRate: rate(
         input.harnessCertifications.filter((certification) => certification.passed)
@@ -508,21 +527,162 @@ export function buildCertifiedBenchmarkDashboardData(
     speedPerPassLeaderboard: rankBySpeedPerPass(leaderboard),
     teamLiftLeaderboard: rankByTeamLift(leaderboard),
     toolReliabilityLeaderboard: rankByToolReliability(leaderboard),
+    workBenchRoleLeaderboards: buildWorkBenchRoleLeaderboards(
+      scoredAttempts,
+      input.teamCompositions,
+      verifierByAttemptId
+    ),
     paretoFrontier,
     teamIqComboMatrixRows,
     teamIqRecommendationCards:
       buildTeamIqRecommendationCards(teamIqComboMatrixRows),
     trackRows: buildCertifiedTrackRows(
       input.caseV2,
-      attempts,
+      scoredAttempts,
       verifierByAttemptId
     ),
     verifierAssertionRows: buildVerifierAssertionRows(verifierResults),
   };
 }
 
+function buildWorkBenchRoleLeaderboards(
+  attempts: BenchmarkAttemptV2[],
+  teams: CertifiedBenchmarkDashboardInput["teamCompositions"],
+  verifierByAttemptId: Map<string, BenchmarkVerifierResult>
+): CertifiedBenchmarkDashboardData["workBenchRoleLeaderboards"] {
+  type Role = WorkBenchRoleLeaderboardRow["role"];
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  const rows = new Map<
+    string,
+    {
+      role: Role;
+      modelId: string;
+      displayName: string;
+      attempts: number;
+      passed: number;
+      verifiedQualitySum: number;
+      efficiencySum: number;
+      costSum: number;
+      costSamples: number;
+      durationSum: number;
+      durationSamples: number;
+    }
+  >();
+
+  const addRoleAttempt = (
+    role: Role,
+    modelId: string,
+    displayName: string,
+    attempt: BenchmarkAttemptV2
+  ) => {
+    const key = `${role}:${modelId}`;
+    const row =
+      rows.get(key) ??
+      {
+        role,
+        modelId,
+        displayName,
+        attempts: 0,
+        passed: 0,
+        verifiedQualitySum: 0,
+        efficiencySum: 0,
+        costSum: 0,
+        costSamples: 0,
+        durationSum: 0,
+        durationSamples: 0,
+      };
+    row.attempts += 1;
+    if (isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))) {
+      row.passed += 1;
+    }
+    row.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
+    row.efficiencySum += finiteMetric(attempt.efficiencyScore) ?? 0;
+    const cost = finiteMetric(attempt.costUsd);
+    if (cost != null) {
+      row.costSum += cost;
+      row.costSamples += 1;
+    }
+    const durationMs = finiteMetric(attempt.durationMs);
+    if (durationMs != null) {
+      row.durationSum += durationMs;
+      row.durationSamples += 1;
+    }
+    rows.set(key, row);
+  };
+
+  for (const attempt of attempts) {
+    if (attempt.track !== "workbench") continue;
+    const team = teamById.get(attempt.teamCompositionId);
+    if (!team) continue;
+    for (const role of team.roles) {
+      if (
+        role.role === "architect" ||
+        role.role === "worker" ||
+        role.role === "reviewer"
+      ) {
+        addRoleAttempt(role.role, role.modelId, role.displayName, attempt);
+      } else if (role.role === "single") {
+        addRoleAttempt("worker", role.modelId, role.displayName, attempt);
+      }
+    }
+  }
+
+  const byRole: CertifiedBenchmarkDashboardData["workBenchRoleLeaderboards"] = {
+    architect: [],
+    worker: [],
+    reviewer: [],
+  };
+  for (const row of rows.values()) {
+    byRole[row.role].push({
+      id: `${row.role}:${row.modelId}`,
+      role: row.role,
+      modelId: row.modelId,
+      displayName: row.displayName || displayModelName(row.modelId),
+      attempts: row.attempts,
+      passed: row.passed,
+      verifiedPassRate: rate(row.passed, row.attempts),
+      verifiedQuality:
+        row.attempts > 0 ? round(row.verifiedQualitySum / row.attempts, 4) : 0,
+      efficiencyScore:
+        row.attempts > 0 ? round(row.efficiencySum / row.attempts, 4) : 0,
+      averageCostUsd:
+        row.costSamples > 0 ? round(row.costSum / row.costSamples, 6) : null,
+      averageDurationMs:
+        row.durationSamples > 0
+          ? round(row.durationSum / row.durationSamples, 2)
+          : null,
+    });
+  }
+
+  for (const key of ["architect", "worker", "reviewer"] as const) {
+    byRole[key].sort(
+      (a, b) =>
+        b.verifiedQuality - a.verifiedQuality ||
+        (b.verifiedPassRate ?? -1) - (a.verifiedPassRate ?? -1) ||
+        b.attempts - a.attempts ||
+        a.displayName.localeCompare(b.displayName)
+    );
+  }
+  return byRole;
+}
+
 function isCertifiedAttempt(attempt: BenchmarkAttemptV2): boolean {
   return attempt.mode === "certified";
+}
+
+export function isScoredCertifiedAttempt(
+  attempt: BenchmarkAttemptV2
+): boolean {
+  if (!isCertifiedAttempt(attempt)) return false;
+  switch (attempt.status) {
+    case "provider_unavailable":
+    case "invalid_harness":
+    case "invalid_environment":
+    case "aborted_user":
+      return false;
+    default:
+      return true;
+  }
 }
 
 function isVerifiedPassed(

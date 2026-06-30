@@ -1,8 +1,6 @@
-import { TOOL_RELIABILITY_V0_1_CASES } from "./cases";
 import type {
   PatchReliabilityCase,
   ToolCallReliabilityCase,
-  ToolReliabilityCase,
 } from "./types";
 
 export type LargeFileStressKind =
@@ -28,7 +26,7 @@ export interface LargeFilePatchReliabilityCase extends PatchReliabilityCase {
   stress: LargeFilePatchStressPolicy;
 }
 
-export type ToolReliabilityV0_2StressCase =
+export type ToolReliabilityStressCase =
   | LargeFilePatchReliabilityCase
   | ToolCallReliabilityCase;
 
@@ -51,7 +49,7 @@ const TOOL_STRATEGY_CASES: ToolCallReliabilityCase[] = Array.from(
         : `src/config/catalog-${idNumber}.json`;
     const action = number <= 10 ? "search" : "read_range";
     return {
-      id: `toolrel-v0.2-tool-strategy-${idNumber}`,
+      id: `toolrel-current-tool-strategy-${idNumber}`,
       category: "tool-call",
       title:
         number <= 10
@@ -61,7 +59,7 @@ const TOOL_STRATEGY_CASES: ToolCallReliabilityCase[] = Array.from(
         number <= 10
           ? `The target function is inside a large file. Emit exactly one JSON tool action that searches ${path} for buildInvoiceSummary_${idNumber}. Do not read the entire file.`
           : `The config file is thousands of lines long. Emit exactly one JSON read_range action for the target section in ${path}; do not request the whole file.`,
-      canary: `AIBENCH-TOOLREL-V02-TOOL-${idNumber}`,
+      canary: `AIBENCH-TOOLREL-CURRENT-TOOL-${idNumber}`,
       metrics: ["tool", "firstAttempt", "forbiddenAction"],
       expectedAction:
         action === "search"
@@ -80,20 +78,15 @@ const TOOL_STRATEGY_CASES: ToolCallReliabilityCase[] = Array.from(
   }
 );
 
-export const TOOL_RELIABILITY_V0_2_LARGE_FILE_CASES: LargeFilePatchReliabilityCase[] =
+export const TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES: LargeFilePatchReliabilityCase[] =
   STRESS_PATCH_CASES;
 
-export const TOOL_RELIABILITY_V0_2_TOOL_STRESS_CASES: ToolCallReliabilityCase[] =
+export const TOOL_RELIABILITY_TOOL_STRATEGY_CASES: ToolCallReliabilityCase[] =
   TOOL_STRATEGY_CASES;
 
-export const TOOL_RELIABILITY_V0_2_STRESS_CASES: ToolReliabilityV0_2StressCase[] = [
+export const TOOL_RELIABILITY_STRESS_CASES: ToolReliabilityStressCase[] = [
   ...STRESS_PATCH_CASES,
   ...TOOL_STRATEGY_CASES,
-];
-
-export const TOOL_RELIABILITY_V0_2_CASES: ToolReliabilityCase[] = [
-  ...TOOL_RELIABILITY_V0_1_CASES,
-  ...TOOL_RELIABILITY_V0_2_STRESS_CASES,
 ];
 
 function repeatedBlockCase(number: number): LargeFilePatchReliabilityCase {
@@ -106,14 +99,14 @@ function repeatedBlockCase(number: number): LargeFilePatchReliabilityCase {
     replacement: "return value.trim().toLowerCase();",
   });
   return patchCase({
-    id: `toolrel-v0.2-large-repeated-${idNumber}`,
+    id: `toolrel-current-large-repeated-${idNumber}`,
     kind: "repeated-block-disambiguation",
     title: `Repeated block disambiguation ${idNumber}`,
     prompt: `Patch only the branch marked ${marker} in ${path}. There are many similar if (!value) blocks; do not edit the wrong block or rewrite the file.`,
     path,
     before,
     after,
-    canary: `AIBENCH-TOOLREL-V02-REPEATED-${idNumber}`,
+    canary: `AIBENCH-TOOLREL-CURRENT-REPEATED-${idNumber}`,
     maxChangedLines: 6,
     maxSearchLines: 12,
     requiredChangedSnippets: ["return value.trim().toLowerCase();"],
@@ -131,14 +124,14 @@ function multiHunkCase(number: number): LargeFilePatchReliabilityCase {
   const before = largeMultiHunkFile(idNumber, false);
   const after = largeMultiHunkFile(idNumber, true);
   return patchCase({
-    id: `toolrel-v0.2-large-multihunk-${idNumber}`,
+    id: `toolrel-current-large-multihunk-${idNumber}`,
     kind: "multi-hunk-patch",
     title: `Three-hunk large file patch ${idNumber}`,
     prompt: `Patch ${path} using minimal SEARCH/REPLACE hunks: update the import alias, helper return value, and call site. The file is intentionally long; do not rewrite unrelated sections.`,
     path,
     before,
     after,
-    canary: `AIBENCH-TOOLREL-V02-MULTIHUNK-${idNumber}`,
+    canary: `AIBENCH-TOOLREL-CURRENT-MULTIHUNK-${idNumber}`,
     maxChangedLines: 12,
     maxSearchLines: 20,
     requiredChangedSnippets: [
@@ -159,14 +152,14 @@ function largeJsonCase(number: number): LargeFilePatchReliabilityCase {
   const before = largeJsonConfig(idNumber, false);
   const after = largeJsonConfig(idNumber, true);
   return patchCase({
-    id: `toolrel-v0.2-large-json-${idNumber}`,
+    id: `toolrel-current-large-json-${idNumber}`,
     kind: "json-large-object-edit",
     title: `Large JSON nested feature flag ${idNumber}`,
     prompt: `Patch only the nested betaCheckout flag in ${path}. The JSON must remain valid and unrelated feature flags must not change.`,
     path,
     before,
     after,
-    canary: `AIBENCH-TOOLREL-V02-JSON-${idNumber}`,
+    canary: `AIBENCH-TOOLREL-CURRENT-JSON-${idNumber}`,
     maxChangedLines: 8,
     maxSearchLines: 16,
     requiredChangedSnippets: [`"betaCheckout_${idNumber}": true`],
@@ -183,14 +176,14 @@ function longReactCase(number: number): LargeFilePatchReliabilityCase {
   const before = largeReactToolbar(idNumber, false);
   const after = largeReactToolbar(idNumber, true);
   return patchCase({
-    id: `toolrel-v0.2-large-react-${idNumber}`,
+    id: `toolrel-current-large-react-${idNumber}`,
     kind: "react-large-component-edit",
     title: `Long React component aria patch ${idNumber}`,
     prompt: `Patch the icon-only save button in ${path} so screen readers announce Save changes ${idNumber}. Do not add visible text and do not edit the other icon buttons.`,
     path,
     before,
     after,
-    canary: `AIBENCH-TOOLREL-V02-REACT-${idNumber}`,
+    canary: `AIBENCH-TOOLREL-CURRENT-REACT-${idNumber}`,
     maxChangedLines: 6,
     maxSearchLines: 14,
     requiredChangedSnippets: [`aria-label="Save changes ${idNumber}"`],
@@ -208,14 +201,14 @@ function noWholeFileRewriteCase(number: number): LargeFilePatchReliabilityCase {
   const before = noRewriteFile(idNumber, false);
   const after = noRewriteFile(idNumber, true);
   return patchCase({
-    id: `toolrel-v0.2-large-no-rewrite-${idNumber}`,
+    id: `toolrel-current-large-no-rewrite-${idNumber}`,
     kind: "no-whole-file-rewrite",
     title: `Minimal patch required ${idNumber}`,
     prompt: `Patch ${path} with a minimal edit. A whole-file rewrite or giant search block should fail even if the final text is equivalent.`,
     path,
     before,
     after,
-    canary: `AIBENCH-TOOLREL-V02-NOREWRITE-${idNumber}`,
+    canary: `AIBENCH-TOOLREL-CURRENT-NOREWRITE-${idNumber}`,
     maxChangedLines: 4,
     maxSearchLines: 8,
     requiredChangedSnippets: [`return clamp_${idNumber}(value, 0, 100);`],
@@ -315,7 +308,7 @@ function largeMultiHunkFile(id: string, patched: boolean): string {
 
 function largeJsonConfig(id: string, patched: boolean): string {
   const entries: string[] = [];
-  for (let index = 1; index <= 240; index++) {
+  for (let index = 1; index <= 520; index++) {
     entries.push(`    "sentinel_${id}_${String(index).padStart(3, "0")}": "keep"`);
   }
   return [
@@ -337,7 +330,7 @@ function largeReactToolbar(id: string, patched: boolean): string {
     "  return (",
     "    <div>",
   ];
-  for (let index = 1; index <= 160; index++) {
+  for (let index = 1; index <= 260; index++) {
     lines.push(`      {/* sentinel-toolbar-section-${String(index).padStart(3, "0")} */}`);
     if (index === 73) {
       lines.push(
@@ -366,7 +359,7 @@ function noRewriteFile(id: string, patched: boolean): string {
     "}",
     "",
   ];
-  for (let index = 1; index <= 300; index++) {
+  for (let index = 1; index <= 500; index++) {
     lines.push(`export const NO_REWRITE_SENTINEL_${id}_${String(index).padStart(3, "0")} = true;`);
   }
   lines.push(`export function normalizePercent_${id}(value: number): number {`);

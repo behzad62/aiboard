@@ -1,5 +1,5 @@
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
-import type { BenchmarkAttemptV2 } from "@/lib/benchmark/types";
+import type { BenchmarkAttemptV2, BenchmarkTeamComposition } from "@/lib/benchmark/types";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
   runWorkBenchBuild,
@@ -20,7 +20,8 @@ export interface RunCertifiedWorkBenchInput {
   context: CertifiedRunContext;
   cases: WorkBenchCase[];
   runner: WorkBenchRunnerConfig;
-  teamCompositionIds: string[];
+  teamCompositionIds?: string[];
+  teamCompositions?: BenchmarkTeamComposition[];
   models?: SelectedModel[];
   runBuild?: NonNullable<WorkBenchExecutionInput["runBuild"]>;
   runBuildDiscussion?: RunBuildDiscussionFn;
@@ -32,7 +33,15 @@ export async function runCertifiedWorkBench(
   input: RunCertifiedWorkBenchInput
 ): Promise<BenchmarkAttemptV2[]> {
   const attempts: BenchmarkAttemptV2[] = [];
-  for (const teamCompositionId of input.teamCompositionIds) {
+  const teamCompositionIds =
+    input.teamCompositionIds ??
+    input.teamCompositions?.map((team) => team.id) ??
+    [];
+  for (const teamCompositionId of teamCompositionIds) {
+    const teamComposition =
+      input.teamCompositions?.find((team) => team.id === teamCompositionId) ??
+      null;
+    const models = modelsForWorkBenchTeam(teamComposition, input.models ?? []);
     for (const workBenchCase of input.cases) {
       const result = await executeWorkBenchVerifierOnly({
         case: workBenchCase,
@@ -48,7 +57,8 @@ export async function runCertifiedWorkBench(
             runWorkBenchBuild({
               ...buildInput,
               context: input.context,
-              models: input.models ?? [],
+              models,
+              teamComposition: teamComposition ?? undefined,
               runBuildDiscussion: input.runBuildDiscussion,
               getBenchmarkTraces: input.getBenchmarkTraces,
             })),
@@ -61,6 +71,32 @@ export async function runCertifiedWorkBench(
     }
   }
   return attempts;
+}
+
+function modelsForWorkBenchTeam(
+  team: BenchmarkTeamComposition | null,
+  fallbackModels: SelectedModel[]
+): SelectedModel[] {
+  if (!team) return fallbackModels;
+  const byId = new Map(fallbackModels.map((model) => [model.modelId, model]));
+  const selected = team.roles.map((role) => ({
+    modelId: role.modelId,
+    providerId: role.providerId,
+    displayName: role.displayName,
+    contextProfile: byId.get(role.modelId)?.contextProfile,
+  }));
+  return uniqueModels(selected.length > 0 ? selected : fallbackModels);
+}
+
+function uniqueModels(models: SelectedModel[]): SelectedModel[] {
+  const seen = new Set<string>();
+  const result: SelectedModel[] = [];
+  for (const model of models) {
+    if (seen.has(model.modelId)) continue;
+    seen.add(model.modelId);
+    result.push(model);
+  }
+  return result;
 }
 
 function attemptIdFor(runId: string, caseId: string, teamCompositionId: string): string {

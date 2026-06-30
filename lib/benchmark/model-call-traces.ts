@@ -93,7 +93,9 @@ export function createGameModelCallTrace(
     ...(input.estimatedUsd !== undefined
       ? { estimatedUsd: input.estimatedUsd }
       : {}),
-    ...(input.rawResponse ? { rawResponse: capTraceText(input.rawResponse) } : {}),
+    ...(input.rawResponse !== undefined
+      ? { rawResponse: capTraceText(input.rawResponse) }
+      : {}),
     ...(input.parsedResponseJson
       ? { parsedResponseJson: capTraceText(input.parsedResponseJson) }
       : {}),

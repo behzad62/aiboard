@@ -33,7 +33,6 @@ export function WorkBenchRunPanel({
 }) {
   const selectedCase =
     cases.find((item) => item.id === selectedCaseId) ?? cases[0] ?? null;
-  const v2Count = cases.filter((item) => item.case.caseVersion.startsWith("2")).length;
 
   return (
     <div className="space-y-3">
@@ -44,7 +43,7 @@ export function WorkBenchRunPanel({
           onChange={onCaseChange}
         />
         <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-          {cases.length} certified fixture cases · {v2Count} v2 challenges
+          {cases.length} certified fixture cases
         </div>
       </div>
       <WorkBenchRunnerStatus

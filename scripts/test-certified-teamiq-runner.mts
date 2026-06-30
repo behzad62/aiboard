@@ -12,7 +12,7 @@ import { runHarnessCertification } from "../lib/benchmark/certified/certificatio
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
   buildPerfectToolReliabilityCandidate,
-  TOOL_RELIABILITY_V0_1_CASES,
+  TOOL_RELIABILITY_CASES,
 } from "../lib/benchmark/toolreliability";
 import {
   deriveTeamComposition,
@@ -22,7 +22,7 @@ import type {
   BenchmarkCaseV2,
   BenchmarkTeamCompositionRole,
 } from "../lib/benchmark/types";
-import type { StreamChunk } from "../lib/providers/base";
+import type { ChatParams, StreamChunk, StructuredOutputFormat } from "../lib/providers/base";
 
 let failures = 0;
 
@@ -35,10 +35,10 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 const now = "2026-06-28T13:00:00.000Z";
 const caseV2: BenchmarkCaseV2 = {
-  id: "teamiq-toolreliability-v0.1-pack",
+  id: "teamiq-toolreliability-current-pack",
   schemaVersion: 2,
   track: "teamiq",
-  title: "TeamIQ over ToolReliability v0.1",
+  title: "TeamIQ over ToolReliability current pack",
   description:
     "TeamIQ benchmark using deterministic ToolReliability tasks as the scored substrate.",
   difficulty: "medium",
@@ -62,7 +62,7 @@ const caseV2: BenchmarkCaseV2 = {
     maxModelCalls: 100,
   },
   scoring: {
-    scoringVersion: "teamiq-toolreliability-v0.1",
+    scoringVersion: "teamiq-toolreliability-current",
     primary: "team_lift",
   },
   contamination: {
@@ -104,7 +104,15 @@ const team = deriveTeamComposition({
 });
 
 const perfectOutputs = buildPerfectToolReliabilityCandidate().outputs;
-const selectedCases = TOOL_RELIABILITY_V0_1_CASES.slice(0, 5);
+const selectedCases = [
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "json-schema"),
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "tool-call"),
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "patch"),
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "repair-loop"),
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "forbidden-action"),
+].filter((benchmarkCase): benchmarkCase is (typeof TOOL_RELIABILITY_CASES)[number] =>
+  Boolean(benchmarkCase)
+);
 const outputByCase = new Map(
   selectedCases.flatMap((benchmarkCase) =>
     (perfectOutputs[benchmarkCase.id] ?? []).map((output, index) => [
@@ -114,6 +122,10 @@ const outputByCase = new Map(
   )
 );
 const callsByProvider = new Map<string, number>();
+const capturedCalls: Array<{
+  providerId: string;
+  params: Pick<ChatParams, "messages" | "structuredOutput">;
+}> = [];
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
@@ -142,6 +154,13 @@ const summary = await runCertifiedBenchmark({
       },
       streamChat: async function* ({ providerId, params }): AsyncIterable<StreamChunk> {
         callsByProvider.set(providerId, (callsByProvider.get(providerId) ?? 0) + 1);
+        capturedCalls.push({
+          providerId,
+          params: {
+            messages: params.messages,
+            structuredOutput: params.structuredOutput,
+          },
+        });
         const prompt = params.messages.map((message) => message.content).join("\n");
         const caseCanary = selectedCases.find((benchmarkCase) =>
           prompt.includes(benchmarkCase.canary)
@@ -167,6 +186,23 @@ const soloAttempts = attempts.filter(
   (attempt) => attempt.track === "teamiq" && attempt.teamCompositionId !== team.id
 );
 const teamAttempt = attempts.find((attempt) => attempt.teamCompositionId === team.id);
+const teamVerifier = verifiers.find((verifier) => verifier.attemptId === teamAttempt?.id);
+
+function promptForCase(caseCategory: string): {
+  prompt: string;
+  structuredOutput?: StructuredOutputFormat;
+} {
+  const benchmarkCase = selectedCases.find((item) => item.category === caseCategory);
+  const captured = capturedCalls.find((call) =>
+    call.params.messages.some((message) =>
+      benchmarkCase ? message.content.includes(benchmarkCase.canary) : false
+    )
+  );
+  return {
+    prompt: captured?.params.messages.map((message) => message.content).join("\n") ?? "",
+    structuredOutput: captured?.params.structuredOutput,
+  };
+}
 
 check(
   "certified TeamIQ run completes",
@@ -199,12 +235,64 @@ check(
   bundle.traces.length >
     selectedCases.length * roles.length &&
     teamAttempt?.traceIds.length ===
-      selectedCases.reduce(
-        (sum, benchmarkCase) =>
-          sum + roles.length * (benchmarkCase.category === "repair-loop" ? 2 : 1),
-        0
-      ),
+      selectedCases.length * roles.length,
   { traceCount: bundle.traces.length, teamAttempt }
+);
+const jsonCall = promptForCase("json-schema");
+check(
+  "certified TeamIQ reuses current ToolReliability JSON schema prompt and structured output",
+  jsonCall.prompt.includes("Required JSON schema:") &&
+    jsonCall.prompt.includes('"decision"') &&
+    jsonCall.structuredOutput?.schema.required?.includes("decision") === true,
+  jsonCall
+);
+const toolCall = promptForCase("tool-call");
+check(
+  "certified TeamIQ reuses current ToolReliability tool-action prompt",
+  toolCall.prompt.includes("Expected JSON tool action:") &&
+    toolCall.prompt.includes("read_range") &&
+    toolCall.prompt.includes('"startLine"'),
+  toolCall.prompt
+);
+const patchCall = promptForCase("patch");
+check(
+  "certified TeamIQ reuses current ToolReliability patch grammar and structured output",
+  patchCall.prompt.includes("Accepted patch response formats:") &&
+    patchCall.prompt.includes("<<<<<<< SEARCH") &&
+    patchCall.structuredOutput?.name === "toolreliability_patch",
+  patchCall
+);
+const repairCall = promptForCase("repair-loop");
+check(
+  "certified TeamIQ seeds repair-loop feedback and requests structured repair output",
+  repairCall.prompt.includes("Previous invalid answer:") &&
+    repairCall.prompt.includes("Parser feedback") &&
+    repairCall.structuredOutput?.schema.required?.length === 3,
+  repairCall
+);
+const forbiddenCall = promptForCase("forbidden-action");
+check(
+  "certified TeamIQ reuses current ToolReliability safe-command prompt",
+  forbiddenCall.prompt.includes("Allowed safe verification action:") &&
+    forbiddenCall.prompt.includes('"command":"npm test"'),
+  forbiddenCall.prompt
+);
+check(
+  "certified TeamIQ model traces are keyed to individual ToolReliability cases",
+  teamAttempt?.traceIds.every((traceId) => {
+    const trace = bundle.traces.find((candidate) => candidate.id === traceId);
+    return trace?.caseId ? selectedCases.some((benchmarkCase) => benchmarkCase.id === trace.caseId) : false;
+  }) === true,
+  teamAttempt?.traceIds.map((traceId) => bundle.traces.find((candidate) => candidate.id === traceId)?.caseId)
+);
+const parsedTeamVerifier = JSON.parse(teamVerifier?.resultJson ?? "{}") as {
+  diagnostics?: { summary?: { total?: number }; cases?: unknown[] };
+};
+check(
+  "certified TeamIQ verifier includes ToolReliability diagnostics",
+  parsedTeamVerifier.diagnostics?.summary?.total === selectedCases.length &&
+    parsedTeamVerifier.diagnostics.cases?.length === selectedCases.length,
+  parsedTeamVerifier
 );
 check(
   "certified TeamIQ verifier results export",

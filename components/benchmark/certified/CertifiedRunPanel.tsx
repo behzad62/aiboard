@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
-import { CaseSuitePicker, type CertifiedSuiteOption } from "./CaseSuitePicker";
+import { CaseSuitePicker } from "./CaseSuitePicker";
 import { HarnessProfilePicker } from "./HarnessProfilePicker";
 import { ModelTeamPicker } from "./ModelTeamPicker";
 import { RunBundlePanel } from "./RunBundlePanel";
@@ -32,7 +32,12 @@ import {
   saveHarnessCertificationResult,
 } from "@/lib/benchmark/store";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
+import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
+import {
+  listCertifiedSuiteOptions,
+  type CertifiedRunnableTrack,
+} from "@/lib/benchmark/certified/suite-options";
 import {
   adjustFireworksPlayerSelectionForPlayerCount,
   getCertifiedRunGate,
@@ -41,13 +46,18 @@ import {
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import type {
   BenchmarkCaseV2,
+  BenchmarkTeamComposition,
+  BenchmarkTeamCompositionRole,
   HarnessProfile,
   TeamIqStrategy,
 } from "@/lib/benchmark/types";
 import {
   createTeamIqCompositionFromSelection,
+  createTeamIqToolBenchCompositionsFromSelection,
   deriveSoloTeamComposition,
+  deriveTeamComposition,
   runCertifiedTeamIq,
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
 } from "@/lib/benchmark/teamiq";
 import {
   FIREWORKS_FULL_GAME_CASES,
@@ -58,17 +68,16 @@ import {
   type FireworksBenchmarkSuite,
 } from "@/lib/benchmark/fireworks";
 import {
-  getGameIqScenarioPack,
   listGameIqScenarioPacks,
   runCertifiedGameIq,
 } from "@/lib/benchmark/gameiq";
 import {
-  TOOL_RELIABILITY_V0_1_CASES,
+  TOOL_RELIABILITY_CASES,
   runCertifiedToolReliability,
 } from "@/lib/benchmark/toolreliability";
 import {
-  getWorkBenchV1CaseOption,
-  listWorkBenchV1CaseOptions,
+  getWorkBenchCaseOption,
+  listWorkBenchCaseOptions,
   runCertifiedWorkBench,
   runWorkBenchBuild,
   workBenchCaseToBenchmarkCaseV2,
@@ -77,9 +86,11 @@ import type { SelectedModel } from "@/lib/providers/base";
 
 const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
+const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
-type RunnableTrack = "gameiq" | "toolreliability" | "teamiq" | "workbench";
+type RunnableTrack = CertifiedRunnableTrack;
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
+type WorkBenchRoleMode = "solo" | "architect_worker" | "architect_worker_reviewer";
 
 const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
   { id: "gameiq", label: "GameIQ" },
@@ -110,6 +121,9 @@ export function CertifiedRunPanel({
   const [models, setModels] = useState<SelectedModel[]>([]);
   const [modelId, setModelId] = useState("");
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
+  const [workBenchRoleMode, setWorkBenchRoleMode] =
+    useState<WorkBenchRoleMode>("solo");
+  const [workBenchModelIds, setWorkBenchModelIds] = useState<string[]>([]);
   const [teamIqStrategy, setTeamIqStrategy] =
     useState<TeamIqUiStrategy>("architect_worker_reviewer");
   const [fireworksPlayerCount, setFireworksPlayerCount] = useState<2 | 3>(2);
@@ -127,8 +141,8 @@ export function CertifiedRunPanel({
   const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState<CertifiedRunSummary | null>(null);
 
-  const suites = useMemo(() => suiteOptions(selectedTrack), [selectedTrack]);
-  const workBenchCases = useMemo(() => listWorkBenchV1CaseOptions(), []);
+  const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
+  const workBenchCases = useMemo(() => listWorkBenchCaseOptions(), []);
   const executionMode = executionModeCopy(selectedTrack, harnessProfile);
   const certification = useMemo(
     () => runHarnessCertification(harnessProfile),
@@ -154,6 +168,13 @@ export function CertifiedRunPanel({
       current.length > 0
         ? current.filter((modelId) =>
             enabled.some((model) => model.modelId === modelId)
+          )
+        : enabled.slice(0, 3).map((model) => model.modelId)
+    );
+    setWorkBenchModelIds((current) =>
+      current.length > 0
+        ? current.filter((workBenchModelId) =>
+            enabled.some((model) => model.modelId === workBenchModelId)
           )
         : enabled.slice(0, 3).map((model) => model.modelId)
     );
@@ -185,6 +206,8 @@ export function CertifiedRunPanel({
     selectedTrack,
     modelId,
     teamModelIds,
+    workBenchModelIds,
+    workBenchRoleMode,
     fireworksPlayerCount: isFireworksSuite(suiteId)
       ? fireworksPlayerCount
       : undefined,
@@ -205,7 +228,7 @@ export function CertifiedRunPanel({
         <CardHeader>
           <CardTitle>Run certified benchmark</CardTitle>
           <CardDescription>
-            Certified scores come from versioned cases and deterministic
+            Certified scores come from current cases and deterministic
             verifiers. Lab scores remain exploratory evidence.
           </CardDescription>
         </CardHeader>
@@ -229,12 +252,21 @@ export function CertifiedRunPanel({
               <StaticField
                 label="Models"
                 value={
-                  teamModelIds.length >= 2
+                  teamModelIds.length >= 1
                     ? isFireworksSuite(suiteId)
                       ? `${teamModelIds.length} / ${fireworksPlayerCount} Fireworks players selected`
                       : `${teamModelIds.length} models selected`
-                    : "Select at least two models"
+                    : "Select at least one model"
                 }
+              />
+            ) : selectedTrack === "workbench" ? (
+              <StaticField
+                label="Models"
+                value={workBenchRoleSummary(
+                  models,
+                  workBenchModelIds,
+                  workBenchRoleMode
+                )}
               />
             ) : (
               <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
@@ -302,31 +334,45 @@ export function CertifiedRunPanel({
                       models,
                       teamModelIds,
                       fireworksPlayerCount
-                    ).join(" · ")}
+                    ).join(" / ")}
                   </div>
                 </div>
               )}
             </div>
           )}
           {selectedTrack === "workbench" && (
-            <WorkBenchRunPanel
-              cases={workBenchCases}
-              selectedCaseId={suiteId}
-              runnerUrl={workBenchRunnerUrl}
-              runnerToken={workBenchRunnerToken}
-              runnerHealth={workBenchRunnerHealth}
-              checkingRunner={checkingWorkBenchRunner}
-              onCaseChange={setSuiteId}
-              onRunnerUrlChange={(value) => {
-                setWorkBenchRunnerUrl(value);
-                setWorkBenchRunnerHealth(null);
-              }}
-              onRunnerTokenChange={(value) => {
-                setWorkBenchRunnerToken(value);
-                setWorkBenchRunnerHealth(null);
-              }}
-              onCheckRunner={() => void checkWorkBenchRunner()}
-            />
+            <div className="space-y-4">
+              <WorkBenchRunPanel
+                cases={workBenchCases}
+                selectedCaseId={suiteId}
+                runnerUrl={workBenchRunnerUrl}
+                runnerToken={workBenchRunnerToken}
+                runnerHealth={workBenchRunnerHealth}
+                checkingRunner={checkingWorkBenchRunner}
+                onCaseChange={setSuiteId}
+                onRunnerUrlChange={(value) => {
+                  setWorkBenchRunnerUrl(value);
+                  setWorkBenchRunnerHealth(null);
+                }}
+                onRunnerTokenChange={(value) => {
+                  setWorkBenchRunnerToken(value);
+                  setWorkBenchRunnerHealth(null);
+                }}
+                onCheckRunner={() => void checkWorkBenchRunner()}
+              />
+              <WorkBenchTeamBuilder
+                models={models}
+                roleMode={workBenchRoleMode}
+                selectedModelIds={workBenchModelIds}
+                onRoleModeChange={(next) => {
+                  setWorkBenchRoleMode(next);
+                  setWorkBenchModelIds((current) =>
+                    current.slice(0, workBenchRoleCount(next))
+                  );
+                }}
+                onChange={setWorkBenchModelIds}
+              />
+            </div>
           )}
           <RunProgressTimeline
             items={[
@@ -363,30 +409,53 @@ export function CertifiedRunPanel({
   async function runSelected() {
     if (!suiteId) return;
     const model = models.find((candidate) => candidate.modelId === modelId);
-    if (selectedTrack !== "teamiq" && !model) return;
+    const workBenchSelectedModels = workBenchModelsForRun(
+      models,
+      workBenchModelIds,
+      workBenchRoleMode
+    );
+    if (
+      selectedTrack !== "teamiq" &&
+      selectedTrack !== "workbench" &&
+      !model
+    ) return;
+    if (selectedTrack === "workbench" && workBenchSelectedModels.length < workBenchRoleCount(workBenchRoleMode)) {
+      return;
+    }
     const selectedWorkBenchCase =
-      selectedTrack === "workbench" ? getWorkBenchV1CaseOption(suiteId) : null;
+      selectedTrack === "workbench" ? getWorkBenchCaseOption(suiteId) : null;
     if (selectedTrack === "workbench" && !selectedWorkBenchCase) return;
     setRunning(true);
     setMessage(null);
     try {
-      const team =
+      const teams =
         selectedTrack === "teamiq"
-          ? createTeamIqCompositionFromSelection({
+          ? teamIqCompositionsForRun({
               models,
               selectedModelIds: teamModelIds,
               strategy: teamIqStrategy,
+              suiteId,
               roleMode: isFireworksSuite(suiteId)
                 ? "fireworks_players"
                 : "default",
               playerCount: fireworksPlayerCount,
             })
-          : deriveSoloTeamComposition({
-              modelId: model!.modelId,
-              providerId: model!.providerId,
-              displayName: model!.displayName,
-            });
-      await saveBenchmarkTeamComposition(team);
+          : [
+              selectedTrack === "workbench"
+                ? createWorkBenchTeamComposition({
+                    models: workBenchSelectedModels,
+                    roleMode: workBenchRoleMode,
+                  })
+                : deriveSoloTeamComposition({
+                    modelId: model!.modelId,
+                    providerId: model!.providerId,
+                    displayName: model!.displayName,
+                  }),
+            ];
+      const primaryTeam = teams[0]!;
+      for (const team of teams) {
+        await saveBenchmarkTeamComposition(team);
+      }
       await saveHarnessCertificationResult(certification);
       const runId = `ui-${selectedTrack}-${Date.now()}`;
       const caseRecord =
@@ -400,7 +469,10 @@ export function CertifiedRunPanel({
         track: selectedTrack,
         harnessProfile,
         caseIds: [caseRecord.id],
-        teamCompositionIds: [team.id],
+        teamCompositionIds: teams.map((team) => team.id),
+        modelBudget: certifiedRunBudgetForCase(caseRecord, {
+          maxModelCallMs: DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS,
+        }),
         certification,
         runner: (context) => {
           if (selectedTrack === "gameiq") {
@@ -408,7 +480,7 @@ export function CertifiedRunPanel({
               context,
               models: [model!],
               scenarioPackIds: [suiteId],
-              teamCompositionIds: [team.id],
+              teamCompositionIds: [primaryTeam.id],
               trials: 1,
             });
           }
@@ -416,8 +488,8 @@ export function CertifiedRunPanel({
             return runCertifiedToolReliability({
               context,
               models: [model!],
-              teamCompositionIds: [team.id],
-              casePack: TOOL_RELIABILITY_V0_1_CASES,
+              teamCompositionIds: [primaryTeam.id],
+              casePack: TOOL_RELIABILITY_CASES,
             });
           }
           if (selectedTrack === "workbench") {
@@ -428,18 +500,20 @@ export function CertifiedRunPanel({
                 url: workBenchRunnerUrl.trim(),
                 token: workBenchRunnerToken.trim(),
               },
-              teamCompositionIds: [team.id],
+              teamCompositionIds: [primaryTeam.id],
+              teamCompositions: [primaryTeam],
               runBuild: (buildInput) =>
                 runWorkBenchBuild({
                   ...buildInput,
                   context,
-                  models: [model!],
+                  models: workBenchSelectedModels,
+                  teamComposition: primaryTeam,
                 }),
             });
           }
           return runCertifiedTeamIq({
             context,
-            teamCompositions: [team],
+            teamCompositions: teams,
             task: teamIqTaskForSuite(suiteId, fireworksPlayerCount),
             includeSoloBaselines: isFireworksSuite(suiteId)
               ? includeSoloBaselines
@@ -477,50 +551,10 @@ export function CertifiedRunPanel({
   }
 }
 
-function suiteOptions(track: RunnableTrack): CertifiedSuiteOption[] {
-  if (track === "toolreliability") {
-    return [{ id: "toolreliability-v0.1-pack", label: "ToolReliability v1: Full tool-use pack" }];
-  }
-  if (track === "teamiq") {
-    return [
-      {
-        id: "teamiq-toolreliability-v0.1-quick",
-        label: "TeamIQ v1: ToolReliability quick",
-      },
-      {
-        id: "fireworks-teamiq-tactics-v0.1",
-        label: "Fireworks v1: Tactics",
-      },
-      {
-        id: "fireworks-teamiq-memory-v0.1",
-        label: "Fireworks v1: Memory",
-      },
-      {
-        id: "fireworks-teamiq-full-v0.1",
-        label: "Fireworks v1: Full games",
-      },
-      {
-        id: "fireworks-teamiq-mixed-v0.1",
-        label: "Fireworks v1: Mixed suite",
-      },
-    ];
-  }
-  if (track === "workbench") {
-    return listWorkBenchV1CaseOptions().map((item) => ({
-      id: item.id,
-      label: item.label,
-    }));
-  }
-  return listGameIqScenarioPacks().map((pack) => ({
-    id: pack.id,
-    label: pack.label,
-  }));
-}
-
 function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV2 {
   const timestamp = new Date().toISOString();
   if (track === "workbench") {
-    const selectedCase = getWorkBenchV1CaseOption(suiteId);
+    const selectedCase = getWorkBenchCaseOption(suiteId);
     if (!selectedCase) {
       throw new Error(`Unknown WorkBench case: ${suiteId}`);
     }
@@ -528,21 +562,21 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
   }
   if (track === "toolreliability") {
     return {
-      id: "toolreliability-v0.1-pack",
+      id: "toolreliability-current-pack",
       schemaVersion: 2,
       track: "toolreliability",
-      title: "ToolReliability v1 pack",
-      description: "Schema, tool-call, large-file patch, repair, and safety checks.",
+      title: "ToolReliability current challenge pack",
+      description: "Current schema, tool-call, large-file patch, repair, and safety challenge pack.",
       difficulty: "medium",
       tags: ["toolreliability"],
-      caseVersion: "1.0.0",
+      caseVersion: "current",
       createdAt: timestamp,
       updatedAt: timestamp,
-      prompt: { userRequest: "Complete each ToolReliability case." },
+      prompt: { userRequest: "Complete each current ToolReliability challenge." },
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
-      budget: { maxUsd: 5, maxModelCalls: 150 },
-      scoring: { scoringVersion: "toolreliability-v1", primary: "tool_reliability" },
+      budget: { maxUsd: 5, maxWallClockSeconds: 1800, maxModelCalls: 150 },
+      scoring: { scoringVersion: "toolreliability-current", primary: "tool_reliability" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TOOLREL",
@@ -557,13 +591,18 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
         fireworksSuiteForSuiteId(suiteId)
       );
     }
+    const allModes = isTeamIqToolReliabilityAllModesSuite(suiteId);
     return {
       id: suiteId,
       schemaVersion: 2,
       track: "teamiq",
-      title: "TeamIQ v1 ToolReliability quick",
+      title: allModes
+        ? "TeamIQ ToolReliability quick all modes"
+        : "TeamIQ ToolReliability quick",
       description:
-        "TeamIQ solo baselines and team attempt over deterministic ToolReliability cases.",
+        allModes
+          ? "TeamIQ solo baselines and all team strategy modes over a cross-category ToolReliability sample."
+          : "TeamIQ solo baselines and team attempt over a cross-category ToolReliability sample.",
       difficulty: "medium",
       tags: ["teamiq", "toolreliability"],
       caseVersion: "1.0.0",
@@ -575,8 +614,8 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       },
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
-      budget: { maxUsd: 5, maxModelCalls: 100 },
-      scoring: { scoringVersion: "teamiq-toolreliability-v1", primary: "team_lift" },
+      budget: { maxUsd: 5, maxWallClockSeconds: 900, maxModelCalls: 150 },
+      scoring: { scoringVersion: "teamiq-toolreliability-current", primary: "team_lift" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TEAMIQ",
@@ -606,7 +645,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
     },
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
-    budget: { maxUsd: 5, maxModelCalls: 100 },
+    budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
     scoring: { scoringVersion: "certified-gameiq-v1", primary: "game_iq" },
     contamination: {
       originalTask: true,
@@ -627,16 +666,48 @@ function teamIqTaskForSuite(
       cases: fireworksCasesForSuiteId(suiteId, fireworksPlayerCount),
     };
   }
-  if (suiteId === "teamiq-toolreliability-v0.1-quick") {
+  if (suiteId === "teamiq-toolreliability-current-quick") {
     return {
       kind: "toolreliability" as const,
-      casePack: TOOL_RELIABILITY_V0_1_CASES.slice(0, 5),
+      casePack: TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
     };
   }
   return {
     kind: "toolreliability" as const,
-    casePack: TOOL_RELIABILITY_V0_1_CASES,
+    casePack: TOOL_RELIABILITY_CASES,
   };
+}
+
+function teamIqCompositionsForRun(input: {
+  models: SelectedModel[];
+  selectedModelIds: string[];
+  strategy: TeamIqUiStrategy;
+  suiteId: string;
+  roleMode: "default" | "fireworks_players";
+  playerCount: 2 | 3;
+}): BenchmarkTeamComposition[] {
+  if (
+    input.roleMode === "default" &&
+    isTeamIqToolReliabilityAllModesSuite(input.suiteId)
+  ) {
+    return createTeamIqToolBenchCompositionsFromSelection({
+      models: input.models,
+      selectedModelIds: input.selectedModelIds,
+    });
+  }
+  return [
+    createTeamIqCompositionFromSelection({
+      models: input.models,
+      selectedModelIds: input.selectedModelIds,
+      strategy: input.strategy,
+      roleMode: input.roleMode,
+      playerCount: input.playerCount,
+    }),
+  ];
+}
+
+function isTeamIqToolReliabilityAllModesSuite(suiteId: string): boolean {
+  return suiteId === "teamiq-toolreliability-current-all-modes";
 }
 
 function fireworksSuiteForSuiteId(suiteId: string): FireworksBenchmarkSuite {
@@ -743,4 +814,159 @@ function StaticField({
       )}
     </div>
   );
+}
+
+function WorkBenchTeamBuilder({
+  models,
+  roleMode,
+  selectedModelIds,
+  onRoleModeChange,
+  onChange,
+}: {
+  models: SelectedModel[];
+  roleMode: WorkBenchRoleMode;
+  selectedModelIds: string[];
+  onRoleModeChange: (value: WorkBenchRoleMode) => void;
+  onChange: (value: string[]) => void;
+}) {
+  const roleCount = workBenchRoleCount(roleMode);
+  const selected = Array.from({ length: roleCount }, (_, index) =>
+    selectedModelIds[index] ?? models[index]?.modelId ?? ""
+  );
+
+  return (
+    <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
+      <label className="space-y-1">
+        <span className="font-medium">Team</span>
+        <select
+          value={roleMode}
+          onChange={(event) =>
+            onRoleModeChange(event.target.value as WorkBenchRoleMode)
+          }
+          className="w-full rounded-md border bg-background px-3 py-2"
+        >
+          <option value="solo">Solo</option>
+          <option value="architect_worker">Architect + Worker</option>
+          <option value="architect_worker_reviewer">
+            Architect + Worker + Reviewer
+          </option>
+        </select>
+      </label>
+      {selected.map((modelId, index) => (
+        <label key={`${roleMode}-${index}`} className="space-y-1">
+          <span className="font-medium">{workBenchRoleLabel(roleMode, index)}</span>
+          <select
+            value={modelId}
+            onChange={(event) => {
+              const next = [...selected];
+              next[index] = event.target.value;
+              onChange(next);
+            }}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          >
+            <option value="">Select model</option>
+            {models.map((model) => (
+              <option key={model.modelId} value={model.modelId}>
+                {model.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function workBenchRoleCount(roleMode: WorkBenchRoleMode): number {
+  if (roleMode === "architect_worker_reviewer") return 3;
+  if (roleMode === "architect_worker") return 2;
+  return 1;
+}
+
+function workBenchRoleSummary(
+  models: SelectedModel[],
+  selectedModelIds: string[],
+  roleMode: WorkBenchRoleMode
+): string {
+  const selected = workBenchModelsForRun(models, selectedModelIds, roleMode);
+  const required = workBenchRoleCount(roleMode);
+  if (selected.length < required) {
+    return `Select ${required} model${required === 1 ? "" : "s"}`;
+  }
+  if (roleMode === "solo") return selected[0]?.displayName ?? "Solo";
+  return selected
+    .map(
+      (model, index) =>
+        `${workBenchRoleLabel(roleMode, index)}: ${model.displayName}`
+    )
+    .join(" / ");
+}
+
+function workBenchModelsForRun(
+  models: SelectedModel[],
+  selectedModelIds: string[],
+  roleMode: WorkBenchRoleMode
+): SelectedModel[] {
+  const required = workBenchRoleCount(roleMode);
+  return selectedModelIds
+    .slice(0, required)
+    .map((id) => models.find((model) => model.modelId === id))
+    .filter((model): model is SelectedModel => Boolean(model));
+}
+
+function createWorkBenchTeamComposition(input: {
+  models: SelectedModel[];
+  roleMode: WorkBenchRoleMode;
+}): BenchmarkTeamComposition {
+  if (input.roleMode === "solo") {
+    const model = input.models[0];
+    return deriveSoloTeamComposition({
+      modelId: model.modelId,
+      providerId: model.providerId,
+      displayName: model.displayName,
+    });
+  }
+  const roles = input.models.map((model, index): BenchmarkTeamCompositionRole => {
+    const role = workBenchRoleFor(input.roleMode, index);
+    return {
+      role,
+      slot: `${String(index + 1).padStart(2, "0")}-${role}`,
+      modelId: model.modelId,
+      providerId: model.providerId,
+      displayName: model.displayName,
+      temperature: 0,
+    };
+  });
+  return deriveTeamComposition({
+    name: roles.map((role) => role.displayName).join(" + "),
+    roles,
+    strategy: input.roleMode,
+  });
+}
+
+function workBenchRoleFor(
+  roleMode: WorkBenchRoleMode,
+  index: number
+): BenchmarkTeamCompositionRole["role"] {
+  if (roleMode === "solo") return "single";
+  if (roleMode === "architect_worker") return index === 0 ? "architect" : "worker";
+  if (index === 0) return "architect";
+  if (index === 1) return "worker";
+  return "reviewer";
+}
+
+function workBenchRoleLabel(roleMode: WorkBenchRoleMode, index: number): string {
+  const role = workBenchRoleFor(roleMode, index);
+  switch (role) {
+    case "single":
+      return "Solo";
+    case "architect":
+      return "Architect";
+    case "worker":
+      return "Worker";
+    case "reviewer":
+      return "Reviewer";
+    default:
+      return role;
+  }
 }

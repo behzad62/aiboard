@@ -20,11 +20,14 @@ import {
 } from "@/lib/providers/base";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import type { CertifiedRunContext } from "./run-context";
+import { CertifiedBudgetExceededError } from "./budget";
 import { buildCertifiedMessages, certifiedPromptText } from "./prompting";
 import {
   createCertifiedModelCallTrace,
   recordCertifiedModelCallTrace,
 } from "./trace-recorder";
+
+const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
 export interface CertifiedModelStreamInput {
   providerId: string;
@@ -51,6 +54,7 @@ export interface CallCertifiedModelInput {
   apiKey?: string;
   baseURL?: string;
   streamChat?: CertifiedModelStream;
+  allowInvalidStructuredOutput?: boolean;
 }
 
 export interface CertifiedModelCallResult {
@@ -107,11 +111,35 @@ export async function callCertifiedModel(
     capabilities: customModel?.capabilities,
     contextProfile: input.model.contextProfile,
   };
+  const preflightUsage = estimateModelCallUsage({
+    messages,
+    output: "",
+    maxTokens: input.maxTokens,
+  });
+  try {
+    input.context.reserveModelCall?.({ inputTokens: preflightUsage.inputTokens });
+  } catch (error) {
+    await recordCertifiedBudgetEvent(input, error);
+    throw error;
+  }
+  await recordCertifiedModelCallEvent(input, {
+    type: "model_call_started",
+    phase: "model-call",
+    message: `Certified model call started for ${fullModelId}.`,
+    details: {
+      maxTokens: input.maxTokens,
+      timeoutMs: certifiedModelCallTimeoutMs(input),
+      schemaMode: input.structuredOutput ? "structured" : "text",
+    },
+  });
   let rawResponse = "";
   let parsePhase = false;
 
   try {
-    for await (const chunk of streamChat({ providerId, params })) {
+    for await (const chunk of withCertifiedModelCallTimeout(
+      streamChat({ providerId, params }),
+      certifiedModelCallTimeoutMs(input)
+    )) {
       if (chunk.type === "token" && chunk.content) {
         rawResponse += chunk.content;
       } else if (chunk.type === "error") {
@@ -119,10 +147,15 @@ export async function callCertifiedModel(
       }
     }
 
+    if (rawResponse.trim().length === 0) {
+      throw new Error("Certified provider returned an empty response.");
+    }
+
     parsePhase = true;
-    const parsedJson = input.structuredOutput
-      ? parseStructuredJson(rawResponse)
-      : undefined;
+    const parsed = parseCertifiedStructuredOutput(rawResponse, {
+      enabled: Boolean(input.structuredOutput),
+      allowInvalid: Boolean(input.allowInvalidStructuredOutput),
+    });
     const usage = estimateModelCallUsage({
       messages,
       output: rawResponse,
@@ -153,13 +186,36 @@ export async function callCertifiedModel(
       estimatedUsd,
       rawResponse,
       parsedResponseJson:
-        parsedJson === undefined ? undefined : JSON.stringify(parsedJson),
-      finalStatus: "parsed",
+        parsed.value === undefined ? undefined : JSON.stringify(parsed.value),
+      finalStatus: parsed.error ? "parse_error" : "parsed",
+      error: parsed.error,
     });
     const traceId = await recordCertifiedModelCallTrace(input.context, trace);
+    await recordCertifiedModelCallEvent(input, {
+      type: "model_call_completed",
+      phase: "model-call",
+      message: `Certified model call completed for ${fullModelId}.`,
+      details: {
+        traceId,
+        latencyMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd,
+      },
+    });
+    try {
+      input.context.recordModelCallUsage?.({
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd,
+      });
+    } catch (error) {
+      await recordCertifiedBudgetEvent(input, error);
+      throw error;
+    }
     return {
       rawResponse,
-      parsedJson,
+      parsedJson: parsed.value,
       traceId,
       latencyMs,
       inputTokens: usage.inputTokens,
@@ -167,6 +223,9 @@ export async function callCertifiedModel(
       estimatedUsd,
     };
   } catch (error) {
+    if (error instanceof CertifiedBudgetExceededError) {
+      throw error;
+    }
     const message = errorMessage(error);
     const usage = estimateModelCallUsage({
       messages,
@@ -199,9 +258,75 @@ export async function callCertifiedModel(
       finalStatus: parsePhase ? "parse_error" : "provider_error",
       error: message,
     });
-    await recordCertifiedModelCallTrace(input.context, trace);
+    const traceId = await recordCertifiedModelCallTrace(input.context, trace);
+    await recordCertifiedModelCallEvent(input, {
+      type: "model_call_failed",
+      phase: parsePhase ? "model-parse" : "model-call",
+      message,
+      details: {
+        traceId,
+        latencyMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd: trace.estimatedUsd,
+      },
+    });
+    try {
+      input.context.recordModelCallUsage?.({
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd: trace.estimatedUsd,
+      });
+    } catch {
+      // Preserve the provider/parser error that caused the failed model call.
+    }
     throw error;
   }
+}
+
+async function recordCertifiedBudgetEvent(
+  input: CallCertifiedModelInput,
+  error: unknown
+): Promise<void> {
+  const message = errorMessage(error);
+  await input.context.recordEvent({
+    id: `${input.context.runId}:${input.attemptId ?? "attempt"}:budget:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
+    attemptId: input.attemptId ?? `${input.context.runId}:budget`,
+    caseId: input.caseId ?? input.context.caseIds[0] ?? "unknown",
+    type: "run_blocked",
+    phase: "budget",
+    at: new Date().toISOString(),
+    message,
+    modelId: fullModelIdForPricing(input.model),
+    providerId: input.model.providerId,
+    detailsJson: JSON.stringify({
+      budget: input.context.modelBudget,
+      snapshot: input.context.budgetSnapshot?.() ?? null,
+    }),
+  });
+}
+
+async function recordCertifiedModelCallEvent(
+  input: CallCertifiedModelInput,
+  event: {
+    type: "model_call_started" | "model_call_completed" | "model_call_failed";
+    phase: string;
+    message: string;
+    details?: Record<string, unknown>;
+  }
+): Promise<void> {
+  await input.context.recordEvent({
+    id: `${input.context.runId}:${input.attemptId ?? "attempt"}:${event.type}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
+    attemptId: input.attemptId ?? `${input.context.runId}:attempt`,
+    caseId: input.caseId ?? input.context.caseIds[0] ?? "unknown",
+    type: event.type,
+    phase: event.phase,
+    at: new Date().toISOString(),
+    message: event.message,
+    modelId: fullModelIdForPricing(input.model),
+    providerId: input.model.providerId,
+    ...(event.details ? { detailsJson: JSON.stringify(event.details) } : {}),
+  });
 }
 
 async function* defaultCertifiedModelStream(
@@ -210,6 +335,51 @@ async function* defaultCertifiedModelStream(
   const provider = getProvider(input.providerId);
   if (!provider) throw new Error(`Unknown certified provider: ${input.providerId}`);
   yield* provider.streamChat(input.params);
+}
+
+async function* withCertifiedModelCallTimeout<T>(
+  iterable: AsyncIterable<T>,
+  timeoutMs: number
+): AsyncIterable<T> {
+  const iterator = iterable[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const next = await withTimeout(
+        iterator.next(),
+        timeoutMs,
+        `Certified model call timed out after ${timeoutMs}ms.`
+      );
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    void iterator.return?.().catch(() => undefined);
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function certifiedModelCallTimeoutMs(input: CallCertifiedModelInput): number {
+  const configured = input.context.modelBudget.maxModelCallMs;
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
+    ? Math.round(configured)
+    : DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS;
 }
 
 function providerModelId(model: SelectedModel): string {
@@ -230,6 +400,25 @@ function parseStructuredJson(rawResponse: string): unknown {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Certified structured response was not valid JSON: ${message}`);
+  }
+}
+
+function parseCertifiedStructuredOutput(
+  rawResponse: string,
+  options: {
+    enabled: boolean;
+    allowInvalid: boolean;
+  }
+): {
+  value?: unknown;
+  error?: string;
+} {
+  if (!options.enabled) return {};
+  try {
+    return { value: parseStructuredJson(rawResponse) };
+  } catch (error) {
+    if (!options.allowInvalid) throw error;
+    return { error: errorMessage(error) };
   }
 }
 

@@ -15,6 +15,7 @@ import {
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import { certifiedRunBudgetForCase } from "../lib/benchmark/certified/run-budget";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -103,6 +104,30 @@ const caseTwo: BenchmarkCaseV2 = {
     canary: "AIBENCH-RUN-ENGINE-2",
   },
 };
+
+const caseBudget = certifiedRunBudgetForCase(
+  {
+    ...caseOne,
+    budget: {
+      maxUsd: 1.5,
+      maxModelCalls: 7,
+      maxInputTokens: 1_000,
+      maxOutputTokens: 500,
+      maxWallClockSeconds: 90,
+    },
+  },
+  { maxModelCallMs: 12_345 }
+);
+check(
+  "certified case budget maps to global model-call controller budget",
+  caseBudget.maxUsd === 1.5 &&
+    caseBudget.maxModelCalls === 7 &&
+    caseBudget.maxInputTokens === 1_000 &&
+    caseBudget.maxOutputTokens === 500 &&
+    caseBudget.maxWallClockMs === 90_000 &&
+    caseBudget.maxModelCallMs === 12_345,
+  caseBudget
+);
 
 const team: BenchmarkTeamComposition = {
   id: "team-engine-single",

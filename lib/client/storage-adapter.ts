@@ -14,6 +14,10 @@ export interface StorageAdapter {
   /** Raw envelope JSON string, or null when nothing is stored yet. */
   load(): Promise<string | null>;
   save(blob: string): Promise<void>;
+  listBenchmarkRunIds(): Promise<string[]>;
+  loadBenchmarkRun(runId: string): Promise<string | null>;
+  saveBenchmarkRun(runId: string, blob: string): Promise<void>;
+  deleteBenchmarkRun(runId: string): Promise<void>;
   label(): string;
 }
 
@@ -23,6 +27,24 @@ const DB_NAME = "ai-discussion-board";
 const STORE_KEY = "store";
 const HANDLE_KEY = "dirHandle";
 const CONFIG_KEY = "config";
+const BENCHMARK_RUN_IDS_KEY = "benchmarkRunIds";
+
+function benchmarkRunStoreKey(runId: string): string {
+  return `benchmark:run:${runId}`;
+}
+
+function benchmarkRunFileName(runId: string): string {
+  return `${encodeURIComponent(runId)}.json`;
+}
+
+function benchmarkRunIdFromFileName(fileName: string): string | null {
+  if (!fileName.endsWith(".json")) return null;
+  try {
+    return decodeURIComponent(fileName.slice(0, -".json".length));
+  } catch {
+    return null;
+  }
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -64,6 +86,20 @@ export async function idbSet(key: string, value: unknown): Promise<void> {
   }
 }
 
+export async function idbDelete(key: string): Promise<void> {
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("kv", "readwrite");
+      tx.objectStore("kv").delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 // ── Adapters ────────────────────────────────────────────────────────────────
 
 export class IndexedDBAdapter implements StorageAdapter {
@@ -73,6 +109,23 @@ export class IndexedDBAdapter implements StorageAdapter {
   }
   async save(blob: string): Promise<void> {
     await idbSet(STORE_KEY, blob);
+  }
+  async listBenchmarkRunIds(): Promise<string[]> {
+    return (await idbGet<string[]>(BENCHMARK_RUN_IDS_KEY)) ?? [];
+  }
+  async loadBenchmarkRun(runId: string): Promise<string | null> {
+    return (await idbGet<string>(benchmarkRunStoreKey(runId))) ?? null;
+  }
+  async saveBenchmarkRun(runId: string, blob: string): Promise<void> {
+    await idbSet(benchmarkRunStoreKey(runId), blob);
+    const runIds = new Set(await this.listBenchmarkRunIds());
+    runIds.add(runId);
+    await idbSet(BENCHMARK_RUN_IDS_KEY, Array.from(runIds).sort());
+  }
+  async deleteBenchmarkRun(runId: string): Promise<void> {
+    await idbDelete(benchmarkRunStoreKey(runId));
+    const runIds = (await this.listBenchmarkRunIds()).filter((id) => id !== runId);
+    await idbSet(BENCHMARK_RUN_IDS_KEY, runIds);
   }
   label(): string {
     return "This browser (IndexedDB)";
@@ -99,6 +152,94 @@ export class FileSystemAdapter implements StorageAdapter {
     });
     const writable = await fileHandle.createWritable();
     await writable.write(blob);
+    await writable.close();
+  }
+
+  async listBenchmarkRunIds(): Promise<string[]> {
+    const runsDir = await this.getBenchmarkRunsDir(false);
+    if (!runsDir) return [];
+    const entries = (
+      runsDir as unknown as {
+        entries(): AsyncIterable<[string, FileSystemHandle]>;
+      }
+    ).entries();
+    const runIds: string[] = [];
+    for await (const [name, handle] of entries) {
+      if (handle.kind !== "file") continue;
+      const runId = benchmarkRunIdFromFileName(name);
+      if (runId) runIds.push(runId);
+    }
+    return runIds.sort();
+  }
+
+  async loadBenchmarkRun(runId: string): Promise<string | null> {
+    const runsDir = await this.getBenchmarkRunsDir(false);
+    if (!runsDir) return null;
+    try {
+      const fileHandle = await runsDir.getFileHandle(benchmarkRunFileName(runId));
+      const text = await (await fileHandle.getFile()).text();
+      return text.trim() ? text : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveBenchmarkRun(runId: string, blob: string): Promise<void> {
+    const runsDir = await this.getBenchmarkRunsDir(true);
+    if (!runsDir) throw new Error("Benchmark run directory is unavailable.");
+    const fileHandle = await runsDir.getFileHandle(benchmarkRunFileName(runId), {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    await this.saveBenchmarkIndex();
+  }
+
+  async deleteBenchmarkRun(runId: string): Promise<void> {
+    const runsDir = await this.getBenchmarkRunsDir(false);
+    if (!runsDir) return;
+    try {
+      await runsDir.removeEntry(benchmarkRunFileName(runId));
+    } catch {
+      // File already gone.
+    }
+    await this.saveBenchmarkIndex();
+  }
+
+  private async getBenchmarkRunsDir(
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle | null> {
+    try {
+      const benchmarksDir = await this.dir.getDirectoryHandle("benchmarks", {
+        create,
+      });
+      return await benchmarksDir.getDirectoryHandle("runs", { create });
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveBenchmarkIndex(): Promise<void> {
+    const benchmarksDir = await this.dir.getDirectoryHandle("benchmarks", {
+      create: true,
+    });
+    const runIds = await this.listBenchmarkRunIds();
+    const fileHandle = await benchmarksDir.getFileHandle("index.json", {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          runs: runIds.map((id) => ({ id, file: `runs/${benchmarkRunFileName(id)}` })),
+        },
+        null,
+        2
+      )
+    );
     await writable.close();
   }
 

@@ -9,6 +9,11 @@ import type {
   BenchmarkVerifierResult,
   HarnessProfile,
 } from "@/lib/benchmark/types";
+import type {
+  CertifiedBudgetSnapshot,
+  CertifiedModelCallReservation,
+  CertifiedModelCallUsage,
+} from "./budget";
 
 export interface CertifiedRunBudget {
   maxUsd?: number;
@@ -16,6 +21,7 @@ export interface CertifiedRunBudget {
   maxInputTokens?: number;
   maxOutputTokens?: number;
   maxWallClockMs?: number;
+  maxModelCallMs?: number;
 }
 
 export interface CertifiedRunContext {
@@ -35,6 +41,9 @@ export interface CertifiedRunContext {
   recordEvent(event: BenchmarkRunEvent): Promise<void>;
   recordToolCall(trace: BenchmarkToolCallTrace): Promise<void>;
   recordFailure(failure: BenchmarkFailure): Promise<void>;
+  reserveModelCall?(input?: CertifiedModelCallReservation): void;
+  recordModelCallUsage?(input: CertifiedModelCallUsage): void;
+  budgetSnapshot?(): CertifiedBudgetSnapshot;
 }
 
 export interface CertifiedRunPersistenceSnapshot {

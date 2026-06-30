@@ -105,7 +105,12 @@ export function getTeamCompositionModelIds(
 export function isSoloTeamComposition(
   team: BenchmarkTeamComposition | undefined
 ): boolean {
-  return getTeamCompositionModelIds(team).length === 1;
+  return Boolean(
+    team &&
+      team.roles.length === 1 &&
+      team.roles[0]?.role === "single" &&
+      team.roles[0]?.slot === "single"
+  );
 }
 
 export function inferProviderId(modelId: string): string {

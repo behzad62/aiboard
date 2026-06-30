@@ -23,7 +23,7 @@ export interface TeamIqRecommendationCard {
 export function buildTeamIqRecommendationCards(
   rows: TeamIqComboMatrixRow[]
 ): TeamIqRecommendationCard[] {
-  const teams = rows.filter((row) => row.modelIds.length > 1 && row.attempts > 0);
+  const teams = rows.filter((row) => !row.isSolo && row.attempts > 0);
   const cards = uniqueCards([
     cardFor("best_team_lift", "Best team lift", maxBy(teams, (row) => row.teamLift), (row) => ({
       value: signedScore(row.teamLift),

@@ -22,7 +22,6 @@ export function BenchmarkReportSummary({
     ["Metric values", counts.metricValues],
     ["Artifacts", counts.artifacts],
     ["Failures", counts.failures],
-    ["Model-call traces", counts.traces],
     ["Game match records", counts.gameMatches],
     ["Build checkpoints", counts.buildCheckpoints],
     ["Build model stats", counts.buildStats],
@@ -31,8 +30,6 @@ export function BenchmarkReportSummary({
     ["Certified cases", counts.certifiedCases],
     ["Certified attempts", counts.certifiedAttempts],
     ["Verifier results", counts.verifierResults],
-    ["Run events", counts.runEvents],
-    ["Tool-call traces", counts.toolCallTraces],
     ["Team compositions", counts.teamCompositions],
     ["Harness certifications", counts.harnessCertifications],
   ] as const;
@@ -42,13 +39,13 @@ export function BenchmarkReportSummary({
       <CardHeader>
         <CardTitle>Export Contents</CardTitle>
         <CardDescription>
-          Lab evidence and certified v2 records are exported together when v2
-          store support is available.
+          Lab evidence and certified records are exported together in the
+          current bundle format.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <ReportCountGroup title="Lab evidence" rows={labRows} />
-        <ReportCountGroup title="Certified v2" rows={certifiedRows} />
+        <ReportCountGroup title="Certified records" rows={certifiedRows} />
       </CardContent>
     </Card>
   );

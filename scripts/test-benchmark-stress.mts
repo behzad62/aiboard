@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 
 const scripts = [
   "scripts/test-toolreliability-stress-cases.mts",
-  "scripts/test-workbench-v2-challenges.mts",
+  "scripts/test-workbench-current-challenges.mts",
 ];
 let failures = 0;
 for (const script of scripts) {

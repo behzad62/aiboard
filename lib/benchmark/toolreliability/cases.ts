@@ -37,7 +37,7 @@ const JSON_SCHEMA_CASES: ToolReliabilityCase[] = Array.from(
     const schema =
       index % 3 === 0 ? answerSchema : index % 3 === 1 ? statusSchema : patchSchema;
     return {
-      id: `toolrel-v0.1-json-schema-${idNumber}`,
+      id: `toolrel-current-json-schema-${idNumber}`,
       category: "json-schema",
       title: `Strict JSON schema response ${idNumber}`,
       prompt:
@@ -59,7 +59,7 @@ const TOOL_CALL_CASES: ToolReliabilityCase[] = Array.from(
         ? `src/module-${idNumber}.ts`
         : `src/batch/input-${String(index - 14).padStart(2, "0")}.ts`;
     return {
-      id: `toolrel-v0.1-tool-call-${idNumber}`,
+      id: `toolrel-current-tool-call-${idNumber}`,
       category: "tool-call",
       title:
         index < 15
@@ -89,7 +89,7 @@ const BASIC_PATCH_CASES: ToolReliabilityCase[] = Array.from(
     const oldValue = `old-${idNumber}`;
     const newValue = `new-${idNumber}`;
     return {
-      id: `toolrel-v0.1-patch-${idNumber}`,
+      id: `toolrel-current-patch-${idNumber}`,
       category: "patch",
       title: `SEARCH/REPLACE patch applies cleanly ${idNumber}`,
       prompt:
@@ -129,7 +129,7 @@ const REPAIR_CASES: ToolReliabilityCase[] = Array.from(
   (_, index) => {
     const idNumber = String(index + 1).padStart(3, "0");
     return {
-      id: `toolrel-v0.1-repair-loop-${idNumber}`,
+      id: `toolrel-current-repair-loop-${idNumber}`,
       category: "repair-loop",
       title: `Second attempt repairs malformed JSON ${idNumber}`,
       prompt:
@@ -146,7 +146,7 @@ const FORBIDDEN_ACTION_CASES: ToolReliabilityCase[] = Array.from(
   (_, index) => {
     const idNumber = String(index + 1).padStart(3, "0");
     return {
-      id: `toolrel-v0.1-forbidden-action-${idNumber}`,
+      id: `toolrel-current-forbidden-action-${idNumber}`,
       category: "forbidden-action",
       title: `Safe verification command ${idNumber}`,
       prompt:
@@ -158,7 +158,7 @@ const FORBIDDEN_ACTION_CASES: ToolReliabilityCase[] = Array.from(
   }
 );
 
-export const TOOL_RELIABILITY_V0_1_CASES: ToolReliabilityCase[] = [
+export const TOOL_RELIABILITY_CASES: ToolReliabilityCase[] = [
   ...JSON_SCHEMA_CASES,
   ...TOOL_CALL_CASES,
   ...BASIC_PATCH_CASES,
@@ -188,8 +188,8 @@ export function validateToolReliabilityCasePack(
   }
 
   for (const item of cases) {
-    if (!item.id.startsWith("toolrel-v0.1-")) {
-      errors.push(`Case ${item.id} is not namespaced for v0.1.`);
+    if (!item.id.startsWith("toolrel-current-")) {
+      errors.push(`Case ${item.id} is not namespaced for current ToolReliability.`);
     }
     if (ids.has(item.id)) errors.push(`Duplicate case id ${item.id}.`);
     ids.add(item.id);
@@ -234,7 +234,7 @@ function createLargeFilePatchCase(index: number): ToolReliabilityCase {
   });
 
   return {
-    id: `toolrel-v0.1-large-patch-${idNumber}`,
+    id: `toolrel-current-large-patch-${idNumber}`,
     category: "patch",
     title: `${labelForLargePatchKind(kind)} ${idNumber}`,
     prompt: [

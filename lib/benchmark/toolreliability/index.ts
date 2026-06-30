@@ -1,16 +1,15 @@
 export {
-  TOOL_RELIABILITY_V0_1_CASES,
+  TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
 } from "./cases";
 export {
-  TOOL_RELIABILITY_V0_2_CASES,
-  TOOL_RELIABILITY_V0_2_LARGE_FILE_CASES,
-  TOOL_RELIABILITY_V0_2_STRESS_CASES,
-  TOOL_RELIABILITY_V0_2_TOOL_STRESS_CASES,
+  TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES,
+  TOOL_RELIABILITY_STRESS_CASES,
+  TOOL_RELIABILITY_TOOL_STRATEGY_CASES,
   type LargeFilePatchReliabilityCase,
   type LargeFilePatchStressPolicy,
   type LargeFileStressKind,
-  type ToolReliabilityV0_2StressCase,
+  type ToolReliabilityStressCase,
 } from "./stress-cases";
 export {
   evaluateLargeFilePatchStressCase,
@@ -23,8 +22,8 @@ export {
 export {
   buildForbiddenToolReliabilityCandidate,
   buildPerfectToolReliabilityCandidate,
+  runToolReliability,
   runToolReliabilityPack,
-  runToolReliabilityV0_1,
 } from "./runner";
 export { runCertifiedToolReliability } from "./certified-runner";
 export {

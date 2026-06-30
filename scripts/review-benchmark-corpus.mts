@@ -1,5 +1,5 @@
 /* Benchmark corpus review checks (run: npx tsx scripts/review-benchmark-corpus.mts) */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   listGameIqScenarioPacks,
@@ -8,13 +8,12 @@ import {
 } from "../lib/benchmark/gameiq";
 import {
   TOOL_RELIABILITY_CASE_CATEGORIES,
-  TOOL_RELIABILITY_V0_1_CASES,
+  TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
 } from "../lib/benchmark/toolreliability";
 import {
-  listWorkBenchV1CaseOptions,
-} from "../lib/benchmark/workbench/v1-corpus";
-import { listWorkBenchV2CaseOptions } from "../lib/benchmark/workbench/v2-corpus";
+  listWorkBenchCaseOptions,
+} from "../lib/benchmark/workbench/corpus";
 
 let failures = 0;
 
@@ -63,47 +62,49 @@ for (const pack of gamePacks) {
   }
 }
 
-const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_V0_1_CASES);
+const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack validates", toolValidation.valid, toolValidation);
-check("ToolReliability has 125 cases", TOOL_RELIABILITY_V0_1_CASES.length === 125, TOOL_RELIABILITY_V0_1_CASES.length);
+check("ToolReliability has 125 cases", TOOL_RELIABILITY_CASES.length === 125, TOOL_RELIABILITY_CASES.length);
 check(
   "ToolReliability has 50 large-file patch stress cases",
-  TOOL_RELIABILITY_V0_1_CASES.filter((item) => item.id.startsWith("toolrel-v0.1-large-patch-")).length === 50,
-  TOOL_RELIABILITY_V0_1_CASES.map((item) => item.id)
+  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 50,
+  TOOL_RELIABILITY_CASES.map((item) => item.id)
 );
 for (const category of TOOL_RELIABILITY_CASE_CATEGORIES) {
   check(
     `ToolReliability ${category} has at least 10 cases`,
-    TOOL_RELIABILITY_V0_1_CASES.filter((item) => item.category === category).length >= 10,
-    TOOL_RELIABILITY_V0_1_CASES.map((item) => item.category)
+    TOOL_RELIABILITY_CASES.filter((item) => item.category === category).length >= 10,
+    TOOL_RELIABILITY_CASES.map((item) => item.category)
   );
 }
 
-const workBenchV1CasesDir = resolve("benchmarks", "workbench", "v1", "cases");
-check("WorkBench v1 cases directory exists", existsSync(workBenchV1CasesDir));
-if (existsSync(workBenchV1CasesDir)) {
-  const v1CaseFiles = readdirSync(workBenchV1CasesDir).filter((file) => file.endsWith(".json"));
-  check("WorkBench v1 has 10 fixture manifests", v1CaseFiles.length === 10, v1CaseFiles);
+for (const legacyPath of [
+  resolve("benchmarks", "workbench", "v0"),
+  resolve("benchmarks", "workbench", "v1"),
+  resolve("benchmarks", "toolreliability", "v0"),
+  resolve("benchmarks", "toolreliability", "v1", "cases.json"),
+  resolve("benchmarks", "gameiq", "v0"),
+  resolve("benchmarks", "teamiq", "v0"),
+]) {
+  check(`legacy benchmark artifact removed: ${legacyPath}`, !existsSync(legacyPath));
 }
 
-const combinedWorkBenchCases = listWorkBenchV1CaseOptions();
-const workBenchV2Cases = listWorkBenchV2CaseOptions();
-check("WorkBench picker exposes v1 + v2 cases", combinedWorkBenchCases.length === 10 + workBenchV2Cases.length, combinedWorkBenchCases.length);
-check("WorkBench v2 has at least 19 generated challenges", workBenchV2Cases.length >= 19, workBenchV2Cases.map((item) => item.id));
-const v2LanguageCounts = workBenchV2Cases.reduce<Record<string, number>>((counts, item) => {
+const workBenchCases = listWorkBenchCaseOptions();
+check("WorkBench current corpus has at least 19 generated challenges", workBenchCases.length >= 19, workBenchCases.map((item) => item.id));
+const workBenchLanguageCounts = workBenchCases.reduce<Record<string, number>>((counts, item) => {
   counts[item.fixtureLanguage] = (counts[item.fixtureLanguage] ?? 0) + 1;
   return counts;
 }, {});
-check("WorkBench v2 includes C# cases", v2LanguageCounts.csharp === 2, v2LanguageCounts);
-check("WorkBench v2 includes C++ cases", v2LanguageCounts.cpp === 2, v2LanguageCounts);
-check("WorkBench v2 includes Go cases", v2LanguageCounts.go === 2, v2LanguageCounts);
-check("WorkBench v2 includes Rust cases", v2LanguageCounts.rust === 1, v2LanguageCounts);
-check("WorkBench v2 includes Python cases", v2LanguageCounts.python === 2, v2LanguageCounts);
-check("WorkBench v2 includes React UI cases", v2LanguageCounts["react-ui"] === 2, v2LanguageCounts);
+check("WorkBench current corpus includes C# cases", workBenchLanguageCounts.csharp === 2, workBenchLanguageCounts);
+check("WorkBench current corpus includes C++ cases", workBenchLanguageCounts.cpp === 2, workBenchLanguageCounts);
+check("WorkBench current corpus includes Go cases", workBenchLanguageCounts.go === 2, workBenchLanguageCounts);
+check("WorkBench current corpus includes Rust cases", workBenchLanguageCounts.rust === 1, workBenchLanguageCounts);
+check("WorkBench current corpus includes Python cases", workBenchLanguageCounts.python === 2, workBenchLanguageCounts);
+check("WorkBench current corpus includes React UI cases", workBenchLanguageCounts["react-ui"] === 2, workBenchLanguageCounts);
 check(
-  "WorkBench v2 cases carry inline verifier fixtures",
-  workBenchV2Cases.every((item) => item.case.fixtureFiles?.["verifier.mjs"] && item.case.fixtureFiles?.["case-meta.json"]),
-  workBenchV2Cases.map((item) => item.id)
+  "WorkBench current cases carry inline verifier fixtures",
+  workBenchCases.every((item) => item.case.fixtureFiles?.["verifier.mjs"] && item.case.fixtureFiles?.["case-meta.json"]),
+  workBenchCases.map((item) => item.id)
 );
 
 if (failures === 0) {

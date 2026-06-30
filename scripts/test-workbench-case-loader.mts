@@ -97,9 +97,9 @@ expectThrow(
   /resultFile/i
 );
 expectThrow(
-  "case loader rejects command-based network none",
+  "case loader rejects command-based network none with current wording",
   () => loadWorkBenchCaseFromJson(JSON.stringify({ ...manifest, environment: { ...manifest.environment, network: "none" } })),
-  /network none/i
+  /WorkBench cannot enforce network none/i
 );
 expectThrow(
   "case loader rejects open network for v0.1",

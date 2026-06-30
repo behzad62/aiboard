@@ -10,6 +10,7 @@ import type {
   BenchmarkTeamCompositionRole,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
+  CertifiedAttemptStatus,
 } from "@/lib/benchmark/types";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
@@ -21,7 +22,19 @@ import {
   type ToolReliabilityCaseResult,
   type ToolReliabilityTraceEvent,
 } from "@/lib/benchmark/toolreliability";
-import { deriveSoloTeamComposition, getTeamCompositionModelIds } from "./compositions";
+import {
+  buildCertifiedToolReliabilityPrompt,
+  certifiedToolReliabilityStructuredOutputForCase,
+  malformedToolReliabilityRepairSeed,
+} from "@/lib/benchmark/toolreliability/certified-runner";
+import {
+  diagnoseToolReliabilityCaseResult,
+  summarizeToolReliabilityDiagnostics,
+} from "@/lib/benchmark/toolreliability/diagnostics";
+import {
+  deriveSoloTeamComposition,
+  isSoloTeamComposition,
+} from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
 import {
   runCertifiedFireworksTeamIq,
@@ -60,7 +73,7 @@ type TeamIqParticipantCall = {
 
 const TEAMIQ_HARNESS_VERSION = "teamiq-runner-v0.1";
 const TEAMIQ_PROMPT_SET_VERSION = "teamiq-toolreliability-prompts-v0.1";
-const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-v0.1";
+const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-current";
 const CERTIFIED_REASONING_EFFORTS = new Set<ReasoningEffort>([
   "default",
   "low",
@@ -153,8 +166,11 @@ async function runTeamIqToolReliabilityAttempt(
 
   for (const benchmarkCase of casePack) {
     const caseOutputs: string[] = [];
-    const callsForCase = benchmarkCase.category === "repair-loop" ? 2 : 1;
-    for (let attemptIndex = 0; attemptIndex < callsForCase; attemptIndex++) {
+    if (benchmarkCase.category === "repair-loop") {
+      caseOutputs.push(malformedToolReliabilityRepairSeed(benchmarkCase));
+    }
+    const modelAttemptIndexes = benchmarkCase.category === "repair-loop" ? [1] : [0];
+    for (const attemptIndex of modelAttemptIndexes) {
       const roleOutputs: string[] = [];
       for (const role of team.roles) {
         const call = await callCertifiedModel({
@@ -171,8 +187,13 @@ async function runTeamIqToolReliabilityAttempt(
           maxTokens: input.maxTokens ?? role.maxTokens ?? 512,
           temperature: 0,
           reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
+          structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
+            benchmarkCase,
+            attemptIndex
+          ),
+          allowInvalidStructuredOutput: true,
           context: input.context,
-          caseId: input.context.caseIds[0],
+          caseId: benchmarkCase.id,
           attemptId,
           participantId: `${team.id}:${role.slot}`,
           pricing: input.pricing,
@@ -194,10 +215,11 @@ async function runTeamIqToolReliabilityAttempt(
   const result = runToolReliabilityPack(candidate, casePack);
   const verifier = createTeamIqVerifierResult({
     attemptId,
-    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-v0.1-pack",
+    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack",
     caseResults: result.caseResults,
     score: result.score,
   });
+  const status = teamIqToolReliabilityStatus(result.caseResults);
   await input.context.recordVerifier(verifier);
   for (const trace of toolCallTracesForResult(attemptId, result.caseResults)) {
     await input.context.recordToolCall(trace);
@@ -207,9 +229,10 @@ async function runTeamIqToolReliabilityAttempt(
     ...result.attempt,
     id: attemptId,
     runId: input.context.runId,
-    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-v0.1-pack",
+    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack",
     teamCompositionId: team.id,
     track: "teamiq",
+    status,
     harnessProfile: input.context.harnessProfile,
     startedAt: input.context.startedAt,
     completedAt: new Date().toISOString(),
@@ -256,10 +279,10 @@ function teamIqToolReliabilityPrompt(input: {
   attemptIndex: number;
   previousOutputs: string[];
 }): string {
-  const repairNote =
-    input.benchmarkCase.category === "repair-loop" && input.attemptIndex > 0
-      ? "\n\nParser feedback: the previous answer was invalid. Return valid JSON only."
-      : "";
+  const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
+    input.benchmarkCase,
+    input.attemptIndex
+  );
   const collaborationNote =
     input.previousOutputs.length > 0
       ? `\n\nEarlier team outputs this turn:\n${input.previousOutputs.join("\n---\n")}`
@@ -268,10 +291,8 @@ function teamIqToolReliabilityPrompt(input: {
     `Team: ${input.team.name}`,
     input.team.strategy ? `Strategy: ${input.team.strategy}` : null,
     `Your role: ${input.role.role} (${input.role.slot})`,
-    input.benchmarkCase.prompt,
-    `Canary: ${input.benchmarkCase.canary}`,
-    "Return only the final answer for this benchmark case.",
-    repairNote,
+    "Collaborate internally, but your answer must satisfy the benchmark contract below.",
+    benchmarkPrompt,
     collaborationNote,
   ]
     .filter((line): line is string => Boolean(line))
@@ -303,12 +324,22 @@ function createTeamIqVerifierResult(input: {
   caseResults: ToolReliabilityCaseResult[];
   score: number;
 }): BenchmarkVerifierResult {
+  const diagnoses = input.caseResults.map((result) =>
+    diagnoseToolReliabilityCaseResult(result)
+  );
+  const diagnosisByCaseId = new Map(
+    diagnoses.map((diagnosis) => [diagnosis.caseId, diagnosis])
+  );
+  const diagnosticSummary = summarizeToolReliabilityDiagnostics(diagnoses);
   const assertions = input.caseResults.map((result) => ({
     id: result.caseId,
     label: `${result.category}: ${result.caseId}`,
     passed: result.passed,
     weight: 1,
-    message: result.passed ? undefined : "TeamIQ ToolReliability case failed.",
+    message: result.passed
+      ? undefined
+      : diagnosisByCaseId.get(result.caseId)?.reason ??
+        "TeamIQ ToolReliability case failed.",
   }));
   const passed = input.caseResults.every((result) => result.passed);
   const resultJson = JSON.stringify({
@@ -318,6 +349,10 @@ function createTeamIqVerifierResult(input: {
       ? "TeamIQ ToolReliability cases passed."
       : "TeamIQ ToolReliability cases failed.",
     assertions,
+    diagnostics: {
+      summary: diagnosticSummary,
+      cases: diagnoses,
+    },
   });
   return {
     id: `${input.attemptId}:verifier`,
@@ -330,6 +365,25 @@ function createTeamIqVerifierResult(input: {
     assertionResults: assertions,
     artifactIds: [],
   };
+}
+
+function teamIqToolReliabilityStatus(
+  caseResults: ToolReliabilityCaseResult[]
+): CertifiedAttemptStatus {
+  if (caseResults.every((result) => result.passed)) return "passed";
+  const failedCategories = new Set(
+    caseResults
+      .filter((result) => !result.passed)
+      .map((result) => result.category)
+  );
+  if (
+    failedCategories.has("tool-call") ||
+    failedCategories.has("patch") ||
+    failedCategories.has("forbidden-action")
+  ) {
+    return "failed_tool_use";
+  }
+  return "failed_model";
 }
 
 function toolCallTracesForResult(
@@ -376,7 +430,7 @@ function isSoloComposition(
   teamCompositionId: string
 ): boolean {
   const team = teams.find((candidate) => candidate.id === teamCompositionId);
-  return getTeamCompositionModelIds(team).length === 1;
+  return isSoloTeamComposition(team);
 }
 
 function costTotal(values: Array<number | null>): number | null {

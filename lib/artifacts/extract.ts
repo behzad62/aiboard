@@ -134,6 +134,19 @@ function bareAttrPath(line: string): string {
   return /^\s*(?:path|file|filename)\s*[:=]\s*(\S+)\s*$/i.exec(line)![1];
 }
 
+function bodyLeadingPathIndex(contentLines: string[]): number {
+  const idx = contentLines.findIndex((l) => l.trim().length > 0);
+  if (idx < 0) return -1;
+  const candidate = contentLines[idx].trim();
+  const next = contentLines
+    .slice(idx + 1)
+    .find((line) => line.trim().length > 0)
+    ?.trim();
+  return looksLikePath(candidate) && /^<{4,}\s*SEARCH\s*$/.test(next ?? "")
+    ? idx
+    : -1;
+}
+
 function lastNonEmpty(lines: string[]): string | undefined {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].trim().length > 0) return lines[i];
@@ -276,9 +289,20 @@ export function extractArtifacts(text: string): ArtifactExtraction {
     // conflict markers are never written into a file as literal content.
     const firstContent = body.find((l) => l.trim().length > 0) ?? "";
     const infoFirst = info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-    if (infoFirst === "edit" || /^<{4,}\s*SEARCH\s*$/.test(firstContent.trim())) {
-      const editPath = pathFromInfo(info);
-      const ops = parseEditOps(body);
+    const leadingPathIdx = bodyLeadingPathIndex(body);
+    if (
+      infoFirst === "edit" ||
+      /^<{4,}\s*SEARCH\s*$/.test(firstContent.trim()) ||
+      leadingPathIdx >= 0
+    ) {
+      const editPath =
+        pathFromInfo(info) ??
+        (leadingPathIdx >= 0 ? body[leadingPathIdx]?.trim() ?? null : null);
+      const editBody =
+        leadingPathIdx >= 0
+          ? body.filter((_, index) => index !== leadingPathIdx)
+          : body;
+      const ops = parseEditOps(editBody);
       if (editPath && ops.length > 0) {
         edits.push({ path: normalizePath(editPath), ops });
         // A cut-off edit block: the terminated ops above are safe, but the

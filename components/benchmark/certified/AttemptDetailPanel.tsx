@@ -31,6 +31,7 @@ export function AttemptDetailPanel({
         teams: getBenchmarkTeamCompositions(),
         verifiers: getBenchmarkVerifierResults(),
         traces: getBenchmarkTraces(),
+        runEvents: [],
         toolCalls: getBenchmarkToolCallTraces(),
         artifacts: getBenchmarkArtifacts(),
         failures: getBenchmarkFailures(),
@@ -40,6 +41,8 @@ export function AttemptDetailPanel({
 
   if (!summary || !detail) return null;
   const { attempt, caseRecord, team, verifier } = detail;
+  const toolRel = detail.toolReliabilityDiagnostics;
+  const visibleFailedCases = toolRel?.failedCases.slice(0, 8) ?? [];
 
   return (
     <Card>
@@ -50,11 +53,24 @@ export function AttemptDetailPanel({
         <div className="grid gap-2 sm:grid-cols-3">
           <Detail label="Run" value={summary.runId} />
           <Detail label="Attempt" value={attempt.id} />
-          <Detail label="Status" value={attempt.status} />
+          <Detail label="Outcome" value={detail.summary.outcomeLabel} />
+          <Detail label="Score use" value={detail.summary.scoreUseLabel} />
+          <Detail label="Verifier" value={detail.summary.verifierOutcomeLabel} />
+          <Detail label="Model calls" value={String(detail.summary.modelCallCount)} />
+          <Detail label="Tool calls" value={String(detail.summary.toolCallCount)} />
+          <Detail label="Budget usage" value={detail.summary.budgetUsageLabel} />
+          <Detail
+            label="Verifier failures"
+            value={String(detail.summary.assertionFailureCount)}
+          />
+          <Detail label="Failures" value={String(detail.summary.failureCount)} />
           <Detail label="Verified quality" value={formatPercent(attempt.verifiedQuality)} />
           <Detail label="Cost" value={formatCost(attempt.costUsd)} />
           <Detail label="Time" value={formatDuration(attempt.durationMs)} />
         </div>
+        <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          {detail.summary.scoreUseExplanation}
+        </p>
 
         <Section title="Case manifest">
           <div className="space-y-1">
@@ -77,7 +93,9 @@ export function AttemptDetailPanel({
             {(team?.roles ?? []).map((role) => (
               <div key={`${role.slot}:${role.modelId}`} className="rounded-md border px-3 py-2">
                 <div className="font-medium">{role.role} - {role.displayName}</div>
-                <div className="text-xs text-muted-foreground">{role.providerId}:{role.modelId}</div>
+                <div className="text-xs text-muted-foreground">
+                  {formatRoleModelId(role)}
+                </div>
               </div>
             ))}
           </div>
@@ -86,6 +104,108 @@ export function AttemptDetailPanel({
         <Section title="Verifier assertions">
           <VerifierAssertionTable verifier={verifier} />
         </Section>
+
+        {toolRel ? (
+          <Section title="ToolReliability diagnosis">
+            <div className="grid gap-2 md:grid-cols-4">
+              {toolRel.accountabilityRows.map((row) => (
+                <Detail key={row.accountability} label={row.label} value={String(row.count)} />
+              ))}
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <TraceList
+                title="Failure categories"
+                rows={toolRel.categoryRows.map((row) => ({
+                  id: row.category,
+                  label: row.label,
+                  meta: `${row.failed} failed of ${row.total}`,
+                }))}
+                empty="No category diagnostics."
+              />
+              <TraceList
+                title="Top reasons"
+                rows={toolRel.topReasons.slice(0, 6).map((row, index) => ({
+                  id: `${index}:${row.reason}`,
+                  label: row.reason,
+                  meta: `${row.count} case${row.count === 1 ? "" : "s"}`,
+                }))}
+                empty="No repeated failure reasons."
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="font-medium">Failed cases</div>
+              {visibleFailedCases.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No failed case diagnostics.</p>
+              ) : (
+                <>
+                  {visibleFailedCases.map((item) => (
+                    <div key={item.caseId} className="rounded-md border px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{item.caseId}</span>
+                        <span className="text-xs text-muted-foreground">{item.categoryLabel}</span>
+                        <span className="text-xs text-muted-foreground">{item.accountabilityLabel}</span>
+                      </div>
+                      <div className="mt-1 text-sm">{item.reason}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{item.evidence}</div>
+                      {item.modelResponses.length > 0 ? (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                            Model response ({item.modelResponses.length})
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            {item.modelResponses.map((response) => (
+                              <pre
+                                key={response.id}
+                                className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs"
+                              >
+                                {[
+                                  response.meta,
+                                  response.error ? `Error\n${response.error}` : "",
+                                  response.rawResponsePreview
+                                    ? `Raw response\n${response.rawResponsePreview}`
+                                    : "",
+                                  response.parsedResponsePreview
+                                    ? `Parsed response\n${response.parsedResponsePreview}`
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join("\n\n")}
+                              </pre>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
+                      {item.verifierEvents.length > 0 ? (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                            Verifier evidence ({item.verifierEvents.length})
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            {item.verifierEvents.map((event) => (
+                              <pre
+                                key={event.id}
+                                className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs"
+                              >
+                                {[event.label, event.status, event.detail]
+                                  .filter(Boolean)
+                                  .join("\n\n")}
+                              </pre>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
+                    </div>
+                  ))}
+                  {toolRel.failedCases.length > visibleFailedCases.length ? (
+                    <p className="text-xs text-muted-foreground">
+                      Showing {visibleFailedCases.length} of {toolRel.failedCases.length} failed cases.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </Section>
+        ) : null}
 
         {detail.artifacts.some((artifact) =>
           artifact.id.endsWith(":fireworks-summary")
@@ -97,27 +217,6 @@ export function AttemptDetailPanel({
             />
           </Section>
         )}
-
-        <Section title="Traces">
-          <div className="grid gap-2 md:grid-cols-2">
-            <TraceList
-              title="Model calls"
-              rows={detail.modelTraces.map((trace) => ({
-                id: trace.id,
-                label: trace.participantId ?? trace.modelId,
-                meta: `${trace.providerId} - ${trace.inputTokens ?? 0}/${trace.outputTokens ?? 0} tokens`,
-              }))}
-            />
-            <TraceList
-              title="Tool calls"
-              rows={detail.toolCalls.map((trace) => ({
-                id: trace.id,
-                label: trace.toolName,
-                meta: `${trace.status}${trace.command ? ` - ${trace.command}` : ""}`,
-              }))}
-            />
-          </div>
-        </Section>
 
         {detail.patchArtifacts.length > 0 && (
           <Section title="Patch diff">
@@ -198,7 +297,7 @@ function TraceList({
   empty = "No records.",
 }: {
   title: string;
-  rows: Array<{ id: string; label: string; meta: string }>;
+  rows: Array<{ id: string; label: string; meta: string; detail?: string }>;
   empty?: string;
 }) {
   return (
@@ -211,6 +310,16 @@ function TraceList({
           <div key={row.id} className="rounded-md border px-3 py-2">
             <div className="truncate font-medium">{row.label}</div>
             <div className="mt-1 break-words text-xs text-muted-foreground">{row.meta}</div>
+            {row.detail ? (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Response
+                </summary>
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs">
+                  {row.detail}
+                </pre>
+              </details>
+            ) : null}
           </div>
         ))
       )}
@@ -228,4 +337,10 @@ function formatCost(value: number | null): string {
 
 function formatDuration(value: number): string {
   return `${(value / 1000).toFixed(1)}s`;
+}
+
+function formatRoleModelId(role: { providerId: string; modelId: string }): string {
+  return role.modelId.startsWith(`${role.providerId}:`)
+    ? role.modelId
+    : `${role.providerId}:${role.modelId}`;
 }

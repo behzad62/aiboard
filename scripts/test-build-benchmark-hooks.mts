@@ -12,6 +12,7 @@ import {
   runWorkBenchModelPatchBuild,
   runWorkBenchBuild,
 } from "../lib/benchmark/workbench/build-adapter";
+import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persistence";
 import type { SelectedModel, StructuredOutputFormat } from "../lib/providers/base";
 import type { WorkBenchCase } from "../lib/benchmark/workbench/types";
 import type { CertifiedRunContext } from "../lib/benchmark/certified/run-context";
@@ -21,6 +22,20 @@ let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+}
+
+async function expectReject(
+  name: string,
+  action: () => Promise<unknown>,
+  messagePattern: RegExp
+): Promise<void> {
+  try {
+    await action();
+    check(name, false, "resolved");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    check(name, messagePattern.test(message), message);
+  }
 }
 
 const benchmark: NonNullable<BuildHooks["benchmark"]> = {
@@ -141,6 +156,20 @@ check(
   "model content resolver falls back to provider collector",
   !fallback.overrideUsed && fallback.content === "provider-content",
   fallback
+);
+
+await expectReject(
+  "benchmark model content resolver rejects empty provider output",
+  () =>
+    resolveBuildModelContent({
+      model,
+      messages: [{ role: "user", content: "No output" }],
+      maxTokens: 64,
+      label: "Benchmark fallback",
+      hooks: { benchmark },
+      collect: async () => "",
+    }),
+  /empty response|empty output|provider/i
 );
 
 const workBenchCase: WorkBenchCase = {
@@ -312,6 +341,39 @@ check(
     directTraces.length === 1,
   { directRunCalled, directBuild, directEvents, directToolCalls, directTraces }
 );
+
+const budgetContext = createCertifiedRunContext({
+  runId: "run-workbench-budget-hook",
+  suiteId: "suite-workbench-budget-hook",
+  track: "workbench",
+  harnessProfile: "aiboard-build-multi-worker",
+  startedAt: new Date().toISOString(),
+  caseIds: [workBenchCase.id],
+  teamCompositionIds: ["team-workbench-hook"],
+  modelBudget: { maxModelCalls: 0 },
+});
+let budgetHookRunCalled = false;
+try {
+  await runWorkBenchBuild({
+    ...workBenchBuildInput,
+    context: budgetContext,
+    models: [model],
+    runBuildDiscussion: async (_discussion, _models, _emit, hooks) => {
+      budgetHookRunCalled = true;
+      hooks?.benchmark?.reserveModelCall?.({ inputTokens: 1 });
+    },
+    getBenchmarkTraces: () => [],
+  });
+  check("WorkBench benchmark budget hook rejects over-budget Build calls", false, "resolved");
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  check(
+    "WorkBench benchmark budget hook rejects over-budget Build calls",
+    /budget|model calls/i.test(message),
+    message
+  );
+}
+check("WorkBench Build discussion reached certified budget hook", budgetHookRunCalled, budgetHookRunCalled);
 
 async function startPatchBenchRunner(): Promise<{
   url: string;
