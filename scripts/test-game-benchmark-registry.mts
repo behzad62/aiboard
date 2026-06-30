@@ -10,6 +10,7 @@ import {
 import { battleshipMatchToGenericGameMatchRecord } from "../lib/games/battleship/benchmark";
 import { codenamesMatchToGenericGameMatchRecord } from "../lib/games/codenames/benchmark";
 import { listRunnableGameBenchmarkDefinitions } from "../lib/games/core/benchmark-definitions";
+import { buildBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type { GameId } from "../lib/games/core/types";
 
 let failures = 0;
@@ -213,6 +214,43 @@ check(
     codenamesStats.turns === 8 &&
     codenamesStats.assassinHits === 1,
   genericCodenamesRecord
+);
+
+// Codenames win attribution + per-model de-duplication through the dashboard.
+// Winner is the "blue" team (anthropic), so the blue model must be credited a
+// win and each team model must count the match exactly once (two seats share a
+// modelId — they must not double-count games/wins/losses).
+const codenamesDashboard = buildBenchmarkDashboardData({
+  gameMatches: [genericCodenamesRecord],
+  buildStats: [],
+  buildCheckpoints: [],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+const codenamesRed = codenamesDashboard.models.find(
+  (model) => model.modelId === "openai:gpt-4.1"
+);
+const codenamesBlue = codenamesDashboard.models.find(
+  (model) => model.modelId === "anthropic:claude-sonnet-4"
+);
+check(
+  "codenames winning team model is credited a win",
+  codenamesBlue?.wins === 1 &&
+    codenamesBlue?.losses === 0 &&
+    codenamesBlue?.draws === 0,
+  codenamesBlue
+);
+check(
+  "codenames losing team model is credited a loss",
+  codenamesRed?.wins === 0 && codenamesRed?.losses === 1,
+  codenamesRed
+);
+check(
+  "codenames seats sharing a model are not double-counted",
+  codenamesBlue?.games === 1 && codenamesRed?.games === 1,
+  { blue: codenamesBlue?.games, red: codenamesRed?.games }
 );
 
 if (failures === 0) {
