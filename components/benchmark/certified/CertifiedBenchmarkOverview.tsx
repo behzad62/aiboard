@@ -109,7 +109,7 @@ export function CertifiedBenchmarkOverview({
           value={String(summary.excludedProviderAttempts)}
           detail={
             summary.excludedAttempts > 0
-              ? `${summary.excludedHarnessAttempts} harness, ${summary.excludedEnvironmentAttempts} environment, ${summary.excludedUserAttempts} user`
+              ? `${summary.excludedHarnessAttempts} harness, ${summary.excludedEnvironmentAttempts} environment, ${summary.excludedCaseAttempts} case, ${summary.excludedUserAttempts} user`
               : undefined
           }
         />
@@ -553,6 +553,7 @@ interface CertifiedSummary {
   excludedHarnessAttempts: number;
   excludedEnvironmentAttempts: number;
   excludedUserAttempts: number;
+  excludedCaseAttempts: number;
   certifiedCases: number;
   verifiedPassRate: number | null;
   averageQuality: number | null;
@@ -626,6 +627,7 @@ function readCertifiedSummary(
     excludedEnvironmentAttempts:
       readNumber(summary.excludedEnvironmentAttempts) ?? 0,
     excludedUserAttempts: readNumber(summary.excludedUserAttempts) ?? 0,
+    excludedCaseAttempts: readNumber(summary.excludedCaseAttempts) ?? 0,
     certifiedCases:
       readNumber(summary.certifiedCases) ?? counts.certifiedCases ?? 0,
     verifiedPassRate:

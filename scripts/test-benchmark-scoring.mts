@@ -222,6 +222,14 @@ check(
   ) === false
 );
 check(
+  "broken-case attempts are excluded from scored attempts",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("excluded-case", soloTeamA.id, 100, {
+      status: "invalid_case",
+    })
+  ) === false
+);
+check(
   "failed budget remains a scored model outcome",
   isScoredCertifiedAttempt(
     certifiedAttempt("scored-budget", soloTeamA.id, 40, {

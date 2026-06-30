@@ -150,6 +150,7 @@ export interface CertifiedBenchmarkDashboardData {
     excludedHarnessAttempts: number;
     excludedEnvironmentAttempts: number;
     excludedUserAttempts: number;
+    excludedCaseAttempts: number;
     certifiedCases: number;
     certifiedTeams: number;
     verifiedPassRate: number | null;

@@ -31,6 +31,7 @@ import {
   buildTeamIqComboMatrixRows,
   buildTeamIqRecommendationCards,
 } from "@/lib/benchmark/teamiq";
+import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
@@ -495,6 +496,9 @@ export function buildCertifiedBenchmarkDashboardData(
       excludedUserAttempts: excludedAttempts.filter(
         (attempt) => attempt.status === "aborted_user"
       ).length,
+      excludedCaseAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "invalid_case"
+      ).length,
       certifiedCases: input.caseV2.length,
       certifiedTeams: leaderboard.length,
       verifiedPassRate: rate(
@@ -674,15 +678,11 @@ export function isScoredCertifiedAttempt(
   attempt: BenchmarkAttemptV2
 ): boolean {
   if (!isCertifiedAttempt(attempt)) return false;
-  switch (attempt.status) {
-    case "provider_unavailable":
-    case "invalid_harness":
-    case "invalid_environment":
-    case "aborted_user":
-      return false;
-    default:
-      return true;
-  }
+  // Single source of truth for "invalid for scoring" lives in failures.ts
+  // (INVALID_STATUSES). This includes invalid_case — a broken fixture/setup/
+  // verifier is the harness's fault, not the model's, so it must not count
+  // against the model's pass rate or quality.
+  return !isInvalidCertifiedRun(attempt.status);
 }
 
 function isVerifiedPassed(
