@@ -463,7 +463,12 @@ async function callFireworksAction(params: {
     throw new Error(`No Fireworks role mapped for ${params.playerId}.`);
   }
 
-  const { system, user } = buildFireworksPrompt(params.state, params.playerId);
+  // Benchmark prompts must not hand the model the solver's optimal-move
+  // recommendations. (Own-card identity is NOT redacted here: in live play the
+  // resolved knowledge is the legitimate result of clues actually given.)
+  const { system, user } = buildFireworksPrompt(params.state, params.playerId, {
+    omitRecommendations: true,
+  });
   try {
     const call = await callCertifiedModel({
       model: selectedModelForRole(role),

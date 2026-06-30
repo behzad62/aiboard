@@ -19,7 +19,10 @@ import {
   getLegalFireworksActions,
   isPlayableCard,
 } from "./engine";
-import { getFireworksPlayerView } from "./hidden-view";
+import {
+  getFireworksPlayerView,
+  type FireworksPlayerViewOptions,
+} from "./hidden-view";
 import type {
   FireworksAction,
   FireworksAiActionResult,
@@ -70,9 +73,10 @@ export function buildFireworksActionSchema(): StructuredOutputFormat {
 
 export function buildFireworksPrompt(
   state: FireworksGameState,
-  playerId: string
+  playerId: string,
+  options: FireworksPlayerViewOptions = {}
 ): { system: string; user: string } {
-  const view = getFireworksPlayerView(state, playerId);
+  const view = getFireworksPlayerView(state, playerId, options);
   return {
     system: `You are playing Fireworks, a cooperative hidden-information card game.
 
