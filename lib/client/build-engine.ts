@@ -3731,6 +3731,14 @@ export async function runBuildDiscussion(
       output: content,
       maxTokens: opts.maxTokens,
     });
+    const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
+    const estimatedUsd = pricing
+      ? estimatedUsdForTokens({
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          pricing,
+        })
+      : null;
     const validation = opts.validateStructuredOutput?.(content);
     const traceParsedJson =
       validation?.ok === true
@@ -3755,6 +3763,7 @@ export async function runBuildDiscussion(
         latencyMs: Date.now() - traceStartMs,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
+        estimatedUsd,
         rawResponse: content,
         parsedResponseJson: traceParsedJson,
         diagnostics,
@@ -3778,15 +3787,8 @@ export async function runBuildDiscussion(
     });
     // Fold the call into the active Build budget window (aggregate per-model
     // tokens + estimated USD). Unknown-priced models leave USD null and surface
-    // as a partial-estimate warning in the Build stats UI.
-    const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
-    const estimatedUsd = pricing
-      ? estimatedUsdForTokens({
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          pricing,
-        })
-      : null;
+    // as a partial-estimate warning in the Build stats UI. (pricing/estimatedUsd
+    // are computed above so the model-call trace can also carry the cost.)
     try {
       benchmark?.recordModelCallUsage?.({
         inputTokens: usage.inputTokens,
