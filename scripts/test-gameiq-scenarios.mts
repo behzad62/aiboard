@@ -197,6 +197,36 @@ check(
   fireworksMemoryPack?.scenarios.map((scenario) => scenario.initialState)
 );
 
+const connectFourTrapPack = firstListing.find(
+  (pack) => pack.id === "gameiq-v0.1-connect-four"
+);
+const connectFourTraps = (connectFourTrapPack?.scenarios ?? []).filter(
+  (scenario) => scenario.category === "trap-setup"
+);
+check(
+  "Connect Four trap-setup scenarios all create a genuine double threat",
+  connectFourTraps.length > 0 &&
+    connectFourTraps.every((scenario) => validateGameIqScenario(scenario).ok),
+  connectFourTraps
+    .filter((scenario) => !validateGameIqScenario(scenario).ok)
+    .map((scenario) => scenario.id)
+);
+const baseTrap = connectFourTraps[0];
+const brokenTrap = baseTrap
+  ? {
+      ...baseTrap,
+      id: `${baseTrap.id}-broken`,
+      expectedActions: [
+        { ...baseTrap.expectedActions[0], action: { column: 0 } },
+      ],
+    }
+  : null;
+check(
+  "Connect Four trap-setup validator rejects a non-double-threat answer",
+  brokenTrap != null && validateGameIqScenario(brokenTrap).ok === false,
+  brokenTrap ? validateGameIqScenario(brokenTrap) : "no base trap"
+);
+
 const knightQueenTactic = chessPack?.scenarios.find(
   (scenario) => scenario.id === "gameiq-v0.1-chess-knight-wins-queen"
 );

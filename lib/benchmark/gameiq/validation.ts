@@ -81,6 +81,20 @@ function hasImmediateConnectFourWin(
   });
 }
 
+function countImmediateConnectFourWins(
+  state: ConnectFourGameState,
+  player: ConnectFourPlayer
+): number {
+  const testState = { ...state, turn: player };
+  return getLegalColumns(testState).filter((column) => {
+    try {
+      return dropDisc(testState, column, 0).winner === player;
+    } catch {
+      return false;
+    }
+  }).length;
+}
+
 export function isStructuredGameIqAction(
   scenario: GameIqScenario,
   action: unknown
@@ -280,6 +294,21 @@ function validateConnectFourCategory(
     return hasImmediateConnectFourWin(nextState, opponent)
       ? fail("Connect Four expected action does not stop the immediate threat.")
       : ok();
+  }
+
+  if (scenario.category === "trap-setup") {
+    // A genuine trap creates a DOUBLE threat: after the expected drop, the
+    // mover must have two or more columns that win immediately, so the
+    // opponent can only block one. Re-derive this from the engine rather than
+    // trusting the hand-authored expected column.
+    const player = state.turn;
+    const nextState = dropDisc(state, expected.column, 0);
+    const winningContinuations = countImmediateConnectFourWins(nextState, player);
+    return winningContinuations >= 2
+      ? ok()
+      : fail(
+          `Connect Four trap-setup creates ${winningContinuations} winning follow-up(s); a double threat needs at least 2.`
+        );
   }
 
   return ok();

@@ -306,11 +306,11 @@ const GENERATED_CONNECT_FOUR_TEMPLATES: ConnectFourTemplate[] = [
     ["trap-center-red", "red", 3, [1, 2], [[5, "yellow"], [6, "yellow"]]],
     ["trap-center-yellow", "yellow", 3, [4, 5], [[0, "red"], [1, "red"]]],
     ["trap-left-red", "red", 1, [2, 3], [[5, "yellow"], [6, "yellow"]]],
-    ["trap-right-yellow", "yellow", 5, [2, 3], [[0, "red"], [1, "red"]]],
+    ["trap-right-yellow", "yellow", 5, [3, 4], [[0, "red"], [1, "red"]]],
     ["trap-spread-red", "red", 2, [3, 4], [[0, "yellow"], [6, "yellow"]]],
     ["trap-spread-yellow", "yellow", 4, [2, 3], [[0, "red"], [6, "red"]]],
-    ["trap-low-red", "red", 0, [1, 2], [[5, "yellow"], [6, "yellow"]]],
-    ["trap-high-yellow", "yellow", 6, [3, 4], [[0, "red"], [1, "red"]]],
+    ["trap-low-red", "red", 2, [1, 3], [[5, "yellow"], [6, "yellow"]]],
+    ["trap-high-yellow", "yellow", 4, [3, 5], [[0, "red"], [1, "red"]]],
     ["trap-balanced-red", "red", 4, [2, 3], [[0, "yellow"], [6, "yellow"]]],
   ].map(([id, owner, target, support, blockers]) => {
     const player = owner as ConnectFourPlayer;
