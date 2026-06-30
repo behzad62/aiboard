@@ -65,10 +65,13 @@ export function useBenchmarkReportActions({
     if (!dashboard) return;
     const bundle = exportBenchmarkReportBundleV2();
     downloadBenchmarkJson(bundle);
+    const summary = bundle.redactionSummary;
     setMessage(
       `Benchmark Bundle exported. Redaction scanned ${
-        bundle.redactionSummary?.scannedArtifacts ?? 0
-      } artifact(s).`
+        summary?.scannedRecords ?? summary?.scannedArtifacts ?? 0
+      } record(s) across all channels; ${
+        summary?.redactedSecrets ?? 0
+      } secret(s) removed.`
     );
   }, [dashboard, setMessage]);
 
