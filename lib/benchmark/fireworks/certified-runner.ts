@@ -323,7 +323,12 @@ async function runScenarioCase(params: {
     call.action,
     { fallbackUsed: call.call.fallbackUsed }
   );
-  const score = scoreFireworksScenarioAction(params.benchmarkCase, call.action);
+  // When the model's output was unparseable/illegal we substitute a strong
+  // deterministic fallback action only to advance the simulation — it must NOT
+  // earn the model scenario credit. Score it 0 so the >= 0.7 assertion fails.
+  const score = call.call.fallbackUsed
+    ? 0
+    : scoreFireworksScenarioAction(params.benchmarkCase, call.action);
   const assertions = [
     {
       id: `${params.benchmarkCase.id}:expected-action`,
