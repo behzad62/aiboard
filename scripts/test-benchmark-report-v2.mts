@@ -1,4 +1,5 @@
 /* Benchmark report v2 checks (run: npx tsx scripts/test-benchmark-report-v2.mts) */
+import { readFileSync } from "node:fs";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
 import type {
@@ -144,6 +145,19 @@ const failedAttemptWithPartialQuality: BenchmarkAttemptV2 = {
   verifierResultId: undefined,
 };
 
+const excludedProviderAttempt: BenchmarkAttemptV2 = {
+  ...attempt,
+  id: "attempt-tool-excluded-provider",
+  runId: "run-tool-3",
+  status: "provider_unavailable",
+  verifiedQuality: 0.99,
+  jobSuccessScore: 99,
+  efficiencyScore: 99,
+  costUsd: 9.99,
+  durationMs: 9999,
+  verifierResultId: undefined,
+};
+
 const publishAttempt: BenchmarkAttemptV2 = {
   ...attempt,
   id: "attempt-publish-1",
@@ -166,7 +180,12 @@ const bundle: BenchmarkReportBundleV2 = {
   failures: [],
   traces: [],
   caseV2: [caseV2],
-  attemptsV2: [attempt, failedAttemptWithPartialQuality, publishAttempt],
+  attemptsV2: [
+    attempt,
+    failedAttemptWithPartialQuality,
+    excludedProviderAttempt,
+    publishAttempt,
+  ],
   verifierResults: [verifier, publishVerifier],
   runEvents: [],
   toolCallTraces: [],
@@ -188,12 +207,26 @@ const certified = buildCertifiedBenchmarkDashboardData({
   harnessCertifications: bundle.harnessCertifications,
 });
 
-check("certified dashboard counts certified runs and cases", certified.summary.certifiedRuns === 2 && certified.summary.certifiedCases === 1, certified.summary);
-check("certified dashboard filters non-certified attempts", certified.summary.certifiedAttempts === 2, certified.summary);
+check("certified dashboard counts certified runs and cases", certified.summary.certifiedRuns === 3 && certified.summary.certifiedCases === 1, certified.summary);
+check("certified dashboard filters non-certified attempts", certified.summary.certifiedAttempts === 3, certified.summary);
+check(
+  "certified dashboard separates scored and excluded certified attempts",
+  certified.summary.scoredAttempts === 2 &&
+    certified.summary.excludedAttempts === 1 &&
+    certified.summary.excludedProviderAttempts === 1,
+  certified.summary
+);
 check("certified dashboard does not pass failed partial-quality attempts", certified.summary.verifiedPassRate === 0.5, certified.summary);
 check("certified dashboard ranks verified quality", certified.leaderboard[0]?.verifiedQuality === 0.75, certified.leaderboard);
 check("certified leaderboard pass count uses status", certified.leaderboard[0]?.passed === 1 && certified.leaderboard[0]?.failed === 1, certified.leaderboard[0]);
 check("certified dashboard filters non-certified verifier assertions", !certified.verifierAssertionRows.some((row) => row.id === "publish-only"), certified.verifierAssertionRows);
+check(
+  "certified dashboard excludes provider-unavailable quality and cost from averages",
+  certified.summary.averageVerifiedQuality === 0.75 &&
+    certified.summary.averageCostUsd === 0.015 &&
+    certified.summary.averageDurationMs === 1000,
+  certified.summary
+);
 
 const markdown = formatBenchmarkMarkdownReport(bundle, {
   summary: {
@@ -227,12 +260,48 @@ check(
 );
 check("markdown report includes team lift matrix", markdown.includes("Team Lift Matrix"), markdown);
 check("markdown report includes failure taxonomy", markdown.includes("Failure Taxonomy"), markdown);
-check("markdown report filters certified attempts", markdown.includes("Certified attempts: 2") && !markdown.includes("Certified attempts: 3"), markdown);
-check("markdown report filters non-certified verifier pass rate", markdown.includes("Verified pass rate: 100%"), markdown);
+check("markdown report reports certified evidence counts", markdown.includes("Certified attempts: 3"), markdown);
+check(
+  "markdown report reports excluded certified evidence counts",
+  markdown.includes("Scored attempts: 2") &&
+    markdown.includes("Excluded attempts: 1") &&
+    markdown.includes("provider 1"),
+  markdown
+);
+check("markdown report filters non-certified verifier pass rate", markdown.includes("Verified pass rate: 50%"), markdown);
 check("markdown report filters non-certified verifier assertions", !markdown.includes("Publish-only assertion"), markdown);
-check("markdown report treats v2 failure statuses as complete", markdown.includes("Completed attempts: 2"), markdown);
+check("markdown report scores completed attempts without excluded provider attempts", markdown.includes("Completed attempts: 2"), markdown);
+check(
+  "markdown report excludes provider-unavailable attempt from scoring rows",
+  markdown.includes("Average verified quality: 75/100") &&
+    markdown.includes("Average cost: $0.015") &&
+    markdown.includes("Average duration: 1.0s") &&
+    markdown.includes("GPT solo: quality 75/100, pass rate 50%, 2 attempt(s), avg cost $0.015"),
+  markdown
+);
 check("markdown report includes v2 raw counts", markdown.includes("Verifier results: 2"), markdown);
 check("markdown report includes run evidence counts", markdown.includes("Run events: 0") && markdown.includes("Tool-call traces: 0"), markdown);
+
+const reportSource = readFileSync("lib/benchmark/reports.ts", "utf8");
+const reportActionSource = readFileSync(
+  "components/benchmark/useBenchmarkReportActions.ts",
+  "utf8"
+);
+check(
+  "benchmark download attaches link and defers blob revocation",
+  reportSource.includes("document.body.appendChild(a)") &&
+    reportSource.includes("setTimeout") &&
+    reportSource.includes("URL.revokeObjectURL(url)"),
+  reportSource.slice(reportSource.indexOf("function downloadText"), reportSource.length)
+);
+check(
+  "benchmark markdown copy handles clipboard denial after download",
+  reportActionSource.includes("try {") &&
+    reportActionSource.includes("navigator.clipboard") &&
+    reportActionSource.includes("catch") &&
+    reportActionSource.includes("Clipboard copy"),
+  reportActionSource
+);
 
 if (failures === 0) {
   console.log("PASS");

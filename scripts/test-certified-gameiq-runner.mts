@@ -28,6 +28,8 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 const pack = getGameIqScenarioPack("connect-four");
 if (!pack) throw new Error("Connect Four GameIQ pack is required for this test.");
+const chessPack = getGameIqScenarioPack("chess");
+if (!chessPack) throw new Error("Chess GameIQ pack is required for this test.");
 
 const now = "2026-06-28T09:00:00.000Z";
 const caseV2: BenchmarkCaseV2 = {
@@ -69,6 +71,26 @@ const caseV2: BenchmarkCaseV2 = {
     originalTask: true,
     canary: "AIBENCH-CERTIFIED-GAMEIQ-RUNNER",
     referenceSolutionPrivate: true,
+  },
+};
+const chessCaseV2: BenchmarkCaseV2 = {
+  ...caseV2,
+  id: chessPack.id,
+  title: chessPack.label,
+  description: "Certified GameIQ Chess scenario pack.",
+  tags: ["gameiq", "chess"],
+  caseVersion: chessPack.version,
+  prompt: {
+    userRequest: "Solve each Chess scenario.",
+    publicContext: "Return a JSON object with a chess move action.",
+  },
+  game: {
+    gameId: "chess",
+    seed: chessPack.id,
+  },
+  budget: {
+    maxUsd: 1,
+    maxModelCalls: chessPack.scenarios.length,
   },
 };
 
@@ -167,6 +189,123 @@ check(
       return keys.every((key) => node.required?.includes(key));
     }),
   observedStructuredOutput
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(chessCaseV2);
+await saveBenchmarkTeamComposition(team);
+
+let chessCallIndex = 0;
+let observedChessStructuredOutput: StructuredOutputFormat | undefined;
+const chessSummary = await runCertifiedBenchmark({
+  runId: "run-certified-gameiq-chess-schema",
+  suiteId: "suite-certified-gameiq",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [chessPack.id],
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  runner: (context) =>
+    runCertifiedGameIq({
+      context,
+      models: [model],
+      scenarioPackIds: [chessPack.id],
+      teamCompositionIds: [team.id],
+      trials: 1,
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        observedChessStructuredOutput ??= params.structuredOutput;
+        const scenario = chessPack.scenarios[chessCallIndex++];
+        const action = scenario.expectedActions[0]?.action as {
+          from: string;
+          to: string;
+          promotion?: string | null;
+        };
+        yield {
+          type: "token",
+          content: JSON.stringify({
+            action: {
+              from: action.from,
+              to: action.to,
+              promotion: action.promotion ?? null,
+            },
+          }),
+        };
+        yield { type: "done" };
+      },
+    }),
+});
+const chessAttempts = await listBenchmarkAttemptsV2();
+const chessAttempt = chessAttempts[0];
+const chessVerifier = (await listBenchmarkVerifierResults())[0];
+const chessActionSchema =
+  observedChessStructuredOutput?.schema.properties?.action?.properties ?? {};
+check(
+  "certified Chess structured output does not expose nested action discriminator",
+  !!observedChessStructuredOutput &&
+    !Object.prototype.hasOwnProperty.call(chessActionSchema, "action") &&
+    Object.keys(chessActionSchema).join(",") === "from,to,promotion",
+  observedChessStructuredOutput
+);
+check(
+  "certified Chess accepts direct move action object",
+  chessSummary.status === "completed" &&
+    chessAttempt?.status === "passed" &&
+    chessAttempt.gameIqScore === 100,
+  { chessSummary, chessAttempt }
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(chessCaseV2);
+await saveBenchmarkTeamComposition(team);
+
+let invalidChessCallIndex = 0;
+await runCertifiedBenchmark({
+  runId: "run-certified-gameiq-chess-failure-evidence",
+  suiteId: "suite-certified-gameiq",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [chessPack.id],
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  runner: (context) =>
+    runCertifiedGameIq({
+      context,
+      models: [model],
+      scenarioPackIds: [chessPack.id],
+      teamCompositionIds: [team.id],
+      trials: 1,
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        invalidChessCallIndex++;
+        yield {
+          type: "token",
+          content: JSON.stringify({
+            action: {
+              from: null,
+              to: null,
+              promotion: null,
+            },
+          }),
+        };
+        yield { type: "done" };
+      },
+    }),
+});
+const failedChessVerifier = (await listBenchmarkVerifierResults())[0];
+const failedAssertionWithDetails = failedChessVerifier?.assertionResults.find(
+  (assertion) => !assertion.passed && assertion.details?.includes("Raw response")
+);
+check(
+  "certified GameIQ failed assertions include raw response details",
+  Boolean(failedAssertionWithDetails) &&
+    failedAssertionWithDetails?.details?.includes('"from":null') === true,
+  failedChessVerifier
+);
+check(
+  "certified GameIQ verifier result stores failed case diagnostics",
+  failedChessVerifier?.resultJson.includes('"caseResults"') === true &&
+    failedChessVerifier.resultJson.includes('"rawResponse"') &&
+    failedChessVerifier.resultJson.includes('"action"'),
+  failedChessVerifier?.resultJson
 );
 
 function schemaObjectNodes(schema: JsonSchemaObject | undefined): JsonSchemaObject[] {

@@ -22,7 +22,7 @@ export function TeamCompositionBuilder({
   if (models.length === 0) {
     return (
       <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-        Add and enable at least two provider models in Settings to run TeamIQ.
+        Add and enable at least one provider model in Settings to run TeamIQ.
       </div>
     );
   }
@@ -58,7 +58,7 @@ export function TeamCompositionBuilder({
         </div>
       </div>
       <div className="grid gap-2 md:grid-cols-3">
-        {models.slice(0, 8).map((model) => {
+        {models.map((model) => {
           const checked = selectedModelIds.includes(model.modelId);
           const disabled = !checked && selectedModelIds.length >= maxSelected;
           return (
@@ -96,15 +96,15 @@ export function TeamCompositionBuilder({
         })}
       </div>
       <p className="text-xs text-muted-foreground">
-        Select two to {maxSelected} models. Roles follow the selected strategy
-        in selection order.
+        Select one to {maxSelected} models. Roles follow the selected strategy
+        in selection order; missing role slots reuse the selected models.
       </p>
     </div>
   );
 }
 
 function maxModelsForStrategy(strategy: TeamIqUiStrategy): number {
-  return strategy === "panel" || strategy === "cheap_swarm_strong_judge" ? 4 : 3;
+  return strategy === "architect_worker" ? 2 : 3;
 }
 
 function strategyLabel(strategy: TeamIqUiStrategy): string {

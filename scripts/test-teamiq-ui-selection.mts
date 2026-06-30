@@ -1,5 +1,13 @@
 /* TeamIQ UI selection checks (run: npx tsx scripts/test-teamiq-ui-selection.mts) */
-import { createTeamIqCompositionFromSelection } from "../lib/benchmark/teamiq";
+import {
+  TEAMIQ_TOOL_BENCH_STRATEGIES,
+  createTeamIqCompositionFromSelection,
+  createTeamIqToolBenchCompositionsFromSelection,
+  deriveSoloTeamComposition,
+  isSoloTeamComposition,
+  linkTeamLiftBaselines,
+} from "../lib/benchmark/teamiq";
+import type { BenchmarkAttemptV2 } from "../lib/benchmark/types";
 import type { SelectedModel } from "../lib/providers/base";
 
 let failures = 0;
@@ -48,16 +56,42 @@ check(
   team
 );
 
-let singleModelRejected = false;
-try {
-  createTeamIqCompositionFromSelection({
-    models,
-    selectedModelIds: [models[0].modelId],
-  });
-} catch {
-  singleModelRejected = true;
-}
-check("TeamIQ UI selection rejects one-model teams", singleModelRejected);
+const oneModelTeam = createTeamIqCompositionFromSelection({
+  models,
+  selectedModelIds: [models[0].modelId],
+  strategy: "architect_worker",
+});
+const oneModelSolo = deriveSoloTeamComposition({
+  modelId: models[0].modelId,
+  providerId: models[0].providerId,
+  displayName: models[0].displayName,
+});
+check(
+  "TeamIQ UI selection can reuse one model across architect and worker roles",
+  oneModelTeam.roles.length === 2 &&
+    oneModelTeam.roles[0]?.role === "architect" &&
+    oneModelTeam.roles[1]?.role === "worker" &&
+    oneModelTeam.roles.every((role) => role.modelId === models[0].modelId),
+  oneModelTeam
+);
+check(
+  "TeamIQ role-reused one-model team is not classified as solo",
+  !isSoloTeamComposition(oneModelTeam) && isSoloTeamComposition(oneModelSolo),
+  oneModelTeam
+);
+const oneModelLiftLinks = linkTeamLiftBaselines({
+  soloAttempts: [attemptForTeam(oneModelSolo.id, 60, "solo-one-model")],
+  teamAttempts: [attemptForTeam(oneModelTeam.id, 80, "team-one-model")],
+  teamCompositions: [oneModelSolo, oneModelTeam],
+  track: "teamiq",
+});
+check(
+  "TeamIQ role-reused one-model team links against its solo baseline",
+  oneModelLiftLinks.length === 1 &&
+    oneModelLiftLinks[0]?.memberSoloAttempts.length === 1 &&
+    oneModelLiftLinks[0]?.score.teamLift > 0,
+  oneModelLiftLinks
+);
 
 const debateTeam = createTeamIqCompositionFromSelection({
   models,
@@ -117,6 +151,67 @@ check(
   underfilledFireworksRejected
 );
 
+const toolBenchTeams = createTeamIqToolBenchCompositionsFromSelection({
+  models,
+  selectedModelIds: models.slice(0, 2).map((model) => model.modelId),
+});
+check(
+  "TeamIQ tool bench selection creates every strategy mode",
+  toolBenchTeams.length === TEAMIQ_TOOL_BENCH_STRATEGIES.length &&
+    TEAMIQ_TOOL_BENCH_STRATEGIES.every((strategy) =>
+      toolBenchTeams.some((candidate) => candidate.strategy === strategy)
+    ),
+  toolBenchTeams
+);
+check(
+  "TeamIQ tool bench all-mode selection keeps distinct team ids",
+  new Set(toolBenchTeams.map((candidate) => candidate.id)).size ===
+    toolBenchTeams.length,
+  toolBenchTeams.map((candidate) => ({
+    id: candidate.id,
+    strategy: candidate.strategy,
+    roles: candidate.roles.map((role) => role.role),
+  }))
+);
+
+const oneModelToolBenchTeams = createTeamIqToolBenchCompositionsFromSelection({
+  models,
+  selectedModelIds: [models[0].modelId],
+});
+check(
+  "TeamIQ tool bench all-mode selection supports one selected model",
+  oneModelToolBenchTeams.length === TEAMIQ_TOOL_BENCH_STRATEGIES.length &&
+    oneModelToolBenchTeams.every(
+      (candidate) =>
+        !isSoloTeamComposition(candidate) &&
+        candidate.roles.length >= 2 &&
+        candidate.roles.every((role) => role.modelId === models[0].modelId)
+    ),
+  oneModelToolBenchTeams
+);
+check(
+  "TeamIQ tool bench strategies use fixed consolidated role shapes",
+  JSON.stringify(
+    Object.fromEntries(
+      oneModelToolBenchTeams.map((candidate) => [
+        candidate.strategy,
+        candidate.roles.map((role) => role.role),
+      ])
+    )
+  ) ===
+    JSON.stringify({
+      panel: ["specialist", "specialist", "specialist"],
+      debate: ["critic", "critic", "judge"],
+      architect_worker: ["architect", "worker"],
+      architect_worker_reviewer: ["architect", "worker", "reviewer"],
+      cheap_swarm_strong_judge: ["worker", "worker", "judge"],
+    }),
+  oneModelToolBenchTeams.map((candidate) => ({
+    strategy: candidate.strategy,
+    roles: candidate.roles.map((role) => role.role),
+  }))
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {
@@ -124,3 +219,37 @@ if (failures === 0) {
 }
 
 process.exit(failures === 0 ? 0 : 1);
+
+function attemptForTeam(
+  teamCompositionId: string,
+  score: number,
+  id: string
+): BenchmarkAttemptV2 {
+  return {
+    id,
+    runId: "test-run",
+    caseId: "test-case",
+    teamCompositionId,
+    mode: "certified",
+    track: "teamiq",
+    harnessProfile: "raw-single-model",
+    status: "passed",
+    startedAt: "2026-06-30T00:00:00.000Z",
+    completedAt: "2026-06-30T00:00:01.000Z",
+    verifiedQuality: score / 100,
+    jobSuccessScore: score,
+    efficiencyScore: score,
+    costUsd: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    modelCalls: 1,
+    toolCalls: 0,
+    durationMs: 1000,
+    artifactIds: [],
+    traceIds: [],
+    failureIds: [],
+    harnessVersion: "teamiq-runner-v0.1",
+    promptSetVersion: "test",
+    scoringVersion: "teamiq-toolreliability-current",
+  };
+}

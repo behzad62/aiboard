@@ -20,7 +20,10 @@ import {
   buildCertifiedBenchmarkDashboardData,
   type BenchmarkDashboardData,
 } from "@/lib/benchmark/metrics";
-import type { BenchmarkFailure } from "@/lib/benchmark/types";
+import type {
+  BenchmarkAttemptV2,
+  BenchmarkFailure,
+} from "@/lib/benchmark/types";
 import {
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
@@ -155,14 +158,15 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
         benchmarkFailures,
       })
     );
+    const certifiedDashboardData = buildCertifiedBenchmarkDashboardData({
+      caseV2: benchmarkCaseV2,
+      attemptsV2: benchmarkAttemptsV2,
+      verifierResults,
+      teamCompositions,
+      harnessCertifications,
+    });
     setCertifiedDashboard(
-      buildCertifiedBenchmarkDashboardData({
-        caseV2: benchmarkCaseV2,
-        attemptsV2: benchmarkAttemptsV2,
-        verifierResults,
-        teamCompositions,
-        harnessCertifications,
-      })
+      withCertifiedDeleteMetadata(certifiedDashboardData, benchmarkAttemptsV2)
     );
     setSuiteCount(benchmarkSuites.length);
     setTraceCount(benchmarkTraces.length);
@@ -213,4 +217,103 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     refresh: load,
     setMessage,
   };
+}
+
+type CertifiedDashboardWithLeaderboard = ReturnType<
+  typeof buildCertifiedBenchmarkDashboardData
+>;
+
+function withCertifiedDeleteMetadata(
+  dashboard: CertifiedDashboardWithLeaderboard,
+  attempts: BenchmarkAttemptV2[]
+): CertifiedDashboardWithLeaderboard & {
+  providerErrorAttempts: Array<{
+    id: string;
+    track: string;
+    teamCompositionId: string;
+  }>;
+} {
+  const certifiedAttempts = attempts.filter(
+    (attempt) => attempt.mode === "certified"
+  );
+  const attemptsByTeam = new Map<string, BenchmarkAttemptV2[]>();
+  for (const attempt of certifiedAttempts) {
+    const list = attemptsByTeam.get(attempt.teamCompositionId) ?? [];
+    list.push(attempt);
+    attemptsByTeam.set(attempt.teamCompositionId, list);
+  }
+
+  return {
+    ...dashboard,
+    leaderboard: dashboard.leaderboard.map((row) => {
+      const teamAttempts = attemptsByTeam.get(row.teamCompositionId) ?? [];
+      const latest = newestAttempt(teamAttempts);
+      return {
+        ...row,
+        latestAttemptId: latest?.id,
+        latestAttemptStatus: latest?.status,
+        latestAttemptTrack: latest?.track,
+        latestAttemptsByTrack: latestAttemptsByTrack(teamAttempts),
+        providerUnavailableAttemptIds: teamAttempts
+          .filter((attempt) => attempt.status === "provider_unavailable")
+          .map((attempt) => attempt.id),
+        providerUnavailableAttemptIdsByTrack:
+          providerUnavailableAttemptIdsByTrack(teamAttempts),
+      };
+    }),
+    providerErrorAttempts: certifiedAttempts
+      .filter((attempt) => attempt.status === "provider_unavailable")
+      .map((attempt) => ({
+        id: attempt.id,
+        track: attempt.track,
+        teamCompositionId: attempt.teamCompositionId,
+      })),
+  };
+}
+
+function latestAttemptsByTrack(
+  attempts: BenchmarkAttemptV2[]
+): Record<string, { id: string; status: string; track: string }> {
+  const byTrack: Record<string, { id: string; status: string; track: string }> = {};
+  const grouped = new Map<string, BenchmarkAttemptV2[]>();
+  for (const attempt of attempts) {
+    const list = grouped.get(attempt.track) ?? [];
+    list.push(attempt);
+    grouped.set(attempt.track, list);
+  }
+  for (const [track, rows] of grouped) {
+    const latest = newestAttempt(rows);
+    if (latest) {
+      byTrack[track] = {
+        id: latest.id,
+        status: latest.status,
+        track: latest.track,
+      };
+    }
+  }
+  return byTrack;
+}
+
+function providerUnavailableAttemptIdsByTrack(
+  attempts: BenchmarkAttemptV2[]
+): Record<string, string[]> {
+  const byTrack: Record<string, string[]> = {};
+  for (const attempt of attempts) {
+    if (attempt.status !== "provider_unavailable") continue;
+    byTrack[attempt.track] ??= [];
+    byTrack[attempt.track].push(attempt.id);
+  }
+  return byTrack;
+}
+
+function newestAttempt(attempts: BenchmarkAttemptV2[]): BenchmarkAttemptV2 | null {
+  return attempts.reduce<BenchmarkAttemptV2 | null>((best, attempt) => {
+    if (!best) return attempt;
+    return attemptTimestamp(attempt) >= attemptTimestamp(best) ? attempt : best;
+  }, null);
+}
+
+function attemptTimestamp(attempt: BenchmarkAttemptV2): number {
+  const parsed = Date.parse(attempt.completedAt ?? attempt.startedAt);
+  return Number.isFinite(parsed) ? parsed : 0;
 }

@@ -223,6 +223,7 @@ export interface BenchmarkVerifierAssertionResult {
   passed: boolean;
   weight: number;
   message?: string;
+  details?: string;
 }
 
 export interface BenchmarkVerifierResult {
@@ -429,8 +430,7 @@ export interface BenchmarkModelCallTrace {
   error?: string;
 }
 
-export interface BenchmarkReportBundle {
-  version: 1;
+export interface BenchmarkReportBundleBase {
   exportedAt: string;
   suites: BenchmarkSuite[];
   runs: BenchmarkRun[];
@@ -448,7 +448,7 @@ export interface BenchmarkReportBundle {
 }
 
 export interface BenchmarkReportBundleV2
-  extends Omit<BenchmarkReportBundle, "version"> {
+  extends BenchmarkReportBundleBase {
   version: 2;
   caseV2: BenchmarkCaseV2[];
   attemptsV2: BenchmarkAttemptV2[];

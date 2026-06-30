@@ -107,10 +107,16 @@ export function listCustomModelInfos(): ModelInfo[] {
 }
 
 /** User-defined Azure Foundry model ids (from the provider key). */
+export function normalizeFoundryModelId(id: string): string {
+  const trimmed = id.trim();
+  const parsed = parseModelId(trimmed);
+  return parsed.providerId === FOUNDRY_PROVIDER_ID ? parsed.model : trimmed;
+}
+
 export function listFoundryModelInfos(): ModelInfo[] {
   const ids = getProviderKey(FOUNDRY_PROVIDER_ID)?.models ?? [];
   return ids
-    .map((id) => id.trim())
+    .map(normalizeFoundryModelId)
     .filter((id) => id.length > 0)
     .map((id) => ({
       id,

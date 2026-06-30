@@ -12,6 +12,8 @@ export interface CertifiedRunGateInput {
   selectedTrack: CertifiedRunnableTrack;
   modelId: string;
   teamModelIds: string[];
+  workBenchModelIds?: string[];
+  workBenchRoleMode?: "solo" | "architect_worker" | "architect_worker_reviewer";
   fireworksPlayerCount?: 2 | 3;
   workBenchRunnerReady: boolean;
   certification: HarnessCertificationResult;
@@ -46,8 +48,28 @@ export function getCertifiedRunGate(
             : "Select exactly two models for 2-player Fireworks."
         );
       }
-    } else if (input.teamModelIds.length < 2) {
-      return blocked("Select at least two models for TeamIQ.");
+    } else if (input.teamModelIds.length < 1) {
+      return blocked("Select at least one model for TeamIQ.");
+    }
+  } else if (input.selectedTrack === "workbench") {
+    const roleMode = input.workBenchRoleMode ?? "solo";
+    const selected = input.workBenchModelIds?.length
+      ? input.workBenchModelIds
+      : input.modelId
+        ? [input.modelId]
+        : [];
+    const required =
+      roleMode === "architect_worker_reviewer"
+        ? 3
+        : roleMode === "architect_worker"
+          ? 2
+          : 1;
+    if (selected.length < required) {
+      return blocked(
+        required === 1
+          ? "Select a WorkBench model."
+          : `Select ${required} WorkBench role models.`
+      );
     }
   } else if (!input.modelId) {
     return blocked("Select a model.");

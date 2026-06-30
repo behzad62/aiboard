@@ -118,6 +118,20 @@ export interface CertifiedRunScore {
   teamLiftLabel: TeamLiftLabel | null;
 }
 
+export interface WorkBenchRoleLeaderboardRow {
+  id: string;
+  role: "architect" | "worker" | "reviewer";
+  modelId: string;
+  displayName: string;
+  attempts: number;
+  passed: number;
+  verifiedPassRate: number | null;
+  verifiedQuality: number;
+  efficiencyScore: number;
+  averageCostUsd: number | null;
+  averageDurationMs: number | null;
+}
+
 export interface CertifiedBenchmarkDashboardInput {
   caseV2: BenchmarkCaseV2[];
   attemptsV2: BenchmarkAttemptV2[];
@@ -130,6 +144,12 @@ export interface CertifiedBenchmarkDashboardData {
   summary: {
     certifiedRuns: number;
     certifiedAttempts: number;
+    scoredAttempts: number;
+    excludedAttempts: number;
+    excludedProviderAttempts: number;
+    excludedHarnessAttempts: number;
+    excludedEnvironmentAttempts: number;
+    excludedUserAttempts: number;
     certifiedCases: number;
     certifiedTeams: number;
     verifiedPassRate: number | null;
@@ -145,6 +165,11 @@ export interface CertifiedBenchmarkDashboardData {
   speedPerPassLeaderboard: CertifiedRunScore[];
   teamLiftLeaderboard: CertifiedRunScore[];
   toolReliabilityLeaderboard: CertifiedRunScore[];
+  workBenchRoleLeaderboards: {
+    architect: WorkBenchRoleLeaderboardRow[];
+    worker: WorkBenchRoleLeaderboardRow[];
+    reviewer: WorkBenchRoleLeaderboardRow[];
+  };
   paretoFrontier: CertifiedRunScore[];
   teamIqComboMatrixRows: TeamIqComboMatrixRow[];
   teamIqRecommendationCards: TeamIqRecommendationCard[];

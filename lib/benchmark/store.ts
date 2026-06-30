@@ -1,4 +1,16 @@
 import {
+  deleteBenchmarkAttemptV2ById,
+  deleteBenchmarkArtifactsByAttemptId,
+  deleteBenchmarkArtifactsByIds,
+  deleteBenchmarkArtifactsByRunId,
+  deleteBenchmarkFailuresByAttemptId,
+  deleteBenchmarkFailuresByRunId,
+  deleteBenchmarkRunById,
+  deleteBenchmarkRunEventsByAttemptId,
+  deleteBenchmarkToolCallTracesByAttemptId,
+  deleteBenchmarkTracesByAttemptId,
+  deleteBenchmarkTracesByRunId,
+  deleteBenchmarkVerifierResultsByAttemptId,
   exportStore,
   flush,
   getBenchmarkArtifacts,
@@ -38,6 +50,8 @@ import {
   upsertBenchmarkTrace,
   upsertBenchmarkVerifierResult,
   __resetClientStoreForTests,
+  deleteBenchmarkRunBlob,
+  saveBenchmarkRunBlob,
 } from "../client/store";
 import type { ClientStore } from "../client/store";
 import { redactBenchmarkBundle } from "./redaction";
@@ -50,7 +64,6 @@ import type {
   BenchmarkFailure,
   BenchmarkMetricValue,
   BenchmarkModelCallTrace,
-  BenchmarkReportBundle,
   BenchmarkReportBundleV2,
   BenchmarkRun,
   BenchmarkRunEvent,
@@ -61,6 +74,12 @@ import type {
   CertifiedAttemptStatus,
   HarnessCertificationResult,
 } from "./types";
+
+export {
+  __enableBenchmarkRunBlobStorageForTests,
+  __exportClientStoreForPersistenceForTests,
+  __getBenchmarkRunBlobsForTests,
+} from "../client/store";
 
 async function ensureWritableStore(): Promise<void> {
   if (!isInitialized()) {
@@ -155,6 +174,14 @@ export async function listBenchmarkToolCallTraces(): Promise<
   return [...getBenchmarkToolCallTraces()];
 }
 
+export async function listBenchmarkTraces(): Promise<BenchmarkModelCallTrace[]> {
+  if (!isInitialized()) {
+    const { needsPassphrase } = await initStore();
+    if (needsPassphrase) return [];
+  }
+  return [...getBenchmarkTraces()];
+}
+
 export async function listBenchmarkTeamCompositions(): Promise<
   BenchmarkTeamComposition[]
 > {
@@ -178,6 +205,7 @@ export async function listHarnessCertificationResults(): Promise<
 export async function saveBenchmarkCase(record: BenchmarkCase): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkCase(record);
+  await persistBenchmarkRunIds(runIdsForCaseId(record.id));
   await flush();
 }
 
@@ -185,24 +213,32 @@ export async function saveBenchmarkCaseV2(record: BenchmarkCaseV2): Promise<void
   validateBenchmarkCaseV2(record);
   await ensureWritableStore();
   upsertBenchmarkCaseV2(record);
+  await persistBenchmarkRunIds(runIdsForCaseId(record.id));
   await flush();
 }
 
 export async function saveBenchmarkRun(record: BenchmarkRun): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkRun(record);
+  await persistBenchmarkRunFile(record.id);
   await flush();
 }
 
 export async function saveBenchmarkSuite(record: BenchmarkSuite): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkSuite(record);
+  await persistBenchmarkRunIds(
+    getBenchmarkRuns()
+      .filter((run) => run.suiteId === record.id)
+      .map((run) => run.id)
+  );
   await flush();
 }
 
 export async function saveBenchmarkAttempt(record: BenchmarkAttempt): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkAttempt(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -212,6 +248,7 @@ export async function saveBenchmarkAttemptV2(
   validateBenchmarkAttemptV2(record);
   await ensureWritableStore();
   upsertBenchmarkAttemptV2(record);
+  await persistBenchmarkRunFile(record.runId);
   await flush();
 }
 
@@ -220,6 +257,7 @@ export async function saveBenchmarkMetricValue(
 ): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkMetricValue(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -228,12 +266,14 @@ export async function saveBenchmarkArtifact(
 ): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkArtifact(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
 export async function saveBenchmarkFailure(record: BenchmarkFailure): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkFailure(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -242,6 +282,7 @@ export async function saveBenchmarkTrace(
 ): Promise<void> {
   await ensureWritableStore();
   upsertBenchmarkTrace(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -251,6 +292,7 @@ export async function saveBenchmarkVerifierResult(
   validateBenchmarkVerifierResult(record);
   await ensureWritableStore();
   upsertBenchmarkVerifierResult(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -258,6 +300,7 @@ export async function saveBenchmarkRunEvent(record: BenchmarkRunEvent): Promise<
   validateBenchmarkRunEvent(record);
   await ensureWritableStore();
   upsertBenchmarkRunEvent(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -267,6 +310,7 @@ export async function saveBenchmarkToolCallTrace(
   validateBenchmarkToolCallTrace(record);
   await ensureWritableStore();
   upsertBenchmarkToolCallTrace(record);
+  await persistBenchmarkRunIds(runIdsForRunOrAttempt(record));
   await flush();
 }
 
@@ -276,6 +320,11 @@ export async function saveBenchmarkTeamComposition(
   validateBenchmarkTeamComposition(record);
   await ensureWritableStore();
   upsertBenchmarkTeamComposition(record);
+  await persistBenchmarkRunIds(
+    getBenchmarkAttemptsV2()
+      .filter((attempt) => attempt.teamCompositionId === record.id)
+      .map((attempt) => attempt.runId)
+  );
   await flush();
 }
 
@@ -285,27 +334,281 @@ export async function saveHarnessCertificationResult(
   validateHarnessCertificationResult(record);
   await ensureWritableStore();
   upsertBenchmarkHarnessCertification(record);
+  await persistBenchmarkRunIds(
+    getBenchmarkAttemptsV2()
+      .filter((attempt) => attempt.harnessProfile === record.harnessProfile)
+      .map((attempt) => attempt.runId)
+  );
   await flush();
 }
 
-export function exportBenchmarkReportBundle(): BenchmarkReportBundle {
+export interface BenchmarkDeleteSummary {
+  runs: number;
+  attempts: number;
+  verifiers: number;
+  artifacts: number;
+  failures: number;
+  traces: number;
+  runEvents: number;
+  toolCallTraces: number;
+}
+
+export async function deleteBenchmarkAttemptCascade(
+  attemptId: string
+): Promise<BenchmarkDeleteSummary> {
+  return deleteBenchmarkAttemptsCascade([attemptId]);
+}
+
+export async function deleteBenchmarkAttemptsCascade(
+  attemptIds: string[]
+): Promise<BenchmarkDeleteSummary> {
+  await ensureWritableStore();
+  const uniqueAttemptIds = Array.from(new Set(attemptIds)).filter(Boolean);
+  const affectedRunIds = new Set(
+    uniqueAttemptIds.flatMap((attemptId) => runIdsForAttemptId(attemptId))
+  );
+  const summary = createDeleteSummary();
+  for (const attemptId of uniqueAttemptIds) {
+    addDeleteSummary(summary, deleteBenchmarkAttemptCascadeInMemory(attemptId));
+  }
+  await persistBenchmarkRunIds(affectedRunIds);
+  await flush();
+  return summary;
+}
+
+export async function deleteBenchmarkRunCascade(
+  runId: string
+): Promise<BenchmarkDeleteSummary> {
+  await ensureWritableStore();
+  const run = getBenchmarkRuns().find((record) => record.id === runId);
+  const attemptIds = getBenchmarkAttemptsV2()
+    .filter((attempt) => attempt.runId === runId)
+    .map((attempt) => attempt.id);
+  const summary = createDeleteSummary();
+  summary.runs += deleteBenchmarkRunById(runId);
+  for (const attemptId of attemptIds) {
+    addDeleteSummary(summary, deleteBenchmarkAttemptCascadeInMemory(attemptId));
+  }
+  summary.failures += deleteBenchmarkFailuresByRunId(runId);
+  summary.traces += deleteBenchmarkTracesByRunId(runId);
+  summary.artifacts += deleteBenchmarkArtifactsByIds(run?.artifactIds ?? []);
+  summary.artifacts += deleteBenchmarkArtifactsByRunId(runId);
+  await deleteBenchmarkRunBlob(runId);
+  await flush();
+  return summary;
+}
+
+function deleteBenchmarkAttemptCascadeInMemory(
+  attemptId: string
+): BenchmarkDeleteSummary {
+  const artifactIds = new Set<string>();
+  const attempt = getBenchmarkAttemptsV2().find((record) => record.id === attemptId);
+  for (const artifactId of attempt?.artifactIds ?? []) artifactIds.add(artifactId);
+  const verifierResults = getBenchmarkVerifierResults().filter(
+    (record) => record.attemptId === attemptId
+  );
+  for (const verifier of verifierResults) {
+    for (const artifactId of verifier.artifactIds) artifactIds.add(artifactId);
+  }
+
+  const summary = createDeleteSummary();
+  summary.attempts += deleteBenchmarkAttemptV2ById(attemptId);
+  summary.verifiers += deleteBenchmarkVerifierResultsByAttemptId(attemptId);
+  summary.artifacts += deleteBenchmarkArtifactsByIds(artifactIds);
+  summary.artifacts += deleteBenchmarkArtifactsByAttemptId(attemptId);
+  summary.failures += deleteBenchmarkFailuresByAttemptId(attemptId);
+  summary.traces += deleteBenchmarkTracesByAttemptId(attemptId);
+  summary.runEvents += deleteBenchmarkRunEventsByAttemptId(attemptId);
+  summary.toolCallTraces += deleteBenchmarkToolCallTracesByAttemptId(attemptId);
+  return summary;
+}
+
+function createDeleteSummary(): BenchmarkDeleteSummary {
   return {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    suites: [...getBenchmarkSuites()],
-    runs: [...getBenchmarkRuns()],
-    cases: [...getBenchmarkCases()],
-    attempts: [...getBenchmarkAttempts()],
-    metricValues: [...getBenchmarkMetricValues()],
-    artifacts: [...getBenchmarkArtifacts()],
-    failures: [...getBenchmarkFailures()],
-    traces: [...getBenchmarkTraces()],
-    sourceEvidence: {
-      gameMatches: [...getGenericGameMatchRecords()],
-      buildCheckpoints: [...getBuildCheckpoints()],
-      buildStats: getModelStats(),
-    },
+    runs: 0,
+    attempts: 0,
+    verifiers: 0,
+    artifacts: 0,
+    failures: 0,
+    traces: 0,
+    runEvents: 0,
+    toolCallTraces: 0,
   };
+}
+
+function addDeleteSummary(
+  target: BenchmarkDeleteSummary,
+  source: BenchmarkDeleteSummary
+): void {
+  target.runs += source.runs;
+  target.attempts += source.attempts;
+  target.verifiers += source.verifiers;
+  target.artifacts += source.artifacts;
+  target.failures += source.failures;
+  target.traces += source.traces;
+  target.runEvents += source.runEvents;
+  target.toolCallTraces += source.toolCallTraces;
+}
+
+async function persistBenchmarkRunIds(runIds: Iterable<string>): Promise<void> {
+  for (const runId of Array.from(new Set(Array.from(runIds).filter(Boolean)))) {
+    await persistBenchmarkRunFile(runId);
+  }
+}
+
+async function persistBenchmarkRunFile(runId: string): Promise<void> {
+  const bundle = buildBenchmarkRunBundle(runId);
+  if (!hasBenchmarkRunEvidence(bundle)) {
+    await deleteBenchmarkRunBlob(runId);
+    return;
+  }
+  await saveBenchmarkRunBlob(runId, JSON.stringify(bundle, null, 2));
+}
+
+function hasBenchmarkRunEvidence(bundle: BenchmarkReportBundleV2): boolean {
+  return (
+    bundle.runs.length > 0 ||
+    bundle.attempts.length > 0 ||
+    bundle.attemptsV2.length > 0 ||
+    bundle.traces.length > 0 ||
+    bundle.runEvents.length > 0 ||
+    bundle.toolCallTraces.length > 0 ||
+    bundle.verifierResults.length > 0 ||
+    bundle.artifacts.length > 0 ||
+    bundle.failures.length > 0
+  );
+}
+
+function buildBenchmarkRunBundle(runId: string): BenchmarkReportBundleV2 {
+  const runs = getBenchmarkRuns().filter((run) => run.id === runId);
+  const attempts = getBenchmarkAttempts().filter(
+    (attempt) => attempt.runId === runId
+  );
+  const attemptsV2 = getBenchmarkAttemptsV2().filter(
+    (attempt) => attempt.runId === runId
+  );
+  const attemptIds = new Set([
+    ...attempts.map((attempt) => attempt.id),
+    ...attemptsV2.map((attempt) => attempt.id),
+  ]);
+  const caseIds = new Set([
+    ...runs.flatMap((run) => run.caseIds),
+    ...attempts.map((attempt) => attempt.caseId).filter(isString),
+    ...attemptsV2.map((attempt) => attempt.caseId),
+  ]);
+  const metricValueIds = new Set(runs.flatMap((run) => run.metricValueIds));
+  const verifierResults = getBenchmarkVerifierResults().filter((verifier) =>
+    attemptIds.has(verifier.attemptId)
+  );
+  const artifactIds = new Set([
+    ...runs.flatMap((run) => run.artifactIds),
+    ...attempts.flatMap((attempt) => attempt.artifactIds),
+    ...attemptsV2.flatMap((attempt) => attempt.artifactIds),
+    ...verifierResults.flatMap((verifier) => verifier.artifactIds),
+  ]);
+  const failures = getBenchmarkFailures().filter(
+    (failure) =>
+      failure.runId === runId ||
+      (failure.attemptId ? attemptIds.has(failure.attemptId) : false)
+  );
+  for (const failure of failures) {
+    caseIds.add(failure.caseId ?? "");
+  }
+  const traces = getBenchmarkTraces().filter(
+    (trace) =>
+      trace.runId === runId ||
+      (trace.attemptId ? attemptIds.has(trace.attemptId) : false)
+  );
+  const runEvents = getBenchmarkRunEvents().filter((event) =>
+    attemptIds.has(event.attemptId)
+  );
+  const toolCallTraces = getBenchmarkToolCallTraces().filter((trace) =>
+    attemptIds.has(trace.attemptId)
+  );
+  const artifacts = getBenchmarkArtifacts().filter(
+    (artifact) =>
+      artifact.runId === runId ||
+      artifactIds.has(artifact.id) ||
+      (artifact.attemptId ? attemptIds.has(artifact.attemptId) : false)
+  );
+  const metricValues = getBenchmarkMetricValues().filter(
+    (metric) =>
+      metric.runId === runId ||
+      metricValueIds.has(metric.id) ||
+      (metric.attemptId ? attemptIds.has(metric.attemptId) : false)
+  );
+  const suiteIds = new Set(runs.map((run) => run.suiteId).filter(isString));
+  const teamIds = new Set(attemptsV2.map((attempt) => attempt.teamCompositionId));
+  const harnessProfiles = new Set(
+    attemptsV2.map((attempt) => attempt.harnessProfile)
+  );
+
+  return {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    suites: getBenchmarkSuites().filter((suite) => suiteIds.has(suite.id)),
+    runs,
+    cases: getBenchmarkCases().filter((benchmarkCase) =>
+      caseIds.has(benchmarkCase.id)
+    ),
+    attempts,
+    metricValues,
+    artifacts,
+    failures,
+    traces,
+    caseV2: getBenchmarkCaseV2().filter((benchmarkCase) =>
+      caseIds.has(benchmarkCase.id)
+    ),
+    attemptsV2,
+    verifierResults,
+    runEvents,
+    toolCallTraces,
+    teamCompositions: getBenchmarkTeamCompositions().filter((team) =>
+      teamIds.has(team.id)
+    ),
+    harnessCertifications: getBenchmarkHarnessCertifications().filter((cert) =>
+      harnessProfiles.has(cert.harnessProfile)
+    ),
+  };
+}
+
+function runIdsForRunOrAttempt(record: {
+  runId?: string;
+  attemptId?: string;
+}): string[] {
+  if (record.runId) return [record.runId];
+  return record.attemptId ? runIdsForAttemptId(record.attemptId) : [];
+}
+
+function runIdsForAttemptId(attemptId: string): string[] {
+  return [
+    ...getBenchmarkAttempts()
+      .filter((attempt) => attempt.id === attemptId)
+      .map((attempt) => attempt.runId)
+      .filter(isString),
+    ...getBenchmarkAttemptsV2()
+      .filter((attempt) => attempt.id === attemptId)
+      .map((attempt) => attempt.runId),
+  ];
+}
+
+function runIdsForCaseId(caseId: string): string[] {
+  return [
+    ...getBenchmarkRuns()
+      .filter((run) => run.caseIds.includes(caseId))
+      .map((run) => run.id),
+    ...getBenchmarkAttempts()
+      .filter((attempt) => attempt.caseId === caseId)
+      .map((attempt) => attempt.runId)
+      .filter(isString),
+    ...getBenchmarkAttemptsV2()
+      .filter((attempt) => attempt.caseId === caseId)
+      .map((attempt) => attempt.runId),
+  ];
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
@@ -338,32 +641,15 @@ export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
   return { ...redacted, bundleHash: hashBenchmarkBundle(redacted) };
 }
 
-export async function importBenchmarkReportBundle(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2
-): Promise<void> {
-  if (isBenchmarkReportBundleV2(bundle)) {
-    await importBenchmarkReportBundleV2(bundle);
-    return;
-  }
-
-  validateBenchmarkReportBundle(bundle);
-  await mergeBenchmarkReportBundle(bundle);
-}
-
 export async function importBenchmarkReportBundleV2(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2
+  bundle: BenchmarkReportBundleV2
 ): Promise<void> {
-  if (isBenchmarkReportBundleV1(bundle)) {
-    await importBenchmarkReportBundle(bundle);
-    return;
-  }
-
   validateBenchmarkReportBundleV2(bundle);
   await mergeBenchmarkReportBundle(bundle);
 }
 
 async function mergeBenchmarkReportBundle(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2
+  bundle: BenchmarkReportBundleV2
 ): Promise<void> {
   await ensureWritableStore();
   const current = exportStore();
@@ -404,51 +690,42 @@ async function mergeBenchmarkReportBundle(
     ),
   };
 
-  if (bundle.version === 2) {
-    next.benchmarkCaseV2 = mergeById(
-      current.benchmarkCaseV2 ?? [],
-      bundle.caseV2
-    );
-    next.benchmarkAttemptsV2 = mergeById(
-      current.benchmarkAttemptsV2 ?? [],
-      bundle.attemptsV2
-    );
-    next.benchmarkVerifierResults = mergeById(
-      current.benchmarkVerifierResults ?? [],
-      bundle.verifierResults
-    );
-    next.benchmarkRunEvents = mergeById(
-      current.benchmarkRunEvents ?? [],
-      bundle.runEvents
-    );
-    next.benchmarkToolCallTraces = mergeById(
-      current.benchmarkToolCallTraces ?? [],
-      bundle.toolCallTraces
-    );
-    next.benchmarkTeamCompositions = mergeById(
-      current.benchmarkTeamCompositions ?? [],
-      bundle.teamCompositions
-    );
-    next.benchmarkHarnessCertifications = mergeById(
-      current.benchmarkHarnessCertifications ?? [],
-      bundle.harnessCertifications
-    );
-  }
+  next.benchmarkCaseV2 = mergeById(
+    current.benchmarkCaseV2 ?? [],
+    bundle.caseV2
+  );
+  next.benchmarkAttemptsV2 = mergeById(
+    current.benchmarkAttemptsV2 ?? [],
+    bundle.attemptsV2
+  );
+  next.benchmarkVerifierResults = mergeById(
+    current.benchmarkVerifierResults ?? [],
+    bundle.verifierResults
+  );
+  next.benchmarkRunEvents = mergeById(
+    current.benchmarkRunEvents ?? [],
+    bundle.runEvents
+  );
+  next.benchmarkToolCallTraces = mergeById(
+    current.benchmarkToolCallTraces ?? [],
+    bundle.toolCallTraces
+  );
+  next.benchmarkTeamCompositions = mergeById(
+    current.benchmarkTeamCompositions ?? [],
+    bundle.teamCompositions
+  );
+  next.benchmarkHarnessCertifications = mergeById(
+    current.benchmarkHarnessCertifications ?? [],
+    bundle.harnessCertifications
+  );
 
   replaceStore({ ...current, ...next });
+  await persistBenchmarkRunIds(bundle.runs.map((run) => run.id));
+  await persistBenchmarkRunIds(
+    bundle.attempts.map((attempt) => attempt.runId).filter(isString)
+  );
+  await persistBenchmarkRunIds(bundle.attemptsV2.map((attempt) => attempt.runId));
   await flush();
-}
-
-function isBenchmarkReportBundleV1(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2
-): bundle is BenchmarkReportBundle {
-  return isPlainObject(bundle) && bundle.version === 1;
-}
-
-function isBenchmarkReportBundleV2(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2
-): bundle is BenchmarkReportBundleV2 {
-  return isPlainObject(bundle) && bundle.version === 2;
 }
 
 function hashBenchmarkBundle(
@@ -480,12 +757,8 @@ function stableNormalize(value: unknown): unknown {
   return normalized;
 }
 
-function validateBenchmarkReportBundle(bundle: BenchmarkReportBundle): void {
-  validateBenchmarkReportBundleBase(bundle, 1);
-}
-
 function validateBenchmarkReportBundleV2(bundle: BenchmarkReportBundleV2): void {
-  validateBenchmarkReportBundleBase(bundle, 2);
+  validateBenchmarkReportBundleBase(bundle);
   validateArrayWithStringKey("caseV2", bundle.caseV2, "id");
   validateArrayWithStringKey("attemptsV2", bundle.attemptsV2, "id");
   validateArrayWithStringKey("verifierResults", bundle.verifierResults, "id");
@@ -526,14 +799,13 @@ function validateBenchmarkReportBundleV2(bundle: BenchmarkReportBundleV2): void 
 }
 
 function validateBenchmarkReportBundleBase(
-  bundle: BenchmarkReportBundle | BenchmarkReportBundleV2,
-  version: 1 | 2
+  bundle: BenchmarkReportBundleV2
 ): void {
   if (!bundle || typeof bundle !== "object") {
     throw new Error("Invalid benchmark report bundle.");
   }
 
-  if (bundle.version !== version) {
+  if (bundle.version !== 2) {
     throw new Error(`Unsupported benchmark report version: ${bundle.version}`);
   }
 
@@ -976,7 +1248,8 @@ function isVerifierAssertionResult(value: unknown): boolean {
     isNonEmptyString(value.label) &&
     typeof value.passed === "boolean" &&
     isFiniteNumber(value.weight) &&
-    isOptionalString(value.message)
+    isOptionalString(value.message) &&
+    isOptionalString(value.details)
   );
 }
 

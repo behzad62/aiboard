@@ -12,7 +12,7 @@ export function RunBundlePanel({ counts }: { counts: BenchmarkReportCounts }) {
       <CardContent className="grid gap-2 text-sm sm:grid-cols-3">
         <BundleCount label="Attempts" value={counts.certifiedAttempts} />
         <BundleCount label="Verifiers" value={counts.verifierResults} />
-        <BundleCount label="Traces" value={counts.traces} />
+        <BundleCount label="Failures" value={counts.failures} />
       </CardContent>
     </Card>
   );

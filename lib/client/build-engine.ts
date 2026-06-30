@@ -74,7 +74,11 @@ import {
   type BuildQualityGateRepoStatus,
   type BuildQualityRequiredCheck,
 } from "@/lib/orchestrator/build-quality-gates";
-import { addBuildUsageCall, createBuildUsageWindow } from "./build-usage";
+import {
+  addBuildUsageCall,
+  createBuildUsageWindow,
+  estimatedUsdForTokens,
+} from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import {
   createGameModelCallTrace,
@@ -86,6 +90,10 @@ import type {
   BenchmarkToolCallTrace,
   HarnessProfile,
 } from "@/lib/benchmark/types";
+import type {
+  CertifiedModelCallReservation,
+  CertifiedModelCallUsage,
+} from "@/lib/benchmark/certified/budget";
 import { buildVerbosityInstruction } from "@/lib/orchestrator/prompts";
 import { extractJudgeResult } from "@/lib/orchestrator/parse";
 import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
@@ -306,6 +314,8 @@ export interface BuildHooks {
     allowedCommands?: string[];
     recordEvent?: (event: BenchmarkRunEvent) => void;
     recordToolCall?: (trace: BenchmarkToolCallTrace) => void;
+    reserveModelCall?: (input?: CertifiedModelCallReservation) => void;
+    recordModelCallUsage?: (input: CertifiedModelCallUsage) => void;
   };
   modelCallOverride?: (input: {
     model: SelectedModel;
@@ -400,10 +410,22 @@ export async function resolveBuildModelContent(input: {
       structuredOutput: input.structuredOutput,
       attachments: input.attachments,
     });
+    assertNonEmptyBenchmarkModelContent(content, input.hooks);
     input.emitToken?.(content);
     return { content, overrideUsed: true };
   }
-  return { content: await input.collect(), overrideUsed: false };
+  const content = await input.collect();
+  assertNonEmptyBenchmarkModelContent(content, input.hooks);
+  return { content, overrideUsed: false };
+}
+
+function assertNonEmptyBenchmarkModelContent(
+  content: string,
+  hooks: BuildHooks | undefined
+): void {
+  if (hooks?.benchmark && content.trim().length === 0) {
+    throw new Error("Certified provider returned an empty response.");
+  }
 }
 
 const SEARCHES_PER_PHASE = 4;
@@ -726,19 +748,25 @@ export async function runBuildDiscussion(
 
   const modelIds: string[] = JSON.parse(discussion.modelIds);
   const architectId = discussion.judgeModelId ?? modelIds[0];
+  const resolveSelectedModelForId = (modelId: string): SelectedModel =>
+    models.find((m) => m.modelId === modelId) ?? {
+      modelId,
+      providerId: parseModelId(modelId).providerId,
+      displayName: resolveModelName(modelId),
+      contextProfile: resolveClientModelContextProfile(modelId),
+    };
   // The Architect is the JUDGE model — even when it isn't one of the
   // participating (worker) models. Resolve it on its own so a non-participant
   // judge (e.g. an expensive GPT-5.5 orchestrating cheap workers) is honored
   // instead of silently falling back to the first participant.
-  const architect: SelectedModel =
-    models.find((m) => m.modelId === architectId) ??
-    {
-      modelId: architectId,
-      providerId: parseModelId(architectId).providerId,
-      displayName: resolveModelName(architectId),
-      contextProfile: resolveClientModelContextProfile(architectId),
-    };
-  const workers = models.filter((m) => m.modelId !== architect.modelId);
+  const architect: SelectedModel = resolveSelectedModelForId(architectId);
+  const reviewer: SelectedModel | null = discussion.reviewerModelId
+    ? resolveSelectedModelForId(discussion.reviewerModelId)
+    : null;
+  const workerIds = modelIds.filter(
+    (id) => id !== architect.modelId && id !== reviewer?.modelId
+  );
+  const workers = workerIds.map(resolveSelectedModelForId);
   if (workers.length === 0) workers.push(architect); // solo build
   const buildContextManager = new BuildContextManager();
   const modelContextProfile = (model: SelectedModel) =>
@@ -3569,6 +3597,23 @@ export async function runBuildDiscussion(
       modelId: model.modelId,
       providerId,
     });
+    const preflightUsage = estimateModelCallUsage({
+      messages,
+      output: "",
+      maxTokens: opts.maxTokens,
+    });
+    try {
+      benchmark?.reserveModelCall?.({ inputTokens: preflightUsage.inputTokens });
+    } catch (error) {
+      emitBenchmarkEvent({
+        type: "run_blocked",
+        phase: "budget",
+        message: error instanceof Error ? error.message : String(error),
+        modelId: model.modelId,
+        providerId,
+      });
+      throw error;
+    }
     let content: string;
     try {
       const resolved = await resolveBuildModelContent({
@@ -3735,6 +3780,29 @@ export async function runBuildDiscussion(
     // tokens + estimated USD). Unknown-priced models leave USD null and surface
     // as a partial-estimate warning in the Build stats UI.
     const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
+    const estimatedUsd = pricing
+      ? estimatedUsdForTokens({
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          pricing,
+        })
+      : null;
+    try {
+      benchmark?.recordModelCallUsage?.({
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd,
+      });
+    } catch (error) {
+      emitBenchmarkEvent({
+        type: "run_blocked",
+        phase: "budget",
+        message: error instanceof Error ? error.message : String(error),
+        modelId: model.modelId,
+        providerId,
+      });
+      throw error;
+    }
     usageWindow = addBuildUsageCall(usageWindow, {
       modelId: model.modelId,
       modelName: model.displayName,
@@ -4752,10 +4820,14 @@ export async function runBuildDiscussion(
     initialUser: string;
     initialAttachments?: AttachmentPayload[];
     budgets: InspectionBudgets;
+    actor?: SelectedModel;
+    actorLabel?: string;
     /** Accumulate delivered read/search results for cross-phase memory. */
     appendContext: (text: string) => void;
   }): Promise<{ action: ArchitectAction; text: string; forced: boolean }> => {
     const { terminal } = args;
+    const actor = args.actor ?? architect;
+    const actorLabel = args.actorLabel ?? "Architect";
     let messages: ChatMessage[] = [
       { role: "system", content: ARCHITECT_SYSTEM_ROLE },
       { role: "user", content: args.initialUser },
@@ -4780,7 +4852,7 @@ export async function runBuildDiscussion(
       forced = true;
       emitArchitectLoopDiag(
         decisionPhase,
-        `Architect ${terminal} inspection ended (${why}) — forcing a final ${terminal} verdict with the current context`
+        `${actorLabel} ${terminal} inspection ended (${why}) — forcing a final ${terminal} verdict with the current context`
       );
       messages.push({ role: "user", content: forcedInstruction });
     };
@@ -4798,17 +4870,17 @@ export async function runBuildDiscussion(
         120_000,
         8,
         buildCompactionPlaceholder(
-          `Architect ${terminal} omitted tool exchange`
+          `${actorLabel} ${terminal} omitted tool exchange`
         )
       );
       if (compacted.compacted > 0) {
         messages = compacted.messages;
         emitArchitectLoopDiag(
           "model_streaming",
-          `Compacted the Architect's ${terminal} context — folded ${compacted.compacted} older tool exchange(s) to stay within budget`
+          `Compacted the ${actorLabel}'s ${terminal} context — folded ${compacted.compacted} older tool exchange(s) to stay within budget`
         );
       }
-      const text = await streamConversation(architect, messages, {
+      const text = await streamConversation(actor, messages, {
         maxTokens: architectMaxTokens,
         label: forced ? `${args.label} (final verdict)` : args.label,
         attachments: turn === 0 ? args.initialAttachments : undefined,
@@ -6367,10 +6439,11 @@ export async function runBuildDiscussion(
       ]
     );
 
+    const reviewActor = reviewer ?? architect;
     emit({
       type: "diagnostic",
       phase: "judging",
-      message: `Architect is reviewing wave ${cycle}`,
+      message: `${reviewActor.displayName} is reviewing wave ${cycle}`,
     });
 
     // The Architect inspects files / runs commands in a real conversation, then
@@ -6393,7 +6466,7 @@ export async function runBuildDiscussion(
       cycle
     );
     const reviewAssembledContext = buildContextManager.buildReviewContext({
-      modelContextProfile: modelContextProfile(architect),
+      modelContextProfile: modelContextProfile(reviewActor),
       request: discussion.topic,
       treeText: treeText(),
       fileContext: truncate(
@@ -6412,12 +6485,14 @@ export async function runBuildDiscussion(
     emitBuildMemoryEvent();
     emitContextAssembled(reviewAssembledContext, {
       phase: "review",
-      label: `Architect review wave ${cycle}`,
-      model: architect,
+      label: `${reviewActor.displayName} review wave ${cycle}`,
+      model: reviewActor,
     });
     const reviewResult = await runArchitectInspectionLoop({
       terminal: "review",
-      label: `Architect is reviewing wave ${cycle}`,
+      label: `${reviewActor.displayName} is reviewing wave ${cycle}`,
+      actor: reviewActor,
+      actorLabel: reviewActor.modelId === architect.modelId ? "Architect" : "Reviewer",
       initialUser: buildArchitectReviewPrompt({
         request: discussion.topic,
         treeText: treeText(),

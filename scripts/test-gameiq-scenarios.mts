@@ -1,8 +1,10 @@
 /* Certified GameIQ scenario pack checks (run: npx tsx scripts/test-gameiq-scenarios.mts) */
 import {
+  actionMatchesExpected,
   getGameIqScenarioPack,
   listGameIqScenarioPacks,
   stableGameIqScenarioPackDigest,
+  validateGameIqAction,
   validateGameIqScenario,
 } from "../lib/benchmark/gameiq";
 import { fromFEN, getPiece } from "../lib/games/chess/engine";
@@ -104,6 +106,25 @@ check(
     .length ?? 0) >= 15,
   chessPack?.scenarios.map((scenario) => scenario.category)
 );
+const firstChessMate = chessPack?.scenarios.find(
+  (scenario) => scenario.category === "mate-in-one"
+);
+if (!firstChessMate) {
+  check("Chess mate-in-one scenario is present", false);
+} else {
+  const expectedAction = firstChessMate.expectedActions[0]?.action;
+  const nullPromotionAction =
+    expectedAction && "from" in expectedAction
+      ? { ...expectedAction, promotion: null }
+      : null;
+  const validation = validateGameIqAction(firstChessMate, nullPromotionAction);
+  check(
+    "Chess mate-in-one accepts structured-output null promotion",
+    validation.ok &&
+      actionMatchesExpected(firstChessMate, nullPromotionAction) === 1,
+    { nullPromotionAction, validation }
+  );
+}
 
 check(
   "Fireworks basic GameIQ pack uses hidden-safe player views",

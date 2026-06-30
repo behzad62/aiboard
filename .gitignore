@@ -25,6 +25,7 @@
 *.pem
 .vs/
 .playwright-mcp/
+.codex-run-logs/
 
 # debug
 npm-debug.log*

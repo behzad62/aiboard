@@ -1,16 +1,18 @@
 /* Certified WorkBench UI data checks (run: npx tsx scripts/test-certified-workbench-ui.mts) */
 import {
-  listWorkBenchV1CaseOptions,
+  listWorkBenchCaseOptions,
   workBenchCaseToBenchmarkCaseV2,
-} from "../lib/benchmark/workbench/v1-corpus";
+} from "../lib/benchmark/workbench/corpus";
 import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
 import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
+import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type {
   BenchmarkArtifact,
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
   BenchmarkFailure,
   BenchmarkModelCallTrace,
+  BenchmarkRunEvent,
   BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
@@ -23,19 +25,18 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-const cases = listWorkBenchV1CaseOptions().filter((item) =>
-  item.id.startsWith("workbench-v1-")
-);
+const cases = listWorkBenchCaseOptions();
 const languageCounts = new Map<string, number>();
 for (const item of cases) {
   languageCounts.set(item.fixtureLanguage, (languageCounts.get(item.fixtureLanguage) ?? 0) + 1);
 }
 
-check("WorkBench UI loader exposes 10 v1 cases", cases.length === 10, cases.map((item) => item.case.id));
+check("WorkBench UI loader exposes current generated cases", cases.length >= 19, cases.map((item) => item.case.id));
 check("WorkBench UI loader labels cases", cases.every((item) => item.label.includes(item.case.title)), cases);
 check(
-  "WorkBench UI loader preserves v1 language mix",
-  languageCounts.get("typescript") === 3 &&
+  "WorkBench UI loader exposes current language mix",
+  languageCounts.get("csharp") === 2 &&
+    languageCounts.get("cpp") === 2 &&
     languageCounts.get("python") === 2 &&
     languageCounts.get("go") === 2 &&
     languageCounts.get("rust") === 1 &&
@@ -46,6 +47,11 @@ check(
   "WorkBench UI loader exposes stable hashes",
   cases.every((item) => item.caseHash.startsWith("workbench:")),
   cases.map((item) => item.caseHash)
+);
+check(
+  "WorkBench UI loader does not expose versioned labels",
+  cases.every((item) => !/\bv[12]\b/i.test(item.label)),
+  cases.map((item) => item.label)
 );
 
 const firstCase = cases[0];
@@ -234,6 +240,17 @@ const detailFailure: BenchmarkFailure = {
   message: "Verifier failed.",
   createdAt: "2026-06-28T10:00:05.000Z",
 };
+const detailRunEvent: BenchmarkRunEvent = {
+  id: "event-detail",
+  attemptId: "attempt-detail",
+  caseId: "case-detail",
+  type: "model_call_failed",
+  phase: "model-call",
+  at: "2026-06-28T10:00:06.000Z",
+  message: "Provider stream timed out.",
+  modelId: "openai:gpt-detail",
+  providerId: "openai",
+};
 const detail = buildAttemptDetailViewModel({
   summary: {
     runId: "run-detail",
@@ -255,6 +272,7 @@ const detail = buildAttemptDetailViewModel({
   toolCalls: [detailToolTrace],
   artifacts: [detailPatch, detailArtifact],
   failures: [detailFailure],
+  runEvents: [detailRunEvent],
 });
 check(
   "attempt detail view model exposes certified evidence categories",
@@ -265,6 +283,7 @@ check(
     detail.toolCalls.length === 1 &&
     detail.patchArtifacts[0]?.content.includes("+fixed") &&
     detail.artifacts.length === 2 &&
+    detail.runEvents[0]?.message === "Provider stream timed out." &&
     detail.failures[0]?.message === "Verifier failed." &&
     detail.metrics.costUsd === 0.02 &&
     detail.metrics.inputTokens === 100 &&
@@ -273,6 +292,59 @@ check(
     detail.versions.harnessVersion === "workbench-runner-v0.1" &&
     detail.versions.scoringVersion === "workbench-v0.1",
   detail
+);
+
+const roleDashboard = buildCertifiedBenchmarkDashboardData({
+  caseV2: [detailCase],
+  attemptsV2: [
+    {
+      ...detailAttempt,
+      status: "passed",
+      verifiedQuality: 0.8,
+      jobSuccessScore: 80,
+      efficiencyScore: 70,
+    },
+  ],
+  verifierResults: [{ ...detailVerifier, passed: true, score: 0.8 }],
+  teamCompositions: [
+    {
+      ...detailTeam,
+      roles: [
+        {
+          role: "architect",
+          slot: "01-architect",
+          modelId: "openai:gpt-architect",
+          providerId: "openai",
+          displayName: "GPT Architect",
+          temperature: 0,
+        },
+        {
+          role: "worker",
+          slot: "02-worker",
+          modelId: "anthropic:claude-worker",
+          providerId: "anthropic",
+          displayName: "Claude Worker",
+          temperature: 0,
+        },
+        {
+          role: "reviewer",
+          slot: "03-reviewer",
+          modelId: "google:gemini-reviewer",
+          providerId: "google",
+          displayName: "Gemini Reviewer",
+          temperature: 0,
+        },
+      ],
+    },
+  ],
+  harnessCertifications: [],
+});
+check(
+  "certified dashboard exposes WorkBench role leaderboards",
+  roleDashboard.workBenchRoleLeaderboards.architect[0]?.modelId === "openai:gpt-architect" &&
+    roleDashboard.workBenchRoleLeaderboards.worker[0]?.modelId === "anthropic:claude-worker" &&
+    roleDashboard.workBenchRoleLeaderboards.reviewer[0]?.modelId === "google:gemini-reviewer",
+  roleDashboard.workBenchRoleLeaderboards
 );
 
 if (failures === 0) {

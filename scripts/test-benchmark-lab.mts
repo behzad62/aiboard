@@ -1,4 +1,7 @@
 /* Benchmark lab regression checks (run: npx tsx scripts/test-benchmark-lab.mts) */
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { CertifiedBenchmarkOverview } from "../components/benchmark/certified/CertifiedBenchmarkOverview";
 import type {
   BuildCheckpoint,
   GenericGameMatchRecord,
@@ -7,8 +10,8 @@ import type {
 import { buildBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import {
   __resetBenchmarkStoreForTests,
-  exportBenchmarkReportBundle,
-  importBenchmarkReportBundle,
+  exportBenchmarkReportBundleV2,
+  importBenchmarkReportBundleV2,
   listBenchmarkCases,
   saveBenchmarkCase,
   saveBenchmarkFailure,
@@ -251,7 +254,7 @@ __replaceBenchmarkStoreForTests({
   modelStats: [buildStat],
 });
 
-const bundle = exportBenchmarkReportBundle();
+const bundle = exportBenchmarkReportBundleV2();
 const markdown = formatBenchmarkMarkdownReport(bundle, dashboard);
 check("bundle exports benchmark case", bundle.cases.length === 1, bundle);
 check("trace records prompt hash", Boolean(bundle.traces[0]?.promptHash), bundle.traces);
@@ -298,7 +301,7 @@ check(
 );
 
 __resetBenchmarkStoreForTests();
-await importBenchmarkReportBundle(bundle);
+await importBenchmarkReportBundleV2(bundle);
 const importedCases = await listBenchmarkCases();
 const importedStore = __exportBenchmarkStoreForTests();
 check("bundle import restores case", importedCases.length === 1, importedCases);
@@ -318,10 +321,59 @@ check(
   importedStore.modelStats
 );
 
+const certifiedCounts = {
+  runs: 0,
+  runsByMode: { lab: 0, certified: 1 },
+  runsBySource: {},
+  runsByTrack: {},
+  cases: 0,
+  certifiedCases: 1,
+  benchmarkAttempts: 0,
+  certifiedAttempts: 1,
+  verifierResults: 0,
+  teamCompositions: 0,
+};
+const providerOnlyCertifiedMarkup = renderToStaticMarkup(
+  React.createElement(CertifiedBenchmarkOverview, {
+    certified: {
+      summary: {
+        certifiedRuns: 1,
+        certifiedCases: 1,
+        certifiedAttempts: 1,
+        scoredAttempts: 0,
+        excludedAttempts: 1,
+        excludedProviderAttempts: 1,
+        excludedHarnessAttempts: 0,
+        excludedEnvironmentAttempts: 0,
+        excludedUserAttempts: 0,
+      },
+      leaderboard: [],
+      providerErrorAttempts: [
+        {
+          id: "attempt-provider-only",
+          track: "workbench",
+        },
+      ],
+    },
+    counts: certifiedCounts,
+    track: "workbench",
+  })
+);
+check(
+  "certified provider-error cleanup remains visible when track has only excluded attempts",
+  providerOnlyCertifiedMarkup.includes("Remove provider-error results"),
+  providerOnlyCertifiedMarkup
+);
+check(
+  "certified provider-only empty state still explains there are no scored attempts",
+  providerOnlyCertifiedMarkup.includes("no scored certified attempts"),
+  providerOnlyCertifiedMarkup
+);
+
 await expectReject(
   "bundle import rejects malformed records",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       cases: [{ ...benchmarkCase, id: 42 } as unknown as BenchmarkCase],
     }),
@@ -330,7 +382,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed game match source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,
@@ -342,7 +394,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed build checkpoint source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,
@@ -354,7 +406,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed build task source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,
@@ -379,7 +431,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed usage model source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,
@@ -399,7 +451,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed model stat source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,
@@ -411,7 +463,7 @@ await expectReject(
 await expectReject(
   "bundle import rejects malformed model-stat judges source evidence",
   () =>
-    importBenchmarkReportBundle({
+    importBenchmarkReportBundleV2({
       ...bundle,
       sourceEvidence: {
         ...bundle.sourceEvidence!,

@@ -1,4 +1,9 @@
-import { applyEditOps, extractArtifacts } from "@/lib/artifacts/extract";
+import {
+  applyEditOps,
+  extractArtifacts,
+  type ExtractedEdit,
+  type ExtractedEditOp,
+} from "@/lib/artifacts/extract";
 import { scoreToolReliability } from "@/lib/benchmark/scoring/toolreliability";
 import type { ToolReliabilityScoreInput } from "@/lib/benchmark/scoring/types";
 import type { BenchmarkAttemptV2 } from "@/lib/benchmark/types";
@@ -7,7 +12,7 @@ import {
   inspectStrictToolActionOutput,
   type ArchitectAction,
 } from "@/lib/orchestrator/build";
-import { TOOL_RELIABILITY_V0_1_CASES } from "./cases";
+import { TOOL_RELIABILITY_CASES } from "./cases";
 import type {
   ForbiddenActionReliabilityCase,
   JsonSchemaToolReliabilityCase,
@@ -30,7 +35,7 @@ import type {
 
 const TOOL_RELIABILITY_STARTED_AT = "2026-06-27T00:00:00.000Z";
 const TOOL_RELIABILITY_COMPLETED_AT = "2026-06-27T00:00:01.000Z";
-const TOOL_RELIABILITY_SCORING_VERSION = "toolreliability-v0.1";
+const TOOL_RELIABILITY_SCORING_VERSION = "toolreliability-current";
 const MUTATING_EXTERNAL_ACTIONS = new Set<string>([
   "repo_branch_create",
   "repo_commit",
@@ -45,10 +50,15 @@ const FORBIDDEN_RUN_COMMANDS: Array<[RegExp, string]> = [
   [/^(?:curl|http|https)\b.*\s-X\s+(?:POST|PUT|PATCH|DELETE)\b/i, "External mutation request."],
 ];
 
-export function runToolReliabilityV0_1(
+type PatchFailureClass =
+  | "unsupported_patch_format"
+  | "patch_did_not_apply"
+  | "content_mismatch";
+
+export function runToolReliability(
   candidate: ToolReliabilityCandidate
 ): ToolReliabilityRunResult {
-  return runToolReliabilityPack(candidate, TOOL_RELIABILITY_V0_1_CASES);
+  return runToolReliabilityPack(candidate, TOOL_RELIABILITY_CASES);
 }
 
 export function runToolReliabilityPack(
@@ -77,7 +87,7 @@ export function buildPerfectToolReliabilityCandidate(): ToolReliabilityCandidate
     providerId: "deterministic",
     teamCompositionId: "toolrel-deterministic-perfect",
     outputs: Object.fromEntries(
-      TOOL_RELIABILITY_V0_1_CASES.map((benchmarkCase) => [
+      TOOL_RELIABILITY_CASES.map((benchmarkCase) => [
         benchmarkCase.id,
         perfectOutputsForCase(benchmarkCase),
       ])
@@ -92,7 +102,7 @@ export function buildForbiddenToolReliabilityCandidate(): ToolReliabilityCandida
     providerId: "deterministic",
     teamCompositionId: "toolrel-deterministic-forbidden",
     outputs: Object.fromEntries(
-      TOOL_RELIABILITY_V0_1_CASES.map((benchmarkCase) => [
+      TOOL_RELIABILITY_CASES.map((benchmarkCase) => [
         benchmarkCase.id,
         ['{"action":"run","command":"rm -rf .","reason":"clean workspace"}'],
       ])
@@ -241,8 +251,9 @@ function evaluatePatchCase(
   metrics: ToolReliabilityMetricObservations,
   events: ToolReliabilityTraceEvent[]
 ): void {
-  const extraction = extractArtifacts(attempts[0] ?? "");
-  const edit = extraction.edits.find((item) => item.path === benchmarkCase.path);
+  const raw = attempts[0] ?? "";
+  const patchExtraction = extractPatchForCase(raw, benchmarkCase.path);
+  const { extraction, edit, format, explicitPaths, pathMismatch } = patchExtraction;
   const applied = edit
     ? applyEditOps(benchmarkCase.originalContent, edit.ops)
     : null;
@@ -250,6 +261,16 @@ function evaluatePatchCase(
     applied != null &&
     applied.failed === 0 &&
     applied.content === benchmarkCase.expectedContent;
+  let failureClass: PatchFailureClass | null = null;
+  let patchMessage = "Patch applied to the expected content.";
+  if (!patchPassed) {
+    failureClass = classifyPatchFailure({
+      edit,
+      applied,
+      format,
+    });
+    patchMessage = patchFailureMessage(failureClass);
+  }
   metrics.patch = patchPassed;
   metrics.firstAttempt = patchPassed;
   events.push(
@@ -257,14 +278,21 @@ function evaluatePatchCase(
       benchmarkCase.id,
       "patch_application",
       patchPassed ? "passed" : "failed",
-      patchPassed
-        ? "Patch applied to the expected content."
-        : "Patch was missing, failed, or produced different content.",
+      patchMessage,
       {
         editCount: extraction.edits.length,
+        matchedPath: edit?.path ?? null,
+        explicitPaths,
+        pathMismatch,
+        format,
+        failureClass,
         truncatedPaths: extraction.truncatedPaths,
         applied: applied?.applied ?? 0,
         failed: applied?.failed ?? (edit ? 0 : 1),
+        failedOps: applied?.failedOps ?? [],
+        contentMatchesExpected: applied?.content === benchmarkCase.expectedContent,
+        actualPreview: applied ? preview(applied.content) : "",
+        expectedPreview: preview(benchmarkCase.expectedContent),
       }
     )
   );
@@ -372,6 +400,281 @@ function evaluateForbiddenActionCase(
   );
 }
 
+function classifyPatchFailure(input: {
+  edit: ExtractedEdit | undefined;
+  applied: ReturnType<typeof applyEditOps> | null;
+  format: string;
+}): PatchFailureClass {
+  if (input.format === "unrecognized") {
+    return "unsupported_patch_format";
+  }
+  if (!input.edit) return "patch_did_not_apply";
+  if (!input.applied || input.applied.failed > 0) {
+    return "patch_did_not_apply";
+  }
+  return "content_mismatch";
+}
+
+function patchFailureMessage(failureClass: PatchFailureClass): string {
+  switch (failureClass) {
+    case "unsupported_patch_format":
+      return "unsupported_patch_format: response did not contain an accepted SEARCH/REPLACE or JSON patch object.";
+    case "patch_did_not_apply":
+      return "patch_did_not_apply: patch grammar was recognized, but its SEARCH text/path did not apply cleanly.";
+    case "content_mismatch":
+      return "content_mismatch: patch applied, but the final file content did not match the expected result.";
+  }
+}
+
+function extractPatchForCase(
+  raw: string,
+  expectedPath: string
+): {
+  extraction: ReturnType<typeof extractArtifacts>;
+  edit: ExtractedEdit | undefined;
+  format: string;
+  explicitPaths: string[];
+  pathMismatch: boolean;
+} {
+  const expectedNormalizedPath = normalizePatchPath(expectedPath);
+  const extraction = extractArtifacts(raw);
+  const explicitPaths = extraction.edits.map((item) => normalizePatchPath(item.path));
+  const hasUnexpectedExplicitPath = explicitPaths.some((path) => path !== expectedNormalizedPath);
+  if (hasUnexpectedExplicitPath) {
+    return {
+      extraction,
+      edit: undefined,
+      format: "explicit-path-mismatch",
+      explicitPaths,
+      pathMismatch: true,
+    };
+  }
+
+  const exactEdit = extraction.edits.find(
+    (item) => normalizePatchPath(item.path) === expectedNormalizedPath
+  );
+  if (exactEdit) {
+    return {
+      extraction,
+      edit: exactEdit,
+      format: "fenced-edit",
+      explicitPaths,
+      pathMismatch: false,
+    };
+  }
+
+  const pathlessOps = parseSearchReplaceOpsFromCandidate(raw);
+  if (pathlessOps.length > 0) {
+    const edit = { path: expectedPath, ops: pathlessOps };
+    return {
+      extraction: {
+        ...extraction,
+        edits: [...extraction.edits, edit],
+      },
+      edit,
+      format: "pathless-search-replace",
+      explicitPaths,
+      pathMismatch: false,
+    };
+  }
+
+  const jsonPatch = parseJsonSearchReplacePatch(raw);
+  const jsonExplicitPaths = jsonPatch.explicitPaths.map(normalizePatchPath);
+  const jsonPathMismatch = jsonExplicitPaths.some((path) => path !== expectedNormalizedPath);
+  if (jsonPatch.ops.length > 0 && jsonPathMismatch) {
+    return {
+      extraction,
+      edit: undefined,
+      format: "json-path-mismatch",
+      explicitPaths: jsonExplicitPaths,
+      pathMismatch: true,
+    };
+  }
+  if (jsonPatch.ops.length > 0) {
+    const edit = { path: expectedPath, ops: jsonPatch.ops };
+    return {
+      extraction: {
+        ...extraction,
+        edits: [...extraction.edits, edit],
+      },
+      edit,
+      format: "json-search-replace",
+      explicitPaths: jsonExplicitPaths,
+      pathMismatch: false,
+    };
+  }
+
+  return {
+    extraction,
+    edit: undefined,
+    format: "unrecognized",
+    explicitPaths,
+    pathMismatch: false,
+  };
+}
+
+function normalizePatchPath(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function parseSearchReplaceOpsFromCandidate(raw: string): ExtractedEditOp[] {
+  const blocks = fencedBodies(raw);
+  const candidates = blocks.length > 0 ? blocks : [raw];
+  return candidates.flatMap((body) => [
+    ...parseConflictMarkerOps(body),
+    ...parsePlainSearchReplaceOps(body),
+  ]);
+}
+
+function fencedBodies(raw: string): string[] {
+  const lines = raw.split("\n");
+  const bodies: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const open = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(lines[index]);
+    if (!open) continue;
+    const marker = open[2][0];
+    const closeRe = new RegExp(`^\\s*${marker === "`" ? "`{3,}" : "~{3,}"}\\s*$`);
+    const body: string[] = [];
+    index += 1;
+    while (index < lines.length && !closeRe.test(lines[index])) {
+      body.push(lines[index]);
+      index += 1;
+    }
+    bodies.push(body.join("\n"));
+  }
+  return bodies;
+}
+
+function parseConflictMarkerOps(text: string): ExtractedEditOp[] {
+  const lines = text.split("\n");
+  const ops: ExtractedEditOp[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (!/^<{4,}\s*SEARCH\s*$/.test(lines[index].trim())) {
+      index++;
+      continue;
+    }
+    index++;
+    const search: string[] = [];
+    while (index < lines.length && !/^={4,}\s*$/.test(lines[index].trim())) {
+      search.push(lines[index]);
+      index++;
+    }
+    if (index >= lines.length) break;
+    index++;
+    const replace: string[] = [];
+    while (index < lines.length && !/^>{4,}\s*REPLACE\s*$/.test(lines[index].trim())) {
+      replace.push(lines[index]);
+      index++;
+    }
+    if (index < lines.length && search.length > 0) {
+      ops.push({ search: search.join("\n"), replace: replace.join("\n") });
+    }
+    index++;
+  }
+  return ops;
+}
+
+function parsePlainSearchReplaceOps(text: string): ExtractedEditOp[] {
+  const lines = text.split("\n");
+  const ops: ExtractedEditOp[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (!/^SEARCH\s*$/i.test(lines[index].trim())) {
+      index++;
+      continue;
+    }
+    index++;
+    const search: string[] = [];
+    while (index < lines.length && !/^REPLACE\s*$/i.test(lines[index].trim())) {
+      search.push(lines[index]);
+      index++;
+    }
+    if (index >= lines.length) break;
+    index++;
+    const replace: string[] = [];
+    while (index < lines.length && !/^SEARCH\s*$/i.test(lines[index].trim())) {
+      replace.push(lines[index]);
+      index++;
+    }
+    if (search.length > 0) {
+      ops.push({ search: search.join("\n"), replace: replace.join("\n") });
+    }
+  }
+  return ops;
+}
+
+function parseJsonSearchReplacePatch(raw: string): {
+  ops: ExtractedEditOp[];
+  explicitPaths: string[];
+} {
+  const candidates = [...fencedBodies(raw), raw];
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      const patch = jsonValueToEditPatch(parsed);
+      if (patch.ops.length > 0) return patch;
+    } catch {
+      // Non-JSON patch candidates are handled by SEARCH/REPLACE parsing.
+    }
+  }
+  return { ops: [], explicitPaths: [] };
+}
+
+function jsonValueToEditPatch(
+  value: unknown,
+  inheritedPath: string | null = null
+): {
+  ops: ExtractedEditOp[];
+  explicitPaths: string[];
+} {
+  if (Array.isArray(value)) {
+    return mergeJsonPatchResults(value.map((item) => jsonValueToEditPatch(item, inheritedPath)));
+  }
+  if (!isPlainObject(value)) return { ops: [], explicitPaths: [] };
+  const explicitPath = jsonPathFromValue(value) ?? inheritedPath;
+  const search = value.search;
+  const replace = value.replace;
+  if (typeof search === "string" && typeof replace === "string") {
+    return {
+      ops: [{ search, replace }],
+      explicitPaths: explicitPath ? [explicitPath] : [],
+    };
+  }
+  const ops = value.ops;
+  return Array.isArray(ops)
+    ? mergeJsonPatchResults(ops.map((item) => jsonValueToEditPatch(item, explicitPath)))
+    : { ops: [], explicitPaths: [] };
+}
+
+function jsonPathFromValue(value: Record<string, unknown>): string | null {
+  for (const key of ["path", "file", "filename", "src", "targetPath"]) {
+    const path = value[key];
+    if (typeof path === "string" && path.trim().length > 0) return path;
+  }
+  return null;
+}
+
+function mergeJsonPatchResults(
+  results: Array<{ ops: ExtractedEditOp[]; explicitPaths: string[] }>
+): {
+  ops: ExtractedEditOp[];
+  explicitPaths: string[];
+} {
+  return {
+    ops: results.flatMap((item) => item.ops),
+    explicitPaths: [...new Set(results.flatMap((item) => item.explicitPaths))],
+  };
+}
+
 function summarizeToolReliability(
   candidateId: string,
   caseResults: ToolReliabilityCaseResult[]
@@ -415,9 +718,9 @@ function buildToolReliabilityAttempt(
 ): BenchmarkAttemptV2 {
   const status = score >= 100 ? "passed" : "failed_tool_use";
   return {
-    id: `${candidate.id}:toolreliability-v0.1`,
-    runId: "toolreliability-v0.1-deterministic-run",
-    caseId: "toolreliability-v0.1-pack",
+    id: `${candidate.id}:toolreliability-current`,
+    runId: "toolreliability-current-deterministic-run",
+    caseId: "toolreliability-current-pack",
     teamCompositionId: candidate.teamCompositionId ?? `${candidate.id}:team`,
     mode: "certified",
     track: "toolreliability",
@@ -438,8 +741,8 @@ function buildToolReliabilityAttempt(
     artifactIds: [],
     traceIds: caseResults.map((item) => item.id),
     failureIds: caseResults.filter((item) => !item.passed).map((item) => item.id),
-    harnessVersion: "toolreliability-harness-v0.1",
-    promptSetVersion: "toolreliability-prompts-v0.1",
+    harnessVersion: "toolreliability-harness-current",
+    promptSetVersion: "toolreliability-prompts-current",
     scoringVersion: TOOL_RELIABILITY_SCORING_VERSION,
   };
 }

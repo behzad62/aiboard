@@ -7,13 +7,12 @@ import {
   stableGameIqScenarioPackDigest,
 } from "../lib/benchmark/gameiq/packs";
 import {
-  TOOL_RELIABILITY_V0_1_CASES,
+  TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
 } from "../lib/benchmark/toolreliability/cases";
 import {
-  listWorkBenchV1CaseOptions,
-} from "../lib/benchmark/workbench/v1-corpus";
-import { listWorkBenchV2CaseOptions } from "../lib/benchmark/workbench/v2-corpus";
+  listWorkBenchCaseOptions,
+} from "../lib/benchmark/workbench/corpus";
 import { toBenchmarkCaseV2 } from "../lib/benchmark/workbench/case-loader";
 
 let failures = 0;
@@ -45,8 +44,15 @@ for (const doc of [
   check(`bench doc exists: ${doc}`, await exists(join(docsRoot, doc)));
 }
 
-for (const track of ["workbench", "gameiq", "toolreliability", "teamiq"]) {
-  check(`benchmark track directory exists: ${track}`, await exists(join(benchmarksRoot, track, "v0")));
+for (const path of [
+  join(benchmarksRoot, "toolreliability", "v0"),
+  join(benchmarksRoot, "toolreliability", "v1", "cases.json"),
+  join(benchmarksRoot, "workbench", "v0"),
+  join(benchmarksRoot, "workbench", "v1"),
+  join(benchmarksRoot, "gameiq", "v0"),
+  join(benchmarksRoot, "teamiq", "v0"),
+]) {
+  check(`legacy benchmark artifact is removed: ${path}`, !(await exists(path)));
 }
 
 const expectedGameIqCounts = new Map([
@@ -71,31 +77,34 @@ for (const pack of listGameIqScenarioPacks()) {
   );
 }
 
-const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_V0_1_CASES);
+const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack covers required metrics", toolValidation.valid, toolValidation);
-check("ToolReliability canonical pack has 125 cases", TOOL_RELIABILITY_V0_1_CASES.length === 125, TOOL_RELIABILITY_V0_1_CASES.length);
+check("ToolReliability canonical pack has 125 cases", TOOL_RELIABILITY_CASES.length === 125, TOOL_RELIABILITY_CASES.length);
 check(
   "ToolReliability canonical pack has 50 large patch stress cases",
-  TOOL_RELIABILITY_V0_1_CASES.filter((item) => item.id.startsWith("toolrel-v0.1-large-patch-")).length === 50
+  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 50
 );
 
-const allWorkBenchCases = listWorkBenchV1CaseOptions();
-const workBenchV2Cases = listWorkBenchV2CaseOptions();
-check("WorkBench combined picker has v1 plus v2 cases", allWorkBenchCases.length === 10 + workBenchV2Cases.length, allWorkBenchCases.length);
-check("WorkBench v2 has generated challenge cases", workBenchV2Cases.length >= 19, workBenchV2Cases.map((item) => item.id));
+const workBenchCases = listWorkBenchCaseOptions();
+check("WorkBench current picker has generated challenge cases", workBenchCases.length >= 19, workBenchCases.map((item) => item.id));
+check(
+  "WorkBench current picker has no legacy case ids or labels",
+  workBenchCases.every((item) => !item.id.includes("-v1-") && !/\bv[12]\b/i.test(item.label)),
+  workBenchCases.map((item) => ({ id: item.id, label: item.label }))
+);
 
-const v2Languages = workBenchV2Cases.reduce<Record<string, number>>((counts, item) => {
+const workBenchLanguages = workBenchCases.reduce<Record<string, number>>((counts, item) => {
   counts[item.fixtureLanguage] = (counts[item.fixtureLanguage] ?? 0) + 1;
   return counts;
 }, {});
-check("WorkBench v2 includes C#", v2Languages.csharp === 2, v2Languages);
-check("WorkBench v2 includes C++", v2Languages.cpp === 2, v2Languages);
-check("WorkBench v2 includes Go", v2Languages.go === 2, v2Languages);
-check("WorkBench v2 includes Rust", v2Languages.rust === 1, v2Languages);
-check("WorkBench v2 includes Python", v2Languages.python === 2, v2Languages);
-check("WorkBench v2 includes React UI", v2Languages["react-ui"] === 2, v2Languages);
+check("WorkBench current corpus includes C#", workBenchLanguages.csharp === 2, workBenchLanguages);
+check("WorkBench current corpus includes C++", workBenchLanguages.cpp === 2, workBenchLanguages);
+check("WorkBench current corpus includes Go", workBenchLanguages.go === 2, workBenchLanguages);
+check("WorkBench current corpus includes Rust", workBenchLanguages.rust === 1, workBenchLanguages);
+check("WorkBench current corpus includes Python", workBenchLanguages.python === 2, workBenchLanguages);
+check("WorkBench current corpus includes React UI", workBenchLanguages["react-ui"] === 2, workBenchLanguages);
 
-for (const option of workBenchV2Cases) {
+for (const option of workBenchCases) {
   const caseV2 = toBenchmarkCaseV2(option.case, "2026-06-27T10:00:00.000Z");
   check(`${option.id} converts to BenchmarkCaseV2`, caseV2.schemaVersion === 2 && caseV2.track === "workbench", caseV2);
   check(`${option.id} has inline fixture files`, Boolean(option.case.fixtureFiles?.["verifier.mjs"] && option.case.fixtureFiles?.["case-meta.json"]), option.case.fixtureFiles);

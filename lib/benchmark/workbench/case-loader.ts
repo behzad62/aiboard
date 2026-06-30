@@ -64,7 +64,7 @@ export function loadWorkBenchCase(manifest: unknown): WorkBenchCase {
   ]);
   if (environment.network === "none" && allowedCommands.length > 0) {
     throw new Error(
-      "WorkBench v0.1 cannot enforce network none while executing setup, verifier, or allowed commands; use dependency-only."
+      "WorkBench cannot enforce network none while executing setup, verifier, or allowed commands; use dependency-only."
     );
   }
 

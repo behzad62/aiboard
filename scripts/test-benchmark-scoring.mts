@@ -1,4 +1,8 @@
 /* Certified benchmark scoring checks (run: npx tsx scripts/test-benchmark-scoring.mts) */
+import {
+  buildCertifiedBenchmarkDashboardData,
+  isScoredCertifiedAttempt,
+} from "../lib/benchmark/metrics";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
 import { scoreTeamLift } from "../lib/benchmark/scoring/teamiq";
@@ -6,7 +10,9 @@ import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
 import { scoreWorkBenchAttempt } from "../lib/benchmark/scoring/workbench";
 import type {
   BenchmarkAttemptV2,
+  BenchmarkCaseV2,
   BenchmarkTeamComposition,
+  BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
 
 let failures = 0;
@@ -183,6 +189,187 @@ check(
   aggregateRows
 );
 
+check(
+  "provider failures are excluded from scored attempts",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("excluded-provider", soloTeamA.id, 100, {
+      status: "provider_unavailable",
+    })
+  ) === false
+);
+check(
+  "harness failures are excluded from scored attempts",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("excluded-harness", soloTeamA.id, 100, {
+      status: "invalid_harness",
+    })
+  ) === false
+);
+check(
+  "environment failures are excluded from scored attempts",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("excluded-environment", soloTeamA.id, 100, {
+      status: "invalid_environment",
+    })
+  ) === false
+);
+check(
+  "user-aborted certified attempts are excluded from scored attempts",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("excluded-user", soloTeamA.id, 100, {
+      status: "aborted_user",
+    })
+  ) === false
+);
+check(
+  "failed budget remains a scored model outcome",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("scored-budget", soloTeamA.id, 40, {
+      status: "failed_budget",
+    })
+  ) === true
+);
+check(
+  "failed model remains a scored model outcome",
+  isScoredCertifiedAttempt(
+    certifiedAttempt("scored-model", soloTeamA.id, 20, {
+      status: "failed_model",
+    })
+  ) === true
+);
+
+const certifiedCases: BenchmarkCaseV2[] = [
+  certifiedCase("case-a", "workbench"),
+  certifiedCase("case-b", "teamiq"),
+];
+const scoringAttempts: BenchmarkAttemptV2[] = [
+  certifiedAttempt("scored-pass-a", soloTeamA.id, 65, {
+    caseId: "case-a",
+    track: "workbench",
+    costUsd: 0.4,
+    durationMs: 4_000,
+    status: "passed",
+  }),
+  certifiedAttempt("excluded-provider-a", soloTeamA.id, 100, {
+    caseId: "case-a",
+    track: "workbench",
+    costUsd: 0.01,
+    durationMs: 100,
+    status: "provider_unavailable",
+  }),
+  certifiedAttempt("excluded-harness-a", soloTeamA.id, 95, {
+    caseId: "case-a",
+    track: "workbench",
+    costUsd: 0.02,
+    durationMs: 200,
+    status: "invalid_harness",
+  }),
+  certifiedAttempt("scored-budget-b", teamAB.id, 80, {
+    caseId: "case-b",
+    track: "teamiq",
+    costUsd: 1.2,
+    durationMs: 8_000,
+    status: "failed_budget",
+  }),
+  certifiedAttempt("scored-model-b", teamAB.id, 70, {
+    caseId: "case-b",
+    track: "teamiq",
+    costUsd: 1.4,
+    durationMs: 9_000,
+    status: "failed_model",
+  }),
+  certifiedAttempt("excluded-environment-b", teamAB.id, 0, {
+    caseId: "case-b",
+    track: "teamiq",
+    costUsd: 5,
+    durationMs: 20_000,
+    status: "invalid_environment",
+  }),
+  certifiedAttempt("excluded-user-b", teamAB.id, 0, {
+    caseId: "case-b",
+    track: "teamiq",
+    costUsd: 6,
+    durationMs: 25_000,
+    status: "aborted_user",
+  }),
+];
+const scoringVerifierResults: BenchmarkVerifierResult[] = [
+  verifierResult("scored-pass-a", true, 0.65),
+  verifierResult("scored-budget-b", false, 0.8),
+  verifierResult("scored-model-b", false, 0.7),
+];
+const certifiedDashboard = buildCertifiedBenchmarkDashboardData({
+  caseV2: certifiedCases,
+  attemptsV2: scoringAttempts,
+  verifierResults: scoringVerifierResults,
+  teamCompositions: [soloTeamA, teamAB],
+  harnessCertifications: [],
+});
+const soloRow = certifiedDashboard.leaderboard.find(
+  (row) => row.teamCompositionId === soloTeamA.id
+);
+const teamRow = certifiedDashboard.leaderboard.find(
+  (row) => row.teamCompositionId === teamAB.id
+);
+const trackRowWorkbench = certifiedDashboard.trackRows.find(
+  (row) => row.track === "workbench"
+);
+const trackRowTeamIq = certifiedDashboard.trackRows.find(
+  (row) => row.track === "teamiq"
+);
+check(
+  "excluded provider or harness evidence does not change solo averages",
+  soloRow?.attempts === 1 &&
+    soloRow?.verifiedQuality === 0.65 &&
+    soloRow?.averageCostUsd === 0.4,
+  soloRow
+);
+check(
+  "failed budget and failed model still count in scored team averages",
+  teamRow?.attempts === 2 &&
+    teamRow?.verifiedQuality === 0.75 &&
+    teamRow?.averageCostUsd === 1.3,
+  teamRow
+);
+check(
+  "leaderboard ordering ignores misleading excluded quality outliers",
+  certifiedDashboard.leaderboard[0]?.teamCompositionId === teamAB.id,
+  certifiedDashboard.leaderboard.map((row) => ({
+    team: row.teamCompositionId,
+    quality: row.verifiedQuality,
+    attempts: row.attempts,
+  }))
+);
+check(
+  "summary averages and pass rate use only scored attempts",
+  certifiedDashboard.summary.scoredAttempts === 3 &&
+    certifiedDashboard.summary.certifiedAttempts === 7 &&
+    certifiedDashboard.summary.verifiedPassRate === 0.3333333333333333 &&
+    certifiedDashboard.summary.averageVerifiedQuality === 0.7167 &&
+    certifiedDashboard.summary.averageCostUsd === 1 &&
+    certifiedDashboard.summary.averageDurationMs === 7000,
+  certifiedDashboard.summary
+);
+check(
+  "summary reports excluded certified evidence by source",
+  certifiedDashboard.summary.excludedAttempts === 4 &&
+    certifiedDashboard.summary.excludedProviderAttempts === 1 &&
+    certifiedDashboard.summary.excludedHarnessAttempts === 1 &&
+    certifiedDashboard.summary.excludedEnvironmentAttempts === 1 &&
+    certifiedDashboard.summary.excludedUserAttempts === 1,
+  certifiedDashboard.summary
+);
+check(
+  "track rows report scored attempts and pass metrics only",
+  trackRowWorkbench?.attempts === 1 &&
+    trackRowWorkbench?.verifiedPassRate === 1 &&
+    trackRowWorkbench?.averageVerifiedQuality === 0.65 &&
+    trackRowTeamIq?.attempts === 2 &&
+    trackRowTeamIq?.verifiedPassRate === 0 &&
+    trackRowTeamIq?.averageVerifiedQuality === 0.75,
+  certifiedDashboard.trackRows
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {
@@ -194,7 +381,8 @@ process.exit(failures === 0 ? 0 : 1);
 function certifiedAttempt(
   id: string,
   teamCompositionId: string,
-  jobSuccessScore: number
+  jobSuccessScore: number,
+  overrides: Partial<BenchmarkAttemptV2> = {}
 ): BenchmarkAttemptV2 {
   return {
     id,
@@ -222,5 +410,63 @@ function certifiedAttempt(
     harnessVersion: "test",
     promptSetVersion: "test",
     scoringVersion: "certified-v0.1",
+    ...overrides,
+  };
+}
+
+function certifiedCase(
+  id: string,
+  track: BenchmarkCaseV2["track"]
+): BenchmarkCaseV2 {
+  return {
+    id,
+    schemaVersion: 2,
+    track,
+    title: id,
+    description: `${track} case`,
+    difficulty: "medium",
+    tags: [],
+    caseVersion: "test",
+    createdAt: "2026-06-27T10:00:00.000Z",
+    updatedAt: "2026-06-27T10:00:00.000Z",
+    prompt: {
+      userRequest: "Do the task",
+    },
+    environment: {
+      type: "local-runner",
+      timeoutSeconds: 600,
+      network: "dependency-only",
+    },
+    verifier: {
+      scorer: "verifier-json",
+    },
+    budget: {},
+    scoring: {
+      scoringVersion: "certified-v0.1",
+      primary: "verified_quality",
+    },
+    contamination: {
+      originalTask: true,
+      canary: "test",
+      referenceSolutionPrivate: true,
+    },
+  };
+}
+
+function verifierResult(
+  attemptId: string,
+  passed: boolean,
+  score: number
+): BenchmarkVerifierResult {
+  return {
+    id: `verifier-${attemptId}`,
+    attemptId,
+    caseId: attemptId.includes("-b") ? "case-b" : "case-a",
+    passed,
+    score,
+    durationMs: 1000,
+    resultJson: "{}",
+    assertionResults: [],
+    artifactIds: [],
   };
 }

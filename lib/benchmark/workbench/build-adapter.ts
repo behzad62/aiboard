@@ -11,7 +11,11 @@ import {
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
-import type { BenchmarkModelCallTrace } from "@/lib/benchmark/types";
+import type {
+  BenchmarkModelCallTrace,
+  BenchmarkTeamComposition,
+  BenchmarkTeamCompositionRole,
+} from "@/lib/benchmark/types";
 import type { Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import type { SelectedModel, StructuredOutputFormat } from "@/lib/providers/base";
@@ -27,6 +31,7 @@ export interface WorkBenchBuildAdapterInput extends WorkBenchBuildExecutionInput
   }) => Promise<WorkBenchBuildExecutionResult>;
   context?: CertifiedRunContext;
   models?: SelectedModel[];
+  teamComposition?: BenchmarkTeamComposition;
   discussion?: Partial<Discussion>;
   emit?: (event: OrchestratorEvent) => void;
   hooks?: Omit<BuildHooks, "benchmark">;
@@ -93,6 +98,12 @@ async function runWorkBenchBuildDiscussion(
         toolCallIds.add(trace.id);
         if (input.context) recording.push(input.context.recordToolCall(trace));
       },
+      reserveModelCall: (reservation) => {
+        input.context?.reserveModelCall?.(reservation);
+      },
+      recordModelCallUsage: (usage) => {
+        input.context?.recordModelCallUsage?.(usage);
+      },
     },
   };
   const discussion = createWorkBenchBuildDiscussion(input, models);
@@ -140,7 +151,8 @@ function createWorkBenchBuildDiscussion(
   models: SelectedModel[]
 ): Discussion {
   const now = new Date().toISOString();
-  const modelIds = models.map((model) => model.modelId);
+  const roleMapping = workBenchRoleMapping(input.teamComposition, models);
+  const modelIds = roleMapping.workerModelIds;
   const runnerUrl = `${input.runner.url.replace(/\/$/, "")}/bench/compat/${encodeURIComponent(
     input.attemptId
   )}`;
@@ -163,8 +175,10 @@ function createWorkBenchBuildDiscussion(
     effort: input.discussion?.effort ?? "low",
     status: input.discussion?.status ?? "pending",
     modelIds: input.discussion?.modelIds ?? JSON.stringify(modelIds),
-    judgeModelId: input.discussion?.judgeModelId ?? modelIds[0] ?? null,
-    reviewerModelId: input.discussion?.reviewerModelId ?? null,
+    judgeModelId:
+      input.discussion?.judgeModelId ?? roleMapping.architectModelId ?? modelIds[0] ?? null,
+    reviewerModelId:
+      input.discussion?.reviewerModelId ?? roleMapping.reviewerModelId ?? null,
     attachmentIds: input.discussion?.attachmentIds ?? null,
     projectFolderName: input.discussion?.projectFolderName ?? null,
     runnerUrl: input.discussion?.runnerUrl ?? runnerUrl,
@@ -189,6 +203,48 @@ function createWorkBenchBuildDiscussion(
     createdAt: input.discussion?.createdAt ?? now,
     updatedAt: input.discussion?.updatedAt ?? now,
   };
+}
+
+function workBenchRoleMapping(
+  team: BenchmarkTeamComposition | undefined,
+  models: SelectedModel[]
+): {
+  architectModelId: string | null;
+  reviewerModelId: string | null;
+  workerModelIds: string[];
+} {
+  if (!team) {
+    const modelIds = models.map((model) => model.modelId);
+    return {
+      architectModelId: modelIds[0] ?? null,
+      reviewerModelId: null,
+      workerModelIds: modelIds,
+    };
+  }
+  const architect =
+    firstRole(team.roles, "architect") ??
+    firstRole(team.roles, "single") ??
+    team.roles[0] ??
+    null;
+  const reviewer = firstRole(team.roles, "reviewer");
+  let workers = team.roles.filter((role) => role.role === "worker");
+  if (workers.length === 0) {
+    const single = firstRole(team.roles, "single");
+    if (single) workers = [single];
+  }
+  if (workers.length === 0 && architect) workers = [architect];
+  return {
+    architectModelId: architect?.modelId ?? null,
+    reviewerModelId: reviewer?.modelId ?? null,
+    workerModelIds: uniqueStrings(workers.map((role) => role.modelId)),
+  };
+}
+
+function firstRole(
+  roles: BenchmarkTeamCompositionRole[],
+  role: BenchmarkTeamCompositionRole["role"]
+): BenchmarkTeamCompositionRole | null {
+  return roles.find((item) => item.role === role) ?? null;
 }
 
 function readBenchmarkTraces(

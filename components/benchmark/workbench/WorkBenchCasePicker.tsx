@@ -7,14 +7,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type {
-  WorkBenchV1CaseOption,
-  WorkBenchV2CaseOption,
-} from "@/lib/benchmark/workbench";
+import type { WorkBenchCaseOption } from "@/lib/benchmark/workbench";
 
-export type WorkBenchCasePickerOption =
-  | WorkBenchV1CaseOption
-  | WorkBenchV2CaseOption;
+export type WorkBenchCasePickerOption = WorkBenchCaseOption;
 
 export function WorkBenchCasePicker({
   value,

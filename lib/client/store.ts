@@ -36,6 +36,7 @@ import type {
   BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
+  BenchmarkReportBundleV2,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
@@ -141,8 +142,126 @@ const DEFAULT_STORE: ClientStore = {
   modelStats: [],
 };
 
+const BENCHMARK_STORE_KEYS = [
+  "benchmarkSuites",
+  "benchmarkRuns",
+  "benchmarkCases",
+  "benchmarkCaseV2",
+  "benchmarkAttempts",
+  "benchmarkAttemptsV2",
+  "benchmarkMetricValues",
+  "benchmarkArtifacts",
+  "benchmarkFailures",
+  "benchmarkTraces",
+  "benchmarkRunEvents",
+  "benchmarkToolCallTraces",
+  "benchmarkVerifierResults",
+  "benchmarkTeamCompositions",
+  "benchmarkHarnessCertifications",
+] as const;
+
+type BenchmarkStoreKey = (typeof BENCHMARK_STORE_KEYS)[number];
+type BenchmarkStoreFields = Pick<ClientStore, BenchmarkStoreKey>;
+
 function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
   return { ...structuredClone(DEFAULT_STORE), ...data };
+}
+
+function emptyBenchmarkStoreFields(): BenchmarkStoreFields {
+  return {
+    benchmarkSuites: [],
+    benchmarkRuns: [],
+    benchmarkCases: [],
+    benchmarkCaseV2: [],
+    benchmarkAttempts: [],
+    benchmarkAttemptsV2: [],
+    benchmarkMetricValues: [],
+    benchmarkArtifacts: [],
+    benchmarkFailures: [],
+    benchmarkTraces: [],
+    benchmarkRunEvents: [],
+    benchmarkToolCallTraces: [],
+    benchmarkVerifierResults: [],
+    benchmarkTeamCompositions: [],
+    benchmarkHarnessCertifications: [],
+  };
+}
+
+function stripBenchmarkStoreFields(data: Partial<ClientStore>): Partial<ClientStore> {
+  const stripped = { ...data };
+  for (const key of BENCHMARK_STORE_KEYS) delete stripped[key];
+  return stripped;
+}
+
+function clientStoreForMainPersistence(data: ClientStore): ClientStore {
+  return { ...structuredClone(data), ...emptyBenchmarkStoreFields() };
+}
+
+function hasBenchmarkStoreFields(data: Partial<ClientStore>): boolean {
+  return BENCHMARK_STORE_KEYS.some((key) => {
+    const value = data[key];
+    return Array.isArray(value) && value.length > 0;
+  });
+}
+
+function mergeBenchmarkStoreFields(
+  target: ClientStore,
+  source: Partial<BenchmarkStoreFields>
+): ClientStore {
+  return {
+    ...target,
+    benchmarkSuites: mergeById(target.benchmarkSuites, source.benchmarkSuites ?? []),
+    benchmarkRuns: mergeById(target.benchmarkRuns, source.benchmarkRuns ?? []),
+    benchmarkCases: mergeById(target.benchmarkCases, source.benchmarkCases ?? []),
+    benchmarkCaseV2: mergeById(target.benchmarkCaseV2, source.benchmarkCaseV2 ?? []),
+    benchmarkAttempts: mergeById(
+      target.benchmarkAttempts,
+      source.benchmarkAttempts ?? []
+    ),
+    benchmarkAttemptsV2: mergeById(
+      target.benchmarkAttemptsV2,
+      source.benchmarkAttemptsV2 ?? []
+    ),
+    benchmarkMetricValues: mergeById(
+      target.benchmarkMetricValues,
+      source.benchmarkMetricValues ?? []
+    ),
+    benchmarkArtifacts: mergeById(
+      target.benchmarkArtifacts,
+      source.benchmarkArtifacts ?? []
+    ),
+    benchmarkFailures: mergeById(
+      target.benchmarkFailures,
+      source.benchmarkFailures ?? []
+    ),
+    benchmarkTraces: mergeById(target.benchmarkTraces, source.benchmarkTraces ?? []),
+    benchmarkRunEvents: mergeById(
+      target.benchmarkRunEvents,
+      source.benchmarkRunEvents ?? []
+    ),
+    benchmarkToolCallTraces: mergeById(
+      target.benchmarkToolCallTraces,
+      source.benchmarkToolCallTraces ?? []
+    ),
+    benchmarkVerifierResults: mergeById(
+      target.benchmarkVerifierResults,
+      source.benchmarkVerifierResults ?? []
+    ),
+    benchmarkTeamCompositions: mergeById(
+      target.benchmarkTeamCompositions,
+      source.benchmarkTeamCompositions ?? []
+    ),
+    benchmarkHarnessCertifications: mergeById(
+      target.benchmarkHarnessCertifications,
+      source.benchmarkHarnessCertifications ?? []
+    ),
+  };
+}
+
+function mergeById<T extends { id: string }>(left: T[], right: T[]): T[] {
+  const records = new Map(left.map((item) => [item.id, item]));
+  for (const item of right) records.set(item.id, item);
+  return Array.from(records.values());
 }
 
 let memory: ClientStore | null = null;
@@ -151,6 +270,7 @@ let config: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
 let initPromise: Promise<{ needsPassphrase: boolean }> | null = null;
 let initGeneration = 0;
 const readyListeners = new Set<() => void>();
+let benchmarkRunBlobStorageForTests: Map<string, string> | null = null;
 
 export function isInitialized(): boolean {
   return memory !== null;
@@ -192,20 +312,44 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   const raw = await adapter.load();
 
   if (raw === null) {
-    commitLoadedStore(generation, hydrateStore());
+    const benchmarkData = await loadBenchmarkStoreFields();
+    commitLoadedStore(
+      generation,
+      mergeBenchmarkStoreFields(hydrateStore(), benchmarkData)
+    );
     return { needsPassphrase: false };
   }
 
   const env = parseEnvelope(raw);
   if (!env) {
-    commitLoadedStore(generation, hydrateStore(JSON.parse(raw) as Partial<ClientStore>));
+    const persisted = JSON.parse(raw) as Partial<ClientStore>;
+    const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
+    const benchmarkData = await loadBenchmarkStoreFields();
+    commitLoadedStore(
+      generation,
+      mergeBenchmarkStoreFields(
+        hydrateStore(stripBenchmarkStoreFields(persisted)),
+        benchmarkData
+      )
+    );
+    if (hadLegacyBenchmarkData) schedulePersist();
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
     return { needsPassphrase: true };
   }
   const json = await unwrap(env);
-  commitLoadedStore(generation, hydrateStore(JSON.parse(json) as Partial<ClientStore>));
+  const persisted = JSON.parse(json) as Partial<ClientStore>;
+  const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
+  const benchmarkData = await loadBenchmarkStoreFields();
+  commitLoadedStore(
+    generation,
+    mergeBenchmarkStoreFields(
+      hydrateStore(stripBenchmarkStoreFields(persisted)),
+      benchmarkData
+    )
+  );
+  if (hadLegacyBenchmarkData) schedulePersist();
   return { needsPassphrase: false };
 }
 
@@ -213,6 +357,80 @@ function commitLoadedStore(generation: number, loaded: ClientStore): void {
   if (generation !== initGeneration || memory) return;
   memory = loaded;
   notifyReady();
+}
+
+async function loadBenchmarkStoreFields(): Promise<BenchmarkStoreFields> {
+  const fields = emptyBenchmarkStoreFields();
+  if (!adapter) return fields;
+  const runIds = await adapter.listBenchmarkRunIds();
+  for (const runId of runIds) {
+    try {
+      const raw = await adapter.loadBenchmarkRun(runId);
+      if (!raw) continue;
+      const plaintext = await unwrapBenchmarkBlob(raw);
+      const bundle = JSON.parse(plaintext) as Partial<BenchmarkReportBundleV2>;
+      mergeBenchmarkBundleIntoFields(fields, bundle);
+    } catch {
+      // A corrupt benchmark run file should not block app startup.
+    }
+  }
+  return fields;
+}
+
+async function unwrapBenchmarkBlob(raw: string): Promise<string> {
+  const env = parseEnvelope(raw);
+  return env ? await unwrap(env) : raw;
+}
+
+function mergeBenchmarkBundleIntoFields(
+  fields: BenchmarkStoreFields,
+  bundle: Partial<BenchmarkReportBundleV2>
+): void {
+  fields.benchmarkSuites = mergeById(fields.benchmarkSuites, bundle.suites ?? []);
+  fields.benchmarkRuns = mergeById(fields.benchmarkRuns, bundle.runs ?? []);
+  fields.benchmarkCases = mergeById(fields.benchmarkCases, bundle.cases ?? []);
+  fields.benchmarkAttempts = mergeById(
+    fields.benchmarkAttempts,
+    bundle.attempts ?? []
+  );
+  fields.benchmarkMetricValues = mergeById(
+    fields.benchmarkMetricValues,
+    bundle.metricValues ?? []
+  );
+  fields.benchmarkArtifacts = mergeById(
+    fields.benchmarkArtifacts,
+    bundle.artifacts ?? []
+  );
+  fields.benchmarkFailures = mergeById(
+    fields.benchmarkFailures,
+    bundle.failures ?? []
+  );
+  fields.benchmarkTraces = mergeById(fields.benchmarkTraces, bundle.traces ?? []);
+  fields.benchmarkCaseV2 = mergeById(fields.benchmarkCaseV2, bundle.caseV2 ?? []);
+  fields.benchmarkAttemptsV2 = mergeById(
+    fields.benchmarkAttemptsV2,
+    bundle.attemptsV2 ?? []
+  );
+  fields.benchmarkVerifierResults = mergeById(
+    fields.benchmarkVerifierResults,
+    bundle.verifierResults ?? []
+  );
+  fields.benchmarkRunEvents = mergeById(
+    fields.benchmarkRunEvents,
+    bundle.runEvents ?? []
+  );
+  fields.benchmarkToolCallTraces = mergeById(
+    fields.benchmarkToolCallTraces,
+    bundle.toolCallTraces ?? []
+  );
+  fields.benchmarkTeamCompositions = mergeById(
+    fields.benchmarkTeamCompositions,
+    bundle.teamCompositions ?? []
+  );
+  fields.benchmarkHarnessCertifications = mergeById(
+    fields.benchmarkHarnessCertifications,
+    bundle.harnessCertifications ?? []
+  );
 }
 
 function notifyReadyListener(listener: () => void): void {
@@ -273,7 +491,10 @@ export async function flush(): Promise<void> {
     persistDirty = true;
     return;
   }
-  const env = await wrap(JSON.stringify(memory), config.encryptionEnabled);
+  const env = await wrap(
+    JSON.stringify(clientStoreForMainPersistence(memory)),
+    config.encryptionEnabled
+  );
   await adapter.save(JSON.stringify(env));
   persistDirty = false;
 }
@@ -681,6 +902,19 @@ function upsertById<T extends { id: string }>(records: T[], record: T): void {
   if (i >= 0) records[i] = record;
   else records.push(record);
 }
+
+function removeWhere<T>(records: T[], predicate: (record: T) => boolean): number {
+  let removed = 0;
+  for (let index = records.length - 1; index >= 0; index--) {
+    if (predicate(records[index])) {
+      records.splice(index, 1);
+      removed++;
+    }
+  }
+  if (removed > 0) schedulePersist();
+  return removed;
+}
+
 export function upsertBenchmarkSuite(record: BenchmarkSuite): void {
   upsertById(getBenchmarkSuites(), record);
   schedulePersist();
@@ -746,6 +980,66 @@ export function upsertBenchmarkHarnessCertification(
 ): void {
   upsertById(getBenchmarkHarnessCertifications(), record);
   schedulePersist();
+}
+export function deleteBenchmarkRunById(runId: string): number {
+  return removeWhere(getBenchmarkRuns(), (record) => record.id === runId);
+}
+export function deleteBenchmarkAttemptV2ById(attemptId: string): number {
+  return removeWhere(getBenchmarkAttemptsV2(), (record) => record.id === attemptId);
+}
+export function deleteBenchmarkAttemptsV2ByRunId(runId: string): number {
+  return removeWhere(getBenchmarkAttemptsV2(), (record) => record.runId === runId);
+}
+export function deleteBenchmarkArtifactsByIds(artifactIds: Iterable<string>): number {
+  const ids = new Set(Array.from(artifactIds).filter(Boolean));
+  if (ids.size === 0) return 0;
+  return removeWhere(getBenchmarkArtifacts(), (record) => ids.has(record.id));
+}
+export function deleteBenchmarkArtifactsByAttemptId(attemptId: string): number {
+  return removeWhere(
+    getBenchmarkArtifacts(),
+    (record) => record.attemptId === attemptId
+  );
+}
+export function deleteBenchmarkArtifactsByRunId(runId: string): number {
+  return removeWhere(getBenchmarkArtifacts(), (record) => record.runId === runId);
+}
+export function deleteBenchmarkVerifierResultsByAttemptId(
+  attemptId: string
+): number {
+  return removeWhere(
+    getBenchmarkVerifierResults(),
+    (record) => record.attemptId === attemptId
+  );
+}
+export function deleteBenchmarkFailuresByAttemptId(attemptId: string): number {
+  return removeWhere(
+    getBenchmarkFailures(),
+    (record) => record.attemptId === attemptId
+  );
+}
+export function deleteBenchmarkFailuresByRunId(runId: string): number {
+  return removeWhere(getBenchmarkFailures(), (record) => record.runId === runId);
+}
+export function deleteBenchmarkTracesByAttemptId(attemptId: string): number {
+  return removeWhere(getBenchmarkTraces(), (record) => record.attemptId === attemptId);
+}
+export function deleteBenchmarkTracesByRunId(runId: string): number {
+  return removeWhere(getBenchmarkTraces(), (record) => record.runId === runId);
+}
+export function deleteBenchmarkRunEventsByAttemptId(attemptId: string): number {
+  return removeWhere(
+    getBenchmarkRunEvents(),
+    (record) => record.attemptId === attemptId
+  );
+}
+export function deleteBenchmarkToolCallTracesByAttemptId(
+  attemptId: string
+): number {
+  return removeWhere(
+    getBenchmarkToolCallTraces(),
+    (record) => record.attemptId === attemptId
+  );
 }
 export function markGameStatsLegacyImportAttempted(): void {
   store().gameStatsLegacyImportAttempted = true;
@@ -846,6 +1140,45 @@ export function exportStore(): ClientStore {
   return store();
 }
 
+export async function saveBenchmarkRunBlob(
+  runId: string,
+  plaintextJson: string
+): Promise<void> {
+  if (benchmarkRunBlobStorageForTests) {
+    benchmarkRunBlobStorageForTests.set(runId, plaintextJson);
+    return;
+  }
+  if (!adapter) return;
+  if (config.encryptionEnabled && !isUnlocked()) {
+    throw new Error("Unlock storage before saving benchmark data.");
+  }
+  const blob = config.encryptionEnabled
+    ? JSON.stringify(await wrap(plaintextJson, true))
+    : plaintextJson;
+  await adapter.saveBenchmarkRun(runId, blob);
+}
+
+export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
+  if (benchmarkRunBlobStorageForTests) {
+    benchmarkRunBlobStorageForTests.delete(runId);
+    return;
+  }
+  if (!adapter) return;
+  await adapter.deleteBenchmarkRun(runId);
+}
+
+export function __enableBenchmarkRunBlobStorageForTests(): void {
+  benchmarkRunBlobStorageForTests = new Map();
+}
+
+export function __getBenchmarkRunBlobsForTests(): Record<string, string> {
+  return Object.fromEntries(benchmarkRunBlobStorageForTests ?? []);
+}
+
+export function __exportClientStoreForPersistenceForTests(): ClientStore {
+  return clientStoreForMainPersistence(store());
+}
+
 export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): void {
   if (persistTimer) {
     clearTimeout(persistTimer);
@@ -871,6 +1204,7 @@ export function __clearClientStoreForTests(): void {
   adapter = null;
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
+  benchmarkRunBlobStorageForTests = null;
 }
 
 export async function __setClientStorePassphraseForTests(

@@ -32,6 +32,7 @@ import type {
   PersistentCertifiedRunContext,
 } from "./run-context";
 import type { CertifiedBenchmarkDashboardData } from "@/lib/benchmark/scoring/types";
+import { createCertifiedBudgetController } from "./budget";
 
 export interface CreateCertifiedRunContextInput {
   runId: string;
@@ -54,6 +55,10 @@ export function createCertifiedRunContext(
   const events = new Map<string, BenchmarkRunEvent>();
   const toolCalls = new Map<string, BenchmarkToolCallTrace>();
   const failures = new Map<string, BenchmarkFailure>();
+  const budgetController = createCertifiedBudgetController({
+    budget: input.modelBudget ?? {},
+    startedAt: input.startedAt,
+  });
 
   return {
     runId: input.runId,
@@ -96,6 +101,15 @@ export function createCertifiedRunContext(
       const record = { ...failure, runId: failure.runId ?? input.runId };
       failures.set(record.id, record);
       await saveBenchmarkFailure(record);
+    },
+    reserveModelCall(reservation) {
+      budgetController.reserveModelCall(reservation);
+    },
+    recordModelCallUsage(usage) {
+      budgetController.recordModelCallUsage(usage);
+    },
+    budgetSnapshot() {
+      return budgetController.snapshot();
     },
     snapshot() {
       return {

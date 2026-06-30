@@ -168,10 +168,43 @@ const team: BenchmarkTeamComposition = {
     },
   ],
 };
+const roleTeam: BenchmarkTeamComposition = {
+  id: "team-certified-workbench-roles",
+  name: "Architect Worker Reviewer team",
+  comboHash: "combo:certified-workbench-roles",
+  strategy: "architect_worker_reviewer",
+  roles: [
+    {
+      role: "architect",
+      slot: "01-architect",
+      modelId: "openai:gpt-architect",
+      providerId: "openai",
+      displayName: "GPT Architect",
+      temperature: 0,
+    },
+    {
+      role: "worker",
+      slot: "02-worker",
+      modelId: "anthropic:claude-worker",
+      providerId: "anthropic",
+      displayName: "Claude Worker",
+      temperature: 0,
+    },
+    {
+      role: "reviewer",
+      slot: "03-reviewer",
+      modelId: "google:gemini-reviewer",
+      providerId: "google",
+      displayName: "Gemini Reviewer",
+      temperature: 0,
+    },
+  ],
+};
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z"));
 await saveBenchmarkTeamComposition(team);
+await saveBenchmarkTeamComposition(roleTeam);
 
 const runner = await startPassingBenchRunner("prepared-workbench-attempt");
 try {
@@ -236,6 +269,81 @@ try {
   check("certified WorkBench dashboard updates", summary.dashboard.summary.certifiedAttempts === 1 && summary.dashboard.summary.verifiedPassRate === 1, summary.dashboard.summary);
 } finally {
   await runner.stop();
+}
+
+const roleRunner = await startPassingBenchRunner("prepared-workbench-role-attempt");
+try {
+  let capturedDiscussion: {
+    judgeModelId?: string | null;
+    reviewerModelId?: string | null;
+    modelIds?: string;
+  } | null = null;
+  let capturedModels: string[] = [];
+  const roleTraceStore: Array<{
+    id: string;
+    runId?: string;
+    attemptId?: string;
+    caseId?: string;
+    modelId: string;
+    providerId: string;
+    startedAt: string;
+    retryHistory: Array<{ attempt: number; status: "parsed"; message: string }>;
+  }> = [];
+  await runCertifiedBenchmark({
+    runId: "run-certified-workbench-roles",
+    suiteId: "suite-certified-workbench",
+    track: "workbench",
+    harnessProfile: "aiboard-build-multi-worker",
+    caseIds: [workBenchCase.id],
+    teamCompositionIds: [roleTeam.id],
+    certification: runHarnessCertification("aiboard-build-multi-worker"),
+    runner: (context) =>
+      runCertifiedWorkBench({
+        context,
+        cases: [workBenchCase],
+        runner: { url: roleRunner.url, token: roleRunner.token },
+        teamCompositions: [roleTeam],
+        runBuildDiscussion: async (discussion, models, _emit, hooks) => {
+          const benchmark = hooks?.benchmark;
+          if (!benchmark) throw new Error("missing benchmark hook");
+          capturedDiscussion = {
+            judgeModelId: discussion.judgeModelId,
+            reviewerModelId: discussion.reviewerModelId,
+            modelIds: discussion.modelIds,
+          };
+          capturedModels = models.map((item) => item.modelId);
+          roleTraceStore.push({
+            id: `${benchmark.attemptId}:trace:model`,
+            runId: benchmark.runId,
+            attemptId: benchmark.attemptId,
+            caseId: benchmark.caseId,
+            modelId: "anthropic:claude-worker",
+            providerId: "anthropic",
+            startedAt: "2026-06-28T10:00:00.000Z",
+            retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
+          });
+        },
+        getBenchmarkTraces: () => roleTraceStore,
+      }),
+  });
+  const discussionModelIds = capturedDiscussion?.modelIds
+    ? (JSON.parse(capturedDiscussion.modelIds) as string[])
+    : [];
+  check(
+    "certified WorkBench maps team roles into Build discussion",
+    capturedDiscussion?.judgeModelId === "openai:gpt-architect" &&
+      capturedDiscussion.reviewerModelId === "google:gemini-reviewer" &&
+      JSON.stringify(discussionModelIds) === JSON.stringify(["anthropic:claude-worker"]) &&
+      JSON.stringify(capturedModels) ===
+        JSON.stringify([
+          "openai:gpt-architect",
+          "anthropic:claude-worker",
+          "google:gemini-reviewer",
+        ]),
+    { capturedDiscussion, discussionModelIds, capturedModels }
+  );
+} finally {
+  await roleRunner.stop();
 }
 
 if (failures === 0) {

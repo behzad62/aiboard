@@ -133,20 +133,53 @@ check(
   )
 );
 
-const toolReliabilityGate = getCertifiedRunGate({
-  suiteId: "teamiq-toolreliability-v0.1-quick",
+const toolReliabilityEmptyGate = getCertifiedRunGate({
+  suiteId: "teamiq-toolreliability-current-quick",
   running: false,
   selectedTrack: "teamiq",
   modelId: "",
-  teamModelIds: ["openai:gpt-fireworks-a", "anthropic:claude-fireworks-b"],
+  teamModelIds: [],
   workBenchRunnerReady: true,
   certification: passingCertification,
   fireworksPlayerCount: 3,
 });
 check(
-  "non-Fireworks TeamIQ still uses the generic two-model gate",
+  "non-Fireworks TeamIQ blocks empty model selection",
+  !toolReliabilityEmptyGate.canRun &&
+    toolReliabilityEmptyGate.reason === "Select at least one model for TeamIQ.",
+  toolReliabilityEmptyGate
+);
+
+const toolReliabilityGate = getCertifiedRunGate({
+  suiteId: "teamiq-toolreliability-current-quick",
+  running: false,
+  selectedTrack: "teamiq",
+  modelId: "",
+  teamModelIds: ["openai:gpt-fireworks-a"],
+  workBenchRunnerReady: true,
+  certification: passingCertification,
+  fireworksPlayerCount: 3,
+});
+check(
+  "non-Fireworks TeamIQ allows one selected model for role-reuse modes",
   toolReliabilityGate.canRun,
   toolReliabilityGate
+);
+
+const toolReliabilityAllModesGate = getCertifiedRunGate({
+  suiteId: "teamiq-toolreliability-current-all-modes",
+  running: false,
+  selectedTrack: "teamiq",
+  modelId: "",
+  teamModelIds: ["openai:gpt-fireworks-a"],
+  workBenchRunnerReady: true,
+  certification: passingCertification,
+  fireworksPlayerCount: 3,
+});
+check(
+  "TeamIQ ToolReliability all-modes suite allows one selected model",
+  toolReliabilityAllModesGate.canRun,
+  toolReliabilityAllModesGate
 );
 
 if (failures === 0) {

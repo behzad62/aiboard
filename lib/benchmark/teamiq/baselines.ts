@@ -50,7 +50,9 @@ export function linkTeamLiftBaselines(
     if (!matchesTrack(teamAttempt, input.track)) continue;
     const teamComposition = teamsById.get(teamAttempt.teamCompositionId);
     const modelIds = getTeamCompositionModelIds(teamComposition);
-    if (!teamComposition || modelIds.length <= 1) continue;
+    if (!teamComposition || isSoloTeamComposition(teamComposition) || modelIds.length === 0) {
+      continue;
+    }
 
     const memberSoloAttempts = modelIds
       .map((modelId) =>

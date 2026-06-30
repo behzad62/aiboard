@@ -94,7 +94,7 @@ export function isStructuredGameIqAction(
       return (
         typeof action.from === "string" &&
         typeof action.to === "string" &&
-        (action.promotion === undefined || typeof action.promotion === "string")
+        (action.promotion == null || typeof action.promotion === "string")
       );
     case "battleship":
       return (

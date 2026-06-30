@@ -11,6 +11,14 @@ export interface CreateTeamIqCompositionSelectionInput {
   playerCount?: 2 | 3;
 }
 
+export const TEAMIQ_TOOL_BENCH_STRATEGIES: Exclude<TeamIqStrategy, "solo">[] = [
+  "panel",
+  "debate",
+  "architect_worker",
+  "architect_worker_reviewer",
+  "cheap_swarm_strong_judge",
+];
+
 export function createTeamIqCompositionFromSelection(
   input: CreateTeamIqCompositionSelectionInput
 ) {
@@ -19,8 +27,8 @@ export function createTeamIqCompositionFromSelection(
     .map((modelId) => input.models.find((model) => model.modelId === modelId))
     .filter((model): model is SelectedModel => Boolean(model))
     .slice(0, maxModelsForSelection(strategy, input));
-  if (selectedModels.length < 2) {
-    throw new Error("TeamIQ requires at least two selected models.");
+  if (selectedModels.length < 1) {
+    throw new Error("TeamIQ requires at least one selected model.");
   }
   if (
     input.roleMode === "fireworks_players" &&
@@ -32,15 +40,28 @@ export function createTeamIqCompositionFromSelection(
   }
 
   return deriveTeamComposition({
-    name: selectedModels
-      .map((model) => model.displayName || model.modelId)
-      .join(" + "),
+    name:
+      input.roleMode === "fireworks_players"
+        ? `Fireworks players: ${modelNameList(selectedModels)}`
+        : teamNameForSelection(strategy, selectedModels),
     strategy: input.roleMode === "fireworks_players" ? "panel" : strategy,
     roles:
       input.roleMode === "fireworks_players"
         ? rolesForFireworksPlayers(selectedModels, input.playerCount ?? 3)
         : rolesForStrategy(strategy, selectedModels),
   });
+}
+
+export function createTeamIqToolBenchCompositionsFromSelection(
+  input: Omit<CreateTeamIqCompositionSelectionInput, "roleMode" | "playerCount">
+) {
+  return TEAMIQ_TOOL_BENCH_STRATEGIES.map((strategy) =>
+    createTeamIqCompositionFromSelection({
+      ...input,
+      strategy,
+      roleMode: "default",
+    })
+  );
 }
 
 function maxModelsForSelection(
@@ -52,7 +73,7 @@ function maxModelsForSelection(
 }
 
 function maxModelsForStrategy(strategy: Exclude<TeamIqStrategy, "solo">): number {
-  return strategy === "panel" || strategy === "cheap_swarm_strong_judge" ? 4 : 3;
+  return strategy === "architect_worker" ? 2 : 3;
 }
 
 function rolesForFireworksPlayers(
@@ -69,37 +90,73 @@ function rolesForStrategy(
   models: SelectedModel[]
 ): BenchmarkTeamCompositionRole[] {
   if (strategy === "panel") {
-    return models.map((model, index) =>
-      roleFor("specialist", `panel-${String(index + 1).padStart(2, "0")}`, model)
+    return [0, 1, 2].map((index) =>
+      roleFor(
+        "specialist",
+        `panel-${String(index + 1).padStart(2, "0")}`,
+        modelForSlot(models, index)
+      )
     );
   }
   if (strategy === "debate") {
     return [
-      roleFor("critic", "01-debater", models[0]),
-      roleFor("critic", "02-debater", models[1]),
-      roleFor("judge", "03-debate-judge", models[2] ?? models[0]),
+      roleFor("critic", "01-debater", modelForSlot(models, 0)),
+      roleFor("critic", "02-debater", modelForSlot(models, 1)),
+      roleFor("judge", "03-debate-judge", modelForSlot(models, 2)),
     ];
   }
   if (strategy === "architect_worker") {
     return [
-      roleFor("architect", "01-architect", models[0]),
-      roleFor("worker", "02-worker", models[1]),
+      roleFor("architect", "01-architect", modelForSlot(models, 0)),
+      roleFor("worker", "02-worker", modelForSlot(models, 1)),
     ];
   }
   if (strategy === "cheap_swarm_strong_judge") {
     const judge = models[models.length - 1];
+    const workers = models.length > 1 ? models.slice(0, -1) : models;
     return [
-      ...models.slice(0, -1).map((model, index) =>
-        roleFor("worker", `${String(index + 1).padStart(2, "0")}-swarm-worker`, model)
-      ),
+      roleFor("worker", "01-swarm-worker", modelForSlot(workers, 0)),
+      roleFor("worker", "02-swarm-worker", modelForSlot(workers, 1)),
       roleFor("judge", "99-strong-judge", judge),
     ];
   }
   return [
-    roleFor("architect", "01-architect", models[0]),
-    roleFor("worker", "02-worker", models[1]),
-    roleFor("reviewer", "03-reviewer", models[2] ?? models[0]),
+    roleFor("architect", "01-architect", modelForSlot(models, 0)),
+    roleFor("worker", "02-worker", modelForSlot(models, 1)),
+    roleFor("reviewer", "03-reviewer", modelForSlot(models, 2)),
   ];
+}
+
+function modelForSlot(models: SelectedModel[], index: number): SelectedModel {
+  const model = models[index % models.length];
+  if (!model) throw new Error("TeamIQ requires at least one selected model.");
+  return model;
+}
+
+function teamNameForSelection(
+  strategy: Exclude<TeamIqStrategy, "solo">,
+  models: SelectedModel[]
+): string {
+  return `${strategyLabel(strategy)}: ${modelNameList(models)}`;
+}
+
+function modelNameList(models: SelectedModel[]): string {
+  return models.map((model) => model.displayName || model.modelId).join(" + ");
+}
+
+function strategyLabel(strategy: Exclude<TeamIqStrategy, "solo">): string {
+  switch (strategy) {
+    case "panel":
+      return "Panel";
+    case "debate":
+      return "Debate";
+    case "architect_worker":
+      return "Architect + worker";
+    case "architect_worker_reviewer":
+      return "Architect + worker + reviewer";
+    case "cheap_swarm_strong_judge":
+      return "Cheap swarm + strong judge";
+  }
 }
 
 function roleFor(

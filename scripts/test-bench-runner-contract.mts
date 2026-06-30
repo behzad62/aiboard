@@ -130,7 +130,7 @@ try {
   });
   check("prepare rejects command execution with network none", rejectedNetworkNone.status === 400, rejectedNetworkNone);
 
-  const fixturePrepared = await request(baseUrl, "/bench/prepare", token, {
+  const namedFixtureRejected = await request(baseUrl, "/bench/prepare", token, {
     attemptId: "fixture-resolution-attempt",
     caseId: "workbench-ts-cli-csv-0001",
     repoUrl: "fixture://workbench-ts-cli-csv-0001",
@@ -140,10 +140,7 @@ try {
     setupCommand: "npm ci",
     allowedCommands: ["npm ci"],
   });
-  check("prepare resolves checked-in fixture repositories", fixturePrepared.status === 200 && fixturePrepared.data.attemptId === "fixture-resolution-attempt", fixturePrepared);
-  const fixtureTree = await request(baseUrl, "/bench/read-tree", token, { attemptId: "fixture-resolution-attempt" });
-  check("fixture repository is copied into workspace", fixtureTree.status === 200 && Array.isArray(fixtureTree.data.files) && (fixtureTree.data.files as string[]).includes("package.json"), fixtureTree);
-  await request(baseUrl, "/bench/cleanup", token, { attemptId: "fixture-resolution-attempt" });
+  check("prepare rejects legacy bundled fixture repositories", namedFixtureRejected.status === 400, namedFixtureRejected);
 
   const prepared = await request(baseUrl, "/bench/prepare", token, {
     caseId: "workbench-contract-0001",

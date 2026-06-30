@@ -35,7 +35,7 @@ function readBundle(value: unknown): BenchmarkReportBundleV2 {
   ) {
     return bundle as BenchmarkReportBundleV2;
   }
-  throw new Error("Only AI Board Benchmark Bundle v2 imports are supported.");
+  throw new Error("Only current AI Board Benchmark Bundle imports are supported.");
 }
 
 function isBaseBundleShape(bundle: ImportCandidate): boolean {
@@ -66,7 +66,7 @@ export function useBenchmarkReportActions({
     const bundle = exportBenchmarkReportBundleV2();
     downloadBenchmarkJson(bundle);
     setMessage(
-      `Benchmark Bundle v2 exported. Redaction scanned ${
+      `Benchmark Bundle exported. Redaction scanned ${
         bundle.redactionSummary?.scannedArtifacts ?? 0
       } artifact(s).`
     );
@@ -77,8 +77,16 @@ export function useBenchmarkReportActions({
     const bundle = exportBenchmarkReportBundleV2();
     const markdown = formatBenchmarkMarkdownReport(bundle, dashboard);
     downloadBenchmarkMarkdown(markdown);
-    await navigator.clipboard.writeText(markdown);
-    setMessage("Benchmark report downloaded and copied to clipboard.");
+    try {
+      if (typeof navigator.clipboard?.writeText !== "function") {
+        throw new Error("Clipboard API is unavailable.");
+      }
+      await navigator.clipboard.writeText(markdown);
+      setMessage("Benchmark report downloaded and copied to clipboard.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMessage(`Benchmark report downloaded. Clipboard copy blocked: ${message}`);
+    }
   }, [dashboard, setMessage]);
 
   const importJson = useCallback(

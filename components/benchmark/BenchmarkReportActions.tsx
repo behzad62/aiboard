@@ -29,7 +29,7 @@ export function BenchmarkReportActions({
       </Button>
       <Button variant="outline" size="sm" onClick={onExportJson}>
         <Download className="mr-2 h-4 w-4" />
-        Export Benchmark Bundle v2
+        Export Benchmark Bundle
       </Button>
       <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
         <Upload className="mr-2 h-4 w-4" />

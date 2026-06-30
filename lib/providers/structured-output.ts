@@ -86,6 +86,9 @@ function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   }
   if (schema.description) next.description = schema.description;
   if (schema.maxLength !== undefined) next.maxLength = schema.maxLength;
+  if (schema.minimum !== undefined) next.minimum = schema.minimum;
+  if (schema.maximum !== undefined) next.maximum = schema.maximum;
+  if (schema.minItems !== undefined) next.minItems = schema.minItems;
   if (schema.enum) next.enum = schema.enum;
   if (schema.required) next.required = schema.required;
   if (schema.nullable !== undefined) next.nullable = schema.nullable;

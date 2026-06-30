@@ -2,9 +2,7 @@
 import {
   __exportBenchmarkStoreForTests,
   __resetBenchmarkStoreForTests,
-  exportBenchmarkReportBundle,
   exportBenchmarkReportBundleV2,
-  importBenchmarkReportBundle,
   importBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
@@ -24,9 +22,7 @@ import {
 } from "../lib/benchmark/store";
 import type {
   BenchmarkAttemptV2,
-  BenchmarkCase,
   BenchmarkCaseV2,
-  BenchmarkReportBundle,
   BenchmarkRunEvent,
   BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
@@ -286,22 +282,12 @@ check(
   { artifact: bundleV2.artifacts[0], summary: bundleV2.redactionSummary }
 );
 
-const legacyCase: BenchmarkCase = {
-  id: "legacy-case",
-  kind: "real-work",
-  domain: "build",
-  title: "Legacy build case",
-  createdAt,
-  updatedAt: createdAt,
-  tags: ["legacy"],
-  configJson: "{}",
-};
-const legacyBundle: BenchmarkReportBundle = {
+const legacyBundle = {
   version: 1,
   exportedAt: createdAt,
   suites: [],
   runs: [],
-  cases: [legacyCase],
+  cases: [],
   attempts: [],
   metricValues: [],
   artifacts: [],
@@ -310,8 +296,11 @@ const legacyBundle: BenchmarkReportBundle = {
 };
 
 __resetBenchmarkStoreForTests();
-await importBenchmarkReportBundle(legacyBundle);
-check("v1 bundle still imports", __exportBenchmarkStoreForTests().benchmarkCases.length === 1);
+await expectReject(
+  "legacy v1 bundle import is rejected",
+  () => importBenchmarkReportBundleV2(legacyBundle as never),
+  /Unsupported benchmark report version/i
+);
 
 __resetBenchmarkStoreForTests();
 await importBenchmarkReportBundleV2(bundleV2);

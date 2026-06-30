@@ -25,6 +25,9 @@ export interface JsonSchemaObject {
   type?: string | string[];
   description?: string;
   maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
   properties?: Record<string, JsonSchemaObject>;
   items?: JsonSchemaObject;
   enum?: Array<string | number | boolean | null>;

@@ -163,7 +163,10 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Architect is reviewing wave 1") {
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
       return [
         "Review.",
         "```json",
