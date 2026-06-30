@@ -3,7 +3,11 @@ import {
   buildAttemptDetailViewModel,
   type AttemptDetailViewModel,
 } from "../lib/benchmark/certified/attempt-detail";
-import { groupVerifierAssertions } from "../components/benchmark/certified/VerifierAssertionTable";
+import {
+  groupVerifierAssertions,
+  verifierAssertionDetailsForDisplay,
+} from "../components/benchmark/certified/VerifierAssertionTable";
+import { getGameIqScenarioPack } from "../lib/benchmark/gameiq";
 import type {
   BenchmarkAttemptV2,
   BenchmarkModelCallTrace,
@@ -257,6 +261,70 @@ check(
     groupedAssertions[0]?.totalWeight === 4 &&
     groupedAssertions[0]?.failedExamples.length === 2,
   groupedAssertions
+);
+
+const battleshipPack = getGameIqScenarioPack("battleship");
+if (!battleshipPack) throw new Error("Battleship GameIQ pack is required for this test.");
+const battleshipScenario = battleshipPack.scenarios[0];
+const legacyGameIqDetails = [
+  "Structured: yes",
+  "Legal: yes",
+  "Correct: no",
+  'Parsed action\n{"target":{"row":0,"column":2}}',
+  'Raw response\n{"action":{"target":{"row":0,"column":2}}}',
+].join("\n\n");
+const enrichedGameIqDetails = verifierAssertionDetailsForDisplay({
+  id: battleshipScenario.id,
+  label: "battleship target-priority",
+  passed: false,
+  weight: 1,
+  message: "Incorrect target.",
+  details: legacyGameIqDetails,
+});
+check(
+  "legacy GameIQ failed samples are enriched with expected result details",
+  enrichedGameIqDetails?.includes("Expected result") === true &&
+    enrichedGameIqDetails.includes(
+      JSON.stringify(battleshipScenario.expectedActions[0]?.action)
+    ),
+  enrichedGameIqDetails
+);
+
+const alreadyEnrichedGameIqDetails = `${legacyGameIqDetails}\n\nExpected result\n[]`;
+check(
+  "GameIQ expected result enrichment does not duplicate existing evidence",
+  verifierAssertionDetailsForDisplay({
+    id: battleshipScenario.id,
+    label: "battleship target-priority",
+    passed: false,
+    weight: 1,
+    details: alreadyEnrichedGameIqDetails,
+  }) === alreadyEnrichedGameIqDetails,
+  verifierAssertionDetailsForDisplay({
+    id: battleshipScenario.id,
+    label: "battleship target-priority",
+    passed: false,
+    weight: 1,
+    details: alreadyEnrichedGameIqDetails,
+  })
+);
+
+check(
+  "non-GameIQ assertion details are not modified by expected result enrichment",
+  verifierAssertionDetailsForDisplay({
+    id: "toolrel-current-patch-001",
+    label: "Patch",
+    passed: false,
+    weight: 1,
+    details: "Patch did not apply.",
+  }) === "Patch did not apply.",
+  verifierAssertionDetailsForDisplay({
+    id: "toolrel-current-patch-001",
+    label: "Patch",
+    passed: false,
+    weight: 1,
+    details: "Patch did not apply.",
+  })
 );
 
 if (failures === 0) {

@@ -301,10 +301,21 @@ check(
   failedChessVerifier
 );
 check(
+  "certified GameIQ failed assertions include expected result details",
+  Boolean(failedAssertionWithDetails) &&
+    failedAssertionWithDetails?.details?.includes("Expected result") === true &&
+    failedAssertionWithDetails.details.includes('"action"') &&
+    failedAssertionWithDetails.details.includes(
+      `"from":"${chessPack.scenarios[0]?.expectedActions[0]?.action.from}"`
+    ),
+  failedAssertionWithDetails
+);
+check(
   "certified GameIQ verifier result stores failed case diagnostics",
   failedChessVerifier?.resultJson.includes('"caseResults"') === true &&
     failedChessVerifier.resultJson.includes('"rawResponse"') &&
-    failedChessVerifier.resultJson.includes('"action"'),
+    failedChessVerifier.resultJson.includes('"action"') &&
+    failedChessVerifier.resultJson.includes('"expectedActions"'),
   failedChessVerifier?.resultJson
 );
 

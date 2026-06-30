@@ -97,6 +97,7 @@ async function evaluateScenario(
     scenarioId: scenario.id,
     gameId: scenario.gameId,
     category: scenario.category,
+    expectedActions: scenario.expectedActions,
     action: providerResult.action,
     rawResponse: providerResult.rawResponse,
     structured: structuredShape && validation.ok,

@@ -92,6 +92,7 @@ export interface GameIqScenarioResult {
   scenarioId: string;
   gameId: GameIqGameId;
   category: GameIqScenarioCategory;
+  expectedActions: Array<GameIqExpectedAction>;
   action: unknown;
   rawResponse?: string;
   structured: boolean;

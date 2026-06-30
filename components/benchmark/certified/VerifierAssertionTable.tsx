@@ -4,6 +4,7 @@ import type {
   BenchmarkVerifierAssertionResult,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
+import { listGameIqScenarios } from "@/lib/benchmark/gameiq/packs";
 
 export interface GroupedVerifierAssertion {
   key: string;
@@ -47,22 +48,25 @@ export function VerifierAssertionTable({
                       Failed examples ({group.failedExamples.length})
                     </summary>
                     <div className="mt-2 space-y-2">
-                      {group.failedExamples.map((assertion) => (
-                        <div key={assertion.id} className="rounded-md border px-2 py-1">
-                          <div className="font-medium text-foreground">{assertion.label}</div>
-                          {assertion.message ? <div>{assertion.message}</div> : null}
-                          {assertion.details ? (
-                            <details className="mt-2">
-                              <summary className="cursor-pointer select-none font-medium">
-                                Details
-                              </summary>
-                              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2">
-                                {assertion.details}
-                              </pre>
-                            </details>
-                          ) : null}
-                        </div>
-                      ))}
+                      {group.failedExamples.map((assertion) => {
+                        const details = verifierAssertionDetailsForDisplay(assertion);
+                        return (
+                          <div key={assertion.id} className="rounded-md border px-2 py-1">
+                            <div className="font-medium text-foreground">{assertion.label}</div>
+                            {assertion.message ? <div>{assertion.message}</div> : null}
+                            {details ? (
+                              <details className="mt-2">
+                                <summary className="cursor-pointer select-none font-medium">
+                                  Details
+                                </summary>
+                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2">
+                                  {details}
+                                </pre>
+                              </details>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   </details>
                 ) : null}
@@ -77,6 +81,27 @@ export function VerifierAssertionTable({
       </table>
     </div>
   );
+}
+
+const gameIqExpectedActionsByScenarioId = new Map(
+  listGameIqScenarios().map((scenario) => [scenario.id, scenario.expectedActions])
+);
+
+export function verifierAssertionDetailsForDisplay(
+  assertion: BenchmarkVerifierAssertionResult
+): string | undefined {
+  const expectedActions = gameIqExpectedActionsByScenarioId.get(assertion.id);
+  if (!expectedActions?.length) {
+    return assertion.details;
+  }
+  const expectedDetails = `Expected result\n${previewJsonForDisplay(expectedActions)}`;
+  if (!assertion.details) {
+    return expectedDetails;
+  }
+  if (assertion.details.includes("Expected result")) {
+    return assertion.details;
+  }
+  return `${assertion.details}\n\n${expectedDetails}`;
 }
 
 export function groupVerifierAssertions(
@@ -134,4 +159,12 @@ function simplifyAssertionText(value: string): string {
     .replace(/\s+#?\d+$/i, "")
     .replace(/\s*\(\d+\)$/i, "")
     .trim();
+}
+
+function previewJsonForDisplay(value: unknown): string {
+  const json = JSON.stringify(value);
+  const limit = 1_500;
+  return json.length <= limit
+    ? json
+    : `${json.slice(0, limit)}\n[truncated ${json.length - limit} chars]`;
 }

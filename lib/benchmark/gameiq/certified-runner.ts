@@ -211,6 +211,7 @@ function createGameIqVerifierResult(
       legal: scenario.legal,
       correct: scenario.correct,
       actionQuality: scenario.actionQuality,
+      expectedActions: scenario.expectedActions,
       action: scenario.action,
       rawResponse: scenario.rawResponse,
       messages: scenario.messages,
@@ -292,6 +293,7 @@ function gameIqAssertionDetails(
     scenario.messages.length > 0
       ? `Messages\n${scenario.messages.join("\n")}`
       : "",
+    `Expected result\n${previewJson(scenario.expectedActions)}`,
     `Parsed action\n${previewJson(scenario.action)}`,
     scenario.rawResponse ? `Raw response\n${previewText(scenario.rawResponse)}` : "",
   ]
