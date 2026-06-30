@@ -324,6 +324,10 @@ export function actionMatchesExpected(
 ): number {
   if (!isStructuredGameIqAction(scenario, action)) return 0;
 
+  if (scenario.gameId === "codenames" && scenario.category === "clue-selection") {
+    return validateGameIqAction(scenario, action).ok ? 1 : 0;
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {

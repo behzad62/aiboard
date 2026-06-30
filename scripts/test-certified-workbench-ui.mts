@@ -1,4 +1,5 @@
 /* Certified WorkBench UI data checks (run: npx tsx scripts/test-certified-workbench-ui.mts) */
+import { readFileSync } from "node:fs";
 import {
   listWorkBenchCaseOptions,
   workBenchCaseToBenchmarkCaseV2,
@@ -345,6 +346,18 @@ check(
     roleDashboard.workBenchRoleLeaderboards.worker[0]?.modelId === "anthropic:claude-worker" &&
     roleDashboard.workBenchRoleLeaderboards.reviewer[0]?.modelId === "google:gemini-reviewer",
   roleDashboard.workBenchRoleLeaderboards
+);
+
+const runnerStatusSource = readFileSync(
+  "components/benchmark/workbench/WorkBenchRunnerStatus.tsx",
+  "utf8"
+);
+check(
+  "WorkBench runner panel links the generated benchmark runner download",
+  runnerStatusSource.includes('href="/bench-runner.mjs"') &&
+    runnerStatusSource.includes('download="bench-runner.mjs"') &&
+    runnerStatusSource.includes("Download bench runner"),
+  runnerStatusSource
 );
 
 if (failures === 0) {

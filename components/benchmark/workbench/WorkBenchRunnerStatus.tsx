@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, Download, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -52,15 +52,23 @@ export function WorkBenchRunnerStatus({
             type="password"
           />
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onCheck}
-          disabled={checking || !url.trim() || !token.trim()}
-        >
-          <RefreshCw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-          Check
-        </Button>
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          <Button type="button" variant="outline" asChild>
+            <a href="/bench-runner.mjs" download="bench-runner.mjs">
+              <Download className="h-4 w-4" />
+              Download bench runner
+            </a>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onCheck}
+            disabled={checking || !url.trim() || !token.trim()}
+          >
+            <RefreshCw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            Check
+          </Button>
+        </div>
       </div>
       <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
         <StatusIcon className={health?.ok ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />

@@ -7,6 +7,9 @@
 // can offer a direct download for ChatGPT Plus/Pro and GitHub Copilot account
 // provider setup.
 //
+// Also publishes the optional benchmark runner used by certified WorkBench
+// cases so hosted/static builds can offer it from the benchmark UI.
+//
 // Run: node scripts/build-runner.mjs   (invoked by predev/prebuild)
 
 import fs from "node:fs";
@@ -23,6 +26,8 @@ const HELP = path.join(here, "runner-help.html");
 const OUT = path.join(repo, "public", "runner.mjs");
 const ACCOUNT_SRC = path.join(repo, "lib", "account-provider-runner.mjs");
 const ACCOUNT_OUT = path.join(repo, "public", "account-provider-runner.mjs");
+const BENCH_SRC = path.join(here, "bench-runner.mjs");
+const BENCH_OUT = path.join(repo, "public", "bench-runner.mjs");
 
 const SINGLE_IMPORT = /^import\s+(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*["'](node:[^"']+)["'];?\s*$/;
 
@@ -105,6 +110,9 @@ fs.writeFileSync(OUT, output);
 if (fs.existsSync(ACCOUNT_SRC)) {
   fs.copyFileSync(ACCOUNT_SRC, ACCOUNT_OUT);
 }
+if (fs.existsSync(BENCH_SRC)) {
+  fs.copyFileSync(BENCH_SRC, BENCH_OUT);
+}
 
 // Release manifest: the app reads it to show the download version + an "update
 // available" nudge; the runner's self-update verifies the SHA-256 (and, later,
@@ -128,4 +136,7 @@ console.log(
 );
 if (fs.existsSync(ACCOUNT_OUT)) {
   console.log(`Copied ${path.relative(repo, ACCOUNT_OUT)} for account-provider setup.`);
+}
+if (fs.existsSync(BENCH_OUT)) {
+  console.log(`Copied ${path.relative(repo, BENCH_OUT)} for benchmark setup.`);
 }

@@ -28,8 +28,11 @@ function nodeCheck(path: string): boolean {
 }
 
 const sourceAccountRunner = "lib/account-provider-runner.mjs";
+const sourceBenchRunner = "scripts/bench-runner.mjs";
 const publicAccountRunner = "public/account-provider-runner.mjs";
 const exportedAccountRunner = "out/account-provider-runner.mjs";
+const publicBenchRunner = "public/bench-runner.mjs";
+const exportedBenchRunner = "out/bench-runner.mjs";
 const publicRunner = "public/runner.mjs";
 const exportedRunner = "out/runner.mjs";
 const publicManifest = "public/runner-manifest.json";
@@ -38,6 +41,8 @@ const exportedManifest = "out/runner-manifest.json";
 for (const path of [
   publicAccountRunner,
   exportedAccountRunner,
+  publicBenchRunner,
+  exportedBenchRunner,
   publicRunner,
   exportedRunner,
   publicManifest,
@@ -57,6 +62,17 @@ if (existsSync(exportedAccountRunner) && existsSync(sourceAccountRunner)) {
   check(
     "exported account runner matches source",
     read(exportedAccountRunner) === read(sourceAccountRunner)
+  );
+}
+
+if (existsSync(publicBenchRunner) && existsSync(sourceBenchRunner)) {
+  check("public benchmark runner matches source", read(publicBenchRunner) === read(sourceBenchRunner));
+}
+
+if (existsSync(exportedBenchRunner) && existsSync(sourceBenchRunner)) {
+  check(
+    "exported benchmark runner matches source",
+    read(exportedBenchRunner) === read(sourceBenchRunner)
   );
 }
 
@@ -82,6 +98,9 @@ if (existsSync(exportedRunner)) {
 }
 if (existsSync(exportedAccountRunner)) {
   check("exported account runner is valid JavaScript", nodeCheck(exportedAccountRunner));
+}
+if (existsSync(exportedBenchRunner)) {
+  check("exported benchmark runner is valid JavaScript", nodeCheck(exportedBenchRunner));
 }
 
 if (failures === 0) {

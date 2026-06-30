@@ -44,6 +44,7 @@ yarn-error.log*
 /public/runner.mjs
 /public/runner-manifest.json
 /public/account-provider-runner.mjs
+/public/bench-runner.mjs
 
 # typescript
 *.tsbuildinfo

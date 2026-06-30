@@ -112,6 +112,43 @@ if (!connectFourScenario) {
   );
 }
 
+const codenamesScenario = getGameIqScenarioPack("codenames")?.scenarios[0];
+if (!codenamesScenario) {
+  check("Codenames scenarios available for behavioral clue scoring", false);
+} else {
+  const alternateLegalClue = await runGameIqScenarios({
+    runId: "gameiq-test-run-codenames-alternate-legal-clue",
+    modelId: "fake:codenames",
+    teamCompositionId: "team-fake-codenames",
+    scenarios: [codenamesScenario],
+    moveProvider: () => ({
+      action: {
+        type: "clue",
+        clue: { word: "PLANET", count: 2 },
+        cardId: null,
+      },
+      rawResponse: JSON.stringify({
+        action: {
+          type: "clue",
+          clue: { word: "PLANET", count: 2 },
+          cardId: null,
+        },
+      }),
+      latencyMs: 0,
+    }),
+  });
+
+  check(
+    "Codenames clue-selection scores alternate legal clues behaviorally",
+    alternateLegalClue.metrics.structuredReliability === 1 &&
+      alternateLegalClue.metrics.legalActionRate === 1 &&
+      alternateLegalClue.metrics.outcomeScore === 1 &&
+      alternateLegalClue.metrics.moveQuality === 1 &&
+      alternateLegalClue.attempt.status === "passed",
+    alternateLegalClue
+  );
+}
+
 if (failures === 0) {
   console.log("PASS");
 } else {
