@@ -96,13 +96,13 @@ export function useBenchmarkReportActions({
     async (file: File) => {
       const text = await file.text();
       const bundle = readBundle(JSON.parse(text));
-      await importBenchmarkReportBundleV2(bundle);
+      const importResult = await importBenchmarkReportBundleV2(bundle);
       await reload();
       const certified = bundle.attemptsV2.filter(
         (attempt) => attempt.mode === "certified"
       ).length;
       setMessage(
-        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s).`
+        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s); ${importResult.updatedCount} existing record(s) updated.`
       );
     },
     [reload, setMessage]

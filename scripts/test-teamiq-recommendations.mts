@@ -94,6 +94,40 @@ check("TeamIQ recommendation cards include best team lift", cards.some((card) =>
 check("TeamIQ recommendation cards include best quality", cards.some((card) => card.kind === "best_quality" && card.teamCompositionId === strongTeam.id), cards);
 check("TeamIQ recommendation cards include watchlist", cards.some((card) => card.kind === "watchlist" && card.teamCompositionId === watchTeam.id), cards);
 check("TeamIQ recommendation cards expose concise values", cards.every((card) => card.title && card.value && card.detail), cards);
+const liftCard = cards.find((card) => card.kind === "best_team_lift");
+check(
+  "best team lift card renders lift as points (+16), not percent-coerced",
+  liftCard?.value === "+16",
+  liftCard
+);
+check(
+  "best team lift detail shows point-scale solo/team scores",
+  liftCard?.detail === "Best solo 72 -> team 88",
+  liftCard
+);
+const onePointLiftCards = strongRowForBoundary(rows)
+  ? buildTeamIqRecommendationCards([
+      {
+        ...strongRowForBoundary(rows)!,
+        teamLift: 1,
+        bestSoloScore: 72,
+        jobSuccessScore: 73,
+      },
+    ])
+  : [];
+const onePointLiftCard = onePointLiftCards.find(
+  (card) => card.kind === "best_team_lift"
+);
+check(
+  "one-point team lift renders as +1, not +100",
+  onePointLiftCard?.value === "+1",
+  onePointLiftCard
+);
+check(
+  "one-point lift detail keeps point-scale baselines",
+  onePointLiftCard?.detail === "Best solo 72 -> team 73",
+  onePointLiftCard
+);
 
 const dashboard = buildCertifiedBenchmarkDashboardData({
   caseV2: [
@@ -173,6 +207,12 @@ function attempt(
     promptSetVersion: "teamiq-test-prompts",
     scoringVersion: "teamiq-test-scoring",
   };
+}
+
+function strongRowForBoundary(
+  rows: ReturnType<typeof buildTeamIqComboMatrixRows>
+) {
+  return rows.find((row) => row.teamCompositionId === strongTeam.id) ?? null;
 }
 
 if (failures === 0) {

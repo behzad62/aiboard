@@ -476,6 +476,68 @@ check(
   { attempt: providerCrashAttempt, failures: providerCrashBundle.failures }
 );
 
+__resetBenchmarkStoreForTests();
+const teamTwo: BenchmarkTeamComposition = {
+  ...team,
+  id: "team-engine-single-2",
+  name: "Engine single model 2",
+  comboHash: "combo:engine-single-2",
+};
+await saveBenchmarkCaseV2(caseOne);
+await saveBenchmarkTeamComposition(team);
+await saveBenchmarkTeamComposition(teamTwo);
+const multiTeamCrash = await runCertifiedBenchmark({
+  runId: "run-certified-engine-multi-team-crash",
+  suiteId: "suite-engine",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseOne.id],
+  teamCompositionIds: [team.id, teamTwo.id],
+  certification: passingCertification,
+  runner: async (context) => {
+    await context.recordTrace({
+      id: `${context.runId}:trace:only`,
+      runId: context.runId,
+      caseId: caseOne.id,
+      modelId: "openai:gpt-engine",
+      providerId: "openai",
+      participantId: team.id,
+      schemaMode: "structured",
+      startedAt: context.startedAt,
+      completedAt: new Date().toISOString(),
+      latencyMs: 10,
+      inputTokens: 6,
+      outputTokens: 4,
+      estimatedUsd: 0.001,
+      rawResponse: "",
+      retryHistory: [],
+    });
+    throw new Error("Budget exhausted before output");
+  },
+});
+const multiTeamAttempts = (await listBenchmarkAttemptsV2()).filter(
+  (attempt) => attempt.runId === multiTeamCrash.runId
+);
+const summedCalls = multiTeamAttempts.reduce((sum, attempt) => sum + attempt.modelCalls, 0);
+const summedInput = multiTeamAttempts.reduce(
+  (sum, attempt) => sum + (attempt.inputTokens ?? 0),
+  0
+);
+const summedCost = multiTeamAttempts.reduce(
+  (sum, attempt) => sum + (attempt.costUsd ?? 0),
+  0
+);
+check(
+  "multi-team crash creates one attempt per team",
+  multiTeamAttempts.length === 2,
+  multiTeamAttempts.map((attempt) => attempt.id)
+);
+check(
+  "single trace is not multiplied across teams",
+  summedCalls === 1 && summedInput === 6 && Math.abs(summedCost - 0.001) < 1e-9,
+  { summedCalls, summedInput, summedCost }
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {

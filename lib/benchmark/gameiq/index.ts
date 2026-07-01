@@ -2,6 +2,7 @@ export {
   getGameIqScenarioPack,
   listGameIqScenarioPacks,
   listGameIqScenarios,
+  stableStringify,
   stableGameIqScenarioPackDigest,
 } from "./packs";
 export { runGameIqScenarios } from "./runner";

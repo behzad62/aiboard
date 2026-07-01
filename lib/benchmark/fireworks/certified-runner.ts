@@ -785,7 +785,7 @@ function aggregateMetrics(
   };
 }
 
-function statusForAttempt(
+export function statusForAttempt(
   score: number,
   calls: FireworksCallRecord[],
   metrics: FireworksGameMetrics
@@ -796,7 +796,14 @@ function statusForAttempt(
   if (calls.some((call) => call.failureCode === "fireworks_invalid_json" || call.failureCode === "fireworks_illegal_action" || call.failureCode === "fireworks_illegal_clue")) {
     return "failed_tool_use";
   }
-  if (metrics.badPlays > 0 || metrics.criticalDiscards > 0) return "failed_model";
+  // Scenario probes are single-position correctness checks: a misplay or
+  // critical discard there is the failure. Aggregates should follow the score.
+  if (
+    metrics.scoreKind === "scenario" &&
+    (metrics.badPlays > 0 || metrics.criticalDiscards > 0)
+  ) {
+    return "failed_model";
+  }
   return score >= 70 ? "passed" : "failed_model";
 }
 

@@ -229,11 +229,6 @@ function applyParetoRecommendations(rows: TeamIqComboMatrixRow[]): void {
         direction: "lower",
         value: (row) => row.averageDurationMs ?? Number.POSITIVE_INFINITY,
       },
-      {
-        key: "teamLift",
-        direction: "higher",
-        value: (row) => row.teamLift ?? Number.NEGATIVE_INFINITY,
-      },
     ])
   );
 

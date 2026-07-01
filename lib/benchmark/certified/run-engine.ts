@@ -129,15 +129,24 @@ function createFailedAttemptsForRunError(input: {
     Date.now() - new Date(input.context.startedAt).getTime()
   );
   const attempts: BenchmarkAttemptV2[] = [];
+  // A trace can only be summed into one synthesized attempt. Without this, a
+  // single persisted trace's cost/tokens/modelCalls are multiplied across teams.
+  const usedTraceIds = new Set<string>();
+  const ownerTeamId = input.context.teamCompositionIds[0];
 
   for (const caseId of input.context.caseIds) {
     for (const teamCompositionId of input.context.teamCompositionIds) {
       if (existingKeys.has(attemptKey(caseId, teamCompositionId))) continue;
-      const traces = snapshot.traces.filter(
-        (trace) =>
-          trace.runId === input.context.runId &&
-          (!trace.caseId || trace.caseId === caseId)
-      );
+      const isOwnerTeam = teamCompositionId === ownerTeamId;
+      const traces = isOwnerTeam
+        ? snapshot.traces.filter(
+            (trace) =>
+              trace.runId === input.context.runId &&
+              (!trace.caseId || trace.caseId === caseId) &&
+              !usedTraceIds.has(trace.id)
+          )
+        : [];
+      for (const trace of traces) usedTraceIds.add(trace.id);
       attempts.push({
         id: `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,
         runId: input.context.runId,
