@@ -50,16 +50,21 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "aiboard-runner-cli-version-"));
 let localRunner: ChildProcessWithoutNullStreams | null = null;
 let accountRunner: ChildProcessWithoutNullStreams | null = null;
+let benchRunner: ChildProcessWithoutNullStreams | null = null;
 
 try {
   const localVersion = await sourceVersion(path.join(repoRoot, "scripts", "runner.mjs"));
   const accountVersion = await sourceVersion(path.join(repoRoot, "lib", "account-provider-runner.mjs"));
+  const benchVersion = await sourceVersion(path.join(repoRoot, "scripts", "bench-runner.mjs"));
   const localPort = 24_000 + Math.floor(Math.random() * 5_000);
   const accountPort = 29_000 + Math.floor(Math.random() * 5_000);
+  const benchPort = 34_000 + Math.floor(Math.random() * 5_000);
   let localStdout = "";
   let localStderr = "";
   let accountStdout = "";
   let accountStderr = "";
+  let benchStdout = "";
+  let benchStderr = "";
 
   localRunner = spawn(
     process.execPath,
@@ -110,10 +115,39 @@ try {
     () => ({ stdout: accountStdout, stderr: accountStderr })
   );
   check("account-provider runner startup banner shows version", true);
+
+  benchRunner = spawn(
+    process.execPath,
+    [
+      path.join(repoRoot, "scripts", "bench-runner.mjs"),
+      "--port",
+      String(benchPort),
+      "--token",
+      "test-bench-runner-token",
+      "--root",
+      path.join(tmpRoot, ".aiboard-bench", "runs"),
+    ],
+    { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] }
+  );
+  benchRunner.stdout.on("data", (chunk) => {
+    benchStdout += String(chunk);
+  });
+  benchRunner.stderr.on("data", (chunk) => {
+    benchStderr += String(chunk);
+  });
+  await waitFor(
+    () =>
+      benchStdout.includes(`Version : v${benchVersion}`) &&
+      benchStdout.includes(`URL     : http://127.0.0.1:${benchPort}`) &&
+      benchStdout.includes("Token   : test-bench-runner-token") &&
+      !benchStdout.trimStart().startsWith("{"),
+    () => ({ stdout: benchStdout, stderr: benchStderr })
+  );
+  check("bench runner startup banner is human-readable", true);
 } catch (error) {
   check("runner CLI version banners", false, error instanceof Error ? error.message : String(error));
 } finally {
-  await Promise.all([stop(localRunner), stop(accountRunner)]);
+  await Promise.all([stop(localRunner), stop(accountRunner), stop(benchRunner)]);
   await rm(tmpRoot, { recursive: true, force: true });
 }
 

@@ -68,16 +68,15 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(
-    JSON.stringify({
-      ok: true,
-      service: "aiboard-bench-runner",
-      version: VERSION,
-      url: `http://${host}:${port}`,
-      root,
-      token,
-    })
-  );
+  console.log("AI Board - bench runner");
+  console.log("-----------------------");
+  console.log(`Version : v${VERSION}`);
+  console.log(`URL     : http://${host}:${port}`);
+  console.log(`Root    : ${root}`);
+  console.log(`Token   : ${token}`);
+  console.log("");
+  console.log("Paste the URL and token into Benchmark -> WorkBench.");
+  console.log("Temporary attempt workspaces are created under Root and cleaned up after runs.");
   console.error(
     "bench-runner v0.1 isolation: commands run with FULL host privileges. " +
       "'network: dependency-only' is a label, not a boundary; " +
