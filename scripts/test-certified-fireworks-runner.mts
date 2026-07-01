@@ -14,6 +14,7 @@ import { runHarnessCertification } from "../lib/benchmark/certified/certificatio
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
   FIREWORKS_FULL_GAME_CASES,
+  FIREWORKS_MEMORY_SCENARIOS,
   FIREWORKS_TACTICS_SCENARIOS,
   fireworksCaseToBenchmarkCaseV2,
 } from "../lib/benchmark/fireworks/scenario-packs";
@@ -73,6 +74,19 @@ check(
   "scenario attempt with a misplay still hard-fails",
   statusForAttempt(95, [], baseMetrics({ scoreKind: "scenario", badPlays: 1 })) === "failed_model",
   statusForAttempt(95, [], baseMetrics({ scoreKind: "scenario", badPlays: 1 }))
+);
+
+const memoryScenario = FIREWORKS_MEMORY_SCENARIOS[0];
+const seededEvents = memoryScenario?.state.events ?? [];
+check(
+  "memory scenario seeds at least one clue event",
+  seededEvents.length >= 1,
+  seededEvents.length
+);
+check(
+  "every seeded memory event is flagged seeded:true",
+  seededEvents.every((event) => event.seeded === true),
+  seededEvents.map((event) => event.seeded)
 );
 
 const selectedCases = FIREWORKS_TACTICS_SCENARIOS.filter(

@@ -298,6 +298,7 @@ function createMemoryScenario(
         ? { action: "clue_color", targetPlayerId: "P1", color }
         : { action: "clue_rank", targetPlayerId: "P1", rank },
     legal: true,
+    seeded: true,
     useful: true,
     memoryConsistent: true,
     message,

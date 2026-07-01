@@ -73,6 +73,7 @@ export interface FireworksEvent {
   useful?: boolean;
   fallbackUsed?: boolean;
   memoryConsistent?: boolean;
+  seeded?: boolean;
   playResult?: "success" | "misplay";
   criticalDiscard?: boolean;
   message: string;
