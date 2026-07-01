@@ -4,8 +4,11 @@ import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
 import {
   __resetBenchmarkStoreForTests,
+  __exportBenchmarkStoreForTests,
+  __replaceBenchmarkStoreForTests,
   importBenchmarkReportBundleV2,
 } from "../lib/benchmark/store";
+import type { BuildCheckpoint, ModelBuildStat } from "../lib/db/schema";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -225,6 +228,125 @@ try {
 }
 check("non-string artifact content rejected", invalidArtifactThrew);
 
+function modelStat(updatedAt: string, builds: number): ModelBuildStat {
+  return {
+    modelId: "openai:gpt-merge",
+    displayName: "GPT Merge",
+    builds,
+    attempts: builds,
+    approvals: builds,
+    fixes: 0,
+    badOutput: 0,
+    unavailable: 0,
+    wApprovals: builds,
+    wFixes: 0,
+    wBadOutput: 0,
+    responseMs: builds * 100,
+    responseChars: builds * 1000,
+    judges: {},
+    independentVerdicts: 0,
+    updatedAt,
+  };
+}
+
+function checkpoint(updatedAt: string, wave: number): BuildCheckpoint {
+  return {
+    discussionId: "discussion-merge",
+    status: "running",
+    updatedAt,
+    runPolicy: "finish",
+    stopReason: null,
+    wave,
+    tasks: [],
+    architectNotes: "",
+    verifyCommand: "npm test",
+    branch: null,
+    prUrl: null,
+    milestone: null,
+    issueNumbers: [],
+    failureFingerprints: {},
+    recoveryLog: [],
+    buildProblems: [],
+    commandProblems: [],
+    stopReport: null,
+    toolReviewReport: null,
+    usageWindow: {
+      startedAt: updatedAt,
+      elapsedMs: 0,
+      estimatedUsd: 0,
+      unknownPricedModelIds: [],
+      models: [],
+    },
+  };
+}
+
+const newerLocalStat = modelStat("2026-06-30T00:00:00.000Z", 30);
+__replaceBenchmarkStoreForTests({ modelStats: [newerLocalStat] });
+await importBenchmarkReportBundleV2({
+  ...bundle,
+  sourceEvidence: {
+    gameMatches: [],
+    buildCheckpoints: [],
+    buildStats: [modelStat("2026-06-01T00:00:00.000Z", 1)],
+  },
+});
+check(
+  "stale modelStats not clobbered",
+  __exportBenchmarkStoreForTests().modelStats?.find((stat) => stat.modelId === "openai:gpt-merge")?.updatedAt ===
+    "2026-06-30T00:00:00.000Z",
+  __exportBenchmarkStoreForTests().modelStats
+);
+const newerModelStatsImport = await importBenchmarkReportBundleV2({
+  ...bundle,
+  sourceEvidence: {
+    gameMatches: [],
+    buildCheckpoints: [],
+    buildStats: [modelStat("2026-07-01T00:00:00.000Z", 40)],
+  },
+});
+check(
+  "newer modelStats replaces older local",
+  __exportBenchmarkStoreForTests().modelStats?.find((stat) => stat.modelId === "openai:gpt-merge")?.updatedAt ===
+    "2026-07-01T00:00:00.000Z",
+  __exportBenchmarkStoreForTests().modelStats
+);
+check(
+  "modelStats import reports an existing record update",
+  (newerModelStatsImport?.updatedCount ?? 0) >= 1,
+  newerModelStatsImport
+);
+
+const newerLocalCheckpoint = checkpoint("2026-06-30T00:00:00.000Z", 30);
+__replaceBenchmarkStoreForTests({ buildCheckpoints: [newerLocalCheckpoint] });
+await importBenchmarkReportBundleV2({
+  ...bundle,
+  sourceEvidence: {
+    gameMatches: [],
+    buildCheckpoints: [checkpoint("2026-06-01T00:00:00.000Z", 1)],
+    buildStats: [],
+  },
+});
+check(
+  "stale buildCheckpoint not clobbered",
+  __exportBenchmarkStoreForTests().buildCheckpoints?.find((item) => item.discussionId === "discussion-merge")?.updatedAt ===
+    "2026-06-30T00:00:00.000Z",
+  __exportBenchmarkStoreForTests().buildCheckpoints
+);
+await importBenchmarkReportBundleV2({
+  ...bundle,
+  sourceEvidence: {
+    gameMatches: [],
+    buildCheckpoints: [checkpoint("2026-07-01T00:00:00.000Z", 40)],
+    buildStats: [],
+  },
+});
+check(
+  "newer buildCheckpoint replaces older local",
+  __exportBenchmarkStoreForTests().buildCheckpoints?.find((item) => item.discussionId === "discussion-merge")?.updatedAt ===
+    "2026-07-01T00:00:00.000Z",
+  __exportBenchmarkStoreForTests().buildCheckpoints
+);
+
 const certified = buildCertifiedBenchmarkDashboardData({
   caseV2: bundle.caseV2,
   attemptsV2: bundle.attemptsV2,
@@ -326,6 +448,12 @@ check(
     reportActionSource.includes("navigator.clipboard") &&
     reportActionSource.includes("catch") &&
     reportActionSource.includes("Clipboard copy"),
+  reportActionSource
+);
+check(
+  "benchmark import success message surfaces existing record updates",
+  reportActionSource.includes("updatedCount") &&
+    reportActionSource.includes("existing record"),
   reportActionSource
 );
 
