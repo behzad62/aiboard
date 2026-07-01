@@ -28,6 +28,7 @@ export interface WorkBenchEnvironment {
   type: "local-runner";
   setupCommand?: string;
   timeoutSeconds: number;
+  /** Advisory only - bench-runner v0.1 does NOT enforce a memory cap. */
   memoryMb?: number;
   network: WorkBenchNetwork;
 }

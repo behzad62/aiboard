@@ -58,6 +58,17 @@ check("normalizer preserves supplied assertion fields", normalized[1]?.id === "e
 const emptyAssertions = normalizeVerifierAssertions([]);
 check("empty assertion list stays empty", emptyAssertions.length === 0, emptyAssertions);
 
+const emptyResult = parseVerifierResult(
+  JSON.stringify({
+    passed: true,
+    score: 1,
+    summary: "claims pass",
+    assertions: [],
+  })
+);
+check("empty assertions force passed=false", emptyResult.passed === false, emptyResult);
+check("empty assertions force score=0", emptyResult.score === 0, emptyResult);
+
 expectThrow(
   "malformed verifier JSON is rejected",
   () => parseVerifierResult("no json here"),
@@ -65,7 +76,14 @@ expectThrow(
 );
 expectThrow(
   "invalid score is rejected",
-  () => parseVerifierResult(JSON.stringify({ passed: true, score: "1" })),
+  () =>
+    parseVerifierResult(
+      JSON.stringify({
+        passed: true,
+        score: "1",
+        assertions: [{ passed: true }],
+      })
+    ),
   /score/i
 );
 expectThrow(

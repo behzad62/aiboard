@@ -120,18 +120,31 @@ export function runWorkBenchChallengeVerifier(input: {
     assertions.push(syntaxAssertion(syntax.path, syntax.kind, input.files[syntax.path] ?? ""));
   }
 
-  const totalWeight = assertions.reduce((sum, item) => sum + item.weight, 0);
-  const passedWeight = assertions
+  const scoredAssertions = assertions.filter((item) => item.weight > 0);
+  const totalWeight = scoredAssertions.reduce((sum, item) => sum + item.weight, 0);
+  const passedWeight = scoredAssertions
     .filter((item) => item.passed)
     .reduce((sum, item) => sum + item.weight, 0);
-  const passed = assertions.every((item) => item.passed);
+  const passed =
+    scoredAssertions.length > 0 &&
+    scoredAssertions.every((item) => item.passed);
   return {
     challengeId: input.challenge.id,
     passed,
-    score: totalWeight > 0 ? passedWeight / totalWeight : passed ? 1 : 0,
-    summary: passed
-      ? "WorkBench challenge passed."
-      : "WorkBench challenge failed.",
+    score:
+      scoredAssertions.length === 0
+        ? 0
+        : totalWeight > 0
+          ? passedWeight / totalWeight
+          : passed
+            ? 1
+            : 0,
+    summary:
+      scoredAssertions.length === 0
+        ? "verifier produced no assertions"
+        : passed
+          ? "WorkBench challenge passed."
+          : "WorkBench challenge failed.",
     assertions,
     changedLines,
   };
@@ -397,12 +410,13 @@ function syntaxAssertion(path: string, kind: "json" | "balanced-braces", content
       };
     }
   }
+  // Coarse heuristic only: counts braces anywhere and does not validate syntax.
   const passed = count(content, "{") === count(content, "}");
   return {
     id: `${path}:balanced-braces`,
     label: `${path} has balanced braces`,
     passed,
-    weight: 1,
+    weight: 0,
     message: passed ? undefined : "Brace counts do not match.",
   };
 }

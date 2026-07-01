@@ -1,14 +1,67 @@
 /* Current WorkBench verified challenge checks (run: npx tsx scripts/test-workbench-current-challenges.mts) */
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   WORKBENCH_CHALLENGES,
   runWorkBenchChallengeVerifier,
+  type WorkBenchChallenge,
 } from "../lib/benchmark/workbench/challenges";
+import { WORKBENCH_VERIFIER } from "../lib/benchmark/workbench/corpus";
 
 let failures = 0;
 
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+}
+
+function runRuntimeVerifier(
+  challenge: WorkBenchChallenge,
+  files: Record<string, string>
+): { passed: boolean; score: number; assertions?: unknown[] } {
+  const dir = mkdtempSync(join(tmpdir(), "workbench-verifier-"));
+  try {
+    writeFileSync(
+      join(dir, "case-meta.json"),
+      JSON.stringify(
+        {
+          id: challenge.id,
+          baseFiles: challenge.baseFiles,
+          referenceFiles: challenge.referenceFiles,
+          verifier: challenge.verifier,
+        },
+        null,
+        2
+      )
+    );
+    writeFileSync(join(dir, "verifier.mjs"), WORKBENCH_VERIFIER);
+    for (const [relativePath, content] of Object.entries({
+      ...challenge.baseFiles,
+      ...files,
+    })) {
+      const target = join(dir, relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, content);
+    }
+    try {
+      execFileSync("node", ["verifier.mjs"], { cwd: dir });
+    } catch {
+      // Failing candidates exit nonzero after writing verifier-result.json.
+    }
+    return JSON.parse(
+      readFileSync(join(dir, "verifier-result.json"), "utf8")
+    ) as { passed: boolean; score: number; assertions?: unknown[] };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 check(
@@ -47,6 +100,14 @@ for (const challenge of WORKBENCH_CHALLENGES) {
       ])
     ),
   });
+  const runtimeReference = runRuntimeVerifier(
+    challenge,
+    challenge.referenceFiles
+  );
+  const runtimeNegative = runRuntimeVerifier(
+    challenge,
+    challenge.negativeControlFiles
+  );
   check(
     `${challenge.id} reference solution passes`,
     reference.passed && reference.score === 1,
@@ -66,6 +127,23 @@ for (const challenge of WORKBENCH_CHALLENGES) {
     `${challenge.id} verifier does not use exact-reference assertion ids`,
     reference.assertions.every((assertion) => !assertion.id.includes("reference")),
     reference.assertions
+  );
+  check(
+    `${challenge.id} runtime verifier matches TS on reference`,
+    runtimeReference.passed === reference.passed &&
+      Math.abs(runtimeReference.score - reference.score) < 1e-9,
+    { runtimeReference, reference }
+  );
+  check(
+    `${challenge.id} runtime verifier matches TS on negative control`,
+    runtimeNegative.passed === negative.passed &&
+      Math.abs(runtimeNegative.score - negative.score) < 1e-9,
+    { runtimeNegative, negative }
+  );
+  check(
+    `${challenge.id} runtime verifier rejects negative control`,
+    runtimeNegative.passed === false,
+    runtimeNegative
   );
   if (challenge.kind === "large-file-surgical-patch") {
     const path = Object.keys(challenge.referenceFiles)[0];
