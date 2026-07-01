@@ -266,16 +266,9 @@ export function buildBenchmarkDashboardData(
     score.buildBadOutput += stat.badOutput;
     score.providerErrors += stat.unavailable;
     score.completions += Math.max(0, stat.attempts - stat.unavailable);
-    // Build stats expose only approvals/fixes/badOutput, so the
-    // structured-output, tool-use, and verifier axes below are derived from the
-    // same tallies and are correlated for build-derived rows. Drive them from
-    // separate schema/tool/verifier signals if those are recorded per attempt.
-    score.schemaValid += stat.approvals + stat.fixes;
-    score.schemaInvalid += stat.badOutput;
-    score.toolValid += stat.approvals + stat.fixes;
-    score.toolInvalid += stat.badOutput;
-    score.verifierPasses += stat.approvals;
-    score.verifierFailures += stat.fixes + stat.badOutput;
+    // Build stats do not record independent schema/tool/verifier outcomes.
+    // Keep bad output in the build outcome fields instead of fanning it out
+    // into three separate reliability axes.
     if (stat.responseMs > 0) {
       score.latencyMs += stat.responseMs;
       score.latencySamples += Math.max(1, stat.approvals + stat.fixes);

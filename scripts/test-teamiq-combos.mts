@@ -222,6 +222,38 @@ check(
   mixedCostRow
 );
 
+const tieBreakTeam = deriveTeamComposition({
+  name: "Tie break pair",
+  roles: [
+    { ...gptRole, slot: "architect-tie-break" },
+    { ...geminiRole, slot: "worker-tie-break" },
+  ],
+});
+const tieAttemptsPositiveFirst = tiedLabelAttempts(tieBreakTeam.id, [
+  "positive",
+  "negative",
+]);
+const tieAttemptsNegativeFirst = tiedLabelAttempts(tieBreakTeam.id, [
+  "negative",
+  "positive",
+]);
+const positiveFirstTie = buildTeamIqComboMatrixRows({
+  attempts: tieAttemptsPositiveFirst,
+  teamCompositions: [soloGpt, soloGemini, tieBreakTeam],
+  track: "teamiq",
+}).find((row) => row.teamCompositionId === tieBreakTeam.id);
+const negativeFirstTie = buildTeamIqComboMatrixRows({
+  attempts: tieAttemptsNegativeFirst,
+  teamCompositions: [soloGpt, soloGemini, tieBreakTeam],
+  track: "teamiq",
+}).find((row) => row.teamCompositionId === tieBreakTeam.id);
+check(
+  "tied TeamIQ lift labels resolve conservatively and independent of attempt order",
+  positiveFirstTie?.teamLiftLabel === "negative" &&
+    negativeFirstTie?.teamLiftLabel === "negative",
+  { positiveFirstTie, negativeFirstTie }
+);
+
 function attempt(
   id: string,
   teamCompositionId: string,
@@ -259,6 +291,25 @@ function attempt(
     promptSetVersion: "test-prompts",
     scoringVersion: "test-scoring",
   };
+}
+
+function tiedLabelAttempts(
+  teamCompositionId: string,
+  order: Array<"positive" | "negative">
+): BenchmarkAttemptV2[] {
+  const attemptsByKind: Record<"positive" | "negative", BenchmarkAttemptV2[]> = {
+    positive: [
+      attempt("tie-positive-solo-gpt", soloGpt.id, "tie-positive", 70, 0.7, 1, 10_000, "raw-single-model"),
+      attempt("tie-positive-solo-gemini", soloGemini.id, "tie-positive", 65, 0.65, 1, 10_000, "raw-single-model"),
+      attempt("tie-positive-team", teamCompositionId, "tie-positive", 82, 0.82, 0.5, 9_000, "aiboard-build-multi-worker"),
+    ],
+    negative: [
+      attempt("tie-negative-solo-gpt", soloGpt.id, "tie-negative", 80, 0.8, 1, 10_000, "raw-single-model"),
+      attempt("tie-negative-solo-gemini", soloGemini.id, "tie-negative", 70, 0.7, 1, 10_000, "raw-single-model"),
+      attempt("tie-negative-team", teamCompositionId, "tie-negative", 70, 0.7, 0.5, 9_000, "aiboard-build-multi-worker"),
+    ],
+  };
+  return order.flatMap((kind) => attemptsByKind[kind]);
 }
 
 if (failures === 0) {

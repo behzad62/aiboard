@@ -10,17 +10,20 @@ import {
   listBenchmarkTeamCompositions,
   listBenchmarkToolCallTraces,
   listBenchmarkVerifierResults,
+  saveBenchmarkRun,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import { reconcileStaleCertifiedRuns } from "../lib/benchmark/certified/run-persistence";
 import { certifiedRunBudgetForCase } from "../lib/benchmark/certified/run-budget";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
   BenchmarkFailure,
   BenchmarkModelCallTrace,
+  BenchmarkRun,
   BenchmarkTeamComposition,
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
@@ -150,6 +153,17 @@ const passingCertification = {
   passed: true,
   checks: [{ id: "run-engine-fixture", label: "Run engine fixture", passed: true }],
 };
+const certificationStartedAtMs = Date.now();
+const runtimeCertification = runHarnessCertification("raw-single-model");
+const certificationCompletedAtMs = Date.now();
+const runtimeCertificationAtMs = Date.parse(runtimeCertification.createdAt);
+check(
+  "harness certification createdAt is generated at runtime",
+  runtimeCertification.createdAt !== "2026-06-27T00:00:00.000Z" &&
+    runtimeCertificationAtMs >= certificationStartedAtMs &&
+    runtimeCertificationAtMs <= certificationCompletedAtMs + 1000,
+  runtimeCertification
+);
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseOne);
@@ -191,6 +205,43 @@ await expectReject(
     }),
   /missing certified case/i
 );
+
+const abortController = new AbortController();
+let runnerReceivedAbortSignal = false;
+const abortedSummary = await runCertifiedBenchmark({
+  runId: "run-certified-engine-aborted",
+  suiteId: "suite-engine",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseOne.id],
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  signal: abortController.signal,
+  runner: async (_context, options) => {
+    runnerReceivedAbortSignal = options?.signal === abortController.signal;
+    abortController.abort("test cancellation");
+  },
+});
+const abortedAttempt = (await listBenchmarkAttemptsV2()).find(
+  (attempt) => attempt.runId === abortedSummary.runId
+);
+check(
+  "certified run forwards AbortSignal to runner",
+  runnerReceivedAbortSignal,
+  runnerReceivedAbortSignal
+);
+check(
+  "aborted certified run creates excluded aborted_user attempt",
+  abortedSummary.status === "failed" &&
+    abortedAttempt?.status === "aborted_user" &&
+    abortedAttempt.verifiedQuality === 0,
+  { summary: abortedSummary, attempt: abortedAttempt }
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(caseOne);
+await saveBenchmarkCaseV2(caseTwo);
+await saveBenchmarkTeamComposition(team);
 
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-engine",
@@ -536,6 +587,57 @@ check(
   "single trace is not multiplied across teams",
   summedCalls === 1 && summedInput === 6 && Math.abs(summedCost - 0.001) < 1e-9,
   { summedCalls, summedInput, summedCost }
+);
+check(
+  "runner crash synthesized attempts use profile version metadata",
+  multiTeamAttempts.every(
+    (attempt) =>
+      attempt.harnessVersion === "raw-single-model-v0.1" &&
+      attempt.promptSetVersion === "certified-prompts-v0.1"
+  ),
+  multiTeamAttempts.map((attempt) => ({
+    harnessVersion: attempt.harnessVersion,
+    promptSetVersion: attempt.promptSetVersion,
+  }))
+);
+
+__resetBenchmarkStoreForTests();
+const staleStartedAt = "2026-06-28T08:00:00.000Z";
+const staleRun: BenchmarkRun = {
+  id: "run-certified-engine-stale",
+  suiteId: "suite-engine",
+  name: "Stale certified run",
+  domain: "game",
+  status: "running",
+  startedAt: staleStartedAt,
+  source: "manual",
+  modelIds: ["openai:gpt-engine"],
+  caseIds: [caseOne.id],
+  summaryJson: JSON.stringify({
+    mode: "certified",
+    track: "gameiq",
+    harnessProfile: "raw-single-model",
+    teamCompositionIds: [team.id],
+    modelBudget: { maxWallClockMs: 1_000 },
+  }),
+  metricValueIds: [],
+  artifactIds: [],
+  failureIds: [],
+};
+await saveBenchmarkRun(staleRun);
+const staleReconciled = await reconcileStaleCertifiedRuns(
+  Date.parse(staleStartedAt) + 11 * 60 * 1000
+);
+const staleAfter = (await listBenchmarkRuns()).find(
+  (run) => run.id === staleRun.id
+);
+check(
+  "stale certified running records are failed after their budget window",
+  staleReconciled === 1 &&
+    staleAfter?.status === "failed" &&
+    Boolean(staleAfter.completedAt) &&
+    staleAfter.summaryJson.includes("staleReconciledAt"),
+  { staleReconciled, staleAfter }
 );
 
 if (failures === 0) {

@@ -3,6 +3,7 @@ import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatu
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
 import { round } from "@/lib/benchmark/scoring/types";
 import { isProviderFailureMessage } from "@/lib/benchmark/certified/classify-provider-failure";
+import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
@@ -39,6 +40,7 @@ export async function executeWorkBenchVerifierOnly(
   }
 
   try {
+    throwIfCertifiedRunAborted(input.signal);
     const preparedAttempt = await prepareBenchCase(input.runner, {
       attemptId: input.attemptId,
       caseId: input.case.id,
@@ -57,6 +59,7 @@ export async function executeWorkBenchVerifierOnly(
 
     let buildResult: WorkBenchBuildExecutionResult;
     try {
+      throwIfCertifiedRunAborted(input.signal);
       buildResult = await input.runBuild({
         case: input.case,
         runner: input.runner,
@@ -65,7 +68,9 @@ export async function executeWorkBenchVerifierOnly(
         teamCompositionId: input.teamCompositionId,
         harnessProfile,
         allowedCommands: input.case.allowedCommands,
+        signal: input.signal,
       });
+      throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
       const failure = classifyBuildFailure(error);
       return createFailedWorkBenchAttempt(input, {
@@ -115,6 +120,7 @@ export async function executeWorkBenchVerifierOnly(
     let verifierRun: WorkBenchRunVerifierResult;
     let parsedVerifierResult: ParsedWorkBenchVerifierResult;
     try {
+      throwIfCertifiedRunAborted(input.signal);
       verifierRun = await runBenchVerifier(input.runner, {
         attemptId,
         timeoutSeconds: input.case.verifier.timeoutSeconds,
@@ -123,6 +129,7 @@ export async function executeWorkBenchVerifierOnly(
         verifierRun.stdoutPreview,
         verifierRun.resultJson
       );
+      throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
       return createFailedWorkBenchAttempt(input, {
         attemptId,
@@ -397,6 +404,9 @@ function findBudgetFailure(
 
 function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
   const message = errorMessage(error).toLowerCase();
+  if (/abort|cancel/.test(message)) {
+    return { status: "aborted_user", code: "aborted_user" };
+  }
   if (/runner|connect|network|fetch|workspace/.test(message)) {
     return { status: "invalid_environment", code: "runner_unavailable" };
   }
@@ -408,6 +418,9 @@ function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatu
 
 function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
   const message = errorMessage(error).toLowerCase();
+  if (/abort|cancel/.test(message)) {
+    return { status: "aborted_user", code: "aborted_user" };
+  }
   if (isProviderFailureMessage(message)) {
     return { status: "provider_unavailable", code: "provider_unavailable" };
   }

@@ -353,6 +353,26 @@ await expectReject(
   /verifier/i
 );
 await expectReject(
+  "malformed legacy trace retry history rejected",
+  () =>
+    importBenchmarkReportBundleV2({
+      ...bundleV2,
+      traces: [
+        {
+          id: "legacy-trace-invalid",
+          runId: "run-1",
+          caseId: caseV2.id,
+          attemptId: attemptV2.id,
+          modelId: "openai:gpt-test",
+          providerId: "openai",
+          startedAt: createdAt,
+          retryHistory: {} as never,
+        },
+      ],
+    }),
+  /trace/i
+);
+await expectReject(
   "missing run events array rejected",
   () => importBenchmarkReportBundleV2({ ...bundleV2, runEvents: undefined } as never),
   /runEvents/i
@@ -431,6 +451,25 @@ await expectReject(
   "malformed harness certification profile rejected",
   () => importBenchmarkReportBundleV2({ ...bundleV2, harnessCertifications: [{ ...certification, harnessProfile: "browser" } as never] }),
   /harness/i
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkAttemptV2({
+  ...attemptV2,
+  completedAt: "2026-07-01T00:00:00.000Z",
+  verifiedQuality: 0.99,
+});
+await importBenchmarkReportBundleV2({
+  ...bundleV2,
+  attemptsV2: [{ ...attemptV2, verifiedQuality: 0.01 }],
+});
+const staleAttemptImport = (await listBenchmarkAttemptsV2()).find(
+  (attempt) => attempt.id === attemptV2.id
+);
+check(
+  "stale same-id attempt import does not clobber newer local certified attempt",
+  staleAttemptImport?.verifiedQuality === 0.99,
+  staleAttemptImport
 );
 
 if (failures === 0) {

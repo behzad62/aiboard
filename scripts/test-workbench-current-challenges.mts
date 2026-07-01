@@ -14,7 +14,10 @@ import {
   runWorkBenchChallengeVerifier,
   type WorkBenchChallenge,
 } from "../lib/benchmark/workbench/challenges";
-import { WORKBENCH_VERIFIER } from "../lib/benchmark/workbench/corpus";
+import {
+  listWorkBenchChallenges,
+  WORKBENCH_VERIFIER,
+} from "../lib/benchmark/workbench/corpus";
 
 let failures = 0;
 
@@ -65,12 +68,13 @@ function runRuntimeVerifier(
 }
 
 check(
-  "WorkBench has 12 current verified challenges",
-  WORKBENCH_CHALLENGES.length === 12,
-  WORKBENCH_CHALLENGES.map((item) => item.id)
+  "WorkBench has 19 current verified challenges",
+  listWorkBenchChallenges().length === 19,
+  listWorkBenchChallenges().map((item) => item.id)
 );
 
-const kinds = new Set(WORKBENCH_CHALLENGES.map((item) => item.kind));
+const currentChallenges = listWorkBenchChallenges();
+const kinds = new Set(currentChallenges.map((item) => item.kind));
 for (const kind of [
   "large-file-surgical-patch",
   "multi-file-contract",
@@ -82,7 +86,7 @@ for (const kind of [
   check(`WorkBench includes ${kind}`, kinds.has(kind as never), [...kinds]);
 }
 
-for (const challenge of WORKBENCH_CHALLENGES) {
+for (const challenge of currentChallenges) {
   const reference = runWorkBenchChallengeVerifier({
     challenge,
     files: challenge.referenceFiles,
@@ -168,6 +172,76 @@ for (const challenge of WORKBENCH_CHALLENGES) {
     );
   }
 }
+
+const duplicateSentinelChallenge: WorkBenchChallenge = {
+  id: "workbench-duplicate-sentinel-test",
+  title: "Duplicate sentinel corruption test",
+  kind: "large-file-surgical-patch",
+  difficulty: "hard",
+  prompt: "Patch only the target branch and preserve both duplicated sentinels.",
+  tags: ["workbench", "test"],
+  baseFiles: {
+    "src/app.ts": [
+      "export function first() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+      "export function target() {",
+      "  return 'old';",
+      "}",
+      "export function second() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+    ].join("\n"),
+  },
+  referenceFiles: {
+    "src/app.ts": [
+      "export function first() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+      "export function target() {",
+      "  return 'new';",
+      "}",
+      "export function second() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+    ].join("\n"),
+  },
+  negativeControlFiles: {
+    "src/app.ts": [
+      "export function first() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+      "export function target() {",
+      "  return 'new';",
+      "}",
+      "export function second() {",
+      "  return CORRUPTED_SENTINEL;",
+      "}",
+    ].join("\n"),
+  },
+  verifier: {
+    requiredSnippets: { "src/app.ts": ["return 'new';"] },
+    requiredUnchangedSnippets: { "src/app.ts": ["return SHARED_SENTINEL;"] },
+  },
+};
+const duplicateSentinelTs = runWorkBenchChallengeVerifier({
+  challenge: duplicateSentinelChallenge,
+  files: duplicateSentinelChallenge.negativeControlFiles,
+});
+const duplicateSentinelRuntime = runRuntimeVerifier(
+  duplicateSentinelChallenge,
+  duplicateSentinelChallenge.negativeControlFiles
+);
+check(
+  "WorkBench verifier detects when one of several identical unchanged snippets is corrupted",
+  !duplicateSentinelTs.passed && duplicateSentinelTs.score < 1,
+  duplicateSentinelTs
+);
+check(
+  "runtime WorkBench verifier detects duplicate unchanged snippet corruption",
+  !duplicateSentinelRuntime.passed && duplicateSentinelRuntime.score < 1,
+  duplicateSentinelRuntime
+);
 
 const largeFileChallenges = WORKBENCH_CHALLENGES.filter((challenge) =>
   challenge.tags.includes("large-file-surgical-patch") ||

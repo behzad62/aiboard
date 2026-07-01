@@ -16,11 +16,19 @@ function expected(
 }
 
 const firstShotState = createInitialBattleshipState();
-const followUpHitState = fireBattleshipShot(
+const firstCarrierHitState = fireBattleshipShot(
   createInitialBattleshipState(),
   { row: 0, column: 0 },
   0
 );
+const followCarrierLineState = {
+  ...fireBattleshipShot(
+    { ...firstCarrierHitState, turn: "blue" },
+    { row: 0, column: 1 },
+    1
+  ),
+  turn: "blue" as const,
+};
 
 const BATTLESHIP_BASE_SCENARIOS: BattleshipGameIqScenario[] = [
   {
@@ -49,11 +57,11 @@ const BATTLESHIP_BASE_SCENARIOS: BattleshipGameIqScenario[] = [
     difficulty: "easy",
     version: "0.1.0",
     prompt:
-      "Orange to move after blue hit A1. Return a legal target that follows the known carrier line.",
-    initialState: followUpHitState,
+      "Blue to move after hitting the orange carrier at A1 and A2. Return the target coordinate that continues the known carrier line.",
+    initialState: followCarrierLineState,
     expectedActions: expected(
-      { target: { row: 0, column: 1 } },
-      "A2",
+      { target: { row: 0, column: 2 } },
+      "A3",
       "Continue along the carrier row."
     ),
     tags: ["battleship", "targeting", "follow-up"],

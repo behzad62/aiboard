@@ -352,12 +352,25 @@ const runnerStatusSource = readFileSync(
   "components/benchmark/workbench/WorkBenchRunnerStatus.tsx",
   "utf8"
 );
+const certifiedRunPanelSource = readFileSync(
+  "components/benchmark/certified/CertifiedRunPanel.tsx",
+  "utf8"
+);
 check(
   "WorkBench runner panel links the generated benchmark runner download",
   runnerStatusSource.includes('href="/bench-runner.mjs"') &&
     runnerStatusSource.includes('download="bench-runner.mjs"') &&
     runnerStatusSource.includes("Download bench runner"),
   runnerStatusSource
+);
+check(
+  "certified run timeline uses distinct phase state",
+  certifiedRunPanelSource.includes("runPhase") &&
+    certifiedRunPanelSource.includes('"certifying"') &&
+    certifiedRunPanelSource.includes('"persisting"') &&
+    !certifiedRunPanelSource.includes('{ label: "Certify", status: running ? "running" : summary ? "done" : "idle" }') &&
+    !certifiedRunPanelSource.includes('{ label: "Run", status: running ? "running" : summary ? "done" : "idle" }'),
+  certifiedRunPanelSource
 );
 
 if (failures === 0) {

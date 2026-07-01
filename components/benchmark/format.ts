@@ -20,8 +20,12 @@ export function duration(value: number | null): string {
 
 export function formatScore(value: number | null): string {
   if (value == null) return "n/a";
-  const score = value <= 1 ? value * 100 : value;
-  return `${Math.round(score * 10) / 10}`;
+  return `${Math.round(value * 10) / 10}`;
+}
+
+export function formatNormalizedScore(value: number | null): string {
+  if (value == null) return "n/a";
+  return formatScore(value * 100);
 }
 
 export function shortModel(modelId: string): string {

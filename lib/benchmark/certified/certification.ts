@@ -97,7 +97,7 @@ export function runHarnessCertification(
 
   return {
     id: `harness-cert:${profile}:${definition.harnessVersion}`,
-    createdAt: "2026-06-27T00:00:00.000Z",
+    createdAt: new Date().toISOString(),
     aiboardVersion: AIBOARD_VERSION,
     benchmarkEngineVersion: AIBOARD_BENCHMARK_ENGINE_VERSION,
     harnessProfile: profile,

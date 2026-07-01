@@ -160,14 +160,15 @@ function parseEnvironment(record: Record<string, unknown>): WorkBenchEnvironment
     NETWORKS,
     "network"
   );
+  if (record.memoryMb !== undefined && record.memoryMb !== null) {
+    throw new Error(
+      "WorkBench v0.1 local runner cannot enforce environment.memoryMb; omit it instead of implying a memory boundary."
+    );
+  }
   return {
     type: "local-runner",
     setupCommand: optionalString(record, "setupCommand"),
     timeoutSeconds: positiveNumber(record.timeoutSeconds, "environment.timeoutSeconds"),
-    memoryMb:
-      record.memoryMb === undefined
-        ? undefined
-        : positiveNumber(record.memoryMb, "environment.memoryMb"),
     network,
   };
 }

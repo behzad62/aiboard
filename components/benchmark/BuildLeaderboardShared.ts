@@ -31,7 +31,7 @@ export const BUILD_LEADERBOARD_COLUMNS: {
   { key: "quality", label: "Architect-reviewed quality", align: "right" },
   { key: "qualityPerAttempt", label: "Architect-reviewed quality/att.", align: "right" },
   { key: "approval", label: "Approval", align: "right" },
-  { key: "speed", label: "Speed", align: "right" },
+  { key: "speed", label: "Throughput", align: "right" },
   { key: "availability", label: "Avail.", align: "right" },
   { key: "builds", label: "Builds", align: "right" },
   { key: "attempts", label: "Attempts", align: "right" },
@@ -69,6 +69,10 @@ export function compareBuildStats(
 
 export function formatBuildAvailability(s: ModelBuildStat): string {
   return pct(availability(s));
+}
+
+export function formatBuildQualityBadge(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 export function outcomeSegmentCounts(s: ModelBuildStat): BuildOutcomeSegmentCounts {

@@ -7,6 +7,8 @@ import { scoreTeamLift } from "./teamiq";
 import type { CertifiedAggregateInput, CertifiedRunScore } from "./types";
 import { finiteOrNull, round } from "./types";
 
+const MIN_CONFIDENT_ATTEMPTS = 3;
+
 type AttemptLike = BenchmarkAttemptV2 & {
   status?: string;
   verifiedQuality?: number;
@@ -121,6 +123,7 @@ export function rankByVerifiedQuality<T extends Partial<CertifiedRunScore>>(
 ): T[] {
   return [...rows].sort(
     (a, b) =>
+      comparePreliminary(a, b) ||
       compareNumberDesc(a.verifiedQuality, b.verifiedQuality) ||
       compareNumberDesc(a.verifiedPassRate, b.verifiedPassRate) ||
       compareNumberDesc(a.attempts, b.attempts) ||
@@ -239,6 +242,7 @@ function finalizeGroup(group: MutableCertifiedRunScore): CertifiedRunScore {
     modelIds: group.modelIds,
     tracks: Array.from(group.tracks).sort(),
     attempts: group.attempts,
+    preliminary: group.attempts > 0 && group.attempts < MIN_CONFIDENT_ATTEMPTS,
     cases: group.caseIds.size,
     passed: group.passed,
     failed: group.failed,
@@ -335,6 +339,20 @@ function compareNumberDesc(
   if (aValue == null) return 1;
   if (bValue == null) return -1;
   return bValue - aValue;
+}
+
+function comparePreliminary<T extends Partial<CertifiedRunScore>>(
+  a: T,
+  b: T
+): number {
+  return Number(isPreliminary(a)) - Number(isPreliminary(b));
+}
+
+function isPreliminary(row: Partial<CertifiedRunScore>): boolean {
+  if (typeof row.preliminary === "boolean") return row.preliminary;
+  return typeof row.attempts === "number" &&
+    row.attempts > 0 &&
+    row.attempts < MIN_CONFIDENT_ATTEMPTS;
 }
 
 function compareNumberAsc(

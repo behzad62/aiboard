@@ -130,6 +130,19 @@ try {
   });
   check("prepare rejects command execution with network none", rejectedNetworkNone.status === 400, rejectedNetworkNone);
 
+  const rejectedMemoryLimit = await request(baseUrl, "/bench/prepare", token, {
+    caseId: "workbench-contract-memory-limit",
+    repoUrl: "fixture://inline",
+    baseCommit: "fixture-base",
+    network: "dependency-only",
+    timeoutSeconds: 30,
+    memoryMb: 2048,
+    files: {
+      "input.txt": "hello\n",
+    },
+  });
+  check("prepare rejects unsupported memory limits", rejectedMemoryLimit.status === 400, rejectedMemoryLimit);
+
   const namedFixtureRejected = await request(baseUrl, "/bench/prepare", token, {
     attemptId: "fixture-resolution-attempt",
     caseId: "workbench-ts-cli-csv-0001",

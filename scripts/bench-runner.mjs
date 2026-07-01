@@ -81,7 +81,7 @@ server.listen(port, host, () => {
   console.error(
     "bench-runner v0.1 isolation: commands run with FULL host privileges. " +
       "'network: dependency-only' is a label, not a boundary; " +
-      "'memoryMb' is NOT enforced. Run only trusted cases."
+      "'memoryMb' requests are rejected. Run only trusted cases."
   );
 });
 
@@ -207,6 +207,12 @@ async function prepare(body) {
   const network = optionalString(body, "network") ?? "none";
   if (network !== "none" && network !== "dependency-only") {
     throw new HttpError(400, "Bench runner v0.1 only allows network none or dependency-only.");
+  }
+  if (body.memoryMb !== undefined && body.memoryMb !== null) {
+    throw new HttpError(
+      400,
+      "Bench runner v0.1 cannot enforce memoryMb; omit memoryMb instead of implying a memory boundary."
+    );
   }
   const setupCommand = optionalString(body, "setupCommand");
   const verifierCommand = optionalString(body, "verifierCommand");

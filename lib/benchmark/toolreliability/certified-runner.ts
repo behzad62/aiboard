@@ -1,4 +1,8 @@
-import { callCertifiedModel, type CertifiedModelStream } from "@/lib/benchmark/certified/model-call";
+import {
+  callCertifiedModel,
+  throwIfCertifiedRunAborted,
+  type CertifiedModelStream,
+} from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type {
   BenchmarkAttemptV2,
@@ -34,6 +38,7 @@ export interface RunCertifiedToolReliabilityInput {
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  signal?: AbortSignal;
 }
 
 export async function runCertifiedToolReliability(
@@ -45,7 +50,9 @@ export async function runCertifiedToolReliability(
 
   const attempts: BenchmarkAttemptV2[] = [];
   for (const teamCompositionId of input.teamCompositionIds) {
+    throwIfCertifiedRunAborted(input.signal);
     for (const model of input.models) {
+      throwIfCertifiedRunAborted(input.signal);
       attempts.push(
         await runCertifiedToolReliabilityAttempt({
           ...input,
@@ -76,6 +83,7 @@ async function runCertifiedToolReliabilityAttempt(
   const outputs: ToolReliabilityCandidate["outputs"] = {};
 
   for (const benchmarkCase of input.casePack) {
+    throwIfCertifiedRunAborted(input.signal);
     const caseOutputs: string[] = [];
     if (benchmarkCase.category === "repair-loop") {
       caseOutputs.push(malformedToolReliabilityRepairSeed(benchmarkCase));
@@ -99,6 +107,7 @@ async function runCertifiedToolReliabilityAttempt(
         participantId: input.teamCompositionId,
         pricing: input.pricing,
         streamChat: input.streamChat,
+        signal: input.signal,
       });
       calls.push({
         traceId: call.traceId,
@@ -119,12 +128,14 @@ async function runCertifiedToolReliabilityAttempt(
     teamCompositionId: input.teamCompositionId,
     outputs,
   };
+  const verifierStartedMs = Date.now();
   const result = runToolReliabilityPack(candidate, input.casePack);
   const verifierResult = createToolReliabilityVerifierResult(
     attemptId,
     caseId,
     result.caseResults,
-    result.score
+    result.score,
+    Math.max(0, Date.now() - verifierStartedMs)
   );
   await input.context.recordVerifier(verifierResult);
   for (const trace of toolCallTracesForResult(attemptId, result.caseResults)) {
@@ -153,11 +164,12 @@ async function runCertifiedToolReliabilityAttempt(
   };
 }
 
-function createToolReliabilityVerifierResult(
+export function createToolReliabilityVerifierResult(
   attemptId: string,
   caseId: string,
   caseResults: ToolReliabilityCaseResult[],
-  score: number
+  score: number,
+  durationMs: number
 ): BenchmarkVerifierResult {
   const diagnoses = caseResults.map(diagnoseToolReliabilityCaseResult);
   const diagnosesByCaseId = new Map(
@@ -192,7 +204,7 @@ function createToolReliabilityVerifierResult(
     caseId,
     passed,
     score: score / 100,
-    durationMs: caseResults.reduce((sum, result) => sum + result.attempts, 0),
+    durationMs,
     resultJson,
     assertionResults: assertions,
     artifactIds: [],

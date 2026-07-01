@@ -1,4 +1,5 @@
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
+import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
 import type { BenchmarkAttemptV2, BenchmarkTeamComposition } from "@/lib/benchmark/types";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
@@ -27,6 +28,7 @@ export interface RunCertifiedWorkBenchInput {
   runBuildDiscussion?: RunBuildDiscussionFn;
   getBenchmarkTraces?: WorkBenchBuildAdapterInput["getBenchmarkTraces"];
   cleanup?: boolean;
+  signal?: AbortSignal;
 }
 
 export async function runCertifiedWorkBench(
@@ -38,11 +40,13 @@ export async function runCertifiedWorkBench(
     input.teamCompositions?.map((team) => team.id) ??
     [];
   for (const teamCompositionId of teamCompositionIds) {
+    throwIfCertifiedRunAborted(input.signal);
     const teamComposition =
       input.teamCompositions?.find((team) => team.id === teamCompositionId) ??
       null;
     const models = modelsForWorkBenchTeam(teamComposition, input.models ?? []);
     for (const workBenchCase of input.cases) {
+      throwIfCertifiedRunAborted(input.signal);
       const result = await executeWorkBenchVerifierOnly({
         case: workBenchCase,
         runner: input.runner,
@@ -51,6 +55,7 @@ export async function runCertifiedWorkBench(
         teamCompositionId,
         harnessProfile: input.context.harnessProfile,
         cleanup: input.cleanup,
+        signal: input.signal,
         runBuild:
           input.runBuild ??
           ((buildInput) =>
@@ -61,6 +66,7 @@ export async function runCertifiedWorkBench(
               teamComposition: teamComposition ?? undefined,
               runBuildDiscussion: input.runBuildDiscussion,
               getBenchmarkTraces: input.getBenchmarkTraces,
+              signal: input.signal,
             })),
       });
       await input.context.recordVerifier(result.verifierResult);

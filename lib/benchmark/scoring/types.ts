@@ -100,6 +100,7 @@ export interface CertifiedRunScore {
   modelIds: string[];
   tracks: string[];
   attempts: number;
+  preliminary: boolean;
   cases: number;
   passed: number;
   failed: number;

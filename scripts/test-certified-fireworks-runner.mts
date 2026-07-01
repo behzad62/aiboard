@@ -89,6 +89,85 @@ check(
   seededEvents.map((event) => event.seeded)
 );
 
+__resetBenchmarkStoreForTests();
+const memoryCaseV2 = fireworksCaseToBenchmarkCaseV2(
+  "fireworks-teamiq-memory-redaction-test",
+  "memory"
+);
+await saveBenchmarkCaseV2(memoryCaseV2);
+const memoryTeam = deriveTeamComposition({
+  name: "Memory Redaction Solo",
+  roles: [
+    {
+      role: "player",
+      slot: "P1",
+      modelId: "openai:memory-redaction",
+      providerId: "openai",
+      displayName: "Memory Redaction",
+      temperature: 0,
+    },
+  ],
+  strategy: "panel",
+});
+await saveBenchmarkTeamComposition(memoryTeam);
+let capturedMemoryView: {
+  ownHand?: {
+    cards?: Array<{
+      color?: unknown;
+      rank?: unknown;
+      knowledge?: { color?: unknown; rank?: unknown };
+    }>;
+    knowledge?: Array<{ color?: unknown; rank?: unknown }>;
+  };
+  recommendations?: {
+    knownPlayableCards?: unknown[];
+    visiblePlayableClues?: unknown[];
+    safeDiscards?: unknown[];
+  };
+} | null = null;
+await runCertifiedBenchmark({
+  runId: "run-certified-fireworks-memory-redaction",
+  suiteId: "suite-certified-fireworks-memory",
+  track: "teamiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [memoryCaseV2.id],
+  teamCompositionIds: [memoryTeam.id],
+  certification: runHarnessCertification("raw-single-model"),
+  runner: (context) =>
+    runCertifiedFireworksTeamIq({
+      context,
+      teamCompositions: [memoryTeam],
+      cases: [memoryScenario],
+      includeSoloBaselines: false,
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        const userContent = String(params.messages.at(-1)?.content ?? "");
+        const viewJson = userContent
+          .split("Current hidden-safe player view JSON:\n")[1]
+          ?.split("\n\nChoose exactly one legal action.")[0];
+        capturedMemoryView = viewJson ? JSON.parse(viewJson) : null;
+        yield { type: "token", content: '{"action":"play","cardIndex":0}' };
+        yield { type: "done" };
+      },
+    }),
+});
+check(
+  "certified Fireworks memory prompts hide the player's own resolved identity",
+  capturedMemoryView?.ownHand?.cards?.every(
+    (card) =>
+      card.color == null &&
+      card.rank == null &&
+      card.knowledge?.color == null &&
+      card.knowledge?.rank == null
+  ) === true &&
+    capturedMemoryView?.ownHand?.knowledge?.every(
+      (knowledge) => knowledge.color == null && knowledge.rank == null
+    ) === true &&
+    (capturedMemoryView?.recommendations?.knownPlayableCards?.length ?? 0) === 0 &&
+    (capturedMemoryView?.recommendations?.visiblePlayableClues?.length ?? 0) === 0 &&
+    (capturedMemoryView?.recommendations?.safeDiscards?.length ?? 0) === 0,
+  capturedMemoryView
+);
+
 const selectedCases = FIREWORKS_TACTICS_SCENARIOS.filter(
   (scenario) => scenario.category === "safe_play"
 ).slice(0, 3);
@@ -163,6 +242,8 @@ const teamSummary = teamSummaryArtifact
         scoreKind?: unknown;
         scenarioQualityScore?: unknown;
         fullGameStackScore?: unknown;
+        finalScore?: unknown;
+        maxScore?: unknown;
       };
     }
   : null;
@@ -216,7 +297,9 @@ check(
   "scenario-only Fireworks summaries expose scenario quality, not stack score",
   teamSummary?.metrics?.scoreKind === "scenario" &&
     typeof teamSummary.metrics.scenarioQualityScore === "number" &&
-    teamSummary.metrics.fullGameStackScore === null,
+    teamSummary.metrics.fullGameStackScore === null &&
+    teamSummary.metrics.finalScore === null &&
+    teamSummary.metrics.maxScore === null,
   teamSummary
 );
 check(

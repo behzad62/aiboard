@@ -90,7 +90,7 @@ export function runFireworksCalibrationBots(input: {
       label: bot.label,
       caseCount: metrics.length,
       averageScore: round(average(metrics.map((item) => scoreFireworksTeamIq({ metrics: item })))),
-      averageStackScore: round(average(metrics.map((item) => item.finalScore))),
+      averageStackScore: round(average(metrics.map((item) => item.finalScore ?? 0))),
       averageBadPlays: round(average(metrics.map((item) => item.badPlays))),
       averageCriticalDiscards: round(
         average(metrics.map((item) => item.criticalDiscards))

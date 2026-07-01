@@ -1,6 +1,7 @@
 import {
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
+  listBenchmarkRuns,
   listBenchmarkTeamCompositions,
   listBenchmarkVerifierResults,
   listHarnessCertificationResults,
@@ -33,6 +34,10 @@ import type {
 } from "./run-context";
 import type { CertifiedBenchmarkDashboardData } from "@/lib/benchmark/scoring/types";
 import { createCertifiedBudgetController } from "./budget";
+
+const DEFAULT_STALE_CERTIFIED_RUN_MS = 24 * 60 * 60 * 1000;
+const STALE_CERTIFIED_RUN_GRACE_MS = 5 * 60 * 1000;
+const MIN_STALE_CERTIFIED_RUN_MS = 10 * 60 * 1000;
 
 export interface CreateCertifiedRunContextInput {
   runId: string;
@@ -129,6 +134,32 @@ export async function persistCertifiedRunRecord(run: BenchmarkRun): Promise<void
   await saveBenchmarkRun(run);
 }
 
+export async function reconcileStaleCertifiedRuns(
+  nowMs = Date.now()
+): Promise<number> {
+  const completedAt = new Date(nowMs).toISOString();
+  let reconciled = 0;
+  for (const run of await listBenchmarkRuns()) {
+    if (run.status !== "running" || !isCertifiedRunRecord(run)) continue;
+    const startedMs = Date.parse(run.startedAt);
+    if (!Number.isFinite(startedMs)) continue;
+    if (nowMs - startedMs < staleCertifiedRunMs(run)) continue;
+    await saveBenchmarkRun({
+      ...run,
+      status: "failed",
+      completedAt,
+      summaryJson: JSON.stringify({
+        ...parseRunSummary(run.summaryJson),
+        staleReconciledAt: completedAt,
+        staleReason:
+          "Certified run was still marked running after its budget window elapsed.",
+      }),
+    });
+    reconciled += 1;
+  }
+  return reconciled;
+}
+
 export async function persistCertifiedTeamCompositions(
   teams: BenchmarkTeamComposition[]
 ): Promise<void> {
@@ -138,6 +169,7 @@ export async function persistCertifiedTeamCompositions(
 }
 
 export async function rebuildCertifiedDashboardData(): Promise<CertifiedBenchmarkDashboardData> {
+  await reconcileStaleCertifiedRuns();
   const [
     caseV2,
     attemptsV2,
@@ -159,6 +191,49 @@ export async function rebuildCertifiedDashboardData(): Promise<CertifiedBenchmar
     teamCompositions,
     harnessCertifications,
   });
+}
+
+function isCertifiedRunRecord(run: BenchmarkRun): boolean {
+  return parseRunSummary(run.summaryJson).mode === "certified";
+}
+
+function staleCertifiedRunMs(run: BenchmarkRun): number {
+  const summary = parseRunSummary(run.summaryJson);
+  const budget = isRecord(summary.modelBudget) ? summary.modelBudget : {};
+  const maxWallClockMs = finitePositiveNumber(budget.maxWallClockMs);
+  const maxModelCalls = finitePositiveNumber(budget.maxModelCalls);
+  const maxModelCallMs = finitePositiveNumber(budget.maxModelCallMs);
+  const modelCallBudgetMs =
+    maxModelCalls != null && maxModelCallMs != null
+      ? maxModelCalls * maxModelCallMs
+      : null;
+  const budgetWindowMs = Math.max(maxWallClockMs ?? 0, modelCallBudgetMs ?? 0);
+  if (budgetWindowMs > 0) {
+    return Math.max(
+      MIN_STALE_CERTIFIED_RUN_MS,
+      budgetWindowMs + STALE_CERTIFIED_RUN_GRACE_MS
+    );
+  }
+  return DEFAULT_STALE_CERTIFIED_RUN_MS;
+}
+
+function parseRunSummary(summaryJson: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(summaryJson) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function finitePositiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertAttemptBelongsToRun(

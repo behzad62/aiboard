@@ -68,10 +68,9 @@ export function evaluateLargeFilePatchStressCase(input: {
     benchmarkCase.stress.disallowWholeFileRewrite &&
       edit?.ops.some((op) => {
         const searchLineCount = op.search.split("\n").length;
-        const originalLineCount = benchmarkCase.originalContent.split("\n").length;
         return (
           op.search.trim() === benchmarkCase.originalContent.trim() ||
-          searchLineCount > Math.max(benchmarkCase.stress.maxSearchLines ?? 25, originalLineCount * 0.25)
+          searchLineCount > (benchmarkCase.stress.maxSearchLines ?? 25)
         );
       })
   );
@@ -79,7 +78,7 @@ export function evaluateLargeFilePatchStressCase(input: {
     (snippet) => !content.includes(snippet)
   );
   const missingRequiredUnchangedSnippets = benchmarkCase.stress.requiredUnchangedSnippets.filter(
-    (snippet) => !content.includes(snippet)
+    (snippet) => occurrenceCount(content, snippet) < occurrenceCount(benchmarkCase.originalContent, snippet)
   );
   const forbiddenSnippetsPresent = (benchmarkCase.stress.forbiddenSnippets ?? []).filter(
     (snippet) => content.includes(snippet)
@@ -176,6 +175,19 @@ function countChangedLines(left: string, right: string): number {
     if ((leftLines[index] ?? "") !== (rightLines[index] ?? "")) changed += 1;
   }
   return changed;
+}
+
+function occurrenceCount(content: string, snippet: string): number {
+  if (snippet.length === 0) return 0;
+  let count = 0;
+  let offset = 0;
+  while (offset <= content.length) {
+    const index = content.indexOf(snippet, offset);
+    if (index === -1) break;
+    count += 1;
+    offset = index + snippet.length;
+  }
+  return count;
 }
 
 function rate<T>(values: T[], predicate: (value: T) => boolean): number {

@@ -55,6 +55,7 @@ export interface CallCertifiedModelInput {
   baseURL?: string;
   streamChat?: CertifiedModelStream;
   allowInvalidStructuredOutput?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface CertifiedModelCallResult {
@@ -70,6 +71,7 @@ export interface CertifiedModelCallResult {
 export async function callCertifiedModel(
   input: CallCertifiedModelInput
 ): Promise<CertifiedModelCallResult> {
+  throwIfCertifiedRunAborted(input.signal);
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const messages = buildCertifiedMessages(input);
@@ -118,6 +120,7 @@ export async function callCertifiedModel(
   });
   try {
     input.context.reserveModelCall?.({ inputTokens: preflightUsage.inputTokens });
+    assertProjectedUsdWithinBudget(input, preflightUsage, "model-call preflight");
   } catch (error) {
     await recordCertifiedBudgetEvent(input, error);
     throw error;
@@ -140,8 +143,10 @@ export async function callCertifiedModel(
   try {
     for await (const chunk of withCertifiedModelCallTimeout(
       streamChat({ providerId, params }),
-      certifiedModelCallTimeoutMs(input)
+      certifiedModelCallTimeoutMs(input),
+      input.signal
     )) {
+      throwIfCertifiedRunAborted(input.signal);
       if (
         typeof wallClockBudgetMs === "number" &&
         Number.isFinite(runStartedMs) &&
@@ -153,6 +158,20 @@ export async function callCertifiedModel(
       }
       if (chunk.type === "token" && chunk.content) {
         rawResponse += chunk.content;
+        try {
+          assertProjectedUsdWithinBudget(
+            input,
+            estimateModelCallUsage({
+              messages,
+              output: rawResponse,
+              maxTokens: input.maxTokens,
+            }),
+            "model-call streaming"
+          );
+        } catch (error) {
+          await recordCertifiedBudgetEvent(input, error);
+          throw error;
+        }
       } else if (chunk.type === "error") {
         throw new Error(chunk.error ?? "Certified provider returned an error.");
       }
@@ -354,15 +373,18 @@ async function* defaultCertifiedModelStream(
 
 async function* withCertifiedModelCallTimeout<T>(
   iterable: AsyncIterable<T>,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): AsyncIterable<T> {
   const iterator = iterable[Symbol.asyncIterator]();
   try {
     for (;;) {
+      throwIfCertifiedRunAborted(signal);
       const next = await withTimeout(
         iterator.next(),
         timeoutMs,
-        `Certified model call timed out after ${timeoutMs}ms.`
+        `Certified model call timed out after ${timeoutMs}ms.`,
+        signal
       );
       if (next.done) return;
       yield next.value;
@@ -375,18 +397,29 @@ async function* withCertifiedModelCallTimeout<T>(
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  message: string
+  message: string,
+  signal?: AbortSignal
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
   try {
+    throwIfCertifiedRunAborted(signal);
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
       }),
+      new Promise<T>((_, reject) => {
+        if (!signal) return;
+        abortListener = () => reject(abortedError(signal));
+        signal.addEventListener("abort", abortListener, { once: true });
+      }),
     ]);
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 
@@ -456,6 +489,42 @@ function estimateCertifiedModelUsd(input: {
     outputTokens: input.outputTokens,
     pricing,
   });
+}
+
+function assertProjectedUsdWithinBudget(
+  input: CallCertifiedModelInput,
+  usage: { inputTokens: number; outputTokens: number },
+  phase: string
+): void {
+  const maxUsd = input.context.modelBudget.maxUsd;
+  if (typeof maxUsd !== "number") return;
+  const estimatedUsd = estimateCertifiedModelUsd({
+    fullModelId: fullModelIdForPricing(input.model),
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    pricing: input.pricing,
+  });
+  if (typeof estimatedUsd !== "number" || !Number.isFinite(estimatedUsd)) return;
+  const priorUsd = input.context.budgetSnapshot?.().estimatedUsd ?? 0;
+  const projectedUsd = priorUsd + Math.max(0, estimatedUsd);
+  if (projectedUsd > maxUsd) {
+    throw new CertifiedBudgetExceededError(
+      `Certified budget exceeded during ${phase}: projected USD ${projectedUsd.toFixed(6)} exceeded maxUsd ${maxUsd}.`
+    );
+  }
+}
+
+export function throwIfCertifiedRunAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw abortedError(signal);
+}
+
+function abortedError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  const suffix =
+    typeof reason === "string" && reason.trim() ? ` ${reason.trim()}` : "";
+  return new Error(`Certified run aborted by user.${suffix}`);
 }
 
 function errorMessage(error: unknown): string {

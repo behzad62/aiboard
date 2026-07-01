@@ -106,7 +106,7 @@ export function computeFireworksMetricRates(
   const memoryDenominator =
     metrics.memoryConsistentActions + metrics.memoryInconsistentActions;
   const actualCostPerPoint =
-    metrics.costUsd !== null && metrics.finalScore > 0
+    metrics.costUsd !== null && metrics.finalScore !== null && metrics.finalScore > 0
       ? metrics.costUsd / metrics.finalScore
       : null;
   const efficiencyFactor =

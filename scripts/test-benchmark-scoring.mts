@@ -175,9 +175,42 @@ const metricModel = metricDashboard.models.find(
   (model) => model.modelId === "model:quality-metric"
 );
 check(
-  "quality metric does not inflate verifierPassRate",
-  metricModel?.verifierPassRate === 0.5,
+  "build-only quality metric does not synthesize verifierPassRate",
+  metricModel?.verifierPassRate === null,
   metricModel
+);
+
+const buildBadOutputDashboard = buildBenchmarkDashboardData({
+  gameMatches: [],
+  buildStats: [
+    modelBuildStat({
+      modelId: "model:bad-output-only",
+      displayName: "Bad Output Only",
+      attempts: 1,
+      approvals: 0,
+      fixes: 0,
+      badOutput: 1,
+      wApprovals: 0,
+      wFixes: 0,
+      wBadOutput: 1,
+    }),
+  ],
+  buildCheckpoints: [],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+const badOutputModel = buildBadOutputDashboard.models.find(
+  (model) => model.modelId === "model:bad-output-only"
+);
+check(
+  "build badOutput is not triple-counted as schema, tool, and verifier failures",
+  badOutputModel?.buildBadOutput === 1 &&
+    badOutputModel.schemaInvalid === 0 &&
+    badOutputModel.toolInvalid === 0 &&
+    badOutputModel.verifierFailures === 0,
+  badOutputModel
 );
 
 const codenamesDashboard = buildBenchmarkDashboardData({
@@ -390,6 +423,31 @@ check(
   "zero-pass costly team is labeled wasteful",
   zeroPassCostlyTeam?.teamLiftLabel === "wasteful",
   zeroPassCostlyTeam
+);
+
+const preliminaryRows = aggregateCertifiedRunScores({
+  attempts: [
+    certifiedAttempt("preliminary-perfect", soloTeamA.id, 100),
+    certifiedAttempt("mature-good-1", soloTeamB.id, 70),
+    certifiedAttempt("mature-good-2", soloTeamB.id, 70),
+    certifiedAttempt("mature-good-3", soloTeamB.id, 70),
+  ],
+  cases: [],
+  teamCompositions: [soloTeamA, soloTeamB],
+  verifierResults: [],
+});
+const preliminaryPerfectRow = preliminaryRows.find(
+  (row) => row.teamCompositionId === soloTeamA.id
+);
+const matureGoodRow = preliminaryRows.find(
+  (row) => row.teamCompositionId === soloTeamB.id
+);
+check(
+  "low-sample certified rows are marked preliminary and ranked behind mature rows",
+  preliminaryRows[0]?.teamCompositionId === soloTeamB.id &&
+    preliminaryPerfectRow?.preliminary === true &&
+    matureGoodRow?.preliminary === false,
+  preliminaryRows
 );
 
 check(

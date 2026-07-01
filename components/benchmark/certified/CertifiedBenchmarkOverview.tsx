@@ -10,7 +10,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { duration, formatScore, pct, usd } from "@/components/benchmark/format";
+import {
+  duration,
+  formatNormalizedScore,
+  formatScore,
+  pct,
+  usd,
+} from "@/components/benchmark/format";
 import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
 import { ComboMatrix } from "@/components/benchmark/teamiq/ComboMatrix";
 import { ParetoFrontier } from "@/components/benchmark/teamiq/ParetoFrontier";
@@ -116,7 +122,7 @@ export function CertifiedBenchmarkOverview({
         <CertifiedStat label="Verified pass" value={pct(summary.verifiedPassRate)} />
         <CertifiedStat
           label="Avg verified quality"
-          value={formatScore(summary.averageQuality)}
+          value={formatNormalizedScore(summary.averageQuality)}
         />
         <CertifiedStat label="Verifier results" value={String(counts.verifierResults)} />
         <CertifiedStat label="Teams" value={String(counts.teamCompositions)} />
@@ -252,7 +258,7 @@ function WorkBenchRoleLeaderboard({
             <div key={row.id} className="border-b pb-3 last:border-0 last:pb-0">
               <div className="truncate text-sm font-medium">{row.displayName}</div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span>{formatScore(row.verifiedQuality)} quality</span>
+                <span>{formatNormalizedScore(row.verifiedQuality)} quality</span>
                 <span>{pct(row.verifiedPassRate)} pass</span>
                 <span>{row.attempts} attempts</span>
               </div>
@@ -398,10 +404,15 @@ function CertifiedLeaderboard({
                   </td>
                   <td className="px-3 py-3">{formatTrackLabel(row.tracks)}</td>
                   <td className="px-3 py-3 text-right tabular-nums">
-                    {row.attempts}
+                    <span>{row.attempts}</span>
+                    {row.preliminary && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        preliminary
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-3 text-right tabular-nums">
-                    {formatScore(row.verifiedQuality)}
+                    {formatNormalizedScore(row.verifiedQuality)}
                   </td>
                   <td className="px-3 py-3 text-right tabular-nums">
                     {pct(row.passRate)}
@@ -484,14 +495,14 @@ function buildRecommendations(rows: CertifiedLeaderboardRow[]) {
     recommendations.push({
       label: "Best quality",
       name: quality.label,
-      value: `Verified quality ${formatScore(quality.verifiedQuality)}`,
+      value: `Verified quality ${formatNormalizedScore(quality.verifiedQuality)}`,
     });
   }
   if (value) {
     recommendations.push({
       label: "Best value",
       name: value.label,
-      value: `${formatScore(value.verifiedQuality)} quality at ${usd(value.averageCostUsd)}`,
+      value: `${formatNormalizedScore(value.verifiedQuality)} quality at ${usd(value.averageCostUsd)}`,
     });
   }
   if (fastest) {
@@ -567,6 +578,7 @@ interface CertifiedLeaderboardRow {
   detail?: string;
   tracks: string[];
   attempts: number;
+  preliminary: boolean;
   verifiedQuality: number | null;
   passRate: number | null;
   efficiencyScore: number | null;
@@ -683,6 +695,7 @@ function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | null {
     detail: readString(row.comboHash) ?? readString(row.modelId) ?? undefined,
     tracks: readTrackList(row),
     attempts: readNumber(row.attempts) ?? readNumber(row.totalAttempts) ?? 0,
+    preliminary: readBoolean(row.preliminary),
     verifiedQuality:
       readNumber(row.verifiedQuality) ??
       readNumber(row.averageVerifiedQuality) ??
@@ -997,6 +1010,10 @@ function readArray(value: unknown): unknown[] {
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
 }
 
 function readString(value: unknown): string | null {

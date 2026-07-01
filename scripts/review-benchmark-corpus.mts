@@ -35,7 +35,7 @@ for (const doc of [
 
 const expectedGameIqCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
-  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-chess", 4],
   ["gameiq-v0.1-battleship", 25],
   ["gameiq-v0.1-codenames", 25],
   ["gameiq-fireworks-basic-v1", 20],
@@ -50,6 +50,19 @@ for (const pack of gamePacks) {
     `GameIQ ${pack.id} has required scenario count`,
     pack.scenarios.length === expectedGameIqCounts.get(pack.id),
     { actual: pack.scenarios.length, expected: expectedGameIqCounts.get(pack.id) }
+  );
+  const distinctScenarioTuples = new Set(
+    pack.scenarios.map((scenario) =>
+      JSON.stringify({
+        initialState: scenario.initialState,
+        expectedActions: scenario.expectedActions,
+      })
+    )
+  );
+  check(
+    `GameIQ ${pack.id} has no duplicate scenario tuples`,
+    distinctScenarioTuples.size === pack.scenarios.length,
+    { distinct: distinctScenarioTuples.size, scenarios: pack.scenarios.length }
   );
   check(
     `GameIQ ${pack.id} digest is stable`,
@@ -85,6 +98,9 @@ for (const legacyPath of [
   resolve("benchmarks", "toolreliability", "v1", "cases.json"),
   resolve("benchmarks", "gameiq", "v0"),
   resolve("benchmarks", "teamiq", "v0"),
+  resolve("benchmarks", "fireworks", "v0.1", "full-games.json"),
+  resolve("benchmarks", "fireworks", "v0.1", "memory.json"),
+  resolve("benchmarks", "fireworks", "v0.1", "tactics.json"),
 ]) {
   check(`legacy benchmark artifact removed: ${legacyPath}`, !existsSync(legacyPath));
 }

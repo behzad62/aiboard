@@ -36,8 +36,12 @@ const EXTRA_LANGUAGE_CHALLENGES: WorkBenchChallenge[] = [
   rustSaturatingAdd(1),
 ];
 
+export function listWorkBenchChallenges(): WorkBenchChallenge[] {
+  return [...WORKBENCH_CHALLENGES, ...EXTRA_LANGUAGE_CHALLENGES];
+}
+
 export function listWorkBenchCaseOptions(): WorkBenchCaseOption[] {
-  return [...WORKBENCH_CHALLENGES, ...EXTRA_LANGUAGE_CHALLENGES].map(
+  return listWorkBenchChallenges().map(
     (challenge) => {
       const fixtureLanguage = languageForChallenge(challenge);
       const workBenchCase = workBenchCaseForChallenge(challenge, fixtureLanguage);
@@ -123,7 +127,6 @@ function workBenchCaseForChallenge(
     environment: {
       type: "local-runner",
       timeoutSeconds: 900,
-      memoryMb: 2048,
       network: "dependency-only",
     },
     verifier: {
@@ -401,13 +404,17 @@ for (const [path, snippets] of Object.entries(meta.verifier.requiredSnippets ?? 
 
 for (const [path, snippets] of Object.entries(meta.verifier.requiredUnchangedSnippets ?? {})) {
   const actual = files[path] ?? "";
+  const base = meta.baseFiles[path] ?? "";
   for (const snippet of snippets) {
+    const expectedCount = occurrenceCount(base, snippet);
+    const actualCount = occurrenceCount(actual, snippet);
+    const passed = expectedCount > 0 ? actualCount >= expectedCount : actual.includes(snippet);
     assertions.push({
       id: path + ":unchanged:" + stableId(snippet),
       label: path + " preserves unrelated code",
-      passed: actual.includes(snippet),
+      passed,
       weight: 1,
-      message: actual.includes(snippet) ? undefined : "Changed or removed sentinel: " + JSON.stringify(snippet),
+      message: passed ? undefined : "Changed or removed sentinel: " + JSON.stringify(snippet) + "; expected at least " + (expectedCount || 1) + ", found " + actualCount + ".",
     });
   }
 }
@@ -494,6 +501,11 @@ function stableId(value) {
 }
 
 function count(value, needle) {
+  return value.split(needle).length - 1;
+}
+
+function occurrenceCount(value, needle) {
+  if (needle.length === 0) return 0;
   return value.split(needle).length - 1;
 }
 `;

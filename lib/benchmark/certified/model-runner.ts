@@ -7,8 +7,13 @@ import type { CertifiedRunContext } from "./run-context";
 import { explainCertifiedFailureStatus } from "./classify-failure";
 import { benchmarkDomainForTrack } from "./run-status";
 
+export interface CertifiedRunnerOptions {
+  signal?: AbortSignal;
+}
+
 export type CertifiedTrackRunner = (
-  context: CertifiedRunContext
+  context: CertifiedRunContext,
+  options?: CertifiedRunnerOptions
 ) => Promise<void | BenchmarkAttemptV2[]>;
 
 export async function persistReturnedAttempts(

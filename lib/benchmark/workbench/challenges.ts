@@ -75,15 +75,20 @@ export function runWorkBenchChallengeVerifier(input: {
 
   for (const [path, snippets] of Object.entries(input.challenge.verifier.requiredUnchangedSnippets ?? {})) {
     const actual = input.files[path] ?? "";
+    const base = input.challenge.baseFiles[path] ?? "";
     for (const snippet of snippets) {
+      const expectedCount = occurrenceCount(base, snippet);
+      const actualCount = occurrenceCount(actual, snippet);
+      const passed =
+        expectedCount > 0 ? actualCount >= expectedCount : actual.includes(snippet);
       assertions.push({
         id: `${path}:unchanged:${stableId(snippet)}`,
         label: `${path} preserves unrelated code`,
-        passed: actual.includes(snippet),
+        passed,
         weight: 1,
-        message: actual.includes(snippet)
+        message: passed
           ? undefined
-          : `${path} changed or removed unrelated sentinel ${JSON.stringify(snippet)}.`,
+          : `${path} changed or removed unrelated sentinel ${JSON.stringify(snippet)}; expected at least ${expectedCount || 1}, found ${actualCount}.`,
       });
     }
   }
@@ -449,5 +454,10 @@ function stableId(value: string): string {
 }
 
 function count(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
+function occurrenceCount(value: string, needle: string): number {
+  if (needle.length === 0) return 0;
   return value.split(needle).length - 1;
 }

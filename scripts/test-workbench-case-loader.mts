@@ -43,7 +43,6 @@ const manifest = {
   },
   environment: {
     timeoutSeconds: 1200,
-    memoryMb: 2048,
     network: "dependency-only",
     setupCommand: "npm ci",
   },
@@ -100,6 +99,11 @@ expectThrow(
   "case loader rejects command-based network none with current wording",
   () => loadWorkBenchCaseFromJson(JSON.stringify({ ...manifest, environment: { ...manifest.environment, network: "none" } })),
   /WorkBench cannot enforce network none/i
+);
+expectThrow(
+  "case loader rejects unsupported memory limits",
+  () => loadWorkBenchCaseFromJson(JSON.stringify({ ...manifest, environment: { ...manifest.environment, memoryMb: 2048 } })),
+  /memoryMb/i
 );
 expectThrow(
   "case loader rejects open network for v0.1",

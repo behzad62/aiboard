@@ -46,7 +46,7 @@ check(
 
 const expectedPackCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
-  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-chess", 4],
   ["gameiq-v0.1-battleship", 25],
   ["gameiq-v0.1-codenames", 25],
   ["gameiq-fireworks-basic-v1", 20],
@@ -78,14 +78,15 @@ for (const pack of firstListing) {
     )
   );
   check(
-    `${pack.id} has at least ${floor} distinct (initialState, expectedActions) tuples`,
-    tuples.size >= floor,
+    `${pack.id} has distinct (initialState, expectedActions) tuples`,
+    tuples.size === pack.scenarios.length && tuples.size >= floor,
     { distinct: tuples.size, scenarios: pack.scenarios.length }
   );
 }
 
 const connectFourPack = getGameIqScenarioPack("connect-four");
 const chessPack = getGameIqScenarioPack("chess");
+const battleshipPack = getGameIqScenarioPack("battleship");
 const fireworksPack = firstListing.find((pack) => pack.id === "gameiq-fireworks-basic-v1");
 check(
   "Connect Four and Chess are first-class packs",
@@ -127,9 +128,10 @@ check(
   Array.from(chessCategories)
 );
 check(
-  "Chess has at least 15 mate-in-one scenarios",
-  (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
-    .length ?? 0) >= 15,
+  "Chess keeps one unique scenario per authored base position",
+  (chessPack?.scenarios.length ?? 0) === 4 &&
+    (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
+      .length ?? 0) === 2,
   chessPack?.scenarios.map((scenario) => scenario.category)
 );
 const firstChessMate = chessPack?.scenarios.find(
@@ -144,13 +146,45 @@ if (!firstChessMate) {
       ? { ...expectedAction, promotion: null }
       : null;
   const validation = validateGameIqAction(firstChessMate, nullPromotionAction);
-  check(
-    "Chess mate-in-one accepts structured-output null promotion",
-    validation.ok &&
+check(
+  "Chess mate-in-one accepts structured-output null promotion",
+  validation.ok &&
       actionMatchesExpected(firstChessMate, nullPromotionAction) === 1,
     { nullPromotionAction, validation }
   );
 }
+
+const battleshipFollowLine = battleshipPack?.scenarios.find(
+  (scenario) => scenario.id === "gameiq-v0.1-battleship-follow-line"
+);
+const battleshipFollowState = battleshipFollowLine?.initialState as
+  | {
+      turn?: unknown;
+      boards?: {
+        orange?: {
+          shotsReceived?: Array<{ target?: { row?: number; column?: number }; result?: string; shipId?: string }>;
+        };
+      };
+    }
+  | undefined;
+const carrierLineHits =
+  battleshipFollowState?.boards?.orange?.shotsReceived?.filter(
+    (shot) =>
+      shot.shipId === "carrier" &&
+      shot.result === "hit" &&
+      shot.target?.row === 0 &&
+      (shot.target.column === 0 || shot.target.column === 1)
+  ) ?? [];
+const battleshipFollowExpected = battleshipFollowLine?.expectedActions[0]
+  ?.action as { target?: { row?: number; column?: number } } | undefined;
+check(
+  "Battleship follow-line scenario requires continuing a known carrier line",
+  battleshipFollowState?.turn === "blue" &&
+    carrierLineHits.length === 2 &&
+    battleshipFollowExpected?.target?.row === 0 &&
+    battleshipFollowExpected.target.column === 2,
+  { state: battleshipFollowState, expected: battleshipFollowExpected }
+);
 
 check(
   "Fireworks basic GameIQ pack uses hidden-safe player views",

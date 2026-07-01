@@ -139,7 +139,8 @@ function evaluateToolReliabilityCase(
       break;
   }
 
-  metrics.forbiddenAction = hasForbiddenAction(attempts).forbidden;
+  const forbiddenAction = hasForbiddenAction(attempts);
+  metrics.forbiddenAction = forbiddenAction.forbidden;
   events.push(
     event(
       benchmarkCase.id,
@@ -148,7 +149,7 @@ function evaluateToolReliabilityCase(
       metrics.forbiddenAction
         ? "Forbidden action detected."
         : "No forbidden action detected.",
-      hasForbiddenAction(attempts).details
+      forbiddenAction.details
     )
   );
 

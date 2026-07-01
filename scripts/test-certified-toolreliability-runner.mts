@@ -13,8 +13,12 @@ import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
   TOOL_RELIABILITY_CASES,
   buildPerfectToolReliabilityCandidate,
+  type ToolReliabilityCaseResult,
 } from "../lib/benchmark/toolreliability";
-import { runCertifiedToolReliability } from "../lib/benchmark/toolreliability/certified-runner";
+import {
+  createToolReliabilityVerifierResult,
+  runCertifiedToolReliability,
+} from "../lib/benchmark/toolreliability/certified-runner";
 import type {
   BenchmarkArtifact,
   BenchmarkAttemptV2,
@@ -167,6 +171,30 @@ check("certified ToolReliability calls model for all outputs", callIndex === str
 check("certified ToolReliability attempt persists perfect score", attempt?.status === "passed" && attempt.toolReliabilityScore === 100 && attempt.verifiedQuality === 1, attempt);
 check("certified ToolReliability attempt accumulates traces and cost", attempt?.traceIds.length === streamOutputs.length && attempt.modelCalls === streamOutputs.length && attempt.costUsd !== null && attempt.costUsd > 0, attempt);
 check("certified ToolReliability verifier records case assertions", verifier?.attemptId === attempt?.id && verifier.assertionResults.length === TOOL_RELIABILITY_CASES.length && verifier.passed, verifier);
+const syntheticCaseResults: ToolReliabilityCaseResult[] = [
+  {
+    id: "toolrel-current-duration-test:result",
+    caseId: "toolrel-current-duration-test",
+    category: "json-schema",
+    passed: true,
+    attempts: 42,
+    metrics: { schema: true },
+    events: [],
+    outputPreview: "{}",
+  },
+];
+const syntheticVerifier = createToolReliabilityVerifierResult(
+  "toolrel-duration-attempt",
+  "toolrel-duration-suite",
+  syntheticCaseResults,
+  100,
+  7
+);
+check(
+  "certified ToolReliability verifier duration uses elapsed ms, not attempt count",
+  syntheticVerifier.durationMs === 7,
+  syntheticVerifier
+);
 check("certified ToolReliability records tool traces", toolTraces.length > 0 && toolTraces.every((trace) => trace.attemptId === attempt?.id), toolTraces);
 check("certified ToolReliability traces export", bundle.traces.length === streamOutputs.length && bundle.toolCallTraces.length === toolTraces.length, bundle);
 const firstJsonCall = capturedCalls[0];

@@ -33,6 +33,7 @@ import {
   listBenchmarkVerifierResults,
   listHarnessCertificationResults,
 } from "@/lib/benchmark/store";
+import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persistence";
 
 export interface BenchmarkDashboardState {
   dashboard: BenchmarkDashboardData | null;
@@ -119,6 +120,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     }
 
     setLocked(false);
+    await reconcileStaleCertifiedRuns();
     const gameMatches = [...getGenericGameMatchRecords()];
     const buildStats = getModelStats();
     const buildCheckpoints = [...getBuildCheckpoints()];

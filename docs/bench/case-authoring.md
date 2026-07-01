@@ -9,7 +9,9 @@ Certified cases must be deterministic, versioned, and scored by a verifier or ru
 - `track`: `workbench`, `gameiq`, `teamiq`, `toolreliability`, or `harnessbench`.
 - `caseVersion`: immutable version for the prompt, fixture, and verifier contract.
 - `prompt.userRequest`: public task text shown to the model.
-- `environment`: runtime type, timeout, memory limit when known, and network policy.
+- `environment`: runtime type, timeout, and network policy. WorkBench v0.1
+  rejects `memoryMb`, because the local runner cannot enforce per-attempt
+  memory isolation.
 - `verifier`: deterministic scorer contract. Use `verifier-json`, `game-engine`, or `rule-checker`.
 - `budget`: official cost, time, model-call, tool-call, and token caps.
 - `scoring`: scoring version and primary metric.

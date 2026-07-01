@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Play, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Play, RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -91,6 +91,7 @@ const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 type RunnableTrack = CertifiedRunnableTrack;
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
 type WorkBenchRoleMode = "solo" | "architect_worker" | "architect_worker_reviewer";
+type CertifiedRunPhase = "idle" | "certifying" | "running" | "persisting" | "done";
 
 const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
   { id: "gameiq", label: "GameIQ" },
@@ -139,7 +140,9 @@ export function CertifiedRunPanel({
     useState<BenchRunnerHealth | null>(null);
   const [checkingWorkBenchRunner, setCheckingWorkBenchRunner] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runPhase, setRunPhase] = useState<CertifiedRunPhase>("idle");
   const [summary, setSummary] = useState<CertifiedRunSummary | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
   const workBenchCases = useMemo(() => listWorkBenchCaseOptions(), []);
@@ -382,10 +385,41 @@ export function CertifiedRunPanel({
           )}
           <RunProgressTimeline
             items={[
-              { label: "Select", status: canRun ? "done" : "idle" },
-              { label: "Certify", status: running ? "running" : summary ? "done" : "idle" },
-              { label: "Run", status: running ? "running" : summary ? "done" : "idle" },
-              { label: "Persist", status: summary ? "done" : "idle" },
+              {
+                label: "Select",
+                status:
+                  canRun || runPhase !== "idle" || summary ? "done" : "idle",
+              },
+              {
+                label: "Certify",
+                status:
+                  runPhase === "certifying"
+                    ? "running"
+                    : runPhase === "running" ||
+                        runPhase === "persisting" ||
+                        runPhase === "done" ||
+                        summary
+                      ? "done"
+                      : "idle",
+              },
+              {
+                label: "Run",
+                status:
+                  runPhase === "running"
+                    ? "running"
+                    : runPhase === "persisting" || runPhase === "done" || summary
+                      ? "done"
+                      : "idle",
+              },
+              {
+                label: "Persist",
+                status:
+                  runPhase === "persisting"
+                    ? "running"
+                    : runPhase === "done" || summary
+                      ? "done"
+                      : "idle",
+              },
             ]}
           />
           <div className="flex flex-wrap gap-2">
@@ -393,6 +427,12 @@ export function CertifiedRunPanel({
               {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Run selected benchmark
             </Button>
+            {running && (
+              <Button variant="outline" onClick={cancelRun}>
+                <Square className="h-4 w-4" />
+                Cancel
+              </Button>
+            )}
           </div>
           {!canRun && runGate.reason && (
             <p className="text-sm text-muted-foreground">{runGate.reason}</p>
@@ -431,7 +471,11 @@ export function CertifiedRunPanel({
     const selectedWorkBenchCase =
       selectedTrack === "workbench" ? getWorkBenchCaseOption(suiteId) : null;
     if (selectedTrack === "workbench" && !selectedWorkBenchCase) return;
+    const abortController = new AbortController();
+    runAbortRef.current = abortController;
     setRunning(true);
+    setRunPhase("certifying");
+    setSummary(null);
     setMessage(null);
     try {
       const teams =
@@ -463,6 +507,7 @@ export function CertifiedRunPanel({
         await saveBenchmarkTeamComposition(team);
       }
       await saveHarnessCertificationResult(certification);
+      setRunPhase("running");
       const runId = `ui-${selectedTrack}-${Date.now()}`;
       const caseRecord =
         selectedTrack === "workbench"
@@ -480,7 +525,8 @@ export function CertifiedRunPanel({
           maxModelCallMs: DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS,
         }),
         certification,
-        runner: (context) => {
+        signal: abortController.signal,
+        runner: (context, options) => {
           if (selectedTrack === "gameiq") {
             return runCertifiedGameIq({
               context,
@@ -488,6 +534,7 @@ export function CertifiedRunPanel({
               scenarioPackIds: [suiteId],
               teamCompositionIds: [primaryTeam.id],
               trials: 1,
+              signal: options?.signal,
             });
           }
           if (selectedTrack === "toolreliability") {
@@ -496,6 +543,7 @@ export function CertifiedRunPanel({
               models: [model!],
               teamCompositionIds: [primaryTeam.id],
               casePack: TOOL_RELIABILITY_CASES,
+              signal: options?.signal,
             });
           }
           if (selectedTrack === "workbench") {
@@ -508,6 +556,7 @@ export function CertifiedRunPanel({
               },
               teamCompositionIds: [primaryTeam.id],
               teamCompositions: [primaryTeam],
+              signal: options?.signal,
               runBuild: (buildInput) =>
                 runWorkBenchBuild({
                   ...buildInput,
@@ -524,17 +573,27 @@ export function CertifiedRunPanel({
             includeSoloBaselines: isFireworksSuite(suiteId)
               ? includeSoloBaselines
               : true,
+            signal: options?.signal,
           });
         },
       });
+      setRunPhase("persisting");
       setSummary(result);
       setMessage(`Certified ${trackLabel(selectedTrack)} run completed.`);
       await onComplete();
+      setRunPhase("done");
     } catch (error) {
+      setRunPhase("idle");
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setRunning(false);
+      runAbortRef.current = null;
     }
+  }
+
+  function cancelRun() {
+    runAbortRef.current?.abort("Cancelled from certified benchmark panel.");
+    setMessage("Cancelling certified run...");
   }
 
   async function checkWorkBenchRunner() {

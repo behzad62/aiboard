@@ -272,6 +272,56 @@ await expectReject(
 );
 check("budget preflight does not call provider stream", !preflightStreamCalled, preflightStreamCalled);
 
+const usdStreamingBudgetContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-budget-usd-streaming",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-budget-usd-streaming"],
+  teamCompositionIds: ["team-budget-usd-streaming"],
+  modelBudget: { maxUsd: 0.0005 },
+});
+await expectReject(
+  "certified budget blocks projected USD during provider streaming",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 64,
+      temperature: 0,
+      context: usdStreamingBudgetContext,
+      caseId: "case-budget-usd-streaming",
+      attemptId: "attempt-budget-usd-streaming",
+      participantId: "single",
+      pricing: {
+        inputUsdPer1M: 0,
+        outputUsdPer1M: 1000,
+      },
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "token", content: "This streamed response exceeds the USD cap." };
+        yield { type: "token", content: "The second chunk should not be needed." };
+      },
+    }),
+  /projected USD|maxUsd|budget/i
+);
+check(
+  "streaming USD budget emits a budget event before completion",
+  usdStreamingBudgetContext
+    .snapshot()
+    .events.some(
+      (event) =>
+        event.attemptId === "attempt-budget-usd-streaming" &&
+        event.type === "run_blocked" &&
+        event.phase === "budget"
+    ) &&
+    !usdStreamingBudgetContext
+      .snapshot()
+      .traces.some((trace) => trace.attemptId === "attempt-budget-usd-streaming"),
+  usdStreamingBudgetContext.snapshot()
+);
+
 const postCallBudgetContext = createCertifiedRunContext({
   runId: "run-certified-model-call-budget-post",
   suiteId: "suite-model-call",

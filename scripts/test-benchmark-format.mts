@@ -1,5 +1,5 @@
 /* Benchmark format helper checks (run: npx tsx scripts/test-benchmark-format.mts) */
-import { formatScore } from "../components/benchmark/format";
+import { formatNormalizedScore, formatScore } from "../components/benchmark/format";
 
 let failures = 0;
 
@@ -8,10 +8,12 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-check("0-1 fraction", formatScore(0.87) === "87", formatScore(0.87));
-check("guarded >1", formatScore(87) === "87", formatScore(87));
-check("one decimal", formatScore(0.875) === "87.5", formatScore(0.875));
-check("null", formatScore(null) === "n/a", formatScore(null));
+check("raw 0-1 score is not auto-multiplied", formatScore(0.87) === "0.9", formatScore(0.87));
+check("raw 1.0 score is not auto-multiplied", formatScore(1) === "1", formatScore(1));
+check("raw >1 score", formatScore(87) === "87", formatScore(87));
+check("normalized fraction score", formatNormalizedScore(0.875) === "87.5", formatNormalizedScore(0.875));
+check("normalized null", formatNormalizedScore(null) === "n/a", formatNormalizedScore(null));
+check("raw null", formatScore(null) === "n/a", formatScore(null));
 
 if (failures === 0) {
   console.log("PASS");

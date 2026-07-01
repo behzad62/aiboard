@@ -440,6 +440,7 @@ export async function runWorkBenchModelPatchBuild(
     apiKey: input.apiKey,
     pricing: input.pricing,
     streamChat: input.streamChat,
+    signal: input.signal,
   });
   const action = parsePatchAction(modelCall.parsedJson);
   if (!sourceFiles.includes(action.path)) {

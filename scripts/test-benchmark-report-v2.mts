@@ -201,8 +201,9 @@ const bundle: BenchmarkReportBundleV2 = {
   bundleHash: "test-hash",
   redactionSummary: {
     scannedArtifacts: 0,
-    redactedSecrets: 0,
-    warnings: [],
+    scannedRecords: 2,
+    redactedSecrets: 1,
+    warnings: ["Tool-call trace tool-1 contains blocked ssh_private_key content."],
   },
 };
 
@@ -429,6 +430,12 @@ check(
 );
 check("markdown report includes v2 raw counts", markdown.includes("Verifier results: 2"), markdown);
 check("markdown report includes run evidence counts", markdown.includes("Run events: 0") && markdown.includes("Tool-call traces: 0"), markdown);
+check(
+  "markdown report surfaces redaction warnings",
+  markdown.includes("Redaction warnings") &&
+    markdown.includes("Tool-call trace tool-1 contains blocked ssh_private_key content."),
+  markdown
+);
 
 const reportSource = readFileSync("lib/benchmark/reports.ts", "utf8");
 const reportActionSource = readFileSync(
@@ -454,6 +461,12 @@ check(
   "benchmark import success message surfaces existing record updates",
   reportActionSource.includes("updatedCount") &&
     reportActionSource.includes("existing record"),
+  reportActionSource
+);
+check(
+  "benchmark export message surfaces redaction warnings",
+  reportActionSource.includes("warning(s)") &&
+    reportActionSource.includes("summary?.warnings"),
   reportActionSource
 );
 

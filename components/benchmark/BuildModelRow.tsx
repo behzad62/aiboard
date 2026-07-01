@@ -13,6 +13,7 @@ import { BuildModelDetail } from "@/components/benchmark/BuildModelDetail";
 import {
   BUILD_LEADERBOARD_COLUMNS,
   formatBuildAvailability,
+  formatBuildQualityBadge,
   lastActive,
   pct,
   round,
@@ -72,7 +73,9 @@ export function BuildModelRow({
           {s.displayName}
         </td>
         <td className="px-2 py-2 text-right">
-          <Badge variant={qualityBadgeVariant(quality)}>{quality}</Badge>
+          <Badge variant={qualityBadgeVariant(quality)}>
+            {formatBuildQualityBadge(quality)}
+          </Badge>
         </td>
         <td className="px-2 py-2 text-right tabular-nums">
           {qpa == null ? "-" : round(qpa, 2)}

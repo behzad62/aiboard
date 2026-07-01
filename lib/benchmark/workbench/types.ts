@@ -28,7 +28,7 @@ export interface WorkBenchEnvironment {
   type: "local-runner";
   setupCommand?: string;
   timeoutSeconds: number;
-  /** Advisory only - bench-runner v0.1 does NOT enforce a memory cap. */
+  /** Unsupported by WorkBench v0.1; manifests with memoryMb are rejected. */
   memoryMb?: number;
   network: WorkBenchNetwork;
 }
@@ -139,6 +139,7 @@ export interface WorkBenchBuildExecutionInput {
   teamCompositionId: string;
   harnessProfile: BenchmarkAttemptV2["harnessProfile"];
   allowedCommands: string[];
+  signal?: AbortSignal;
 }
 
 export interface WorkBenchBuildExecutionResult {
@@ -163,6 +164,7 @@ export interface WorkBenchExecutionInput {
   runBuild?: (
     input: WorkBenchBuildExecutionInput
   ) => Promise<WorkBenchBuildExecutionResult>;
+  signal?: AbortSignal;
   costUsd?: number | null;
   inputTokens?: number;
   outputTokens?: number;

@@ -25,6 +25,7 @@ import {
 import { isProviderFailureMessage } from "./classify-provider-failure";
 import { persistReturnedAttempts, type CertifiedTrackRunner } from "./model-runner";
 import type { CertifiedRunBudget } from "./run-context";
+import { throwIfCertifiedRunAborted } from "./model-call";
 
 export interface RunCertifiedBenchmarkInput {
   runId?: string;
@@ -37,6 +38,7 @@ export interface RunCertifiedBenchmarkInput {
   modelBudget?: CertifiedRunBudget;
   certification: HarnessCertificationResult;
   runner: CertifiedTrackRunner;
+  signal?: AbortSignal;
 }
 
 export async function runCertifiedBenchmark(
@@ -69,7 +71,12 @@ export async function runCertifiedBenchmark(
   let status: CertifiedRunSummary["status"] = "completed";
   let errorMessage: string | undefined;
   try {
-    await persistReturnedAttempts(context, await input.runner(context));
+    throwIfCertifiedRunAborted(input.signal);
+    await persistReturnedAttempts(
+      context,
+      await input.runner(context, { signal: input.signal })
+    );
+    throwIfCertifiedRunAborted(input.signal);
   } catch (error) {
     status = "failed";
     errorMessage = error instanceof Error ? error.message : String(error);
@@ -129,6 +136,7 @@ function createFailedAttemptsForRunError(input: {
     0,
     Date.now() - new Date(input.context.startedAt).getTime()
   );
+  const profile = getHarnessProfileDefinition(input.context.harnessProfile);
   const attempts: BenchmarkAttemptV2[] = [];
   // A trace can only be summed into one synthesized attempt. Without this, a
   // single persisted trace's cost/tokens/modelCalls are multiplied across teams.
@@ -183,8 +191,10 @@ function createFailedAttemptsForRunError(input: {
         artifactIds: [],
         traceIds: traces.map((trace) => trace.id),
         failureIds: [],
-        harnessVersion: `${input.context.harnessProfile}-v0.1`,
-        promptSetVersion: "certified-run-error-v0.1",
+        harnessVersion:
+          profile?.harnessVersion ?? `${input.context.harnessProfile}-v0.1`,
+        promptSetVersion:
+          profile?.promptSetVersion ?? "certified-run-error-v0.1",
         scoringVersion: "certified-run-error-v0.1",
       });
     }
@@ -197,13 +207,11 @@ function attemptKey(caseId: string, teamCompositionId: string): string {
   return `${caseId}\u0000${teamCompositionId}`;
 }
 
-// NOTE: `aborted_user` is wired through the failure taxonomy / scoring / UI,
-// but is currently unreachable: no certified run path creates an
-// AbortController, so neither this classifier nor any runner produces it. If a
-// Cancel button threads an AbortSignal through input.runner -> callCertifiedModel,
-// add an /abort|cancel/ branch here returning "aborted_user".
 function statusForRunError(message: string): BenchmarkAttemptV2["status"] {
   const normalized = message.toLowerCase();
+  if (/abort|cancel/.test(normalized)) {
+    return "aborted_user";
+  }
   if (isProviderFailureMessage(normalized)) {
     return "provider_unavailable";
   }

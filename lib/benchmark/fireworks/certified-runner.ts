@@ -1,5 +1,6 @@
 import {
   callCertifiedModel,
+  throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "@/lib/benchmark/certified/budget";
@@ -66,6 +67,7 @@ export interface RunCertifiedFireworksTeamIqInput {
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  signal?: AbortSignal;
 }
 
 interface FireworksCallRecord {
@@ -117,6 +119,7 @@ export async function runCertifiedFireworksTeamIq(
   const allTeams = await expandFireworksCompositions(input);
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
+    throwIfCertifiedRunAborted(input.signal);
     attempts.push(await runFireworksAttempt(input, team));
   }
 
@@ -316,6 +319,7 @@ async function runScenarioCase(params: {
     state,
     playerId: params.benchmarkCase.actingPlayerId,
     caseId: params.benchmarkCase.id,
+    redactOwnIdentity: params.benchmarkCase.suite === "fireworks-memory-v0.1",
     calls: params.calls,
     failures: params.failures,
   });
@@ -457,6 +461,7 @@ async function callFireworksAction(params: {
   state: FireworksGameState;
   playerId: string;
   caseId: string;
+  redactOwnIdentity?: boolean;
   calls: FireworksCallRecord[];
   failures: BenchmarkFailure[];
 }): Promise<FireworksActionCall> {
@@ -466,10 +471,11 @@ async function callFireworksAction(params: {
   }
 
   // Benchmark prompts must not hand the model the solver's optimal-move
-  // recommendations. (Own-card identity is NOT redacted here: in live play the
-  // resolved knowledge is the legitimate result of clues actually given.)
+  // recommendations. Memory probes also redact pre-seeded own-card identity so
+  // the model must use clue history rather than the fixture answer.
   const { system, user } = buildFireworksPrompt(params.state, params.playerId, {
     omitRecommendations: true,
+    redactOwnIdentity: params.redactOwnIdentity === true,
   });
   try {
     const call = await callCertifiedModel({
@@ -486,6 +492,7 @@ async function callFireworksAction(params: {
       participantId: `fireworks:${params.playerId}`,
       pricing: params.input.pricing,
       streamChat: params.input.streamChat,
+      signal: params.input.signal,
     });
     const parsed = parseFireworksActionResponseResult(
       params.state,
@@ -755,16 +762,14 @@ function aggregateMetrics(
     fullGameResults.length > 0
       ? average(fullGameResults.map((result) => result.score))
       : null;
-  const finalScore =
-    fullGameStackScore ??
-    average(caseResults.map((result) => scoreFireworksState(result.state)));
+  const finalScore = fullGameStackScore;
   return {
     scoreKind,
     scenarioQualityScore,
     fullGameStackScore,
     fullGameTeamScore,
     finalScore,
-    maxScore: 15,
+    maxScore: fullGameResults.length > 0 ? 15 : null,
     normalizedScore: average(caseResults.map((result) => result.score)),
     legalActions,
     illegalActions,

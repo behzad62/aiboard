@@ -1,5 +1,6 @@
 import {
   callCertifiedModel,
+  throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
@@ -61,6 +62,7 @@ export interface RunCertifiedTeamIqInput {
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  signal?: AbortSignal;
 }
 
 type TeamIqParticipantCall = {
@@ -94,6 +96,7 @@ export async function runCertifiedTeamIq(
       maxTokens: input.maxTokens,
       streamChat: input.streamChat,
       pricing: input.pricing,
+      signal: input.signal,
     });
   }
 
@@ -104,6 +107,7 @@ export async function runCertifiedTeamIq(
   const allTeams = await expandTeamIqCompositions(input);
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
+    throwIfCertifiedRunAborted(input.signal);
     attempts.push(
       await runTeamIqToolReliabilityAttempt(input, team, input.task.casePack)
     );
@@ -165,6 +169,7 @@ async function runTeamIqToolReliabilityAttempt(
   const outputs: ToolReliabilityCandidate["outputs"] = {};
 
   for (const benchmarkCase of casePack) {
+    throwIfCertifiedRunAborted(input.signal);
     const caseOutputs: string[] = [];
     if (benchmarkCase.category === "repair-loop") {
       caseOutputs.push(malformedToolReliabilityRepairSeed(benchmarkCase));
@@ -198,6 +203,7 @@ async function runTeamIqToolReliabilityAttempt(
           participantId: `${team.id}:${role.slot}`,
           pricing: input.pricing,
           streamChat: input.streamChat,
+          signal: input.signal,
         });
         calls.push(call);
         roleOutputs.push(call.rawResponse);
@@ -230,6 +236,7 @@ async function runTeamIqToolReliabilityAttempt(
           participantId: `${team.id}:${synthesisRole.slot}:synthesis`,
           pricing: input.pricing,
           streamChat: input.streamChat,
+          signal: input.signal,
         });
         calls.push(synthesisCall);
         caseOutputs.push(synthesisCall.rawResponse);

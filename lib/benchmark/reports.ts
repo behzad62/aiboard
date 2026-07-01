@@ -189,7 +189,7 @@ function appendCertifiedReportSections(
       rate(passedAttempts.length, scoredAttempts.length)
     )}`
   );
-  lines.push(`- Average verified quality: ${formatScore(averageQuality)}`);
+  lines.push(`- Average verified quality: ${formatNormalizedScore(averageQuality)}`);
   lines.push(`- Average cost: ${formatUsd(averageCost)}`);
   lines.push(`- Average duration: ${formatDuration(averageDuration)}`);
   lines.push("");
@@ -238,7 +238,7 @@ function appendTopCertifiedTeams(
   } else {
     for (const row of rows) {
       lines.push(
-        `- ${row.label}: quality ${formatScore(row.quality)}, pass rate ${formatPct(
+        `- ${row.label}: quality ${formatNormalizedScore(row.quality)}, pass rate ${formatPct(
           rate(row.passed, row.attempts)
         )}, ${row.attempts} attempt(s), avg cost ${formatUsd(row.cost)}`
       );
@@ -275,7 +275,7 @@ function appendTopCertifiedModels(
   } else {
     for (const row of rows) {
       lines.push(
-        `- ${row.displayName}: quality ${formatScore(
+        `- ${row.displayName}: quality ${formatNormalizedScore(
           row.quality
         )}, pass rate ${formatPct(rate(row.passed, row.attempts))}, ${
           row.attempts
@@ -311,7 +311,7 @@ function appendCertifiedTradeoffs(
   } else {
     for (const row of rows) {
       lines.push(
-        `- ${row.displayName}: verified quality ${formatScore(
+        `- ${row.displayName}: verified quality ${formatNormalizedScore(
           row.verifiedQuality
         )}, efficiency ${formatScore(row.efficiencyScore)}, cost/pass ${formatUsd(
           row.costPerPass
@@ -542,6 +542,16 @@ function appendRawV2Counts(
   lines.push(
     `- Redacted secrets: ${bundle.redactionSummary?.redactedSecrets ?? 0}`
   );
+  const warnings = bundle.redactionSummary?.warnings ?? [];
+  if (warnings.length > 0) {
+    lines.push("- Redaction warnings:");
+    for (const warning of warnings.slice(0, 5)) {
+      lines.push(`  - ${warning}`);
+    }
+    if (warnings.length > 5) {
+      lines.push(`  - ${warnings.length - 5} more warning(s) omitted.`);
+    }
+  }
   lines.push("");
 }
 
@@ -657,7 +667,12 @@ function average(values: number[]): number | null {
 
 function formatScore(value: number | null): string {
   if (value == null) return "n/a";
-  return value <= 1 ? `${Math.round(value * 1000) / 10}/100` : `${round(value)}/100`;
+  return `${round(value)}/100`;
+}
+
+function formatNormalizedScore(value: number | null): string {
+  if (value == null) return "n/a";
+  return formatScore(value * 100);
 }
 
 function formatNumber(value: number | null): string {

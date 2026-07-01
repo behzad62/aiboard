@@ -158,8 +158,8 @@ export interface FireworksGameMetrics {
   scenarioQualityScore: number | null;
   fullGameStackScore: number | null;
   fullGameTeamScore: number | null;
-  finalScore: number;
-  maxScore: number;
+  finalScore: number | null;
+  maxScore: number | null;
   normalizedScore: number;
   legalActions: number;
   illegalActions: number;

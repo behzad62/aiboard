@@ -1,4 +1,8 @@
-import { callCertifiedModel, type CertifiedModelStream } from "@/lib/benchmark/certified/model-call";
+import {
+  callCertifiedModel,
+  throwIfCertifiedRunAborted,
+  type CertifiedModelStream,
+} from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult } from "@/lib/benchmark/types";
 import type { ModelPricing } from "@/lib/providers/pricing";
@@ -75,6 +79,7 @@ export interface RunCertifiedGameIqInput {
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  signal?: AbortSignal;
 }
 
 export async function runCertifiedGameIq(
@@ -89,8 +94,11 @@ export async function runCertifiedGameIq(
   const attempts: BenchmarkAttemptV2[] = [];
   const trials = Math.max(1, Math.floor(input.trials));
   for (const teamCompositionId of input.teamCompositionIds) {
+    throwIfCertifiedRunAborted(input.signal);
     for (const model of input.models) {
+      throwIfCertifiedRunAborted(input.signal);
       for (let trial = 0; trial < trials; trial++) {
+        throwIfCertifiedRunAborted(input.signal);
         attempts.push(
           await runCertifiedGameIqAttempt({
             ...input,
@@ -144,6 +152,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         participantId: input.teamCompositionId,
         pricing: input.pricing,
         streamChat: input.streamChat,
+        signal: input.signal,
       });
       calls.push({
         traceId: call.traceId,

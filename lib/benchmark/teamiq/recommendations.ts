@@ -34,16 +34,16 @@ export function buildTeamIqRecommendationCards(
       detail: `Best solo ${points(row.bestSoloScore)} -> team ${points(row.jobSuccessScore)}`,
     })),
     cardFor("best_quality", "Best quality", maxBy(teams, (row) => row.verifiedQuality), (row) => ({
-      value: score(row.verifiedQuality),
+      value: percent(row.verifiedQuality),
       detail: `${row.attempts} attempt${row.attempts === 1 ? "" : "s"} verified`,
     })),
     cardFor("best_value", "Best value", maxBy(teams, valueScore), (row) => ({
-      value: `${score(row.verifiedQuality)} at ${money(row.averageCostUsd)}`,
+      value: `${percent(row.verifiedQuality)} at ${money(row.averageCostUsd)}`,
       detail: "Highest verified quality per dollar",
     })),
     cardFor("fastest", "Fastest", minBy(teams, (row) => row.averageDurationMs), (row) => ({
       value: time(row.averageDurationMs),
-      detail: `Verified quality ${score(row.verifiedQuality)}`,
+      detail: `Verified quality ${percent(row.verifiedQuality)}`,
     })),
     cardFor(
       "watchlist",
@@ -135,9 +135,9 @@ function minBy(
   }, null);
 }
 
-function score(value: number | null): string {
+function percent(value: number | null): string {
   if (value == null) return "n/a";
-  return `${Math.round(value * 100 * 10) / 10}`;
+  return `${Math.round(value * 100)}%`;
 }
 
 function points(value: number | null): string {

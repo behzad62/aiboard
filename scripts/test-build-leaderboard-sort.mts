@@ -1,7 +1,9 @@
 /* Build leaderboard sort/display checks (run: npx tsx scripts/test-build-leaderboard-sort.mts) */
 import {
+  BUILD_LEADERBOARD_COLUMNS,
   compareBuildStats,
   formatBuildAvailability,
+  formatBuildQualityBadge,
 } from "../components/benchmark/BuildLeaderboardShared";
 import { approvalRate } from "../lib/client/model-stats";
 import type { ModelBuildStat } from "../lib/db/schema";
@@ -72,6 +74,21 @@ check(
   "clean model availability renders 100%",
   formatBuildAvailability(clean) === "100%",
   formatBuildAvailability(clean)
+);
+
+check(
+  "speed column is labeled as throughput",
+  BUILD_LEADERBOARD_COLUMNS.find((column) => column.key === "speed")?.label ===
+    "Throughput",
+  BUILD_LEADERBOARD_COLUMNS
+);
+
+check(
+  "build quality badge includes explicit sign for positive values",
+  formatBuildQualityBadge(2.5) === "+2.5" &&
+    formatBuildQualityBadge(0) === "0" &&
+    formatBuildQualityBadge(-1.5) === "-1.5",
+  [formatBuildQualityBadge(2.5), formatBuildQualityBadge(0), formatBuildQualityBadge(-1.5)]
 );
 
 if (failures === 0) {

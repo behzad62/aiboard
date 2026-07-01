@@ -100,6 +100,24 @@ check("TeamIQ recommendation cards include best quality", cards.some((card) => c
 check("TeamIQ recommendation cards include watchlist", cards.some((card) => card.kind === "watchlist" && card.teamCompositionId === watchTeam.id), cards);
 check("TeamIQ recommendation cards expose concise values", cards.every((card) => card.title && card.value && card.detail), cards);
 const liftCard = cards.find((card) => card.kind === "best_team_lift");
+const qualityCard = cards.find((card) => card.kind === "best_quality");
+const valueCard = cards.find((card) => card.kind === "best_value");
+const fastestCard = cards.find((card) => card.kind === "fastest");
+check(
+  "best quality card renders normalized quality as a percent",
+  qualityCard?.value === "88%",
+  qualityCard
+);
+check(
+  "best value card renders normalized quality as a percent",
+  valueCard?.value === "88% at $1.00",
+  valueCard
+);
+check(
+  "fastest card detail renders normalized quality as a percent",
+  fastestCard?.detail === "Verified quality 88%",
+  fastestCard
+);
 check(
   "best team lift card renders lift as points (+16), not percent-coerced",
   liftCard?.value === "+16",

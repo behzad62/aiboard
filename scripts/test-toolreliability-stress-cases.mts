@@ -4,10 +4,12 @@ import {
   TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES,
   TOOL_RELIABILITY_STRESS_CASES,
   TOOL_RELIABILITY_TOOL_STRATEGY_CASES,
+  evaluateLargeFilePatchStressCase,
   runLargeFilePatchStressPack,
   stressPatchOutputForCase,
   wholeFileRewriteOutputForCase,
   validateToolReliabilityCasePack,
+  type LargeFilePatchReliabilityCase,
   type ToolReliabilityCandidate,
 } from "../lib/benchmark/toolreliability";
 
@@ -103,6 +105,143 @@ check(
   "stress evaluator rejects whole-file rewrites even when final content matches",
   rewriteRun.passedCases === 0 && rewriteRun.noWholeFileRewriteRate === 0,
   rewriteRun
+);
+
+const strictSearchCase: LargeFilePatchReliabilityCase = {
+  id: "toolrel-current-large-threshold-test",
+  category: "patch",
+  title: "Strict maxSearchLines rewrite threshold",
+  prompt: "Patch the target line without broad context.",
+  canary: "AIBENCH-TOOLREL-CURRENT-THRESHOLD",
+  metrics: ["patch"],
+  path: "src/threshold.ts",
+  originalContent: [
+    "const line1 = 1;",
+    "const line2 = 2;",
+    "const line3 = 3;",
+    "const line4 = 4;",
+    "const line5 = 5;",
+    "const line6 = 6;",
+    "const line7 = 7;",
+    "const target = 'old';",
+    "const line9 = 9;",
+    "const line10 = 10;",
+    "const line11 = 11;",
+    "const line12 = 12;",
+    "const line13 = 13;",
+    "const line14 = 14;",
+    "const line15 = 15;",
+    "const line16 = 16;",
+    "const line17 = 17;",
+    "const line18 = 18;",
+    "const line19 = 19;",
+    "const line20 = 20;",
+  ].join("\n"),
+  expectedContent: [
+    "const line1 = 1;",
+    "const line2 = 2;",
+    "const line3 = 3;",
+    "const line4 = 4;",
+    "const line5 = 5;",
+    "const line6 = 6;",
+    "const line7 = 7;",
+    "const target = 'new';",
+    "const line9 = 9;",
+    "const line10 = 10;",
+    "const line11 = 11;",
+    "const line12 = 12;",
+    "const line13 = 13;",
+    "const line14 = 14;",
+    "const line15 = 15;",
+    "const line16 = 16;",
+    "const line17 = 17;",
+    "const line18 = 18;",
+    "const line19 = 19;",
+    "const line20 = 20;",
+  ].join("\n"),
+  stress: {
+    kind: "large-file-search-replace",
+    minOriginalLineCount: 20,
+    maxChangedLines: 2,
+    maxSearchLines: 3,
+    requiredChangedSnippets: ["const target = 'new';"],
+    requiredUnchangedSnippets: ["const line7 = 7;"],
+    disallowWholeFileRewrite: true,
+  },
+};
+const broadSearchResult = evaluateLargeFilePatchStressCase({
+  benchmarkCase: strictSearchCase,
+  output: [
+    "```edit path=src/threshold.ts",
+    "<<<<<<< SEARCH",
+    "const line6 = 6;",
+    "const line7 = 7;",
+    "const target = 'old';",
+    "const line9 = 9;",
+    "=======",
+    "const line6 = 6;",
+    "const line7 = 7;",
+    "const target = 'new';",
+    "const line9 = 9;",
+    ">>>>>>> REPLACE",
+    "```",
+  ].join("\n"),
+});
+check(
+  "stress evaluator flags searches broader than maxSearchLines as rewrite-like",
+  broadSearchResult.wholeFileRewriteDetected === true &&
+    broadSearchResult.searchLines === 4,
+  broadSearchResult
+);
+
+const duplicateSnippetCase: LargeFilePatchReliabilityCase = {
+  id: "toolrel-current-large-duplicate-snippet-test",
+  category: "patch",
+  title: "Duplicate unchanged snippet occurrence count",
+  prompt: "Patch target without corrupting duplicate stable lines.",
+  canary: "AIBENCH-TOOLREL-CURRENT-DUPLICATE",
+  metrics: ["patch"],
+  path: "src/duplicate.ts",
+  originalContent: [
+    "export const stable = keep();",
+    "export const target = 'old';",
+    "export const stable = keep();",
+  ].join("\n"),
+  expectedContent: [
+    "export const stable = keep();",
+    "export const target = 'new';",
+    "export const stable = keep();",
+  ].join("\n"),
+  stress: {
+    kind: "repeated-block-disambiguation",
+    minOriginalLineCount: 3,
+    maxChangedLines: 3,
+    maxSearchLines: 3,
+    requiredChangedSnippets: ["export const target = 'new';"],
+    requiredUnchangedSnippets: ["export const stable = keep();"],
+    disallowWholeFileRewrite: true,
+  },
+};
+const duplicateCorruptionResult = evaluateLargeFilePatchStressCase({
+  benchmarkCase: duplicateSnippetCase,
+  output: [
+    "```edit path=src/duplicate.ts",
+    "<<<<<<< SEARCH",
+    "export const stable = keep();",
+    "export const target = 'old';",
+    "=======",
+    "export const stable = broken();",
+    "export const target = 'new';",
+    ">>>>>>> REPLACE",
+    "```",
+  ].join("\n"),
+});
+check(
+  "stress evaluator detects missing duplicate unchanged snippet occurrences",
+  duplicateCorruptionResult.missingRequiredUnchangedSnippets.includes(
+    "export const stable = keep();"
+  ),
+  duplicateCorruptionResult
 );
 
 check(

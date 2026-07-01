@@ -52,6 +52,15 @@ function isBaseBundleShape(bundle: ImportCandidate): boolean {
   );
 }
 
+function redactionWarningSummary(
+  summary: BenchmarkReportBundleV2["redactionSummary"]
+): string {
+  const count = summary?.warnings.length ?? 0;
+  if (count === 0) return "";
+  const first = summary?.warnings[0];
+  return ` ${count} warning(s) require review${first ? `: ${first}` : "."}`;
+}
+
 export function useBenchmarkReportActions({
   dashboard,
   reload,
@@ -71,7 +80,7 @@ export function useBenchmarkReportActions({
         summary?.scannedRecords ?? summary?.scannedArtifacts ?? 0
       } record(s) across all channels; ${
         summary?.redactedSecrets ?? 0
-      } secret(s) removed.`
+      } secret(s) removed.${redactionWarningSummary(summary)}`
     );
   }, [dashboard, setMessage]);
 

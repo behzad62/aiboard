@@ -68,6 +68,14 @@ interface MutableComboRow {
   isSolo: boolean;
 }
 
+const TEAM_LIFT_LABEL_SEVERITY: Record<TeamLiftLabel, number> = {
+  wasteful: 5,
+  negative: 4,
+  neutral: 3,
+  positive: 2,
+  strong_positive: 1,
+};
+
 export function buildTeamIqComboMatrixRows(
   input: TeamIqComboMatrixInput
 ): TeamIqComboMatrixRow[] {
@@ -262,7 +270,11 @@ function recommendationFor(
 }
 
 function mostCommonLabel(labels: Map<TeamLiftLabel, number>): TeamLiftLabel {
-  return Array.from(labels.entries()).sort((a, b) => b[1] - a[1])[0][0];
+  return Array.from(labels.entries()).sort(
+    (a, b) =>
+      b[1] - a[1] ||
+      TEAM_LIFT_LABEL_SEVERITY[b[0]] - TEAM_LIFT_LABEL_SEVERITY[a[0]]
+  )[0][0];
 }
 
 function scoreForAttempt(attempt: BenchmarkAttemptV2): number {

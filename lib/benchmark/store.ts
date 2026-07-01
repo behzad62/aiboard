@@ -665,27 +665,42 @@ async function mergeBenchmarkReportBundle(
   const current = exportStore();
   const importResult = summarizeBenchmarkImport(current, bundle);
   const next: Partial<ClientStore> = {
-    benchmarkSuites: mergeById(current.benchmarkSuites ?? [], bundle.suites),
-    benchmarkRuns: mergeById(current.benchmarkRuns ?? [], bundle.runs),
-    benchmarkCases: mergeById(current.benchmarkCases ?? [], bundle.cases),
-    benchmarkAttempts: mergeById(
-      current.benchmarkAttempts ?? [],
-      bundle.attempts
+    benchmarkSuites: mergeByIdKeepExisting(current.benchmarkSuites ?? [], bundle.suites),
+    benchmarkRuns: mergeByIdPreferNewer(
+      current.benchmarkRuns ?? [],
+      bundle.runs,
+      completedOrStartedAt
     ),
-    benchmarkMetricValues: mergeById(
+    benchmarkCases: mergeByIdPreferNewer(
+      current.benchmarkCases ?? [],
+      bundle.cases,
+      (record) => record.updatedAt || record.createdAt
+    ),
+    benchmarkAttempts: mergeByIdPreferNewer(
+      current.benchmarkAttempts ?? [],
+      bundle.attempts,
+      completedOrStartedAt
+    ),
+    benchmarkMetricValues: mergeByIdKeepExisting(
       current.benchmarkMetricValues ?? [],
       bundle.metricValues
     ),
-    benchmarkArtifacts: mergeById(
+    benchmarkArtifacts: mergeByIdPreferNewer(
       current.benchmarkArtifacts ?? [],
-      bundle.artifacts
+      bundle.artifacts,
+      (record) => record.createdAt
     ),
-    benchmarkFailures: mergeById(
+    benchmarkFailures: mergeByIdPreferNewer(
       current.benchmarkFailures ?? [],
-      bundle.failures
+      bundle.failures,
+      (record) => record.createdAt
     ),
-    benchmarkTraces: mergeById(current.benchmarkTraces ?? [], bundle.traces),
-    gameMatchRecords: mergeById(
+    benchmarkTraces: mergeByIdPreferNewer(
+      current.benchmarkTraces ?? [],
+      bundle.traces,
+      completedOrStartedAt
+    ),
+    gameMatchRecords: mergeByIdKeepExisting(
       current.gameMatchRecords ?? [],
       bundle.sourceEvidence?.gameMatches ?? []
     ),
@@ -705,33 +720,38 @@ async function mergeBenchmarkReportBundle(
     ),
   };
 
-  next.benchmarkCaseV2 = mergeById(
+  next.benchmarkCaseV2 = mergeByIdPreferNewer(
     current.benchmarkCaseV2 ?? [],
-    bundle.caseV2
+    bundle.caseV2,
+    (record) => record.updatedAt || record.createdAt
   );
-  next.benchmarkAttemptsV2 = mergeById(
+  next.benchmarkAttemptsV2 = mergeByIdPreferNewer(
     current.benchmarkAttemptsV2 ?? [],
-    bundle.attemptsV2
+    bundle.attemptsV2,
+    completedOrStartedAt
   );
-  next.benchmarkVerifierResults = mergeById(
+  next.benchmarkVerifierResults = mergeByIdKeepExisting(
     current.benchmarkVerifierResults ?? [],
     bundle.verifierResults
   );
-  next.benchmarkRunEvents = mergeById(
+  next.benchmarkRunEvents = mergeByIdPreferNewer(
     current.benchmarkRunEvents ?? [],
-    bundle.runEvents
+    bundle.runEvents,
+    (record) => record.at
   );
-  next.benchmarkToolCallTraces = mergeById(
+  next.benchmarkToolCallTraces = mergeByIdPreferNewer(
     current.benchmarkToolCallTraces ?? [],
-    bundle.toolCallTraces
+    bundle.toolCallTraces,
+    completedOrStartedAt
   );
-  next.benchmarkTeamCompositions = mergeById(
+  next.benchmarkTeamCompositions = mergeByIdKeepExisting(
     current.benchmarkTeamCompositions ?? [],
     bundle.teamCompositions
   );
-  next.benchmarkHarnessCertifications = mergeById(
+  next.benchmarkHarnessCertifications = mergeByIdPreferNewer(
     current.benchmarkHarnessCertifications ?? [],
-    bundle.harnessCertifications
+    bundle.harnessCertifications,
+    (record) => record.createdAt
   );
 
   replaceStore({ ...current, ...next });
@@ -858,6 +878,10 @@ function validateBenchmarkReportBundleBase(
     ) {
       throw new Error("Invalid artifacts record in benchmark report bundle.");
     }
+  }
+
+  for (const trace of bundle.traces as BenchmarkModelCallTrace[]) {
+    validateBenchmarkModelCallTrace(trace);
   }
 
   if (bundle.sourceEvidence !== undefined) {
@@ -1226,6 +1250,56 @@ function validateBenchmarkToolCallTrace(record: BenchmarkToolCallTrace): void {
   }
 }
 
+function validateBenchmarkModelCallTrace(record: BenchmarkModelCallTrace): void {
+  if (!isPlainObject(record)) {
+    throw new Error("Invalid benchmark trace in benchmark report bundle.");
+  }
+
+  if (
+    !isNonEmptyString(record.id) ||
+    !isOptionalString(record.runId) ||
+    !isOptionalString(record.caseId) ||
+    !isOptionalString(record.attemptId) ||
+    !isNonEmptyString(record.modelId) ||
+    !isNonEmptyString(record.providerId) ||
+    !isOptionalString(record.participantId) ||
+    !isOptionalString(record.reasoningEffort) ||
+    !isOptionalString(record.schemaMode) ||
+    !isOptionalString(record.promptHash) ||
+    !isNonEmptyString(record.startedAt) ||
+    !isOptionalString(record.completedAt) ||
+    !isOptionalFiniteNumber(record.latencyMs) ||
+    !isOptionalFiniteNumber(record.inputTokens) ||
+    !isOptionalFiniteNumber(record.outputTokens) ||
+    !(record.estimatedUsd === undefined ||
+      record.estimatedUsd === null ||
+      isFiniteNumber(record.estimatedUsd)) ||
+    !isOptionalString(record.rawResponse) ||
+    !isOptionalString(record.parsedResponseJson) ||
+    !Array.isArray(record.retryHistory) ||
+    !record.retryHistory.every(isBenchmarkModelCallTraceAttempt) ||
+    !isOptionalString(record.fallbackReason) ||
+    !isOptionalString(record.error)
+  ) {
+    throw new Error("Invalid benchmark trace in benchmark report bundle.");
+  }
+}
+
+function isBenchmarkModelCallTraceAttempt(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return (
+    isFiniteNumber(value.attempt) &&
+    (value.status === "parsed" ||
+      value.status === "parse_error" ||
+      value.status === "illegal" ||
+      value.status === "provider_error") &&
+    typeof value.message === "string" &&
+    isOptionalString(value.rawResponse) &&
+    isOptionalString(value.parsedJson) &&
+    isOptionalFiniteNumber(value.latencyMs)
+  );
+}
+
 function validateBenchmarkTeamComposition(
   record: BenchmarkTeamComposition
 ): void {
@@ -1575,9 +1649,29 @@ function isNumberRecord(value: unknown): value is Record<string, number> {
   );
 }
 
-function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+function mergeByIdKeepExisting<T extends { id: string }>(
+  current: T[],
+  incoming: T[]
+): T[] {
   const map = new Map(current.map((item) => [item.id, item]));
-  for (const item of incoming) map.set(item.id, item);
+  for (const item of incoming) {
+    if (!map.has(item.id)) map.set(item.id, item);
+  }
+  return Array.from(map.values());
+}
+
+function mergeByIdPreferNewer<T extends { id: string }>(
+  current: T[],
+  incoming: T[],
+  tsFor: (item: T) => string | undefined
+): T[] {
+  const map = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    const existing = map.get(item.id);
+    if (!existing || isSameOrNewerTimestamp(tsFor(item), tsFor(existing))) {
+      map.set(item.id, item);
+    }
+  }
   return Array.from(map.values());
 }
 
@@ -1594,6 +1688,27 @@ function mergeByKeyPreferNewer<T>(
     if (!existing || tsFor(item) >= tsFor(existing)) map.set(key, item);
   }
   return Array.from(map.values());
+}
+
+function completedOrStartedAt(record: {
+  completedAt?: string;
+  startedAt?: string;
+}): string | undefined {
+  return record.completedAt ?? record.startedAt;
+}
+
+function isSameOrNewerTimestamp(
+  incoming: string | undefined,
+  existing: string | undefined
+): boolean {
+  if (!existing) return true;
+  if (!incoming) return false;
+  const incomingMs = Date.parse(incoming);
+  const existingMs = Date.parse(existing);
+  if (Number.isFinite(incomingMs) && Number.isFinite(existingMs)) {
+    return incomingMs >= existingMs;
+  }
+  return incoming >= existing;
 }
 
 function summarizeBenchmarkImport(

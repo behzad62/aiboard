@@ -1,8 +1,0 @@
-{
-  "id": "fireworks-full-v0.1",
-  "version": "0.1.0",
-  "caseCount": 20,
-  "twoPlayerSeeds": 10,
-  "threePlayerSeeds": 10,
-  "source": "Generated from lib/benchmark/fireworks/scenario-packs.ts"
-}
