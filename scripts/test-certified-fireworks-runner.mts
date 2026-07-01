@@ -17,9 +17,10 @@ import {
   FIREWORKS_TACTICS_SCENARIOS,
   fireworksCaseToBenchmarkCaseV2,
 } from "../lib/benchmark/fireworks/scenario-packs";
-import { runCertifiedFireworksTeamIq } from "../lib/benchmark/fireworks/certified-runner";
+import { runCertifiedFireworksTeamIq, statusForAttempt } from "../lib/benchmark/fireworks/certified-runner";
 import { deriveTeamComposition } from "../lib/benchmark/teamiq";
 import type { BenchmarkTeamCompositionRole } from "../lib/benchmark/types";
+import type { FireworksGameMetrics } from "../lib/games/fireworks/types";
 import type { StreamChunk } from "../lib/providers/base";
 
 let failures = 0;
@@ -30,6 +31,49 @@ function check(name: string, ok: boolean, detail?: unknown): void {
     `${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`
   );
 }
+
+const baseMetrics = (
+  over: Partial<FireworksGameMetrics>
+): FireworksGameMetrics => ({
+  scoreKind: "mixed",
+  scenarioQualityScore: null,
+  fullGameStackScore: null,
+  fullGameTeamScore: null,
+  finalScore: 0,
+  maxScore: 15,
+  normalizedScore: 0,
+  legalActions: 0,
+  illegalActions: 0,
+  fallbackActions: 0,
+  cluesGiven: 0,
+  usefulClues: 0,
+  wastedClues: 0,
+  plays: 0,
+  safePlays: 0,
+  badPlays: 0,
+  discards: 0,
+  safeDiscards: 0,
+  criticalDiscards: 0,
+  memoryConsistentActions: 0,
+  memoryInconsistentActions: 0,
+  modelCalls: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costUsd: 0,
+  durationMs: 0,
+  ...over,
+});
+
+check(
+  "mixed attempt with one misplay but high score still passes",
+  statusForAttempt(88, [], baseMetrics({ scoreKind: "mixed", badPlays: 1 })) === "passed",
+  statusForAttempt(88, [], baseMetrics({ scoreKind: "mixed", badPlays: 1 }))
+);
+check(
+  "scenario attempt with a misplay still hard-fails",
+  statusForAttempt(95, [], baseMetrics({ scoreKind: "scenario", badPlays: 1 })) === "failed_model",
+  statusForAttempt(95, [], baseMetrics({ scoreKind: "scenario", badPlays: 1 }))
+);
 
 const selectedCases = FIREWORKS_TACTICS_SCENARIOS.filter(
   (scenario) => scenario.category === "safe_play"

@@ -45,6 +45,24 @@ const claudeRole: BenchmarkTeamCompositionRole = {
   temperature: 0,
 };
 
+const weakArchitectRole: BenchmarkTeamCompositionRole = {
+  role: "architect",
+  slot: "architect-weak",
+  modelId: "openai:gpt-weak",
+  providerId: "openai",
+  displayName: "GPT Weak",
+  temperature: 0,
+};
+
+const weakWorkerRole: BenchmarkTeamCompositionRole = {
+  role: "worker",
+  slot: "worker-weak",
+  modelId: "google:gemini-weak",
+  providerId: "google",
+  displayName: "Gemini Weak",
+  temperature: 0,
+};
+
 const soloGpt = deriveSoloTeamComposition({
   modelId: "openai:gpt-test",
   displayName: "GPT Test",
@@ -58,6 +76,16 @@ const soloGemini = deriveSoloTeamComposition({
 const soloClaude = deriveSoloTeamComposition({
   modelId: "anthropic:claude-test",
   displayName: "Claude Test",
+  temperature: 0,
+});
+const soloWeakArchitect = deriveSoloTeamComposition({
+  modelId: "openai:gpt-weak",
+  displayName: "GPT Weak",
+  temperature: 0,
+});
+const soloWeakWorker = deriveSoloTeamComposition({
+  modelId: "google:gemini-weak",
+  displayName: "Gemini Weak",
   temperature: 0,
 });
 
@@ -75,6 +103,10 @@ const cheapTeam = deriveTeamComposition({
     { ...geminiRole, slot: "worker" },
     { ...claudeRole, slot: "critic" },
   ],
+});
+const weakBaselineTeam = deriveTeamComposition({
+  name: "Weak baseline pair",
+  roles: [weakArchitectRole, weakWorkerRole],
 });
 const partialBaselineTeam = deriveTeamComposition({
   name: "GPT plus missing solo",
@@ -96,18 +128,24 @@ const rows = buildTeamIqComboMatrixRows({
     attempt("solo-gpt", soloGpt.id, "case-1", 74, 0.74, 0.8, 60_000, "raw-single-model"),
     attempt("solo-gemini", soloGemini.id, "case-1", 60, 0.6, 0.4, 40_000, "raw-single-model"),
     attempt("solo-claude", soloClaude.id, "case-1", 71, 0.71, 0.6, 45_000, "raw-single-model"),
+    attempt("solo-weak-architect", soloWeakArchitect.id, "case-1", 10, 0.1, 0.1, 10_000, "raw-single-model"),
+    attempt("solo-weak-worker", soloWeakWorker.id, "case-1", 8, 0.08, 0.1, 10_000, "raw-single-model"),
     attempt("strong-team", strongTeam.id, "case-1", 84, 0.84, 1, 50_000, "aiboard-build-multi-worker"),
     attempt("dominated-team", dominatedTeam.id, "case-1", 70, 0.7, 2, 90_000, "aiboard-build-multi-worker"),
     attempt("cheap-team", cheapTeam.id, "case-1", 76, 0.76, 0.2, 30_000, "aiboard-build-multi-worker"),
+    attempt("weak-baseline-team", weakBaselineTeam.id, "case-1", 75, 0.75, 3, 100_000, "aiboard-build-multi-worker"),
     attempt("partial-baseline-team", partialBaselineTeam.id, "case-1", 99, 0.99, 0.1, 20_000, "aiboard-build-multi-worker"),
   ],
   teamCompositions: [
     soloGpt,
     soloGemini,
     soloClaude,
+    soloWeakArchitect,
+    soloWeakWorker,
     strongTeam,
     dominatedTeam,
     cheapTeam,
+    weakBaselineTeam,
     partialBaselineTeam,
   ],
   track: "teamiq",
@@ -117,11 +155,14 @@ const teamRows = rows.filter((row) => row.modelIds.length > 1);
 const strongRow = rows.find((row) => row.teamCompositionId === strongTeam.id);
 const dominatedRow = rows.find((row) => row.teamCompositionId === dominatedTeam.id);
 const cheapRow = rows.find((row) => row.teamCompositionId === cheapTeam.id);
+const weakBaselineRow = rows.find(
+  (row) => row.teamCompositionId === weakBaselineTeam.id
+);
 const partialBaselineRow = rows.find(
   (row) => row.teamCompositionId === partialBaselineTeam.id
 );
 
-check("combo matrix returns TeamIQ team rows", teamRows.length === 4, rows);
+check("combo matrix returns TeamIQ team rows", teamRows.length === 5, rows);
 check(
   "combo matrix rows expose quality, cost, speed, and lift",
   strongRow?.verifiedQuality === 0.84 &&
@@ -138,6 +179,16 @@ check(
     strongRow?.isParetoRecommended === true &&
     cheapRow?.isParetoRecommended === true,
   rows
+);
+check(
+  "team lift no longer rescues a quality/cost/speed-dominated combo",
+  weakBaselineRow?.isParetoRecommended === false,
+  {
+    weakBaselineLift: weakBaselineRow?.teamLift,
+    strongTeamLift: strongRow?.teamLift,
+    weakBaselineQuality: weakBaselineRow?.verifiedQuality,
+    strongQuality: strongRow?.verifiedQuality,
+  }
 );
 check(
   "combo rows without complete solo baselines are not recommended",

@@ -641,18 +641,26 @@ export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
   return { ...redacted, bundleHash: hashBenchmarkBundle(redacted) };
 }
 
+export interface BenchmarkImportResult {
+  addedCount: number;
+  updatedCount: number;
+  addedByCategory: Record<string, number>;
+  updatedByCategory: Record<string, number>;
+}
+
 export async function importBenchmarkReportBundleV2(
   bundle: BenchmarkReportBundleV2
-): Promise<void> {
+): Promise<BenchmarkImportResult> {
   validateBenchmarkReportBundleV2(bundle);
-  await mergeBenchmarkReportBundle(bundle);
+  return mergeBenchmarkReportBundle(bundle);
 }
 
 async function mergeBenchmarkReportBundle(
   bundle: BenchmarkReportBundleV2
-): Promise<void> {
+): Promise<BenchmarkImportResult> {
   await ensureWritableStore();
   const current = exportStore();
+  const importResult = summarizeBenchmarkImport(current, bundle);
   const next: Partial<ClientStore> = {
     benchmarkSuites: mergeById(current.benchmarkSuites ?? [], bundle.suites),
     benchmarkRuns: mergeById(current.benchmarkRuns ?? [], bundle.runs),
@@ -678,15 +686,19 @@ async function mergeBenchmarkReportBundle(
       current.gameMatchRecords ?? [],
       bundle.sourceEvidence?.gameMatches ?? []
     ),
-    buildCheckpoints: mergeByKey(
+    buildCheckpoints: mergeByKeyPreferNewer(
       current.buildCheckpoints ?? [],
       bundle.sourceEvidence?.buildCheckpoints ?? [],
-      (checkpoint) => checkpoint.discussionId
+      (checkpoint) => checkpoint.discussionId,
+      (checkpoint) => checkpoint.updatedAt
     ),
-    modelStats: mergeByKey(
+    // Model stats are cumulative aggregates; updatedAt is the best available
+    // proportional import heuristic short of re-aggregating raw build evidence.
+    modelStats: mergeByKeyPreferNewer(
       current.modelStats ?? [],
       bundle.sourceEvidence?.buildStats ?? [],
-      (stat) => stat.modelId
+      (stat) => stat.modelId,
+      (stat) => stat.updatedAt
     ),
   };
 
@@ -726,6 +738,7 @@ async function mergeBenchmarkReportBundle(
   );
   await persistBenchmarkRunIds(bundle.attemptsV2.map((attempt) => attempt.runId));
   await flush();
+  return importResult;
 }
 
 function hashBenchmarkBundle(
@@ -822,6 +835,16 @@ function validateBenchmarkReportBundleBase(
 
   for (const [label, value, key] of keyedArrays) {
     validateArrayWithStringKey(label, value, key);
+  }
+
+  for (const artifact of bundle.artifacts as BenchmarkArtifact[]) {
+    if (
+      typeof artifact.content !== "string" ||
+      typeof artifact.label !== "string" ||
+      typeof artifact.mimeType !== "string"
+    ) {
+      throw new Error("Invalid artifacts record in benchmark report bundle.");
+    }
   }
 
   if (bundle.sourceEvidence !== undefined) {
@@ -1545,14 +1568,168 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
   return Array.from(map.values());
 }
 
-function mergeByKey<T>(
+function mergeByKeyPreferNewer<T>(
+  current: T[],
+  incoming: T[],
+  keyFor: (item: T) => string,
+  tsFor: (item: T) => string
+): T[] {
+  const map = new Map(current.map((item) => [keyFor(item), item]));
+  for (const item of incoming) {
+    const key = keyFor(item);
+    const existing = map.get(key);
+    if (!existing || tsFor(item) >= tsFor(existing)) map.set(key, item);
+  }
+  return Array.from(map.values());
+}
+
+function summarizeBenchmarkImport(
+  current: ClientStore,
+  bundle: BenchmarkReportBundleV2
+): BenchmarkImportResult {
+  const result: BenchmarkImportResult = {
+    addedCount: 0,
+    updatedCount: 0,
+    addedByCategory: {},
+    updatedByCategory: {},
+  };
+
+  countById(result, "suites", current.benchmarkSuites ?? [], bundle.suites);
+  countById(result, "runs", current.benchmarkRuns ?? [], bundle.runs);
+  countById(result, "cases", current.benchmarkCases ?? [], bundle.cases);
+  countById(result, "attempts", current.benchmarkAttempts ?? [], bundle.attempts);
+  countById(
+    result,
+    "metricValues",
+    current.benchmarkMetricValues ?? [],
+    bundle.metricValues
+  );
+  countById(
+    result,
+    "artifacts",
+    current.benchmarkArtifacts ?? [],
+    bundle.artifacts
+  );
+  countById(result, "failures", current.benchmarkFailures ?? [], bundle.failures);
+  countById(result, "traces", current.benchmarkTraces ?? [], bundle.traces);
+  countById(
+    result,
+    "gameMatches",
+    current.gameMatchRecords ?? [],
+    bundle.sourceEvidence?.gameMatches ?? []
+  );
+  countByKeyPreferNewer(
+    result,
+    "buildCheckpoints",
+    current.buildCheckpoints ?? [],
+    bundle.sourceEvidence?.buildCheckpoints ?? [],
+    (checkpoint) => checkpoint.discussionId,
+    (checkpoint) => checkpoint.updatedAt
+  );
+  countByKeyPreferNewer(
+    result,
+    "modelStats",
+    current.modelStats ?? [],
+    bundle.sourceEvidence?.buildStats ?? [],
+    (stat) => stat.modelId,
+    (stat) => stat.updatedAt
+  );
+  countById(result, "caseV2", current.benchmarkCaseV2 ?? [], bundle.caseV2);
+  countById(
+    result,
+    "attemptsV2",
+    current.benchmarkAttemptsV2 ?? [],
+    bundle.attemptsV2
+  );
+  countById(
+    result,
+    "verifierResults",
+    current.benchmarkVerifierResults ?? [],
+    bundle.verifierResults
+  );
+  countById(
+    result,
+    "runEvents",
+    current.benchmarkRunEvents ?? [],
+    bundle.runEvents
+  );
+  countById(
+    result,
+    "toolCallTraces",
+    current.benchmarkToolCallTraces ?? [],
+    bundle.toolCallTraces
+  );
+  countById(
+    result,
+    "teamCompositions",
+    current.benchmarkTeamCompositions ?? [],
+    bundle.teamCompositions
+  );
+  countById(
+    result,
+    "harnessCertifications",
+    current.benchmarkHarnessCertifications ?? [],
+    bundle.harnessCertifications
+  );
+
+  return result;
+}
+
+function countById<T extends { id: string }>(
+  result: BenchmarkImportResult,
+  category: string,
+  current: T[],
+  incoming: T[]
+): void {
+  countByKey(result, category, current, incoming, (item) => item.id);
+}
+
+function countByKey<T>(
+  result: BenchmarkImportResult,
+  category: string,
   current: T[],
   incoming: T[],
   keyFor: (item: T) => string
-): T[] {
-  const map = new Map(current.map((item) => [keyFor(item), item]));
-  for (const item of incoming) map.set(keyFor(item), item);
-  return Array.from(map.values());
+): void {
+  const existing = new Set(current.map(keyFor));
+  for (const item of incoming) {
+    incrementImportCount(result, category, existing.has(keyFor(item)) ? "updated" : "added");
+  }
+}
+
+function countByKeyPreferNewer<T>(
+  result: BenchmarkImportResult,
+  category: string,
+  current: T[],
+  incoming: T[],
+  keyFor: (item: T) => string,
+  tsFor: (item: T) => string
+): void {
+  const existing = new Map(current.map((item) => [keyFor(item), item]));
+  for (const item of incoming) {
+    const currentItem = existing.get(keyFor(item));
+    if (!currentItem) {
+      incrementImportCount(result, category, "added");
+    } else if (tsFor(item) >= tsFor(currentItem)) {
+      incrementImportCount(result, category, "updated");
+    }
+  }
+}
+
+function incrementImportCount(
+  result: BenchmarkImportResult,
+  category: string,
+  kind: "added" | "updated"
+): void {
+  if (kind === "added") {
+    result.addedCount += 1;
+    result.addedByCategory[category] =
+      (result.addedByCategory[category] ?? 0) + 1;
+  } else {
+    result.updatedCount += 1;
+    result.updatedByCategory[category] =
+      (result.updatedByCategory[category] ?? 0) + 1;
+  }
 }
 
 export function __resetBenchmarkStoreForTests(): void {

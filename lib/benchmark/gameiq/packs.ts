@@ -94,7 +94,7 @@ export function listGameIqScenarios(): GameIqScenario[] {
   return GAMEIQ_SCENARIO_PACKS.flatMap((pack) => pack.scenarios).map(clone);
 }
 
-function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }

@@ -67,6 +67,28 @@ for (const challenge of WORKBENCH_CHALLENGES) {
     reference.assertions.every((assertion) => !assertion.id.includes("reference")),
     reference.assertions
   );
+  if (challenge.kind === "large-file-surgical-patch") {
+    const path = Object.keys(challenge.referenceFiles)[0];
+    const content = path ? challenge.referenceFiles[path] : "";
+    const tampered = path
+      ? {
+          ...challenge.referenceFiles,
+          [path]: content.replace(
+            "return raw; // non-target sentinel 060",
+            "return CORRUPTED; // non-target sentinel 060"
+          ),
+        }
+      : challenge.referenceFiles;
+    const tamperedResult = runWorkBenchChallengeVerifier({
+      challenge,
+      files: tampered,
+    });
+    check(
+      `${challenge.id} detects corruption of a single non-target branch`,
+      !tamperedResult.passed,
+      tamperedResult
+    );
+  }
 }
 
 const largeFileChallenges = WORKBENCH_CHALLENGES.filter((challenge) =>

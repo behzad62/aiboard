@@ -116,7 +116,8 @@ export interface BenchmarkTrendRow {
   date: string;
   games: number;
   buildAttempts: number;
-  quality: number;
+  quality: number | null;
+  qualitySamples: number;
 }
 
 export interface BenchmarkEvidenceItem {
@@ -388,8 +389,8 @@ export function buildBenchmarkDashboardData(
     .sort((a, b) => b.qualityScore - a.qualityScore);
 
   for (const trend of trends.values()) {
-    const denominator = trend.games + trend.buildAttempts;
-    trend.quality = denominator > 0 ? trend.quality / denominator : 0;
+    trend.quality =
+      trend.qualitySamples > 0 ? (trend.quality ?? 0) / trend.qualitySamples : null;
   }
 
   return {
@@ -922,7 +923,8 @@ function addGameMatch(input: {
     if (isDraw) score.draws += 1;
     else if (modelWon) score.wins += 1;
     else score.losses += 1;
-    trend.quality += isDraw ? 50 : modelWon ? 100 : 0;
+    trend.quality = (trend.quality ?? 0) + (isDraw ? 50 : modelWon ? 100 : 0);
+    trend.qualitySamples += 1;
 
     if (invalidResponses > 0) incrementFailure(input.failures, modelId, "invalid_action");
     if (fallbackMoves > 0) incrementFailure(input.failures, modelId, "fallback_action");
@@ -1118,7 +1120,7 @@ function trendFor(
   const date = timestamp.slice(0, 10);
   const existing = trends.get(date);
   if (existing) return existing;
-  const created = { date, games: 0, buildAttempts: 0, quality: 0 };
+  const created = { date, games: 0, buildAttempts: 0, quality: 0, qualitySamples: 0 };
   trends.set(date, created);
   return created;
 }

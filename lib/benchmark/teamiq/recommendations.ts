@@ -26,8 +26,8 @@ export function buildTeamIqRecommendationCards(
   const teams = rows.filter((row) => !row.isSolo && row.attempts > 0);
   const cards = uniqueCards([
     cardFor("best_team_lift", "Best team lift", maxBy(teams, (row) => row.teamLift), (row) => ({
-      value: signedScore(row.teamLift),
-      detail: `Best solo ${score(row.bestSoloScore)} -> team ${score(row.jobSuccessScore)}`,
+      value: signedPoints(row.teamLift),
+      detail: `Best solo ${points(row.bestSoloScore)} -> team ${points(row.jobSuccessScore)}`,
     })),
     cardFor("best_quality", "Best quality", maxBy(teams, (row) => row.verifiedQuality), (row) => ({
       value: score(row.verifiedQuality),
@@ -50,7 +50,7 @@ export function buildTeamIqRecommendationCards(
         detail:
           row.teamLift == null
             ? "Missing complete solo baselines"
-            : `Team lift ${signedScore(row.teamLift)}`,
+            : `Team lift ${signedPoints(row.teamLift)}`,
       })
     ),
   ]);
@@ -133,13 +133,17 @@ function minBy(
 
 function score(value: number | null): string {
   if (value == null) return "n/a";
-  const normalized = value <= 1 ? value * 100 : value;
-  return `${Math.round(normalized * 10) / 10}`;
+  return `${Math.round(value * 100 * 10) / 10}`;
 }
 
-function signedScore(value: number | null): string {
+function points(value: number | null): string {
   if (value == null) return "n/a";
-  return `${value > 0 ? "+" : ""}${score(value)}`;
+  return `${Math.round(value * 10) / 10}`;
+}
+
+function signedPoints(value: number | null): string {
+  if (value == null) return "n/a";
+  return `${value > 0 ? "+" : ""}${points(value)}`;
 }
 
 function money(value: number | null): string {

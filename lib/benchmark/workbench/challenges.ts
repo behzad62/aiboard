@@ -156,7 +156,14 @@ function largeFileSurgicalPatch(number: number): WorkBenchChallenge {
     maxChangedLines: 3,
     requiredSnippets: { [path]: ["return raw.trim().toLowerCase(); // target branch"] },
     requiredUnchangedSnippets: {
-      [path]: ["return raw; // non-target sentinel", `// ${marker}`],
+      [path]: [
+        "return raw; // non-target sentinel 001",
+        "return raw; // non-target sentinel 060",
+        "return raw; // non-target sentinel 116",
+        "return raw; // non-target sentinel 118",
+        "return raw; // non-target sentinel 220",
+        `// ${marker}`,
+      ],
     },
     forbiddenSnippets: { [path]: ["return raw.toLowerCase(); // target branch"] },
   });
@@ -319,13 +326,14 @@ function challenge(input: {
 function largeNormalizerFile(marker: string, targetReturn: string): string {
   const lines = ["# WorkBench large normalizer fixture"];
   for (let index = 1; index <= 220; index++) {
-    lines.push(`export function normalizeBranch_${String(index).padStart(3, "0")}(raw: string): string {`);
+    const tag = String(index).padStart(3, "0");
+    lines.push(`export function normalizeBranch_${tag}(raw: string): string {`);
     lines.push("  if (!raw) return \"\";");
     if (index === 117) {
       lines.push(`  // ${marker}`);
       lines.push(`  ${targetReturn}`);
     } else {
-      lines.push("  return raw; // non-target sentinel");
+      lines.push(`  return raw; // non-target sentinel ${tag}`);
     }
     lines.push("}");
   }

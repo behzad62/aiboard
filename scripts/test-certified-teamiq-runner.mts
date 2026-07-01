@@ -235,7 +235,7 @@ check(
   bundle.traces.length >
     selectedCases.length * roles.length &&
     teamAttempt?.traceIds.length ===
-      selectedCases.length * roles.length,
+      selectedCases.length * (roles.length + 1),
   { traceCount: bundle.traces.length, teamAttempt }
 );
 const jsonCall = promptForCase("json-schema");
@@ -304,6 +304,69 @@ check(
   "certified TeamIQ calls every team provider",
   roles.every((role) => (callsByProvider.get(role.providerId) ?? 0) > 0),
   Object.fromEntries(callsByProvider)
+);
+
+__resetBenchmarkStoreForTests();
+const synthesisCase = selectedCases.find(
+  (benchmarkCase) => benchmarkCase.category === "json-schema"
+)!;
+const twoRoleTeam = deriveTeamComposition({
+  name: "Synthesis required team",
+  roles: roles.slice(0, 2),
+});
+await saveBenchmarkCaseV2(caseV2);
+await saveBenchmarkTeamComposition(twoRoleTeam);
+let synthesisModelCalls = 0;
+let synthesisPrompts = 0;
+const synthesisSummary = await runCertifiedBenchmark({
+  runId: "run-certified-teamiq-synthesis",
+  suiteId: "suite-certified-teamiq",
+  track: "teamiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseV2.id],
+  teamCompositionIds: [twoRoleTeam.id],
+  certification: runHarnessCertification("raw-single-model"),
+  runner: (context) =>
+    runCertifiedTeamIq({
+      context,
+      teamCompositions: [twoRoleTeam],
+      task: {
+        kind: "toolreliability",
+        casePack: [synthesisCase],
+      },
+      includeSoloBaselines: false,
+      pricing: {
+        inputUsdPer1M: 1,
+        outputUsdPer1M: 1,
+      },
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        synthesisModelCalls++;
+        const prompt = params.messages.map((message) => message.content).join("\n");
+        const isSynthesis = prompt.includes("Synthesize the team outputs");
+        if (isSynthesis) synthesisPrompts++;
+        yield {
+          type: "token",
+          content: isSynthesis
+            ? outputByCase.get(`${synthesisCase.canary}:0`) ?? "{}"
+            : JSON.stringify({ member: "not the final answer" }),
+        };
+        yield { type: "done" };
+      },
+    }),
+});
+const synthesisAttempt = (await listBenchmarkAttemptsV2()).find(
+  (attempt) => attempt.runId === synthesisSummary.runId
+);
+check(
+  "multi-role TeamIQ adds one synthesis model call per case",
+  synthesisModelCalls === twoRoleTeam.roles.length + 1 && synthesisPrompts === 1,
+  { synthesisModelCalls, synthesisPrompts }
+);
+check(
+  "multi-role TeamIQ scores the synthesized answer, not a member output",
+  synthesisAttempt?.status === "passed" &&
+    synthesisAttempt.modelCalls === twoRoleTeam.roles.length + 1,
+  synthesisAttempt
 );
 
 if (failures === 0) {

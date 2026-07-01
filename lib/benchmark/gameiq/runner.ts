@@ -1,5 +1,6 @@
 import { scoreGameIqAttempt } from "@/lib/benchmark/scoring/gameiq";
 import { round } from "@/lib/benchmark/scoring/types";
+import { stableStringify } from "./packs";
 import {
   GAMEIQ_HARNESS_VERSION,
   GAMEIQ_PROMPT_SET_VERSION,
@@ -40,6 +41,13 @@ function latencyFactor(latencyMs: number, targetMs: number): number {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function distinctGroupKey(result: GameIqScenarioResult): string {
+  return stableStringify({
+    gameId: result.gameId,
+    expectedActions: result.expectedActions,
+  });
 }
 
 function attemptId(input: RunGameIqScenariosInput): string {
@@ -134,18 +142,33 @@ export async function runGameIqScenarios(
   const legalActions = caseResults.filter((result) => result.legal).length;
   const correctActions = caseResults.filter((result) => result.correct).length;
   const fallbackActions = caseResults.filter((result) => result.fallbackUsed).length;
+  const groups = new Map<string, GameIqScenarioResult[]>();
+  for (const result of caseResults) {
+    const key = distinctGroupKey(result);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(result);
+    else groups.set(key, [result]);
+  }
+  const groupAverages = Array.from(groups.values()).map((bucket) => ({
+    correct: average(bucket.map((result) => (result.correct ? 1 : 0))),
+    quality: average(bucket.map((result) => result.actionQuality)),
+    legal: average(bucket.map((result) => (result.legal ? 1 : 0))),
+    structured: average(bucket.map((result) => (result.structured ? 1 : 0))),
+    fallback: average(bucket.map((result) => (result.fallbackUsed ? 1 : 0))),
+  }));
   const metrics: GameIqRunMetrics = {
     scenarioCount,
     structuredActions,
     legalActions,
     correctActions,
     fallbackActions,
-    outcomeScore: scenarioCount > 0 ? correctActions / scenarioCount : 0,
-    moveQuality: average(caseResults.map((result) => result.actionQuality)),
-    legalActionRate: scenarioCount > 0 ? legalActions / scenarioCount : 0,
-    structuredReliability:
-      scenarioCount > 0 ? structuredActions / scenarioCount : 0,
-    fallbackRate: scenarioCount > 0 ? fallbackActions / scenarioCount : 0,
+    outcomeScore: average(groupAverages.map((group) => group.correct)),
+    moveQuality: average(groupAverages.map((group) => group.quality)),
+    legalActionRate: average(groupAverages.map((group) => group.legal)),
+    structuredReliability: average(
+      groupAverages.map((group) => group.structured)
+    ),
+    fallbackRate: average(groupAverages.map((group) => group.fallback)),
     latencyFactor: average(caseResults.map((result) => result.latencyFactor)),
   };
   const score = scoreGameIqAttempt(metrics);

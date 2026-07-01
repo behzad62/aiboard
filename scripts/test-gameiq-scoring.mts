@@ -4,6 +4,7 @@ import {
   listGameIqScenarios,
   runGameIqScenarios,
   type GameIqMoveProvider,
+  type GameIqScenario,
 } from "../lib/benchmark/gameiq";
 
 let failures = 0;
@@ -109,6 +110,43 @@ if (!connectFourScenario) {
       illegalStructured.metrics.structuredReliability === 0 &&
       illegalStructured.score < 25,
     illegalStructured
+  );
+}
+
+const chessPack = getGameIqScenarioPack("chess");
+const firstChessScenario = chessPack?.scenarios[0];
+const distinctChessScenario = chessPack?.scenarios.find(
+  (scenario) =>
+    JSON.stringify(scenario.expectedActions) !==
+    JSON.stringify(firstChessScenario?.expectedActions)
+);
+if (!firstChessScenario || !distinctChessScenario) {
+  check("Chess scenarios available for de-dup aggregation check", false);
+} else {
+  const clonedChessScenarios: GameIqScenario[] = [
+    { ...firstChessScenario, id: `${firstChessScenario.id}-clone-a` },
+    { ...firstChessScenario, id: `${firstChessScenario.id}-clone-b` },
+    distinctChessScenario,
+  ];
+  const dedupedResult = await runGameIqScenarios({
+    runId: "gameiq-test-run-deduped-clones",
+    modelId: "fake:deduped",
+    teamCompositionId: "team-fake-deduped",
+    scenarios: clonedChessScenarios,
+    moveProvider: ({ scenarioIndex, scenario }) => ({
+      action:
+        scenarioIndex === 1
+          ? { from: "a1", to: "a1" }
+          : scenario.expectedActions[0]?.action,
+      rawResponse: "dedupe-check",
+      latencyMs: 0,
+    }),
+  });
+  const expectedDedupedOutcome = 0.75;
+  check(
+    "identical chess clones collapse to one group in outcomeScore",
+    Math.abs(dedupedResult.metrics.outcomeScore - expectedDedupedOutcome) < 1e-9,
+    { outcomeScore: dedupedResult.metrics.outcomeScore, expectedDedupedOutcome }
   );
 }
 

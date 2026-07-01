@@ -1,6 +1,7 @@
 import { cleanupBenchRun, getBenchDiff, prepareBenchCase, runBenchVerifier } from "@/lib/client/bench-runner";
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatus } from "@/lib/benchmark/types";
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
+import { round } from "@/lib/benchmark/scoring/types";
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
@@ -92,7 +93,11 @@ export async function executeWorkBenchVerifierOnly(
       });
     }
 
-    const budgetFailure = findBudgetFailure(input, buildResult, Math.max(0, Date.now() - startedMs));
+    // Budget checks use model-attributable build time; attempt.durationMs below
+    // still reports the full prepare -> verifier wall clock.
+    const buildDurationMs =
+      buildResult.durationMs ?? Math.max(0, Date.now() - startedMs);
+    const budgetFailure = findBudgetFailure(input, buildResult, buildDurationMs);
     if (budgetFailure) {
       return createFailedWorkBenchAttempt(input, {
         attemptId,
@@ -130,13 +135,14 @@ export async function executeWorkBenchVerifierOnly(
       });
     }
 
-    const durationForScore = Math.max(0, Date.now() - startedMs);
+    const scoreDurationMs =
+      buildResult.durationMs ?? Math.max(0, Date.now() - startedMs);
     const score = scoreWorkBenchAttempt({
       verifierScore: parsedVerifierResult.score,
       verifierPassed: parsedVerifierResult.passed,
       actualCostUsd: buildResult.costUsd ?? input.costUsd ?? null,
       targetCostUsd: input.case.scoring.costTargetUsd,
-      actualDurationMs: durationForScore,
+      actualDurationMs: scoreDurationMs,
       targetDurationMs:
         typeof input.case.scoring.timeTargetSeconds === "number"
           ? input.case.scoring.timeTargetSeconds * 1000
@@ -201,6 +207,7 @@ export async function executeWorkBenchVerifierOnly(
       verifiedQuality: score.verifiedQuality,
       jobSuccessScore: score.jobSuccessScore,
       efficiencyScore: score.efficiencyScore,
+      toolReliabilityScore: round(score.toolReliability * 100),
       costUsd: buildResult.costUsd ?? input.costUsd ?? null,
       inputTokens: buildResult.inputTokens ?? input.inputTokens ?? 0,
       outputTokens: buildResult.outputTokens ?? input.outputTokens ?? 0,
@@ -329,6 +336,7 @@ export function createFailedWorkBenchAttempt(
     verifiedQuality: score.verifiedQuality,
     jobSuccessScore: score.jobSuccessScore,
     efficiencyScore: score.efficiencyScore,
+    toolReliabilityScore: round(score.toolReliability * 100),
     costUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
     inputTokens: context.buildResult?.inputTokens ?? input.inputTokens ?? 0,
     outputTokens: context.buildResult?.outputTokens ?? input.outputTokens ?? 0,
@@ -378,6 +386,8 @@ function findBudgetFailure(
   if (typeof budget.maxOutputTokens === "number" && outputTokens > budget.maxOutputTokens) {
     return { code: "budget_output_tokens_exceeded", message: `Output tokens ${outputTokens} exceeded maxOutputTokens ${budget.maxOutputTokens}.` };
   }
+  // `durationMs` is the model-attributable build duration passed by the caller,
+  // not the full prepare/verifier reporting duration.
   if (typeof budget.maxWallClockSeconds === "number" && durationMs > budget.maxWallClockSeconds * 1000) {
     return { code: "budget_wall_clock_exceeded", message: `Duration ${durationMs}ms exceeded maxWallClockSeconds ${budget.maxWallClockSeconds}.` };
   }

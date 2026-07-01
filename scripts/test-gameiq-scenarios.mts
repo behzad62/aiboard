@@ -3,6 +3,7 @@ import {
   actionMatchesExpected,
   getGameIqScenarioPack,
   listGameIqScenarioPacks,
+  stableStringify,
   stableGameIqScenarioPackDigest,
   validateGameIqAction,
   validateGameIqScenario,
@@ -55,6 +56,29 @@ for (const pack of firstListing) {
     `${pack.id} meets expected scenario count`,
     pack.scenarios.length === expectedPackCounts.get(pack.id),
     { actual: pack.scenarios.length, expected: expectedPackCounts.get(pack.id) }
+  );
+}
+
+const distinctFloor = new Map([
+  ["gameiq-v0.1-chess", 4],
+  ["gameiq-v0.1-battleship", 20],
+  ["gameiq-v0.1-codenames", 20],
+]);
+for (const pack of firstListing) {
+  const floor = distinctFloor.get(pack.id);
+  if (floor === undefined) continue;
+  const tuples = new Set(
+    pack.scenarios.map((scenario) =>
+      stableStringify({
+        initialState: scenario.initialState,
+        expectedActions: scenario.expectedActions,
+      })
+    )
+  );
+  check(
+    `${pack.id} has at least ${floor} distinct (initialState, expectedActions) tuples`,
+    tuples.size >= floor,
+    { distinct: tuples.size, scenarios: pack.scenarios.length }
   );
 }
 

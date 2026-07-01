@@ -202,7 +202,40 @@ async function runTeamIqToolReliabilityAttempt(
         calls.push(call);
         roleOutputs.push(call.rawResponse);
       }
-      caseOutputs.push(finalOutputForTeam(team, roleOutputs));
+      if (team.roles.length > 1) {
+        const synthesisRole = preferredRoleForTeam(team, roleOutputs);
+        const synthesisCall = await callCertifiedModel({
+          model: selectedModelForRole(synthesisRole),
+          system:
+            "You are the final synthesizer for a certified TeamIQ benchmark. Return only the requested benchmark answer.",
+          user: teamIqToolReliabilitySynthesisPrompt({
+            team,
+            benchmarkCase,
+            attemptIndex,
+            roleOutputs,
+          }),
+          maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? 512,
+          temperature: 0,
+          reasoningEffort: certifiedReasoningEffort(
+            synthesisRole.reasoningEffort
+          ),
+          structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
+            benchmarkCase,
+            attemptIndex
+          ),
+          allowInvalidStructuredOutput: true,
+          context: input.context,
+          caseId: benchmarkCase.id,
+          attemptId,
+          participantId: `${team.id}:${synthesisRole.slot}:synthesis`,
+          pricing: input.pricing,
+          streamChat: input.streamChat,
+        });
+        calls.push(synthesisCall);
+        caseOutputs.push(synthesisCall.rawResponse);
+      } else {
+        caseOutputs.push(finalOutputForTeam(team, roleOutputs));
+      }
     }
     outputs[benchmarkCase.id] = caseOutputs;
   }
@@ -299,10 +332,57 @@ function teamIqToolReliabilityPrompt(input: {
     .join("\n");
 }
 
+function teamIqToolReliabilitySynthesisPrompt(input: {
+  team: BenchmarkTeamComposition;
+  benchmarkCase: ToolReliabilityCase;
+  attemptIndex: number;
+  roleOutputs: string[];
+}): string {
+  const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
+    input.benchmarkCase,
+    input.attemptIndex
+  );
+  const memberOutputs = input.team.roles
+    .map((role, index) =>
+      [
+        `${role.role} (${role.slot}) output:`,
+        input.roleOutputs[index] ?? "",
+      ].join("\n")
+    )
+    .join("\n---\n");
+  return [
+    `Team: ${input.team.name}`,
+    input.team.strategy ? `Strategy: ${input.team.strategy}` : null,
+    "Synthesize the team outputs into one final answer.",
+    "Return only the benchmark answer that satisfies the contract below; do not explain the synthesis.",
+    benchmarkPrompt,
+    "Team member outputs:",
+    memberOutputs,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
 function finalOutputForTeam(
   team: BenchmarkTeamComposition,
   roleOutputs: string[]
 ): string {
+  const index = preferredRoleIndexForTeam(team, roleOutputs);
+  return index >= 0 ? roleOutputs[index] : roleOutputs[roleOutputs.length - 1] ?? "";
+}
+
+function preferredRoleForTeam(
+  team: BenchmarkTeamComposition,
+  roleOutputs: string[]
+): BenchmarkTeamCompositionRole {
+  const index = preferredRoleIndexForTeam(team, roleOutputs);
+  return team.roles[index >= 0 ? index : team.roles.length - 1];
+}
+
+function preferredRoleIndexForTeam(
+  team: BenchmarkTeamComposition,
+  roleOutputs: string[]
+): number {
   const preferredRoles =
     team.strategy === "architect_worker"
       ? ["worker"]
@@ -312,10 +392,10 @@ function finalOutputForTeam(
   for (const preferredRole of preferredRoles) {
     const index = team.roles.findIndex((role) => role.role === preferredRole);
     if (index >= 0 && roleOutputs[index]) {
-      return roleOutputs[index];
+      return index;
     }
   }
-  return roleOutputs[roleOutputs.length - 1] ?? "";
+  return roleOutputs.length - 1;
 }
 
 function createTeamIqVerifierResult(input: {
