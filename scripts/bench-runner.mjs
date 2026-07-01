@@ -556,10 +556,11 @@ async function copyFixtureTree(source, target) {
   });
 }
 
-// Files that hold the verifier's own criteria/result. The model under test
+// Files that hold the verifier's own criteria or result. The model under test
 // reaches the workspace through the write/patch endpoints; it must never be
-// able to overwrite these to fake a pass. (The runner itself writes them during
-// prepare via direct fs calls, which bypass these endpoints.)
+// able to overwrite these to fake a pass. The configured verifier result file is
+// still blocked from direct model writes, but it is mutable output for verifier
+// commands and is not treated as immutable harness input at official scoring.
 const PROTECTED_WORKSPACE_FILES = new Set([
   "case-meta.json",
   "verifier.mjs",
@@ -571,12 +572,23 @@ const PROTECTED_WORKSPACE_FILES = new Set([
 
 function isProtectedWorkspaceFile(relPath) {
   if (typeof relPath !== "string") return false;
-  const normalized = relPath.replace(/\\/g, "/").replace(/^\.?\//, "");
+  const normalized = normalizeWorkspacePath(relPath);
   const base = normalized.split("/").pop() ?? normalized;
   return (
     PROTECTED_WORKSPACE_FILES.has(normalized) ||
     PROTECTED_WORKSPACE_FILES.has(base)
   );
+}
+
+function isConfiguredVerifierResultFile(relPath, meta) {
+  if (typeof relPath !== "string" || typeof meta?.verifierResultFile !== "string") {
+    return false;
+  }
+  return normalizeWorkspacePath(relPath) === normalizeWorkspacePath(meta.verifierResultFile);
+}
+
+function normalizeWorkspacePath(relPath) {
+  return relPath.replace(/\\/g, "/").replace(/^\.?\//, "");
 }
 
 function assertWritableWorkspacePath(relPath) {
@@ -592,6 +604,7 @@ async function assertHarnessFilesUntampered(attemptRoot, meta) {
   const snapshot = meta?.snapshot ?? {};
   for (const relPath of Object.keys(snapshot)) {
     if (!isProtectedWorkspaceFile(relPath)) continue;
+    if (isConfiguredVerifierResultFile(relPath, meta)) continue;
     let current;
     try {
       current = await readFile(resolveSafePath(attemptRoot, relPath), "utf8");

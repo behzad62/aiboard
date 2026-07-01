@@ -233,6 +233,47 @@ try {
   });
   check("compat write rejects protected file via traversal-normalized path", tamperNested.status === 400 || tamperNested.status === 403, tamperNested);
 
+  const verifierPrecheckPrepared = await request(baseUrl, "/bench/prepare", token, {
+    caseId: "workbench-verifier-precheck-0001",
+    repoUrl: "fixture://inline",
+    baseCommit: "fixture-base",
+    network: "dependency-only",
+    timeoutSeconds: 30,
+    verifierCommand: "node verifier-precheck.js",
+    verifierResultFile: "verifier-result.json",
+    allowedCommands: ["node verifier-precheck.js"],
+    files: {
+      "input.txt": "hello\n",
+      "verifier-result.json":
+        '{"passed":false,"score":0,"summary":"stale prepare result","assertions":[{"id":"stale","label":"stale","passed":false,"weight":1}]}',
+      "verifier-precheck.js":
+        "const fs=require('fs'); const passed=fs.existsSync('input.txt'); const result={passed,score:passed?1:0,summary:'fresh verifier result',assertions:[{id:'input',label:'input exists',passed,weight:1}]}; fs.writeFileSync('verifier-result.json', JSON.stringify(result)); console.log(JSON.stringify(result)); process.exit(passed?0:1);",
+    },
+  });
+  const verifierPrecheckAttempt = String(verifierPrecheckPrepared.data.attemptId ?? "");
+  const verifierPrecheckRun = await request(baseUrl, "/bench/run-command", token, {
+    attemptId: verifierPrecheckAttempt,
+    command: "node verifier-precheck.js",
+    timeoutSeconds: 10,
+  });
+  check(
+    "run-command allows model pre-check verifier to refresh verifier-result.json",
+    verifierPrecheckRun.status === 200 && verifierPrecheckRun.data.exitCode === 0,
+    verifierPrecheckRun
+  );
+  const verifierPrecheckOfficial = await request(baseUrl, "/bench/run-verifier", token, {
+    attemptId: verifierPrecheckAttempt,
+  });
+  check(
+    "run-verifier allows verifier-result.json to differ after an allowed verifier pre-check",
+    verifierPrecheckOfficial.status === 200 &&
+      verifierPrecheckOfficial.data.passed === true &&
+      typeof verifierPrecheckOfficial.data.resultJson === "string" &&
+      verifierPrecheckOfficial.data.resultJson.includes("fresh verifier result"),
+    verifierPrecheckOfficial
+  );
+  await request(baseUrl, "/bench/cleanup", token, { attemptId: verifierPrecheckAttempt });
+
   // Defense in depth: even if a protected file is changed via an allowlisted
   // shell command (which the write-endpoint guard does not cover), the verifier
   // must refuse to score a run whose harness files no longer match prepare.
