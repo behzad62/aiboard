@@ -229,7 +229,7 @@ async function expectStructuredFailure(
   name: string,
   input: WorkBenchExecutionInput,
   expectedStatus: CertifiedAttemptStatus
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof executeWorkBenchVerifierOnly>> | null> {
   try {
     const result = await executeWorkBenchVerifierOnly(input);
     check(`${name} returns ${expectedStatus}`, result.attempt.status === expectedStatus, result.attempt);
@@ -237,12 +237,14 @@ async function expectStructuredFailure(
     check(`${name} returns synthetic verifier result`, result.verifierResult.attemptId === result.attempt.id && result.verifierResult.passed === false && result.parsedVerifierResult.passed === false, result.verifierResult);
     check(`${name} records a structured failure id`, result.attempt.failureIds.length === 1 && result.attempt.failureIds[0].startsWith(`${result.attempt.id}:failure:`), result.attempt.failureIds);
     check(`${name} emits a failure log artifact`, result.artifacts.some((artifact) => artifact.kind === "log" && artifact.id === `${result.attempt.id}:failure-log`), result.artifacts);
+    return result;
   } catch (error) {
     check(`${name} does not throw`, false, error instanceof Error ? error.message : String(error));
+    return null;
   }
 }
 
-await expectStructuredFailure(
+const missingRunBuildFailure = await expectStructuredFailure(
   "missing runBuild callback",
   {
     case: caseRecord,
@@ -252,6 +254,11 @@ await expectStructuredFailure(
     teamCompositionId: "team-fixture",
   },
   "invalid_harness"
+);
+check(
+  "failed WorkBench attempt records tool reliability score 0",
+  missingRunBuildFailure?.attempt.toolReliabilityScore === 0,
+  missingRunBuildFailure?.attempt
 );
 
 await expectStructuredFailure(
@@ -426,8 +433,8 @@ try {
         inputTokens: 12,
         outputTokens: 8,
         modelCalls: 1,
-        toolCalls: 0,
-        validToolCalls: 0,
+        toolCalls: 2,
+        validToolCalls: 1,
       };
     },
   });
@@ -435,6 +442,7 @@ try {
   check("verifier record uses prepared attempt id", canonicalResult.verifierResult.id === "prepared-attempt-id:verifier" && canonicalResult.verifierResult.attemptId === "prepared-attempt-id", canonicalResult.verifierResult);
   check("artifact records use prepared attempt id", canonicalResult.artifacts.every((artifact) => artifact.id.startsWith("prepared-attempt-id:") && artifact.attemptId === "prepared-attempt-id"), canonicalResult.artifacts);
   check("attempt artifact ids use prepared attempt id", canonicalResult.attempt.artifactIds.includes("prepared-attempt-id:verifier-result") && canonicalResult.attempt.artifactIds.includes("prepared-attempt-id:patch"), canonicalResult.attempt.artifactIds);
+  check("attempt records tool reliability score 0-100", canonicalResult.attempt.toolReliabilityScore === 50, canonicalResult.attempt);
   check("cleanup uses prepared attempt id", canonicalRunner.requests.some((request) => request.path === "/bench/cleanup" && request.body.attemptId === "prepared-attempt-id"), canonicalRunner.requests);
 } catch (error) {
   check("canonical attempt id contract did not throw", false, error instanceof Error ? error.message : String(error));

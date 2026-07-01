@@ -1,6 +1,7 @@
 import { cleanupBenchRun, getBenchDiff, prepareBenchCase, runBenchVerifier } from "@/lib/client/bench-runner";
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatus } from "@/lib/benchmark/types";
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
+import { round } from "@/lib/benchmark/scoring/types";
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
@@ -201,6 +202,7 @@ export async function executeWorkBenchVerifierOnly(
       verifiedQuality: score.verifiedQuality,
       jobSuccessScore: score.jobSuccessScore,
       efficiencyScore: score.efficiencyScore,
+      toolReliabilityScore: round(score.toolReliability * 100),
       costUsd: buildResult.costUsd ?? input.costUsd ?? null,
       inputTokens: buildResult.inputTokens ?? input.inputTokens ?? 0,
       outputTokens: buildResult.outputTokens ?? input.outputTokens ?? 0,
@@ -329,6 +331,7 @@ export function createFailedWorkBenchAttempt(
     verifiedQuality: score.verifiedQuality,
     jobSuccessScore: score.jobSuccessScore,
     efficiencyScore: score.efficiencyScore,
+    toolReliabilityScore: round(score.toolReliability * 100),
     costUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
     inputTokens: context.buildResult?.inputTokens ?? input.inputTokens ?? 0,
     outputTokens: context.buildResult?.outputTokens ?? input.outputTokens ?? 0,
