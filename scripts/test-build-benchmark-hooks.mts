@@ -305,6 +305,24 @@ const directBuild = await runWorkBenchBuild({
       status: "ok",
       startedAt: "2026-06-28T10:00:00.000Z",
     });
+    benchmarkHook.recordToolCall?.({
+      id: "direct-tool-failed",
+      attemptId: benchmarkHook.attemptId,
+      caseId: benchmarkHook.caseId,
+      toolName: "run",
+      status: "failed",
+      startedAt: "2026-06-28T10:00:00.000Z",
+      error: "command failed",
+    });
+    benchmarkHook.recordToolCall?.({
+      id: "direct-tool-denied",
+      attemptId: benchmarkHook.attemptId,
+      caseId: benchmarkHook.caseId,
+      toolName: "run",
+      status: "denied",
+      startedAt: "2026-06-28T10:00:00.000Z",
+      error: "command denied",
+    });
     emit({
       type: "diagnostic",
       phase: "initializing",
@@ -337,9 +355,14 @@ check(
     directBuild.inputTokens === 12 &&
     directBuild.outputTokens === 8 &&
     directEvents.length === 1 &&
-    directToolCalls.length === 1 &&
+    directToolCalls.length === 3 &&
     directTraces.length === 1,
   { directRunCalled, directBuild, directEvents, directToolCalls, directTraces }
+);
+check(
+  "WorkBench build adapter counts only ok tool calls as valid",
+  directBuild.toolCalls === 3 && directBuild.validToolCalls === 1,
+  directBuild
 );
 
 const budgetContext = createCertifiedRunContext({

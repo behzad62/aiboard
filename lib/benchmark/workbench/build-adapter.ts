@@ -86,6 +86,7 @@ async function runWorkBenchBuildDiscussion(
   const beforeTraceIds = new Set(readBenchmarkTraces(input).map((trace) => trace.id));
   const recording: Array<Promise<unknown>> = [];
   const toolCallIds = new Set<string>();
+  const validToolCallIds = new Set<string>();
   const benchmark = createWorkBenchBenchmarkHooks(input);
   const hooks: BuildHooks = {
     ...input.hooks,
@@ -96,6 +97,7 @@ async function runWorkBenchBuildDiscussion(
       },
       recordToolCall: (trace) => {
         toolCallIds.add(trace.id);
+        if (trace.status === "ok") validToolCallIds.add(trace.id);
         if (input.context) recording.push(input.context.recordToolCall(trace));
       },
       reserveModelCall: (reservation) => {
@@ -137,6 +139,7 @@ async function runWorkBenchBuildDiscussion(
   return summarizeBuildDiscussionResult({
     traces,
     toolCalls: toolCallIds.size,
+    validToolCalls: validToolCallIds.size,
     durationMs: Math.max(0, Date.now() - startedMs),
   });
 }
@@ -260,6 +263,7 @@ function readBenchmarkTraces(
 function summarizeBuildDiscussionResult(input: {
   traces: BenchmarkModelCallTrace[];
   toolCalls: number;
+  validToolCalls: number;
   durationMs: number;
 }): WorkBenchBuildExecutionResult {
   const traceIds = uniqueStrings(input.traces.map((trace) => trace.id));
@@ -281,7 +285,7 @@ function summarizeBuildDiscussionResult(input: {
     ),
     modelCalls: traceIds.length,
     toolCalls: input.toolCalls,
-    validToolCalls: input.toolCalls,
+    validToolCalls: input.validToolCalls,
     durationMs: input.durationMs,
   };
 }
