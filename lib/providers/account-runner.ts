@@ -1,4 +1,5 @@
 import type { AIProvider, ChatParams, ModelInfo, StreamChunk } from "./base";
+import { providerSupportsMaxTokensFeature } from "./provider-registry";
 
 export const ACCOUNT_RUNNER_TEXT_ONLY = {
   image: false,
@@ -63,11 +64,14 @@ function unsupportedAttachmentReason(params: ChatParams): string | undefined {
   return undefined;
 }
 
-function buildAccountRunnerRequestBody(params: ChatParams): Record<string, unknown> {
+function buildAccountRunnerRequestBody(
+  params: ChatParams,
+  supportsMaxTokens: boolean
+): Record<string, unknown> {
   return {
     model: params.model,
     messages: params.messages,
-    maxTokens: params.maxTokens,
+    ...(supportsMaxTokens ? { maxTokens: params.maxTokens } : {}),
     temperature: params.temperature,
     reasoningEffort: params.reasoningEffort,
     structuredOutput: params.structuredOutput,
@@ -179,6 +183,10 @@ export function createAccountRunnerProvider(
       }
 
       try {
+        const supportsMaxTokens = providerSupportsMaxTokensFeature(
+          options.id,
+          params.model
+        );
         const response = await fetch(
           joinRunnerUrl(baseURL, `/providers/${options.runnerPath}/chat`),
           {
@@ -187,7 +195,9 @@ export function createAccountRunnerProvider(
               "content-type": "application/json",
               "x-runner-token": params.apiKey,
             },
-            body: JSON.stringify(buildAccountRunnerRequestBody(params)),
+            body: JSON.stringify(
+              buildAccountRunnerRequestBody(params, supportsMaxTokens)
+            ),
           }
         );
         if (
