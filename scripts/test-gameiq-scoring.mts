@@ -42,7 +42,7 @@ check(
     perfect.attempt.verifiedQuality === 1 &&
     perfect.attempt.jobSuccessScore === 100 &&
     perfect.attempt.efficiencyScore === 100 &&
-    perfect.attempt.scoringVersion === "certified-gameiq-v0.1",
+    perfect.attempt.scoringVersion === "certified-gameiq-v0.2",
   perfect.attempt
 );
 check(
@@ -62,6 +62,19 @@ check(
     perfect.metrics.fallbackRate === 0,
   perfect.metrics
 );
+
+const slowPerfect = await runGameIqScenarios({
+  runId: "gameiq-test-run-slow-perfect",
+  modelId: "fake:slow-perfect",
+  teamCompositionId: "team-fake-slow-perfect",
+  scenarios,
+  moveProvider: ({ scenario }) => ({
+    action: scenario.expectedActions[0]?.action,
+    rawResponse: JSON.stringify({ action: scenario.expectedActions[0]?.action }),
+    latencyMs: 10_000_000,
+  }),
+});
+check("GameIQ score ignores wall-clock latency", slowPerfect.score === 100, slowPerfect);
 
 const invalidProvider: GameIqMoveProvider = () => ({
   action: "not-json-action",

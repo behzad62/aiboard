@@ -12,7 +12,7 @@ import type {
 } from "@/lib/games/fireworks/types";
 import type { Move, PieceType } from "@/lib/games/chess/types";
 
-export const GAMEIQ_SCORING_VERSION = "certified-gameiq-v0.1";
+export const GAMEIQ_SCORING_VERSION = "certified-gameiq-v0.2";
 export const GAMEIQ_PROMPT_SET_VERSION = "gameiq-v0.1";
 export const GAMEIQ_HARNESS_VERSION = "gameiq-runner-v0.1";
 
