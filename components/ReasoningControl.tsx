@@ -11,8 +11,7 @@ interface ReasoningControlProps {
 }
 
 /**
- * How hard the models reason. Maps per provider (OpenAI reasoning_effort,
- * Anthropic output_config.effort, Gemini thinking) — see lib/providers/reasoning.ts.
+ * How hard the models reason. Maps per provider in lib/providers/reasoning.ts.
  */
 export function ReasoningControl({ value, onChange }: ReasoningControlProps) {
   // Guard against a stale module binding (e.g. a dev-only HMR transient when

@@ -65,6 +65,77 @@ export const MODEL_CATALOG: CatalogModel[] = [
     validationCandidate: true,
   },
 
+  // ChatGPT account-backed models - served through the local account-provider
+  // runner, but represented as normal provider catalog entries in the app.
+  {
+    id: "gpt-5.5",
+    name: "GPT-5.5 (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "ChatGPT Plus/Pro account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.4",
+    name: "GPT-5.4 (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "ChatGPT account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Fast ChatGPT account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Codex-style ChatGPT account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+
+  // GitHub Copilot account-backed models - served through the local
+  // account-provider runner.
+  {
+    id: "auto",
+    name: "Copilot Auto",
+    providerId: "github-copilot",
+    description: "Let GitHub Copilot choose the best account-backed model",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.4",
+    name: "GPT-5.4 (Copilot)",
+    providerId: "github-copilot",
+    description:
+      "GitHub Copilot account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini (Copilot)",
+    providerId: "github-copilot",
+    description:
+      "Fast GitHub Copilot account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
+    id: "claude-sonnet-4.5",
+    name: "Claude Sonnet 4.5 (Copilot)",
+    providerId: "github-copilot",
+    description:
+      "Claude model exposed through GitHub Copilot when available on the account",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+
   // Anthropic — https://platform.claude.com/docs/en/about-claude/models/overview
   {
     id: "claude-fable-5",

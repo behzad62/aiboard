@@ -171,6 +171,8 @@ try {
     headers,
     body: JSON.stringify({
       model: "gpt-5.5",
+      maxTokens: 1234,
+      reasoningEffort: "high",
       messages: [
         { role: "system", content: "You are validating a model connection." },
         { role: "user", content: "Reply with exactly: ok" },
@@ -202,6 +204,12 @@ try {
   check("runner sends store false to Codex backend", captured?.body.store === false, captured?.body);
   check("runner requests the Codex backend stream", captured?.body.stream === true, captured?.body);
   check("runner sends selected model", captured?.body.model === "gpt-5.5", captured?.body);
+  check("runner forwards ChatGPT max output tokens", captured?.body.max_output_tokens === 1234, captured?.body);
+  check(
+    "runner forwards ChatGPT reasoning effort",
+    JSON.stringify(captured?.body.reasoning) === JSON.stringify({ effort: "high" }),
+    captured?.body
+  );
   const userInput = Array.isArray(captured?.body.input) ? captured?.body.input.find((item) => item.role === "user") : undefined;
   const userContent = Array.isArray(userInput?.content) ? userInput.content : [];
   check(

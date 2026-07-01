@@ -100,8 +100,7 @@ export interface ReasoningEffortInfo {
   description: string;
 }
 
-// How hard the models reason. Mapped per provider in lib/providers/reasoning.ts
-// (OpenAI reasoning_effort, Anthropic output_config.effort, Gemini thinking).
+// How hard the models reason. Mapped per provider in lib/providers/reasoning.ts.
 export const REASONING_OPTIONS: ReasoningEffortInfo[] = [
   {
     value: "default",

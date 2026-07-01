@@ -1,4 +1,5 @@
 import { parseModelId } from "./base";
+import { providerSupportsReasoningEffortFeature } from "./provider-registry";
 import type { ReasoningEffort } from "../db/schema";
 
 /**
@@ -104,12 +105,6 @@ export function geminiThinkingConfig(
 
 /** Whether this provider path should attempt to send a reasoning param at all. */
 export function providerSupportsReasoning(fullModelId: string): boolean {
-  const { providerId } = parseModelId(fullModelId);
-  return (
-    providerId === "openai" ||
-    providerId === "anthropic" ||
-    providerId === "foundry" ||
-    providerId === "google" ||
-    providerId === "openrouter"
-  );
+  const { providerId, model } = parseModelId(fullModelId);
+  return providerSupportsReasoningEffortFeature(providerId, model);
 }

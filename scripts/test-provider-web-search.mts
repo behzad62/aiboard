@@ -28,7 +28,7 @@ const structuredOutput: StructuredOutputFormat = {
   },
 };
 
-for (const providerId of ["openai", "anthropic", "google", "openrouter"]) {
+for (const providerId of ["openai", "anthropic", "google", "openrouter", "chatgpt"]) {
   check(
     `${providerId} discussion calls enable provider-native web search`,
     shouldEnableProviderNativeWebSearch({
@@ -39,7 +39,7 @@ for (const providerId of ["openai", "anthropic", "google", "openrouter"]) {
   );
 }
 
-for (const providerId of ["custom", "foundry", "account-runner"]) {
+for (const providerId of ["custom", "foundry", "github-copilot"]) {
   check(
     `${providerId} does not claim provider-native web search`,
     !shouldEnableProviderNativeWebSearch({ providerId, model: "model" }),
