@@ -55,17 +55,16 @@ export function buildFireworksActionSchema(): StructuredOutputFormat {
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["action"],
+      required: ["action", "targetPlayerId", "color", "rank", "cardIndex"],
       properties: {
         action: {
           type: "string",
           enum: ["clue_color", "clue_rank", "play", "discard"],
         },
-        targetPlayerId: { type: "string" },
-        color: { type: "string", enum: ["red", "blue", "green"] },
-        rank: { type: "number", enum: [1, 2, 3, 4, 5] },
-        cardIndex: { type: "number" },
-        reason: { type: "string" },
+        targetPlayerId: { type: ["string", "null"] },
+        color: { type: ["string", "null"], enum: ["red", "blue", "green", null] },
+        rank: { type: ["integer", "null"], enum: [1, 2, 3, 4, 5, null] },
+        cardIndex: { type: ["integer", "null"] },
       },
     },
   };
