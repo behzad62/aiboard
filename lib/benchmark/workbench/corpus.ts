@@ -4,6 +4,7 @@ import type { WorkBenchCase } from "./types";
 import {
   WORKBENCH_CHALLENGES,
   type WorkBenchChallenge,
+  type WorkBenchChallengeKind,
 } from "./challenges";
 
 export type WorkBenchFixtureLanguage =
@@ -20,10 +21,20 @@ export interface WorkBenchCaseOption {
   id: string;
   label: string;
   fixtureLanguage: WorkBenchFixtureLanguage;
+  challengeKind: WorkBenchChallengeKind;
   caseHash: string;
   referenceSolutionNotes: string;
   negativeControlWrongSolution: string;
   case: WorkBenchCase;
+}
+
+export interface WorkBenchCasePackOption {
+  id: string;
+  label: string;
+  description: string;
+  caseCount: number;
+  caseIds: string[];
+  cases: WorkBenchCaseOption[];
 }
 
 const EXTRA_LANGUAGE_CHALLENGES: WorkBenchChallenge[] = [
@@ -49,6 +60,7 @@ export function listWorkBenchCaseOptions(): WorkBenchCaseOption[] {
         id: workBenchCase.id,
         label: `${workBenchCase.title} (${fixtureLanguage})`,
         fixtureLanguage,
+        challengeKind: challenge.kind,
         caseHash: createWorkBenchCaseHash(workBenchCase),
         referenceSolutionNotes: referenceNotesForChallenge(challenge),
         negativeControlWrongSolution: negativeNotesForChallenge(challenge),
@@ -62,6 +74,42 @@ export function getWorkBenchCaseOption(
   id: string
 ): WorkBenchCaseOption | null {
   return listWorkBenchCaseOptions().find((item) => item.id === id) ?? null;
+}
+
+export function listWorkBenchCasePacks(): WorkBenchCasePackOption[] {
+  const cases = listWorkBenchCaseOptions();
+  return [
+    createWorkBenchCasePack({
+      id: "workbench-current-all",
+      label: `All current WorkBench cases (${cases.length})`,
+      description: "Runs every current certified WorkBench fixture case.",
+      cases,
+    }),
+    ...groupWorkBenchCasePacks({
+      cases,
+      idPrefix: "workbench-current-language",
+      groupKey: (item) => item.fixtureLanguage,
+      labelForGroup: (language, count) =>
+        `${workBenchLanguageLabel(language)} cases (${count})`,
+      descriptionForGroup: (language) =>
+        `Runs current WorkBench cases using ${workBenchLanguageLabel(language)} fixtures.`,
+    }),
+    ...groupWorkBenchCasePacks({
+      cases,
+      idPrefix: "workbench-current-kind",
+      groupKey: (item) => item.challengeKind,
+      labelForGroup: (kind, count) =>
+        `${workBenchChallengeKindLabel(kind)} cases (${count})`,
+      descriptionForGroup: (kind) =>
+        `Runs current WorkBench ${workBenchChallengeKindLabel(kind).toLowerCase()} cases.`,
+    }),
+  ];
+}
+
+export function getWorkBenchCasePack(
+  id: string
+): WorkBenchCasePackOption | null {
+  return listWorkBenchCasePacks().find((pack) => pack.id === id) ?? null;
 }
 
 export function workBenchCaseToBenchmarkCaseV2(
@@ -157,6 +205,86 @@ function workBenchCaseForChallenge(
     allowedCommands: ["node verifier.mjs"],
     fixtureFiles,
   };
+}
+
+function groupWorkBenchCasePacks<T extends string>(input: {
+  cases: WorkBenchCaseOption[];
+  idPrefix: string;
+  groupKey: (item: WorkBenchCaseOption) => T;
+  labelForGroup: (group: T, count: number) => string;
+  descriptionForGroup: (group: T) => string;
+}): WorkBenchCasePackOption[] {
+  const grouped = new Map<T, WorkBenchCaseOption[]>();
+  for (const item of input.cases) {
+    const key = input.groupKey(item);
+    grouped.set(key, [...(grouped.get(key) ?? []), item]);
+  }
+  return [...grouped.entries()].map(([group, cases]) =>
+    createWorkBenchCasePack({
+      id: `${input.idPrefix}-${group}`,
+      label: input.labelForGroup(group, cases.length),
+      description: input.descriptionForGroup(group),
+      cases,
+    })
+  );
+}
+
+function createWorkBenchCasePack(input: {
+  id: string;
+  label: string;
+  description: string;
+  cases: WorkBenchCaseOption[];
+}): WorkBenchCasePackOption {
+  return {
+    id: input.id,
+    label: input.label,
+    description: input.description,
+    caseCount: input.cases.length,
+    caseIds: input.cases.map((item) => item.id),
+    cases: input.cases,
+  };
+}
+
+function workBenchLanguageLabel(language: WorkBenchFixtureLanguage): string {
+  switch (language) {
+    case "typescript":
+      return "TypeScript";
+    case "python":
+      return "Python";
+    case "go":
+      return "Go";
+    case "rust":
+      return "Rust";
+    case "react-ui":
+      return "React UI";
+    case "json":
+      return "JSON";
+    case "csharp":
+      return "C#";
+    case "cpp":
+      return "C++";
+    default:
+      return language;
+  }
+}
+
+function workBenchChallengeKindLabel(kind: WorkBenchChallengeKind): string {
+  switch (kind) {
+    case "large-file-surgical-patch":
+      return "Large-file surgical patch";
+    case "multi-file-contract":
+      return "Multi-file contract";
+    case "parser-edge-case":
+      return "Parser edge case";
+    case "react-accessibility":
+      return "React accessibility";
+    case "large-json-config":
+      return "Large JSON config";
+    case "no-whole-file-rewrite":
+      return "No whole-file rewrite";
+    default:
+      return kind;
+  }
 }
 
 function languageForChallenge(

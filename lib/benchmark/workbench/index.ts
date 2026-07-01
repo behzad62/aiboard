@@ -7,3 +7,4 @@ export * from "./types";
 export * from "./corpus";
 export * from "./challenges";
 export * from "./verifier";
+export * from "./ui-selection";

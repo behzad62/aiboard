@@ -1,5 +1,5 @@
 import { listGameIqScenarioPacks } from "@/lib/benchmark/gameiq";
-import { listWorkBenchCaseOptions } from "@/lib/benchmark/workbench";
+import { listWorkBenchCasePacks } from "@/lib/benchmark/workbench";
 import type { CertifiedRunnableTrack } from "./ui-gates";
 
 export type { CertifiedRunnableTrack } from "./ui-gates";
@@ -49,9 +49,9 @@ export function listCertifiedSuiteOptions(
     ];
   }
   if (track === "workbench") {
-    return listWorkBenchCaseOptions().map((item) => ({
-      id: item.id,
-      label: item.label,
+    return listWorkBenchCasePacks().map((pack) => ({
+      id: pack.id,
+      label: pack.label,
     }));
   }
   return listGameIqScenarioPacks().map((pack) => ({

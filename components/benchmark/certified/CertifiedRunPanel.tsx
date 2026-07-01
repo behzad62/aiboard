@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/card";
 import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
 import { CaseSuitePicker } from "./CaseSuitePicker";
-import { HarnessProfilePicker } from "./HarnessProfilePicker";
 import { ModelTeamPicker } from "./ModelTeamPicker";
 import { RunBundlePanel } from "./RunBundlePanel";
 import { RunProgressTimeline } from "./RunProgressTimeline";
@@ -33,6 +32,7 @@ import {
 } from "@/lib/benchmark/store";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget";
+import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
 import {
   listCertifiedSuiteOptions,
@@ -76,11 +76,14 @@ import {
   runCertifiedToolReliability,
 } from "@/lib/benchmark/toolreliability";
 import {
-  getWorkBenchCaseOption,
-  listWorkBenchCaseOptions,
+  getWorkBenchCasePack,
+  normalizeWorkBenchModelSelection,
   runCertifiedWorkBench,
   runWorkBenchBuild,
   workBenchCaseToBenchmarkCaseV2,
+  workBenchHarnessProfileForRoleMode,
+  workBenchRoleCount,
+  type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
 import type { SelectedModel } from "@/lib/providers/base";
 
@@ -90,7 +93,6 @@ const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
 type RunnableTrack = CertifiedRunnableTrack;
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
-type WorkBenchRoleMode = "solo" | "architect_worker" | "architect_worker_reviewer";
 type CertifiedRunPhase = "idle" | "certifying" | "running" | "persisting" | "done";
 
 const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
@@ -98,11 +100,6 @@ const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
   { id: "toolreliability", label: "Tool Reliability" },
   { id: "teamiq", label: "TeamIQ" },
   { id: "workbench", label: "WorkBench" },
-];
-
-const WORKBENCH_HARNESS_PROFILES: Array<{ id: HarnessProfile; label: string }> = [
-  { id: "aiboard-build-single-worker", label: "Build single worker" },
-  { id: "aiboard-build-multi-worker", label: "Build multi-worker" },
 ];
 
 export function CertifiedRunPanel({
@@ -145,11 +142,21 @@ export function CertifiedRunPanel({
   const runAbortRef = useRef<AbortController | null>(null);
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
-  const workBenchCases = useMemo(() => listWorkBenchCaseOptions(), []);
-  const executionMode = executionModeCopy(selectedTrack, harnessProfile);
+  const selectedWorkBenchPack = useMemo(
+    () => (selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null),
+    [selectedTrack, suiteId]
+  );
+  const effectiveHarnessProfile =
+    selectedTrack === "workbench"
+      ? workBenchHarnessProfileForRoleMode(workBenchRoleMode)
+      : harnessProfile;
+  const executionMode = executionModeCopy(
+    selectedTrack,
+    effectiveHarnessProfile
+  );
   const certification = useMemo(
-    () => runHarnessCertification(harnessProfile),
-    [harnessProfile]
+    () => runHarnessCertification(effectiveHarnessProfile),
+    [effectiveHarnessProfile]
   );
 
   useEffect(() => {
@@ -189,8 +196,9 @@ export function CertifiedRunPanel({
 
   useEffect(() => {
     if (selectedTrack === "workbench") {
-      if (!WORKBENCH_HARNESS_PROFILES.some((profile) => profile.id === harnessProfile)) {
-        setHarnessProfile("aiboard-build-single-worker");
+      const derivedProfile = workBenchHarnessProfileForRoleMode(workBenchRoleMode);
+      if (harnessProfile !== derivedProfile) {
+        setHarnessProfile(derivedProfile);
       }
       return;
     }
@@ -201,7 +209,7 @@ export function CertifiedRunPanel({
     if (harnessProfile !== DIRECT_MODEL_HARNESS) {
       setHarnessProfile(DIRECT_MODEL_HARNESS);
     }
-  }, [selectedTrack, harnessProfile]);
+  }, [selectedTrack, workBenchRoleMode, harnessProfile]);
 
   const runGate = getCertifiedRunGate({
     suiteId,
@@ -247,16 +255,14 @@ export function CertifiedRunPanel({
                 onChange={(value) => setSelectedTrack(value as RunnableTrack)}
               />
             )}
-            {selectedTrack === "workbench" ? (
-              <StaticField label="Case set" value="Choose WorkBench case below" />
-            ) : (
-              <CaseSuitePicker
-                value={suiteId}
-                options={suites}
-                ariaLabel="Case suite"
-                onChange={setSuiteId}
-              />
-            )}
+            <CaseSuitePicker
+              value={suiteId}
+              options={suites}
+              ariaLabel={
+                selectedTrack === "workbench" ? "WorkBench case pack" : "Case suite"
+              }
+              onChange={setSuiteId}
+            />
             {selectedTrack === "teamiq" ? (
               <StaticField
                 label="Models"
@@ -281,10 +287,10 @@ export function CertifiedRunPanel({
               <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
             )}
             {selectedTrack === "workbench" ? (
-              <HarnessProfilePicker
-                value={harnessProfile}
-                onChange={setHarnessProfile}
-                profiles={WORKBENCH_HARNESS_PROFILES}
+              <StaticField
+                label="Harness"
+                value={executionMode.title}
+                description={executionMode.description}
               />
             ) : (
               <StaticField
@@ -352,13 +358,11 @@ export function CertifiedRunPanel({
           {selectedTrack === "workbench" && (
             <div className="space-y-4">
               <WorkBenchRunPanel
-                cases={workBenchCases}
-                selectedCaseId={suiteId}
+                selectedPack={selectedWorkBenchPack}
                 runnerUrl={workBenchRunnerUrl}
                 runnerToken={workBenchRunnerToken}
                 runnerHealth={workBenchRunnerHealth}
                 checkingRunner={checkingWorkBenchRunner}
-                onCaseChange={setSuiteId}
                 onRunnerUrlChange={(value) => {
                   setWorkBenchRunnerUrl(value);
                   setWorkBenchRunnerHealth(null);
@@ -376,7 +380,11 @@ export function CertifiedRunPanel({
                 onRoleModeChange={(next) => {
                   setWorkBenchRoleMode(next);
                   setWorkBenchModelIds((current) =>
-                    current.slice(0, workBenchRoleCount(next))
+                    normalizeWorkBenchModelSelection({
+                      models,
+                      selectedModelIds: current,
+                      roleMode: next,
+                    })
                   );
                 }}
                 onChange={setWorkBenchModelIds}
@@ -468,9 +476,9 @@ export function CertifiedRunPanel({
     if (selectedTrack === "workbench" && workBenchSelectedModels.length < workBenchRoleCount(workBenchRoleMode)) {
       return;
     }
-    const selectedWorkBenchCase =
-      selectedTrack === "workbench" ? getWorkBenchCaseOption(suiteId) : null;
-    if (selectedTrack === "workbench" && !selectedWorkBenchCase) return;
+    const selectedWorkBenchPack =
+      selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null;
+    if (selectedTrack === "workbench" && !selectedWorkBenchPack) return;
     const abortController = new AbortController();
     runAbortRef.current = abortController;
     setRunning(true);
@@ -509,19 +517,29 @@ export function CertifiedRunPanel({
       await saveHarnessCertificationResult(certification);
       setRunPhase("running");
       const runId = `ui-${selectedTrack}-${Date.now()}`;
-      const caseRecord =
+      const caseRecords =
         selectedTrack === "workbench"
-          ? workBenchCaseToBenchmarkCaseV2(selectedWorkBenchCase!)
-          : caseForSelection(selectedTrack, suiteId);
-      await saveBenchmarkCaseV2(caseRecord);
+          ? selectedWorkBenchPack
+            ? selectedWorkBenchPack.cases.map((caseOption) =>
+                workBenchCaseToBenchmarkCaseV2(caseOption)
+              )
+            : []
+          : [caseForSelection(selectedTrack, suiteId)];
+      for (const caseRecord of caseRecords) {
+        await saveBenchmarkCaseV2(caseRecord);
+      }
       const result = await runCertifiedBenchmark({
         runId,
-        suiteId: `suite-${selectedTrack}`,
+        suiteId: selectedTrack === "workbench" ? suiteId : `suite-${selectedTrack}`,
+        name:
+          selectedTrack === "workbench" && selectedWorkBenchPack
+            ? selectedWorkBenchPack.label
+            : undefined,
         track: selectedTrack,
-        harnessProfile,
-        caseIds: [caseRecord.id],
+        harnessProfile: effectiveHarnessProfile,
+        caseIds: caseRecords.map((caseRecord) => caseRecord.id),
         teamCompositionIds: teams.map((team) => team.id),
-        modelBudget: certifiedRunBudgetForCase(caseRecord, {
+        modelBudget: certifiedRunBudgetForCases(caseRecords, {
           maxModelCallMs: DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS,
         }),
         certification,
@@ -547,9 +565,12 @@ export function CertifiedRunPanel({
             });
           }
           if (selectedTrack === "workbench") {
+            if (!selectedWorkBenchPack) {
+              throw new Error(`Unknown WorkBench case pack: ${suiteId}`);
+            }
             return runCertifiedWorkBench({
               context,
-              cases: [selectedWorkBenchCase!.case],
+              cases: selectedWorkBenchPack.cases.map((caseOption) => caseOption.case),
               runner: {
                 url: workBenchRunnerUrl.trim(),
                 token: workBenchRunnerToken.trim(),
@@ -579,7 +600,11 @@ export function CertifiedRunPanel({
       });
       setRunPhase("persisting");
       setSummary(result);
-      setMessage(`Certified ${trackLabel(selectedTrack)} run completed.`);
+      setMessage(
+        selectedTrack === "workbench"
+          ? `Certified WorkBench pack completed (${caseRecords.length} cases).`
+          : `Certified ${trackLabel(selectedTrack)} run completed.`
+      );
       await onComplete();
       setRunPhase("done");
     } catch (error) {
@@ -619,11 +644,7 @@ export function CertifiedRunPanel({
 function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV2 {
   const timestamp = new Date().toISOString();
   if (track === "workbench") {
-    const selectedCase = getWorkBenchCaseOption(suiteId);
-    if (!selectedCase) {
-      throw new Error(`Unknown WorkBench case: ${suiteId}`);
-    }
-    return workBenchCaseToBenchmarkCaseV2(selectedCase, timestamp);
+    throw new Error("WorkBench runs require a selected case pack.");
   }
   if (track === "toolreliability") {
     return {
@@ -718,6 +739,45 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       referenceSolutionPrivate: true,
     },
   };
+}
+
+function certifiedRunBudgetForCases(
+  caseRecords: BenchmarkCaseV2[],
+  defaults: CertifiedRunBudget = {}
+): CertifiedRunBudget {
+  const budgets = caseRecords.map((caseRecord) =>
+    certifiedRunBudgetForCase(caseRecord, defaults)
+  );
+  return {
+    ...defaults,
+    maxUsd: sumBudgetField(budgets, "maxUsd"),
+    maxModelCalls: sumBudgetField(budgets, "maxModelCalls"),
+    maxInputTokens: sumBudgetField(budgets, "maxInputTokens"),
+    maxOutputTokens: sumBudgetField(budgets, "maxOutputTokens"),
+    maxWallClockMs: sumBudgetField(budgets, "maxWallClockMs"),
+  };
+}
+
+function sumBudgetField(
+  budgets: CertifiedRunBudget[],
+  field: keyof Pick<
+    CertifiedRunBudget,
+    | "maxUsd"
+    | "maxModelCalls"
+    | "maxInputTokens"
+    | "maxOutputTokens"
+    | "maxWallClockMs"
+  >
+): number | undefined {
+  let total = 0;
+  let found = false;
+  for (const budget of budgets) {
+    const value = budget[field];
+    if (typeof value !== "number") continue;
+    total += value;
+    found = true;
+  }
+  return found ? total : undefined;
 }
 
 function teamIqTaskForSuite(
@@ -850,9 +910,7 @@ function executionModeCopy(track: RunnableTrack, harnessProfile: HarnessProfile)
     };
   }
   return {
-    title:
-      WORKBENCH_HARNESS_PROFILES.find((profile) => profile.id === harnessProfile)?.label ??
-      "Build harness",
+    title: workBenchHarnessProfileLabel(harnessProfile),
     description: "WorkBench uses the local bench runner and Build-mode tool protocol.",
   };
 }
@@ -895,9 +953,12 @@ function WorkBenchTeamBuilder({
   onChange: (value: string[]) => void;
 }) {
   const roleCount = workBenchRoleCount(roleMode);
-  const selected = Array.from({ length: roleCount }, (_, index) =>
-    selectedModelIds[index] ?? models[index]?.modelId ?? ""
-  );
+  const selected = normalizeWorkBenchModelSelection({
+    models,
+    selectedModelIds,
+    roleMode,
+  });
+  while (selected.length < roleCount) selected.push("");
 
   return (
     <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
@@ -942,10 +1003,14 @@ function WorkBenchTeamBuilder({
   );
 }
 
-function workBenchRoleCount(roleMode: WorkBenchRoleMode): number {
-  if (roleMode === "architect_worker_reviewer") return 3;
-  if (roleMode === "architect_worker") return 2;
-  return 1;
+function workBenchHarnessProfileLabel(harnessProfile: HarnessProfile): string {
+  if (harnessProfile === "aiboard-build-single-worker") {
+    return "Build single worker";
+  }
+  if (harnessProfile === "aiboard-build-multi-worker") {
+    return "Build multi-worker";
+  }
+  return "Build harness";
 }
 
 function workBenchRoleSummary(
@@ -972,9 +1037,11 @@ function workBenchModelsForRun(
   selectedModelIds: string[],
   roleMode: WorkBenchRoleMode
 ): SelectedModel[] {
-  const required = workBenchRoleCount(roleMode);
-  return selectedModelIds
-    .slice(0, required)
+  return normalizeWorkBenchModelSelection({
+    models,
+    selectedModelIds,
+    roleMode,
+  })
     .map((id) => models.find((model) => model.modelId === id))
     .filter((model): model is SelectedModel => Boolean(model));
 }

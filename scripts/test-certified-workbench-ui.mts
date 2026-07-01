@@ -1,9 +1,16 @@
 /* Certified WorkBench UI data checks (run: npx tsx scripts/test-certified-workbench-ui.mts) */
 import { readFileSync } from "node:fs";
 import {
+  listWorkBenchCasePacks,
   listWorkBenchCaseOptions,
   workBenchCaseToBenchmarkCaseV2,
 } from "../lib/benchmark/workbench/corpus";
+import {
+  normalizeWorkBenchModelSelection,
+  workBenchHarnessProfileForRoleMode,
+  workBenchRoleCount,
+} from "../lib/benchmark/workbench/ui-selection";
+import { listCertifiedSuiteOptions } from "../lib/benchmark/certified/suite-options";
 import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
 import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
@@ -27,12 +34,66 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 }
 
 const cases = listWorkBenchCaseOptions();
+const casePacks = listWorkBenchCasePacks();
+const allCasePack = casePacks.find((pack) => pack.id === "workbench-current-all");
+const workBenchSuiteOptions = listCertifiedSuiteOptions("workbench");
 const languageCounts = new Map<string, number>();
 for (const item of cases) {
   languageCounts.set(item.fixtureLanguage, (languageCounts.get(item.fixtureLanguage) ?? 0) + 1);
 }
 
 check("WorkBench UI loader exposes current generated cases", cases.length >= 19, cases.map((item) => item.case.id));
+check(
+  "WorkBench UI loader exposes all-cases pack",
+  allCasePack?.caseCount === cases.length &&
+    allCasePack?.cases.length === cases.length &&
+    allCasePack?.caseIds.length === cases.length &&
+    allCasePack?.caseIds.join("|") === cases.map((item) => item.id).join("|"),
+  allCasePack
+);
+check(
+  "WorkBench suite options expose packs instead of individual cases",
+  workBenchSuiteOptions[0]?.id === "workbench-current-all" &&
+    casePacks.every((pack) =>
+      workBenchSuiteOptions.some(
+        (option) => option.id === pack.id && option.label === pack.label
+      )
+    ) &&
+    cases.every((item) =>
+      !workBenchSuiteOptions.some((option) => option.id === item.id)
+    ),
+  workBenchSuiteOptions
+);
+check(
+  "WorkBench packs keep unique ordered case ids",
+  casePacks.every((pack) => {
+    const ids = pack.cases.map((item) => item.id);
+    return (
+      ids.join("|") === pack.caseIds.join("|") &&
+      new Set(pack.caseIds).size === pack.caseIds.length
+    );
+  }),
+  casePacks.map((pack) => ({ id: pack.id, caseIds: pack.caseIds }))
+);
+check(
+  "WorkBench UI loader exposes language packs",
+  ["typescript", "python", "go", "rust", "react-ui", "json", "csharp", "cpp"].every((language) =>
+    casePacks.some(
+      (pack) =>
+        pack.id === `workbench-current-language-${language}` &&
+        pack.caseCount === languageCounts.get(language)
+    )
+  ),
+  casePacks.map((pack) => ({ id: pack.id, caseCount: pack.caseCount }))
+);
+check(
+  "WorkBench UI loader exposes non-empty challenge-kind packs",
+  casePacks
+    .filter((pack) => pack.id.startsWith("workbench-current-kind-"))
+    .length >= 6 &&
+    casePacks.every((pack) => pack.caseCount > 0 && pack.cases.length === pack.caseCount),
+  casePacks.map((pack) => ({ id: pack.id, caseCount: pack.caseCount }))
+);
 check("WorkBench UI loader labels cases", cases.every((item) => item.label.includes(item.case.title)), cases);
 check(
   "WorkBench UI loader exposes current language mix",
@@ -43,6 +104,56 @@ check(
     languageCounts.get("rust") === 1 &&
     languageCounts.get("react-ui") === 2,
   Object.fromEntries(languageCounts)
+);
+const workBenchSelectionModels = [
+  { modelId: "openai:gpt-a" },
+  { modelId: "anthropic:claude-b" },
+  { modelId: "google:gemini-c" },
+];
+check(
+  "WorkBench role counts match UI modes",
+  workBenchRoleCount("solo") === 1 &&
+    workBenchRoleCount("architect_worker") === 2 &&
+    workBenchRoleCount("architect_worker_reviewer") === 3,
+  null
+);
+check(
+  "WorkBench harness profile is derived from role mode",
+  workBenchHarnessProfileForRoleMode("solo") === "aiboard-build-single-worker" &&
+    workBenchHarnessProfileForRoleMode("architect_worker") === "aiboard-build-multi-worker" &&
+    workBenchHarnessProfileForRoleMode("architect_worker_reviewer") === "aiboard-build-multi-worker",
+  null
+);
+check(
+  "WorkBench role mode expansion stores displayed fallback model slots",
+  normalizeWorkBenchModelSelection({
+    models: workBenchSelectionModels,
+    selectedModelIds: ["openai:gpt-a"],
+    roleMode: "architect_worker",
+  }).join("|") === "openai:gpt-a|anthropic:claude-b",
+  null
+);
+check(
+  "WorkBench role mode expansion avoids phantom duplicate fallback slots",
+  normalizeWorkBenchModelSelection({
+    models: workBenchSelectionModels,
+    selectedModelIds: ["anthropic:claude-b"],
+    roleMode: "architect_worker",
+  }).join("|") === "anthropic:claude-b|openai:gpt-a",
+  null
+);
+check(
+  "WorkBench role mode shrink trims stored model slots",
+  normalizeWorkBenchModelSelection({
+    models: workBenchSelectionModels,
+    selectedModelIds: [
+      "openai:gpt-a",
+      "anthropic:claude-b",
+      "google:gemini-c",
+    ],
+    roleMode: "solo",
+  }).join("|") === "openai:gpt-a",
+  null
 );
 check(
   "WorkBench UI loader exposes stable hashes",
@@ -370,6 +481,22 @@ check(
     certifiedRunPanelSource.includes('"persisting"') &&
     !certifiedRunPanelSource.includes('{ label: "Certify", status: running ? "running" : summary ? "done" : "idle" }') &&
     !certifiedRunPanelSource.includes('{ label: "Run", status: running ? "running" : summary ? "done" : "idle" }'),
+  certifiedRunPanelSource
+);
+check(
+  "certified WorkBench UI derives harness profile from role mode",
+  certifiedRunPanelSource.includes("workBenchHarnessProfileForRoleMode(workBenchRoleMode)") &&
+    !certifiedRunPanelSource.includes("profiles={WORKBENCH_HARNESS_PROFILES}"),
+  certifiedRunPanelSource
+);
+check(
+  "certified WorkBench UI runs packs instead of individual cases",
+  certifiedRunPanelSource.includes("getWorkBenchCasePack(suiteId)") &&
+    certifiedRunPanelSource.includes("selectedWorkBenchPack.cases.map") &&
+    certifiedRunPanelSource.includes("caseRecords.map((caseRecord) => caseRecord.id)") &&
+    certifiedRunPanelSource.includes("cases: selectedWorkBenchPack.cases.map") &&
+    !certifiedRunPanelSource.includes("getWorkBenchCaseOption(suiteId)") &&
+    !certifiedRunPanelSource.includes("selectedCaseId={suiteId}"),
   certifiedRunPanelSource
 );
 
