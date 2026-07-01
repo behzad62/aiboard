@@ -824,6 +824,16 @@ function validateBenchmarkReportBundleBase(
     validateArrayWithStringKey(label, value, key);
   }
 
+  for (const artifact of bundle.artifacts as BenchmarkArtifact[]) {
+    if (
+      typeof artifact.content !== "string" ||
+      typeof artifact.label !== "string" ||
+      typeof artifact.mimeType !== "string"
+    ) {
+      throw new Error("Invalid artifacts record in benchmark report bundle.");
+    }
+  }
+
   if (bundle.sourceEvidence !== undefined) {
     if (
       !bundle.sourceEvidence ||

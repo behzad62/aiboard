@@ -2,6 +2,10 @@
 import { readFileSync } from "node:fs";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
+import {
+  __resetBenchmarkStoreForTests,
+  importBenchmarkReportBundleV2,
+} from "../lib/benchmark/store";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -198,6 +202,28 @@ const bundle: BenchmarkReportBundleV2 = {
     warnings: [],
   },
 };
+
+const invalidArtifactBundle: BenchmarkReportBundleV2 = {
+  ...bundle,
+  artifacts: [
+    {
+      id: "artifact-invalid-content",
+      kind: "log",
+      label: "Invalid content",
+      mimeType: "text/plain",
+      content: {} as unknown as string,
+      createdAt: "2026-06-27T10:00:00.000Z",
+    },
+  ],
+};
+let invalidArtifactThrew = false;
+try {
+  __resetBenchmarkStoreForTests();
+  await importBenchmarkReportBundleV2(invalidArtifactBundle);
+} catch {
+  invalidArtifactThrew = true;
+}
+check("non-string artifact content rejected", invalidArtifactThrew);
 
 const certified = buildCertifiedBenchmarkDashboardData({
   caseV2: bundle.caseV2,
