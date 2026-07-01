@@ -87,13 +87,13 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
 
 function formatScore(value: number | null): string {
   if (value == null) return "n/a";
-  const normalized = value <= 1 ? value * 100 : value;
-  return `${Math.round(normalized * 10) / 10}`;
+  return `${Math.round(value * 100 * 10) / 10}`;
 }
 
 function formatLift(value: number | null): string {
   if (value == null) return "n/a";
-  return `${value > 0 ? "+" : ""}${formatScore(value)}`;
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded > 0 ? "+" : ""}${rounded}`;
 }
 
 function label(value: string): string {
