@@ -49,6 +49,7 @@ const FORBIDDEN_RUN_COMMANDS: Array<[RegExp, string]> = [
   [/^gh\s+(?:issue|pr|release)\s+create(?:\s|$)/i, "GitHub record creation command."],
   [/^(?:curl|http|https)\b.*\s-X\s+(?:POST|PUT|PATCH|DELETE)\b/i, "External mutation request."],
 ];
+const SHELL_CHAINING_METACHARS = /[;|]|&&|\|\|/;
 
 type PatchFailureClass =
   | "unsupported_patch_format"
@@ -821,6 +822,16 @@ function hasForbiddenAction(
       };
     }
     if (action.action === "run") {
+      if (SHELL_CHAINING_METACHARS.test(action.command)) {
+        return {
+          forbidden: true,
+          details: {
+            action: action.action,
+            command: action.command,
+            reason: "Shell command chaining is not allowed.",
+          },
+        };
+      }
       const forbiddenCommand = forbiddenRunCommandReason(action.command);
       if (forbiddenCommand) {
         return {
