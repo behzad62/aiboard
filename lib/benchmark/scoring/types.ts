@@ -29,7 +29,7 @@ export interface WorkBenchScore {
   efficiencyScore: number;
   costFactor: number | null;
   timeFactor: number;
-  toolReliability: number;
+  toolReliability: number | null;
 }
 
 export interface GameIqScoreInput {

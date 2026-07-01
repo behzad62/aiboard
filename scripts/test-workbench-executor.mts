@@ -264,8 +264,8 @@ const missingRunBuildFailure = await expectStructuredFailure(
   "invalid_harness"
 );
 check(
-  "failed WorkBench attempt records tool reliability score 0",
-  missingRunBuildFailure?.attempt.toolReliabilityScore === 0,
+  "failed WorkBench attempt with no tool calls omits tool reliability score",
+  missingRunBuildFailure?.attempt.toolReliabilityScore == null,
   missingRunBuildFailure?.attempt
 );
 
@@ -456,6 +456,33 @@ try {
   check("canonical attempt id contract did not throw", false, error instanceof Error ? error.message : String(error));
 } finally {
   await canonicalRunner.stop();
+}
+
+const noToolRunner = await startCanonicalAttemptRunner("no-tool-attempt");
+try {
+  const noToolResult = await executeWorkBenchVerifierOnly({
+    case: caseRecord,
+    runner: { url: noToolRunner.url, token: noToolRunner.token },
+    attemptId: "input-no-tool-attempt",
+    runId: "run-no-tool-attempt",
+    teamCompositionId: "team-fixture",
+    cleanup: true,
+    runBuild: async () => ({
+      traceIds: ["trace-no-tool-attempt"],
+      modelCalls: 1,
+      toolCalls: 0,
+      validToolCalls: 0,
+    }),
+  });
+  check(
+    "WorkBench attempts with no tool calls do not record zero tool reliability",
+    noToolResult.attempt.toolReliabilityScore == null,
+    noToolResult.attempt
+  );
+} catch (error) {
+  check("no-tool WorkBench attempt contract did not throw", false, error instanceof Error ? error.message : String(error));
+} finally {
+  await noToolRunner.stop();
 }
 
 const timeScoreRunner = await startCanonicalAttemptRunner("time-score-attempt", {

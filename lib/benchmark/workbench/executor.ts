@@ -215,7 +215,7 @@ export async function executeWorkBenchVerifierOnly(
       verifiedQuality: score.verifiedQuality,
       jobSuccessScore: score.jobSuccessScore,
       efficiencyScore: score.efficiencyScore,
-      toolReliabilityScore: round(score.toolReliability * 100),
+      toolReliabilityScore: scaleToolReliabilityScore(score.toolReliability),
       costUsd: buildResult.costUsd ?? input.costUsd ?? null,
       inputTokens: buildResult.inputTokens ?? input.inputTokens ?? 0,
       outputTokens: buildResult.outputTokens ?? input.outputTokens ?? 0,
@@ -344,7 +344,7 @@ export function createFailedWorkBenchAttempt(
     verifiedQuality: score.verifiedQuality,
     jobSuccessScore: score.jobSuccessScore,
     efficiencyScore: score.efficiencyScore,
-    toolReliabilityScore: round(score.toolReliability * 100),
+    toolReliabilityScore: scaleToolReliabilityScore(score.toolReliability),
     costUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
     inputTokens: context.buildResult?.inputTokens ?? input.inputTokens ?? 0,
     outputTokens: context.buildResult?.outputTokens ?? input.outputTokens ?? 0,
@@ -366,6 +366,10 @@ export function createFailedWorkBenchAttempt(
     score,
     artifacts: [logArtifact],
   };
+}
+
+function scaleToolReliabilityScore(value: number | null): number | undefined {
+  return value == null ? undefined : round(value * 100);
 }
 
 function findBudgetFailure(

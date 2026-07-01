@@ -307,6 +307,7 @@ export interface BenchmarkToolCallTrace {
   toolName: string;
   command?: string;
   status: "ok" | "failed" | "blocked" | "denied";
+  exitCode?: number;
   startedAt: string;
   completedAt?: string;
   durationMs?: number;

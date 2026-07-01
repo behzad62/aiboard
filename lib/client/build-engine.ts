@@ -2014,6 +2014,7 @@ export async function runBuildDiscussion(
         toolName: "run",
         command,
         status: result.exitCode === 0 ? "ok" : "failed",
+        exitCode: result.exitCode,
         startedAt: traceStartedAt,
         completedAt: new Date().toISOString(),
         durationMs: Date.now() - traceStartMs,

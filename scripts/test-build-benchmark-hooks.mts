@@ -311,6 +311,7 @@ const directBuild = await runWorkBenchBuild({
       caseId: benchmarkHook.caseId,
       toolName: "run",
       status: "failed",
+      exitCode: 1,
       startedAt: "2026-06-28T10:00:00.000Z",
       error: "command failed",
     });
@@ -360,8 +361,8 @@ check(
   { directRunCalled, directBuild, directEvents, directToolCalls, directTraces }
 );
 check(
-  "WorkBench build adapter counts only ok tool calls as valid",
-  directBuild.toolCalls === 3 && directBuild.validToolCalls === 1,
+  "WorkBench build adapter counts executed nonzero commands as valid tool use",
+  directBuild.toolCalls === 3 && directBuild.validToolCalls === 2,
   directBuild
 );
 

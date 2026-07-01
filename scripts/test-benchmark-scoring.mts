@@ -73,8 +73,8 @@ const unknownCost = scoreWorkBenchAttempt({
   targetCostUsd: 1,
   actualDurationMs: 60_000,
   targetDurationMs: 60_000,
-  validToolCalls: 0,
-  totalToolCalls: 0,
+  validToolCalls: 1,
+  totalToolCalls: 2,
 });
 check("unknown cost does not crash scoring", unknownCost.costFactor === null && Number.isFinite(unknownCost.efficiencyScore), unknownCost);
 
@@ -85,13 +85,13 @@ const knownPerfectCost = scoreWorkBenchAttempt({
   targetCostUsd: 1,
   actualDurationMs: 60_000,
   targetDurationMs: 60_000,
-  validToolCalls: 0,
-  totalToolCalls: 0,
+  validToolCalls: 1,
+  totalToolCalls: 2,
 });
 check(
   "unknown cost is renormalized, not awarded full cost credit",
   unknownCost.efficiencyScore < knownPerfectCost.efficiencyScore &&
-    unknownCost.efficiencyScore === 86.67,
+    unknownCost.efficiencyScore === 93.33,
   { unknownCost, knownPerfectCost }
 );
 

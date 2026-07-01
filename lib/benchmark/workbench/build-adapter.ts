@@ -12,6 +12,7 @@ import {
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type {
+  BenchmarkToolCallTrace,
   BenchmarkModelCallTrace,
   BenchmarkTeamComposition,
   BenchmarkTeamCompositionRole,
@@ -97,7 +98,7 @@ async function runWorkBenchBuildDiscussion(
       },
       recordToolCall: (trace) => {
         toolCallIds.add(trace.id);
-        if (trace.status === "ok") validToolCallIds.add(trace.id);
+        if (isValidWorkBenchToolCall(trace)) validToolCallIds.add(trace.id);
         if (input.context) recording.push(input.context.recordToolCall(trace));
       },
       reserveModelCall: (reservation) => {
@@ -142,6 +143,16 @@ async function runWorkBenchBuildDiscussion(
     validToolCalls: validToolCallIds.size,
     durationMs: Math.max(0, Date.now() - startedMs),
   });
+}
+
+function isValidWorkBenchToolCall(trace: BenchmarkToolCallTrace): boolean {
+  if (trace.status === "ok") return true;
+  return (
+    trace.toolName === "run" &&
+    trace.status === "failed" &&
+    typeof trace.exitCode === "number" &&
+    Number.isFinite(trace.exitCode)
+  );
 }
 
 async function loadRunBuildDiscussion(): Promise<RunBuildDiscussionFn> {
