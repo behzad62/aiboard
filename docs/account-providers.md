@@ -27,5 +27,5 @@ The browser stores only the runner URL and runner token. Account authorization d
 Current limits:
 
 - Availability depends on the user's account entitlements and upstream account-provider behavior.
-- ChatGPT account mode supports image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and native Build tool calls through the runner.
+- ChatGPT account mode supports image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and native Build tool calls through the runner. It intentionally does not send max-token caps because the ChatGPT Codex account backend rejects `max_output_tokens`.
 - GitHub Copilot account mode supports image attachments, text-readable documents, raw document files, structured output on supported routes, max-token forwarding, and reasoning effort on GPT-class Responses routes. Claude chat-completions routes intentionally omit reasoning effort because that route has not been verified to accept it.

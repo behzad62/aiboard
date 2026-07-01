@@ -50,6 +50,7 @@ try {
     apiKey: "runner-token",
     baseURL: "http://127.0.0.1:1455",
     messages: [{ role: "user", content: "Read the attachments." }],
+    maxTokens: 1234,
     attachments,
   })) {
     chunks.push(chunk);
@@ -60,6 +61,7 @@ try {
     chunks,
   });
   check("provider forwards attachments to account runner", JSON.stringify(calls[0]?.body.attachments) === JSON.stringify(attachments), calls[0]?.body);
+  check("provider omits ChatGPT maxTokens unsupported by account backend", !Object.prototype.hasOwnProperty.call(calls[0]?.body ?? {}, "maxTokens"), calls[0]?.body);
   check("provider does not emit text-only error", !chunks.some((chunk) => chunk.type === "error" && /text-only/i.test(chunk.error)), chunks);
 } finally {
   globalThis.fetch = originalFetch;

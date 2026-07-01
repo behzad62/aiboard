@@ -48,6 +48,7 @@ export interface ProviderDefinition {
   accountRunner?: AccountRunnerProviderSetup;
   nativeWebSearch: boolean | ((modelId: string) => boolean);
   reasoningEffort: boolean | ((modelId: string) => boolean);
+  maxTokens: boolean | ((modelId: string) => boolean);
   runtimeBehavior: ModelRuntimeBehavior;
 }
 
@@ -60,6 +61,7 @@ export const PROVIDER_DEFINITIONS = {
     modelSource: "catalog",
     nativeWebSearch: true,
     reasoningEffort: true,
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
@@ -75,6 +77,7 @@ export const PROVIDER_DEFINITIONS = {
     modelSource: "catalog",
     nativeWebSearch: true,
     reasoningEffort: true,
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
@@ -101,6 +104,7 @@ export const PROVIDER_DEFINITIONS = {
     },
     nativeWebSearch: false,
     reasoningEffort: true,
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
@@ -116,6 +120,7 @@ export const PROVIDER_DEFINITIONS = {
     modelSource: "catalog",
     nativeWebSearch: true,
     reasoningEffort: true,
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is sent",
       temperatureNote:
@@ -131,6 +136,7 @@ export const PROVIDER_DEFINITIONS = {
     modelSource: "catalog",
     nativeWebSearch: true,
     reasoningEffort: true,
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is sent",
       temperatureNote:
@@ -169,10 +175,11 @@ export const PROVIDER_DEFINITIONS = {
     },
     nativeWebSearch: true,
     reasoningEffort: true,
+    maxTokens: false,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
-        "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and native Build tool calls are forwarded through the runner.",
+        "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and native Build tool calls are forwarded through the runner. Max-token caps are intentionally omitted because the ChatGPT Codex account backend rejects max_output_tokens.",
       promptCachingLabel: "Account-provider dependent",
       promptCachingNote:
         "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",
@@ -208,6 +215,7 @@ export const PROVIDER_DEFINITIONS = {
     nativeWebSearch: false,
     reasoningEffort: (modelId: string) =>
       modelId === "auto" || /^gpt-\d+/i.test(modelId),
+    maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Route-dependent",
       temperatureNote:
@@ -244,5 +252,13 @@ export function providerSupportsReasoningEffortFeature(
   modelId = ""
 ): boolean {
   const support = getProviderDefinition(providerId)?.reasoningEffort;
+  return typeof support === "function" ? support(modelId) : support === true;
+}
+
+export function providerSupportsMaxTokensFeature(
+  providerId: string,
+  modelId = ""
+): boolean {
+  const support = getProviderDefinition(providerId)?.maxTokens;
   return typeof support === "function" ? support(modelId) : support === true;
 }

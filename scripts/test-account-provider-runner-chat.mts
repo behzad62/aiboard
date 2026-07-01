@@ -75,6 +75,17 @@ const fakeBackend = http.createServer(async (req, res) => {
     headers: req.headers,
     body,
   });
+  if (Object.prototype.hasOwnProperty.call(body, "max_output_tokens")) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: {
+          message: "Unsupported parameter: max_output_tokens",
+        },
+      })
+    );
+    return;
+  }
   if (body.store !== false) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ detail: "Store must be set to false" }));
@@ -204,7 +215,11 @@ try {
   check("runner sends store false to Codex backend", captured?.body.store === false, captured?.body);
   check("runner requests the Codex backend stream", captured?.body.stream === true, captured?.body);
   check("runner sends selected model", captured?.body.model === "gpt-5.5", captured?.body);
-  check("runner forwards ChatGPT max output tokens", captured?.body.max_output_tokens === 1234, captured?.body);
+  check(
+    "runner omits ChatGPT max output tokens unsupported by Codex backend",
+    !Object.prototype.hasOwnProperty.call(captured?.body ?? {}, "max_output_tokens"),
+    captured?.body
+  );
   check(
     "runner forwards ChatGPT reasoning effort",
     JSON.stringify(captured?.body.reasoning) === JSON.stringify({ effort: "high" }),

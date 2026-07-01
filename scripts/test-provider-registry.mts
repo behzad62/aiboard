@@ -2,6 +2,7 @@
 import { getAllProviders } from "../lib/client/providers";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { PROVIDER_IDS } from "../lib/providers/constants";
+import { providerSupportsMaxTokensFeature } from "../lib/providers/provider-registry";
 import { providerSupportsReasoning } from "../lib/providers/reasoning";
 import { getModelRuntimeBehavior } from "../lib/providers/runtime-behavior";
 import { shouldEnableProviderNativeWebSearch } from "../lib/providers/web-search";
@@ -68,6 +69,16 @@ check(
     providerId: "github-copilot",
     model: "gpt-5.4",
   }),
+  null
+);
+check(
+  "ChatGPT account runner does not claim max-token request support",
+  !providerSupportsMaxTokensFeature("chatgpt", "gpt-5.4"),
+  null
+);
+check(
+  "GitHub Copilot account runner keeps max-token request support",
+  providerSupportsMaxTokensFeature("github-copilot", "gpt-5.4"),
   null
 );
 

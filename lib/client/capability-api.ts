@@ -7,6 +7,7 @@ import type {
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
+import { providerSupportsMaxTokensFeature } from "@/lib/providers/provider-registry";
 import {
   CAPABILITY_PROBES,
   CONCURRENCY_A_MESSAGES,
@@ -409,6 +410,13 @@ async function runOneProbe(
   }
 
   if (id === "maxTokens") {
+    if (!providerSupportsMaxTokensFeature(target.providerId, target.modelId)) {
+      return {
+        id,
+        status: "skipped",
+        detail: "Provider path does not expose a max-token request parameter",
+      };
+    }
     const output = await runProbeCall({ target, messages: MAX_TOKENS_PROBE_MESSAGES, maxTokens: 8 });
     return evaluateParameterAcceptanceProbeResult({
       id,
