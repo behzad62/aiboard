@@ -600,11 +600,21 @@ function parsePlainSearchReplaceOps(text: string): ExtractedEditOp[] {
     if (index >= lines.length) break;
     index++;
     const replace: string[] = [];
-    while (index < lines.length && !/^SEARCH\s*$/i.test(lines[index].trim())) {
+    let terminated = false;
+    while (index < lines.length) {
+      if (/^SEARCH\s*$/i.test(lines[index].trim())) {
+        terminated = true;
+        break;
+      }
+      if (/^(?:END|REPLACE-END)\s*$/i.test(lines[index].trim())) {
+        terminated = true;
+        index++;
+        break;
+      }
       replace.push(lines[index]);
       index++;
     }
-    if (search.length > 0) {
+    if (search.length > 0 && terminated) {
       ops.push({ search: search.join("\n"), replace: replace.join("\n") });
     }
   }
@@ -703,9 +713,9 @@ function rate(
   caseResults: ToolReliabilityCaseResult[],
   metric: ToolReliabilityMetricKey,
   positiveValue: boolean
-): number {
+): number | null {
   const applicable = caseResults.filter((item) => item.metrics[metric] !== undefined);
-  if (applicable.length === 0) return 1;
+  if (applicable.length === 0) return null;
   return (
     applicable.filter((item) => item.metrics[metric] === positiveValue).length /
     applicable.length
