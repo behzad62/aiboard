@@ -24,6 +24,7 @@ import { openrouterProvider } from "@/lib/providers/openrouter";
 import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { getModelDisplayName } from "@/lib/providers/catalog";
+import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { CustomModel } from "@/lib/db/schema";
 import {
@@ -53,7 +54,7 @@ const FOUNDRY_CAPABILITIES = {
   video: false,
 } as const;
 
-const providers: Record<string, AIProvider> = {
+const providers: Record<ProviderId, AIProvider> = {
   openai: openaiProvider,
   anthropic: anthropicProvider,
   foundry: foundryProvider,
@@ -64,11 +65,11 @@ const providers: Record<string, AIProvider> = {
 };
 
 export function getProvider(id: string): AIProvider | undefined {
-  return providers[id];
+  return providers[id as ProviderId];
 }
 
 export function getAllProviders(): AIProvider[] {
-  return Object.values(providers);
+  return PROVIDER_IDS.map((id) => providers[id]);
 }
 
 function withContextProfile(

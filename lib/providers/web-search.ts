@@ -1,17 +1,14 @@
 import type { ChatMessage, StructuredOutputFormat } from "./base";
+import { providerSupportsNativeWebSearchFeature } from "./provider-registry";
 
 export const WEB_SEARCH_CAPABILITY_NOTE =
   "Internet search is available when needed. Use it for current, time-sensitive, or source-dependent facts; avoid it for stable general knowledge. If you use search results, cite the sources you relied on.";
 
-const PROVIDER_NATIVE_WEB_SEARCH_IDS = new Set([
-  "openai",
-  "anthropic",
-  "google",
-  "openrouter",
-]);
-
-export function providerSupportsNativeWebSearch(providerId: string): boolean {
-  return PROVIDER_NATIVE_WEB_SEARCH_IDS.has(providerId);
+export function providerSupportsNativeWebSearch(
+  providerId: string,
+  model?: string
+): boolean {
+  return providerSupportsNativeWebSearchFeature(providerId, model);
 }
 
 export function shouldEnableProviderNativeWebSearch(input: {
@@ -23,7 +20,7 @@ export function shouldEnableProviderNativeWebSearch(input: {
   if (input.allowWebSearch === false || input.structuredOutput) {
     return false;
   }
-  return providerSupportsNativeWebSearch(input.providerId);
+  return providerSupportsNativeWebSearch(input.providerId, input.model);
 }
 
 export function withWebSearchCapabilityNote(

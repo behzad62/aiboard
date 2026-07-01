@@ -1,9 +1,2 @@
-export const PROVIDER_IDS = [
-  "openai",
-  "anthropic",
-  "foundry",
-  "google",
-  "openrouter",
-] as const;
-
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+export { PROVIDER_IDS } from "./provider-registry";
+export type { ProviderId } from "./provider-registry";

@@ -16,6 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Copy } from "lucide-react";
 import type { ModelInfo } from "@/lib/providers/base";
+import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import { saveProviderKey, validateProvider } from "@/lib/client/settings-api";
 import { getProviderKey } from "@/lib/client/store";
@@ -33,50 +34,6 @@ interface ProviderConfig {
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
 }
-
-const NEEDS_BASE_URL: Record<string, { label: string; placeholder: string; hint: string }> = {
-  foundry: {
-    label: "Foundry endpoint (base URL)",
-    placeholder: "https://<resource>.services.ai.azure.com/anthropic/",
-    hint: "From your Azure AI Foundry resource — the Anthropic-compatible endpoint ending in /anthropic/.",
-  },
-  chatgpt: {
-    label: "Account runner URL",
-    placeholder: "http://127.0.0.1:1455",
-    hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
-  },
-  "github-copilot": {
-    label: "Account runner URL",
-    placeholder: "http://127.0.0.1:1455",
-    hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here.",
-  },
-};
-
-const NEEDS_MODEL_IDS: Record<string, { label: string; placeholder: string; hint: string }> = {
-  foundry: {
-    label: "Model ids (one per line)",
-    placeholder: "claude-opus-4-5",
-    hint: "The Anthropic model ids your Foundry deployment exposes — enter exactly what your resource calls them.",
-  },
-};
-
-const ACCOUNT_RUNNER_PROVIDERS: Record<
-  string,
-  { path: string; loginLabel: string; tokenLabel: string; tokenPlaceholder: string }
-> = {
-  chatgpt: {
-    path: "chatgpt",
-    loginLabel: "Log in with OpenAI",
-    tokenLabel: "Runner session token",
-    tokenPlaceholder: "Paste the current token printed by the account runner",
-  },
-  "github-copilot": {
-    path: "github-copilot",
-    loginLabel: "Log in with GitHub",
-    tokenLabel: "Runner session token",
-    tokenPlaceholder: "Paste the current token printed by the account runner",
-  },
-};
 
 interface AccountRunnerLoginResponse {
   ok?: boolean;
@@ -113,9 +70,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [deviceLoginPrompt, setDeviceLoginPrompt] = useState<DeviceLoginPrompt | null>(null);
-  const baseUrlField = NEEDS_BASE_URL[provider.providerId];
-  const modelIdsField = NEEDS_MODEL_IDS[provider.providerId];
-  const accountRunner = ACCOUNT_RUNNER_PROVIDERS[provider.providerId];
+  const providerDefinition = getProviderDefinition(provider.providerId);
+  const baseUrlField = providerDefinition?.baseURLField;
+  const modelIdsField = providerDefinition?.modelIdsField;
+  const accountRunner = providerDefinition?.accountRunner;
 
   const parsedModelIds = modelIdsText
     .split(/[\n,]/)
@@ -137,7 +95,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
     try {
       if (baseUrlField && !baseURL.trim()) {
-        throw new Error(accountRunner ? "This provider needs the account runner URL" : "This provider needs its endpoint base URL");
+        throw new Error(
+          providerDefinition?.baseURLRequiredMessage ??
+            "This provider needs its endpoint base URL"
+        );
       }
       if (modelIdsField && parsedModelIds.length === 0) {
         throw new Error("Add at least one model id");
@@ -261,7 +222,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
 
   const handleEnabledChange = async (checked: boolean) => {
     if (!provider.hasKey) {
-      setMessage(accountRunner ? "Save the runner URL and token before enabling this provider" : "Save an API key before enabling this provider");
+      setMessage(
+        providerDefinition?.missingCredentialMessage ??
+          "Save an API key before enabling this provider"
+      );
       return;
     }
 
@@ -302,14 +266,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const runtimeBehavior = getModelRuntimeBehavior(
     `${provider.providerId}:${defaultModel}`
   );
-  const keyLabel = accountRunner?.tokenLabel ?? "API Key";
-  const keyPlaceholder = accountRunner
-    ? provider.hasKey
-      ? "Leave blank to keep existing runner token"
-      : accountRunner.tokenPlaceholder
-    : provider.hasKey
-      ? "Leave blank to keep existing key"
-      : "Enter API key";
+  const keyLabel =
+    accountRunner?.tokenLabel ?? providerDefinition?.credentialLabel ?? "API Key";
+  const keyPlaceholder = provider.hasKey
+    ? providerDefinition?.savedCredentialPlaceholder ??
+      "Leave blank to keep existing key"
+    : providerDefinition?.credentialPlaceholder ?? "Enter API key";
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
@@ -362,7 +324,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         />
         {accountRunner && (
           <p className="text-xs text-muted-foreground">
-            This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved ChatGPT/GitHub login stays in the auth file.
+            {accountRunner.tokenHint}
           </p>
         )}
       </div>
@@ -374,11 +336,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             Download the runner, run it with Node, paste its current URL/session token above, save, then authorize your account if it is not already connected.
           </p>
           <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
-            node account-provider-runner.mjs
+            {accountRunner.command}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a
-              href="/account-provider-runner.mjs"
+              href={accountRunner.downloadHref}
               download
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >

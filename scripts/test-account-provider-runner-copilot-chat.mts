@@ -146,6 +146,8 @@ try {
     headers,
     body: JSON.stringify({
       model: "claude-sonnet-4.5",
+      maxTokens: 321,
+      reasoningEffort: "high",
       messages: [{ role: "user", content: "Read the attachments." }],
       attachments: [
         {
@@ -176,6 +178,13 @@ try {
   check("GitHub Copilot chat returns response text", data.content === "ok", data);
   check("runner sends one GitHub Copilot backend request", capturedRequests.length === 1, capturedRequests);
   check("runner uses configured GitHub Copilot API base for non-GPT-5 chat models", captured?.url === "/chat/completions", captured);
+  check("runner forwards Copilot chat max tokens", captured?.body.max_tokens === 321, captured?.body);
+  check(
+    "runner omits reasoning for Copilot Claude chat-completions models",
+    !Object.prototype.hasOwnProperty.call(captured?.body ?? {}, "reasoning") &&
+      !Object.prototype.hasOwnProperty.call(captured?.body ?? {}, "reasoning_effort"),
+    captured?.body
+  );
   check(
     "runner sends Copilot text attachments in text part",
     userContent.some((part) => part?.type === "text" && String(part.text).includes("AIBOARD_DOCUMENT_SECRET=blue-river")),
@@ -192,6 +201,8 @@ try {
     headers,
     body: JSON.stringify({
       model: "gpt-5.4-mini",
+      maxTokens: 654,
+      reasoningEffort: "max",
       messages: [{ role: "user", content: "Read the attachments." }],
       attachments: [
         {
@@ -220,6 +231,12 @@ try {
 
   check("GitHub Copilot responses route returns HTTP 200 from fake backend", responsesResponse.ok, responsesData);
   check("runner uses Copilot responses path for GPT-5-class models including mini", responsesCaptured?.url === "/responses", responsesCaptured);
+  check("runner forwards Copilot responses max output tokens", responsesCaptured?.body.max_output_tokens === 654, responsesCaptured?.body);
+  check(
+    "runner forwards Copilot responses reasoning effort",
+    JSON.stringify(responsesCaptured?.body.reasoning) === JSON.stringify({ effort: "xhigh" }),
+    responsesCaptured?.body
+  );
   check(
     "runner sends Copilot responses text attachments as input_text",
     responsesContent.some((part) => part?.type === "input_text" && String(part.text).includes("AIBOARD_DOCUMENT_SECRET=blue-river")),
