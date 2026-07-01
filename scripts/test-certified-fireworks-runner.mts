@@ -340,6 +340,42 @@ check(
 );
 
 __resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(caseV2);
+await saveBenchmarkTeamComposition(illegalTeam);
+let budgetStreamCalled = false;
+await runCertifiedBenchmark({
+  runId: "run-certified-fireworks-budget",
+  suiteId: "suite-certified-fireworks",
+  track: "teamiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseV2.id],
+  teamCompositionIds: [illegalTeam.id],
+  modelBudget: { maxModelCalls: 0 },
+  certification: runHarnessCertification("raw-single-model"),
+  runner: (context) =>
+    runCertifiedFireworksTeamIq({
+      context,
+      teamCompositions: [illegalTeam],
+      cases: selectedCases.slice(0, 1),
+      includeSoloBaselines: false,
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        budgetStreamCalled = true;
+        yield { type: "token", content: '{"action":"play","cardIndex":0}' };
+        yield { type: "done" };
+      },
+    }),
+});
+const budgetAttempts = await listBenchmarkAttemptsV2();
+const budgetFailures = await listBenchmarkFailures();
+check(
+  "Fireworks budget exhaustion records failed_budget instead of invalid JSON",
+  budgetAttempts[0]?.status === "failed_budget" &&
+    budgetFailures.some((failure) => failure.code === "fireworks_budget_exceeded") &&
+    !budgetStreamCalled,
+  { budgetAttempts, budgetFailures, budgetStreamCalled }
+);
+
+__resetBenchmarkStoreForTests();
 const fullCase = { ...FIREWORKS_FULL_GAME_CASES[0], id: "fireworks-full-calibration-test", maxTurns: 1 };
 await saveBenchmarkCaseV2(fireworksCaseToBenchmarkCaseV2("fireworks-teamiq-full-calibration-test", "full"));
 await saveBenchmarkTeamComposition(illegalTeam);

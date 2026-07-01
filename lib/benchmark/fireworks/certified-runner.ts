@@ -2,6 +2,7 @@ import {
   callCertifiedModel,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
+import { CertifiedBudgetExceededError } from "@/lib/benchmark/certified/budget";
 import type {
   CertifiedRunContext,
   PersistentCertifiedRunContext,
@@ -552,11 +553,11 @@ async function callFireworksAction(params: {
       params.state,
       params.playerId
     );
-    const failureCode = /provider|api key|unauthorized|rate.?limit|quota|timeout/i.test(
-      message
-    )
-      ? "fireworks_provider_failure"
-      : "fireworks_invalid_json";
+    const failureCode = isCertifiedBudgetError(error, message)
+      ? "fireworks_budget_exceeded"
+      : /provider|api key|unauthorized|rate.?limit|quota|timeout/i.test(message)
+        ? "fireworks_provider_failure"
+        : "fireworks_invalid_json";
     const record: FireworksCallRecord = {
       latencyMs: 0,
       inputTokens: 0,
@@ -575,7 +576,12 @@ async function callFireworksAction(params: {
         caseId: params.caseId,
         modelId: role.modelId,
         code: failureCode,
-        source: failureCode === "fireworks_provider_failure" ? "provider" : "parser",
+        source:
+          failureCode === "fireworks_provider_failure"
+            ? "provider"
+            : failureCode === "fireworks_budget_exceeded"
+              ? "benchmark"
+              : "parser",
         message,
         sequence: failureSequence(params.failures, params.caseId, failureCode),
       })
@@ -805,6 +811,9 @@ export function statusForAttempt(
   calls: FireworksCallRecord[],
   metrics: FireworksGameMetrics
 ): CertifiedAttemptStatus {
+  if (calls.some((call) => call.failureCode === "fireworks_budget_exceeded")) {
+    return "failed_budget";
+  }
   if (calls.some((call) => call.failureCode === "fireworks_provider_failure")) {
     return "provider_unavailable";
   }
@@ -887,6 +896,13 @@ function failureSequence(
 
 function isClueAction(action: FireworksAction | undefined): boolean {
   return action?.action === "clue_color" || action?.action === "clue_rank";
+}
+
+function isCertifiedBudgetError(error: unknown, message: string): boolean {
+  return (
+    error instanceof CertifiedBudgetExceededError ||
+    /budget|token limit|cost limit|wall.?clock/i.test(message)
+  );
 }
 
 function traceIdsForAttempt(

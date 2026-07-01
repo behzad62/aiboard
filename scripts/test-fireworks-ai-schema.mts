@@ -26,6 +26,7 @@ state.hands[1].cards[0] = { id: "red-one", color: "red", rank: 1 };
 
 const schema = buildFireworksActionSchema();
 const schemaProperties = schema.schema.properties as Record<string, unknown>;
+const sortedRequired = [...(schema.schema.required ?? [])].sort();
 check(
   "structured schema is strict and names Fireworks actions",
   schema.name === "fireworks_action" &&
@@ -34,9 +35,31 @@ check(
   schema
 );
 check(
+  "strict structured schema requires every Fireworks action property",
+  JSON.stringify(sortedRequired) ===
+    JSON.stringify(["action", "cardIndex", "color", "rank", "targetPlayerId"].sort()),
+  schema
+);
+check(
+  "action-dependent Fireworks fields are nullable for strict providers",
+  JSON.stringify((schemaProperties.targetPlayerId as { type?: unknown }).type) ===
+    JSON.stringify(["string", "null"]) &&
+    JSON.stringify((schemaProperties.color as { type?: unknown; enum?: unknown }).type) ===
+      JSON.stringify(["string", "null"]) &&
+    JSON.stringify((schemaProperties.color as { type?: unknown; enum?: unknown }).enum) ===
+      JSON.stringify(["red", "blue", "green", null]) &&
+    JSON.stringify((schemaProperties.rank as { type?: unknown; enum?: unknown }).type) ===
+      JSON.stringify(["integer", "null"]) &&
+    JSON.stringify((schemaProperties.rank as { type?: unknown; enum?: unknown }).enum) ===
+      JSON.stringify([1, 2, 3, 4, 5, null]) &&
+    JSON.stringify((schemaProperties.cardIndex as { type?: unknown }).type) ===
+      JSON.stringify(["integer", "null"]),
+  schema
+);
+check(
   "structured schema restricts clue rank to Fireworks ranks",
   JSON.stringify((schemaProperties.rank as { enum?: unknown }).enum) ===
-    JSON.stringify([1, 2, 3, 4, 5]),
+    JSON.stringify([1, 2, 3, 4, 5, null]),
   schemaProperties.rank
 );
 
