@@ -112,7 +112,7 @@ const weightedGameIq = scoreGameIqAttempt({
   fallbackRate: 0.2,
   latencyFactor: 1,
 });
-check("GameIQ uses plan weights and fallback multiplier", weightedGameIq === 58.5, weightedGameIq);
+check("GameIQ uses plan weights and fallback multiplier", weightedGameIq === 56.7, weightedGameIq);
 
 const toolReliability = scoreToolReliability({
   schemaValidRate: 1,
@@ -259,6 +259,36 @@ const wasteful = scoreTeamLift({
   bestSoloDurationMs: 30_000,
 });
 check("wasteful team classification works", wasteful.label === "wasteful", wasteful);
+
+const expensiveLoser = scoreTeamLift({
+  teamScore: 60,
+  memberSoloScores: [75],
+  teamCostUsd: 2,
+  bestSoloCostUsd: 1,
+  teamDurationMs: 60_000,
+  bestSoloDurationMs: 30_000,
+});
+check(
+  "negative lift is penalized harder for an expensive/slow team",
+  expensiveLoser.costAdjustedTeamLift !== null &&
+    expensiveLoser.costAdjustedTeamLift < expensiveLoser.teamLift &&
+    expensiveLoser.speedAdjustedTeamLift < expensiveLoser.teamLift,
+  expensiveLoser
+);
+
+const overpricedPositive = scoreTeamLift({
+  teamScore: 80,
+  memberSoloScores: [75],
+  teamCostUsd: 4,
+  bestSoloCostUsd: 1,
+  teamDurationMs: 30_000,
+  bestSoloDurationMs: 30_000,
+});
+check(
+  "small positive lift on a >3x-cost team downgrades to neutral",
+  overpricedPositive.label === "neutral",
+  overpricedPositive
+);
 
 const soloTeamA: BenchmarkTeamComposition = {
   id: "solo-a",

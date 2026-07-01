@@ -184,14 +184,14 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     jobSuccessScore: average(group.jobSuccessScoreSum, group.attempts, 2),
     costUsd: group.costSamples > 0 ? round(group.costUsd, 6) : null,
     averageCostUsd:
-      group.costSamples > 0 ? round(group.costUsd / group.costSamples, 6) : null,
+      group.costSamples > 0 ? round(group.costUsd / group.attempts, 6) : null,
     durationMs:
       group.durationSamples > 0
-        ? round(group.durationMs / group.durationSamples)
+        ? round(group.durationMs / group.attempts)
         : null,
     averageDurationMs:
       group.durationSamples > 0
-        ? round(group.durationMs / group.durationSamples)
+        ? round(group.durationMs / group.attempts)
         : null,
     bestSoloScore:
       group.teamLiftSamples > 0
