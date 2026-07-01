@@ -5,6 +5,7 @@ import {
   deriveSoloTeamComposition,
   deriveTeamComposition,
 } from "../lib/benchmark/teamiq";
+import type { TeamIqComboMatrixRow } from "../lib/benchmark/teamiq/combo-matrix";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type {
   BenchmarkAttemptV2,
@@ -80,7 +81,11 @@ const attempts = [
   attempt("solo-worker", soloWorker.id, 62, 0.62, 0.2, 20_000),
   attempt("solo-reviewer", soloReviewer.id, 72, 0.72, 0.7, 35_000),
   attempt("strong-team", strongTeam.id, 88, 0.88, 1, 25_000),
+  attempt("strong-team-2", strongTeam.id, 88, 0.88, 1, 25_000),
+  attempt("strong-team-3", strongTeam.id, 88, 0.88, 1, 25_000),
   attempt("watch-team", watchTeam.id, 65, 0.65, 2, 60_000),
+  attempt("watch-team-2", watchTeam.id, 65, 0.65, 2, 60_000),
+  attempt("watch-team-3", watchTeam.id, 65, 0.65, 2, 60_000),
 ];
 
 const rows = buildTeamIqComboMatrixRows({
@@ -127,6 +132,36 @@ check(
   "one-point lift detail keeps point-scale baselines",
   onePointLiftCard?.detail === "Best solo 72 -> team 73",
   onePointLiftCard
+);
+const confidentTeam: TeamIqComboMatrixRow = {
+  ...strongRowForBoundary(rows)!,
+  id: "confident-team-row",
+  teamCompositionId: "confident-team",
+  teamName: "Confident team",
+  attempts: 5,
+  verifiedQuality: 0.9,
+  jobSuccessScore: 90,
+};
+const lowSampleTeam: TeamIqComboMatrixRow = {
+  ...confidentTeam,
+  id: "low-sample-team-row",
+  teamCompositionId: "low-sample-team",
+  teamName: "Low sample team",
+  attempts: 1,
+  verifiedQuality: 1,
+  jobSuccessScore: 100,
+};
+const sampleGuardCards = buildTeamIqRecommendationCards([
+  confidentTeam,
+  lowSampleTeam,
+]);
+const sampleGuardBestQuality = sampleGuardCards.find(
+  (card) => card.kind === "best_quality"
+);
+check(
+  "best-quality card ignores n<3 team",
+  sampleGuardBestQuality?.teamCompositionId === confidentTeam.teamCompositionId,
+  sampleGuardBestQuality
 );
 
 const dashboard = buildCertifiedBenchmarkDashboardData({

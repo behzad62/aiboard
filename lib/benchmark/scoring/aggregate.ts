@@ -291,10 +291,10 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
     const lift = scoreTeamLift({
       teamScore: row.jobSuccessScore,
       memberSoloScores: soloRows.map((solo) => solo.jobSuccessScore),
-      teamCostUsd: row.costPerPass,
-      bestSoloCostUsd: bestSolo.costPerPass,
-      teamDurationMs: row.speedPerPassMs,
-      bestSoloDurationMs: bestSolo.speedPerPassMs,
+      teamCostUsd: row.averageCostUsd,
+      bestSoloCostUsd: bestSolo.averageCostUsd,
+      teamDurationMs: row.durationMs,
+      bestSoloDurationMs: bestSolo.durationMs,
     });
     row.bestSoloScore = lift.bestSoloScore;
     row.teamLift = lift.teamLift;

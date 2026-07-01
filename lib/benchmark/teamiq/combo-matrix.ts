@@ -9,6 +9,7 @@ import {
   isSoloTeamComposition,
 } from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
+import { MIN_CONFIDENT_ATTEMPTS } from "./recommendations";
 
 export type TeamIqRecommendationLabel =
   | "recommended"
@@ -209,9 +210,14 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
 }
 
 function applyParetoRecommendations(rows: TeamIqComboMatrixRow[]): void {
-  const candidates = rows.filter(
+  const allCandidates = rows.filter(
     (row) => !row.isSolo && row.attempts > 0 && row.teamLift !== null
   );
+  const confidentCandidates = allCandidates.filter(
+    (row) => row.attempts >= MIN_CONFIDENT_ATTEMPTS
+  );
+  const candidates =
+    confidentCandidates.length > 0 ? confidentCandidates : allCandidates;
   const frontier = new Set(
     computeParetoFrontier(candidates, [
       {

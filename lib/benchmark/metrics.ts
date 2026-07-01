@@ -31,7 +31,10 @@ import {
   buildTeamIqComboMatrixRows,
   buildTeamIqRecommendationCards,
 } from "@/lib/benchmark/teamiq";
+import { MIN_CONFIDENT_ATTEMPTS } from "@/lib/benchmark/teamiq/recommendations";
 import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
+
+const EVIDENCE_PER_MODEL_CAP = 50;
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
@@ -263,6 +266,10 @@ export function buildBenchmarkDashboardData(
     score.buildBadOutput += stat.badOutput;
     score.providerErrors += stat.unavailable;
     score.completions += Math.max(0, stat.attempts - stat.unavailable);
+    // Build stats expose only approvals/fixes/badOutput, so the
+    // structured-output, tool-use, and verifier axes below are derived from the
+    // same tallies and are correlated for build-derived rows. Drive them from
+    // separate schema/tool/verifier signals if those are recorded per attempt.
     score.schemaValid += stat.approvals + stat.fixes;
     score.schemaInvalid += stat.badOutput;
     score.toolValid += stat.approvals + stat.fixes;
@@ -351,8 +358,7 @@ export function buildBenchmarkDashboardData(
 
   for (const metric of input.benchmarkMetricValues) {
     if (!metric.modelId) continue;
-    const score = scoreFor(metric.modelId);
-    if (metric.key === "quality") score.verifierPasses += metric.value;
+    scoreFor(metric.modelId);
     addEvidence(evidenceByModel, metric.modelId, {
       id: `metric:${metric.id}`,
       title: metric.label,
@@ -456,7 +462,12 @@ export function buildCertifiedBenchmarkDashboardData(
       verifierResults,
     })
   );
-  const paretoFrontier = computeParetoFrontier(leaderboard, [
+  const confidentLeaderboard = leaderboard.filter(
+    (row) => row.attempts >= MIN_CONFIDENT_ATTEMPTS
+  );
+  const paretoCandidates =
+    confidentLeaderboard.length > 0 ? confidentLeaderboard : leaderboard;
+  const paretoFrontier = computeParetoFrontier(paretoCandidates, [
     {
       key: "verifiedQuality",
       direction: "higher",
@@ -939,30 +950,29 @@ function addGameMatch(input: {
     });
   }
 
-  if (aiParticipants.length === 2) {
-    const a = aiParticipants[0];
-    const b = aiParticipants[1];
-    if (a.modelId && b.modelId) {
-      const key = [a.modelId, b.modelId].sort().join("::");
-      const row =
-        input.headToHead.get(key) ??
-        createHeadToHeadRow(
-          a.modelId,
-          b.modelId,
-          displayModelName(a.modelId),
-          displayModelName(b.modelId)
-        );
-      row.games += 1;
-      if (isDraw) row.draws += 1;
-      else if (winnerId === a.id) {
-        if (row.modelA === a.modelId) row.modelAWins += 1;
-        else row.modelBWins += 1;
-      } else if (winnerId === b.id) {
-        if (row.modelA === b.modelId) row.modelAWins += 1;
-        else row.modelBWins += 1;
-      }
-      input.headToHead.set(key, row);
+  if (distinctModelIds.length === 2) {
+    const [modelA, modelB] = distinctModelIds;
+    const key = [modelA, modelB].sort().join("::");
+    const row =
+      input.headToHead.get(key) ??
+      createHeadToHeadRow(
+        modelA,
+        modelB,
+        displayModelName(modelA),
+        displayModelName(modelB)
+      );
+    row.games += 1;
+    const winnerParticipant = aiParticipants.find((participant) =>
+      participantIsWinner(participant.id, winnerId)
+    );
+    const winningModelId = winnerParticipant?.modelId ?? null;
+    if (isDraw || !winningModelId) row.draws += 1;
+    else if (winningModelId === row.modelA) {
+      row.modelAWins += 1;
+    } else if (winningModelId === row.modelB) {
+      row.modelBWins += 1;
     }
+    input.headToHead.set(key, row);
   }
 }
 
@@ -1157,8 +1167,12 @@ function addEvidence(
   modelId: string,
   item: BenchmarkEvidenceItem
 ): void {
-  target[modelId] ??= [];
-  target[modelId].push(item);
+  const list = (target[modelId] ??= []);
+  list.push(item);
+  if (list.length > EVIDENCE_PER_MODEL_CAP) {
+    list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    list.length = EVIDENCE_PER_MODEL_CAP;
+  }
 }
 
 function distributeCount(total: number, buckets: number): number[] {
