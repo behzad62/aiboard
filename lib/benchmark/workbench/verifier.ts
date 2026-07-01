@@ -15,16 +15,21 @@ export function parseVerifierResult(
       : extractVerifierJson(stdout);
   const parsed = parseJsonObject(source, "verifier JSON");
 
-  const passed = getBoolean(parsed, "passed");
+  const rawPassed = getBoolean(parsed, "passed");
   const assertions = normalizeVerifierAssertions(
     Array.isArray(parsed.assertions) ? parsed.assertions : []
   );
-  const score =
-    parsed.score === undefined
-      ? scoreAssertions(assertions, passed)
+  const noAssertions = assertions.length === 0;
+  const passed = noAssertions ? false : rawPassed;
+  const score = noAssertions
+    ? 0
+    : parsed.score === undefined
+      ? scoreAssertions(assertions)
       : clamp01(getFiniteNumber(parsed, "score"));
   const summary =
-    typeof parsed.summary === "string" && parsed.summary.trim()
+    noAssertions
+      ? "Verifier produced no assertions"
+      : typeof parsed.summary === "string" && parsed.summary.trim()
       ? parsed.summary.trim()
       : passed
         ? "Verifier passed"
@@ -152,11 +157,8 @@ function parseJsonObject(source: string, label: string): Record<string, unknown>
   }
 }
 
-function scoreAssertions(
-  assertions: WorkBenchVerifierAssertion[],
-  fallbackPassed: boolean
-): number {
-  if (assertions.length === 0) return fallbackPassed ? 1 : 0;
+function scoreAssertions(assertions: WorkBenchVerifierAssertion[]): number {
+  if (assertions.length === 0) return 0;
   const totalWeight = assertions.reduce((sum, assertion) => sum + assertion.weight, 0);
   if (totalWeight <= 0) return assertions.every((assertion) => assertion.passed) ? 1 : 0;
   const passedWeight = assertions.reduce(

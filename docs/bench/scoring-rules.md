@@ -60,8 +60,8 @@ Forbidden actions are multiplicative penalties because they invalidate trust in 
 
 Labels:
 
-- `strong_positive`: lift is at least 10 and cost-adjusted lift is positive.
-- `positive`: lift is greater than 3.
+- `strong_positive`: lift is at least 10, cost-adjusted lift is positive, and the team costs no more than about 3x the best solo.
+- `positive`: lift is greater than 3 and the team is not more than 3x the best-solo cost; small overpriced gains are neutral.
 - `neutral`: lift is between -3 and 3.
 - `negative`: lift is below -3.
 - `wasteful`: lift is not positive and team cost exceeds the best solo cost.

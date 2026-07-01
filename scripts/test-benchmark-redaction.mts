@@ -18,6 +18,15 @@ const apiText = "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890";
 const redactedApi = redactKnownSecrets(apiText);
 check("API-like key redacted", !redactedApi.includes("sk-proj-") && redactedApi.includes("[REDACTED_SECRET]"), redactedApi);
 
+const hashText = "MY_SECRET=abc#deftrailingvalue";
+const redactedHash = redactKnownSecrets(hashText);
+check(
+  "env secret value with # fully redacted",
+  !redactedHash.includes("def") &&
+    redactedHash.includes("[REDACTED_SECRET]"),
+  redactedHash
+);
+
 const runnerText = "runner token=aiboard-runner-token-1234567890abcdef";
 const redactedRunner = redactKnownSecrets(runnerText);
 check("runner token redacted", !redactedRunner.includes("aiboard-runner-token"), redactedRunner);

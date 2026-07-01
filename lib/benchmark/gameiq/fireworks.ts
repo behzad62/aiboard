@@ -1,5 +1,4 @@
 import { getFireworksPlayerView } from "@/lib/games/fireworks/hidden-view";
-import type { FireworksAction } from "@/lib/games/fireworks/types";
 import {
   FIREWORKS_MEMORY_SCENARIOS,
   FIREWORKS_TACTICS_SCENARIOS,
@@ -17,15 +16,7 @@ const MEMORY_CATEGORIES = new Set([
   "timing_inference",
 ]);
 
-function expected(
-  action: FireworksAction,
-  label: string,
-  weight = 1
-): Array<{ action: FireworksAction; label: string; weight: number }> {
-  return [{ action, label, weight }];
-}
-
-function toGameIqScenario(input: {
+export function toGameIqScenario(input: {
   scenario: FireworksScenario;
   index: number;
   idPrefix: string;
@@ -33,7 +24,6 @@ function toGameIqScenario(input: {
   difficulty: "easy" | "medium" | "hard";
   tags: string[];
 }): FireworksGameIqScenario {
-  const expectedAction = input.scenario.expectedActions[0];
   return {
     id: `${input.idPrefix}-${String(input.index + 1).padStart(2, "0")}`,
     gameId: "fireworks",
@@ -51,11 +41,11 @@ function toGameIqScenario(input: {
         redactOwnIdentity: MEMORY_CATEGORIES.has(input.scenario.category),
       }
     ),
-    expectedActions: expected(
-      expectedAction.action,
-      expectedAction.label,
-      expectedAction.weight
-    ),
+    expectedActions: input.scenario.expectedActions.map((action) => ({
+      action: action.action,
+      label: action.label,
+      weight: action.weight,
+    })),
     tags: ["fireworks", "solo-control", "hidden-information", ...input.tags],
     maxResponseMs: 15_000,
   };

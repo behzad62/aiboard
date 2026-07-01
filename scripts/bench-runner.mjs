@@ -78,6 +78,11 @@ server.listen(port, host, () => {
       token,
     })
   );
+  console.error(
+    "bench-runner v0.1 isolation: commands run with FULL host privileges. " +
+      "'network: dependency-only' is a label, not a boundary; " +
+      "'memoryMb' is NOT enforced. Run only trusted cases."
+  );
 });
 
 async function route(pathname, body) {

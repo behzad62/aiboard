@@ -50,6 +50,7 @@ for (const path of [
   join(benchmarksRoot, "workbench", "v0"),
   join(benchmarksRoot, "workbench", "v1"),
   join(benchmarksRoot, "gameiq", "v0"),
+  join(benchmarksRoot, "gameiq", "v1"),
   join(benchmarksRoot, "teamiq", "v0"),
 ]) {
   check(`legacy benchmark artifact is removed: ${path}`, !(await exists(path)));

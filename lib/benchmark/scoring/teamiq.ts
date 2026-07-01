@@ -48,10 +48,16 @@ function classifyTeamLift(
   ) {
     return "wasteful";
   }
-  if (teamLift >= 10 && (costAdjustedTeamLift ?? teamLift) > 0) {
+  const costRatio =
+    teamCost != null && bestSoloCost != null && bestSoloCost > 0
+      ? teamCost / bestSoloCost
+      : null;
+  const overpriced = costRatio != null && costRatio > 3;
+
+  if (teamLift >= 10 && !overpriced && (costAdjustedTeamLift ?? teamLift) > 0) {
     return "strong_positive";
   }
-  if (teamLift > 3) return "positive";
+  if (teamLift > 3) return overpriced && teamLift < 10 ? "neutral" : "positive";
   if (teamLift >= -3 && teamLift <= 3) return "neutral";
   if (teamLift < -3) return "negative";
   return "neutral";
@@ -64,6 +70,9 @@ function adjustedLift(
 ): number | null {
   const baseline = finiteOrNull(baselineValue);
   const team = finiteOrNull(teamValue);
-  if (baseline == null || team == null || team <= 0) return null;
-  return round(teamLift * (baseline / team));
+  if (baseline == null || team == null || team <= 0 || baseline <= 0) {
+    return null;
+  }
+  const factor = teamLift >= 0 ? baseline / team : team / baseline;
+  return round(teamLift * factor);
 }

@@ -43,6 +43,7 @@ import {
 } from "@/lib/games/fireworks/scoring";
 import type {
   FireworksAction,
+  FireworksEvent,
   FireworksGameMetrics,
   FireworksGameState,
 } from "@/lib/games/fireworks/types";
@@ -704,6 +705,9 @@ function aggregateMetrics(
   durationMs: number
 ): FireworksGameMetrics {
   const eventStates = caseResults.map((result) => result.state);
+  const modelEvents = eventStates.flatMap((state) =>
+    state.events.filter(isModelEvent)
+  );
   const scenarioResults = caseResults.filter((result) => result.kind === "scenario");
   const fullGameResults = caseResults.filter(
     (result) => result.kind === "full_game"
@@ -715,22 +719,23 @@ function aggregateMetrics(
         ? "full_game"
         : "scenario";
   const legalActions = eventStates.reduce(
-    (sum, state) => sum + state.events.filter((event) => event.legal).length,
+    (sum, state) =>
+      sum +
+      state.events.filter((event) => isModelEvent(event) && event.legal)
+        .length,
     0
   );
   const illegalActions = calls.filter((call) => !call.legal).length;
   const fallbackActions = calls.filter((call) => call.fallbackUsed).length;
-  const clueEvents = eventStates.flatMap((state) =>
-    state.events.filter(
-      (event) =>
-        event.action.action === "clue_color" || event.action.action === "clue_rank"
-    )
+  const clueEvents = modelEvents.filter(
+    (event) =>
+      event.action.action === "clue_color" || event.action.action === "clue_rank"
   );
-  const playEvents = eventStates.flatMap((state) =>
-    state.events.filter((event) => event.action.action === "play")
+  const playEvents = modelEvents.filter(
+    (event) => event.action.action === "play"
   );
-  const discardEvents = eventStates.flatMap((state) =>
-    state.events.filter((event) => event.action.action === "discard")
+  const discardEvents = modelEvents.filter(
+    (event) => event.action.action === "discard"
   );
   const scenarioQualityScore =
     scenarioResults.length > 0
@@ -769,12 +774,18 @@ function aggregateMetrics(
     criticalDiscards: discardEvents.filter((event) => event.criticalDiscard).length,
     memoryConsistentActions: eventStates.reduce(
       (sum, state) =>
-        sum + state.events.filter((event) => event.memoryConsistent !== false).length,
+        sum +
+        state.events.filter(
+          (event) => isModelEvent(event) && event.memoryConsistent !== false
+        ).length,
       0
     ),
     memoryInconsistentActions: eventStates.reduce(
       (sum, state) =>
-        sum + state.events.filter((event) => event.memoryConsistent === false).length,
+        sum +
+        state.events.filter(
+          (event) => isModelEvent(event) && event.memoryConsistent === false
+        ).length,
       0
     ),
     modelCalls: calls.length,
@@ -783,6 +794,10 @@ function aggregateMetrics(
     costUsd: costTotal(calls.map((call) => call.estimatedUsd)),
     durationMs,
   };
+}
+
+function isModelEvent(event: FireworksEvent): boolean {
+  return event.seeded !== true;
 }
 
 export function statusForAttempt(

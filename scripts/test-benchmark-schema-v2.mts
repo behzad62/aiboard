@@ -19,6 +19,7 @@ import {
   saveBenchmarkToolCallTrace,
   saveBenchmarkVerifierResult,
   saveHarnessCertificationResult,
+  verifyBenchmarkBundleHash,
 } from "../lib/benchmark/store";
 import type {
   BenchmarkAttemptV2,
@@ -274,6 +275,17 @@ check("v2 bundle exports all new arrays", bundleV2.version === 2 &&
   bundleV2.harnessCertifications.length === 1,
   bundleV2);
 check("v2 bundle includes a bundle hash", typeof bundleV2.bundleHash === "string" && bundleV2.bundleHash.length > 0, bundleV2.bundleHash);
+const goodVerify = verifyBenchmarkBundleHash(bundleV2);
+check("matching bundleHash verifies ok", goodVerify.ok, goodVerify);
+const tamperedBundle = {
+  ...bundleV2,
+  attemptsV2: bundleV2.attemptsV2.map((attempt) => ({
+    ...attempt,
+    verifiedQuality: 0.01,
+  })),
+};
+const badVerify = verifyBenchmarkBundleHash(tamperedBundle);
+check("mutated payload with original hash fails verification", !badVerify.ok, badVerify);
 check(
   "v2 bundle export redacts artifact secrets",
   !bundleV2.artifacts[0]?.content.includes("sk-proj-") &&
@@ -303,13 +315,16 @@ await expectReject(
 );
 
 __resetBenchmarkStoreForTests();
-await importBenchmarkReportBundleV2(bundleV2);
+const cleanImport = await importBenchmarkReportBundleV2(bundleV2);
+check("clean import reports no hash mismatch", cleanImport.hashMismatch === false, cleanImport);
 const roundTrip = exportBenchmarkReportBundleV2();
 check("imported v2 bundle round-trips without score drift", roundTrip.attemptsV2[0]?.verifiedQuality === attemptV2.verifiedQuality, roundTrip.attemptsV2[0]);
 check("imported v2 bundle round-trips run evidence", roundTrip.runEvents.length === 1 && roundTrip.toolCallTraces.length === 1, {
   runEvents: roundTrip.runEvents,
   toolCallTraces: roundTrip.toolCallTraces,
 });
+const dirtyImport = await importBenchmarkReportBundleV2(tamperedBundle);
+check("tampered import reports hash mismatch", dirtyImport.hashMismatch === true, dirtyImport);
 
 const {
   toolReliabilityScore: _omittedToolReliabilityScore,

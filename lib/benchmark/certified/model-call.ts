@@ -134,12 +134,23 @@ export async function callCertifiedModel(
   });
   let rawResponse = "";
   let parsePhase = false;
+  const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
+  const runStartedMs = new Date(input.context.startedAt).getTime();
 
   try {
     for await (const chunk of withCertifiedModelCallTimeout(
       streamChat({ providerId, params }),
       certifiedModelCallTimeoutMs(input)
     )) {
+      if (
+        typeof wallClockBudgetMs === "number" &&
+        Number.isFinite(runStartedMs) &&
+        Date.now() - runStartedMs > wallClockBudgetMs
+      ) {
+        throw new CertifiedBudgetExceededError(
+          `Certified budget exceeded during model-call streaming: wall-clock time exceeded maxWallClockMs ${wallClockBudgetMs}.`
+        );
+      }
       if (chunk.type === "token" && chunk.content) {
         rawResponse += chunk.content;
       } else if (chunk.type === "error") {
@@ -277,8 +288,12 @@ export async function callCertifiedModel(
         outputTokens: usage.outputTokens,
         estimatedUsd: trace.estimatedUsd,
       });
-    } catch {
-      // Preserve the provider/parser error that caused the failed model call.
+    } catch (recordError) {
+      if (recordError instanceof CertifiedBudgetExceededError) {
+        await recordCertifiedBudgetEvent(input, recordError);
+        throw recordError;
+      }
+      // Otherwise preserve the provider/parser error that caused the failed model call.
     }
     throw error;
   }

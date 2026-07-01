@@ -122,6 +122,13 @@ const partialBaselineTeam = deriveTeamComposition({
     },
   ],
 });
+const mixedCostTeam = deriveTeamComposition({
+  name: "GPT plus Gemini mixed cost",
+  roles: [
+    { ...gptRole, slot: "architect-mixed-cost" },
+    { ...geminiRole, slot: "worker-mixed-cost" },
+  ],
+});
 
 const rows = buildTeamIqComboMatrixRows({
   attempts: [
@@ -135,6 +142,12 @@ const rows = buildTeamIqComboMatrixRows({
     attempt("cheap-team", cheapTeam.id, "case-1", 76, 0.76, 0.2, 30_000, "aiboard-build-multi-worker"),
     attempt("weak-baseline-team", weakBaselineTeam.id, "case-1", 75, 0.75, 3, 100_000, "aiboard-build-multi-worker"),
     attempt("partial-baseline-team", partialBaselineTeam.id, "case-1", 99, 0.99, 0.1, 20_000, "aiboard-build-multi-worker"),
+    attempt("mixed-cost-team-priced", mixedCostTeam.id, "case-1", 50, 0.5, 1, 20_000, "aiboard-build-multi-worker"),
+    {
+      ...attempt("mixed-cost-team-unpriced", mixedCostTeam.id, "case-2", 50, 0.5, 1, 20_000, "aiboard-build-multi-worker"),
+      costUsd: null,
+      durationMs: Number.NaN,
+    },
   ],
   teamCompositions: [
     soloGpt,
@@ -147,6 +160,7 @@ const rows = buildTeamIqComboMatrixRows({
     cheapTeam,
     weakBaselineTeam,
     partialBaselineTeam,
+    mixedCostTeam,
   ],
   track: "teamiq",
 });
@@ -161,8 +175,11 @@ const weakBaselineRow = rows.find(
 const partialBaselineRow = rows.find(
   (row) => row.teamCompositionId === partialBaselineTeam.id
 );
+const mixedCostRow = rows.find(
+  (row) => row.teamCompositionId === mixedCostTeam.id
+);
 
-check("combo matrix returns TeamIQ team rows", teamRows.length === 5, rows);
+check("combo matrix returns TeamIQ team rows", teamRows.length === 6, rows);
 check(
   "combo matrix rows expose quality, cost, speed, and lift",
   strongRow?.verifiedQuality === 0.84 &&
@@ -197,6 +214,12 @@ check(
     partialBaselineRow?.isParetoRecommended === false &&
     partialBaselineRow?.recommendationLabel === "insufficient_data",
   partialBaselineRow
+);
+check(
+  "cost averages over all attempts, not just priced samples",
+  mixedCostRow?.averageCostUsd === 0.5 &&
+    mixedCostRow?.averageDurationMs === 10_000,
+  mixedCostRow
 );
 
 function attempt(

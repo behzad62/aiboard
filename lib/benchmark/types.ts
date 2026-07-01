@@ -145,6 +145,7 @@ export interface BenchmarkCaseV2 {
     imageDigest?: string;
     setupCommand?: string;
     timeoutSeconds: number;
+    /** Advisory only - bench-runner v0.1 does NOT enforce a memory cap. */
     memoryMb?: number;
     network: "none" | "dependency-only" | "open";
   };

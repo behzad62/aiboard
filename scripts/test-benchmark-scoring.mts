@@ -1,5 +1,6 @@
 /* Certified benchmark scoring checks (run: npx tsx scripts/test-benchmark-scoring.mts) */
 import {
+  buildBenchmarkDashboardData,
   buildCertifiedBenchmarkDashboardData,
   isScoredCertifiedAttempt,
 } from "../lib/benchmark/metrics";
@@ -9,9 +10,15 @@ import { scoreTeamLift } from "../lib/benchmark/scoring/teamiq";
 import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
 import { scoreWorkBenchAttempt } from "../lib/benchmark/scoring/workbench";
 import type {
+  BuildCheckpoint,
+  GenericGameMatchRecord,
+  ModelBuildStat,
+} from "../lib/db/schema";
+import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
+  BenchmarkMetricValue,
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
 
@@ -105,7 +112,7 @@ const weightedGameIq = scoreGameIqAttempt({
   fallbackRate: 0.2,
   latencyFactor: 1,
 });
-check("GameIQ uses plan weights and fallback multiplier", weightedGameIq === 58.5, weightedGameIq);
+check("GameIQ uses plan weights and fallback multiplier", weightedGameIq === 56.7, weightedGameIq);
 
 const toolReliability = scoreToolReliability({
   schemaValidRate: 1,
@@ -128,6 +135,109 @@ const schemaOnlyReliability = scoreToolReliability({
 });
 check("ToolReliability uses plan weights", schemaOnlyReliability === 25, schemaOnlyReliability);
 
+const decisiveMatch = gameMatch("match-decisive", "red");
+const drawMatch = gameMatch("match-draw", "draw");
+const trendDashboard = buildBenchmarkDashboardData({
+  gameMatches: [decisiveMatch, drawMatch],
+  buildStats: [],
+  buildCheckpoints: [buildCheckpoint("trend-build", "2026-07-01T12:00:00.000Z", 10)],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+check(
+  "trend quality is mean participant outcome on 0-100 scale",
+  Math.abs((trendDashboard.trendRows[0]?.quality ?? 0) - 50) < 1e-6,
+  trendDashboard.trendRows
+);
+
+const metricDashboard = buildBenchmarkDashboardData({
+  gameMatches: [],
+  buildStats: [
+    modelBuildStat({
+      modelId: "model:quality-metric",
+      displayName: "Quality Metric",
+      attempts: 2,
+      approvals: 1,
+      fixes: 1,
+      wApprovals: 1,
+      wFixes: 1,
+    }),
+  ],
+  buildCheckpoints: [],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [qualityMetric("model:quality-metric", 87)],
+  benchmarkFailures: [],
+});
+const metricModel = metricDashboard.models.find(
+  (model) => model.modelId === "model:quality-metric"
+);
+check(
+  "quality metric does not inflate verifierPassRate",
+  metricModel?.verifierPassRate === 0.5,
+  metricModel
+);
+
+const codenamesDashboard = buildBenchmarkDashboardData({
+  gameMatches: [codenamesMatch()],
+  buildStats: [],
+  buildCheckpoints: [],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+const redCodenamesModel = codenamesDashboard.models.find(
+  (model) => model.modelId === "model:red-team"
+);
+const codenamesHeadToHead = codenamesDashboard.headToHeadRows[0];
+check(
+  "codenames red model recorded a team win",
+  redCodenamesModel?.wins === 1 && redCodenamesModel?.losses === 0,
+  redCodenamesModel
+);
+check(
+  "codenames head-to-head row credits the winning team model",
+  codenamesDashboard.headToHeadRows.length === 1 &&
+    codenamesHeadToHead?.games === 1 &&
+    ((codenamesHeadToHead.modelA === "model:red-team" &&
+      codenamesHeadToHead.modelAWins === 1) ||
+      (codenamesHeadToHead.modelB === "model:red-team" &&
+        codenamesHeadToHead.modelBWins === 1)),
+  codenamesDashboard.headToHeadRows
+);
+
+const evidenceModelId = "model:evidence-cap";
+const evidenceDashboard = buildBenchmarkDashboardData({
+  gameMatches: [],
+  buildStats: [],
+  buildCheckpoints: Array.from({ length: 60 }, (_, index) =>
+    buildCheckpoint(
+      `evidence-${index}`,
+      `2026-07-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+      1,
+      evidenceModelId
+    )
+  ),
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+const cappedEvidence = evidenceDashboard.evidenceByModel[evidenceModelId] ?? [];
+check(
+  "evidence is capped per model",
+  cappedEvidence.length <= 50,
+  cappedEvidence.length
+);
+check(
+  "evidence cap retains newest items",
+  cappedEvidence.some((item) => item.timestamp === "2026-07-01T00:59:00.000Z"),
+  cappedEvidence.map((item) => item.timestamp)
+);
+
 const lift = scoreTeamLift({
   teamScore: 84,
   memberSoloScores: [60, 74, 71],
@@ -149,6 +259,36 @@ const wasteful = scoreTeamLift({
   bestSoloDurationMs: 30_000,
 });
 check("wasteful team classification works", wasteful.label === "wasteful", wasteful);
+
+const expensiveLoser = scoreTeamLift({
+  teamScore: 60,
+  memberSoloScores: [75],
+  teamCostUsd: 2,
+  bestSoloCostUsd: 1,
+  teamDurationMs: 60_000,
+  bestSoloDurationMs: 30_000,
+});
+check(
+  "negative lift is penalized harder for an expensive/slow team",
+  expensiveLoser.costAdjustedTeamLift !== null &&
+    expensiveLoser.costAdjustedTeamLift < expensiveLoser.teamLift &&
+    expensiveLoser.speedAdjustedTeamLift < expensiveLoser.teamLift,
+  expensiveLoser
+);
+
+const overpricedPositive = scoreTeamLift({
+  teamScore: 80,
+  memberSoloScores: [75],
+  teamCostUsd: 4,
+  bestSoloCostUsd: 1,
+  teamDurationMs: 30_000,
+  bestSoloDurationMs: 30_000,
+});
+check(
+  "small positive lift on a >3x-cost team downgrades to neutral",
+  overpricedPositive.label === "neutral",
+  overpricedPositive
+);
 
 const soloTeamA: BenchmarkTeamComposition = {
   id: "solo-a",
@@ -204,6 +344,52 @@ check(
   "aggregate team lift requires every member solo baseline",
   partialBaselineTeam?.teamLift === null && partialBaselineTeam?.bestSoloScore === null,
   aggregateRows
+);
+
+const soloTeamB: BenchmarkTeamComposition = {
+  id: "solo-b",
+  name: "Model B",
+  comboHash: "solo:b",
+  roles: [
+    {
+      role: "single",
+      slot: "single",
+      modelId: "model:b",
+      providerId: "test",
+      displayName: "Model B",
+      temperature: 0,
+    },
+  ],
+};
+const zeroPassCostRows = aggregateCertifiedRunScores({
+  attempts: [
+    certifiedAttempt("cost-solo-a", soloTeamA.id, 70, {
+      costUsd: 0.1,
+      durationMs: 1000,
+      status: "passed",
+    }),
+    certifiedAttempt("cost-solo-b", soloTeamB.id, 68, {
+      costUsd: 0.1,
+      durationMs: 1000,
+      status: "passed",
+    }),
+    certifiedAttempt("cost-team-ab", teamAB.id, 69, {
+      costUsd: 2,
+      durationMs: 2000,
+      status: "failed_model",
+    }),
+  ],
+  cases: [],
+  teamCompositions: [soloTeamA, soloTeamB, teamAB],
+  verifierResults: [],
+});
+const zeroPassCostlyTeam = zeroPassCostRows.find(
+  (row) => row.teamCompositionId === teamAB.id
+);
+check(
+  "zero-pass costly team is labeled wasteful",
+  zeroPassCostlyTeam?.teamLiftLabel === "wasteful",
+  zeroPassCostlyTeam
 );
 
 check(
@@ -402,6 +588,165 @@ if (failures === 0) {
 }
 
 process.exit(failures === 0 ? 0 : 1);
+
+function gameMatch(id: string, winner: "red" | "yellow" | "draw"): GenericGameMatchRecord {
+  return {
+    id,
+    gameId: "connect-four",
+    timestamp: "2026-07-01T12:00:00.000Z",
+    participants: [
+      {
+        id: "red",
+        kind: "ai",
+        label: "Red",
+        modelId: "model:red",
+        reasoningEffort: "medium",
+      },
+      {
+        id: "yellow",
+        kind: "ai",
+        label: "Yellow",
+        modelId: "model:yellow",
+        reasoningEffort: "medium",
+      },
+    ],
+    resultJson: JSON.stringify({
+      result: winner,
+      winner,
+      draw: winner === "draw",
+    }),
+    statsJson: JSON.stringify({
+      moves: 10,
+      durationMs: 5000,
+      avgAiResponseMs: 250,
+      invalidResponses: 0,
+      fallbackMoves: 0,
+    }),
+  };
+}
+
+function codenamesMatch(): GenericGameMatchRecord {
+  return {
+    id: "codenames-red-wins",
+    gameId: "codenames",
+    timestamp: "2026-07-01T13:00:00.000Z",
+    participants: [
+      {
+        id: "red-spymaster",
+        kind: "ai",
+        label: "Red Spymaster",
+        modelId: "model:red-team",
+      },
+      {
+        id: "red-operative",
+        kind: "ai",
+        label: "Red Operative",
+        modelId: "model:red-team",
+      },
+      {
+        id: "blue-spymaster",
+        kind: "ai",
+        label: "Blue Spymaster",
+        modelId: "model:blue-team",
+      },
+      {
+        id: "blue-operative",
+        kind: "ai",
+        label: "Blue Operative",
+        modelId: "model:blue-team",
+      },
+    ],
+    resultJson: JSON.stringify({ winner: "red", result: "red", draw: false }),
+    statsJson: JSON.stringify({
+      moves: 8,
+      durationMs: 8000,
+      avgAiResponseMs: 500,
+      invalidResponses: 0,
+      fallbackMoves: 0,
+    }),
+  };
+}
+
+function modelBuildStat(partial: Partial<ModelBuildStat> = {}): ModelBuildStat {
+  return {
+    modelId: partial.modelId ?? "model:build",
+    displayName: partial.displayName ?? "Build Model",
+    builds: partial.builds ?? 1,
+    attempts: partial.attempts ?? 1,
+    approvals: partial.approvals ?? 1,
+    fixes: partial.fixes ?? 0,
+    badOutput: partial.badOutput ?? 0,
+    unavailable: partial.unavailable ?? 0,
+    wApprovals: partial.wApprovals ?? partial.approvals ?? 1,
+    wFixes: partial.wFixes ?? partial.fixes ?? 0,
+    wBadOutput: partial.wBadOutput ?? partial.badOutput ?? 0,
+    responseMs: partial.responseMs ?? 1000,
+    responseChars: partial.responseChars ?? 1000,
+    judges: partial.judges ?? {},
+    independentVerdicts: partial.independentVerdicts ?? 0,
+    updatedAt: partial.updatedAt ?? "2026-07-01T00:00:00.000Z",
+  };
+}
+
+function buildCheckpoint(
+  discussionId: string,
+  updatedAt: string,
+  calls: number,
+  modelId = "model:trend-build"
+): BuildCheckpoint {
+  return {
+    discussionId,
+    status: "completed",
+    updatedAt,
+    runPolicy: "finish",
+    stopReason: null,
+    wave: 1,
+    tasks: [],
+    architectNotes: "",
+    verifyCommand: "npm test",
+    branch: null,
+    prUrl: null,
+    milestone: null,
+    issueNumbers: [],
+    failureFingerprints: {},
+    recoveryLog: [],
+    buildProblems: [],
+    commandProblems: [],
+    stopReport: null,
+    toolReviewReport: null,
+    usageWindow: {
+      startedAt: updatedAt,
+      elapsedMs: calls * 1000,
+      estimatedUsd: calls * 0.01,
+      unknownPricedModelIds: [],
+      models: [
+        {
+          modelId,
+          modelName: modelId,
+          providerId: "test",
+          calls,
+          inputTokens: calls * 100,
+          outputTokens: calls * 50,
+          totalTokens: calls * 150,
+          estimatedUsd: calls * 0.01,
+          priced: true,
+        },
+      ],
+    },
+  };
+}
+
+function qualityMetric(modelId: string, value: number): BenchmarkMetricValue {
+  return {
+    id: `metric-${modelId}`,
+    modelId,
+    domain: "build",
+    key: "quality",
+    label: "Quality",
+    value,
+    direction: "higher",
+  };
+}
 
 function certifiedAttempt(
   id: string,

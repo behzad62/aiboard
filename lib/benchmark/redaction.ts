@@ -103,7 +103,7 @@ const SECRET_SCAN_PATTERNS: SecretPattern[] = [
   {
     kind: "env_secret",
     pattern:
-      /^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n#]*)/gim,
+      /^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*[ \t]*=[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]*)/gim,
   },
 ];
 
@@ -131,7 +131,7 @@ const SECRET_REDACTION_PATTERNS: RedactionPattern[] = [
   {
     kind: "env_secret",
     pattern:
-      /^([ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*[ \t]*=[ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n#]*)/gim,
+      /^([ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*[ \t]*=[ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]*)/gim,
     replacement: (_match, prefix: string) => `${prefix}${REDACTED_SECRET}`,
   },
   {

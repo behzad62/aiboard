@@ -646,13 +646,16 @@ export interface BenchmarkImportResult {
   updatedCount: number;
   addedByCategory: Record<string, number>;
   updatedByCategory: Record<string, number>;
+  hashMismatch: boolean;
 }
 
 export async function importBenchmarkReportBundleV2(
   bundle: BenchmarkReportBundleV2
 ): Promise<BenchmarkImportResult> {
   validateBenchmarkReportBundleV2(bundle);
-  return mergeBenchmarkReportBundle(bundle);
+  const verification = verifyBenchmarkBundleHash(bundle);
+  const result = await mergeBenchmarkReportBundle(bundle);
+  return { ...result, hashMismatch: !verification.ok };
 }
 
 async function mergeBenchmarkReportBundle(
@@ -751,6 +754,16 @@ function hashBenchmarkBundle(
     hash = Math.imul(hash, 16777619);
   }
   return `fnv1a:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export function verifyBenchmarkBundleHash(
+  bundle: BenchmarkReportBundleV2
+): { ok: boolean; expected: string; actual: string | null } {
+  const actual = bundle.bundleHash ?? null;
+  const expected = hashBenchmarkBundle(
+    bundle as Omit<BenchmarkReportBundleV2, "bundleHash">
+  );
+  return { ok: actual === null || actual === expected, expected, actual };
 }
 
 function stableStringify(value: unknown): string {
@@ -1592,6 +1605,7 @@ function summarizeBenchmarkImport(
     updatedCount: 0,
     addedByCategory: {},
     updatedByCategory: {},
+    hashMismatch: false,
   };
 
   countById(result, "suites", current.benchmarkSuites ?? [], bundle.suites);

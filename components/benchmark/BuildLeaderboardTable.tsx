@@ -51,6 +51,13 @@ export function BuildLeaderboardTable({
                 {BUILD_LEADERBOARD_COLUMNS.map((column) => (
                   <th
                     key={column.key}
+                    aria-sort={
+                      sortKey === column.key
+                        ? sortDir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : undefined
+                    }
                     className={`px-2 py-2 font-medium ${
                       column.align === "right" ? "text-right" : "text-left"
                     }`}
@@ -58,13 +65,14 @@ export function BuildLeaderboardTable({
                     <button
                       type="button"
                       onClick={() => onToggleSort(column.key)}
+                      aria-label={`Sort by ${column.label}`}
                       className={`inline-flex items-center gap-1 hover:text-foreground ${
                         sortKey === column.key ? "text-foreground" : ""
                       }`}
                     >
                       {column.label}
                       {sortKey === column.key && (
-                        <span aria-hidden>{sortDir === "asc" ? "^" : "v"}</span>
+                        <span aria-hidden>{sortDir === "asc" ? "▲" : "▼"}</span>
                       )}
                     </button>
                   </th>

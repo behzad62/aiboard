@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { duration, pct, usd } from "@/components/benchmark/format";
+import { duration, formatScore, pct, usd } from "@/components/benchmark/format";
 import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
 import { ComboMatrix } from "@/components/benchmark/teamiq/ComboMatrix";
 import { ParetoFrontier } from "@/components/benchmark/teamiq/ParetoFrontier";
@@ -983,12 +983,6 @@ function readLatestAttemptsByTrack(
 
 function formatDeleteError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function formatScore(value: number | null): string {
-  if (value == null) return "n/a";
-  const score = value <= 1 ? value * 100 : value;
-  return `${Math.round(score * 10) / 10}`;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {

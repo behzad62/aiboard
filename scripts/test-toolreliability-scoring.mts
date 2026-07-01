@@ -317,6 +317,36 @@ check(
   didNotApplyEvent
 );
 
+const partialPatchOnly = runToolReliabilityPack(
+  {
+    id: "toolrel-partial-patch-only",
+    modelId: "deterministic:partial",
+    providerId: "deterministic",
+    teamCompositionId: "toolrel-partial-patch-only",
+    outputs: {
+      [opusStyleBasicPatchCase.id]: [
+        [
+          "```edit path=src/feature.ts",
+          "<<<<<<< SEARCH",
+          'export const exportedValue = "missing";',
+          "=======",
+          'export const exportedValue = "new";',
+          ">>>>>>> REPLACE",
+          "```",
+        ].join("\n"),
+      ],
+    },
+  },
+  [opusStyleBasicPatchCase]
+);
+check(
+  "partial pack does not grant free credit for absent dimensions",
+  partialPatchOnly.summary.rates.schemaValidRate === null &&
+    partialPatchOnly.summary.rates.patchSuccessRate === 0 &&
+    partialPatchOnly.score === 0,
+  partialPatchOnly
+);
+
 const contentMismatch = runToolReliabilityPack(
   {
     id: "toolrel-content-mismatch-candidate",
@@ -347,6 +377,35 @@ check(
   contentMismatchEvent?.message.includes("content_mismatch") === true &&
     contentMismatchEvent.details?.failureClass === "content_mismatch",
   contentMismatchEvent
+);
+
+const proseTailPatch = runToolReliabilityPack(
+  {
+    id: "toolrel-prose-tail-patch",
+    modelId: "deterministic:prose-tail",
+    providerId: "deterministic",
+    teamCompositionId: "toolrel-prose-tail",
+    outputs: {
+      [opusStyleBasicPatchCase.id]: [
+        [
+          "SEARCH",
+          'export const exportedValue = "old";',
+          "REPLACE",
+          'export const exportedValue = "new";',
+          "END",
+          "",
+          "I also refactored a few things while I was here.",
+        ].join("\n"),
+      ],
+    },
+  },
+  [opusStyleBasicPatchCase]
+);
+check(
+  "bare SEARCH/REPLACE does not fold trailing prose into the replacement",
+  proseTailPatch.caseResults.every((item) => item.passed) &&
+    proseTailPatch.summary.rates.patchSuccessRate === 1,
+  proseTailPatch.caseResults
 );
 
 if (failures === 0) {

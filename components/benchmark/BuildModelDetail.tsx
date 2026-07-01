@@ -7,13 +7,17 @@ import {
   judgeSummary,
 } from "@/lib/client/model-stats";
 import type { ModelBuildStat } from "@/lib/db/schema";
-import { round } from "@/components/benchmark/BuildLeaderboardShared";
+import {
+  outcomeSegmentCounts,
+  round,
+} from "@/components/benchmark/BuildLeaderboardShared";
 
 const SEGMENTS = [
   { key: "approved", label: "Approved", className: "bg-emerald-500" },
   { key: "fixes", label: "Fixes", className: "bg-amber-500" },
   { key: "badOutput", label: "Bad output", className: "bg-destructive" },
   { key: "unavailable", label: "Unavailable", className: "bg-muted-foreground/40" },
+  { key: "ungraded", label: "Ungraded", className: "bg-muted-foreground/20" },
 ] as const;
 
 export function BuildModelDetail({
@@ -26,14 +30,7 @@ export function BuildModelDetail({
   const judge = judgeSummary(s);
   const speed = charsPerSecond(s);
   const totalSecs = s.responseMs / 1000;
-  const counts: Record<string, number> = {
-    approved: s.approvals,
-    fixes: s.fixes,
-    badOutput: s.badOutput,
-    unavailable: s.unavailable,
-  };
-  const total =
-    s.attempts || SEGMENTS.reduce((acc, seg) => acc + counts[seg.key], 0);
+  const { total, counts } = outcomeSegmentCounts(s);
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">

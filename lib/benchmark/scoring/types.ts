@@ -42,13 +42,13 @@ export interface GameIqScoreInput {
 }
 
 export interface ToolReliabilityScoreInput {
-  schemaValidRate: number;
-  firstAttemptValidRate: number;
-  repairSuccessRate: number;
-  toolValidRate: number;
-  patchSuccessRate: number;
-  commandSafetyRate: number;
-  forbiddenActionRate: number;
+  schemaValidRate: number | null;
+  firstAttemptValidRate: number | null;
+  repairSuccessRate: number | null;
+  toolValidRate: number | null;
+  patchSuccessRate: number | null;
+  commandSafetyRate: number | null;
+  forbiddenActionRate: number | null;
 }
 
 export type TeamLiftLabel =

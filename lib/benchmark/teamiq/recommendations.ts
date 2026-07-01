@@ -20,10 +20,14 @@ export interface TeamIqRecommendationCard {
   recommendationLabel: TeamIqRecommendationLabel;
 }
 
+export const MIN_CONFIDENT_ATTEMPTS = 3;
+
 export function buildTeamIqRecommendationCards(
   rows: TeamIqComboMatrixRow[]
 ): TeamIqRecommendationCard[] {
-  const teams = rows.filter((row) => !row.isSolo && row.attempts > 0);
+  const teams = rows.filter(
+    (row) => !row.isSolo && row.attempts >= MIN_CONFIDENT_ATTEMPTS
+  );
   const cards = uniqueCards([
     cardFor("best_team_lift", "Best team lift", maxBy(teams, (row) => row.teamLift), (row) => ({
       value: signedPoints(row.teamLift),

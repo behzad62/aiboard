@@ -8,6 +8,8 @@ import {
   validateGameIqAction,
   validateGameIqScenario,
 } from "../lib/benchmark/gameiq";
+import { FIREWORKS_TACTICS_SCENARIOS } from "../lib/benchmark/fireworks/scenario-packs";
+import { toGameIqScenario } from "../lib/benchmark/gameiq/fireworks";
 import { fromFEN, getPiece } from "../lib/games/chess/engine";
 
 let failures = 0;
@@ -220,6 +222,36 @@ check(
   }) === true,
   fireworksMemoryPack?.scenarios.map((scenario) => scenario.initialState)
 );
+
+const fireworksTwoActionSource = FIREWORKS_TACTICS_SCENARIOS[0];
+if (fireworksTwoActionSource) {
+  const firstExpected = fireworksTwoActionSource.expectedActions[0];
+  const ported = toGameIqScenario({
+    scenario: {
+      ...fireworksTwoActionSource,
+      expectedActions: [
+        firstExpected,
+        {
+          ...firstExpected,
+          label: `${firstExpected.label} alternative`,
+          weight: firstExpected.weight / 2,
+        },
+      ],
+    },
+    index: 0,
+    idPrefix: "test-fireworks-port",
+    titlePrefix: "Fireworks Port Test",
+    difficulty: "medium",
+    tags: ["test"],
+  });
+  check(
+    "Fireworks GameIQ port keeps every expected action",
+    ported.expectedActions.length === 2 &&
+      ported.expectedActions[1]?.label.endsWith("alternative") &&
+      ported.expectedActions[1]?.weight === firstExpected.weight / 2,
+    ported.expectedActions
+  );
+}
 
 const connectFourTrapPack = firstListing.find(
   (pack) => pack.id === "gameiq-v0.1-connect-four"

@@ -48,7 +48,9 @@ export function QualityScatterChart({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <CardDescription>
+          {description} Select a model from the Scorecards table below.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {data.length > 0 ? (

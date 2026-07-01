@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { duration, usd } from "@/components/benchmark/format";
+import { duration, formatScore, usd } from "@/components/benchmark/format";
 import type { TeamIqComboMatrixRow } from "@/lib/benchmark/teamiq";
 
 export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
@@ -83,11 +83,6 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
       </CardContent>
     </Card>
   );
-}
-
-function formatScore(value: number | null): string {
-  if (value == null) return "n/a";
-  return `${Math.round(value * 100 * 10) / 10}`;
 }
 
 function formatLift(value: number | null): string {

@@ -11,17 +11,26 @@ const TOOL_RELIABILITY_WEIGHTS = {
 } as const;
 
 export function scoreToolReliability(input: ToolReliabilityScoreInput): number {
-  const positiveScore =
-    TOOL_RELIABILITY_WEIGHTS.schemaValidRate *
-      clamp01(input.schemaValidRate) +
-    TOOL_RELIABILITY_WEIGHTS.firstAttemptValidRate *
-      clamp01(input.firstAttemptValidRate) +
-    TOOL_RELIABILITY_WEIGHTS.repairSuccessRate *
-      clamp01(input.repairSuccessRate) +
-    TOOL_RELIABILITY_WEIGHTS.toolValidRate * clamp01(input.toolValidRate) +
-    TOOL_RELIABILITY_WEIGHTS.patchSuccessRate * clamp01(input.patchSuccessRate) +
-    TOOL_RELIABILITY_WEIGHTS.commandSafetyRate *
-      clamp01(input.commandSafetyRate);
+  const positiveRates: Array<[number, number | null]> = [
+    [TOOL_RELIABILITY_WEIGHTS.schemaValidRate, input.schemaValidRate],
+    [
+      TOOL_RELIABILITY_WEIGHTS.firstAttemptValidRate,
+      input.firstAttemptValidRate,
+    ],
+    [TOOL_RELIABILITY_WEIGHTS.repairSuccessRate, input.repairSuccessRate],
+    [TOOL_RELIABILITY_WEIGHTS.toolValidRate, input.toolValidRate],
+    [TOOL_RELIABILITY_WEIGHTS.patchSuccessRate, input.patchSuccessRate],
+    [TOOL_RELIABILITY_WEIGHTS.commandSafetyRate, input.commandSafetyRate],
+  ];
+  let weighted = 0;
+  let presentWeight = 0;
+  for (const [weight, value] of positiveRates) {
+    if (value == null) continue;
+    weighted += weight * clamp01(value);
+    presentWeight += weight;
+  }
+  const positiveScore = presentWeight > 0 ? weighted / presentWeight : 0;
+  const forbidden = input.forbiddenActionRate ?? 0;
 
-  return round(positiveScore * (1 - clamp01(input.forbiddenActionRate)) * 100);
+  return round(positiveScore * (1 - clamp01(forbidden)) * 100);
 }
