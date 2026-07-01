@@ -169,6 +169,36 @@ check("fallback rate is represented", (gemini?.fallbackRate ?? 0) > 0, gemini);
 check("build failures are categorized", dashboard.failureRows[0]?.tool === 1, dashboard.failureRows);
 check("head-to-head result is tracked", dashboard.headToHeadRows[0]?.modelAWins + dashboard.headToHeadRows[0]?.modelBWins === 1, dashboard.headToHeadRows);
 check("summary includes cost", dashboard.summary.averageCostUsd === 0.12, dashboard.summary);
+const mixedTrendRow = dashboard.trendRows.find((row) => row.date === "2026-06-24");
+check(
+  "trend quality averages game outcomes independently of build attempts",
+  mixedTrendRow?.quality === 50,
+  mixedTrendRow
+);
+const buildOnlyTrendDashboard = buildBenchmarkDashboardData({
+  gameMatches: [],
+  buildStats: [],
+  buildCheckpoints: [
+    {
+      ...checkpoint,
+      discussionId: "discussion-build-only",
+      updatedAt: "2026-06-25T10:06:00.000Z",
+      buildProblems: [],
+    },
+  ],
+  benchmarkRuns: [],
+  benchmarkCases: [],
+  benchmarkMetricValues: [],
+  benchmarkFailures: [],
+});
+const buildOnlyTrendRow = buildOnlyTrendDashboard.trendRows.find(
+  (row) => row.games === 0 && row.buildAttempts > 0
+);
+check(
+  "build-only trend quality is null",
+  buildOnlyTrendRow?.quality === null,
+  buildOnlyTrendRow
+);
 
 __resetBenchmarkStoreForTests();
 const benchmarkCase: BenchmarkCase = {
