@@ -45,8 +45,10 @@ function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 interface FakeRunnerOptions {
   prepareStatus?: number;
   prepareError?: string;
+  prepareDelayMs?: number;
   verifierStatus?: number;
   verifierError?: string;
+  verifierDelayMs?: number;
   verifierResultJson?: string;
   diff?: string;
 }
@@ -75,6 +77,7 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
     }
     switch (path) {
       case "/bench/prepare":
+        if (options.prepareDelayMs) await delay(options.prepareDelayMs);
         if (options.prepareStatus && options.prepareStatus >= 400) {
           sendJsonResponse(res, options.prepareStatus, { error: options.prepareError ?? "prepare failed" });
           return;
@@ -86,6 +89,7 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
         });
         return;
       case "/bench/run-verifier":
+        if (options.verifierDelayMs) await delay(options.verifierDelayMs);
         if (options.verifierStatus && options.verifierStatus >= 400) {
           sendJsonResponse(res, options.verifierStatus, { error: options.verifierError ?? "verifier failed" });
           return;
@@ -120,6 +124,10 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
     requests,
     stop: () => stopServer(server),
   };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 async function readJsonRequest(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
@@ -448,6 +456,119 @@ try {
   check("canonical attempt id contract did not throw", false, error instanceof Error ? error.message : String(error));
 } finally {
   await canonicalRunner.stop();
+}
+
+const timeScoreRunner = await startCanonicalAttemptRunner("time-score-attempt", {
+  verifierDelayMs: 50,
+});
+try {
+  const timeScoreResult = await executeWorkBenchVerifierOnly({
+    case: {
+      ...caseRecord,
+      id: "workbench-executor-time-score",
+      scoring: {
+        ...caseRecord.scoring,
+        timeTargetSeconds: 0.01,
+      },
+      budget: {
+        ...caseRecord.budget,
+        maxWallClockSeconds: 1,
+      },
+    },
+    runner: { url: timeScoreRunner.url, token: timeScoreRunner.token },
+    attemptId: "attempt-time-score",
+    runId: "run-time-score",
+    teamCompositionId: "team-fixture",
+    cleanup: true,
+    runBuild: async () => ({
+      traceIds: ["trace-time-score"],
+      modelCalls: 1,
+      toolCalls: 1,
+      validToolCalls: 1,
+      durationMs: 5,
+    }),
+  });
+  check(
+    "WorkBench timeFactor scores model-attributable build time, not verifier wall clock",
+    timeScoreResult.score.timeFactor === 1,
+    timeScoreResult.score
+  );
+} catch (error) {
+  check("WorkBench timeFactor build-time contract did not throw", false, error instanceof Error ? error.message : String(error));
+} finally {
+  await timeScoreRunner.stop();
+}
+
+const slowBuildTimeRunner = await startCanonicalAttemptRunner("slow-build-time-attempt");
+try {
+  const slowBuildTimeResult = await executeWorkBenchVerifierOnly({
+    case: {
+      ...caseRecord,
+      id: "workbench-executor-slow-build-time",
+      scoring: {
+        ...caseRecord.scoring,
+        timeTargetSeconds: 0.01,
+      },
+    },
+    runner: { url: slowBuildTimeRunner.url, token: slowBuildTimeRunner.token },
+    attemptId: "attempt-slow-build-time",
+    runId: "run-slow-build-time",
+    teamCompositionId: "team-fixture",
+    cleanup: true,
+    runBuild: async () => ({
+      traceIds: ["trace-slow-build-time"],
+      modelCalls: 1,
+      toolCalls: 1,
+      validToolCalls: 1,
+      durationMs: 50,
+    }),
+  });
+  check(
+    "WorkBench timeFactor still penalizes slow model-attributable build time",
+    slowBuildTimeResult.score.timeFactor < 1,
+    slowBuildTimeResult.score
+  );
+} catch (error) {
+  check("WorkBench slow build-time contract did not throw", false, error instanceof Error ? error.message : String(error));
+} finally {
+  await slowBuildTimeRunner.stop();
+}
+
+const budgetBuildTimeRunner = await startCanonicalAttemptRunner("budget-buildtime-attempt", {
+  prepareDelayMs: 50,
+});
+try {
+  const budgetBuildTimeResult = await executeWorkBenchVerifierOnly({
+    case: {
+      ...caseRecord,
+      id: "workbench-executor-buildtime-budget",
+      budget: {
+        ...caseRecord.budget,
+        maxWallClockSeconds: 0.01,
+      },
+    },
+    runner: { url: budgetBuildTimeRunner.url, token: budgetBuildTimeRunner.token },
+    attemptId: "attempt-buildtime-budget",
+    runId: "run-buildtime-budget",
+    teamCompositionId: "team-fixture",
+    cleanup: true,
+    runBuild: async () => ({
+      traceIds: ["trace-buildtime-budget"],
+      modelCalls: 1,
+      toolCalls: 1,
+      validToolCalls: 1,
+      durationMs: 5,
+    }),
+  });
+  check(
+    "WorkBench wall-clock budget uses build time, not prepare overhead",
+    budgetBuildTimeResult.attempt.status !== "failed_budget",
+    budgetBuildTimeResult.attempt
+  );
+} catch (error) {
+  check("WorkBench build-time budget contract did not throw", false, error instanceof Error ? error.message : String(error));
+} finally {
+  await budgetBuildTimeRunner.stop();
 }
 
 const child = spawn(process.execPath, [
