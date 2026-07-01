@@ -240,13 +240,19 @@ export function CertifiedRunPanel({
               <CaseSuitePicker
                 value={selectedTrack}
                 options={TRACK_OPTIONS}
+                ariaLabel="Track"
                 onChange={(value) => setSelectedTrack(value as RunnableTrack)}
               />
             )}
             {selectedTrack === "workbench" ? (
               <StaticField label="Case set" value="Choose WorkBench case below" />
             ) : (
-              <CaseSuitePicker value={suiteId} options={suites} onChange={setSuiteId} />
+              <CaseSuitePicker
+                value={suiteId}
+                options={suites}
+                ariaLabel="Case suite"
+                onChange={setSuiteId}
+              />
             )}
             {selectedTrack === "teamiq" ? (
               <StaticField

@@ -23,7 +23,7 @@ export function BenchmarkModelScorecards({
     <Card>
       <CardHeader>
         <CardTitle>Model Scorecards</CardTitle>
-        <CardDescription>Click a row to inspect the evidence behind it.</CardDescription>
+        <CardDescription>Select a row to inspect the evidence behind it.</CardDescription>
       </CardHeader>
       <CardContent>
         {models.length > 0 ? (
@@ -45,10 +45,19 @@ export function BenchmarkModelScorecards({
                 {models.map((model) => (
                   <tr
                     key={model.modelId}
-                    className={`cursor-pointer border-b hover:bg-muted/50 ${
+                    tabIndex={0}
+                    role="button"
+                    aria-pressed={selectedModelId === model.modelId}
+                    className={`cursor-pointer border-b hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring ${
                       selectedModelId === model.modelId ? "bg-muted" : ""
                     }`}
                     onClick={() => onSelect(model)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelect(model);
+                      }
+                    }}
                   >
                     <td className="py-2 pr-3">
                       <div className="font-medium">{model.displayName}</div>

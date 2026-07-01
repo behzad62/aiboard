@@ -17,7 +17,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
-import { CHART_COLORS, EmptyChart } from "@/components/benchmark/chart-utils";
+import {
+  CHART_COLORS,
+  CHART_DASHES,
+  ChartDataTable,
+  EmptyChart,
+} from "@/components/benchmark/chart-utils";
 
 export function CapabilityRadarChart({
   dashboard,
@@ -27,14 +32,19 @@ export function CapabilityRadarChart({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Capability Profile</CardTitle>
-        <CardDescription>
+        <CardTitle id="capability-profile-title">Capability Profile</CardTitle>
+        <CardDescription id="capability-profile-description">
           Multi-axis scorecard. Higher is better on every axis.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {dashboard.models.length > 0 ? (
-          <div className="h-[320px]">
+          <div
+            className="h-[320px]"
+            role="img"
+            aria-labelledby="capability-profile-title"
+            aria-describedby="capability-profile-description"
+          >
             <ResponsiveContainer>
               <RadarChart data={dashboard.radarRows}>
                 <PolarGrid />
@@ -47,12 +57,21 @@ export function CapabilityRadarChart({
                     name={model.displayName}
                     dataKey={model.displayName}
                     stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                    strokeDasharray={CHART_DASHES[index % CHART_DASHES.length]}
                     fill={CHART_COLORS[index % CHART_COLORS.length]}
                     fillOpacity={0.16}
                   />
                 ))}
               </RadarChart>
             </ResponsiveContainer>
+            <ChartDataTable
+              caption="Capability profile data"
+              columns={[
+                "axis",
+                ...dashboard.models.slice(0, 4).map((model) => model.displayName),
+              ]}
+              rows={dashboard.radarRows}
+            />
           </div>
         ) : (
           <EmptyChart label="Run games or save Build cases to populate profile data." />

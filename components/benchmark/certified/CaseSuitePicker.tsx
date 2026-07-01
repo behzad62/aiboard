@@ -16,15 +16,17 @@ export interface CertifiedSuiteOption {
 export function CaseSuitePicker({
   value,
   options,
+  ariaLabel,
   onChange,
 }: {
   value: string;
   options: CertifiedSuiteOption[];
+  ariaLabel: string;
   onChange: (value: string) => void;
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger>
+      <SelectTrigger aria-label={ariaLabel}>
         <SelectValue placeholder="Case suite" />
       </SelectTrigger>
       <SelectContent>

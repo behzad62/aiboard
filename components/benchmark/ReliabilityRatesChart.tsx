@@ -20,7 +20,9 @@ import {
 import { compactPct } from "@/components/benchmark/format";
 import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
 import {
+  CHART_COLORS,
   EmptyChart,
+  moveSuccessRate,
   modelIdFromChartClick,
 } from "@/components/benchmark/chart-utils";
 
@@ -36,7 +38,8 @@ export function ReliabilityRatesChart({
       <CardHeader>
         <CardTitle>Reliability Rates</CardTitle>
         <CardDescription>
-          Win, legality, schema, fallback, and verifier signals by model.
+          Win, legality, schema, move success, and verifier signals by model.
+          Select a model from the Scorecards table below.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -55,11 +58,15 @@ export function ReliabilityRatesChart({
                 <YAxis tickFormatter={compactPct} domain={[0, 100]} />
                 <Tooltip formatter={(value) => `${value}%`} />
                 <Legend />
-                <Bar dataKey="winRate" name="Win" fill="#22c55e" />
-                <Bar dataKey="legalActionRate" name="Legal" fill="#38bdf8" />
-                <Bar dataKey="schemaValidRate" name="Schema" fill="#a78bfa" />
-                <Bar dataKey="fallbackRate" name="Fallback" fill="#f59e0b" />
-                <Bar dataKey="verifierPassRate" name="Verifier" fill="#ef4444" />
+                <Bar dataKey="winRate" name="Win" fill={CHART_COLORS[2]} />
+                <Bar dataKey="legalActionRate" name="Legal" fill={CHART_COLORS[5]} />
+                <Bar dataKey="schemaValidRate" name="Schema" fill={CHART_COLORS[3]} />
+                <Bar
+                  dataKey={(row) => moveSuccessRate(row.fallbackRate)}
+                  name="Move success"
+                  fill={CHART_COLORS[1]}
+                />
+                <Bar dataKey="verifierPassRate" name="Verifier" fill={CHART_COLORS[4]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

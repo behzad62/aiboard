@@ -15,6 +15,7 @@ import {
   getBenchmarkVerifierResults,
 } from "@/lib/client/store";
 import { FireworksBenchmarkSummary } from "@/components/benchmark/fireworks/FireworksBenchmarkSummary";
+import { formatScore } from "@/components/benchmark/format";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
 
 export function AttemptDetailPanel({
@@ -64,7 +65,7 @@ export function AttemptDetailPanel({
             value={String(detail.summary.assertionFailureCount)}
           />
           <Detail label="Failures" value={String(detail.summary.failureCount)} />
-          <Detail label="Verified quality" value={formatPercent(attempt.verifiedQuality)} />
+          <Detail label="Verified quality" value={formatScore(attempt.verifiedQuality)} />
           <Detail label="Cost" value={formatCost(attempt.costUsd)} />
           <Detail label="Time" value={formatDuration(attempt.durationMs)} />
         </div>
@@ -325,10 +326,6 @@ function TraceList({
       )}
     </div>
   );
-}
-
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
 }
 
 function formatCost(value: number | null): string {

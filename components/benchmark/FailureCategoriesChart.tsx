@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/card";
 import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
 import {
+  CHART_COLORS,
+  ChartDataTable,
   EmptyChart,
   modelIdFromChartClick,
 } from "@/components/benchmark/chart-utils";
@@ -33,14 +35,20 @@ export function FailureCategoriesChart({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Failure Categories</CardTitle>
-        <CardDescription>
+        <CardTitle id="failure-categories-title">Failure Categories</CardTitle>
+        <CardDescription id="failure-categories-description">
           Provider, parser, rules, tool, verifier, and uncategorized issues.
+          Select a model from the Scorecards table below.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {dashboard.failureRows.length > 0 ? (
-          <div className="h-[280px]">
+          <div
+            className="h-[280px]"
+            role="img"
+            aria-labelledby="failure-categories-title"
+            aria-describedby="failure-categories-description"
+          >
             <ResponsiveContainer>
               <BarChart
                 data={dashboard.failureRows}
@@ -54,14 +62,27 @@ export function FailureCategoriesChart({
                 <YAxis allowDecimals={false} />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="provider" stackId="failures" fill="#ef4444" />
-                <Bar dataKey="parser" stackId="failures" fill="#a78bfa" />
-                <Bar dataKey="rules" stackId="failures" fill="#f59e0b" />
-                <Bar dataKey="tool" stackId="failures" fill="#38bdf8" />
-                <Bar dataKey="verifier" stackId="failures" fill="#22c55e" />
+                <Bar dataKey="provider" stackId="failures" fill={CHART_COLORS[4]} />
+                <Bar dataKey="parser" stackId="failures" fill={CHART_COLORS[3]} />
+                <Bar dataKey="rules" stackId="failures" fill={CHART_COLORS[1]} />
+                <Bar dataKey="tool" stackId="failures" fill={CHART_COLORS[0]} />
+                <Bar dataKey="verifier" stackId="failures" fill={CHART_COLORS[2]} />
                 <Bar dataKey="other" stackId="failures" fill="#64748b" />
               </BarChart>
             </ResponsiveContainer>
+            <ChartDataTable
+              caption="Failure category data"
+              columns={[
+                "displayName",
+                "provider",
+                "parser",
+                "rules",
+                "tool",
+                "verifier",
+                "other",
+              ]}
+              rows={dashboard.failureRows}
+            />
           </div>
         ) : (
           <EmptyChart label="No categorized failures recorded." />
