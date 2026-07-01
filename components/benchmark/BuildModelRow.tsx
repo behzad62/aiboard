@@ -4,7 +4,6 @@ import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   approvalRate,
-  availability,
   charsPerSecond,
   qualityPerAttempt,
   qualityScore,
@@ -13,6 +12,7 @@ import type { ModelBuildStat } from "@/lib/db/schema";
 import { BuildModelDetail } from "@/components/benchmark/BuildModelDetail";
 import {
   BUILD_LEADERBOARD_COLUMNS,
+  formatBuildAvailability,
   lastActive,
   pct,
   round,
@@ -39,7 +39,7 @@ export function BuildModelRow({
   const qpa = qualityPerAttempt(s);
   const speed = charsPerSecond(s);
   const rate = approvalRate(s);
-  const availText = s.unavailable > 0 ? pct(availability(s)) : "-";
+  const availText = formatBuildAvailability(s);
 
   return (
     <>

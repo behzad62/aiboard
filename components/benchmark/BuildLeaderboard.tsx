@@ -28,9 +28,11 @@ import {
   BuildLeaderboardTable,
   type BuildSortKey,
 } from "@/components/benchmark/BuildLeaderboardTable";
+import {
+  compareBuildStats,
+  type SortDir,
+} from "@/components/benchmark/BuildLeaderboardShared";
 import { BuildSummaryStrip } from "@/components/benchmark/BuildLeaderboardSummary";
-
-type SortDir = "asc" | "desc";
 
 function sortValue(s: ModelBuildStat, key: BuildSortKey): number | string | null {
   switch (key) {
@@ -102,21 +104,9 @@ export function BuildLeaderboard() {
 
   const rows = useMemo(() => {
     const list = (stats ?? []).slice();
-    list.sort((a, b) => {
-      const va = sortValue(a, sortKey);
-      const vb = sortValue(b, sortKey);
-      if (va == null && vb == null) return 0;
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      let cmp: number;
-      if (typeof va === "string" || typeof vb === "string") {
-        cmp = String(va).localeCompare(String(vb));
-      } else {
-        cmp = va - vb;
-      }
-      if (cmp === 0) cmp = qualityScore(b) - qualityScore(a);
-      return sortDir === "asc" ? cmp : -cmp;
-    });
+    list.sort((a, b) =>
+      compareBuildStats(a, b, (s) => sortValue(s, sortKey), sortDir)
+    );
     return list;
   }, [stats, sortKey, sortDir]);
 

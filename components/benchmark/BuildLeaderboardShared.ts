@@ -1,3 +1,9 @@
+import type { ModelBuildStat } from "@/lib/db/schema";
+import {
+  availability,
+  qualityScore,
+} from "@/lib/client/model-stats";
+
 export type BuildSortKey =
   | "quality"
   | "qualityPerAttempt"
@@ -8,6 +14,13 @@ export type BuildSortKey =
   | "attempts"
   | "lastActive"
   | "model";
+
+export type SortDir = "asc" | "desc";
+
+export interface BuildOutcomeSegmentCounts {
+  total: number;
+  counts: Record<string, number>;
+}
 
 export const BUILD_LEADERBOARD_COLUMNS: {
   key: BuildSortKey;
@@ -32,6 +45,45 @@ export function round(n: number, dp = 1): number {
 
 export function pct(n: number | null): string {
   return n == null ? "-" : `${Math.round(n * 100)}%`;
+}
+
+export function compareBuildStats(
+  a: ModelBuildStat,
+  b: ModelBuildStat,
+  sortValue: (s: ModelBuildStat) => number | string | null,
+  sortDir: SortDir
+): number {
+  const va = sortValue(a);
+  const vb = sortValue(b);
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  let cmp =
+    typeof va === "string" || typeof vb === "string"
+      ? String(va).localeCompare(String(vb))
+      : va - vb;
+  if (sortDir === "desc") cmp = -cmp;
+  if (cmp === 0) cmp = qualityScore(b) - qualityScore(a);
+  return cmp;
+}
+
+export function formatBuildAvailability(s: ModelBuildStat): string {
+  return pct(availability(s));
+}
+
+export function outcomeSegmentCounts(s: ModelBuildStat): BuildOutcomeSegmentCounts {
+  const graded = s.approvals + s.fixes + s.badOutput + s.unavailable;
+  const total = s.attempts || graded;
+  return {
+    total,
+    counts: {
+      approved: s.approvals,
+      fixes: s.fixes,
+      badOutput: s.badOutput,
+      unavailable: s.unavailable,
+      ungraded: Math.max(0, total - graded),
+    },
+  };
 }
 
 export function lastActive(iso: string): string {
