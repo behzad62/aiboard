@@ -109,7 +109,9 @@ async function route(pathname, body) {
       });
     case "/bench/write-file":
       return withAttempt(body, async ({ attemptRoot }) => {
-        const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+        const relPath = requiredString(body, "path");
+        assertWritableWorkspacePath(relPath);
+        const file = resolveSafePath(attemptRoot, relPath);
         const content = requiredString(body, "content");
         await mkdir(dirname(file), { recursive: true });
         await writeFile(file, content, "utf8");
@@ -170,7 +172,9 @@ async function routeCompat(attemptId, endpoint, body) {
     case "/read-range":
       return readFileRange(attemptRoot, body);
     case "/write": {
-      const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+      const relPath = requiredString(body, "path");
+      assertWritableWorkspacePath(relPath);
+      const file = resolveSafePath(attemptRoot, relPath);
       const content = requiredString(body, "content");
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, content, "utf8");
@@ -276,7 +280,9 @@ async function prepare(body) {
 }
 
 async function patchFile(attemptRoot, body) {
-  const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+  const relPath = requiredString(body, "path");
+  assertWritableWorkspacePath(relPath);
+  const file = resolveSafePath(attemptRoot, relPath);
   const original = await readFile(file, "utf8");
   const ops = Array.isArray(body.ops)
     ? body.ops
@@ -303,7 +309,9 @@ async function patchFile(attemptRoot, body) {
 }
 
 async function appendFile(attemptRoot, body) {
-  const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+  const relPath = requiredString(body, "path");
+  assertWritableWorkspacePath(relPath);
+  const file = resolveSafePath(attemptRoot, relPath);
   const content = requiredString(body, "content");
   const reset = body.reset === true;
   let next = content;
@@ -373,6 +381,7 @@ async function runVerifier(attemptRoot, meta, body) {
   const command = optionalString(body, "command") ?? meta.verifierCommand;
   if (!command) throw new HttpError(400, "No verifier command configured.");
   assertAllowedCommand(meta, command);
+  await assertHarnessFilesUntampered(attemptRoot, meta);
   const result = await runCommand(command, attemptRoot, optionalTimeout(body) ?? meta.timeoutSeconds);
   const resultFile = optionalString(body, "resultFile") ?? meta.verifierResultFile;
   let resultJson = "";
@@ -534,6 +543,60 @@ async function copyFixtureTree(source, target) {
     errorOnExist: false,
     filter: (sourcePath) => basename(sourcePath) !== ".git",
   });
+}
+
+// Files that hold the verifier's own criteria/result. The model under test
+// reaches the workspace through the write/patch endpoints; it must never be
+// able to overwrite these to fake a pass. (The runner itself writes them during
+// prepare via direct fs calls, which bypass these endpoints.)
+const PROTECTED_WORKSPACE_FILES = new Set([
+  "case-meta.json",
+  "verifier.mjs",
+  "verifier-result.json",
+  "negative-control.json",
+  "reference-solution.md",
+  META_FILE,
+]);
+
+function isProtectedWorkspaceFile(relPath) {
+  if (typeof relPath !== "string") return false;
+  const normalized = relPath.replace(/\\/g, "/").replace(/^\.?\//, "");
+  const base = normalized.split("/").pop() ?? normalized;
+  return (
+    PROTECTED_WORKSPACE_FILES.has(normalized) ||
+    PROTECTED_WORKSPACE_FILES.has(base)
+  );
+}
+
+function assertWritableWorkspacePath(relPath) {
+  if (isProtectedWorkspaceFile(relPath)) {
+    throw new HttpError(403, `Refusing to write protected harness file: ${relPath}`);
+  }
+}
+
+// Verify-time backstop: confirm the verifier's own files still match what
+// prepare wrote. Catches tampering through any vector the write guard does not
+// cover (e.g. an allowlisted shell command that overwrites case-meta.json).
+async function assertHarnessFilesUntampered(attemptRoot, meta) {
+  const snapshot = meta?.snapshot ?? {};
+  for (const relPath of Object.keys(snapshot)) {
+    if (!isProtectedWorkspaceFile(relPath)) continue;
+    let current;
+    try {
+      current = await readFile(resolveSafePath(attemptRoot, relPath), "utf8");
+    } catch {
+      throw new HttpError(
+        409,
+        `Protected harness file missing at verify time: ${relPath}`
+      );
+    }
+    if (current !== snapshot[relPath]) {
+      throw new HttpError(
+        409,
+        `Protected harness file modified after prepare: ${relPath}`
+      );
+    }
+  }
 }
 
 function resolveSafePath(attemptRoot, relPath) {

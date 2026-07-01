@@ -11,14 +11,33 @@ import type {
   FireworksVisibleCard,
 } from "./types";
 
+export interface FireworksPlayerViewOptions {
+  /**
+   * Drop the solver "recommendations" hint (known playable cards / playable
+   * clues / safe discards). Used by benchmark prompt paths so the model is not
+   * handed the optimal move — the live game UI keeps the default (hints on).
+   */
+  omitRecommendations?: boolean;
+  /**
+   * Hide the player's OWN resolved card identity (color/rank). Used only for
+   * memory benchmark scenarios that pre-seed knowledge to test recall — the
+   * model must reconstruct identity from notColors/notRanks/clueHistory rather
+   * than reading it off. Never use during live play, where resolved knowledge
+   * is the legitimate result of clues actually given.
+   */
+  redactOwnIdentity?: boolean;
+}
+
 export function getFireworksPlayerView(
   state: FireworksGameState,
-  playerId: string
+  playerId: string,
+  options: FireworksPlayerViewOptions = {}
 ): FireworksPlayerView {
   const player = state.players.find((candidate) => candidate.id === playerId);
   const ownHand = state.hands.find((hand) => hand.playerId === playerId);
   if (!player || !ownHand) throw new Error(`Unknown Fireworks player: ${playerId}.`);
 
+  const redact = options.redactOwnIdentity === true;
   const legalActions = getLegalFireworksActions(state, playerId);
   return {
     gameId: state.id,
@@ -31,19 +50,19 @@ export function getFireworksPlayerView(
       count: ownHand.cards.length,
       cards: ownHand.knowledge.map<FireworksVisibleCard>((knowledge) => ({
         id: null,
-        color: knowledge.color ?? null,
-        rank: knowledge.rank ?? null,
+        color: redact ? null : knowledge.color ?? null,
+        rank: redact ? null : knowledge.rank ?? null,
         knowledge: {
-          color: knowledge.color,
-          rank: knowledge.rank,
+          color: redact ? undefined : knowledge.color,
+          rank: redact ? undefined : knowledge.rank,
           notColors: [...knowledge.notColors],
           notRanks: [...knowledge.notRanks],
           clueHistory: [...knowledge.clueHistory],
         },
       })),
       knowledge: ownHand.knowledge.map((knowledge) => ({
-        color: knowledge.color,
-        rank: knowledge.rank,
+        color: redact ? undefined : knowledge.color,
+        rank: redact ? undefined : knowledge.rank,
         notColors: [...knowledge.notColors],
         notRanks: [...knowledge.notRanks],
         clueHistory: [...knowledge.clueHistory],
@@ -79,7 +98,10 @@ export function getFireworksPlayerView(
       action: { ...event.action } as FireworksAction,
     })),
     legalActions,
-    recommendations: buildRecommendations(state, playerId, legalActions),
+    recommendations:
+      options.omitRecommendations || redact
+        ? { knownPlayableCards: [], visiblePlayableClues: [], safeDiscards: [] }
+        : buildRecommendations(state, playerId, legalActions),
   };
 }
 

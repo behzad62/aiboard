@@ -460,6 +460,7 @@ export interface BenchmarkReportBundleV2
   bundleHash?: string;
   redactionSummary?: {
     scannedArtifacts: number;
+    scannedRecords?: number;
     redactedSecrets: number;
     warnings: string[];
   };

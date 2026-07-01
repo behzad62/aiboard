@@ -1,4 +1,11 @@
-import type { BenchmarkArtifact } from "./types";
+import type {
+  BenchmarkArtifact,
+  BenchmarkFailure,
+  BenchmarkModelCallTrace,
+  BenchmarkRunEvent,
+  BenchmarkToolCallTrace,
+  BenchmarkVerifierResult,
+} from "./types";
 
 export type BenchmarkSecretFindingKind =
   | "openai_api_key"
@@ -25,12 +32,20 @@ export interface BenchmarkSecretScanResult {
 
 export interface BenchmarkRedactionSummary {
   scannedArtifacts: number;
+  /** Total records scanned across every free-text channel (artifacts + traces
+   * + tool-calls + run-events + verifier results + failures). */
+  scannedRecords: number;
   redactedSecrets: number;
   warnings: string[];
 }
 
-interface BenchmarkBundleWithArtifacts {
+interface BenchmarkBundleWithChannels {
   artifacts: BenchmarkArtifact[];
+  traces?: BenchmarkModelCallTrace[];
+  toolCallTraces?: BenchmarkToolCallTrace[];
+  runEvents?: BenchmarkRunEvent[];
+  verifierResults?: BenchmarkVerifierResult[];
+  failures?: BenchmarkFailure[];
   redactionSummary?: BenchmarkRedactionSummary;
 }
 
@@ -158,43 +173,144 @@ const LOCAL_PATH_PATTERNS = [
   /\/Users\/[^/\s"'<>|]+(?:\/[^\s"'<>|]+)*/g,
 ];
 
-export function redactBenchmarkBundle<T extends BenchmarkBundleWithArtifacts>(
+interface RedactionState {
+  redactedSecrets: number;
+  warnings: string[];
+}
+
+/**
+ * Redact one free-text field: push a warning for any blocked finding, strip
+ * known secrets (counted) and absolute local paths. Returns the original value
+ * unchanged when it is not a non-empty string.
+ */
+function redactField<V>(
+  value: V,
+  state: RedactionState,
+  describe: (kind: BenchmarkSecretFindingKind) => string
+): V {
+  if (typeof value !== "string" || value.length === 0) return value;
+  const scan = scanArtifactForSecrets(value);
+  for (const finding of scan.findings) {
+    if (finding.blocked) state.warnings.push(describe(finding.kind));
+  }
+  const secretRedaction = redactKnownSecretsWithCount(value);
+  state.redactedSecrets += secretRedaction.count;
+  return redactAbsoluteLocalPathsWithCount(secretRedaction.content)
+    .content as unknown as V;
+}
+
+export function redactBenchmarkBundle<T extends BenchmarkBundleWithChannels>(
   bundle: T
 ): T & { redactionSummary: BenchmarkRedactionSummary } {
-  let redactedSecrets = 0;
-  const warnings: string[] = [];
+  const state: RedactionState = { redactedSecrets: 0, warnings: [] };
 
-  const artifacts = bundle.artifacts.map((artifact) => {
-    const scanResult = scanArtifactForSecrets(artifact);
-    for (const finding of scanResult.findings) {
-      if (finding.blocked) {
-        warnings.push(
-          `Artifact ${artifact.id} contains blocked ${finding.kind} content.`
-        );
-      }
-    }
+  const artifacts = bundle.artifacts.map((artifact) => ({
+    ...artifact,
+    content: redactField(
+      artifact.content,
+      state,
+      (kind) => `Artifact ${artifact.id} contains blocked ${kind} content.`
+    ),
+  }));
 
-    const secretRedaction = redactKnownSecretsWithCount(artifact.content);
-    redactedSecrets += secretRedaction.count;
-    const pathRedaction = redactAbsoluteLocalPathsWithCount(
-      secretRedaction.content
-    );
+  const traces = bundle.traces?.map((trace) => ({
+    ...trace,
+    rawResponse: redactField(trace.rawResponse, state, traceLabel(trace.id)),
+    parsedResponseJson: redactField(
+      trace.parsedResponseJson,
+      state,
+      traceLabel(trace.id)
+    ),
+    fallbackReason: redactField(trace.fallbackReason, state, traceLabel(trace.id)),
+    error: redactField(trace.error, state, traceLabel(trace.id)),
+    retryHistory: trace.retryHistory.map((retry) => ({
+      ...retry,
+      message: redactField(retry.message, state, traceLabel(trace.id)),
+      rawResponse: redactField(retry.rawResponse, state, traceLabel(trace.id)),
+      parsedJson: redactField(retry.parsedJson, state, traceLabel(trace.id)),
+    })),
+  }));
 
-    return {
-      ...artifact,
-      content: pathRedaction.content,
-    };
-  });
+  const toolCallTraces = bundle.toolCallTraces?.map((tool) => ({
+    ...tool,
+    command: redactField(tool.command, state, toolLabel(tool.id)),
+    inputJson: redactField(tool.inputJson, state, toolLabel(tool.id)),
+    outputPreview: redactField(tool.outputPreview, state, toolLabel(tool.id)),
+    error: redactField(tool.error, state, toolLabel(tool.id)),
+  }));
+
+  const runEvents = bundle.runEvents?.map((event) => ({
+    ...event,
+    message: redactField(event.message, state, eventLabel(event.id)),
+    detailsJson: redactField(event.detailsJson, state, eventLabel(event.id)),
+  }));
+
+  const verifierResults = bundle.verifierResults?.map((result) => ({
+    ...result,
+    command: redactField(result.command, state, verifierLabel(result.id)),
+    stdoutPreview: redactField(
+      result.stdoutPreview,
+      state,
+      verifierLabel(result.id)
+    ),
+    stderrPreview: redactField(
+      result.stderrPreview,
+      state,
+      verifierLabel(result.id)
+    ),
+    resultJson: redactField(result.resultJson, state, verifierLabel(result.id)),
+  }));
+
+  const failures = bundle.failures?.map((failure) => ({
+    ...failure,
+    message: redactField(failure.message, state, failureLabel(failure.id)),
+    details: redactField(failure.details, state, failureLabel(failure.id)),
+  }));
+
+  const scannedRecords =
+    bundle.artifacts.length +
+    (bundle.traces?.length ?? 0) +
+    (bundle.toolCallTraces?.length ?? 0) +
+    (bundle.runEvents?.length ?? 0) +
+    (bundle.verifierResults?.length ?? 0) +
+    (bundle.failures?.length ?? 0);
 
   return {
     ...bundle,
     artifacts,
+    ...(traces ? { traces } : {}),
+    ...(toolCallTraces ? { toolCallTraces } : {}),
+    ...(runEvents ? { runEvents } : {}),
+    ...(verifierResults ? { verifierResults } : {}),
+    ...(failures ? { failures } : {}),
     redactionSummary: {
       scannedArtifacts: bundle.artifacts.length,
-      redactedSecrets,
-      warnings,
+      scannedRecords,
+      redactedSecrets: state.redactedSecrets,
+      warnings: state.warnings,
     },
   };
+}
+
+function traceLabel(id: string) {
+  return (kind: BenchmarkSecretFindingKind) =>
+    `Model-call trace ${id} contains blocked ${kind} content.`;
+}
+function toolLabel(id: string) {
+  return (kind: BenchmarkSecretFindingKind) =>
+    `Tool-call trace ${id} contains blocked ${kind} content.`;
+}
+function eventLabel(id: string) {
+  return (kind: BenchmarkSecretFindingKind) =>
+    `Run event ${id} contains blocked ${kind} content.`;
+}
+function verifierLabel(id: string) {
+  return (kind: BenchmarkSecretFindingKind) =>
+    `Verifier result ${id} contains blocked ${kind} content.`;
+}
+function failureLabel(id: string) {
+  return (kind: BenchmarkSecretFindingKind) =>
+    `Failure ${id} contains blocked ${kind} content.`;
 }
 
 export function scanArtifactForSecrets(

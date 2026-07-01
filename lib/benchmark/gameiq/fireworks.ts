@@ -7,6 +7,16 @@ import {
 import type { FireworksScenario } from "@/lib/benchmark/fireworks/types";
 import type { FireworksGameIqScenario } from "./types";
 
+// Categories whose scenarios pre-seed resolved knowledge to test recall; the
+// model-facing view must hide own-card identity for these so the benchmark
+// measures memory, not transcription.
+const MEMORY_CATEGORIES = new Set([
+  "combine_color_and_rank",
+  "old_clue_recall",
+  "negative_information",
+  "timing_inference",
+]);
+
 function expected(
   action: FireworksAction,
   label: string,
@@ -35,7 +45,11 @@ function toGameIqScenario(input: {
       "You control the active Fireworks player from this hidden-safe player view. Choose one legal action that maximizes team score.",
     initialState: getFireworksPlayerView(
       input.scenario.state,
-      input.scenario.actingPlayerId
+      input.scenario.actingPlayerId,
+      {
+        omitRecommendations: true,
+        redactOwnIdentity: MEMORY_CATEGORIES.has(input.scenario.category),
+      }
     ),
     expectedActions: expected(
       expectedAction.action,

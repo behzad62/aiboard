@@ -208,27 +208,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -446,16 +428,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
+          "knownPlayableCards": [],
           "visiblePlayableClues": [],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -673,27 +648,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -911,27 +868,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -1149,27 +1088,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -1387,27 +1308,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -1625,27 +1528,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -1863,16 +1748,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
+          "knownPlayableCards": [],
           "visiblePlayableClues": [],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -2090,27 +1968,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -2328,37 +2188,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "red"
-            },
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 2
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -2398,11 +2230,9 @@
           "cards": [
             {
               "id": null,
-              "color": "red",
-              "rank": 1,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "red",
-                "rank": 1,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -2444,8 +2274,6 @@
           ],
           "knowledge": [
             {
-              "color": "red",
-              "rank": 1,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -2613,27 +2441,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -2673,11 +2483,9 @@
           "cards": [
             {
               "id": null,
-              "color": "blue",
-              "rank": 2,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "blue",
-                "rank": 2,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -2719,8 +2527,6 @@
           ],
           "knowledge": [
             {
-              "color": "blue",
-              "rank": 2,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -2888,16 +2694,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
+          "knownPlayableCards": [],
           "visiblePlayableClues": [],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -2937,11 +2736,9 @@
           "cards": [
             {
               "id": null,
-              "color": "green",
-              "rank": 3,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "green",
-                "rank": 3,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -2983,8 +2780,6 @@
           ],
           "knowledge": [
             {
-              "color": "green",
-              "rank": 3,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -3152,27 +2947,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -3212,11 +2989,9 @@
           "cards": [
             {
               "id": null,
-              "color": "red",
-              "rank": 4,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "red",
-                "rank": 4,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -3258,8 +3033,6 @@
           ],
           "knowledge": [
             {
-              "color": "red",
-              "rank": 4,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -3427,27 +3200,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -3487,11 +3242,9 @@
           "cards": [
             {
               "id": null,
-              "color": "blue",
-              "rank": 1,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "blue",
-                "rank": 1,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -3533,8 +3286,6 @@
           ],
           "knowledge": [
             {
-              "color": "blue",
-              "rank": 1,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -3702,27 +3453,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -3762,11 +3495,9 @@
           "cards": [
             {
               "id": null,
-              "color": "green",
-              "rank": 2,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "green",
-                "rank": 2,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -3808,8 +3539,6 @@
           ],
           "knowledge": [
             {
-              "color": "green",
-              "rank": 2,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -3977,27 +3706,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -4037,11 +3748,9 @@
           "cards": [
             {
               "id": null,
-              "color": "red",
-              "rank": 3,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "red",
-                "rank": 3,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -4083,8 +3792,6 @@
           ],
           "knowledge": [
             {
-              "color": "red",
-              "rank": 3,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -4252,27 +3959,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -4312,11 +4001,9 @@
           "cards": [
             {
               "id": null,
-              "color": "blue",
-              "rank": 4,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "blue",
-                "rank": 4,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -4358,8 +4045,6 @@
           ],
           "knowledge": [
             {
-              "color": "blue",
-              "rank": 4,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -4527,16 +4212,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
+          "knownPlayableCards": [],
           "visiblePlayableClues": [],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -4576,11 +4254,9 @@
           "cards": [
             {
               "id": null,
-              "color": "green",
-              "rank": 1,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "green",
-                "rank": 1,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -4622,8 +4298,6 @@
           ],
           "knowledge": [
             {
-              "color": "green",
-              "rank": 1,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -4791,27 +4465,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [
@@ -4851,11 +4507,9 @@
           "cards": [
             {
               "id": null,
-              "color": "red",
-              "rank": 2,
+              "color": null,
+              "rank": null,
               "knowledge": {
-                "color": "red",
-                "rank": 2,
                 "notColors": [],
                 "notRanks": [],
                 "clueHistory": [
@@ -4897,8 +4551,6 @@
           ],
           "knowledge": [
             {
-              "color": "red",
-              "rank": 2,
               "notColors": [],
               "notRanks": [],
               "clueHistory": [
@@ -5066,37 +4718,9 @@
           }
         ],
         "recommendations": {
-          "knownPlayableCards": [
-            0
-          ],
-          "visiblePlayableClues": [
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "red"
-            },
-            {
-              "action": "clue_color",
-              "targetPlayerId": "P2",
-              "color": "blue"
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 1
-            },
-            {
-              "action": "clue_rank",
-              "targetPlayerId": "P2",
-              "rank": 2
-            }
-          ],
-          "safeDiscards": [
-            0,
-            1,
-            2,
-            3
-          ]
+          "knownPlayableCards": [],
+          "visiblePlayableClues": [],
+          "safeDiscards": []
         }
       },
       "expectedActions": [

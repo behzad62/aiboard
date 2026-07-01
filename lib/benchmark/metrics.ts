@@ -31,6 +31,7 @@ import {
   buildTeamIqComboMatrixRows,
   buildTeamIqRecommendationCards,
 } from "@/lib/benchmark/teamiq";
+import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
@@ -495,6 +496,9 @@ export function buildCertifiedBenchmarkDashboardData(
       excludedUserAttempts: excludedAttempts.filter(
         (attempt) => attempt.status === "aborted_user"
       ).length,
+      excludedCaseAttempts: excludedAttempts.filter(
+        (attempt) => attempt.status === "invalid_case"
+      ).length,
       certifiedCases: input.caseV2.length,
       certifiedTeams: leaderboard.length,
       verifiedPassRate: rate(
@@ -674,15 +678,11 @@ export function isScoredCertifiedAttempt(
   attempt: BenchmarkAttemptV2
 ): boolean {
   if (!isCertifiedAttempt(attempt)) return false;
-  switch (attempt.status) {
-    case "provider_unavailable":
-    case "invalid_harness":
-    case "invalid_environment":
-    case "aborted_user":
-      return false;
-    default:
-      return true;
-  }
+  // Single source of truth for "invalid for scoring" lives in failures.ts
+  // (INVALID_STATUSES). This includes invalid_case — a broken fixture/setup/
+  // verifier is the harness's fault, not the model's, so it must not count
+  // against the model's pass rate or quality.
+  return !isInvalidCertifiedRun(attempt.status);
 }
 
 function isVerifiedPassed(
@@ -838,6 +838,21 @@ function finiteMetric(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * A participant won if its id equals the winner token, or — for team games like
+ * Codenames where the winner is a team token ("red"/"blue") and seats are
+ * role-suffixed ("red-spymaster") — if its id is on the winning team. 2-player
+ * games (chess/connect-four/battleship) use the participant id as the token, so
+ * exact match still applies.
+ */
+function participantIsWinner(
+  participantId: string,
+  winnerId: string | null | undefined
+): boolean {
+  if (!winnerId) return false;
+  return participantId === winnerId || participantId.startsWith(`${winnerId}-`);
+}
+
 function addGameMatch(input: {
   match: GenericGameMatchRecord;
   scoreFor: (modelId: string, displayName?: string) => MutableScore;
@@ -854,20 +869,42 @@ function addGameMatch(input: {
   const fallbackMoves = readNumber(stats.fallbackMoves);
   const durationMs = readNumber(stats.durationMs);
   const avgAiResponseMs = readNumber(stats.avgAiResponseMs);
-  const perModelMoves = Math.max(1, Math.ceil(moves / Math.max(1, aiParticipants.length)));
-  const perModelInvalid = distributeCount(invalidResponses, aiParticipants.length);
-  const perModelFallback = distributeCount(fallbackMoves, aiParticipants.length);
   const winnerId =
     readString(result.winner) ?? readString(result.result) ?? readString(result.victor);
   const isDraw = Boolean(result.draw) || winnerId === "draw";
 
+  // Collapse seats by distinct modelId so a model occupying multiple seats in a
+  // team game (e.g. Codenames red-spymaster + red-operative) counts the match
+  // once, not once per seat. Distribute move/invalid/fallback counts over
+  // distinct models, not raw seats, so legalActions/invalidActions aren't
+  // inflated.
+  const distinctModelIds = Array.from(
+    new Set(
+      aiParticipants
+        .map((participant) => participant.modelId)
+        .filter((modelId): modelId is string => Boolean(modelId))
+    )
+  );
+  const perModelMoves = Math.max(
+    1,
+    Math.ceil(moves / Math.max(1, distinctModelIds.length))
+  );
+  const perModelInvalid = distributeCount(invalidResponses, distinctModelIds.length);
+  const perModelFallback = distributeCount(fallbackMoves, distinctModelIds.length);
+
   const trend = trendFor(input.trends, input.match.timestamp);
   trend.games += 1;
 
-  for (let i = 0; i < aiParticipants.length; i++) {
-    const participant = aiParticipants[i];
-    if (!participant.modelId) continue;
-    const score = input.scoreFor(participant.modelId);
+  for (let i = 0; i < distinctModelIds.length; i++) {
+    const modelId = distinctModelIds[i];
+    const seats = aiParticipants.filter(
+      (participant) => participant.modelId === modelId
+    );
+    const firstSeat = seats[0];
+    const modelWon =
+      !isDraw &&
+      seats.some((seat) => participantIsWinner(seat.id, winnerId));
+    const score = input.scoreFor(modelId);
     score.games += 1;
     score.completions += 1;
     score.legalActions += perModelMoves;
@@ -883,19 +920,19 @@ function addGameMatch(input: {
       score.latencySamples += 1;
     }
     if (isDraw) score.draws += 1;
-    else if (winnerId === participant.id) score.wins += 1;
+    else if (modelWon) score.wins += 1;
     else score.losses += 1;
-    trend.quality += isDraw ? 50 : winnerId === participant.id ? 100 : 0;
+    trend.quality += isDraw ? 50 : modelWon ? 100 : 0;
 
-    if (invalidResponses > 0) incrementFailure(input.failures, participant.modelId, "invalid_action");
-    if (fallbackMoves > 0) incrementFailure(input.failures, participant.modelId, "fallback_action");
+    if (invalidResponses > 0) incrementFailure(input.failures, modelId, "invalid_action");
+    if (fallbackMoves > 0) incrementFailure(input.failures, modelId, "fallback_action");
 
-    addEvidence(input.evidenceByModel, participant.modelId, {
-      id: `game-match:${input.match.gameId}:${input.match.id}:${participant.id}`,
+    addEvidence(input.evidenceByModel, modelId, {
+      id: `game-match:${input.match.gameId}:${input.match.id}:${modelId}`,
       title: `${input.match.gameId} match`,
       domain: "game",
       timestamp: input.match.timestamp,
-      summary: `${participant.label}: ${isDraw ? "draw" : winnerId === participant.id ? "win" : "loss"} in ${moves} moves.`,
+      summary: `${firstSeat?.label ?? modelId}: ${isDraw ? "draw" : modelWon ? "win" : "loss"} in ${moves} moves.`,
       detailsJson: JSON.stringify(input.match, null, 2),
     });
   }

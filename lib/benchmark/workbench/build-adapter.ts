@@ -263,16 +263,14 @@ function summarizeBuildDiscussionResult(input: {
   durationMs: number;
 }): WorkBenchBuildExecutionResult {
   const traceIds = uniqueStrings(input.traces.map((trace) => trace.id));
-  const priced = input.traces.filter(
-    (trace) => typeof trace.estimatedUsd === "number"
-  );
   return {
     traceIds,
     artifactIds: [],
-    costUsd:
-      priced.length === input.traces.length
-        ? priced.reduce((sum, trace) => sum + (trace.estimatedUsd ?? 0), 0)
-        : null,
+    // Sum the priced traces and return null only when every trace is unpriced
+    // (mirrors the other certified runners' costTotal). The previous
+    // all-or-nothing rule discarded partial cost data and yielded null whenever
+    // any single call lacked pricing.
+    costUsd: costTotal(input.traces.map((trace) => trace.estimatedUsd ?? null)),
     inputTokens: input.traces.reduce(
       (sum, trace) => sum + (trace.inputTokens ?? 0),
       0
@@ -286,6 +284,17 @@ function summarizeBuildDiscussionResult(input: {
     validToolCalls: input.toolCalls,
     durationMs: input.durationMs,
   };
+}
+
+function costTotal(values: Array<number | null>): number | null {
+  if (values.every((value) => value === null)) {
+    return null;
+  }
+  let total = 0;
+  for (const value of values) {
+    total += value ?? 0;
+  }
+  return total;
 }
 
 export interface WorkBenchModelPatchBuildInput

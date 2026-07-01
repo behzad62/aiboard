@@ -533,8 +533,10 @@ function appendRawV2Counts(
   lines.push(`- Team compositions: ${bundle.teamCompositions.length}`);
   lines.push(`- Harness certifications: ${bundle.harnessCertifications.length}`);
   lines.push(
-    `- Redaction scanned artifacts: ${
-      bundle.redactionSummary?.scannedArtifacts ?? 0
+    `- Redaction scanned records (all channels): ${
+      bundle.redactionSummary?.scannedRecords ??
+      bundle.redactionSummary?.scannedArtifacts ??
+      0
     }`
   );
   lines.push(

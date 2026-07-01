@@ -147,6 +147,86 @@ check(
   firstListing.filter((pack) => pack.gameId === "fireworks").map((pack) => ({ id: pack.id, count: pack.scenarios.length }))
 );
 
+const fireworksMemoryPack = firstListing.find(
+  (pack) => pack.id === "gameiq-fireworks-memory-v1"
+);
+check(
+  "Fireworks GameIQ views do not leak optimal-move recommendations",
+  firstListing
+    .filter((pack) => pack.gameId === "fireworks")
+    .every((pack) =>
+      pack.scenarios.every((scenario) => {
+        const recommendations = (
+          scenario.initialState as {
+            recommendations?: {
+              knownPlayableCards?: unknown[];
+              visiblePlayableClues?: unknown[];
+            };
+          }
+        ).recommendations;
+        return (
+          (recommendations?.knownPlayableCards?.length ?? 0) === 0 &&
+          (recommendations?.visiblePlayableClues?.length ?? 0) === 0
+        );
+      })
+    ) === true,
+  "model-facing recommendations must be empty"
+);
+check(
+  "Fireworks memory scenarios hide the player's own resolved identity",
+  fireworksMemoryPack?.scenarios.every((scenario) => {
+    const ownHand = (
+      scenario.initialState as {
+        ownHand?: {
+          cards?: Array<{
+            color?: unknown;
+            rank?: unknown;
+            knowledge?: { color?: unknown; rank?: unknown };
+          }>;
+        };
+      }
+    ).ownHand;
+    return (ownHand?.cards ?? []).every(
+      (card) =>
+        card.color == null &&
+        card.rank == null &&
+        card.knowledge?.color == null &&
+        card.knowledge?.rank == null
+    );
+  }) === true,
+  fireworksMemoryPack?.scenarios.map((scenario) => scenario.initialState)
+);
+
+const connectFourTrapPack = firstListing.find(
+  (pack) => pack.id === "gameiq-v0.1-connect-four"
+);
+const connectFourTraps = (connectFourTrapPack?.scenarios ?? []).filter(
+  (scenario) => scenario.category === "trap-setup"
+);
+check(
+  "Connect Four trap-setup scenarios all create a genuine double threat",
+  connectFourTraps.length > 0 &&
+    connectFourTraps.every((scenario) => validateGameIqScenario(scenario).ok),
+  connectFourTraps
+    .filter((scenario) => !validateGameIqScenario(scenario).ok)
+    .map((scenario) => scenario.id)
+);
+const baseTrap = connectFourTraps[0];
+const brokenTrap = baseTrap
+  ? {
+      ...baseTrap,
+      id: `${baseTrap.id}-broken`,
+      expectedActions: [
+        { ...baseTrap.expectedActions[0], action: { column: 0 } },
+      ],
+    }
+  : null;
+check(
+  "Connect Four trap-setup validator rejects a non-double-threat answer",
+  brokenTrap != null && validateGameIqScenario(brokenTrap).ok === false,
+  brokenTrap ? validateGameIqScenario(brokenTrap) : "no base trap"
+);
+
 const knightQueenTactic = chessPack?.scenarios.find(
   (scenario) => scenario.id === "gameiq-v0.1-chess-knight-wins-queen"
 );

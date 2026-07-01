@@ -232,6 +232,15 @@ check(
     illegalFailures.some((failure) => failure.code === "fireworks_illegal_clue"),
   { illegalAttempts, illegalFailures }
 );
+check(
+  "illegal Fireworks output is not scored via the deterministic fallback",
+  illegalAttempts[0]?.verifiedQuality === 0 &&
+    illegalAttempts[0]?.jobSuccessScore === 0,
+  {
+    verifiedQuality: illegalAttempts[0]?.verifiedQuality,
+    jobSuccessScore: illegalAttempts[0]?.jobSuccessScore,
+  }
+);
 
 async function runIllegalFailureIds(): Promise<string[]> {
   __resetBenchmarkStoreForTests();

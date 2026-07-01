@@ -196,6 +196,59 @@ try {
   const compatRunDenied = await request(baseUrl, `${compatBase}/run`, token, { command: "git push", timeoutSeconds: 10 });
   check("compat run rejects commands outside allowlist", compatRunDenied.status === 403, compatRunDenied);
 
+  // The model under test must not be able to overwrite the verifier's own
+  // ruleset/criteria (case-meta.json, verifier.mjs, etc.) to fake a pass.
+  const tamperWrite = await request(baseUrl, `${compatBase}/write`, token, {
+    path: "case-meta.json",
+    content: "{}",
+  });
+  check("compat write rejects protected harness file (case-meta.json)", tamperWrite.status === 403, tamperWrite);
+  const tamperPatch = await request(baseUrl, `${compatBase}/patch`, token, {
+    path: "verifier.mjs",
+    ops: [{ search: "a", replace: "b" }],
+  });
+  check("compat patch rejects protected harness file (verifier.mjs)", tamperPatch.status === 403, tamperPatch);
+  const tamperBenchWrite = await request(baseUrl, "/bench/write-file", token, {
+    attemptId,
+    path: "verifier-result.json",
+    content: '{"passed":true,"score":1}',
+  });
+  check("bench write-file rejects protected harness file (verifier-result.json)", tamperBenchWrite.status === 403, tamperBenchWrite);
+  const tamperNested = await request(baseUrl, `${compatBase}/write`, token, {
+    path: "src/../case-meta.json",
+    content: "{}",
+  });
+  check("compat write rejects protected file via traversal-normalized path", tamperNested.status === 400 || tamperNested.status === 403, tamperNested);
+
+  // Defense in depth: even if a protected file is changed via an allowlisted
+  // shell command (which the write-endpoint guard does not cover), the verifier
+  // must refuse to score a run whose harness files no longer match prepare.
+  const tamperPrepared = await request(baseUrl, "/bench/prepare", token, {
+    caseId: "workbench-tamper-0001",
+    repoUrl: "fixture://inline",
+    baseCommit: "fixture-base",
+    network: "dependency-only",
+    timeoutSeconds: 30,
+    verifierCommand: "node verify-stub.js",
+    verifierResultFile: "verifier-result.json",
+    allowedCommands: ["node verify-stub.js", "node tamper.js"],
+    files: {
+      "case-meta.json": '{"requiredSnippets":{"src/app.ts":["IMPORTANT"]}}',
+      "verify-stub.js":
+        "const fs=require('fs'); fs.writeFileSync('verifier-result.json', JSON.stringify({passed:true,score:1,summary:'ok',assertions:[]})); console.log('done');",
+      "tamper.js": "const fs=require('fs'); fs.writeFileSync('case-meta.json','{}'); console.log('tampered');",
+    },
+  });
+  const tamperAttempt = String(tamperPrepared.data.attemptId ?? "");
+  await request(baseUrl, "/bench/run-command", token, {
+    attemptId: tamperAttempt,
+    command: "node tamper.js",
+    timeoutSeconds: 10,
+  });
+  const tamperVerify = await request(baseUrl, "/bench/run-verifier", token, { attemptId: tamperAttempt });
+  check("run-verifier rejects a run where a protected harness file was modified", tamperVerify.status === 409, tamperVerify);
+  await request(baseUrl, "/bench/cleanup", token, { attemptId: tamperAttempt });
+
   const verifier = await request(baseUrl, "/bench/run-verifier", token, { attemptId });
   check("run-verifier executes configured verifier", verifier.status === 200 && verifier.data.passed === true && verifier.data.score === 1, verifier);
   check("run-verifier returns verifier result JSON", typeof verifier.data.resultJson === "string" && verifier.data.resultJson.includes("\"passed\":true"), verifier);
