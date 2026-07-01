@@ -6,6 +6,7 @@ import {
   groupFailureClassifications,
   isInvalidCertifiedRun,
 } from "../lib/benchmark/certified/classify-failure";
+import { isProviderFailureMessage } from "../lib/benchmark/certified/classify-provider-failure";
 import { classifyCertifiedRunResult } from "../lib/benchmark/certified/classify-run-result";
 
 let failures = 0;
@@ -170,6 +171,22 @@ check(
     invalidHarness: explainCertifiedFailureStatus("invalid_harness"),
     providerUnavailable: explainCertifiedFailureStatus("provider_unavailable"),
   }
+);
+
+check(
+  "model-call 'timed out' phrasing classifies as a provider failure",
+  isProviderFailureMessage("Certified model call timed out after 120000ms."),
+  "timed out should be provider"
+);
+check(
+  "legacy 'timeout' phrasing still classifies as a provider failure",
+  isProviderFailureMessage("request timeout"),
+  "timeout should be provider"
+);
+check(
+  "non-provider harness error is not a provider failure",
+  !isProviderFailureMessage("internal parser bug"),
+  "harness error should not be provider"
 );
 
 const missingFailure = classifyCertifiedRunResult({

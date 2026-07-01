@@ -307,6 +307,88 @@ check(
   postCallBudgetContext.snapshot().traces
 );
 
+const failPathBudgetContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-budget-failpath",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-budget-failpath"],
+  teamCompositionIds: ["team-budget-failpath"],
+  modelBudget: { maxOutputTokens: 1 },
+});
+await expectReject(
+  "failed model call surfaces budget exhaustion from partial usage",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 64,
+      temperature: 0,
+      context: failPathBudgetContext,
+      caseId: "case-budget-failpath",
+      attemptId: "attempt-budget-failpath",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "token", content: "This partial output intentionally uses several tokens." };
+        yield { type: "error", error: "Provider 503 mid-stream" };
+      },
+    }),
+  /budget|output tokens/i
+);
+check(
+  "failed model call emits a run_blocked budget event",
+  failPathBudgetContext
+    .snapshot()
+    .events.some(
+      (event) =>
+        event.attemptId === "attempt-budget-failpath" &&
+        event.type === "run_blocked" &&
+        event.phase === "budget"
+    ),
+  failPathBudgetContext.snapshot().events
+);
+
+const wallClockContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-wallclock",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-wallclock"],
+  teamCompositionIds: ["team-wallclock"],
+  modelBudget: { maxWallClockMs: 20 },
+});
+await expectReject(
+  "certified model call aborts mid-stream when wall-clock budget is exceeded",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context: wallClockContext,
+      caseId: "case-wallclock",
+      attemptId: "attempt-wallclock",
+      participantId: "single",
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "token", content: "first" };
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        yield { type: "token", content: "second" };
+      },
+    }),
+  /wall.?clock|budget/i
+);
+check(
+  "wall-clock budget aborts before a completed trace is recorded",
+  !wallClockContext
+    .snapshot()
+    .traces.some((trace) => trace.attemptId === "attempt-wallclock"),
+  wallClockContext.snapshot().traces
+);
+
 const timeoutContext = createCertifiedRunContext({
   runId: "run-certified-model-call-timeout",
   suiteId: "suite-model-call",

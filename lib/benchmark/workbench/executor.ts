@@ -2,6 +2,7 @@ import { cleanupBenchRun, getBenchDiff, prepareBenchCase, runBenchVerifier } fro
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatus } from "@/lib/benchmark/types";
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
 import { round } from "@/lib/benchmark/scoring/types";
+import { isProviderFailureMessage } from "@/lib/benchmark/certified/classify-provider-failure";
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
@@ -407,7 +408,7 @@ function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatu
 
 function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
   const message = errorMessage(error).toLowerCase();
-  if (/provider|api key|unauthorized|rate.?limit|quota|timeout/.test(message)) {
+  if (isProviderFailureMessage(message)) {
     return { status: "provider_unavailable", code: "provider_unavailable" };
   }
   if (/budget|token limit|cost limit|wall.?clock/.test(message)) {
