@@ -204,7 +204,7 @@ Rules:
 - "column" is required and must be one of the legal one-based columns.
 - Omit optional fields unless they add clear value.
 - Optional "gesture" values: "thinking", "confident", "confused", "celebrating", "apologetic", "neutral".
-- Optional "utterance" must be under ${CONNECT_FOUR_UTTERANCE_MAX_LENGTH} characters.
+- Optional "utterance" must be short table-talk for the other player. Do not mention columns, threats, blocks, winning lines, calculations, or future plans.
 - Optional "reasoning" must be under ${CONNECT_FOUR_REASONING_MAX_LENGTH} characters.
 - Optional "confidence" must be a number from 0 to 1.
 - Do not include text outside the JSON object.

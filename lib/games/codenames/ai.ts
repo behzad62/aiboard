@@ -1,6 +1,11 @@
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { buildGameAIInteraction } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
+import {
+  buildProvisionalStrategyNoteSection,
+  compactGameAIStrategyNote,
+  GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+} from "@/lib/games/core/strategy-notes";
 import type { StreamChunk, StructuredOutputFormat } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
@@ -56,6 +61,7 @@ export type CodenamesSpymasterMoveResult =
       clue: CodenamesSpymasterAIResponse["clue"];
       intendedWords?: string[];
       riskNotes?: string;
+      strategyNote?: string;
       interaction: GameAIInteraction | null;
       diagnostics?: CodenamesAIDiagnosticAttempt[];
     }
@@ -67,6 +73,7 @@ export type CodenamesGuesserMoveResult =
       guesses: string[];
       interaction: GameAIInteraction | null;
       rationale?: string;
+      strategyNote?: string;
       diagnostics?: CodenamesAIDiagnosticAttempt[];
     }
   | { error: string; diagnostics?: CodenamesAIDiagnosticAttempt[] };
@@ -128,6 +135,9 @@ export function parseCodenamesSpymasterResponseResult(
       : typeof parsed.risk_notes === "string"
         ? compactText(parsed.risk_notes, CODENAMES_DIAGNOSTICS_MAX_LENGTH)
         : undefined;
+  const strategyNote = compactGameAIStrategyNote(
+    parsed.strategyNote ?? parsed.strategy_note
+  );
   const validation = validateCodenamesClue(state, {
     word: clueWord,
     count,
@@ -136,13 +146,14 @@ export function parseCodenamesSpymasterResponseResult(
     return { ok: false, type: "illegal", message: validation.error };
   }
 
-  const interaction = buildGameAIInteraction("spymaster", parsed);
+  const interaction = buildGameAIInteraction(`${state.turnTeam}-spymaster`, parsed);
   return {
     ok: true,
     parsed: {
       clue: validation.clue,
       ...(intendedWords ? { intendedWords: intendedWords.map(normalizeWord) } : {}),
       ...(riskNotes ? { riskNotes } : {}),
+      ...(strategyNote ? { strategyNote } : {}),
       ...(interaction?.gesture ? { gesture: interaction.gesture } : {}),
       ...(interaction?.utterance
         ? { utterance: compactText(interaction.utterance, CODENAMES_UTTERANCE_MAX_LENGTH) }
@@ -239,13 +250,16 @@ export function parseCodenamesGuesserResponseResult(
     guesses.push(card.word);
   }
 
-  const interaction = buildGameAIInteraction("operative", parsed);
+  const interaction = buildGameAIInteraction(`${state.turnTeam}-operative`, parsed);
   const rationale =
     typeof parsed.rationale === "string"
       ? compactText(parsed.rationale, CODENAMES_RATIONALE_MAX_LENGTH)
       : typeof parsed.reasoning === "string"
         ? compactText(parsed.reasoning, CODENAMES_RATIONALE_MAX_LENGTH)
         : undefined;
+  const strategyNote = compactGameAIStrategyNote(
+    parsed.strategyNote ?? parsed.strategy_note
+  );
 
   return {
     ok: true,
@@ -253,6 +267,7 @@ export function parseCodenamesGuesserResponseResult(
       cardIds,
       guesses,
       ...(rationale ? { rationale } : {}),
+      ...(strategyNote ? { strategyNote } : {}),
       ...(interaction?.gesture ? { gesture: interaction.gesture } : {}),
       ...(interaction?.utterance
         ? { utterance: compactText(interaction.utterance, CODENAMES_UTTERANCE_MAX_LENGTH) }
@@ -282,7 +297,7 @@ Rules:
 - Use count 0 only when you want the operative to avoid a danger theme.
 - intendedWords should list your team's target words for this clue for private diagnostics.
 - Avoid clues that point to opponent, neutral, or assassin words.
-- Do not reveal hidden roles in utterance.
+- Optional utterance must be short table-talk for the other players. Do not mention board words, intended words, hidden roles, danger words, guesses, or future plans.
 - Do not include text outside the JSON object.`;
 
   const board = getCodenamesSpymasterBoard(state)
@@ -296,6 +311,11 @@ Rules:
     .filter((card) => card.role !== team && !card.revealed)
     .map((card) => `${card.word}=${card.role.toUpperCase()}`)
     .join(", ");
+  const strategyNote = buildProvisionalStrategyNoteSection(
+    state.aiStrategyNotes?.[team]?.spymaster,
+    "board, clue rules, and legal moves are authoritative"
+  );
+  const strategyNoteBlock = strategyNote ? `\n\n${strategyNote}` : "";
 
   return {
     system,
@@ -304,6 +324,7 @@ ${board}
 
 Unrevealed ${team.toUpperCase()} words: ${ownWords}
 Danger words: ${dangers}
+${strategyNoteBlock}
 
 Give the best legal clue for ${team.toUpperCase()}.`,
   };
@@ -323,6 +344,7 @@ Rules:
 - Choose only visible unrevealed board words.
 - Choose at least 1 and at most the remaining guess allowance.
 - Do not guess revealed words.
+- Optional utterance must be short table-talk for the other players. Do not mention board words, guesses, hidden roles, clue interpretation, or future plans.
 - Do not include text outside the JSON object.`;
   const board = getCodenamesPublicBoard(state)
     .map((card) =>
@@ -331,6 +353,11 @@ Rules:
         : `${card.position} ${card.word}`
     )
     .join("\n");
+  const strategyNote = buildProvisionalStrategyNoteSection(
+    state.aiStrategyNotes?.[team]?.operative,
+    "board, clue rules, and legal moves are authoritative"
+  );
+  const strategyNoteBlock = strategyNote ? `\n\n${strategyNote}` : "";
 
   return {
     system,
@@ -339,6 +366,7 @@ Guesses remaining: ${state.guessesRemaining}
 
 Visible board:
 ${board}
+${strategyNoteBlock}
 
 Choose the best guess or guesses for ${team.toUpperCase()}.`,
   };
@@ -363,6 +391,12 @@ export function buildCodenamesSpymasterResponseFormat(): StructuredOutputFormat 
         riskNotes: {
           type: "string",
           maxLength: CODENAMES_DIAGNOSTICS_MAX_LENGTH,
+        },
+        strategyNote: {
+          type: "string",
+          maxLength: GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+          description:
+            "Optional provisional note for this spymaster's future turns. Keep it short, observational, and re-checkable.",
         },
         gesture: {
           type: "string",
@@ -394,6 +428,12 @@ export function buildCodenamesGuessResponseFormat(): StructuredOutputFormat {
           description: "Visible board words to guess.",
         },
         rationale: { type: "string", maxLength: CODENAMES_RATIONALE_MAX_LENGTH },
+        strategyNote: {
+          type: "string",
+          maxLength: GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+          description:
+            "Optional provisional note for this operative's future turns. Keep it short, observational, and re-checkable.",
+        },
         gesture: {
           type: "string",
           enum: ["thinking", "confident", "confused", "celebrating", "apologetic", "neutral"],
@@ -464,6 +504,7 @@ export async function requestCodenamesSpymasterMove(params: {
     clue: result.parsed.clue,
     intendedWords: result.parsed.intendedWords,
     riskNotes: result.parsed.riskNotes,
+    strategyNote: result.parsed.strategyNote,
     interaction: result.parsed.interaction,
     diagnostics: result.diagnostics,
   };
@@ -501,6 +542,7 @@ export async function requestCodenamesGuesserMove(params: {
     guesses: result.parsed.guesses,
     interaction: result.parsed.interaction,
     rationale: result.parsed.rationale,
+    strategyNote: result.parsed.strategyNote,
     diagnostics: result.diagnostics,
   };
 }

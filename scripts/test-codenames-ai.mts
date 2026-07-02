@@ -70,13 +70,20 @@ const parsedClue = parseCodenamesSpymasterResponse(
   "intendedWords": ["MOON", "STAR"],
   "riskNotes": "Avoid BOMB.",
   "utterance": "Look upward.",
-  "confidence": 0.9
+  "confidence": 0.9,
+  "strategyNote": "Continue grouping safe sky words, but recheck BOMB-adjacent clues before committing."
 }
 \`\`\``
 );
 
 check("spymaster response parses clue", parsedClue?.clue.word === "space", parsedClue);
 check("spymaster response parses count", parsedClue?.clue.count === 2, parsedClue);
+check(
+  "spymaster response retains compact provisional strategy note",
+  parsedClue?.strategyNote ===
+    "Continue grouping safe sky words, but recheck BOMB-adjacent clues before committing.",
+  parsedClue
+);
 check(
   "spymaster response retains private intended words outside public clue",
   parsedClue?.intendedWords?.join(",") === "MOON,STAR" &&
@@ -114,12 +121,18 @@ const clueState = submitCodenamesClue(
 );
 const parsedGuess = parseCodenamesGuesserResponse(
   clueState,
-  `{"guesses":["MOON","STAR"],"rationale":"Both are space words.","gesture":"confident"}`
+  `{"guesses":["MOON","STAR"],"rationale":"Both are space words.","gesture":"confident","strategyNote":"Treat space as likely sky/celestial, but stop if the first reveal is not ours."}`
 );
 
 check(
   "guesser response maps words to card ids",
   parsedGuess?.cardIds.join(",") === "red-1,red-2",
+  parsedGuess
+);
+check(
+  "guesser response retains compact provisional strategy note",
+  parsedGuess?.strategyNote ===
+    "Treat space as likely sky/celestial, but stop if the first reveal is not ours.",
   parsedGuess
 );
 check("guesser response retains rationale", parsedGuess?.rationale === "Both are space words.", parsedGuess);
@@ -162,6 +175,25 @@ check(
     spymasterPrompt.user.includes("BOMB - ASSASSIN"),
   spymasterPrompt.user
 );
+const memoryState = {
+  ...state,
+  aiStrategyNotes: {
+    red: {
+      spymaster: "Try a safe sky clue for MOON and STAR; avoid BOMB risk.",
+      operative: "Prior clue probably pointed to visible sky words.",
+    },
+  },
+};
+const notedSpymasterPrompt = buildCodenamesSpymasterPrompt(memoryState, "red");
+check(
+  "spymaster prompt gets only spymaster-scoped provisional strategy",
+  notedSpymasterPrompt.user.includes("Previous strategic note") &&
+    notedSpymasterPrompt.user.includes("context only") &&
+    notedSpymasterPrompt.user.includes("current board, clue rules, and legal moves are authoritative") &&
+    notedSpymasterPrompt.user.includes("Try a safe sky clue") &&
+    !notedSpymasterPrompt.user.includes("Prior clue probably"),
+  notedSpymasterPrompt.user
+);
 const guesserPrompt = buildCodenamesGuesserPrompt(clueState, "red");
 check(
   "guesser prompt hides hidden roles",
@@ -169,6 +201,19 @@ check(
     !guesserPrompt.user.includes("MOON - RED") &&
     !guesserPrompt.user.includes("ASSASSIN"),
   guesserPrompt.user
+);
+const notedGuesserPrompt = buildCodenamesGuesserPrompt(
+  submitCodenamesClue(memoryState, { word: "space", count: 2 }, 1_000),
+  "red"
+);
+check(
+  "operative prompt gets only operative-scoped provisional strategy",
+  notedGuesserPrompt.user.includes("Previous strategic note") &&
+    notedGuesserPrompt.user.includes("context only") &&
+    notedGuesserPrompt.user.includes("current board, clue rules, and legal moves are authoritative") &&
+    notedGuesserPrompt.user.includes("Prior clue probably") &&
+    !notedGuesserPrompt.user.includes("Try a safe sky clue"),
+  notedGuesserPrompt.user
 );
 
 check(
@@ -180,13 +225,15 @@ check(
   "spymaster structured output requires clue and count",
   JSON.stringify(buildCodenamesSpymasterResponseFormat().schema.required) ===
     JSON.stringify(["clue", "count"]) &&
-    JSON.stringify(buildCodenamesSpymasterResponseFormat().schema).includes('"integer"'),
+    JSON.stringify(buildCodenamesSpymasterResponseFormat().schema).includes('"integer"') &&
+    buildCodenamesSpymasterResponseFormat().schema.properties?.strategyNote?.maxLength === 240,
   buildCodenamesSpymasterResponseFormat()
 );
 check(
   "guesser structured output requires guesses",
   JSON.stringify(buildCodenamesGuessResponseFormat().schema.required) ===
-    JSON.stringify(["guesses"]),
+    JSON.stringify(["guesses"]) &&
+    buildCodenamesGuessResponseFormat().schema.properties?.strategyNote?.maxLength === 240,
   buildCodenamesGuessResponseFormat()
 );
 

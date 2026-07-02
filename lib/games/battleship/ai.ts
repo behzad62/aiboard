@@ -4,6 +4,11 @@ import {
   type GameAIInteractionResult,
 } from "@/lib/games/core/ai-interactions";
 import type { GameAIInteraction } from "@/lib/games/core/types";
+import {
+  buildProvisionalStrategyNoteSection,
+  compactGameAIStrategyNote,
+  GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+} from "@/lib/games/core/strategy-notes";
 import type { StreamChunk, StructuredOutputFormat } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import { isRecoverableGameAIError } from "@/lib/games/core/ai-errors";
@@ -65,6 +70,7 @@ export interface BattleshipAIMoveSuccess
   extends GameAIInteractionResult<BattleshipCoordinate> {
   target: BattleshipCoordinate;
   interaction: GameAIInteraction | null;
+  strategyNote?: string;
 }
 
 export interface BattleshipAIDiagnosticAttempt {
@@ -125,6 +131,9 @@ export function parseBattleshipAIResponse(
         BATTLESHIP_REASONING_MAX_LENGTH
       );
     }
+    response.strategyNote = compactGameAIStrategyNote(
+      parsed.strategyNote ?? parsed.strategy_note
+    );
 
     const interaction = buildGameAIInteraction("ai", parsed);
     if (interaction?.gesture) response.gesture = interaction.gesture;
@@ -230,15 +239,21 @@ Respond with ONLY compact valid JSON like {"target":"A1"}.
 Rules:
 - "target" is required and must be one of the available A1-J10 targets.
 - Omit optional fields unless they add clear value.
-- Optional "utterance" must be under ${BATTLESHIP_UTTERANCE_MAX_LENGTH} characters.
+- Optional "utterance" must be short table-talk for the other player. Do not mention coordinates, ships, hits, misses, search patterns, targets, or future plans.
 - Optional "reasoning" must be under ${BATTLESHIP_REASONING_MAX_LENGTH} characters.
 - Do not include text outside the JSON object.
 - Do not wrap the JSON in markdown code fences.`;
 
+  const strategyNote = buildProvisionalStrategyNoteSection(
+    state.aiStrategyNotes?.[player],
+    "board and legal targets are authoritative"
+  );
+  const strategyNoteBlock = strategyNote ? `\n\n${strategyNote}` : "";
   const user = `You are ${player === "blue" ? "Blue" : "Orange"}.
 
 Previous shots against opponent:
 ${boardIntel(state, player)}
+${strategyNoteBlock}
 
 Available targets: ${availableTargets}
 
@@ -262,6 +277,12 @@ export function buildBattleshipMoveResponseFormat(): StructuredOutputFormat {
           type: "string",
           maxLength: BATTLESHIP_REASONING_MAX_LENGTH,
           description: "Brief target rationale. Omit unless useful.",
+        },
+        strategyNote: {
+          type: "string",
+          maxLength: GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+          description:
+            "Optional provisional note for your future turns. Keep it short, observational, and re-checkable.",
         },
         gesture: {
           type: "string",
@@ -611,6 +632,7 @@ export async function requestBattleshipAIMove(
         action: parsed.target,
         target: parsed.target,
         interaction,
+        ...(parsed.strategyNote ? { strategyNote: parsed.strategyNote } : {}),
         ...(parsed.gesture ? { gesture: parsed.gesture } : {}),
         ...(parsed.utterance ? { utterance: parsed.utterance } : {}),
         ...(parsed.confidence !== undefined ? { confidence: parsed.confidence } : {}),

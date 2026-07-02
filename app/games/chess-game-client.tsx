@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ChevronsLeft,
   ChevronsRight,
+  Clock,
   Pause,
   Play,
   StepBack,
@@ -12,12 +13,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChessBoard } from "@/components/games/ChessBoard";
-import { ChessClock } from "@/components/games/chess/ChessClock";
 import { MoveHistory } from "@/components/games/chess/MoveHistory";
 import { GameControls } from "@/components/games/chess/GameControls";
 import { ExportGameMenu } from "@/components/games/chess/ExportGameMenu";
 import { ImportGameMenu } from "@/components/games/chess/ImportGameMenu";
-import { AIPresence } from "@/components/games/chess/AIPresence";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
 import {
   GameAIConfigPanel,
   type GameAIConfigValue,
@@ -72,6 +72,8 @@ import {
   type ChessSessionSnapshot,
 } from "@/lib/games/chess/session";
 import { listGameSessions } from "@/lib/games/core/session-store";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 import type { ChessPgnMetadata } from "@/lib/games/chess/export";
 
 // Game mode options
@@ -350,19 +352,57 @@ function formatReplayMoveLabel(ply: number, move: MoveRecord | null): string {
 
 type AIConfig = GameAIConfigValue;
 
+function formatBoardPlayerTime(ms: number, isTimed: boolean): string {
+  const normalizedMs = Math.max(0, ms);
+  const totalSeconds = isTimed
+    ? Math.ceil(normalizedMs / 1000)
+    : Math.floor(normalizedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours.toString().padStart(2, "0")}:${minutes
+      .toString()
+      .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }
+  return `${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}`;
+}
+
 function BoardPlayerCard({
   player,
   active,
   testId,
+  timeMs,
+  isTimed,
+  isPaused,
+  aiInteraction,
+  aiThinking,
 }: {
   player: BoardPlayerSummary;
   active: boolean;
   testId: string;
+  timeMs: number;
+  isTimed: boolean;
+  isPaused: boolean;
+  aiInteraction: GameAIInteraction | null;
+  aiThinking: boolean;
 }) {
+  const isWhite = player.color === "white";
+  const isLowTime = isTimed && timeMs <= 30_000;
+  const visibleInteraction =
+    player.kind === "ai"
+      ? aiThinking
+        ? buildGameAIThinkingInteraction(player.color)
+        : aiInteraction
+      : null;
+
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-3 rounded-xl border px-3 py-2 shadow-sm",
+        "rounded-xl border px-3 py-2 shadow-sm",
         "border-slate-200 bg-white/85 text-slate-900",
         "dark:border-slate-700 dark:bg-slate-950/75 dark:text-slate-100",
         active &&
@@ -370,40 +410,71 @@ function BoardPlayerCard({
       )}
       data-testid={testId}
     >
-      <div className="flex min-w-0 items-center gap-3">
-        <div
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div
+            className={cn(
+              "flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border-2 shadow-inner",
+              isWhite
+                ? "border-stone-300 bg-stone-50 text-stone-900"
+                : "border-slate-600 bg-slate-950 text-slate-100"
+            )}
+            aria-hidden="true"
+          >
+            {isWhite ? "W" : "B"}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold leading-tight">
+              {player.title}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <span>{player.subtitle}</span>
+              <span className="h-1 w-1 rounded-full bg-current" />
+              <span>
+                {player.kind === "ai"
+                  ? player.reasoningLabel ?? "R: Off"
+                  : "Human"}
+              </span>
+            </div>
+          </div>
+        </div>
+        <span
           className={cn(
-            "flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border-2 shadow-inner",
-            player.color === "white"
-              ? "border-stone-300 bg-stone-50 text-stone-900"
-              : "border-slate-600 bg-slate-950 text-slate-100"
+            "h-2.5 w-2.5 flex-shrink-0 rounded-full",
+            active
+              ? "bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.16)]"
+              : "bg-slate-300 dark:bg-slate-700"
           )}
-          aria-hidden="true"
-        >
-          {player.color === "white" ? "W" : "B"}
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold leading-tight">
-            {player.title}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            <span>{player.subtitle}</span>
-            <span className="h-1 w-1 rounded-full bg-current" />
-            <span>
-              {player.kind === "ai"
-                ? player.reasoningLabel ?? "R: Off"
-                : "Human"}
-            </span>
-          </div>
-        </div>
+          aria-label={active ? "Active turn" : "Waiting"}
+        />
       </div>
-      <span
-        className={cn(
-          "h-2.5 w-2.5 flex-shrink-0 rounded-full",
-          active ? "bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.16)]" : "bg-slate-300 dark:bg-slate-700"
-        )}
-        aria-label={active ? "Active turn" : "Waiting"}
-      />
+
+      <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-current/10 bg-white/60 px-3 py-2 dark:bg-slate-950/40">
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          {isTimed ? "Remaining" : "Elapsed"}
+        </span>
+        <span
+          className={cn(
+            "font-mono text-lg font-bold tabular-nums",
+            isLowTime
+              ? "text-red-600 dark:text-red-300"
+              : "text-slate-950 dark:text-white",
+            active && !isPaused && "animate-pulse"
+          )}
+          data-testid={`chess-clock-${player.color}`}
+        >
+          {formatBoardPlayerTime(timeMs, isTimed)}
+        </span>
+      </div>
+
+      <div data-testid={aiThinking ? "ai-thinking" : undefined}>
+        <GameAIPresence
+          interaction={visibleInteraction}
+          variant="card"
+          className="mt-3"
+        />
+      </div>
     </div>
   );
 }
@@ -1742,6 +1813,24 @@ export function ChessGameClient({
   );
   const topBoardPlayer = getBoardPlayer(boardFlipped ? "white" : "black");
   const bottomBoardPlayer = getBoardPlayer(boardFlipped ? "black" : "white");
+  const timeForBoardPlayer = (color: PieceColor) =>
+    isTimedGame
+      ? color === "white"
+        ? whiteRemainingMs ?? 0
+        : blackRemainingMs ?? 0
+      : color === "white"
+        ? whiteTimeMs
+        : blackTimeMs;
+  const interactionForBoardPlayer = (color: PieceColor) =>
+    lastAiInteraction?.actorId === color ? lastAiInteraction : null;
+  const aiIsThinkingForBoardPlayer = (player: BoardPlayerSummary) =>
+    Boolean(
+      !isReplayReviewing &&
+        aiThinking &&
+        displayActiveGameStatus &&
+        displayGameState.turn === player.color &&
+        player.kind === "ai"
+    );
   const exportSnapshot = useMemo<ChessSessionSnapshot>(
     () => ({
       gameMode,
@@ -2202,6 +2291,11 @@ export function ChessGameClient({
                     displayGameState.turn === topBoardPlayer.color
                   }
                   testId="board-player-top"
+                  timeMs={timeForBoardPlayer(topBoardPlayer.color)}
+                  isTimed={isTimedGame}
+                  isPaused={isPaused}
+                  aiInteraction={interactionForBoardPlayer(topBoardPlayer.color)}
+                  aiThinking={aiIsThinkingForBoardPlayer(topBoardPlayer)}
                 />
                 <div className="rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-2xl shadow-slate-900/10 dark:border-slate-700/80 dark:bg-slate-950/60 dark:shadow-black/35 sm:p-3">
                   <ChessBoard
@@ -2229,6 +2323,11 @@ export function ChessGameClient({
                     displayGameState.turn === bottomBoardPlayer.color
                   }
                   testId="board-player-bottom"
+                  timeMs={timeForBoardPlayer(bottomBoardPlayer.color)}
+                  isTimed={isTimedGame}
+                  isPaused={isPaused}
+                  aiInteraction={interactionForBoardPlayer(bottomBoardPlayer.color)}
+                  aiThinking={aiIsThinkingForBoardPlayer(bottomBoardPlayer)}
                 />
               </div>
               <CapturedPieces
@@ -2241,32 +2340,6 @@ export function ChessGameClient({
 
           {/* Control Panel */}
           <div className="w-full lg:w-96 lg:max-w-[36%] space-y-4">
-            {/* Clocks */}
-            <div className="flex flex-col gap-3">
-              <ChessClock
-                color="black"
-                timeMs={isTimedGame ? blackRemainingMs ?? 0 : blackTimeMs}
-                isTimed={isTimedGame}
-                isActive={
-                  !isReplayReviewing &&
-                  gameState.turn === "black" &&
-                  activeGameStatus
-                }
-                isPaused={isPaused}
-              />
-              <ChessClock
-                color="white"
-                timeMs={isTimedGame ? whiteRemainingMs ?? 0 : whiteTimeMs}
-                isTimed={isTimedGame}
-                isActive={
-                  !isReplayReviewing &&
-                  gameState.turn === "white" &&
-                  activeGameStatus
-                }
-                isPaused={isPaused}
-              />
-            </div>
-
             {/* Game Status */}
             {showGameStatus && (
               <div
@@ -2294,17 +2367,6 @@ export function ChessGameClient({
               </div>
             )}
 
-            {/* AI Thinking Indicator */}
-            {aiThinking && (
-              <div
-                className="p-4 rounded-xl bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 flex items-center gap-3"
-                data-testid="ai-thinking"
-              >
-                <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
-                <span>AI is thinking...</span>
-              </div>
-            )}
-
             {/* AI Error */}
             {aiError && (
               <div
@@ -2326,8 +2388,6 @@ export function ChessGameClient({
                 <div className="text-sm">{aiWarning}</div>
               </div>
             )}
-
-            <AIPresence interaction={lastAiInteraction} />
 
             <ReplayControls
               moveCount={moveCount}

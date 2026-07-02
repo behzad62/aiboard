@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Copy } from "lucide-react";
-import { GameAIPresence } from "@/components/games/GameAIPresence";
 import type {
   GameAIConfigValue,
   GameAIModelOption,
@@ -864,7 +863,7 @@ export function ConnectFourGameClient({
         : isPaused
           ? "Paused"
           : currentPlayerIsAI
-            ? `${playerLabel(gameState.turn)} AI thinking`
+            ? `${playerLabel(gameState.turn)} is thinking`
             : `${playerLabel(gameState.turn)} to move`;
 
   if (!gameStarted) {
@@ -945,6 +944,16 @@ export function ConnectFourGameClient({
               active={displayActiveGame && displayState.turn === "red"}
               elapsedMs={elapsedForPlayer(displayedClock, "red")}
               winner={displayState.winner === "red"}
+              aiInteraction={
+                lastAiInteraction?.actorId === "red" ? lastAiInteraction : null
+              }
+              aiThinking={
+                !isReplayReviewing &&
+                aiThinking &&
+                displayActiveGame &&
+                displayState.turn === "red" &&
+                redIsAI
+              }
             />
 
             <ConnectFourBoard
@@ -968,6 +977,16 @@ export function ConnectFourGameClient({
               active={displayActiveGame && displayState.turn === "yellow"}
               elapsedMs={elapsedForPlayer(displayedClock, "yellow")}
               winner={displayState.winner === "yellow"}
+              aiInteraction={
+                lastAiInteraction?.actorId === "yellow" ? lastAiInteraction : null
+              }
+              aiThinking={
+                !isReplayReviewing &&
+                aiThinking &&
+                displayActiveGame &&
+                displayState.turn === "yellow" &&
+                yellowIsAI
+              }
             />
           </section>
 
@@ -990,19 +1009,6 @@ export function ConnectFourGameClient({
                 {statusMessage}
               </div>
             </section>
-
-            {aiThinking && (
-              <div
-                className="flex items-center gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sky-800 shadow-sm dark:border-sky-800 dark:bg-sky-950/35 dark:text-sky-200"
-                data-testid="connect-four-ai-thinking"
-              >
-                <span
-                  className="h-5 w-5 animate-spin rounded-full border-2 border-sky-500 border-t-transparent"
-                  aria-hidden="true"
-                />
-                <span className="text-sm font-semibold">AI is thinking...</span>
-              </div>
-            )}
 
             {aiWarning && (
               <div
@@ -1059,8 +1065,6 @@ export function ConnectFourGameClient({
                 </details>
               </section>
             )}
-
-            <GameAIPresence interaction={lastAiInteraction} />
 
             <ConnectFourControls
               status={gameState.status}

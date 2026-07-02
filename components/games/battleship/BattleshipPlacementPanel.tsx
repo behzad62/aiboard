@@ -31,7 +31,7 @@ interface BattleshipPlacementPanelProps {
   onRemoveShip: (shipId: string) => void;
   onAutoPlace: () => void;
   onClear: () => void;
-  onConfirm: () => void;
+  onConfirm: (ships: BattleshipShip[]) => void;
 }
 
 export function BattleshipPlacementPanel({
@@ -151,10 +151,11 @@ export function BattleshipPlacementPanel({
             </button>
             <button
               type="button"
-              onClick={onConfirm}
+              onClick={() => onConfirm(ships)}
               disabled={!canConfirm}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
               data-testid="battleship-confirm-placement"
+              data-ship-count={ships.length}
             >
               <Check className="h-4 w-4" aria-hidden="true" />
               Confirm fleet

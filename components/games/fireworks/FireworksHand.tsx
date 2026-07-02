@@ -21,7 +21,10 @@ export function FireworksHand({
 }) {
   return (
     <section className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+      <div
+        className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950"
+        data-testid="fireworks-hidden-hand"
+      >
         <div className="mb-3 flex items-center justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
@@ -54,7 +57,10 @@ export function FireworksHand({
 
 function VisibleHand({ hand }: { hand: FireworksVisibleHand }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+    <div
+      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950"
+      data-testid={`fireworks-visible-hand-${hand.playerId}`}
+    >
       <div className="mb-3 flex items-center justify-between">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">

@@ -56,11 +56,13 @@ export interface BattleshipGameState {
   status: BattleshipStatus;
   winner: BattleshipPlayer | null;
   moveHistory: BattleshipMoveRecord[];
+  aiStrategyNotes?: Partial<Record<BattleshipPlayer, string>>;
 }
 
 export interface BattleshipAIResponse {
   target: BattleshipCoordinate;
   reasoning?: string;
+  strategyNote?: string;
   gesture?: GameAIInteraction["gesture"];
   utterance?: string;
   confidence?: number;

@@ -1,4 +1,9 @@
 import type { ReasoningEffort } from "@/lib/db/schema";
+import {
+  buildProvisionalStrategyNoteSection,
+  compactGameAIStrategyNote,
+  GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+} from "@/lib/games/core/strategy-notes";
 import type {
   ChatParams,
   StreamChunk,
@@ -18,6 +23,7 @@ import {
   fireworksActionsEqual,
   getLegalFireworksActions,
   isPlayableCard,
+  withFireworksAIStrategyNote,
 } from "./engine";
 import {
   getFireworksPlayerView,
@@ -40,7 +46,12 @@ export interface FireworksAIModelOption {
 }
 
 export type FireworksAIParseResult =
-  | { ok: true; action: FireworksAction; parsedResponseJson: string }
+  | {
+      ok: true;
+      action: FireworksAction;
+      parsedResponseJson: string;
+      strategyNote?: string;
+    }
   | {
       ok: false;
       type: "parse" | "illegal";
@@ -55,7 +66,14 @@ export function buildFireworksActionSchema(): StructuredOutputFormat {
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["action", "targetPlayerId", "color", "rank", "cardIndex"],
+      required: [
+        "action",
+        "targetPlayerId",
+        "color",
+        "rank",
+        "cardIndex",
+        "strategyNote",
+      ],
       properties: {
         action: {
           type: "string",
@@ -65,6 +83,10 @@ export function buildFireworksActionSchema(): StructuredOutputFormat {
         color: { type: ["string", "null"], enum: ["red", "blue", "green", null] },
         rank: { type: ["integer", "null"], enum: [1, 2, 3, 4, 5, null] },
         cardIndex: { type: ["integer", "null"] },
+        strategyNote: {
+          type: ["string", "null"],
+          maxLength: GAME_AI_STRATEGY_NOTE_MAX_LENGTH,
+        },
       },
     },
   };
@@ -76,6 +98,11 @@ export function buildFireworksPrompt(
   options: FireworksPlayerViewOptions = {}
 ): { system: string; user: string } {
   const view = getFireworksPlayerView(state, playerId, options);
+  const strategyNote = buildProvisionalStrategyNoteSection(
+    state.aiStrategyNotes?.[playerId],
+    "hidden-safe view and legal actions are authoritative"
+  );
+  const strategyNoteBlock = strategyNote ? `\n\n${strategyNote}` : "";
   return {
     system: `You are playing Fireworks, a cooperative hidden-information card game.
 
@@ -88,6 +115,7 @@ Avoid playing unknown cards, discarding critical cards, illegal clues, and self-
 In AI Board Fireworks, when the deck is empty, play continues until hands are empty or the benchmark turn limit is reached.
 Return only compact JSON for one legal action.`,
     user: `You are ${playerId}.
+${strategyNoteBlock}
 
 Current hidden-safe player view JSON:
 ${JSON.stringify(view)}
@@ -131,10 +159,17 @@ export function parseFireworksActionResponseResult(
     };
   }
 
+  const strategyNote = compactGameAIStrategyNote(
+    parsed.strategyNote ?? parsed.strategy_note
+  );
   return {
     ok: true,
     action,
-    parsedResponseJson: JSON.stringify(action),
+    parsedResponseJson: JSON.stringify({
+      ...action,
+      strategyNote: strategyNote ?? null,
+    }),
+    ...(strategyNote ? { strategyNote } : {}),
   };
 }
 
@@ -266,6 +301,7 @@ export async function requestFireworksAiAction(params: {
         legal: true,
         fallbackUsed: false,
         latencyMs: Date.now() - startedAt,
+        ...(parsed.strategyNote ? { strategyNote: parsed.strategyNote } : {}),
       };
     }
     return {
@@ -294,9 +330,12 @@ export function applyFireworksAiResult(
   result: FireworksAiActionResult
 ): FireworksGameState {
   if (!result.action) return state;
-  return applyFireworksAction(state, playerId, result.action, {
+  const next = applyFireworksAction(state, playerId, result.action, {
     fallbackUsed: result.fallbackUsed,
   });
+  return result.fallbackUsed
+    ? next
+    : withFireworksAIStrategyNote(next, playerId, result.strategyNote);
 }
 
 function normalizeFireworksAction(parsed: Record<string, unknown>): FireworksAction | null {

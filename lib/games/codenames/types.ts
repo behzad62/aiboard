@@ -79,6 +79,9 @@ export interface CodenamesGameState {
   guessesRemaining: number;
   guessesMadeForActiveClue: number;
   moveHistory: CodenamesMoveRecord[];
+  aiStrategyNotes?: Partial<
+    Record<CodenamesTeam, Partial<Record<CodenamesPlayerRole, string>>>
+  >;
 }
 
 export interface CodenamesAIConfig {
@@ -90,6 +93,7 @@ export interface CodenamesSpymasterAIResponse {
   clue: CodenamesClue;
   intendedWords?: string[];
   riskNotes?: string;
+  strategyNote?: string;
   gesture?: GameAIInteraction["gesture"];
   utterance?: string;
   confidence?: number;
@@ -100,6 +104,7 @@ export interface CodenamesGuesserAIResponse {
   cardIds: string[];
   guesses: string[];
   rationale?: string;
+  strategyNote?: string;
   gesture?: GameAIInteraction["gesture"];
   utterance?: string;
   confidence?: number;

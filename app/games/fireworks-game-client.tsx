@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bot, RefreshCw, RotateCcw, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
 import { FireworksActionPanel } from "@/components/games/fireworks/FireworksActionPanel";
 import { FireworksBoard } from "@/components/games/fireworks/FireworksBoard";
 import { FireworksClueHistory } from "@/components/games/fireworks/FireworksClueHistory";
@@ -17,6 +18,7 @@ import {
 import { getFireworksPlayerView } from "@/lib/games/fireworks/hidden-view";
 import {
   chooseDeterministicFireworksFallback,
+  applyFireworksAiResult,
   getFireworksAIModels,
   getFireworksModelApiKey,
   getFireworksModelBaseURL,
@@ -28,6 +30,8 @@ import type {
   FireworksGameState,
   FireworksPlayer,
 } from "@/lib/games/fireworks/types";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 import type { ReasoningEffort } from "@/lib/db/schema";
 
 type FireworksMode = "pvp" | "pvai" | "aivai";
@@ -41,6 +45,7 @@ const EMPTY_AI_CONFIG: FireworksAIConfig = {
   modelId: "",
   reasoningEffort: "none",
 };
+const FIREWORKS_FALLBACK_TURN_DELAY_MS = 250;
 
 export function FireworksGameClient({
   onBackToGames,
@@ -57,6 +62,8 @@ export function FireworksGameClient({
     createFireworksGame({ seed: "fireworks-ui" })
   );
   const [aiThinking, setAiThinking] = useState(false);
+  const [lastAiInteraction, setLastAiInteraction] =
+    useState<GameAIInteraction | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const aiRequestRef = useRef(0);
 
@@ -82,6 +89,10 @@ export function FireworksGameClient({
   );
   const canHumanAct =
     started && state.status === "playing" && !aiThinking && !currentSeatIsAI;
+  const seatInteraction =
+    currentSeatIsAI && aiThinking
+      ? buildGameAIThinkingInteraction(currentPlayer.id)
+      : lastAiInteraction;
 
   const startGame = useCallback(() => {
     const players: FireworksPlayer[] = Array.from({ length: playerCount }, (_, index) => {
@@ -103,6 +114,7 @@ export function FireworksGameClient({
       })
     );
     setMessage(null);
+    setLastAiInteraction(null);
     setStarted(true);
   }, [aiConfig.modelId, humanPlayerId, mode, playerCount]);
 
@@ -130,14 +142,24 @@ export function FireworksGameClient({
       const player = getCurrentPlayer(requestState);
       try {
         const apiKey = aiConfig.modelId ? getFireworksModelApiKey(aiConfig.modelId) : null;
-        const result =
+        const configuredModel =
           aiConfig.modelId && apiKey
+            ? { modelId: aiConfig.modelId, apiKey }
+            : null;
+        if (!configuredModel) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, FIREWORKS_FALLBACK_TURN_DELAY_MS)
+          );
+          if (abortController.signal.aborted) return;
+        }
+        const result =
+          configuredModel
             ? await requestFireworksAiAction({
                 state: requestState,
                 playerId: player.id,
-                modelId: aiConfig.modelId,
+                modelId: configuredModel.modelId,
                 reasoningEffort: aiConfig.reasoningEffort,
-                apiKey,
+                apiKey: configuredModel.apiKey,
                 baseURL: getFireworksModelBaseURL(aiConfig.modelId),
                 signal: abortController.signal,
               })
@@ -150,20 +172,33 @@ export function FireworksGameClient({
                 error: aiConfig.modelId ? "Missing API key." : "No AI model selected.",
               };
         if (aiRequestRef.current !== requestId || abortController.signal.aborted) return;
-        if (result.error) {
+        if (result.error && aiConfig.modelId) {
           setMessage(`${player.label}: ${result.error} A legal fallback was used.`);
         }
         if (result.action) {
+          setLastAiInteraction({
+            actorId: player.id,
+            gesture: result.fallbackUsed ? "confused" : "confident",
+            utterance: result.fallbackUsed
+              ? "I need to clean that up."
+              : "I like this turn.",
+            ...(result.error ? { diagnostics: result.error } : {}),
+          });
           setState((current) =>
             current === requestState
-              ? applyFireworksAction(current, player.id, result.action!, {
-                  fallbackUsed: result.fallbackUsed,
-                })
+              ? applyFireworksAiResult(current, player.id, result)
               : current
           );
         }
       } catch (error) {
         if (aiRequestRef.current !== requestId || abortController.signal.aborted) return;
+        setLastAiInteraction({
+          actorId: player.id,
+          gesture: "confused",
+          utterance: "I need to clean that up.",
+          diagnostics:
+            error instanceof Error ? error.message : "Fireworks AI turn failed.",
+        });
         setMessage(error instanceof Error ? error.message : "Fireworks AI turn failed.");
       } finally {
         if (aiRequestRef.current === requestId) setAiThinking(false);
@@ -297,11 +332,13 @@ export function FireworksGameClient({
               {currentPlayer.label}
             </div>
             {aiThinking && (
-              <div className="mt-3 inline-flex items-center gap-2 text-sm text-sky-700 dark:text-sky-300">
-                <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-                AI thinking
-              </div>
+              <RefreshCw className="mt-3 h-4 w-4 animate-spin text-sky-700 dark:text-sky-300" aria-hidden="true" />
             )}
+            <GameAIPresence
+              interaction={seatInteraction}
+              variant="card"
+              className="mt-3"
+            />
             {message && (
               <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-200">
                 {message}

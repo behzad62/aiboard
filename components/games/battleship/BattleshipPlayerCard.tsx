@@ -1,6 +1,9 @@
 "use client";
 
 import { Bot, User } from "lucide-react";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 import type {
   BattleshipPlayer,
   BattleshipPlayerBoard,
@@ -19,6 +22,8 @@ interface BattleshipPlayerCardProps {
   modelName?: string;
   reasoning?: string;
   board: BattleshipPlayerBoard;
+  aiInteraction?: GameAIInteraction | null;
+  aiThinking?: boolean;
 }
 
 export function BattleshipPlayerCard({
@@ -28,12 +33,21 @@ export function BattleshipPlayerCard({
   modelName,
   reasoning,
   board,
+  aiInteraction = null,
+  aiThinking = false,
 }: BattleshipPlayerCardProps) {
   const remaining = remainingShipCells(board);
   const sunk = sunkShipCount(board);
+  const visibleInteraction =
+    isAI
+      ? aiThinking
+        ? buildGameAIThinkingInteraction(player)
+        : aiInteraction
+      : null;
 
   return (
     <section
+      data-testid={`battleship-player-${player}`}
       className={cn(
         "rounded-xl border bg-white p-4 shadow-sm dark:bg-slate-950",
         player === "blue"
@@ -88,6 +102,11 @@ export function BattleshipPlayerCard({
           <div className="mt-1 font-semibold">{sunk}/5 ships</div>
         </div>
       </div>
+      <GameAIPresence
+        interaction={visibleInteraction}
+        variant="card"
+        className="mt-3"
+      />
     </section>
   );
 }

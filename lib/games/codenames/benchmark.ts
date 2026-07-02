@@ -7,6 +7,7 @@ import {
   getCodenamesPublicBoard,
   submitCodenamesClue,
   submitCodenamesGuess,
+  withCodenamesAIStrategyNote,
 } from "./engine";
 import {
   getCodenamesModelApiKey,
@@ -238,6 +239,12 @@ export async function runCodenamesAIBenchmark(
     } else {
       state = submitCodenamesClue(state, clueResult.clue, Date.now());
       state = attachInteractionToLatestMove(state, clueResult.interaction);
+      state = withCodenamesAIStrategyNote(
+        state,
+        team,
+        "spymaster",
+        clueResult.strategyNote
+      );
     }
     turns++;
 
@@ -268,6 +275,12 @@ export async function runCodenamesAIBenchmark(
         try {
           state = submitCodenamesGuess(state, cardId, Date.now());
           state = attachInteractionToLatestMove(state, guessResult.interaction);
+          state = withCodenamesAIStrategyNote(
+            state,
+            team,
+            "operative",
+            guessResult.strategyNote
+          );
           guessed = true;
         } catch {
           invalidResponses++;

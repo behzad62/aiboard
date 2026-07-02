@@ -9,7 +9,9 @@ import type {
   CodenamesPublicCard,
   CodenamesStatus,
   CodenamesTeam,
+  CodenamesPlayerRole,
 } from "./types";
+import { compactGameAIStrategyNote } from "@/lib/games/core/strategy-notes";
 
 export const CODENAMES_GRID_SIZE = 5;
 export const CODENAMES_CARD_COUNT = CODENAMES_GRID_SIZE * CODENAMES_GRID_SIZE;
@@ -128,6 +130,18 @@ function cloneState(state: CodenamesGameState): CodenamesGameState {
     cards: state.cards.map(cloneCard),
     activeClue: state.activeClue ? { ...state.activeClue } : null,
     moveHistory: state.moveHistory.map((move) => ({ ...move })),
+    ...(state.aiStrategyNotes
+      ? {
+          aiStrategyNotes: {
+            red: state.aiStrategyNotes.red
+              ? { ...state.aiStrategyNotes.red }
+              : undefined,
+            blue: state.aiStrategyNotes.blue
+              ? { ...state.aiStrategyNotes.blue }
+              : undefined,
+          },
+        }
+      : {}),
   };
 }
 
@@ -429,6 +443,26 @@ export function setCodenamesPaused(
     return { ...cloneState(state), status: "playing" };
   }
   return cloneState(state);
+}
+
+export function withCodenamesAIStrategyNote(
+  state: CodenamesGameState,
+  team: CodenamesTeam,
+  role: CodenamesPlayerRole,
+  note: string | undefined
+): CodenamesGameState {
+  const compact = compactGameAIStrategyNote(note);
+  if (!compact) return state;
+  return {
+    ...state,
+    aiStrategyNotes: {
+      ...(state.aiStrategyNotes ?? {}),
+      [team]: {
+        ...(state.aiStrategyNotes?.[team] ?? {}),
+        [role]: compact,
+      },
+    },
+  };
 }
 
 export function isCodenamesActiveStatus(status: CodenamesStatus): boolean {

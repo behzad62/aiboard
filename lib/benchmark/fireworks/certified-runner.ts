@@ -31,6 +31,7 @@ import {
   createFireworksGame,
   getCurrentPlayer,
   scoreFireworksState,
+  withFireworksAIStrategyNote,
 } from "@/lib/games/fireworks/engine";
 import {
   buildFireworksActionSchema,
@@ -86,6 +87,7 @@ interface FireworksActionCall {
   action: FireworksAction;
   rawResponse: string;
   parsedResponseJson?: string;
+  strategyNote?: string;
   call: FireworksCallRecord;
 }
 
@@ -334,12 +336,19 @@ async function runScenarioCase(params: {
     calls: params.calls,
     failures: params.failures,
   });
-  const nextState = applyFireworksAction(
+  const appliedState = applyFireworksAction(
     state,
     params.benchmarkCase.actingPlayerId,
     call.action,
     { fallbackUsed: call.call.fallbackUsed }
   );
+  const nextState = call.call.fallbackUsed
+    ? appliedState
+    : withFireworksAIStrategyNote(
+        appliedState,
+        params.benchmarkCase.actingPlayerId,
+        call.strategyNote
+      );
   // When the model's output was unparseable/illegal we substitute a strong
   // deterministic fallback action only to advance the simulation — it must NOT
   // earn the model scenario credit. Score it 0 so the >= 0.7 assertion fails.
@@ -424,9 +433,12 @@ async function runFullGameCase(params: {
     });
     totalTurns += 1;
     if (call.call.fallbackUsed) fallbackTurns += 1;
-    state = applyFireworksAction(state, playerId, call.action, {
+    const appliedState = applyFireworksAction(state, playerId, call.action, {
       fallbackUsed: call.call.fallbackUsed,
     });
+    state = call.call.fallbackUsed
+      ? appliedState
+      : withFireworksAIStrategyNote(appliedState, playerId, call.strategyNote);
   }
 
   const metrics = computeFireworksGameMetrics({ state });
@@ -537,6 +549,7 @@ async function callFireworksAction(params: {
         action: parsed.action,
         rawResponse: call.rawResponse,
         parsedResponseJson: parsed.parsedResponseJson,
+        strategyNote: parsed.strategyNote,
         call: record,
       };
     }

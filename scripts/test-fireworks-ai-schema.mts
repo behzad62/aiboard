@@ -2,6 +2,7 @@
 import { createFireworksGame } from "../lib/games/fireworks/engine";
 import {
   buildFireworksActionSchema,
+  buildFireworksPrompt,
   chooseDeterministicFireworksFallback,
   parseFireworksActionResponseResult,
 } from "../lib/games/fireworks/ai";
@@ -37,7 +38,9 @@ check(
 check(
   "strict structured schema requires every Fireworks action property",
   JSON.stringify(sortedRequired) ===
-    JSON.stringify(["action", "cardIndex", "color", "rank", "targetPlayerId"].sort()),
+    JSON.stringify(
+      ["action", "cardIndex", "color", "rank", "strategyNote", "targetPlayerId"].sort()
+    ),
   schema
 );
 check(
@@ -62,15 +65,30 @@ check(
     JSON.stringify([1, 2, 3, 4, 5, null]),
   schemaProperties.rank
 );
+check(
+  "structured schema allows nullable provisional strategy notes",
+  JSON.stringify((schemaProperties.strategyNote as { type?: unknown } | undefined)?.type) ===
+    JSON.stringify(["string", "null"]) &&
+    (schemaProperties.strategyNote as { maxLength?: unknown } | undefined)?.maxLength === 240,
+  schemaProperties.strategyNote
+);
 
+const parsedClueColor = parseFireworksActionResponseResult(
+  state,
+  "P1",
+  '{"action":"clue_color","targetPlayerId":"P2","color":"red","reason":"playable","strategyNote":"Clue playable ones first, but recheck current hands each turn."}'
+);
 check(
   "valid clue_color parses",
-  parseFireworksActionResponseResult(
-    state,
-    "P1",
-    '{"action":"clue_color","targetPlayerId":"P2","color":"red","reason":"playable"}'
-  ).ok,
-  null
+  parsedClueColor.ok,
+  parsedClueColor
+);
+check(
+  "valid clue_color retains compact provisional strategy note",
+  parsedClueColor.ok &&
+    parsedClueColor.strategyNote ===
+      "Clue playable ones first, but recheck current hands each turn.",
+  parsedClueColor
 );
 check(
   "valid clue_rank parses",
@@ -126,6 +144,24 @@ check(
   "fallback always returns a legal action",
   parseFireworksActionResponseResult(state, "P1", JSON.stringify(fallback)).ok,
   fallback
+);
+
+const notedPrompt = buildFireworksPrompt(
+  {
+    ...state,
+    aiStrategyNotes: {
+      P1: "P2 has a playable red 1; prefer a clue if tokens remain.",
+    },
+  },
+  "P1"
+);
+check(
+  "Fireworks prompt frames prior strategy as provisional context",
+  notedPrompt.user.includes("Previous strategic note") &&
+    notedPrompt.user.includes("context only") &&
+    notedPrompt.user.includes("current hidden-safe view and legal actions are authoritative") &&
+    notedPrompt.user.includes("P2 has a playable red 1"),
+  notedPrompt.user
 );
 
 if (failures === 0) {

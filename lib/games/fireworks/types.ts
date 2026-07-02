@@ -96,6 +96,7 @@ export interface FireworksGameState {
   turn: number;
   status: "playing" | "completed" | "failed";
   events: FireworksEvent[];
+  aiStrategyNotes?: Record<string, string>;
 }
 
 export interface FireworksVisibleCard {
@@ -149,6 +150,7 @@ export interface FireworksAiActionResult {
   legal: boolean;
   fallbackUsed: boolean;
   latencyMs: number;
+  strategyNote?: string;
   traceId?: string;
   error?: string;
 }

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ClipboardCopy, Pause, Play, RotateCcw } from "lucide-react";
-import { GameAIPresence } from "@/components/games/GameAIPresence";
 import type {
   GameAIConfigValue,
   GameAIModelOption,
@@ -40,6 +39,7 @@ import {
   submitCodenamesClue,
   submitCodenamesGuess,
   validateCodenamesClue,
+  withCodenamesAIStrategyNote,
 } from "@/lib/games/codenames/engine";
 import {
   CODENAMES_ACTIVE_SESSION_ID,
@@ -131,24 +131,30 @@ function applyClueWithInteraction(
   state: CodenamesGameState,
   clue: CodenamesClue,
   timestamp: number,
-  interaction: GameAIInteraction | null
+  interaction: GameAIInteraction | null,
+  strategyNote?: string
 ): CodenamesGameState {
-  return attachAIInteractionToLatestMove(
+  const team = state.turnTeam;
+  const next = attachAIInteractionToLatestMove(
     submitCodenamesClue(state, clue, timestamp),
     interaction
   );
+  return withCodenamesAIStrategyNote(next, team, "spymaster", strategyNote);
 }
 
 function applyGuessWithInteraction(
   state: CodenamesGameState,
   cardId: string,
   timestamp: number,
-  interaction: GameAIInteraction | null
+  interaction: GameAIInteraction | null,
+  strategyNote?: string
 ): CodenamesGameState {
-  return attachAIInteractionToLatestMove(
+  const team = state.turnTeam;
+  const next = attachAIInteractionToLatestMove(
     submitCodenamesGuess(state, cardId, timestamp),
     interaction
   );
+  return withCodenamesAIStrategyNote(next, team, "operative", strategyNote);
 }
 
 function shouldPersistCodenamesSnapshot(snapshot: CodenamesSessionSnapshot): boolean {
@@ -356,13 +362,29 @@ export function CodenamesGameClient({
       gameState.status === "win" ||
       currentPrivateView?.role === "spymaster");
   const canExportFullSnapshot = gameState.status === "win" || gameMode === "aivai";
-  const visibleAiInteraction =
-    activeGame &&
-    lastAiInteraction?.actorId.endsWith("-spymaster") &&
-    gameMode !== "aivai" &&
-    currentPrivateView?.role !== "spymaster"
-      ? null
-      : lastAiInteraction;
+  const visibleInteractionForRole = (
+    team: CodenamesTeam,
+    role: CodenamesPlayerRole
+  ) => {
+    const id = actorId(team, role);
+    if (lastAiInteraction?.actorId !== id) return null;
+    if (
+      activeGame &&
+      role === "spymaster" &&
+      gameMode !== "aivai" &&
+      currentPrivateView?.role !== "spymaster"
+    ) {
+      return null;
+    }
+    return lastAiInteraction;
+  };
+  const roleIsThinking = (team: CodenamesTeam, role: CodenamesPlayerRole) =>
+    Boolean(
+      aiThinking &&
+        currentSeatIsAI &&
+        neededSeat?.team === team &&
+        neededSeat.role === role
+    );
 
   const invalidateAIRequests = useCallback(() => {
     aiRequestVersionRef.current += 1;
@@ -702,7 +724,13 @@ export function CodenamesGameClient({
             setLastAiInteraction(result.interaction);
             setGameState((prev) =>
               prev === requestState
-                ? applyClueWithInteraction(prev, result.clue, Date.now(), result.interaction)
+                ? applyClueWithInteraction(
+                    prev,
+                    result.clue,
+                    Date.now(),
+                    result.interaction,
+                    result.strategyNote
+                  )
                 : prev
             );
             return;
@@ -754,7 +782,8 @@ export function CodenamesGameClient({
                 next,
                 cardId,
                 Date.now(),
-                result.interaction
+                result.interaction,
+                result.strategyNote
               );
             }
             return next;
@@ -836,7 +865,7 @@ export function CodenamesGameClient({
       : isPaused || gameState.status === "paused"
         ? "Paused"
         : currentSeatIsAI
-          ? `${teamLabel(gameState.turnTeam)} ${roleLabel(gameState.phase === "clue" ? "spymaster" : "operative")} AI thinking`
+          ? `${teamLabel(gameState.turnTeam)} ${roleLabel(gameState.phase === "clue" ? "spymaster" : "operative")} is thinking`
           : `${teamLabel(gameState.turnTeam)} ${gameState.phase === "clue" ? "spymaster clue" : "operatives guess"}`;
 
   if (!gameStarted) {
@@ -931,6 +960,16 @@ export function CodenamesGameClient({
                   }
                   spymasterReasoning={redSpymasterAI.reasoningEffort}
                   operativeReasoning={redOperativeAI.reasoningEffort}
+                  spymasterInteraction={visibleInteractionForRole(
+                    "red",
+                    "spymaster"
+                  )}
+                  operativeInteraction={visibleInteractionForRole(
+                    "red",
+                    "operative"
+                  )}
+                  spymasterThinking={roleIsThinking("red", "spymaster")}
+                  operativeThinking={roleIsThinking("red", "operative")}
                   winner={gameState.winner === "red"}
                 />
                 <CodenamesTeamPanel
@@ -951,6 +990,16 @@ export function CodenamesGameClient({
                   }
                   spymasterReasoning={blueSpymasterAI.reasoningEffort}
                   operativeReasoning={blueOperativeAI.reasoningEffort}
+                  spymasterInteraction={visibleInteractionForRole(
+                    "blue",
+                    "spymaster"
+                  )}
+                  operativeInteraction={visibleInteractionForRole(
+                    "blue",
+                    "operative"
+                  )}
+                  spymasterThinking={roleIsThinking("blue", "spymaster")}
+                  operativeThinking={roleIsThinking("blue", "operative")}
                   winner={gameState.winner === "blue"}
                 />
               </div>
@@ -988,16 +1037,6 @@ export function CodenamesGameClient({
                 </div>
               )}
             </section>
-
-            {aiThinking && (
-              <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sky-800 shadow-sm dark:border-sky-800 dark:bg-sky-950/35 dark:text-sky-200">
-                <span
-                  className="h-5 w-5 animate-spin rounded-full border-2 border-sky-500 border-t-transparent"
-                  aria-hidden="true"
-                />
-                <span className="text-sm font-semibold">AI is thinking...</span>
-              </div>
-            )}
 
             {(actionError || aiWarning || aiError) && (
               <div
@@ -1049,8 +1088,6 @@ export function CodenamesGameClient({
                 )}
               </section>
             )}
-
-            <GameAIPresence interaction={visibleAiInteraction} />
 
             <CodenamesCluePanel
               phase={gameState.phase}

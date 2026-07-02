@@ -12,6 +12,7 @@ import type {
   BattleshipShotRecord,
   BattleshipShotResult,
 } from "./types";
+import { compactGameAIStrategyNote } from "@/lib/games/core/strategy-notes";
 
 export const BATTLESHIP_BOARD_SIZE = 10;
 
@@ -484,6 +485,9 @@ export function fireBattleshipShot(
     status: didWin ? "win" : "playing",
     winner: didWin ? player : null,
     moveHistory: [...state.moveHistory, move],
+    ...(state.aiStrategyNotes
+      ? { aiStrategyNotes: { ...state.aiStrategyNotes } }
+      : {}),
   };
 }
 
@@ -512,5 +516,21 @@ export function attachBattleshipAIInteractionToLatestMove(
         ? { ...move, aiInteraction }
         : move
     ),
+  };
+}
+
+export function withBattleshipAIStrategyNote(
+  state: BattleshipGameState,
+  player: BattleshipPlayer,
+  note: string | undefined
+): BattleshipGameState {
+  const compact = compactGameAIStrategyNote(note);
+  if (!compact) return state;
+  return {
+    ...state,
+    aiStrategyNotes: {
+      ...(state.aiStrategyNotes ?? {}),
+      [player]: compact,
+    },
   };
 }

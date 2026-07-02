@@ -11,7 +11,6 @@ import {
   RotateCcw,
   Upload,
 } from "lucide-react";
-import { GameAIPresence } from "@/components/games/GameAIPresence";
 import type {
   GameAIConfigValue,
   GameAIModelOption,
@@ -51,6 +50,7 @@ import {
   setBattleshipPaused,
   targetToLabel,
   validateBattleshipFleet,
+  withBattleshipAIStrategyNote,
 } from "@/lib/games/battleship/engine";
 import {
   exportBattleshipJson,
@@ -160,15 +160,18 @@ function applyShotWithInteraction(
   state: BattleshipGameState,
   target: BattleshipCoordinate,
   timestamp: number,
-  interaction: GameAIInteraction | null = null
+  interaction: GameAIInteraction | null = null,
+  strategyNote?: string
 ): BattleshipGameState {
+  const player = state.turn;
   const next = fireBattleshipShot(state, target, timestamp);
-  if (!interaction || next.moveHistory.length === 0) return next;
+  const noted = withBattleshipAIStrategyNote(next, player, strategyNote);
+  if (!interaction || noted.moveHistory.length === 0) return noted;
 
   return {
-    ...next,
-    moveHistory: next.moveHistory.map((move, index) =>
-      index === next.moveHistory.length - 1
+    ...noted,
+    moveHistory: noted.moveHistory.map((move, index) =>
+      index === noted.moveHistory.length - 1
         ? { ...move, aiInteraction: interaction }
         : move
     ),
@@ -259,6 +262,8 @@ export function BattleshipGameClient({
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handoffIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const persistenceTokenRef = useRef(0);
+  const placementShipsRef =
+    useRef<Record<BattleshipPlayer, BattleshipShip[]>>(EMPTY_PLACEMENTS);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeGame = isBattleshipActiveStatus(gameState.status);
@@ -575,7 +580,13 @@ export function BattleshipGameClient({
             prev.turn === currentTurn &&
             isBattleshipActiveStatus(prev.status) &&
             isLegalBattleshipTarget(prev, currentTurn, target)
-              ? applyShotWithInteraction(prev, target, Date.now(), interaction)
+              ? applyShotWithInteraction(
+                  prev,
+                  target,
+                  Date.now(),
+                  interaction,
+                  legal ? result.strategyNote : undefined
+                )
               : prev
           );
           return;
@@ -791,6 +802,7 @@ export function BattleshipGameClient({
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
     setPlacementShips(emptyPlacements);
+    placementShipsRef.current = emptyPlacements;
     setPlacementError(null);
     setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
     setPlacementOrientation("horizontal");
@@ -845,30 +857,35 @@ export function BattleshipGameClient({
 
   const handlePlaceShip = useCallback(
     (ship: BattleshipShip) => {
-      setPlacementShips((current) => {
-        const nextShips = [
-          ...current[placementPlayer].filter((item) => item.id !== ship.id),
-          ship,
-        ];
-        setSelectedPlacementShipId(nextUnplacedShipId(nextShips));
-        setPlacementError(null);
-        return {
-          ...current,
-          [placementPlayer]: nextShips,
-        };
-      });
+      const current = placementShipsRef.current;
+      const currentShips = current[placementPlayer] ?? [];
+      const nextShips = [
+        ...currentShips.filter((item) => item.id !== ship.id),
+        ship,
+      ];
+      const nextPlacements = {
+        ...current,
+        [placementPlayer]: nextShips,
+      };
+      placementShipsRef.current = nextPlacements;
+      setPlacementShips(nextPlacements);
+      setSelectedPlacementShipId(nextUnplacedShipId(nextShips));
+      setPlacementError(null);
     },
     [placementPlayer]
   );
 
   const handleRemovePlacedShip = useCallback(
     (shipId: string) => {
-      setPlacementShips((current) => ({
+      const current = placementShipsRef.current;
+      const nextPlacements = {
         ...current,
-        [placementPlayer]: current[placementPlayer].filter(
+        [placementPlayer]: (current[placementPlayer] ?? []).filter(
           (ship) => ship.id !== shipId
         ),
-      }));
+      };
+      placementShipsRef.current = nextPlacements;
+      setPlacementShips(nextPlacements);
       setSelectedPlacementShipId(shipId);
       setPlacementError(null);
     },
@@ -877,35 +894,42 @@ export function BattleshipGameClient({
 
   const handleAutoPlaceFleet = useCallback(() => {
     const board = createRandomBattleshipBoard();
-    setPlacementShips((current) => ({
-      ...current,
+    const nextPlacements = {
+      ...placementShipsRef.current,
       [placementPlayer]: board.ships,
-    }));
+    };
+    placementShipsRef.current = nextPlacements;
+    setPlacementShips(nextPlacements);
     setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
     setPlacementError(null);
   }, [placementPlayer]);
 
   const handleClearFleet = useCallback(() => {
-    setPlacementShips((current) => ({
-      ...current,
+    const nextPlacements = {
+      ...placementShipsRef.current,
       [placementPlayer]: [],
-    }));
+    };
+    placementShipsRef.current = nextPlacements;
+    setPlacementShips(nextPlacements);
     setSelectedPlacementShipId(BATTLESHIP_FLEET[0].id);
     setPlacementError(null);
   }, [placementPlayer]);
 
-  const handleConfirmPlacement = useCallback(async () => {
-    const currentShips = placementShips[placementPlayer];
+  const handleConfirmPlacement = useCallback(async (displayedShips?: BattleshipShip[]) => {
+    const currentShips =
+      displayedShips ?? placementShipsRef.current[placementPlayer] ?? [];
     const validation = validateBattleshipFleet(currentShips);
     if (!validation.ok) {
       setPlacementError(validation.error);
       return;
     }
 
+    const currentPlacements = placementShipsRef.current;
     const nextPlacements = {
-      ...placementShips,
+      ...currentPlacements,
       [placementPlayer]: validation.ships,
     };
+    placementShipsRef.current = nextPlacements;
     setPlacementShips(nextPlacements);
 
     if (gameMode === "pvp" && placementPlayer === "blue") {
@@ -939,7 +963,6 @@ export function BattleshipGameClient({
     gameMode,
     humanPlayer,
     placementPlayer,
-    placementShips,
     requestAIPlacement,
     startHandoff,
     startPlayingFromShips,
@@ -1118,12 +1141,12 @@ export function BattleshipGameClient({
             <BattleshipHandoff
               nextPlayer={handoffPlayer}
               seconds={handoffSeconds}
-              onSkip={finishHandoff}
+              onSkip={() => finishHandoff()}
             />
           ) : (
             <BattleshipPlacementPanel
               player={placementPlayer}
-              ships={placementShips[placementPlayer]}
+              ships={placementShips[placementPlayer] ?? []}
               selectedShipId={selectedPlacementShipId}
               orientation={placementOrientation}
               error={placementError}
@@ -1133,7 +1156,7 @@ export function BattleshipGameClient({
               onRemoveShip={handleRemovePlacedShip}
               onAutoPlace={handleAutoPlaceFleet}
               onClear={handleClearFleet}
-              onConfirm={() => void handleConfirmPlacement()}
+              onConfirm={(ships) => void handleConfirmPlacement(ships)}
             />
           )}
         </main>
@@ -1213,7 +1236,7 @@ export function BattleshipGameClient({
             <BattleshipHandoff
               nextPlayer={handoffPlayer}
               seconds={handoffSeconds}
-              onSkip={finishHandoff}
+              onSkip={() => finishHandoff()}
             />
           ) : (
             <section className="space-y-4">
@@ -1229,6 +1252,15 @@ export function BattleshipGameClient({
                   }
                   reasoning={blueIsAI ? compactReasoningLabel(blueAI) : undefined}
                   board={gameState.boards.blue}
+                  aiInteraction={
+                    lastAiInteraction?.actorId === "blue" ? lastAiInteraction : null
+                  }
+                  aiThinking={
+                    aiThinking &&
+                    activeGame &&
+                    gameState.turn === "blue" &&
+                    blueIsAI
+                  }
                 />
                 <BattleshipPlayerCard
                   player="orange"
@@ -1243,6 +1275,17 @@ export function BattleshipGameClient({
                     orangeIsAI ? compactReasoningLabel(orangeAI) : undefined
                   }
                   board={gameState.boards.orange}
+                  aiInteraction={
+                    lastAiInteraction?.actorId === "orange"
+                      ? lastAiInteraction
+                      : null
+                  }
+                  aiThinking={
+                    aiThinking &&
+                    activeGame &&
+                    gameState.turn === "orange" &&
+                    orangeIsAI
+                  }
                 />
               </div>
 
@@ -1318,19 +1361,6 @@ export function BattleshipGameClient({
               </div>
             </section>
 
-            {aiThinking && (
-              <div
-                className="flex items-center gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sky-800 shadow-sm dark:border-sky-800 dark:bg-sky-950/35 dark:text-sky-200"
-                data-testid="battleship-ai-thinking"
-              >
-                <span
-                  className="h-5 w-5 animate-spin rounded-full border-2 border-sky-500 border-t-transparent"
-                  aria-hidden="true"
-                />
-                <span className="text-sm font-semibold">AI is scanning...</span>
-              </div>
-            )}
-
             {aiWarning && (
               <div
                 className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 shadow-sm dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-200"
@@ -1384,8 +1414,6 @@ export function BattleshipGameClient({
                 </details>
               </section>
             )}
-
-            <GameAIPresence interaction={lastAiInteraction} />
 
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950">
               <div className="flex justify-center">

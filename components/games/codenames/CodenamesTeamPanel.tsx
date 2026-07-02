@@ -1,6 +1,9 @@
 "use client";
 
 import { Bot, UserRound } from "lucide-react";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 import type { CodenamesTeam } from "@/lib/games/codenames/types";
 import { cn } from "@/lib/utils";
 import { compactReasoningLabel, teamLabel } from "./view-helpers";
@@ -15,6 +18,10 @@ export function CodenamesTeamPanel({
   operativeModelLabel,
   spymasterReasoning,
   operativeReasoning,
+  spymasterInteraction,
+  operativeInteraction,
+  spymasterThinking,
+  operativeThinking,
   winner,
 }: {
   team: CodenamesTeam;
@@ -26,6 +33,10 @@ export function CodenamesTeamPanel({
   operativeModelLabel?: string;
   spymasterReasoning?: string;
   operativeReasoning?: string;
+  spymasterInteraction?: GameAIInteraction | null;
+  operativeInteraction?: GameAIInteraction | null;
+  spymasterThinking?: boolean;
+  operativeThinking?: boolean;
   winner?: boolean;
 }) {
   return (
@@ -59,32 +70,51 @@ export function CodenamesTeamPanel({
         />
       </div>
       <RoleLine
+        actorId={`${team}-spymaster`}
         label="Spymaster"
         kind={spymasterKind}
         modelLabel={spymasterModelLabel}
         reasoning={spymasterReasoning}
+        interaction={spymasterInteraction}
+        thinking={spymasterThinking}
       />
       <RoleLine
+        actorId={`${team}-operative`}
         label="Operative"
         kind={operativeKind}
         modelLabel={operativeModelLabel}
         reasoning={operativeReasoning}
+        interaction={operativeInteraction}
+        thinking={operativeThinking}
       />
     </section>
   );
 }
 
 function RoleLine({
+  actorId,
   label,
   kind,
   modelLabel,
   reasoning,
+  interaction,
+  thinking = false,
 }: {
+  actorId: string;
   label: string;
   kind: "human" | "ai";
   modelLabel?: string;
   reasoning?: string;
+  interaction?: GameAIInteraction | null;
+  thinking?: boolean;
 }) {
+  const visibleInteraction =
+    kind === "ai"
+      ? thinking
+        ? buildGameAIThinkingInteraction(actorId)
+        : interaction ?? null
+      : null;
+
   return (
     <div className="mt-3 rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/40">
       <div className="flex items-center gap-2 font-semibold">
@@ -100,6 +130,11 @@ function RoleLine({
           ? `${modelLabel ?? "AI"} - ${compactReasoningLabel(reasoning ?? "default")}`
           : "Human"}
       </div>
+      <GameAIPresence
+        interaction={visibleInteraction}
+        variant="card"
+        className="mt-3"
+      />
     </div>
   );
 }

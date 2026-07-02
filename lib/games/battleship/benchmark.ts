@@ -6,6 +6,7 @@ import {
   createBattleshipStateWithBoards,
   createRandomBattleshipBoard,
   fireBattleshipShot,
+  withBattleshipAIStrategyNote,
 } from "./engine";
 import {
   chooseFallbackBattleshipTarget,
@@ -248,6 +249,11 @@ export async function runBattleshipAIBenchmark(
         nextState = attachBattleshipAIInteractionToLatestMove(
           nextState,
           aiResult.interaction ?? undefined
+        );
+        nextState = withBattleshipAIStrategyNote(
+          nextState,
+          player,
+          aiResult.strategyNote
         );
       } catch {
         invalidResponses++;

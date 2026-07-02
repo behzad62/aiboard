@@ -1,6 +1,9 @@
 "use client";
 
 import { Bot, Clock, Trophy, User } from "lucide-react";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
 import { cn } from "@/lib/utils";
 import type { ConnectFourPlayer } from "@/lib/games/connect-four/types";
 
@@ -13,6 +16,8 @@ interface ConnectFourPlayerPanelProps {
   elapsedMs: number;
   active: boolean;
   winner?: boolean;
+  aiInteraction?: GameAIInteraction | null;
+  aiThinking?: boolean;
 }
 
 const PLAYER_STYLES: Record<
@@ -49,9 +54,17 @@ export function ConnectFourPlayerPanel({
   elapsedMs,
   active,
   winner = false,
+  aiInteraction = null,
+  aiThinking = false,
 }: ConnectFourPlayerPanelProps) {
   const styles = PLAYER_STYLES[player];
   const KindIcon = kind === "ai" ? Bot : User;
+  const visibleInteraction =
+    kind === "ai"
+      ? aiThinking
+        ? buildGameAIThinkingInteraction(player)
+        : aiInteraction
+      : null;
 
   return (
     <section
@@ -131,6 +144,12 @@ export function ConnectFourPlayerPanel({
           )}
         </div>
       )}
+
+      <GameAIPresence
+        interaction={visibleInteraction}
+        variant="card"
+        className="mt-3"
+      />
     </section>
   );
 }

@@ -26,6 +26,7 @@
 .vs/
 .playwright-mcp/
 .codex-run-logs/
+.superpowers/
 
 # debug
 npm-debug.log*

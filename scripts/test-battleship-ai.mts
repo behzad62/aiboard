@@ -23,11 +23,16 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 const parsed = parseBattleshipAIResponse(`Here is the shot:
 \`\`\`json
-{"target":"B7","gesture":"confident","utterance":"Testing that lane.","confidence":1.4}
+{"target":"B7","gesture":"confident","utterance":"Testing that lane.","confidence":1.4,"strategyNote":"Continue the parity sweep near the last hit, but recheck all open adjacent targets first."}
 \`\`\``);
 
 check("AI response parses A1 target labels", parsed?.target.row === 1 && parsed.target.column === 6, parsed);
 check("AI response clamps confidence", parsed?.confidence === 1, parsed);
+check(
+  "AI response retains compact provisional strategy note",
+  parsed?.strategyNote === "Continue the parity sweep near the last hit, but recheck all open adjacent targets first.",
+  parsed
+);
 check("invalid target is rejected", parseBattleshipAIResponse('{"target":"K1"}') === null);
 
 const placement = parseBattleshipPlacementResponse(`\`\`\`json
@@ -59,6 +64,11 @@ check(
   format
 );
 check(
+  "Battleship structured output allows provisional strategy notes",
+  format.schema.properties?.strategyNote?.maxLength === 240,
+  format
+);
+check(
   "Battleship placement structured output requires ships",
   JSON.stringify(placementFormat.schema.required) === JSON.stringify(["ships"]),
   placementFormat
@@ -76,6 +86,23 @@ check(
   prompt.system.includes('{"target":"A1"}') &&
     prompt.user.includes("Available targets"),
   prompt
+);
+const notedPrompt = buildBattleshipPrompt(
+  {
+    ...state,
+    aiStrategyNotes: {
+      blue: "Keep a checkerboard sweep, but prioritize adjacent cells after a hit.",
+    },
+  },
+  "blue"
+);
+check(
+  "Battleship prompt frames prior strategy as provisional context",
+  notedPrompt.user.includes("Previous strategic note") &&
+    notedPrompt.user.includes("context only") &&
+    notedPrompt.user.includes("current board and legal targets are authoritative") &&
+    notedPrompt.user.includes("Keep a checkerboard sweep"),
+  notedPrompt.user
 );
 
 const afterMiss = fireBattleshipShot(state, { row: 0, column: 9 }, 1_000);

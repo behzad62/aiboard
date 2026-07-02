@@ -200,7 +200,7 @@ IMPORTANT: You must respond with ONLY valid JSON in this exact format:
   "to": "e4",
   "promotion": "queen",
   "gesture": "confident",
-  "utterance": "I like the central control here.",
+  "utterance": "I like this turn.",
   "confidence": 0.72
 }
 
@@ -208,7 +208,7 @@ Rules for your response:
 - "from" and "to" are required - use algebraic notation (a-h for files, 1-8 for ranks)
 - "promotion" is ONLY included when a pawn reaches the last rank. Valid values: "queen", "rook", "bishop", "knight". Omit this field entirely for non-promotion moves.
 - Optional "gesture" values: "thinking", "confident", "confused", "celebrating", "apologetic", "neutral". Use "neutral" or omit it unless there is a clear reason.
-- Optional "utterance" must be at most one short sentence. Omit it for normal quiet chess moves.
+- Optional "utterance" must be at most one short sentence of table-talk for the other player. Do not mention squares, pieces, tactics, targets, threats, calculations, or future plans.
 - Optional "confidence" must be a number from 0 to 1.
 - You MUST choose a move from the provided list of legal moves
 - Do not include any text outside the JSON object

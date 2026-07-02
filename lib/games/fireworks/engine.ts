@@ -10,6 +10,7 @@ import type {
   FireworksRank,
   FireworksStackState,
 } from "./types";
+import { compactGameAIStrategyNote } from "@/lib/games/core/strategy-notes";
 
 export const FIREWORKS_COLORS: FireworksColor[] = ["red", "blue", "green"];
 export const FIREWORKS_RANKS: FireworksRank[] = [1, 2, 3, 4, 5];
@@ -355,6 +356,22 @@ export function cloneFireworksState(state: FireworksGameState): FireworksGameSta
   return cloneState(state);
 }
 
+export function withFireworksAIStrategyNote(
+  state: FireworksGameState,
+  playerId: string,
+  note: string | undefined
+): FireworksGameState {
+  const compact = compactGameAIStrategyNote(note);
+  if (!compact) return state;
+  return {
+    ...state,
+    aiStrategyNotes: {
+      ...(state.aiStrategyNotes ?? {}),
+      [playerId]: compact,
+    },
+  };
+}
+
 export function getFireworksRankCopyCount(rank: FireworksRank): number {
   return RANK_COPY_COUNTS[rank];
 }
@@ -499,6 +516,9 @@ function cloneState(state: FireworksGameState): FireworksGameState {
       ...event,
       action: { ...event.action } as FireworksAction,
     })),
+    ...(state.aiStrategyNotes
+      ? { aiStrategyNotes: { ...state.aiStrategyNotes } }
+      : {}),
   };
 }
 
