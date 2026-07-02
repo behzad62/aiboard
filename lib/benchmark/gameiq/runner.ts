@@ -219,7 +219,7 @@ export async function runGameIqScenarios(
       mode: "certified",
       track: "gameiq",
       harnessProfile: input.harnessProfile ?? "raw-single-model",
-      status: statusFromScore(score),
+      status: statusFromScore(score, metrics),
       startedAt,
       completedAt,
       verifiedQuality: score / 100,

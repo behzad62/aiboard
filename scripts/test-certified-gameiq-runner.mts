@@ -127,6 +127,8 @@ await saveBenchmarkTeamComposition(team);
 
 let callIndex = 0;
 let observedStructuredOutput: StructuredOutputFormat | undefined;
+let observedReasoningEffort: string | undefined;
+let observedMaxTokens: number | undefined;
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-gameiq",
   suiteId: "suite-certified-gameiq",
@@ -148,6 +150,8 @@ const summary = await runCertifiedBenchmark({
       },
       streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
         observedStructuredOutput = params.structuredOutput;
+        observedReasoningEffort = params.reasoningEffort;
+        observedMaxTokens = params.maxTokens;
         const scenario = pack.scenarios[callIndex++];
         yield {
           type: "token",
@@ -189,6 +193,16 @@ check(
       return keys.every((key) => node.required?.includes(key));
     }),
   observedStructuredOutput
+);
+check(
+  "certified GameIQ leaves reasoning unset so providers use model defaults",
+  observedReasoningEffort === undefined,
+  observedReasoningEffort
+);
+check(
+  "certified GameIQ default output ceiling leaves room for hidden thinking plus JSON",
+  typeof observedMaxTokens === "number" && observedMaxTokens >= 2048,
+  observedMaxTokens
 );
 
 __resetBenchmarkStoreForTests();
@@ -317,6 +331,43 @@ check(
     failedChessVerifier.resultJson.includes('"action"') &&
     failedChessVerifier.resultJson.includes('"expectedActions"'),
   failedChessVerifier?.resultJson
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(caseV2);
+await saveBenchmarkTeamComposition(team);
+
+let malformedJsonCallCount = 0;
+const malformedJsonSummary = await runCertifiedBenchmark({
+  runId: "run-certified-gameiq-malformed-json",
+  suiteId: "suite-certified-gameiq",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [pack.id],
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  runner: (context) =>
+    runCertifiedGameIq({
+      context,
+      models: [model],
+      scenarioPackIds: [pack.id],
+      teamCompositionIds: [team.id],
+      trials: 1,
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        malformedJsonCallCount++;
+        yield { type: "token", content: '{"action":{"column":3' };
+        yield { type: "done" };
+      },
+    }),
+});
+const malformedJsonAttempt = (await listBenchmarkAttemptsV2())[0];
+check(
+  "certified GameIQ malformed JSON is scored as failed tool use, not invalid harness",
+  malformedJsonSummary.status === "completed" &&
+    malformedJsonAttempt?.status === "failed_tool_use" &&
+    malformedJsonAttempt.traceIds.length === pack.scenarios.length &&
+    malformedJsonCallCount === pack.scenarios.length,
+  { malformedJsonSummary, malformedJsonAttempt, malformedJsonCallCount }
 );
 
 function schemaObjectNodes(schema: JsonSchemaObject | undefined): JsonSchemaObject[] {

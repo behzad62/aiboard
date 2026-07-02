@@ -194,6 +194,15 @@ export type FireworksGameIqScenario = GameIqScenario<
   FireworksAction
 >;
 
-export function statusFromScore(score: number): CertifiedAttemptStatus {
+export function statusFromScore(
+  score: number,
+  metrics?: Pick<GameIqRunMetrics, "structuredReliability" | "legalActionRate">
+): CertifiedAttemptStatus {
+  if (
+    metrics &&
+    (metrics.structuredReliability < 1 || metrics.legalActionRate < 1)
+  ) {
+    return "failed_tool_use";
+  }
   return score >= 70 ? "passed" : "failed_model";
 }

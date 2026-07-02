@@ -129,6 +129,45 @@ check(
   googleConfig
 );
 
+const googleNullableEnumFormat = {
+  name: "google_nullable_enum",
+  schema: {
+    type: "object",
+    required: ["promotion", "rank"],
+    properties: {
+      promotion: {
+        type: ["string", "null"],
+        enum: ["queen", "rook", null],
+      },
+      rank: {
+        type: ["integer", "null"],
+        enum: [1, 2, 3, null],
+      },
+    },
+  },
+} as const;
+const googleNullableEnumConfig = googleStructuredOutputConfig(
+  googleNullableEnumFormat
+);
+const googlePromotionSchema =
+  googleNullableEnumConfig.responseSchema?.properties?.promotion;
+const googleRankSchema =
+  googleNullableEnumConfig.responseSchema?.properties?.rank;
+check(
+  "Google nullable string enums use nullable plus string-only enum values",
+  googlePromotionSchema?.nullable === true &&
+    Array.isArray(googlePromotionSchema.enum) &&
+    googlePromotionSchema.enum.join(",") === "queen,rook",
+  googlePromotionSchema
+);
+check(
+  "Google numeric enums are omitted because Gemini schema enum is string-only",
+  googleRankSchema?.nullable === true &&
+    googleRankSchema.type === "integer" &&
+    googleRankSchema.enum === undefined,
+  googleRankSchema
+);
+
 const anthropicTool = anthropicStructuredToolConfig(format);
 check(
   "Anthropic receives a forced structured-output tool",

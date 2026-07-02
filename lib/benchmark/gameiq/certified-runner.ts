@@ -83,6 +83,8 @@ const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
   }),
 };
 
+const DEFAULT_GAMEIQ_MAX_TOKENS = 2048;
+
 export interface RunCertifiedGameIqInput {
   context: CertifiedRunContext;
   models: SelectedModel[];
@@ -170,8 +172,9 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         user: gameIqScenarioPrompt(scenario, scenarioIndex, totalScenarios),
         ...(memoryMessages ? { messages: memoryMessages } : {}),
         structuredOutput: gameIqStructuredOutputForScenario(scenario),
-        maxTokens: input.maxTokens ?? 512,
+        maxTokens: input.maxTokens ?? DEFAULT_GAMEIQ_MAX_TOKENS,
         temperature: 0,
+        allowInvalidStructuredOutput: true,
         context: input.context,
         caseId: input.context.caseIds[0],
         attemptId: plannedAttemptId,
@@ -471,7 +474,7 @@ function gameIqAssertionDetails(
 }
 
 function previewJson(value: unknown): string {
-  return previewText(JSON.stringify(value));
+  return previewText(JSON.stringify(value) ?? "undefined");
 }
 
 function previewText(value: string): string {

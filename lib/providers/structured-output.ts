@@ -76,11 +76,12 @@ export function anthropicStructuredToolConfig(
 
 function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   const next: JsonSchemaObject = {};
+  let nullable = schema.nullable === true;
   if (Array.isArray(schema.type)) {
     const nonNullTypes = schema.type.filter((type) => type !== "null");
     if (nonNullTypes.length === 1) next.type = nonNullTypes[0];
     else if (nonNullTypes.length > 1) next.type = nonNullTypes;
-    if (schema.type.includes("null")) next.nullable = true;
+    if (schema.type.includes("null")) nullable = true;
   } else if (schema.type) {
     next.type = schema.type;
   }
@@ -89,9 +90,19 @@ function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
   if (schema.minimum !== undefined) next.minimum = schema.minimum;
   if (schema.maximum !== undefined) next.maximum = schema.maximum;
   if (schema.minItems !== undefined) next.minItems = schema.minItems;
-  if (schema.enum) next.enum = schema.enum;
+  if (schema.enum) {
+    const enumValues = schema.enum.filter((value) => value !== null);
+    if (enumValues.length < schema.enum.length) nullable = true;
+    if (
+      enumValues.length > 0 &&
+      enumValues.every((value): value is string => typeof value === "string")
+    ) {
+      next.enum = enumValues;
+    }
+  }
   if (schema.required) next.required = schema.required;
-  if (schema.nullable !== undefined) next.nullable = schema.nullable;
+  if (nullable) next.nullable = true;
+  else if (schema.nullable !== undefined) next.nullable = schema.nullable;
   if (schema.items) next.items = toGoogleSchema(schema.items);
   if (schema.properties) {
     next.properties = Object.fromEntries(

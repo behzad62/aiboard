@@ -97,7 +97,7 @@ check(
     invalid.metrics.legalActionRate === 0 &&
     invalid.metrics.outcomeScore === 0 &&
     invalid.metrics.moveQuality === 0 &&
-    invalid.attempt.status === "failed_model",
+    invalid.attempt.status === "failed_tool_use",
   { metrics: invalid.metrics, attempt: invalid.attempt }
 );
 
