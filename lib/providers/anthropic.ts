@@ -157,6 +157,18 @@ export function anthropicNativeToolField(
   };
 }
 
+function isAnthropicThinkingEnabled(field: Record<string, unknown>): boolean {
+  const thinking = field.thinking as { type?: string } | undefined;
+  return thinking?.type === "enabled" || thinking?.type === "adaptive";
+}
+
+function isAnthropicManualThinkingEnabled(
+  field: Record<string, unknown>
+): boolean {
+  const thinking = field.thinking as { type?: string } | undefined;
+  return thinking?.type === "enabled";
+}
+
 /**
  * Shared Anthropic-API streaming — used by the native Anthropic provider and
  * by gateways exposing the same API (Azure AI Foundry via params.baseURL).
@@ -206,10 +218,13 @@ export async function* streamAnthropicChat(
     // Adaptive thinking + output_config.effort are newer than the pinned SDK's
     // types; the cast lets them pass through. Omitted by default/off and
     // skipped for unsupported models.
+    const maxTokens = params.maxTokens ?? 1500;
     const reasoningField = anthropicReasoningFields(
       params.model,
-      params.reasoningEffort ?? "default"
+      params.reasoningEffort ?? "default",
+      maxTokens
     );
+    const thinkingEnabled = isAnthropicThinkingEnabled(reasoningField);
     const structuredToolConfig = anthropicStructuredToolConfig(
       params.structuredOutput
     );
@@ -226,7 +241,9 @@ export async function* streamAnthropicChat(
           ...((nativeToolField.tools as unknown[] | undefined) ?? []),
         ];
     const combinedToolChoice = params.structuredOutput
-      ? structuredToolConfig.tool_choice
+      ? thinkingEnabled && combinedTools.length > 0
+        ? { type: "auto" }
+        : structuredToolConfig.tool_choice
       : nativeToolField.tool_choice ?? webSearchField.tool_choice;
     const combinedToolField =
       combinedTools.length > 0
@@ -235,20 +252,31 @@ export async function* streamAnthropicChat(
             ...(combinedToolChoice ? { tool_choice: combinedToolChoice } : {}),
           }
         : {};
+    const requestOptions =
+      isAnthropicManualThinkingEnabled(reasoningField) && combinedTools.length > 0
+        ? {
+            headers: {
+              "anthropic-beta": "interleaved-thinking-2025-05-14",
+            },
+          }
+        : undefined;
 
     try {
       const pendingToolCalls = new Map<
         number,
         NativeToolCall & { argumentsJson: string }
       >();
-      const stream = await client.messages.stream({
-        model: params.model,
-        max_tokens: params.maxTokens ?? 1500,
-        system: systemMessage?.content,
-        messages: chatMessages,
-        ...(reasoningField as Record<string, never>),
-        ...(combinedToolField as Record<string, never>),
-      });
+      const stream = await client.messages.stream(
+        {
+          model: params.model,
+          max_tokens: maxTokens,
+          system: systemMessage?.content,
+          messages: chatMessages,
+          ...(reasoningField as Record<string, never>),
+          ...(combinedToolField as Record<string, never>),
+        },
+        requestOptions
+      );
 
       for await (const event of stream) {
         if (

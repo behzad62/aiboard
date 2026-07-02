@@ -322,6 +322,7 @@ export interface BuildHooks {
     messages: ChatMessage[];
     maxTokens: number;
     label: string;
+    reasoningEffort: ReasoningEffort;
     structuredOutput?: StructuredOutputFormat;
     attachments?: AttachmentPayload[];
   }) => Promise<string>;
@@ -395,6 +396,7 @@ export async function resolveBuildModelContent(input: {
   messages: ChatMessage[];
   maxTokens: number;
   label: string;
+  reasoningEffort: ReasoningEffort;
   structuredOutput?: StructuredOutputFormat;
   attachments?: AttachmentPayload[];
   hooks?: BuildHooks;
@@ -407,6 +409,7 @@ export async function resolveBuildModelContent(input: {
       messages: input.messages,
       maxTokens: input.maxTokens,
       label: input.label,
+      reasoningEffort: input.reasoningEffort,
       structuredOutput: input.structuredOutput,
       attachments: input.attachments,
     });
@@ -3622,6 +3625,7 @@ export async function runBuildDiscussion(
         messages,
         maxTokens: opts.maxTokens,
         label: opts.label,
+        reasoningEffort,
         structuredOutput: opts.structuredOutput,
         attachments: opts.attachments,
         hooks,

@@ -7,8 +7,8 @@ import type { ReasoningEffort } from "../db/schema";
  * parameter. Sources (verified 2026-07-02):
  *  - OpenAI GPT-5.5 `reasoning_effort`: none|low|medium|high|xhigh (default medium)
  *  - Anthropic `output_config.effort`: low|medium|high|xhigh|max (default high);
- *    Opus 4.5 supports effort without adaptive thinking and not max; Haiku 4.5
- *    does NOT support effort.
+ *    Opus 4.5 supports effort plus manual `thinking.budget_tokens`, but not
+ *    adaptive thinking or max effort; Haiku 4.5 does NOT support effort.
  *  - OpenRouter `reasoning.effort` / `reasoning_effort`: none|low|medium|high|xhigh|max.
  *  - Gemini 3+: `thinkingLevel` (minimal|low|medium|high); Gemini 2.5: `thinkingBudget`
  *    (int). Sending both is a 400, so we pick one by model generation.
@@ -86,10 +86,14 @@ function anthropicUsesAdaptiveThinkingField(model: string): boolean {
   );
 }
 
+function anthropicUsesManualThinkingField(model: string): boolean {
+  return hasAnthropicModelPrefix(model, "claude-opus-4-5");
+}
+
 function anthropicSupportsEffort(model: string): boolean {
   return (
     anthropicUsesAdaptiveThinkingField(model) ||
-    hasAnthropicModelPrefix(model, "claude-opus-4-5")
+    anthropicUsesManualThinkingField(model)
   );
 }
 
@@ -124,12 +128,54 @@ export function anthropicEffort(
   }
 }
 
+function anthropicManualThinkingBudget(
+  effort: ReasoningEffort,
+  maxTokens: number
+): number | null {
+  if (effort === "default" || effort === "none") return null;
+
+  const limit = Math.floor(maxTokens);
+  if (!Number.isFinite(limit) || limit <= 1024) return null;
+  const responseReserve = Math.min(
+    1024,
+    Math.max(256, Math.floor(limit * 0.25))
+  );
+  const maxThinkingBudget = limit - responseReserve;
+  if (maxThinkingBudget < 1024) return null;
+
+  const ratio =
+    effort === "low"
+      ? 0.25
+      : effort === "medium"
+        ? 0.5
+        : effort === "high"
+          ? 0.75
+          : 0.875;
+  return Math.min(maxThinkingBudget, Math.max(1024, Math.floor(limit * ratio)));
+}
+
 export function anthropicReasoningFields(
   model: string,
-  effort: ReasoningEffort
+  effort: ReasoningEffort,
+  maxTokens = 1500
 ): Record<string, unknown> {
   const value = anthropicEffort(model, effort);
   if (!value) return {};
+  if (anthropicUsesManualThinkingField(model)) {
+    const budgetTokens = anthropicManualThinkingBudget(effort, maxTokens);
+    return {
+      ...(budgetTokens
+        ? {
+            thinking: {
+              type: "enabled",
+              budget_tokens: budgetTokens,
+              display: "omitted",
+            },
+          }
+        : {}),
+      output_config: { effort: value },
+    };
+  }
   return {
     ...(anthropicUsesAdaptiveThinkingField(model)
       ? { thinking: { type: "adaptive" } }

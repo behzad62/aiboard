@@ -17,7 +17,7 @@ import type {
   BenchmarkTeamComposition,
   BenchmarkTeamCompositionRole,
 } from "@/lib/benchmark/types";
-import type { Discussion } from "@/lib/db/schema";
+import type { Discussion, ReasoningEffort } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import type { SelectedModel, StructuredOutputFormat } from "@/lib/providers/base";
 import type { ModelPricing } from "@/lib/providers/pricing";
@@ -319,6 +319,7 @@ export interface WorkBenchModelPatchBuildInput
   streamChat?: CertifiedModelStream;
   apiKey?: string;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  reasoningEffort?: ReasoningEffort;
 }
 
 interface WorkBenchPatchAction {
@@ -444,6 +445,7 @@ export async function runWorkBenchModelPatchBuild(
     structuredOutput: WORKBENCH_PATCH_ACTION_SCHEMA,
     maxTokens: 1600,
     temperature: 0,
+    reasoningEffort: input.reasoningEffort,
     context: input.context,
     participantId: "workbench-builder",
     caseId: input.case.id,

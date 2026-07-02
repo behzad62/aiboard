@@ -113,6 +113,7 @@ const resolved = await resolveBuildModelContent({
   messages: [{ role: "user", content: "Plan the work" }],
   maxTokens: 512,
   label: "Architect plan",
+  reasoningEffort: "high",
   structuredOutput,
   hooks: {
     modelCallOverride: async (input) => {
@@ -138,9 +139,11 @@ check(
   { resolved, collected, emittedToken }
 );
 check(
-  "modelCallOverride receives structured output metadata",
-  (overrideInput as { structuredOutput?: StructuredOutputFormat } | null)
-    ?.structuredOutput?.name === "architect_action",
+  "modelCallOverride receives structured output and reasoning metadata",
+  (overrideInput as
+    | { structuredOutput?: StructuredOutputFormat; reasoningEffort?: string }
+    | null)?.structuredOutput?.name === "architect_action" &&
+    (overrideInput as { reasoningEffort?: string } | null)?.reasoningEffort === "high",
   overrideInput
 );
 
@@ -149,6 +152,7 @@ const fallback = await resolveBuildModelContent({
   messages: [{ role: "user", content: "No override" }],
   maxTokens: 64,
   label: "Fallback",
+  reasoningEffort: "default",
   collect: async () => "provider-content",
 });
 
@@ -166,6 +170,7 @@ await expectReject(
       messages: [{ role: "user", content: "No output" }],
       maxTokens: 64,
       label: "Benchmark fallback",
+      reasoningEffort: "default",
       hooks: { benchmark },
       collect: async () => "",
     }),
@@ -503,6 +508,7 @@ const context: CertifiedRunContext = {
   recordFailure: async () => undefined,
 };
 const patchRunner = await startPatchBenchRunner();
+let patchReasoningEffort: unknown = null;
 try {
   const patchBuild = await runWorkBenchModelPatchBuild({
     ...workBenchBuildInput,
@@ -511,7 +517,9 @@ try {
     model,
     apiKey: "test-api-key",
     pricing: null,
-    streamChat: async function* () {
+    reasoningEffort: "high",
+    streamChat: async function* (input) {
+      patchReasoningEffort = input.params.reasoningEffort;
       yield {
         type: "token",
         content: JSON.stringify({
@@ -531,8 +539,9 @@ try {
       patchBuild.validToolCalls === 3 &&
       patchRunner.requests.some((request) => request.path === "/bench/patch-file") &&
       traces.length === 1 &&
-      toolCalls.length === 3,
-    { patchBuild, requests: patchRunner.requests, traces, toolCalls }
+      toolCalls.length === 3 &&
+      patchReasoningEffort === "high",
+    { patchBuild, requests: patchRunner.requests, traces, toolCalls, patchReasoningEffort }
   );
 } finally {
   await patchRunner.stop();

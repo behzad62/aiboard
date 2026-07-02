@@ -83,22 +83,40 @@ check(
 );
 check(
   "Claude Opus 4.5 medium sends effort without unsupported adaptive thinking",
-  json(anthropicReasoningFields("claude-opus-4-5", "medium")) ===
-    json({ output_config: { effort: "medium" } }),
-  anthropicReasoningFields("claude-opus-4-5", "medium")
+  json(anthropicReasoningFields("claude-opus-4-5", "medium", 4096)) ===
+    json({
+      thinking: { type: "enabled", budget_tokens: 2048, display: "omitted" },
+      output_config: { effort: "medium" },
+    }),
+  anthropicReasoningFields("claude-opus-4-5", "medium", 4096)
 );
 check(
   "Claude Opus 4.5 max falls back to its highest supported effort",
-  json(anthropicReasoningFields("claude-opus-4-5", "max")) ===
-    json({ output_config: { effort: "high" } }),
-  anthropicReasoningFields("claude-opus-4-5", "max")
+  json(anthropicReasoningFields("claude-opus-4-5", "max", 4096)) ===
+    json({
+      thinking: { type: "enabled", budget_tokens: 3072, display: "omitted" },
+      output_config: { effort: "high" },
+    }),
+  anthropicReasoningFields("claude-opus-4-5", "max", 4096)
+);
+check(
+  "Claude Opus 4.5 max can use a larger budget when the output cap leaves room",
+  json(anthropicReasoningFields("claude-opus-4-5", "max", 8192)) ===
+    json({
+      thinking: { type: "enabled", budget_tokens: 7168, display: "omitted" },
+      output_config: { effort: "high" },
+    }),
+  anthropicReasoningFields("claude-opus-4-5", "max", 8192)
 );
 const foundryOpus45Model = parseModelId("foundry:claude-opus-4-5").model;
 check(
   "Azure Foundry Opus 4.5 medium uses the Anthropic-compatible Opus 4.5 payload",
-  json(anthropicReasoningFields(foundryOpus45Model, "medium")) ===
-    json({ output_config: { effort: "medium" } }),
-  anthropicReasoningFields(foundryOpus45Model, "medium")
+  json(anthropicReasoningFields(foundryOpus45Model, "medium", 4096)) ===
+    json({
+      thinking: { type: "enabled", budget_tokens: 2048, display: "omitted" },
+      output_config: { effort: "medium" },
+    }),
+  anthropicReasoningFields(foundryOpus45Model, "medium", 4096)
 );
 check(
   "Claude Fable off maps to its lowest supported adaptive thinking effort",
