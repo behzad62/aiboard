@@ -115,16 +115,33 @@ let capturedMemoryView: {
     cards?: Array<{
       color?: unknown;
       rank?: unknown;
-      knowledge?: { color?: unknown; rank?: unknown };
+      knowledge?: {
+        color?: unknown;
+        rank?: unknown;
+        notColors?: unknown[];
+        notRanks?: unknown[];
+        clueHistory?: unknown[];
+      };
     }>;
-    knowledge?: Array<{ color?: unknown; rank?: unknown }>;
+    knowledge?: Array<{
+      color?: unknown;
+      rank?: unknown;
+      notColors?: unknown[];
+      notRanks?: unknown[];
+      clueHistory?: unknown[];
+    }>;
   };
+  events?: Array<{ action?: { action?: string; targetPlayerId?: string } }>;
   recommendations?: {
     knownPlayableCards?: unknown[];
     visiblePlayableClues?: unknown[];
     safeDiscards?: unknown[];
   };
 } | null = null;
+// Memory scenarios are now delivered as a multi-turn recall episode: many
+// messages, still ONE model call. Capture the whole conversation and the final
+// decision turn's state view.
+let capturedMemoryMessages: Array<{ role: string; content: string }> = [];
 await runCertifiedBenchmark({
   runId: "run-certified-fireworks-memory-redaction",
   suiteId: "suite-certified-fireworks-memory",
@@ -140,9 +157,13 @@ await runCertifiedBenchmark({
       cases: [memoryScenario],
       includeSoloBaselines: false,
       streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
-        const userContent = String(params.messages.at(-1)?.content ?? "");
-        const viewJson = userContent
-          .split("Current hidden-safe player view JSON:\n")[1]
+        capturedMemoryMessages = params.messages.map((message) => ({
+          role: String(message.role),
+          content: String(message.content),
+        }));
+        const decisionContent = String(params.messages.at(-1)?.content ?? "");
+        const viewJson = decisionContent
+          .split("Current position JSON:\n")[1]
           ?.split("\n\nChoose exactly one legal action.")[0];
         capturedMemoryView = viewJson ? JSON.parse(viewJson) : null;
         yield { type: "token", content: '{"action":"play","cardIndex":0}' };
@@ -166,6 +187,41 @@ check(
     (capturedMemoryView?.recommendations?.visiblePlayableClues?.length ?? 0) === 0 &&
     (capturedMemoryView?.recommendations?.safeDiscards?.length ?? 0) === 0,
   capturedMemoryView
+);
+check(
+  "certified Fireworks memory delivery is multi-turn (>= 5 messages, ends with the decision turn)",
+  capturedMemoryMessages.length >= 5 &&
+    capturedMemoryMessages[0]?.role === "system" &&
+    capturedMemoryMessages.at(-1)?.role === "user" &&
+    capturedMemoryMessages.some(
+      (message) => message.role === "assistant"
+    ),
+  capturedMemoryMessages.map((message) => message.role)
+);
+check(
+  "certified Fireworks memory decision turn strips the clue-identity channels (recall required)",
+  capturedMemoryView?.ownHand?.knowledge?.every(
+    (knowledge) =>
+      (knowledge.notColors?.length ?? 0) === 0 &&
+      (knowledge.notRanks?.length ?? 0) === 0 &&
+      (knowledge.clueHistory?.length ?? 0) === 0
+  ) === true &&
+    (capturedMemoryView?.events ?? []).every(
+      (event) =>
+        !(
+          (event.action?.action === "clue_color" ||
+            event.action?.action === "clue_rank") &&
+          event.action?.targetPlayerId === memoryScenario.actingPlayerId
+        )
+    ),
+  { knowledge: capturedMemoryView?.ownHand?.knowledge, events: capturedMemoryView?.events }
+);
+check(
+  "certified Fireworks memory earlier turns carry the clue history the decision turn omits",
+  capturedMemoryMessages
+    .slice(0, -1)
+    .some((message) => /Turn \d+:.*clues you/.test(message.content)),
+  capturedMemoryMessages.map((message) => message.content.slice(0, 40))
 );
 
 // The fake "perfect" model below always answers play cardIndex 0, so pick

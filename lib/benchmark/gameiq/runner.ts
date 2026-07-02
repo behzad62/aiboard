@@ -82,19 +82,9 @@ async function evaluateScenario(
     typeof performance !== "undefined" && performance.now
       ? performance.now()
       : Date.now();
-  let providerResult: GameIqProviderResult;
-
-  try {
-    providerResult = normalizeProviderResult(
-      await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
-    );
-  } catch (error) {
-    providerResult = {
-      action: null,
-      rawResponse: error instanceof Error ? error.message : String(error),
-      fallbackUsed: true,
-    };
-  }
+  const providerResult = normalizeProviderResult(
+    await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
+  );
 
   const completed =
     typeof performance !== "undefined" && performance.now

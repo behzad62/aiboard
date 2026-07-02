@@ -53,6 +53,10 @@ import type {
 import {
   scoreFireworksScenarioAction,
 } from "./scenario-packs";
+import {
+  buildFireworksMemoryEpisodeForScenario,
+  isFireworksMemoryScenario,
+} from "./memory-episode";
 import { runFireworksCalibrationBots } from "./calibration-bots";
 import type {
   FireworksBenchmarkCase,
@@ -325,6 +329,7 @@ async function runScenarioCase(params: {
   failures: BenchmarkFailure[];
 }): Promise<FireworksCaseRunResult> {
   const state = params.benchmarkCase.state;
+  const isMemory = isFireworksMemoryScenario(params.benchmarkCase);
   const call = await callFireworksAction({
     input: params.input,
     team: params.team,
@@ -332,7 +337,12 @@ async function runScenarioCase(params: {
     state,
     playerId: params.benchmarkCase.actingPlayerId,
     caseId: params.benchmarkCase.id,
-    redactOwnIdentity: params.benchmarkCase.suite === "fireworks-memory-v0.1",
+    redactOwnIdentity: isMemory,
+    // Memory scenarios are delivered as a multi-turn recall episode: the seeded
+    // clue history is replayed as earlier conversation turns and the decision
+    // turn carries no clue-identity channels, so the model must RECALL. Still
+    // one model call.
+    memoryScenario: isMemory ? params.benchmarkCase : undefined,
     calls: params.calls,
     failures: params.failures,
   });
@@ -497,6 +507,7 @@ async function callFireworksAction(params: {
   playerId: string;
   caseId: string;
   redactOwnIdentity?: boolean;
+  memoryScenario?: FireworksScenario;
   calls: FireworksCallRecord[];
   failures: BenchmarkFailure[];
 }): Promise<FireworksActionCall> {
@@ -512,11 +523,22 @@ async function callFireworksAction(params: {
     omitRecommendations: true,
     redactOwnIdentity: params.redactOwnIdentity === true,
   });
+  // Memory scenarios: replace the single decision prompt with a multi-turn
+  // recall episode (clue history as earlier turns; decision turn carries no
+  // clue-identity channels). Non-memory scenarios keep the exact single-turn
+  // prompt they produced before.
+  const episode = params.memoryScenario
+    ? buildFireworksMemoryEpisodeForScenario(params.memoryScenario, {
+        system,
+        playerId: params.playerId,
+      })
+    : null;
   try {
     const call = await callCertifiedModel({
       model: selectedModelForRole(role),
       system,
       user,
+      ...(episode ? { messages: episode.messages } : {}),
       structuredOutput: buildFireworksActionSchema(),
       maxTokens: params.input.maxTokens ?? role.maxTokens ?? 512,
       temperature: 0,

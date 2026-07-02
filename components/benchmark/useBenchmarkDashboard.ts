@@ -12,8 +12,10 @@ import {
   getBenchmarkSuites,
   getBenchmarkTraces,
   getBuildCheckpoints,
+  getCorruptBenchmarkRunCount,
   getGenericGameMatchRecords,
   getModelStats,
+  rescanBenchmarkRunFiles,
 } from "@/lib/client/store";
 import {
   buildBenchmarkDashboardData,
@@ -45,6 +47,8 @@ export interface BenchmarkDashboardState {
   traceCount: number;
   reportCounts: BenchmarkReportCounts;
   benchmarkFailures: BenchmarkFailure[];
+  /** Run files that could not be read this session (surface as a warning line). */
+  corruptRunFileCount: number;
   load: () => Promise<void>;
   refresh: () => Promise<void>;
   setMessage: (message: string | null) => void;
@@ -103,6 +107,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
   const [reportCounts, setReportCounts] =
     useState<BenchmarkReportCounts>(EMPTY_REPORT_COUNTS);
   const [benchmarkFailures, setBenchmarkFailures] = useState<BenchmarkFailure[]>([]);
+  const [corruptRunFileCount, setCorruptRunFileCount] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +120,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       setTraceCount(0);
       setReportCounts(EMPTY_REPORT_COUNTS);
       setBenchmarkFailures([]);
+      setCorruptRunFileCount(0);
       setLoading(false);
       return;
     }
@@ -195,8 +201,20 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       harnessCertifications: harnessCertifications.length,
     });
     setBenchmarkFailures(benchmarkFailures);
+    setCorruptRunFileCount(getCorruptBenchmarkRunCount());
     setLoading(false);
   }, []);
+
+  // Refresh re-lists run files first so runs that appeared after boot (another
+  // tab, a cloud-synced folder, an external writer) are merged before the
+  // in-memory re-read. The adapter list call is cheap, so refresh stays fast.
+  const refresh = useCallback(async () => {
+    const ready = await ensureReady();
+    if (!ready.needsPassphrase) {
+      await rescanBenchmarkRunFiles();
+    }
+    await load();
+  }, [load]);
 
   useEffect(() => {
     void load().catch((error) => {
@@ -215,8 +233,9 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     traceCount,
     reportCounts,
     benchmarkFailures,
+    corruptRunFileCount,
     load,
-    refresh: load,
+    refresh,
     setMessage,
   };
 }

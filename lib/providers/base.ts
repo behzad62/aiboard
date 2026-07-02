@@ -79,11 +79,31 @@ export interface ChatParams {
   contextProfile?: ModelContextProfile;
 }
 
+/**
+ * Provider-reported token usage for a single model call. Fields are optional
+ * because providers differ in what they surface (some report only output
+ * tokens on a streaming delta, others report both at the end). When present
+ * these are the REAL billed counts, not the chars/4 estimate.
+ */
+export interface StreamUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface StreamChunk {
-  type: "token" | "done" | "error" | "tool_call";
+  /**
+   * `"usage"` is an additive, side-channel chunk carrying provider-reported
+   * token counts. Existing consumers match on the specific types they care
+   * about (`token`/`tool_call`/`error`/`done`) with narrow `if` guards, so an
+   * unrecognized `"usage"` chunk passes through harmlessly — no consumer needs
+   * to change to remain correct.
+   */
+  type: "token" | "done" | "error" | "tool_call" | "usage";
   content?: string;
   error?: string;
   toolCall?: NativeToolCall;
+  /** Present on `type: "usage"` chunks (and optionally alongside `done`). */
+  usage?: StreamUsage;
 }
 
 export interface AIProvider {

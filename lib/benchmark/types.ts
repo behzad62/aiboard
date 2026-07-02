@@ -263,6 +263,12 @@ export interface BenchmarkAttemptV2 {
   costUsd: number | null;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Whether inputTokens/outputTokens are the provider's REAL billed counts
+   * ("reported") or the chars/4 fallback estimate ("estimated"). Additive and
+   * optional so existing records without it are treated as legacy estimates.
+   */
+  usageSource?: "reported" | "estimated";
   modelCalls: number;
   toolCalls: number;
   durationMs: number;
@@ -424,6 +430,8 @@ export interface BenchmarkModelCallTrace {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** "reported" when the provider returned real usage; "estimated" for chars/4 fallback. */
+  usageSource?: "reported" | "estimated";
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;

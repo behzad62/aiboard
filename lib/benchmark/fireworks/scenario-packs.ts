@@ -26,12 +26,19 @@ import type {
   FireworksTacticsCategory,
 } from "./types";
 
-// Bumped whenever generated scenario content changes (ids stay stable).
+// Bumped whenever generated scenario content OR the model-facing delivery of a
+// suite changes (ids stay stable).
 // 0.2.0: opaque seeds/card ids (no category or card-role leakage), varied
 // decision slots and acting players, engine-verified expected actions,
 // dead-card memory variants, seeded events consistent with clue knowledge,
 // and engine-derived harm scoring.
-export const FIREWORKS_SCENARIO_PACK_VERSION = "0.2.0";
+// 0.3.0: memory scenarios (fireworks-memory-v0.1) are now delivered as genuine
+// multi-turn recall episodes — the seeded clue history is replayed as earlier
+// conversation turns (interleaved with neutral distractors) and the decision
+// turn carries no clue-identity channels, so the model must RECALL rather than
+// transcribe. Scenario CONTENT (states/expected/forbidden) is unchanged; only
+// the memory suite's prompt path changed. Scoring is identical.
+export const FIREWORKS_SCENARIO_PACK_VERSION = "0.3.0";
 
 const TACTICS_CATEGORIES: FireworksTacticsCategory[] = [
   "safe_play",

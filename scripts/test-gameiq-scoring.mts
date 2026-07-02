@@ -101,6 +101,27 @@ check(
   { metrics: invalid.metrics, attempt: invalid.attempt }
 );
 
+let providerErrorPropagated = false;
+try {
+  await runGameIqScenarios({
+    runId: "gameiq-test-run-provider-error",
+    modelId: "fake:provider-error",
+    teamCompositionId: "team-fake-provider-error",
+    scenarios: [scenarios[0]],
+    moveProvider: () => {
+      throw new Error("Provider unavailable: simulated scenario failure");
+    },
+  });
+} catch (error) {
+  providerErrorPropagated =
+    error instanceof Error &&
+    error.message === "Provider unavailable: simulated scenario failure";
+}
+check(
+  "GameIQ propagates move provider errors instead of scoring them as model actions",
+  providerErrorPropagated
+);
+
 const connectFourScenario = getGameIqScenarioPack("connect-four")?.scenarios[0];
 if (!connectFourScenario) {
   check("Connect Four scenarios available for illegal action check", false);

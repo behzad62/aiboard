@@ -150,6 +150,8 @@ async function* streamOpenAIResponses(
       string,
       NativeToolCall & { argumentsJson: string }
     >();
+    let reportedInputTokens: number | undefined;
+    let reportedOutputTokens: number | undefined;
     const stream = await client.responses.create({
       model: params.model,
       ...(instructions ? { instructions } : {}),
@@ -187,6 +189,22 @@ async function* streamOpenAIResponses(
         name?: string;
         arguments?: string;
       };
+      // Responses reports usage on the terminal response.completed event.
+      const responseUsage = (
+        event as unknown as {
+          response?: {
+            usage?: { input_tokens?: number; output_tokens?: number } | null;
+          };
+        }
+      ).response?.usage;
+      if (responseUsage) {
+        if (typeof responseUsage.input_tokens === "number") {
+          reportedInputTokens = responseUsage.input_tokens;
+        }
+        if (typeof responseUsage.output_tokens === "number") {
+          reportedOutputTokens = responseUsage.output_tokens;
+        }
+      }
       if (event.type === "response.output_text.delta" && event.delta) {
         yield { type: "token", content: event.delta };
       } else if (event.type === "response.failed") {
@@ -279,6 +297,15 @@ async function* streamOpenAIResponses(
       (call) => call.name
     )) {
       yield { type: "tool_call", toolCall };
+    }
+    if (reportedInputTokens != null || reportedOutputTokens != null) {
+      yield {
+        type: "usage",
+        usage: {
+          inputTokens: reportedInputTokens,
+          outputTokens: reportedOutputTokens,
+        },
+      };
     }
     yield { type: "done" };
   } catch (err) {

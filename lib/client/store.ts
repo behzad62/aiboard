@@ -272,6 +272,15 @@ let initGeneration = 0;
 const readyListeners = new Set<() => void>();
 let benchmarkRunBlobStorageForTests: Map<string, string> | null = null;
 
+/**
+ * Run-file ids already merged into `memory`. Populated during init and by
+ * rescanBenchmarkRunFiles(); lets a rescan skip files it has already folded in
+ * so a double rescan does not re-merge (and attempt counts stay stable).
+ */
+const mergedBenchmarkRunIds = new Set<string>();
+/** Corrupt run-file ids already warned about, so we warn at most once per id per session. */
+const corruptBenchmarkRunIds = new Set<string>();
+
 export function isInitialized(): boolean {
   return memory !== null;
 }
@@ -361,25 +370,111 @@ function commitLoadedStore(generation: number, loaded: ClientStore): void {
 
 async function loadBenchmarkStoreFields(): Promise<BenchmarkStoreFields> {
   const fields = emptyBenchmarkStoreFields();
-  if (!adapter) return fields;
-  const runIds = await adapter.listBenchmarkRunIds();
+  mergedBenchmarkRunIds.clear();
+  corruptBenchmarkRunIds.clear();
+  const runIds = await listBenchmarkRunFileIds();
   for (const runId of runIds) {
-    try {
-      const raw = await adapter.loadBenchmarkRun(runId);
-      if (!raw) continue;
-      const plaintext = await unwrapBenchmarkBlob(raw);
-      const bundle = JSON.parse(plaintext) as Partial<BenchmarkReportBundleV2>;
-      mergeBenchmarkBundleIntoFields(fields, bundle);
-    } catch {
-      // A corrupt benchmark run file should not block app startup.
+    const bundle = await loadBenchmarkRunBundle(runId);
+    if (bundle === CORRUPT_BENCHMARK_RUN) {
+      // A corrupt benchmark run file must not block app startup; it is counted
+      // and surfaced instead of silently swallowed.
+      continue;
     }
+    if (bundle === null) continue;
+    mergeBenchmarkBundleIntoFields(fields, bundle);
+    mergedBenchmarkRunIds.add(runId);
   }
   return fields;
+}
+
+/** Sentinel distinguishing a corrupt/unreadable run blob from a genuinely empty one. */
+const CORRUPT_BENCHMARK_RUN = Symbol("corrupt-benchmark-run");
+
+/** Lists run-file ids from the active source (test map or storage adapter). */
+async function listBenchmarkRunFileIds(): Promise<string[]> {
+  if (benchmarkRunBlobStorageForTests) {
+    return Array.from(benchmarkRunBlobStorageForTests.keys());
+  }
+  if (!adapter) return [];
+  return adapter.listBenchmarkRunIds();
+}
+
+/**
+ * Loads and parses one run blob. Returns the parsed bundle, `null` when the
+ * blob is absent, or the CORRUPT sentinel when it cannot be read/parsed (which
+ * is warned about once per id per session).
+ */
+async function loadBenchmarkRunBundle(
+  runId: string
+): Promise<Partial<BenchmarkReportBundleV2> | null | typeof CORRUPT_BENCHMARK_RUN> {
+  try {
+    const raw = benchmarkRunBlobStorageForTests
+      ? benchmarkRunBlobStorageForTests.get(runId) ?? null
+      : adapter
+        ? await adapter.loadBenchmarkRun(runId)
+        : null;
+    if (!raw) return null;
+    const plaintext = await unwrapBenchmarkBlob(raw);
+    return JSON.parse(plaintext) as Partial<BenchmarkReportBundleV2>;
+  } catch (error) {
+    warnCorruptBenchmarkRun(runId, error);
+    return CORRUPT_BENCHMARK_RUN;
+  }
+}
+
+function warnCorruptBenchmarkRun(runId: string, error: unknown): void {
+  if (corruptBenchmarkRunIds.has(runId)) return;
+  corruptBenchmarkRunIds.add(runId);
+  const reason = error instanceof Error ? error.message : String(error);
+  console.warn(`Benchmark run file "${runId}" could not be read: ${reason}`);
 }
 
 async function unwrapBenchmarkBlob(raw: string): Promise<string> {
   const env = parseEnvelope(raw);
   return env ? await unwrap(env) : raw;
+}
+
+export interface BenchmarkRunRescanResult {
+  /** Run files newly merged into memory by this rescan. */
+  merged: number;
+  /** Run files present but unreadable/corrupt (skipped). */
+  corrupt: number;
+}
+
+/**
+ * Re-lists benchmark run files and merges any that appeared AFTER init (another
+ * tab, a cloud-synced folder, or an external writer) into the in-memory store.
+ *
+ * Scope: new-ids-only. Files already merged (tracked in `mergedBenchmarkRunIds`)
+ * are skipped, so a double rescan does not re-merge and record counts stay
+ * stable. A run file whose contents changed in place after being merged is NOT
+ * re-read here — in-app writers merge their own edits into memory directly, and
+ * detecting external in-place edits would require per-file hashing on every
+ * refresh. `corrupt` counts files that could not be read this session.
+ */
+export async function rescanBenchmarkRunFiles(): Promise<BenchmarkRunRescanResult> {
+  if (!memory) return { merged: 0, corrupt: corruptBenchmarkRunIds.size };
+  const runIds = await listBenchmarkRunFileIds();
+  let merged = 0;
+  for (const runId of runIds) {
+    if (mergedBenchmarkRunIds.has(runId)) continue;
+    const bundle = await loadBenchmarkRunBundle(runId);
+    if (bundle === CORRUPT_BENCHMARK_RUN || bundle === null) continue;
+    const fields = emptyBenchmarkStoreFields();
+    mergeBenchmarkBundleIntoFields(fields, bundle);
+    memory = mergeBenchmarkStoreFields(memory, fields);
+    mergedBenchmarkRunIds.add(runId);
+    merged += 1;
+  }
+  return { merged, corrupt: corruptBenchmarkRunIds.size };
+}
+
+/**
+ * Count of benchmark run files that could not be read this session. The
+ * dashboard surfaces this so silently unreadable evidence is visible.
+ */
+export function getCorruptBenchmarkRunCount(): number {
+  return corruptBenchmarkRunIds.size;
 }
 
 function mergeBenchmarkBundleIntoFields(
@@ -1144,6 +1239,10 @@ export async function saveBenchmarkRunBlob(
   runId: string,
   plaintextJson: string
 ): Promise<void> {
+  // An in-app write already merged this run's records into memory, so mark it
+  // merged: a later rescan must not re-count it as a newly discovered file.
+  mergedBenchmarkRunIds.add(runId);
+  corruptBenchmarkRunIds.delete(runId);
   if (benchmarkRunBlobStorageForTests) {
     benchmarkRunBlobStorageForTests.set(runId, plaintextJson);
     return;
@@ -1159,6 +1258,8 @@ export async function saveBenchmarkRunBlob(
 }
 
 export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
+  mergedBenchmarkRunIds.delete(runId);
+  corruptBenchmarkRunIds.delete(runId);
   if (benchmarkRunBlobStorageForTests) {
     benchmarkRunBlobStorageForTests.delete(runId);
     return;
@@ -1167,8 +1268,69 @@ export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
   await adapter.deleteBenchmarkRun(runId);
 }
 
+export interface ClearAllBenchmarkDataResult {
+  /** Per-run benchmark blob files deleted via the storage adapter. */
+  runFiles: number;
+  /** In-memory benchmark records (v1 + v2) removed across every array. */
+  records: number;
+}
+
+/**
+ * Wipe every benchmark record: all per-run blob files, the merged-run/corrupt
+ * tracking, and every in-memory benchmark array (v1 lab records + v2 certified
+ * records). Persists afterwards so a subsequent rescan resurrects nothing.
+ *
+ * Scope: benchmark evidence ONLY. Game sessions/match records, build
+ * checkpoints/files/memories, model (Build Lab) stats, discussions/messages,
+ * provider settings, and attachments are untouched.
+ */
+export async function clearAllBenchmarkData(): Promise<ClearAllBenchmarkDataResult> {
+  const s = store();
+
+  const records = BENCHMARK_STORE_KEYS.reduce(
+    (sum, key) => sum + (s[key]?.length ?? 0),
+    0
+  );
+
+  // Delete every run blob the adapter knows about (idb keys / FS run files).
+  // Use the file ids straight from the source so orphaned blobs whose records
+  // never merged (e.g. a corrupt file) are cleaned up too.
+  const runFileIds = await listBenchmarkRunFileIds();
+  let runFiles = 0;
+  for (const runId of runFileIds) {
+    await deleteBenchmarkRunBlob(runId);
+    runFiles += 1;
+  }
+
+  // Empty every in-memory benchmark array in place so live references (the
+  // `getBenchmark*` getters return the array itself) observe the clear.
+  for (const key of BENCHMARK_STORE_KEYS) {
+    (s[key] as unknown[]).length = 0;
+  }
+
+  // Belt and suspenders: drop any tracking for ids that were never files.
+  mergedBenchmarkRunIds.clear();
+  corruptBenchmarkRunIds.clear();
+
+  schedulePersist();
+  await flush();
+
+  return { runFiles, records };
+}
+
 export function __enableBenchmarkRunBlobStorageForTests(): void {
   benchmarkRunBlobStorageForTests = new Map();
+  mergedBenchmarkRunIds.clear();
+  corruptBenchmarkRunIds.clear();
+}
+
+/** Test helper: writes a raw run blob directly, bypassing the in-app save path
+ * (simulates a file that appeared after init, e.g. another tab / synced folder). */
+export function __setBenchmarkRunBlobRawForTests(runId: string, raw: string): void {
+  if (!benchmarkRunBlobStorageForTests) {
+    benchmarkRunBlobStorageForTests = new Map();
+  }
+  benchmarkRunBlobStorageForTests.set(runId, raw);
 }
 
 export function __getBenchmarkRunBlobsForTests(): Record<string, string> {
@@ -1190,6 +1352,8 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   adapter = null;
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
+  mergedBenchmarkRunIds.clear();
+  corruptBenchmarkRunIds.clear();
   notifyReady();
 }
 
@@ -1205,6 +1369,8 @@ export function __clearClientStoreForTests(): void {
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
   benchmarkRunBlobStorageForTests = null;
+  mergedBenchmarkRunIds.clear();
+  corruptBenchmarkRunIds.clear();
 }
 
 export async function __setClientStorePassphraseForTests(

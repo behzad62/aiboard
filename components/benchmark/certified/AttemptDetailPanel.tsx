@@ -61,10 +61,13 @@ export function AttemptDetailPanel({
           <Detail label="Tool calls" value={String(detail.summary.toolCallCount)} />
           <Detail label="Budget usage" value={detail.summary.budgetUsageLabel} />
           <Detail
-            label="Verifier failures"
+            label="Failed checks"
             value={String(detail.summary.assertionFailureCount)}
           />
-          <Detail label="Failures" value={String(detail.summary.failureCount)} />
+          <Detail
+            label="Classified failures"
+            value={String(detail.summary.failureCount)}
+          />
           <Detail label="Verified quality" value={formatNormalizedScore(attempt.verifiedQuality)} />
           <Detail label="Cost" value={formatCost(attempt.costUsd)} />
           <Detail label="Time" value={formatDuration(attempt.durationMs)} />

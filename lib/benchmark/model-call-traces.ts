@@ -29,6 +29,7 @@ export interface CreateGameModelCallTraceInput {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  usageSource?: "reported" | "estimated";
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;
@@ -90,6 +91,7 @@ export function createGameModelCallTrace(
     ...(input.outputTokens !== undefined
       ? { outputTokens: input.outputTokens }
       : {}),
+    ...(input.usageSource ? { usageSource: input.usageSource } : {}),
     ...(input.estimatedUsd !== undefined
       ? { estimatedUsd: input.estimatedUsd }
       : {}),

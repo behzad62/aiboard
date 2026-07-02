@@ -187,8 +187,24 @@ export const googleProvider: AIProvider = {
       );
       const result = await chat.sendMessageStream(parts);
       const pendingToolCalls: NativeToolCall[] = [];
+      let reportedInputTokens: number | undefined;
+      let reportedOutputTokens: number | undefined;
+      const captureGeminiUsage = (metadata: unknown): void => {
+        const usage = metadata as
+          | { promptTokenCount?: number; candidatesTokenCount?: number }
+          | undefined;
+        if (typeof usage?.promptTokenCount === "number") {
+          reportedInputTokens = usage.promptTokenCount;
+        }
+        if (typeof usage?.candidatesTokenCount === "number") {
+          reportedOutputTokens = usage.candidatesTokenCount;
+        }
+      };
 
       for await (const chunk of result.stream) {
+        captureGeminiUsage(
+          (chunk as unknown as { usageMetadata?: unknown }).usageMetadata
+        );
         const chunkWithCalls = chunk as unknown as {
           functionCalls?: () => Array<{
             name?: string;
@@ -237,11 +253,13 @@ export const googleProvider: AIProvider = {
         }
       }
       const responseWithCalls = (await result.response) as unknown as {
+        usageMetadata?: unknown;
         functionCalls?: () => Array<{
           name?: string;
           args?: Record<string, unknown>;
         }>;
       };
+      captureGeminiUsage(responseWithCalls.usageMetadata);
       for (const call of responseWithCalls.functionCalls?.() ?? []) {
         const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`;
         const alreadyCaptured = pendingToolCalls.some(
@@ -259,6 +277,15 @@ export const googleProvider: AIProvider = {
       }
       for (const toolCall of pendingToolCalls) {
         yield { type: "tool_call", toolCall };
+      }
+      if (reportedInputTokens != null || reportedOutputTokens != null) {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: reportedInputTokens,
+            outputTokens: reportedOutputTokens,
+          },
+        };
       }
       yield { type: "done" };
     } catch (err) {

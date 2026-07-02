@@ -10,10 +10,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { BenchmarkReportCounts } from "@/components/benchmark/useBenchmarkDashboard";
 import { CaseSuitePicker } from "./CaseSuitePicker";
 import { ModelTeamPicker } from "./ModelTeamPicker";
-import { RunBundlePanel } from "./RunBundlePanel";
 import { RunProgressTimeline } from "./RunProgressTimeline";
 import { AttemptDetailPanel } from "./AttemptDetailPanel";
 import { TeamCompositionBuilder } from "@/components/benchmark/teamiq/TeamCompositionBuilder";
@@ -33,9 +31,15 @@ import {
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget";
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
+import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/types";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
 import {
+  classifyGameIqModelRunOutcome,
+  gameIqBundlePackIds,
+  gameIqPackRunContext,
+  isGameIqBundleSuite,
   listCertifiedSuiteOptions,
+  reidGameIqPackAttempt,
   type CertifiedRunnableTrack,
 } from "@/lib/benchmark/certified/suite-options";
 import {
@@ -90,6 +94,38 @@ const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
+// Safety valve: GameIQ runs every selected model as its own certified run. Each
+// model already fans out to one provider call per scenario per pack, so an
+// unbounded Promise.allSettled over 10 models would open 10x that many calls at
+// once. We run models parallel up to this cap and queue the rest.
+const MAX_PARALLEL_GAMEIQ_MODELS = 4;
+
+// "passed" = the run completed AND every pack attempt passed its verifier.
+// "partial" = completed but only some packs passed. "failed" = the run errored
+// OR completed with zero passing packs (the model's answers scored nothing).
+// Basing this on the actual attempt outcomes — not merely on the run
+// completing — keeps a model that scored 0 from showing a green "Passed".
+type GameIqModelRunStatus =
+  | "queued"
+  | "running"
+  | "passed"
+  | "partial"
+  | "failed";
+
+interface GameIqModelRunState {
+  modelId: string;
+  displayName: string;
+  providerId: string;
+  status: GameIqModelRunStatus;
+  summary?: CertifiedRunSummary;
+  /** Packs whose attempt passed its verifier, out of packs scored. */
+  packsPassed?: number;
+  packsScored?: number;
+  /** Mean verified quality (0-100) across the model's pack attempts. */
+  avgQuality?: number;
+  error?: string;
+}
+
 type RunnableTrack = CertifiedRunnableTrack;
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
 type CertifiedRunPhase = "idle" | "certifying" | "running" | "persisting" | "done";
@@ -103,12 +139,10 @@ const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
 
 export function CertifiedRunPanel({
   track,
-  counts,
   onComplete,
   setMessage,
 }: {
   track: CertifiedTrackView;
-  counts: BenchmarkReportCounts;
   onComplete: () => Promise<void>;
   setMessage: (message: string | null) => void;
 }) {
@@ -117,6 +151,7 @@ export function CertifiedRunPanel({
   const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
   const [models, setModels] = useState<SelectedModel[]>([]);
   const [modelId, setModelId] = useState("");
+  const [gameIqModelIds, setGameIqModelIds] = useState<string[]>([]);
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
   const [workBenchRoleMode, setWorkBenchRoleMode] =
     useState<WorkBenchRoleMode>("solo");
@@ -138,6 +173,9 @@ export function CertifiedRunPanel({
   const [running, setRunning] = useState(false);
   const [runPhase, setRunPhase] = useState<CertifiedRunPhase>("idle");
   const [summary, setSummary] = useState<CertifiedRunSummary | null>(null);
+  const [gameIqModelRuns, setGameIqModelRuns] = useState<GameIqModelRunState[]>(
+    []
+  );
   const runAbortRef = useRef<AbortController | null>(null);
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
@@ -173,6 +211,15 @@ export function CertifiedRunPanel({
     }));
     setModels(enabled);
     setModelId((current) => current || enabled[0]?.modelId || "");
+    setGameIqModelIds((current) =>
+      current.length > 0
+        ? current.filter((gameIqModelId) =>
+            enabled.some((model) => model.modelId === gameIqModelId)
+          )
+        : enabled[0]
+          ? [enabled[0].modelId]
+          : []
+    );
     setTeamModelIds((current) =>
       current.length > 0
         ? current.filter((modelId) =>
@@ -215,6 +262,7 @@ export function CertifiedRunPanel({
     running,
     selectedTrack,
     modelId,
+    gameIqModelIds,
     teamModelIds,
     workBenchModelIds,
     workBenchRoleMode,
@@ -243,10 +291,10 @@ export function CertifiedRunPanel({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-4">
-            {lockedTrack ? (
-              <StaticField label="Track" value={trackLabel(selectedTrack)} />
-            ) : (
+          <div
+            className={`grid gap-3 ${lockedTrack ? "md:grid-cols-3" : "md:grid-cols-4"}`}
+          >
+            {!lockedTrack && (
               <CaseSuitePicker
                 value={selectedTrack}
                 options={TRACK_OPTIONS}
@@ -262,7 +310,18 @@ export function CertifiedRunPanel({
               }
               onChange={setSuiteId}
             />
-            {selectedTrack === "teamiq" ? (
+            {selectedTrack === "gameiq" ? (
+              <StaticField
+                label="Models"
+                value={
+                  gameIqModelIds.length >= 1
+                    ? `${gameIqModelIds.length} model${
+                        gameIqModelIds.length === 1 ? "" : "s"
+                      } selected`
+                    : "Select at least one model"
+                }
+              />
+            ) : selectedTrack === "teamiq" ? (
               <StaticField
                 label="Models"
                 value={
@@ -299,6 +358,13 @@ export function CertifiedRunPanel({
               />
             )}
           </div>
+          {selectedTrack === "gameiq" && (
+            <GameIqModelChecklist
+              models={models}
+              selectedModelIds={gameIqModelIds}
+              onChange={setGameIqModelIds}
+            />
+          )}
           {selectedTrack === "teamiq" && (
             <div className="space-y-4">
               <TeamCompositionBuilder
@@ -390,45 +456,51 @@ export function CertifiedRunPanel({
               />
             </div>
           )}
-          <RunProgressTimeline
-            items={[
-              {
-                label: "Select",
-                status:
-                  canRun || runPhase !== "idle" || summary ? "done" : "idle",
-              },
-              {
-                label: "Certify",
-                status:
-                  runPhase === "certifying"
-                    ? "running"
-                    : runPhase === "running" ||
-                        runPhase === "persisting" ||
-                        runPhase === "done" ||
-                        summary
-                      ? "done"
-                      : "idle",
-              },
-              {
-                label: "Run",
-                status:
-                  runPhase === "running"
-                    ? "running"
-                    : runPhase === "persisting" || runPhase === "done" || summary
-                      ? "done"
-                      : "idle",
-              },
-              {
-                label: "Persist",
-                status:
-                  runPhase === "persisting"
-                    ? "running"
-                    : runPhase === "done" || summary
-                      ? "done"
-                      : "idle",
-              },
-            ]}
-          />
+          {selectedTrack === "gameiq" ? (
+            <GameIqModelRunProgress runs={gameIqModelRuns} />
+          ) : (
+            <RunProgressTimeline
+              items={[
+                {
+                  label: "Select",
+                  status:
+                    canRun || runPhase !== "idle" || summary ? "done" : "idle",
+                },
+                {
+                  label: "Certify",
+                  status:
+                    runPhase === "certifying"
+                      ? "running"
+                      : runPhase === "running" ||
+                          runPhase === "persisting" ||
+                          runPhase === "done" ||
+                          summary
+                        ? "done"
+                        : "idle",
+                },
+                {
+                  label: "Run",
+                  status:
+                    runPhase === "running"
+                      ? "running"
+                      : runPhase === "persisting" ||
+                          runPhase === "done" ||
+                          summary
+                        ? "done"
+                        : "idle",
+                },
+                {
+                  label: "Persist",
+                  status:
+                    runPhase === "persisting"
+                      ? "running"
+                      : runPhase === "done" || summary
+                        ? "done"
+                        : "idle",
+                },
+              ]}
+            />
+          )}
           <div className="flex flex-wrap gap-2">
             <Button disabled={!canRun} onClick={() => void runSelected()}>
               {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -453,14 +525,21 @@ export function CertifiedRunPanel({
         </CardContent>
       </Card>
       <div className="space-y-4">
-        <RunBundlePanel counts={counts} />
-        <AttemptDetailPanel summary={summary} />
+        {selectedTrack === "gameiq" ? (
+          <GameIqModelRunSummaryPanel runs={gameIqModelRuns} models={models} />
+        ) : (
+          <AttemptDetailPanel summary={summary} />
+        )}
       </div>
     </div>
   );
 
   async function runSelected() {
     if (!suiteId) return;
+    if (selectedTrack === "gameiq") {
+      await runGameIqMultiModel();
+      return;
+    }
     const model = models.find((candidate) => candidate.modelId === modelId);
     const workBenchSelectedModels = workBenchModelsForRun(
       models,
@@ -543,17 +622,7 @@ export function CertifiedRunPanel({
         }),
         certification,
         signal: abortController.signal,
-        runner: (context, options) => {
-          if (selectedTrack === "gameiq") {
-            return runCertifiedGameIq({
-              context,
-              models: [model!],
-              scenarioPackIds: [suiteId],
-              teamCompositionIds: [primaryTeam.id],
-              trials: 1,
-              signal: options?.signal,
-            });
-          }
+        runner: async (context, options) => {
           if (selectedTrack === "toolreliability") {
             return runCertifiedToolReliability({
               context,
@@ -615,6 +684,199 @@ export function CertifiedRunPanel({
     }
   }
 
+  async function runGameIqMultiModel() {
+    const selectedModels = gameIqModelIds
+      .map((id) => models.find((candidate) => candidate.modelId === id))
+      .filter((model): model is SelectedModel => Boolean(model));
+    if (selectedModels.length === 0) return;
+
+    const abortController = new AbortController();
+    runAbortRef.current = abortController;
+    setRunning(true);
+    setRunPhase("certifying");
+    setSummary(null);
+    setMessage(null);
+    setGameIqModelRuns(
+      selectedModels.map((model) => ({
+        modelId: model.modelId,
+        displayName: model.displayName,
+        providerId: model.providerId,
+        status: "queued",
+      }))
+    );
+
+    // GameIQ expands the selected suite to its concrete pack ids: the "All
+    // GameIQ packs" bundle becomes one case (and one scored attempt) per pack,
+    // so leaderboard attribution stays per-pack; a single-pack selection stays
+    // a single case. The pack case ids are model-independent, so we build the
+    // shared cases once and reuse them for every selected model.
+    const gameIqPackIds = gameIqBundlePackIds(suiteId);
+    const caseRecords = gameIqPackIds.map((packId) =>
+      caseForSelection("gameiq", packId, fireworksPlayerCount)
+    );
+
+    try {
+      await saveHarnessCertificationResult(certification);
+      for (const caseRecord of caseRecords) {
+        await saveBenchmarkCaseV2(caseRecord);
+      }
+      setRunPhase("running");
+
+      const batchStamp = Date.now();
+      const runOneModel = async (
+        model: SelectedModel,
+        index: number
+      ): Promise<GameIqModelRunState> => {
+        updateGameIqModelRun(model.modelId, { status: "running" });
+        // Unique per model even if two runs start in the same millisecond: the
+        // batch index disambiguates the shared timestamp.
+        const runId = `ui-gameiq-${batchStamp}-${slugForRunId(
+          model.providerId
+        )}-${slugForRunId(model.modelId)}-${index}`;
+        const team = deriveSoloTeamComposition({
+          modelId: model.modelId,
+          providerId: model.providerId,
+          displayName: model.displayName,
+        });
+        await saveBenchmarkTeamComposition(team);
+        // Capture this model's pack attempts from inside the runner so the
+        // per-model badge reflects the real scores, not just run completion.
+        let capturedAttempts: BenchmarkAttempt[] = [];
+        const result = await runCertifiedBenchmark({
+          runId,
+          suiteId: "suite-gameiq",
+          track: "gameiq",
+          harnessProfile: DIRECT_MODEL_HARNESS,
+          caseIds: caseRecords.map((caseRecord) => caseRecord.id),
+          teamCompositionIds: [team.id],
+          modelBudget: certifiedRunBudgetForCases(caseRecords, {
+            maxModelCallMs: DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS,
+          }),
+          certification,
+          signal: abortController.signal,
+          runner: async (context, options) => {
+            // Run each selected pack as its own attempt so the bundle produces
+            // one scored attempt per pack (distinct caseId + attempt id). The
+            // certified GameIQ runner keys its attempt/verifier ids off the run
+            // id alone, so a shared context would collide across packs; the
+            // per-pack wrapper below scopes the case id and re-ids the returned
+            // attempts and their verifiers by pack.
+            const attempts: BenchmarkAttempt[] = [];
+            for (const packId of gameIqPackIds) {
+              const packContext = gameIqPackRunContext(context, packId);
+              const packAttempts = await runCertifiedGameIq({
+                context: packContext,
+                models: [model],
+                scenarioPackIds: [packId],
+                teamCompositionIds: [team.id],
+                trials: 1,
+                signal: options?.signal,
+              });
+              attempts.push(
+                ...packAttempts.map((attempt) =>
+                  reidGameIqPackAttempt(attempt, packId)
+                )
+              );
+            }
+            capturedAttempts = attempts;
+            return attempts;
+          },
+        });
+        // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
+        // the provider/budget error into the summary status; treat that as a
+        // failure for the batch tally too.
+        if (result.status !== "completed") {
+          const state: GameIqModelRunState = {
+            modelId: model.modelId,
+            displayName: model.displayName,
+            providerId: model.providerId,
+            status: "failed",
+            summary: result,
+            error: result.error ?? "Run did not complete.",
+          };
+          updateGameIqModelRun(model.modelId, state);
+          return state;
+        }
+        // Derive the real outcome from the pack attempts (a "failed_model"
+        // attempt completes the run but scored 0), not from run completion.
+        const outcome = classifyGameIqModelRunOutcome(true, capturedAttempts);
+        const state: GameIqModelRunState = {
+          modelId: model.modelId,
+          displayName: model.displayName,
+          providerId: model.providerId,
+          status: outcome.status,
+          summary: result,
+          packsScored: outcome.packsScored,
+          packsPassed: outcome.packsPassed,
+          avgQuality: outcome.avgQuality,
+          error:
+            outcome.status === "failed"
+              ? "The model completed the run but did not pass any pack (scored 0)."
+              : undefined,
+        };
+        updateGameIqModelRun(model.modelId, state);
+        return state;
+      };
+
+      // Promise.allSettled isolation: one model failing (provider error, budget,
+      // thrown runner) does not abort the others. A per-model throw still resolves
+      // to a "failed" row so the batch tally stays accurate.
+      const settled = await mapWithConcurrency(
+        selectedModels,
+        MAX_PARALLEL_GAMEIQ_MODELS,
+        async (model, index) => {
+          try {
+            return await runOneModel(model, index);
+          } catch (error) {
+            const state: GameIqModelRunState = {
+              modelId: model.modelId,
+              displayName: model.displayName,
+              providerId: model.providerId,
+              status: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            };
+            updateGameIqModelRun(model.modelId, state);
+            return state;
+          }
+        }
+      );
+
+      const passed = settled.filter((run) => run.status === "passed").length;
+      const partial = settled.filter((run) => run.status === "partial").length;
+      const failed = settled.filter((run) => run.status === "failed").length;
+      const tally = [
+        `${passed} passed`,
+        ...(partial > 0 ? [`${partial} partial`] : []),
+        `${failed} failed`,
+      ].join(", ");
+      setRunPhase("persisting");
+      setMessage(
+        `Ran ${settled.length} model${
+          settled.length === 1 ? "" : "s"
+        } on ${gameIqSuiteLabel(suiteId)}: ${tally}`
+      );
+      await onComplete();
+      setRunPhase("done");
+    } catch (error) {
+      setRunPhase("idle");
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunning(false);
+      runAbortRef.current = null;
+    }
+  }
+
+  function updateGameIqModelRun(
+    modelId: string,
+    patch: Partial<GameIqModelRunState>
+  ) {
+    setGameIqModelRuns((current) =>
+      current.map((run) =>
+        run.modelId === modelId ? { ...run, ...patch } : run
+      )
+    );
+  }
+
   function cancelRun() {
     runAbortRef.current?.abort("Cancelled from certified benchmark panel.");
     setMessage("Cancelling certified run...");
@@ -638,6 +900,39 @@ export function CertifiedRunPanel({
       setCheckingWorkBenchRunner(false);
     }
   }
+}
+
+// Runs `mapper` over `items` with at most `limit` in flight at once, preserving
+// input order in the returned array. Used to cap how many GameIQ model runs open
+// their provider calls simultaneously (see MAX_PARALLEL_GAMEIQ_MODELS).
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index]!, index);
+    }
+  };
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+function slugForRunId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "model";
+}
+
+function gameIqSuiteLabel(suiteId: string): string {
+  const option = listCertifiedSuiteOptions("gameiq").find(
+    (candidate) => candidate.id === suiteId
+  );
+  return option?.label ?? (isGameIqBundleSuite(suiteId) ? "all GameIQ packs" : suiteId);
 }
 
 function caseForSelection(
@@ -737,7 +1032,7 @@ function caseForSelection(
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
-    scoring: { scoringVersion: "certified-gameiq-v1", primary: "game_iq" },
+    scoring: { scoringVersion: "certified-gameiq-v0.2", primary: "game_iq" },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-UI-GAMEIQ",
@@ -924,6 +1219,183 @@ function StaticField({
         </div>
       )}
     </div>
+  );
+}
+
+function GameIqModelChecklist({
+  models,
+  selectedModelIds,
+  onChange,
+}: {
+  models: SelectedModel[];
+  selectedModelIds: string[];
+  onChange: (modelIds: string[]) => void;
+}) {
+  if (models.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+        Add and enable at least one provider model in Settings to run GameIQ.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="grid gap-2 md:grid-cols-3">
+        {models.map((model) => {
+          const checked = selectedModelIds.includes(model.modelId);
+          return (
+            <label
+              key={model.modelId}
+              className={`flex min-h-16 cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+                checked ? "border-primary bg-primary/5" : "bg-card"
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4"
+                checked={checked}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    onChange([...selectedModelIds, model.modelId]);
+                  } else {
+                    onChange(
+                      selectedModelIds.filter((id) => id !== model.modelId)
+                    );
+                  }
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block truncate font-medium">
+                  {model.displayName || model.modelId}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {model.providerId}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {selectedModelIds.length === 0
+          ? "Select at least one model. Each selected model runs the benchmark on its own, in parallel."
+          : `${selectedModelIds.length} model${
+              selectedModelIds.length === 1 ? "" : "s"
+            } selected. Each runs the benchmark on its own, in parallel.`}
+      </p>
+    </div>
+  );
+}
+
+function GameIqModelRunProgress({ runs }: { runs: GameIqModelRunState[] }) {
+  if (runs.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
+        Select models and start the run to see per-model progress here.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {runs.map((run) => (
+        <div
+          key={run.modelId}
+          className="flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+        >
+          <div className="min-w-0">
+            <div className="truncate font-medium">{run.displayName}</div>
+            <div className="truncate text-xs text-muted-foreground">
+              {run.providerId}
+            </div>
+            {run.status === "failed" && run.error && (
+              <div className="mt-1 text-xs leading-snug text-destructive">
+                {run.error}
+              </div>
+            )}
+          </div>
+          <GameIqModelStatusBadge run={run} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GameIqModelStatusBadge({ run }: { run: GameIqModelRunState }) {
+  const label =
+    run.status === "queued"
+      ? "Queued"
+      : run.status === "running"
+        ? "Running"
+        : run.status === "passed"
+          ? "Passed"
+          : run.status === "partial"
+            ? "Partial"
+            : "Failed";
+  const tone =
+    run.status === "passed"
+      ? "border-primary/40 bg-primary/10 text-primary"
+      : run.status === "partial"
+        ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        : run.status === "failed"
+          ? "border-destructive/40 bg-destructive/10 text-destructive"
+          : run.status === "running"
+            ? "border-border bg-muted text-foreground"
+            : "border-border bg-muted/50 text-muted-foreground";
+  return (
+    <span
+      className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function GameIqModelRunSummaryPanel({
+  runs,
+  models,
+}: {
+  runs: GameIqModelRunState[];
+  models: SelectedModel[];
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Per-model results</CardTitle>
+        <CardDescription>
+          Each selected model runs the GameIQ suite as its own certified run.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {runs.length === 0 ? (
+          <p className="text-muted-foreground">
+            {models.length === 0
+              ? "Enable a provider model in Settings to run GameIQ."
+              : "No run yet. Select models and start the benchmark."}
+          </p>
+        ) : (
+          runs.map((run) => (
+            <div key={run.modelId} className="rounded-md border px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium">{run.displayName}</span>
+                <GameIqModelStatusBadge run={run} />
+              </div>
+              {run.packsScored !== undefined && run.packsScored > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Avg quality {Math.round(run.avgQuality ?? 0)} · {run.packsPassed}
+                  /{run.packsScored} pack
+                  {run.packsScored === 1 ? "" : "s"} passed
+                </div>
+              )}
+              {run.status === "failed" && run.error && (
+                <div className="mt-1 text-xs leading-snug text-destructive">
+                  {run.error}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

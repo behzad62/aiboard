@@ -16,7 +16,15 @@ export function BenchmarkSummaryStrip({
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
         <SummaryCard label="Runs" value={String(dashboard.summary.totalRuns)} />
-        <SummaryCard label="Cases" value={String(dashboard.summary.totalCases)} />
+        <SummaryCard
+          label="Runnable cases"
+          value={String(dashboard.summary.totalCases)}
+          hint={
+            dashboard.summary.capturedCases > 0
+              ? `+${dashboard.summary.capturedCases} captured stop-report case(s), not runnable`
+              : undefined
+          }
+        />
         <SummaryCard label="Models" value={String(dashboard.summary.totalModels)} />
         <SummaryCard label="Completion" value={pct(dashboard.summary.completionRate)} />
         <SummaryCard label="Schema valid" value={pct(dashboard.summary.schemaValidRate)} />
@@ -34,13 +42,26 @@ export function BenchmarkSummaryStrip({
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function SummaryCard({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div className="rounded-lg border bg-card px-4 py-3">
       <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+      {hint ? (
+        <div className="mt-1 text-[11px] leading-tight text-muted-foreground">
+          {hint}
+        </div>
+      ) : null}
     </div>
   );
 }

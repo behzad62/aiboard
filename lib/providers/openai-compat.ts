@@ -318,11 +318,22 @@ export async function* streamOpenAICompatibleChat(
         }
       : {};
 
+  // Ask OpenAI/OpenRouter to append a final usage-only chunk. Local
+  // OpenAI-compatible servers (Ollama, LM Studio) can reject unknown stream
+  // options, so only the hosted providers opt in; if a custom endpoint happens
+  // to include usage anyway, the parsing below still picks it up.
+  const streamOptionsField =
+    providerId === "openai" || providerId === "openrouter"
+      ? { stream_options: { include_usage: true } }
+      : {};
+
   try {
     const pendingToolCalls = new Map<
       number,
       NativeToolCall & { argumentsJson: string }
     >();
+    let reportedInputTokens: number | undefined;
+    let reportedOutputTokens: number | undefined;
     const stream = await client.chat.completions.create({
       model: params.model,
       messages,
@@ -332,10 +343,24 @@ export async function* streamOpenAICompatibleChat(
       ...(reasoningField as Record<string, never>),
       ...(structuredOutputField as Record<string, never>),
       ...(combinedToolField as Record<string, never>),
+      ...(streamOptionsField as Record<string, never>),
       stream: true,
     });
 
     for await (const chunk of stream) {
+      const usage = (
+        chunk as unknown as {
+          usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+        }
+      ).usage;
+      if (usage) {
+        if (typeof usage.prompt_tokens === "number") {
+          reportedInputTokens = usage.prompt_tokens;
+        }
+        if (typeof usage.completion_tokens === "number") {
+          reportedOutputTokens = usage.completion_tokens;
+        }
+      }
       const delta = chunk.choices[0]?.delta;
       const token = delta?.content;
       if (token) {
@@ -360,6 +385,15 @@ export async function* streamOpenAICompatibleChat(
       (call) => call.name
     )) {
       yield { type: "tool_call", toolCall };
+    }
+    if (reportedInputTokens != null || reportedOutputTokens != null) {
+      yield {
+        type: "usage",
+        usage: {
+          inputTokens: reportedInputTokens,
+          outputTokens: reportedOutputTokens,
+        },
+      };
     }
     yield { type: "done" };
   } catch (err) {

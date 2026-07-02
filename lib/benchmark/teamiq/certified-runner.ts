@@ -76,7 +76,10 @@ type TeamIqParticipantCall = {
 
 const TEAMIQ_HARNESS_VERSION = "teamiq-runner-v0.1";
 const TEAMIQ_PROMPT_SET_VERSION = "teamiq-toolreliability-prompts-v0.1";
-const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-current";
+// Must match the persisted case record's scoring.scoringVersion
+// ("teamiq-toolreliability-v2" in CertifiedRunPanel's caseForSelection) so the
+// attempt's VERSIONS stamp and its case record agree.
+const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-v2";
 const CERTIFIED_REASONING_EFFORTS = new Set<ReasoningEffort>([
   "default",
   "low",

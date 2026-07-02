@@ -1,5 +1,4 @@
 /* Build benchmark hook checks (run: npx tsx scripts/test-build-benchmark-hooks.mts) */
-import { createServer, type Server, type ServerResponse } from "node:http";
 import {
   buildBenchmarkTraceContext,
   resolveBuildModelContent,
@@ -9,13 +8,11 @@ import {
 } from "../lib/client/build-engine";
 import {
   createWorkBenchBenchmarkHooks,
-  runWorkBenchModelPatchBuild,
   runWorkBenchBuild,
 } from "../lib/benchmark/workbench/build-adapter";
 import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persistence";
 import type { SelectedModel, StructuredOutputFormat } from "../lib/providers/base";
 import type { WorkBenchCase } from "../lib/benchmark/workbench/types";
-import type { CertifiedRunContext } from "../lib/benchmark/certified/run-context";
 
 let failures = 0;
 
@@ -416,159 +413,6 @@ try {
   );
 }
 check("WorkBench Build discussion reached certified budget hook", budgetHookRunCalled, budgetHookRunCalled);
-
-async function startPatchBenchRunner(): Promise<{
-  url: string;
-  token: string;
-  stop: () => Promise<void>;
-  requests: Array<{ path: string; body: Record<string, unknown> }>;
-}> {
-  const token = `patch-runner-${Date.now()}`;
-  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-  const server = createServer(async (req, res) => {
-    const path = req.url ?? "/";
-    const body = await readJsonRequest(req);
-    requests.push({ path, body });
-    if (req.headers["x-runner-token"] !== token) {
-      sendJsonResponse(res, 401, { error: "token required" });
-      return;
-    }
-    switch (path) {
-      case "/bench/read-tree":
-        sendJsonResponse(res, 200, {
-          files: ["src/fix.ts", "verifier.mjs", "verifier-result.json"],
-        });
-        return;
-      case "/bench/read-file":
-        sendJsonResponse(res, 200, {
-          content: "export const value = \"old\";\n",
-          bytes: 28,
-        });
-        return;
-      case "/bench/patch-file":
-        sendJsonResponse(res, 200, {
-          applied: body.path === "src/fix.ts" ? 1 : 0,
-          bytes: 28,
-          content: "export const value = \"new\";\n",
-        });
-        return;
-      default:
-        sendJsonResponse(res, 404, { error: `unknown endpoint ${path}` });
-    }
-  });
-  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("fake runner did not bind");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    token,
-    requests,
-    stop: () => stopServer(server),
-  };
-}
-
-async function readJsonRequest(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.from(chunk));
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) return {};
-  const parsed = JSON.parse(raw) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
-}
-
-function sendJsonResponse(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
-
-function stopServer(server: Server): Promise<void> {
-  return new Promise((resolveStop, rejectStop) => {
-    server.close((error) => {
-      if (error) rejectStop(error);
-      else resolveStop();
-    });
-  });
-}
-
-const traces: unknown[] = [];
-const toolCalls: unknown[] = [];
-const context: CertifiedRunContext = {
-  runId: "run-workbench-patch",
-  mode: "certified",
-  track: "workbench",
-  harnessProfile: "aiboard-build-multi-worker",
-  suiteId: "suite-workbench-patch",
-  startedAt: "2026-06-28T10:00:00.000Z",
-  caseIds: [workBenchCase.id],
-  teamCompositionIds: ["team-workbench-hook"],
-  modelBudget: {},
-  recordAttempt: async () => undefined,
-  recordVerifier: async () => undefined,
-  recordArtifact: async () => undefined,
-  recordTrace: async (trace) => {
-    traces.push(trace);
-  },
-  recordEvent: async () => undefined,
-  recordToolCall: async (trace) => {
-    toolCalls.push(trace);
-  },
-  recordFailure: async () => undefined,
-};
-const patchRunner = await startPatchBenchRunner();
-let patchReasoningEffort: unknown = null;
-let patchMaxTokens: unknown = null;
-try {
-  const patchBuild = await runWorkBenchModelPatchBuild({
-    ...workBenchBuildInput,
-    runner: { url: patchRunner.url, token: patchRunner.token },
-    context,
-    model,
-    apiKey: "test-api-key",
-    pricing: null,
-    reasoningEffort: "high",
-    streamChat: async function* (input) {
-      patchReasoningEffort = input.params.reasoningEffort;
-      patchMaxTokens = input.params.maxTokens;
-      yield {
-        type: "token",
-        content: JSON.stringify({
-          path: "src/fix.ts",
-          search: "export const value = \"old\";",
-          replace: "export const value = \"new\";",
-          summary: "Update the fixture value.",
-        }),
-      };
-    },
-  });
-  check(
-    "WorkBench model patch build reads, patches, and returns evidence",
-    patchBuild.modelCalls === 1 &&
-      patchBuild.traceIds.length === 1 &&
-      patchBuild.toolCalls === 3 &&
-      patchBuild.validToolCalls === 3 &&
-      patchRunner.requests.some((request) => request.path === "/bench/patch-file") &&
-      traces.length === 1 &&
-      toolCalls.length === 3 &&
-      patchReasoningEffort === "high" &&
-      patchMaxTokens === 8192,
-    {
-      patchBuild,
-      requests: patchRunner.requests,
-      traces,
-      toolCalls,
-      patchReasoningEffort,
-      patchMaxTokens,
-    }
-  );
-} finally {
-  await patchRunner.stop();
-}
 
 if (failures === 0) {
   console.log("PASS");

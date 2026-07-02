@@ -24,6 +24,13 @@ import {
 import { listGameIqScenarioPacks } from "./packs";
 import { runGameIqScenarios } from "./runner";
 import { GAMEIQ_PLACEHOLDER_CLUE_WORD } from "./validation";
+import { FIREWORKS_MEMORY_RECALL_TAG } from "./fireworks";
+import {
+  buildFireworksMemoryEpisode,
+  fireworksDecisionSlot,
+} from "@/lib/benchmark/fireworks/memory-episode";
+import type { ChatMessage } from "@/lib/providers/base";
+import type { FireworksPlayerView } from "@/lib/games/fireworks/types";
 
 const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
   GameIqScenario["gameId"],
@@ -145,10 +152,23 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
     startedAt: input.context.startedAt,
     harnessProfile: input.context.harnessProfile,
     moveProvider: async ({ scenario, scenarioIndex, totalScenarios }) => {
+      const system =
+        "You are a certified GameIQ benchmark participant. Return only the requested structured JSON.";
+      // Fireworks memory-recall scenarios are delivered as a multi-turn episode:
+      // the seeded clue history is replayed as earlier conversation turns and
+      // the decision turn carries no clue-identity channels, so the model must
+      // RECALL. Every other game/category stays single-turn and byte-identical.
+      const memoryMessages = fireworksMemoryEpisodeMessages(
+        scenario,
+        scenarioIndex,
+        totalScenarios,
+        system
+      );
       const call = await callCertifiedModel({
         model: input.model,
-        system: "You are a certified GameIQ benchmark participant. Return only the requested structured JSON.",
+        system,
         user: gameIqScenarioPrompt(scenario, scenarioIndex, totalScenarios),
+        ...(memoryMessages ? { messages: memoryMessages } : {}),
         structuredOutput: gameIqStructuredOutputForScenario(scenario),
         maxTokens: input.maxTokens ?? 512,
         temperature: 0,
@@ -277,6 +297,52 @@ export function gameIqScenarioPrompt(
     `State JSON: ${JSON.stringify(gameIqModelStateView(scenario))}`,
     `Return JSON matching this shape (the example values are placeholders, not a suggested or legal move — replace them with your own answer): ${gameIqActionShapeExample(scenario)}.`,
   ].join("\n\n");
+}
+
+// Multi-turn recall delivery for fireworks memory scenarios. Returns null for
+// every other scenario (single-turn, byte-identical to before). When non-null,
+// the seeded clue history is narrated as earlier conversation turns and the
+// final decision turn carries the GameIQ prompt over a clue-identity-stripped
+// state view, so the model must RECALL the clues to answer. Still one call.
+function fireworksMemoryEpisodeMessages(
+  scenario: GameIqScenario,
+  scenarioIndex: number,
+  totalScenarios: number,
+  system: string
+): ChatMessage[] | null {
+  if (
+    scenario.gameId !== "fireworks" ||
+    !scenario.tags.includes(FIREWORKS_MEMORY_RECALL_TAG)
+  ) {
+    return null;
+  }
+  const view = scenario.initialState as FireworksPlayerView;
+  const episode = buildFireworksMemoryEpisode({
+    system,
+    view,
+    decisionSlot: fireworksDecisionSlot(scenario),
+    episodeId: scenario.id,
+  });
+  // Reuse the episode's system + narrated recall turns (everything before its
+  // own fireworks-style decision turn), then append the GameIQ decision turn
+  // built over the identity-stripped decision view so the model returns the
+  // GameIQ structured shape it is scored against.
+  const narration = episode.messages.slice(0, -1);
+  const decisionScenario: GameIqScenario = {
+    ...scenario,
+    initialState: episode.decisionView,
+  };
+  return [
+    ...narration,
+    {
+      role: "user",
+      content: gameIqScenarioPrompt(
+        decisionScenario,
+        scenarioIndex,
+        totalScenarios
+      ),
+    },
+  ];
 }
 
 // Answer conventions each game needs so a correct answer never fails on

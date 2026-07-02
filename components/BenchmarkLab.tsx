@@ -1,12 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Trash2 } from "lucide-react";
 import {
   Card,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { clearAllBenchmarkData } from "@/lib/benchmark/store";
+import { ClearBenchmarkDataDialog } from "@/components/benchmark/ClearBenchmarkDataDialog";
 import { BenchmarkCharts } from "@/components/benchmark/BenchmarkCharts";
 import { BenchmarkEvidencePanel } from "@/components/benchmark/BenchmarkEvidencePanel";
 import { BenchmarkHeadToHeadTable } from "@/components/benchmark/BenchmarkHeadToHeadTable";
@@ -46,12 +50,15 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
     traceCount,
     reportCounts,
     benchmarkFailures,
+    corruptRunFileCount,
     refresh,
     setMessage,
   } = useBenchmarkDashboard();
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] =
     useState<BenchmarkEvidenceItem | null>(null);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const { exportJson, exportMarkdown, importJson } = useBenchmarkReportActions({
     dashboard,
     reload: refresh,
@@ -142,7 +149,6 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
             view === "full") && (
             <CertifiedRunPanel
               track={certifiedTrack ?? "all"}
-              counts={reportCounts}
               onComplete={refresh}
               setMessage={setMessage}
             />
@@ -151,6 +157,7 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
             certified={certifiedDashboard}
             counts={reportCounts}
             track={certifiedTrack ?? "all"}
+            corruptRunFileCount={corruptRunFileCount}
             onRefresh={refresh}
             setMessage={setMessage}
           />
@@ -185,19 +192,77 @@ export function BenchmarkLab({ view = "full" }: { view?: BenchmarkLabView }) {
 
       {showReports && (
         <div className="space-y-4">
+          {corruptRunFileCount > 0 && (
+            <div
+              role="status"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+            >
+              {corruptRunFileCount} benchmark run file
+              {corruptRunFileCount === 1 ? "" : "s"} could not be read — see the
+              browser console for details.
+            </div>
+          )}
           <BenchmarkSummaryStrip
             dashboard={dashboard}
             suiteCount={suiteCount}
             traceCount={traceCount}
           />
           <BenchmarkReportSummary counts={reportCounts} />
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3">
+            <div className="text-sm">
+              <p className="font-medium text-foreground">Danger zone</p>
+              <p className="text-muted-foreground">
+                Permanently delete every benchmark record. Game match history,
+                Build Lab stats, and settings are kept. Export a bundle first if
+                you might need this data later.
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setClearDialogOpen(true)}
+              data-testid="clear-benchmark-open"
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Clear all benchmark data
+            </Button>
+          </div>
         </div>
+      )}
+
+      {clearDialogOpen && (
+        <ClearBenchmarkDataDialog
+          busy={clearing}
+          onCancel={() => {
+            if (!clearing) setClearDialogOpen(false);
+          }}
+          onConfirm={() => void handleClearAllBenchmarkData()}
+        />
       )}
     </section>
   );
 
   function reportError(error: unknown) {
     setMessage(error instanceof Error ? error.message : String(error));
+  }
+
+  async function handleClearAllBenchmarkData() {
+    setClearing(true);
+    try {
+      const { runFiles, records } = await clearAllBenchmarkData();
+      await refresh();
+      setClearDialogOpen(false);
+      setMessage(
+        `Cleared all benchmark data: ${records} record${
+          records === 1 ? "" : "s"
+        } and ${runFiles} run file${runFiles === 1 ? "" : "s"} deleted. Game ` +
+          `match history, Build Lab stats, and settings were kept.`
+      );
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setClearing(false);
+    }
   }
 }
 

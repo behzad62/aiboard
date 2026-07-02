@@ -98,6 +98,15 @@ export interface CertifiedRunScore {
   displayName: string;
   modelIds: string[];
   tracks: string[];
+  /**
+   * Human-readable titles of the cases this row aggregates, so the leaderboard
+   * can name WHICH packs/cases the row came from (not just its tracks). Unique,
+   * in first-appearance order across the row's attempts. Each entry is the case
+   * record's `title` resolved from the aggregate input's `cases`, falling back to
+   * the raw caseId when no case record is found. Full titles are kept here; any
+   * shared-prefix shortening is a display concern for the UI layer.
+   */
+  caseTitles: string[];
   attempts: number;
   preliminary: boolean;
   cases: number;
@@ -105,6 +114,30 @@ export interface CertifiedRunScore {
   failed: number;
   verifiedPassRate: number | null;
   verifiedQuality: number;
+  /**
+   * Cross-track OVERALL score (0..1): the simple mean of this row's per-track
+   * average verified quality, every track weighted EQUALLY. This is distinct
+   * from `verifiedQuality`, which is the attempt-weighted mean across whatever
+   * tracks the row ran. Equal weighting is deliberate: an attempt-weighted mean
+   * lets a high-volume track (e.g. a 19-attempt WorkBench run) drown out a
+   * low-volume one (e.g. a 1-attempt GameIQ run), so a model that runs one big
+   * track would outrank a model judged fairly across several. Equal per-track
+   * weighting judges breadth instead. Null when the row has no scored attempts
+   * (no tracks to average). A single-track row's overallScore equals that
+   * track's average verified quality (breadth is one track wide).
+   */
+  overallScore: number | null;
+  /**
+   * Per-track quality breakdown feeding `overallScore`, one entry per distinct
+   * track the row ran, in track-id order. Lets the UI show WHAT the overall
+   * number averages (e.g. in a tooltip). `averageVerifiedQuality` is the
+   * attempt-weighted mean within that single track.
+   */
+  trackBreakdown: Array<{
+    track: string;
+    attempts: number;
+    averageVerifiedQuality: number;
+  }>;
   jobSuccessScore: number;
   efficiencyScore: number;
   toolReliabilityScore: number | null;
@@ -113,6 +146,24 @@ export interface CertifiedRunScore {
   durationMs: number | null;
   costPerPass: number | null;
   speedPerPassMs: number | null;
+  /** Summed provider input tokens across the row's attempts (null if none). */
+  inputTokens: number | null;
+  /** Summed provider output tokens across the row's attempts (null if none). */
+  outputTokens: number | null;
+  /** Summed input+output tokens across the row's attempts (null if none). */
+  totalTokens: number | null;
+  /**
+   * Total tokens per verified pass — the token-based efficiency axis that works
+   * even when cost is unavailable (account/custom providers have no pricing).
+   * Null when there are no passes or no token samples.
+   */
+  tokensPerPass: number | null;
+  /**
+   * Which basis the cost/efficiency ranking used for this row: "usd" when a real
+   * USD cost was available, "tokens" when it fell back to tokensPerPass, null
+   * when neither is available.
+   */
+  costBasis: "usd" | "tokens" | null;
   bestSoloScore: number | null;
   teamLift: number | null;
   teamLiftLabel: TeamLiftLabel | null;
@@ -161,6 +212,12 @@ export interface CertifiedBenchmarkDashboardData {
     harnessCertificationPassRate: number | null;
   };
   leaderboard: CertifiedRunScore[];
+  /**
+   * The leaderboard rows ranked by the equal-weighted cross-track overall score
+   * (nulls last, preliminary demoted). Backs the "Overall (all tracks)" Rank-by
+   * option in the certified leaderboard UI.
+   */
+  overallLeaderboard: CertifiedRunScore[];
   efficiencyLeaderboard: CertifiedRunScore[];
   costPerPassLeaderboard: CertifiedRunScore[];
   speedPerPassLeaderboard: CertifiedRunScore[];
@@ -189,6 +246,29 @@ export interface CertifiedBenchmarkDashboardData {
     failed: number;
     passRate: number | null;
     weight: number | null;
+  }>;
+  /**
+   * Per-model, cross-track SOLO intelligence leaderboard (product goal 1: "most
+   * intelligent model"). Sorted best-first with preliminary (<3 attempts) rows
+   * demoted. Shape mirrors ModelIntelligenceRow in metrics.ts; kept inline here
+   * to avoid a circular type import.
+   */
+  modelIntelligence: Array<{
+    modelId: string;
+    displayName: string;
+    attempts: number;
+    passed: number;
+    verifiedPassRate: number | null;
+    combinedScore: number;
+    trackCount: number;
+    preliminary: boolean;
+    tracks: Array<{
+      track: string;
+      attempts: number;
+      passed: number;
+      verifiedPassRate: number | null;
+      averageVerifiedQuality: number;
+    }>;
   }>;
 }
 

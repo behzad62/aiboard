@@ -278,7 +278,32 @@ export async function* streamAnthropicChat(
         requestOptions
       );
 
+      // Anthropic reports input tokens on message_start and the running output
+      // token total on message_delta; capture the last-seen values and emit one
+      // usage chunk before `done`.
+      let reportedInputTokens: number | undefined;
+      let reportedOutputTokens: number | undefined;
       for await (const event of stream) {
+        if (event.type === "message_start") {
+          const usage = (
+            event as unknown as {
+              message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+            }
+          ).message?.usage;
+          if (typeof usage?.input_tokens === "number") {
+            reportedInputTokens = usage.input_tokens;
+          }
+          if (typeof usage?.output_tokens === "number") {
+            reportedOutputTokens = usage.output_tokens;
+          }
+        } else if (event.type === "message_delta") {
+          const usage = (
+            event as unknown as { usage?: { output_tokens?: number } }
+          ).usage;
+          if (typeof usage?.output_tokens === "number") {
+            reportedOutputTokens = usage.output_tokens;
+          }
+        }
         if (
           event.type === "content_block_delta" &&
           event.delta.type === "text_delta"
@@ -324,6 +349,15 @@ export async function* streamAnthropicChat(
         )) {
           yield { type: "tool_call", toolCall };
         }
+      }
+      if (reportedInputTokens != null || reportedOutputTokens != null) {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: reportedInputTokens,
+            outputTokens: reportedOutputTokens,
+          },
+        };
       }
       yield { type: "done" };
     } catch (err) {

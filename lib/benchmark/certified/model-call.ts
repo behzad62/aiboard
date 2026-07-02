@@ -13,6 +13,7 @@ import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import {
   formatModelId,
   parseModelId,
+  type ChatMessage,
   type ChatParams,
   type SelectedModel,
   type StreamChunk,
@@ -42,6 +43,13 @@ export interface CallCertifiedModelInput {
   model: SelectedModel;
   system: string;
   user: string;
+  /**
+   * Optional full multi-turn conversation. When set it is sent verbatim instead
+   * of the derived [system, user] pair (still one model call). Used by the
+   * Fireworks memory recall episodes; all other callers omit it and are
+   * unaffected.
+   */
+  messages?: ChatMessage[];
   structuredOutput?: StructuredOutputFormat;
   maxTokens: number;
   temperature: 0;
@@ -66,6 +74,11 @@ export interface CertifiedModelCallResult {
   inputTokens: number;
   outputTokens: number;
   estimatedUsd: number | null;
+  /**
+   * "reported" when the provider surfaced real billed token counts for this
+   * call; "estimated" when we fell back to the chars/4 approximation.
+   */
+  usageSource: "reported" | "estimated";
 }
 
 export async function callCertifiedModel(
@@ -137,6 +150,10 @@ export async function callCertifiedModel(
   });
   let rawResponse = "";
   let parsePhase = false;
+  // Provider-reported billed token counts, captured from the "usage" chunk when
+  // the provider emits one. Preferred over the chars/4 estimate below.
+  let reportedInputTokens: number | undefined;
+  let reportedOutputTokens: number | undefined;
   const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
   const runStartedMs = new Date(input.context.startedAt).getTime();
 
@@ -172,6 +189,13 @@ export async function callCertifiedModel(
           await recordCertifiedBudgetEvent(input, error);
           throw error;
         }
+      } else if (chunk.type === "usage" && chunk.usage) {
+        if (typeof chunk.usage.inputTokens === "number") {
+          reportedInputTokens = chunk.usage.inputTokens;
+        }
+        if (typeof chunk.usage.outputTokens === "number") {
+          reportedOutputTokens = chunk.usage.outputTokens;
+        }
       } else if (chunk.type === "error") {
         throw new Error(chunk.error ?? "Certified provider returned an error.");
       }
@@ -186,10 +210,12 @@ export async function callCertifiedModel(
       enabled: Boolean(input.structuredOutput),
       allowInvalid: Boolean(input.allowInvalidStructuredOutput),
     });
-    const usage = estimateModelCallUsage({
+    const usage = resolveModelCallUsage({
       messages,
       output: rawResponse,
       maxTokens: input.maxTokens,
+      reportedInputTokens,
+      reportedOutputTokens,
     });
     const estimatedUsd = estimateCertifiedModelUsd({
       fullModelId,
@@ -213,6 +239,7 @@ export async function callCertifiedModel(
       latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      usageSource: usage.usageSource,
       estimatedUsd,
       rawResponse,
       parsedResponseJson:
@@ -251,16 +278,19 @@ export async function callCertifiedModel(
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       estimatedUsd,
+      usageSource: usage.usageSource,
     };
   } catch (error) {
     if (error instanceof CertifiedBudgetExceededError) {
       throw error;
     }
     const message = errorMessage(error);
-    const usage = estimateModelCallUsage({
+    const usage = resolveModelCallUsage({
       messages,
       output: rawResponse,
       maxTokens: input.maxTokens,
+      reportedInputTokens,
+      reportedOutputTokens,
     });
     const latencyMs = Math.max(0, Date.now() - startedMs);
     const trace = createCertifiedModelCallTrace({
@@ -278,6 +308,7 @@ export async function callCertifiedModel(
       latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      usageSource: usage.usageSource,
       estimatedUsd: estimateCertifiedModelUsd({
         fullModelId,
         inputTokens: usage.inputTokens,
@@ -468,6 +499,43 @@ function parseCertifiedStructuredOutput(
     if (!options.allowInvalid) throw error;
     return { error: errorMessage(error) };
   }
+}
+
+/**
+ * Resolve the token counts to record for a model call, preferring the
+ * provider's real billed counts (from the "usage" stream chunk) and falling
+ * back to the chars/4 estimate per side. `usageSource` is "reported" when at
+ * least one side was provider-reported, otherwise "estimated".
+ */
+function resolveModelCallUsage(input: {
+  messages: ChatMessage[];
+  output: string;
+  maxTokens: number;
+  reportedInputTokens?: number;
+  reportedOutputTokens?: number;
+}): { inputTokens: number; outputTokens: number; usageSource: "reported" | "estimated" } {
+  const estimate = estimateModelCallUsage({
+    messages: input.messages,
+    output: input.output,
+    maxTokens: input.maxTokens,
+  });
+  const inputReported =
+    typeof input.reportedInputTokens === "number" &&
+    Number.isFinite(input.reportedInputTokens) &&
+    input.reportedInputTokens >= 0;
+  const outputReported =
+    typeof input.reportedOutputTokens === "number" &&
+    Number.isFinite(input.reportedOutputTokens) &&
+    input.reportedOutputTokens >= 0;
+  return {
+    inputTokens: inputReported
+      ? (input.reportedInputTokens as number)
+      : estimate.inputTokens,
+    outputTokens: outputReported
+      ? (input.reportedOutputTokens as number)
+      : estimate.outputTokens,
+    usageSource: inputReported || outputReported ? "reported" : "estimated",
+  };
 }
 
 function estimateCertifiedModelUsd(input: {

@@ -80,6 +80,10 @@ export {
   __exportClientStoreForPersistenceForTests,
   __getBenchmarkRunBlobsForTests,
 } from "../client/store";
+export {
+  clearAllBenchmarkData,
+  type ClearAllBenchmarkDataResult,
+} from "../client/store";
 
 async function ensureWritableStore(): Promise<void> {
   if (!isInitialized()) {

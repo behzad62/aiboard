@@ -135,6 +135,8 @@ type AttemptLike = BenchmarkAttemptV2 & {
   toolReliabilityScore?: number;
   costUsd?: number | null;
   durationMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
   teamCompositionId?: string;
   caseId?: string;
   track?: string;
@@ -160,7 +162,16 @@ interface MutableCertifiedRunScore {
   displayName: string;
   modelIds: string[];
   tracks: Set<string>;
+  // Per-track quality accumulators feeding the equal-weighted overall score.
+  // Keyed by resolved track; each holds this row's attempt count and verified-
+  // quality sum WITHIN that one track, so finalizeGroup can average per track
+  // and then take the simple (equal-weight) mean of those track averages.
+  trackQuality: Map<string, { attempts: number; verifiedQualitySum: number }>;
   caseIds: Set<string>;
+  // Case ids in first-appearance order across this row's attempts. The Set above
+  // tracks membership (for the `cases` count and dedup); this array preserves a
+  // deterministic order so resolved titles read the same way every render.
+  caseIdOrder: string[];
   attempts: number;
   passed: number;
   failed: number;
@@ -173,6 +184,9 @@ interface MutableCertifiedRunScore {
   costSamples: number;
   durationMs: number;
   durationSamples: number;
+  inputTokens: number;
+  outputTokens: number;
+  tokenSamples: number;
 }
 
 export function aggregateCertifiedRunScores(
@@ -205,6 +219,8 @@ export function aggregateCertifiedRunScores(
     const toolReliabilityScore = finiteOrNull(attempt.toolReliabilityScore);
     const costUsd = finiteOrNull(attempt.costUsd);
     const durationMs = finiteOrNull(attempt.durationMs);
+    const inputTokens = finiteOrNull(attempt.inputTokens);
+    const outputTokens = finiteOrNull(attempt.outputTokens);
     const track =
       attempt.track ??
       ((attempt.caseId ? (caseById.get(attempt.caseId) as BenchmarkCaseV2 | undefined) : undefined) as
@@ -215,8 +231,19 @@ export function aggregateCertifiedRunScores(
     group.attempts += 1;
     if (isPassedAttempt(attempt)) group.passed += 1;
     else group.failed += 1;
-    if (attempt.caseId) group.caseIds.add(attempt.caseId);
+    if (attempt.caseId) {
+      if (!group.caseIds.has(attempt.caseId)) {
+        group.caseIdOrder.push(attempt.caseId);
+      }
+      group.caseIds.add(attempt.caseId);
+    }
     group.tracks.add(track);
+    const trackQuality =
+      group.trackQuality.get(track) ??
+      { attempts: 0, verifiedQualitySum: 0 };
+    trackQuality.attempts += 1;
+    trackQuality.verifiedQualitySum += verifiedQuality;
+    group.trackQuality.set(track, trackQuality);
     group.verifiedQualitySum += verifiedQuality;
     group.jobSuccessScoreSum += jobSuccessScore;
     group.efficiencyScoreSum += efficiencyScore;
@@ -232,9 +259,16 @@ export function aggregateCertifiedRunScores(
       group.durationMs += durationMs;
       group.durationSamples += 1;
     }
+    if (inputTokens != null || outputTokens != null) {
+      group.inputTokens += inputTokens ?? 0;
+      group.outputTokens += outputTokens ?? 0;
+      group.tokenSamples += 1;
+    }
   }
 
-  const rows = Array.from(groups.values()).map(finalizeGroup);
+  const rows = Array.from(groups.values()).map((group) =>
+    finalizeGroup(group, caseById)
+  );
   applyTeamLift(rows);
   return rankByVerifiedQuality(rows);
 }
@@ -247,6 +281,26 @@ export function rankByVerifiedQuality<T extends Partial<CertifiedRunScore>>(
       comparePreliminary(a, b) ||
       compareNumberDesc(a.verifiedQuality, b.verifiedQuality) ||
       compareNumberDesc(a.verifiedPassRate, b.verifiedPassRate) ||
+      compareNumberDesc(a.attempts, b.attempts) ||
+      compareText(a.displayName, b.displayName)
+  );
+}
+
+/**
+ * Rank by the equal-weighted cross-track OVERALL score. Preliminary rows are
+ * demoted, rows with no overall score (no scored attempts) sort last, then ties
+ * break by verified quality, attempt count, and display name — mirroring the
+ * verified-quality ranking's convention so the leaderboard stays consistent
+ * when the user flips to the Overall sort.
+ */
+export function rankByOverall<T extends Partial<CertifiedRunScore>>(
+  rows: T[]
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      comparePreliminary(a, b) ||
+      compareNumberDesc(a.overallScore, b.overallScore) ||
+      compareNumberDesc(a.verifiedQuality, b.verifiedQuality) ||
       compareNumberDesc(a.attempts, b.attempts) ||
       compareText(a.displayName, b.displayName)
   );
@@ -266,12 +320,43 @@ export function rankByEfficiency<T extends Partial<CertifiedRunScore>>(
 export function rankByCostPerPass<T extends Partial<CertifiedRunScore>>(
   rows: T[]
 ): T[] {
+  // Efficiency ranking. Rows with a real USD cost-per-pass sort first (cheapest
+  // to priciest); rows with no pricing (account/custom providers) fall back to
+  // tokens-per-pass and sort among themselves after the priced rows. Cost and
+  // tokens are different units, so we never compare a USD row against a token
+  // row numerically — priced rows simply outrank unpriced ones, and within each
+  // basis the cheaper/leaner row wins.
   return [...rows].sort(
     (a, b) =>
+      compareCostBasisPriority(a, b) ||
       compareNumberAsc(a.costPerPass, b.costPerPass) ||
+      compareNumberAsc(a.tokensPerPass, b.tokensPerPass) ||
       compareNumberDesc(a.verifiedQuality, b.verifiedQuality) ||
       compareText(a.displayName, b.displayName)
   );
+}
+
+// USD-priced rows (costBasis "usd") rank ahead of token-only rows ("tokens"),
+// which rank ahead of rows with neither basis. Falls back to the null-safe
+// costPerPass/tokensPerPass presence when costBasis isn't populated on the row.
+function compareCostBasisPriority<T extends Partial<CertifiedRunScore>>(
+  a: T,
+  b: T
+): number {
+  return costBasisRank(b) - costBasisRank(a);
+}
+
+function costBasisRank<T extends Partial<CertifiedRunScore>>(row: T): number {
+  const basis =
+    row.costBasis ??
+    (finiteOrNull(row.costPerPass) != null
+      ? "usd"
+      : finiteOrNull(row.tokensPerPass) != null
+        ? "tokens"
+        : null);
+  if (basis === "usd") return 2;
+  if (basis === "tokens") return 1;
+  return 0;
 }
 
 export function rankBySpeedPerPass<T extends Partial<CertifiedRunScore>>(
@@ -331,7 +416,9 @@ function groupFor(
     displayName,
     modelIds,
     tracks: new Set(),
+    trackQuality: new Map(),
     caseIds: new Set(),
+    caseIdOrder: [],
     attempts: 0,
     passed: 0,
     failed: 0,
@@ -344,15 +431,59 @@ function groupFor(
     costSamples: 0,
     durationMs: 0,
     durationSamples: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    tokenSamples: 0,
   };
   groups.set(teamId, created);
   return created;
 }
 
-function finalizeGroup(group: MutableCertifiedRunScore): CertifiedRunScore {
+function finalizeGroup(
+  group: MutableCertifiedRunScore,
+  caseById: Map<string, BenchmarkCaseV2>
+): CertifiedRunScore {
   const costUsd = group.costSamples > 0 ? round(group.costUsd, 6) : null;
   const durationMs =
     group.durationSamples > 0 ? round(group.durationMs / group.durationSamples) : null;
+  const hasTokens = group.tokenSamples > 0;
+  const inputTokens = hasTokens ? group.inputTokens : null;
+  const outputTokens = hasTokens ? group.outputTokens : null;
+  const totalTokens = hasTokens ? group.inputTokens + group.outputTokens : null;
+  const costPerPass =
+    group.passed > 0 && group.costSamples > 0
+      ? round(group.costUsd / group.passed, 6)
+      : null;
+  const tokensPerPass =
+    group.passed > 0 && hasTokens
+      ? round((group.inputTokens + group.outputTokens) / group.passed)
+      : null;
+  // Prefer real USD cost; fall back to token-based efficiency when the row's
+  // providers have no pricing (account/custom). null only if neither exists.
+  const costBasis: "usd" | "tokens" | null =
+    costPerPass != null ? "usd" : tokensPerPass != null ? "tokens" : null;
+
+  // Equal-weighted cross-track overall score. Average verified quality WITHIN
+  // each track first, then take the simple mean of those per-track averages so
+  // every track counts the same regardless of attempt volume. A high-volume
+  // track cannot drown a low-volume one this way (unlike verifiedQuality, which
+  // is attempt-weighted). Null when the row has no scored attempts.
+  const trackBreakdown = Array.from(group.trackQuality.entries())
+    .map(([track, acc]) => ({
+      track,
+      attempts: acc.attempts,
+      averageVerifiedQuality: average(acc.verifiedQualitySum, acc.attempts),
+    }))
+    .sort((a, b) => a.track.localeCompare(b.track));
+  const overallScore =
+    trackBreakdown.length > 0
+      ? round(
+          trackBreakdown.reduce(
+            (sum, entry) => sum + entry.averageVerifiedQuality,
+            0
+          ) / trackBreakdown.length
+        )
+      : null;
 
   return {
     id: group.id,
@@ -362,6 +493,7 @@ function finalizeGroup(group: MutableCertifiedRunScore): CertifiedRunScore {
     displayName: group.displayName,
     modelIds: group.modelIds,
     tracks: Array.from(group.tracks).sort(),
+    caseTitles: resolveCaseTitles(group.caseIdOrder, caseById),
     attempts: group.attempts,
     preliminary: group.attempts > 0 && group.attempts < MIN_CONFIDENT_ATTEMPTS,
     cases: group.caseIds.size,
@@ -369,6 +501,8 @@ function finalizeGroup(group: MutableCertifiedRunScore): CertifiedRunScore {
     failed: group.failed,
     verifiedPassRate: rate(group.passed, group.attempts),
     verifiedQuality: average(group.verifiedQualitySum, group.attempts),
+    overallScore,
+    trackBreakdown,
     jobSuccessScore: average(group.jobSuccessScoreSum, group.attempts),
     efficiencyScore: average(group.efficiencyScoreSum, group.attempts),
     toolReliabilityScore:
@@ -379,14 +513,16 @@ function finalizeGroup(group: MutableCertifiedRunScore): CertifiedRunScore {
     averageCostUsd:
       group.costSamples > 0 ? round(group.costUsd / group.costSamples, 6) : null,
     durationMs,
-    costPerPass:
-      group.passed > 0 && group.costSamples > 0
-        ? round(group.costUsd / group.passed, 6)
-        : null,
+    costPerPass,
     speedPerPassMs:
       group.passed > 0 && group.durationSamples > 0
         ? round(group.durationMs / group.passed)
         : null,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    tokensPerPass,
+    costBasis,
     bestSoloScore: null,
     teamLift: null,
     teamLiftLabel: null,
@@ -493,6 +629,29 @@ function compareText(
   b: string | null | undefined
 ): number {
   return (a ?? "").localeCompare(b ?? "");
+}
+
+/**
+ * Resolve a row's case ids (in first-appearance order) to display titles. Each
+ * id maps to its case record's `title`; when no record is found (e.g. an
+ * imported bundle missing the case), the raw id is kept so the row still names
+ * something. Titles are de-duplicated while preserving first-appearance order,
+ * so a merged cross-track row that reaches the same case through two tracks (two
+ * ids resolving to one title, or the same id twice) lists that title once.
+ */
+function resolveCaseTitles(
+  caseIdOrder: string[],
+  caseById: Map<string, BenchmarkCaseV2>
+): string[] {
+  const seen = new Set<string>();
+  const titles: string[] = [];
+  for (const caseId of caseIdOrder) {
+    const title = caseById.get(caseId)?.title ?? caseId;
+    if (seen.has(title)) continue;
+    seen.add(title);
+    titles.push(title);
+  }
+  return titles;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {

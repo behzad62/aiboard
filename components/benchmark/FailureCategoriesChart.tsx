@@ -1,5 +1,6 @@
 "use client";
 
+import type { TooltipContentProps } from "recharts";
 import {
   Bar,
   BarChart,
@@ -32,13 +33,24 @@ export function FailureCategoriesChart({
   dashboard: BenchmarkDashboardData;
   onSelectModel: (modelId: string) => void;
 }) {
+  // Total attempts per model gives the failure counts context: "318 rules"
+  // means little without knowing how many attempts it is out of.
+  const attemptsByDisplayName = new Map<string, number>();
+  for (const model of dashboard.models) {
+    attemptsByDisplayName.set(
+      model.displayName,
+      model.games + model.buildAttempts
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle id="failure-categories-title">Failure Categories</CardTitle>
         <CardDescription id="failure-categories-description">
           Provider, parser, rules, tool, verifier, and uncategorized issues.
-          Select a model from the Scorecards table below.
+          Hover a bar to see the model&apos;s total attempts. Select a model from
+          the Scorecards table below.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -60,7 +72,16 @@ export function FailureCategoriesChart({
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="displayName" tick={{ fontSize: 12 }} />
                 <YAxis allowDecimals={false} />
-                <Tooltip />
+                <Tooltip
+                  content={(props) => (
+                    <FailureTooltip
+                      active={props.active}
+                      payload={props.payload as FailureTooltipPayload}
+                      label={props.label}
+                      attemptsByDisplayName={attemptsByDisplayName}
+                    />
+                  )}
+                />
                 <Legend />
                 <Bar dataKey="provider" stackId="failures" fill={CHART_COLORS[4]} />
                 <Bar dataKey="parser" stackId="failures" fill={CHART_COLORS[3]} />
@@ -89,5 +110,55 @@ export function FailureCategoriesChart({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+type FailureTooltipPayload = TooltipContentProps<number, string>["payload"];
+
+function FailureTooltip({
+  active,
+  payload,
+  label,
+  attemptsByDisplayName,
+}: {
+  active?: boolean;
+  payload?: FailureTooltipPayload;
+  label?: string | number;
+  attemptsByDisplayName: Map<string, number>;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const displayName = String(label ?? "");
+  const totalAttempts = attemptsByDisplayName.get(displayName);
+  const totalFailures = payload.reduce(
+    (sum: number, item) =>
+      sum + (typeof item.value === "number" ? item.value : 0),
+    0
+  );
+
+  return (
+    <div className="rounded-md border bg-background px-3 py-2 text-xs shadow-sm">
+      <div className="font-medium">{displayName}</div>
+      <div className="mt-1 text-muted-foreground">
+        {totalFailures} failure{totalFailures === 1 ? "" : "s"}
+        {totalAttempts != null
+          ? ` across ${totalAttempts} attempt${totalAttempts === 1 ? "" : "s"}`
+          : ""}
+      </div>
+      <div className="mt-1 space-y-0.5">
+        {payload
+          .filter((item) => typeof item.value === "number" && item.value > 0)
+          .map((item) => (
+            <div key={String(item.dataKey)} className="flex items-center gap-2">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: item.color }}
+                aria-hidden="true"
+              />
+              <span className="capitalize">{String(item.name ?? item.dataKey)}</span>
+              <span className="ml-auto tabular-nums">{item.value}</span>
+            </div>
+          ))}
+      </div>
+    </div>
   );
 }

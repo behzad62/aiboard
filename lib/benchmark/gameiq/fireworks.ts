@@ -16,6 +16,12 @@ const MEMORY_CATEGORIES = new Set([
   "timing_inference",
 ]);
 
+// Tag applied to every memory-category GameIQ fireworks scenario so the runner
+// can deliver it as a multi-turn recall episode (see gameiq/certified-runner.ts
+// and fireworks/memory-episode.ts) without string-sniffing the source id. The
+// tag is model-invisible (tags never reach the prompt).
+export const FIREWORKS_MEMORY_RECALL_TAG = "fireworks-memory-recall";
+
 export function toGameIqScenario(input: {
   scenario: FireworksScenario;
   index: number;
@@ -24,6 +30,7 @@ export function toGameIqScenario(input: {
   difficulty: "easy" | "medium" | "hard";
   tags: string[];
 }): FireworksGameIqScenario {
+  const isMemory = MEMORY_CATEGORIES.has(input.scenario.category);
   return {
     id: `${input.idPrefix}-${String(input.index + 1).padStart(2, "0")}`,
     gameId: "fireworks",
@@ -38,7 +45,7 @@ export function toGameIqScenario(input: {
       input.scenario.actingPlayerId,
       {
         omitRecommendations: true,
-        redactOwnIdentity: MEMORY_CATEGORIES.has(input.scenario.category),
+        redactOwnIdentity: isMemory,
       }
     ),
     expectedActions: input.scenario.expectedActions.map((action) => ({
@@ -62,6 +69,7 @@ export function toGameIqScenario(input: {
       "solo-control",
       "hidden-information",
       `source:${input.scenario.id}`,
+      ...(isMemory ? [FIREWORKS_MEMORY_RECALL_TAG] : []),
       ...input.tags,
     ],
     maxResponseMs: 15_000,

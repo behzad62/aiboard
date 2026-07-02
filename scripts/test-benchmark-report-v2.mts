@@ -381,6 +381,7 @@ const markdown = formatBenchmarkMarkdownReport(bundle, {
   summary: {
     totalRuns: 0,
     totalCases: 0,
+    capturedCases: 0,
     totalModels: 0,
     completionRate: null,
     schemaValidRate: null,

@@ -11,6 +11,7 @@ export interface CertifiedRunGateInput {
   running: boolean;
   selectedTrack: CertifiedRunnableTrack;
   modelId: string;
+  gameIqModelIds?: string[];
   teamModelIds: string[];
   workBenchModelIds?: string[];
   workBenchRoleMode?: "solo" | "architect_worker" | "architect_worker_reviewer";
@@ -36,7 +37,11 @@ export function getCertifiedRunGate(
 
   if (input.running) return blocked("A certified run is already in progress.");
   if (!input.suiteId) return blocked("Select a benchmark suite or case.");
-  if (input.selectedTrack === "teamiq") {
+  if (input.selectedTrack === "gameiq") {
+    if ((input.gameIqModelIds?.length ?? 0) < 1) {
+      return blocked("Select at least one model");
+    }
+  } else if (input.selectedTrack === "teamiq") {
     if (isFireworksSuite(input.suiteId)) {
       const playerCount = input.fireworksPlayerCount ?? 2;
       if (input.teamModelIds.length !== playerCount) {

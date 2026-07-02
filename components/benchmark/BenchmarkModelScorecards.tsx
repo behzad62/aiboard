@@ -10,6 +10,14 @@ import {
 import type { BenchmarkModelScore } from "@/lib/benchmark/metrics";
 import { duration, pct, shortModel, usd } from "@/components/benchmark/format";
 
+// A model needs at least this many samples (games + Build attempts) before its
+// scores are treated as settled rather than preliminary.
+const MIN_CONFIDENT_SAMPLES = 3;
+
+function sampleCount(model: BenchmarkModelScore): number {
+  return model.games + model.buildAttempts;
+}
+
 export function BenchmarkModelScorecards({
   models,
   selectedModelId,
@@ -32,6 +40,7 @@ export function BenchmarkModelScorecards({
               <thead>
                 <tr className="border-b text-muted-foreground">
                   <th className="py-2 text-left">Model</th>
+                  <th className="py-2 text-right">Sample</th>
                   <th className="py-2 text-right">Architect-reviewed quality</th>
                   <th className="py-2 text-right">Win</th>
                   <th className="py-2 text-right">Legal</th>
@@ -64,6 +73,17 @@ export function BenchmarkModelScorecards({
                       <div className="text-xs text-muted-foreground">
                         {shortModel(model.modelId)}
                       </div>
+                    </td>
+                    <td className="py-2 text-right tabular-nums">
+                      <span>{sampleCount(model)}</span>
+                      {sampleCount(model) < MIN_CONFIDENT_SAMPLES && (
+                        <span
+                          className="ml-2 rounded-sm border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                          title={`Fewer than ${MIN_CONFIDENT_SAMPLES} samples: treat these scores as preliminary.`}
+                        >
+                          preliminary
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 text-right font-semibold">
                       {model.qualityScore}

@@ -10,13 +10,17 @@ import type {
   BenchmarkFailure,
   BenchmarkMetricValue,
   BenchmarkRun,
+  BenchmarkTeamComposition,
+  BenchmarkTrack,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
+import { isSoloTeamComposition } from "@/lib/benchmark/teamiq/compositions";
 import {
   aggregateCertifiedRunScores,
   dedupeCrossTrackAttempts,
   rankByCostPerPass,
   rankByEfficiency,
+  rankByOverall,
   rankBySpeedPerPass,
   rankByTeamLift,
   rankByToolReliability,
@@ -34,12 +38,20 @@ import {
 } from "@/lib/benchmark/teamiq";
 import { MIN_CONFIDENT_ATTEMPTS } from "@/lib/benchmark/teamiq/recommendations";
 import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
+import { partitionBenchmarkCases } from "@/lib/benchmark/build-cases";
 
 const EVIDENCE_PER_MODEL_CAP = 50;
 
 export interface BenchmarkSummaryCards {
   totalRuns: number;
+  /** Runnable benchmark cases only. Captured stop-report cases are excluded. */
   totalCases: number;
+  /**
+   * Captured Build stop-report cases (kind "real-work"). Diagnostics only —
+   * never run, verified, or scored. Surfaced separately so they are not
+   * presented as benchmark coverage.
+   */
+  capturedCases: number;
   totalModels: number;
   completionRate: number | null;
   schemaValidRate: number | null;
@@ -545,6 +557,7 @@ export function buildCertifiedBenchmarkDashboardData(
       ),
     },
     leaderboard,
+    overallLeaderboard: rankByOverall(leaderboard),
     efficiencyLeaderboard: rankByEfficiency(leaderboard),
     costPerPassLeaderboard: rankByCostPerPass(leaderboard),
     speedPerPassLeaderboard: rankBySpeedPerPass(leaderboard),
@@ -565,6 +578,15 @@ export function buildCertifiedBenchmarkDashboardData(
       verifierByAttemptId
     ),
     verifierAssertionRows: buildVerifierAssertionRows(verifierResults),
+    // Goal 1 ("most intelligent model"): a per-model, cross-track SOLO
+    // leaderboard. Built from the full certified attempts (not just scored) —
+    // buildModelIntelligenceRows filters to solo + scored itself.
+    modelIntelligence: buildModelIntelligenceRows({
+      attempts: certifiedAttempts,
+      cases: input.caseV2,
+      teamCompositions: input.teamCompositions,
+      verifierResults,
+    }),
   };
 }
 
@@ -1075,9 +1097,13 @@ function summarize(
     }
   );
 
+  const { runnable: runnableCases, captured: capturedCases } =
+    partitionBenchmarkCases(input.benchmarkCases);
+
   return {
     totalRuns: input.benchmarkRuns.length + input.gameMatches.length + input.buildCheckpoints.length,
-    totalCases: input.benchmarkCases.length,
+    totalCases: runnableCases.length,
+    capturedCases: capturedCases.length,
     totalModels: models.length,
     completionRate: rate(totals.completions, totals.work),
     schemaValidRate: rate(totals.schemaValid, totals.schemaTotal),
@@ -1244,4 +1270,234 @@ function displayModelName(modelId: string): string {
 
 function formatUsd(value: number | null): string {
   return value == null ? "unknown cost" : `$${value.toFixed(3)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Goal 1: "most intelligent model" — a per-model, cross-track SOLO leaderboard.
+// ---------------------------------------------------------------------------
+
+/** Per-track quality breakdown for one model in the intelligence leaderboard. */
+export interface ModelIntelligenceTrackBreakdown {
+  track: BenchmarkTrack;
+  attempts: number;
+  passed: number;
+  verifiedPassRate: number | null;
+  /** Average verified quality (0..1) across this model's solo attempts here. */
+  averageVerifiedQuality: number;
+}
+
+export interface ModelIntelligenceRow {
+  modelId: string;
+  displayName: string;
+  /** Total solo scored attempts for this model across all tracks (post-dedupe). */
+  attempts: number;
+  passed: number;
+  verifiedPassRate: number | null;
+  /**
+   * Combined intelligence score (0..1). To stop a model that only ran one
+   * high-volume track from dominating, this is the SIMPLE MEAN of the model's
+   * per-track average verified quality — every track it appeared in counts
+   * equally, regardless of how many attempts each track has. A model present in
+   * more tracks is therefore judged on breadth, not on the single track where it
+   * happened to run the most cases.
+   */
+  combinedScore: number;
+  /** Number of distinct tracks that contributed to combinedScore. */
+  trackCount: number;
+  /** True when the model has fewer than 3 total solo attempts (thin evidence). */
+  preliminary: boolean;
+  /** Per-track breakdown, sorted by track id. */
+  tracks: ModelIntelligenceTrackBreakdown[];
+}
+
+export interface ModelIntelligenceInput {
+  attempts: BenchmarkAttemptV2[];
+  cases?: BenchmarkCaseV2[];
+  teamCompositions?: BenchmarkTeamComposition[];
+  verifierResults?: BenchmarkVerifierResult[];
+}
+
+const MODEL_INTELLIGENCE_MIN_CONFIDENT_ATTEMPTS = 3;
+
+/**
+ * Build the "most intelligent model" leaderboard (product goal 1): group SOLO
+ * scored certified attempts by model across every track, applying cross-track
+ * de-duplication so a decision reached via two tracks counts once. Each model's
+ * combined score normalizes per track (simple mean of per-track average verified
+ * quality) so a single high-volume track can't dominate. Rows are sorted by
+ * combined score descending, with preliminary (<3 attempts) rows demoted.
+ */
+export function buildModelIntelligenceRows(
+  input: ModelIntelligenceInput
+): ModelIntelligenceRow[] {
+  const teams = input.teamCompositions ?? [];
+  const cases = input.cases ?? [];
+  const verifierResults = input.verifierResults ?? [];
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  const caseById = new Map(cases.map((item) => [item.id, item]));
+  const verifierByAttemptId = new Map(
+    verifierResults.map((result) => [result.attemptId, result])
+  );
+
+  // Solo scored attempts only, then dedupe cross-track so a shared decision
+  // reached through two tracks isn't counted twice for the same model.
+  const soloScored = input.attempts.filter(
+    (attempt) =>
+      isScoredCertifiedAttempt(attempt) &&
+      isSoloTeamComposition(teamById.get(attempt.teamCompositionId))
+  );
+  const deduped = dedupeCrossTrackAttempts(soloScored, cases);
+
+  interface TrackAcc {
+    attempts: number;
+    passed: number;
+    verifiedQualitySum: number;
+  }
+  interface ModelAcc {
+    modelId: string;
+    displayName: string;
+    attempts: number;
+    passed: number;
+    tracks: Map<BenchmarkTrack, TrackAcc>;
+  }
+  const models = new Map<string, ModelAcc>();
+
+  for (const attempt of deduped) {
+    const team = teamById.get(attempt.teamCompositionId);
+    const role = team?.roles[0];
+    const modelId = role?.modelId;
+    if (!modelId) continue;
+    const track = (attempt.track ??
+      caseById.get(attempt.caseId)?.track ??
+      "workbench") as BenchmarkTrack;
+
+    const model =
+      models.get(modelId) ??
+      ({
+        modelId,
+        displayName: role?.displayName || displayModelName(modelId),
+        attempts: 0,
+        passed: 0,
+        tracks: new Map(),
+      } satisfies ModelAcc);
+    const trackAcc =
+      model.tracks.get(track) ??
+      ({ attempts: 0, passed: 0, verifiedQualitySum: 0 } satisfies TrackAcc);
+
+    const passed = isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id));
+    model.attempts += 1;
+    if (passed) model.passed += 1;
+    trackAcc.attempts += 1;
+    if (passed) trackAcc.passed += 1;
+    trackAcc.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
+
+    model.tracks.set(track, trackAcc);
+    models.set(modelId, model);
+  }
+
+  const rows: ModelIntelligenceRow[] = Array.from(models.values()).map(
+    (model) => {
+      const tracks: ModelIntelligenceTrackBreakdown[] = Array.from(
+        model.tracks.entries()
+      )
+        .map(([track, acc]) => ({
+          track,
+          attempts: acc.attempts,
+          passed: acc.passed,
+          verifiedPassRate: rate(acc.passed, acc.attempts),
+          averageVerifiedQuality:
+            acc.attempts > 0 ? round(acc.verifiedQualitySum / acc.attempts, 4) : 0,
+        }))
+        .sort((a, b) => a.track.localeCompare(b.track));
+      // Simple mean of per-track averages — every track counts equally.
+      const combinedScore =
+        tracks.length > 0
+          ? round(
+              tracks.reduce(
+                (sum, track) => sum + track.averageVerifiedQuality,
+                0
+              ) / tracks.length,
+              4
+            )
+          : 0;
+      return {
+        modelId: model.modelId,
+        displayName: model.displayName,
+        attempts: model.attempts,
+        passed: model.passed,
+        verifiedPassRate: rate(model.passed, model.attempts),
+        combinedScore,
+        trackCount: tracks.length,
+        preliminary:
+          model.attempts > 0 &&
+          model.attempts < MODEL_INTELLIGENCE_MIN_CONFIDENT_ATTEMPTS,
+        tracks,
+      };
+    }
+  );
+
+  return rows.sort(
+    (a, b) =>
+      Number(a.preliminary) - Number(b.preliminary) ||
+      b.combinedScore - a.combinedScore ||
+      (b.verifiedPassRate ?? -1) - (a.verifiedPassRate ?? -1) ||
+      b.attempts - a.attempts ||
+      a.displayName.localeCompare(b.displayName)
+  );
+}
+
+/**
+ * Track-true headline numbers for a single track. Returns the same shape as the
+ * certified dashboard summary but scoped to one track, so a per-track tab can
+ * show pass rate / quality / cost / duration computed only from that track's
+ * scored attempts (no cross-track merging — a per-track view must stay pure).
+ */
+export function buildCertifiedTrackSummary(input: {
+  track: BenchmarkTrack;
+  caseV2: BenchmarkCaseV2[];
+  attemptsV2: BenchmarkAttemptV2[];
+  verifierResults: BenchmarkVerifierResult[];
+}): {
+  track: BenchmarkTrack;
+  scoredAttempts: number;
+  verifiedPassRate: number | null;
+  averageVerifiedQuality: number | null;
+  averageEfficiencyScore: number | null;
+  averageCostUsd: number | null;
+  averageDurationMs: number | null;
+} {
+  const caseById = new Map(input.caseV2.map((item) => [item.id, item]));
+  const verifierByAttemptId = new Map(
+    input.verifierResults.map((result) => [result.attemptId, result])
+  );
+  const trackOf = (attempt: BenchmarkAttemptV2): string =>
+    attempt.track ?? caseById.get(attempt.caseId)?.track ?? "unknown";
+
+  const scored = input.attemptsV2.filter(
+    (attempt) =>
+      isScoredCertifiedAttempt(attempt) && trackOf(attempt) === input.track
+  );
+
+  return {
+    track: input.track,
+    scoredAttempts: scored.length,
+    verifiedPassRate: rate(
+      scored.filter((attempt) =>
+        isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))
+      ).length,
+      scored.length
+    ),
+    averageVerifiedQuality: averageNumbers(
+      scored.map((attempt) => finiteMetric(attempt.verifiedQuality))
+    ),
+    averageEfficiencyScore: averageNumbers(
+      scored.map((attempt) => finiteMetric(attempt.efficiencyScore))
+    ),
+    averageCostUsd: averageNumbers(
+      scored.map((attempt) => finiteMetric(attempt.costUsd))
+    ),
+    averageDurationMs: averageNumbers(
+      scored.map((attempt) => finiteMetric(attempt.durationMs))
+    ),
+  };
 }

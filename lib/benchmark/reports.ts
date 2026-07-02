@@ -8,6 +8,7 @@ import {
   groupFailureClassifications,
 } from "@/lib/benchmark/failures";
 import { aggregateCertifiedRunScores } from "@/lib/benchmark/scoring/aggregate";
+import { isCapturedBuildCase } from "@/lib/benchmark/build-cases";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -29,7 +30,12 @@ export function formatBenchmarkMarkdownReport(
   lines.push("");
   lines.push("## Summary");
   lines.push(`- Total runs: ${dashboard.summary.totalRuns}`);
-  lines.push(`- Total cases: ${dashboard.summary.totalCases}`);
+  lines.push(`- Runnable cases: ${dashboard.summary.totalCases}`);
+  if (dashboard.summary.capturedCases > 0) {
+    lines.push(
+      `- Captured stop-report cases (diagnostics, not runnable): ${dashboard.summary.capturedCases}`
+    );
+  }
   lines.push(`- Models: ${dashboard.summary.totalModels}`);
   lines.push(
     `- Completion rate: ${formatPct(dashboard.summary.completionRate)}`
@@ -77,10 +83,16 @@ export function formatBenchmarkMarkdownReport(
 
   appendCertifiedReportSections(lines, bundle);
 
+  const capturedBundleCases = bundle.cases.filter(isCapturedBuildCase);
   lines.push("## Raw Bundle Counts");
   lines.push(`- Suites: ${bundle.suites.length}`);
   lines.push(`- Runs: ${bundle.runs.length}`);
-  lines.push(`- Cases: ${bundle.cases.length}`);
+  lines.push(
+    `- Cases: ${bundle.cases.length - capturedBundleCases.length} runnable` +
+      (capturedBundleCases.length > 0
+        ? ` (+${capturedBundleCases.length} captured stop-report case(s), diagnostics only)`
+        : "")
+  );
   lines.push(`- Attempts: ${bundle.attempts.length}`);
   lines.push(`- Metric values: ${bundle.metricValues.length}`);
   lines.push(`- Artifacts: ${bundle.artifacts.length}`);
