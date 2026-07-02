@@ -254,12 +254,18 @@ for (const pack of packs) {
     );
   }
 }
-// The demotions from the 2026-07 review must not silently regress: these
-// packs currently fail the floor, so they cannot be first-class. (Fireworks
+// The demotions from the 2026-07 review must not silently regress: any pack
+// pinned here currently fails the floor, so it cannot be first-class. (Fireworks
 // packs are intentionally NOT pinned here: their scenarios are being
 // re-authored, and the generic first-class-implies-floor guard above already
-// prevents a dishonest promotion.)
-for (const packId of ["gameiq-v0.1-chess", "gameiq-v0.1-codenames"]) {
+// prevents a dishonest promotion. Codenames was UN-pinned on 2026-07-02: it
+// was re-authored from 25 legality clones into 10 distinct skill-binding
+// decisions, now passes the rigor floor, and is honestly first-class. Chess was
+// UN-pinned on 2026-07-02: it was re-authored from 4 prompt-leaked
+// micro-positions into 15 distinct engine-verified decisions, now passes the
+// rigor floor, and is honestly first-class — see scripts/test-gameiq-chess-pack.mts.)
+const lightweightPinnedPackIds: string[] = [];
+for (const packId of lightweightPinnedPackIds) {
   const pack = packs.find((candidate) => candidate.id === packId);
   if (!pack) {
     check(`${packId} exists for tier-honesty guard`, false);

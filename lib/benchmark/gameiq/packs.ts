@@ -15,13 +15,26 @@ import { actionMatchesExpected } from "./validation";
 // necessary-but-not-sufficient rigor check defined below and enforced by
 // scripts/test-gameiq-shared-guards.mts) AND the pack's scenarios have been
 // review-verified to measure the labeled skill. Tier history (2026-07 review):
-// - chess: demoted — 4 scenarios (~2 real decisions) is below any floor.
-// - fireworks-memory / fireworks-basic / codenames: a single constant answer
-//   scores correct on 100% of scenarios, so they cannot discriminate.
+// - chess: RE-AUTHORED 2026-07-02 and PROMOTED to first-class — the old 4
+//   prompt-leaked micro-positions were replaced with 15 distinct engine-verified
+//   decisions (mate-in-one back-rank/smothered/promotion/queen + two-mate
+//   positions for both colors, hanging-piece captures with losing distractors,
+//   a unique mate-defense, and promotion best-moves); it passes the rigor floor
+//   (15 distinct decisions, max constant-answer rate 13%) and every scenario is
+//   verified by scripts/test-gameiq-chess-pack.mts.
+// - fireworks-memory / fireworks-basic: before the 2026-07-02 regeneration a
+//   single constant answer scored correct on 100% of scenarios.
+// - codenames: RE-AUTHORED 2026-07-02 and PROMOTED to first-class — the old
+//   25 legality clones were replaced with 10 distinct skill-binding decisions
+//   (deduced guesses + binding clues); it now passes the rigor floor and a
+//   constant baseline scores zero.
 // - fireworks-hard: a single constant clue action aces half the pack.
-// - battleship: passes the mechanical floor but its scenarios were authored
-//   against a leaked full-information state; pending re-authoring it stays
-//   lightweight.
+// - battleship: RE-AUTHORED 2026-07-02 and PROMOTED to first-class — the old
+//   leaked-full-state pack (25 scenarios, ~2 decisions, titles naming the
+//   answer cell) was replaced with 11 distinct hidden-information targeting
+//   decisions with engine-fired shot histories, verified against an
+//   independent placement-enumeration oracle in
+//   scripts/test-gameiq-battleship-pack.mts.
 // - 2026-07-02: all three fireworks packs regenerated (decision-slot variance,
 //   needed_clue reachable, dead-card clue oracles fixed); they stay lightweight
 //   pending a fresh discrimination review.
@@ -30,7 +43,7 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-connect-four",
     gameId: "connect-four",
     label: "Certified GameIQ v1: Connect Four",
-    version: "0.1.0",
+    version: "0.2.0",
     certificationTier: "first-class",
     scenarios: CONNECT_FOUR_GAMEIQ_SCENARIOS,
   },
@@ -38,24 +51,28 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-chess",
     gameId: "chess",
     label: "Certified GameIQ v1: Chess Tactics",
-    version: "0.2.0",
-    certificationTier: "lightweight",
+    version: "0.3.0",
+    certificationTier: "first-class",
     scenarios: CHESS_GAMEIQ_SCENARIOS,
   },
   {
     id: "gameiq-v0.1-battleship",
     gameId: "battleship",
     label: "Certified GameIQ v1: Battleship Targeting",
-    version: "0.1.0",
-    certificationTier: "lightweight",
+    version: "0.2.0",
+    certificationTier: "first-class",
     scenarios: BATTLESHIP_GAMEIQ_SCENARIOS,
   },
   {
     id: "gameiq-v0.1-codenames",
     gameId: "codenames",
     label: "Certified GameIQ v1: Codenames Clues",
-    version: "0.1.0",
-    certificationTier: "lightweight",
+    // 0.2.0: re-authored 2026-07-02 — replaced the 25 re-skinned legality
+    // clones with 10 distinct skill-binding decisions (6 deduced guesses, 4
+    // binding clues). Passes gameIqPackFirstClassFloor (>=10 distinct
+    // decisions, 0% constant-answer rate), so first-class is now honest.
+    version: "0.2.0",
+    certificationTier: "first-class",
     scenarios: CODENAMES_GAMEIQ_SCENARIOS,
   },
   {

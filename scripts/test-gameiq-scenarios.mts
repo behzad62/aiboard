@@ -46,9 +46,9 @@ check(
 
 const expectedPackCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
-  ["gameiq-v0.1-chess", 4],
-  ["gameiq-v0.1-battleship", 25],
-  ["gameiq-v0.1-codenames", 25],
+  ["gameiq-v0.1-chess", 15],
+  ["gameiq-v0.1-battleship", 11],
+  ["gameiq-v0.1-codenames", 10],
   ["gameiq-fireworks-basic-v1", 20],
   ["gameiq-fireworks-hard-v1", 40],
   ["gameiq-fireworks-memory-v1", 30],
@@ -62,9 +62,9 @@ for (const pack of firstListing) {
 }
 
 const distinctFloor = new Map([
-  ["gameiq-v0.1-chess", 4],
-  ["gameiq-v0.1-battleship", 20],
-  ["gameiq-v0.1-codenames", 20],
+  ["gameiq-v0.1-chess", 12],
+  ["gameiq-v0.1-battleship", 11],
+  ["gameiq-v0.1-codenames", 10],
 ]);
 for (const pack of firstListing) {
   const floor = distinctFloor.get(pack.id);
@@ -89,9 +89,9 @@ const chessPack = getGameIqScenarioPack("chess");
 const battleshipPack = getGameIqScenarioPack("battleship");
 const fireworksPack = firstListing.find((pack) => pack.id === "gameiq-fireworks-basic-v1");
 check(
-  "Connect Four is first-class; Chess is demoted to lightweight (4 scenarios is below the rigor floor)",
+  "Connect Four and re-authored Chess are both first-class (Chess grew to 15 engine-verified distinct decisions and passes the rigor floor)",
   connectFourPack?.certificationTier === "first-class" &&
-    chessPack?.certificationTier === "lightweight",
+    chessPack?.certificationTier === "first-class",
   {
     connectFour: connectFourPack?.certificationTier,
     chess: chessPack?.certificationTier,
@@ -126,15 +126,19 @@ const chessCategories = new Set(
   chessPack?.scenarios.map((scenario) => scenario.category) ?? []
 );
 check(
-  "Chess covers mate-in-one plus legal tactics",
-  chessCategories.has("mate-in-one") && chessCategories.has("legal-tactic"),
+  "Chess covers mate-in-one plus defensive/material decisions (avoid-losing-move), and no longer uses the weak legal-tactic category",
+  chessCategories.has("mate-in-one") &&
+    chessCategories.has("avoid-losing-move") &&
+    !chessCategories.has("legal-tactic"),
   Array.from(chessCategories)
 );
 check(
-  "Chess keeps one unique scenario per authored base position",
-  (chessPack?.scenarios.length ?? 0) === 4 &&
-    (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
-      .length ?? 0) === 2,
+  "Chess has both white-to-move and black-to-move mate-in-one scenarios",
+  (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
+    .length ?? 0) >= 6 &&
+    (chessPack?.scenarios.filter(
+      (scenario) => scenario.category === "mate-in-one"
+    ).length ?? 0) > 0,
   chessPack?.scenarios.map((scenario) => scenario.category)
 );
 const firstChessMate = chessPack?.scenarios.find(

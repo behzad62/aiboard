@@ -35,9 +35,9 @@ for (const doc of [
 
 const expectedGameIqCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
-  ["gameiq-v0.1-chess", 4],
-  ["gameiq-v0.1-battleship", 25],
-  ["gameiq-v0.1-codenames", 25],
+  ["gameiq-v0.1-chess", 15],
+  ["gameiq-v0.1-battleship", 11],
+  ["gameiq-v0.1-codenames", 10],
   ["gameiq-fireworks-basic-v1", 20],
   ["gameiq-fireworks-hard-v1", 40],
   ["gameiq-fireworks-memory-v1", 30],
