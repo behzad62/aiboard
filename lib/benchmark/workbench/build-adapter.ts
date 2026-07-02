@@ -19,6 +19,7 @@ import type {
 } from "@/lib/benchmark/types";
 import type { Discussion, ReasoningEffort } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
+import { BUILD_ROUND_MIN_TOKENS } from "@/lib/orchestrator/config";
 import type { SelectedModel, StructuredOutputFormat } from "@/lib/providers/base";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type {
@@ -367,6 +368,26 @@ const WORKBENCH_PATCH_ACTION_SCHEMA: StructuredOutputFormat = {
 
 const SOURCE_FILE_PATTERN = /\.(?:cjs|cpp|cs|css|go|h|hpp|html|js|jsx|json|mjs|py|rs|ts|tsx)$/i;
 
+function workBenchPatchMaxTokens(model: SelectedModel): number {
+  const profiledBudget =
+    typeof model.contextProfile?.buildOutputReserveTokens === "number" &&
+    Number.isFinite(model.contextProfile.buildOutputReserveTokens) &&
+    model.contextProfile.buildOutputReserveTokens > 0
+      ? Math.floor(model.contextProfile.buildOutputReserveTokens)
+      : typeof model.contextProfile?.maxOutputTokens === "number" &&
+          Number.isFinite(model.contextProfile.maxOutputTokens) &&
+          model.contextProfile.maxOutputTokens > 0
+        ? Math.floor(model.contextProfile.maxOutputTokens)
+        : null;
+  if (profiledBudget === null) return BUILD_ROUND_MIN_TOKENS;
+  const explicitProfile =
+    model.contextProfile?.source === "registry" ||
+    model.contextProfile?.source === "override";
+  return explicitProfile
+    ? profiledBudget
+    : Math.max(BUILD_ROUND_MIN_TOKENS, profiledBudget);
+}
+
 export async function runWorkBenchModelPatchBuild(
   input: WorkBenchModelPatchBuildInput
 ): Promise<WorkBenchBuildExecutionResult> {
@@ -443,7 +464,7 @@ export async function runWorkBenchModelPatchBuild(
       "You are running a certified WorkBench fixture. Return one minimal patch action as strict JSON. Do not include markdown or prose.",
     user: buildPatchPrompt(input, fileSnapshots),
     structuredOutput: WORKBENCH_PATCH_ACTION_SCHEMA,
-    maxTokens: 1600,
+    maxTokens: workBenchPatchMaxTokens(input.model),
     temperature: 0,
     reasoningEffort: input.reasoningEffort,
     context: input.context,

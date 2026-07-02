@@ -30,6 +30,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 type ModelOverrideCall = {
   label: string;
   messages: ChatMessage[];
+  maxTokens: number;
   attachments?: AttachmentPayload[];
 };
 
@@ -110,11 +111,37 @@ const architect: SelectedModel = {
   modelId: "test:architect",
   providerId: "test",
   displayName: "Test Architect",
+  contextProfile: {
+    providerId: "test",
+    modelId: "architect",
+    fullModelId: "test:architect",
+    contextWindowTokens: 200_000,
+    maxOutputTokens: 32_768,
+    buildOutputReserveTokens: 32_768,
+    effectiveBuildInputCeilingTokens: 167_232,
+    longContextQuality: "good",
+    promptCaching: false,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
+    source: "override",
+  },
 };
 const worker: SelectedModel = {
   modelId: "test:worker",
   providerId: "test",
   displayName: "Test Worker",
+  contextProfile: {
+    providerId: "test",
+    modelId: "worker",
+    fullModelId: "test:worker",
+    contextWindowTokens: 200_000,
+    maxOutputTokens: 24_576,
+    buildOutputReserveTokens: 24_576,
+    effectiveBuildInputCeilingTokens: 175_424,
+    longContextQuality: "good",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker"],
+    source: "override",
+  },
 };
 
 installIndexedDbStub();
@@ -130,6 +157,7 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
     calls.push({
       label: input.label,
       messages: input.messages,
+      maxTokens: input.maxTokens,
       attachments: (input as { attachments?: AttachmentPayload[] }).attachments,
     });
     if (input.label === "Architect is planning the project") {
@@ -194,6 +222,13 @@ await runBuildDiscussion(discussion, [architect, worker], (event) => {
 
 const planningCall = calls.find((call) => call.label === "Architect is planning the project");
 const nonPlanningCalls = calls.filter((call) => call.label !== "Architect is planning the project");
+const workerCall = calls.find((call) => call.label.startsWith("Test Worker working on T1"));
+const reviewCall = calls.find(
+  (call) =>
+    call.label === "Architect is reviewing wave 1" ||
+    call.label === "Test Architect is reviewing wave 1"
+);
+const summaryCall = calls.find((call) => call.label === "Architect is writing the build summary");
 const planPrompt = planningCall?.messages.map((message) => message.content).join("\n\n") ?? "";
 const completed = storeApi.getDiscussionById(discussion.id)?.status;
 
@@ -226,6 +261,120 @@ check(
     label: call.label,
     attachmentCount: call.attachments?.length ?? 0,
   }))
+);
+check(
+  "Build model calls use each model's output ceiling as the response budget",
+  planningCall?.maxTokens === 32_768 &&
+    workerCall?.maxTokens === 24_576 &&
+    reviewCall?.maxTokens === 32_768 &&
+    summaryCall?.maxTokens === 32_768,
+  calls.map((call) => ({ label: call.label, maxTokens: call.maxTokens }))
+);
+
+const fallbackDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-default-budget",
+  modelIds: JSON.stringify(["test:fallback-worker"]),
+  judgeModelId: "test:fallback-architect",
+  attachmentIds: JSON.stringify([]),
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+const fallbackArchitect: SelectedModel = {
+  modelId: "test:fallback-architect",
+  providerId: "test",
+  displayName: "Fallback Architect",
+};
+const fallbackWorker: SelectedModel = {
+  modelId: "test:fallback-worker",
+  providerId: "test",
+  displayName: "Fallback Worker",
+};
+storeApi.insertDiscussion(fallbackDiscussion);
+const fallbackCalls: ModelOverrideCall[] = [];
+const fallbackHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    fallbackCalls.push({
+      label: input.label,
+      messages: input.messages,
+      maxTokens: input.maxTokens,
+      attachments: (input as { attachments?: AttachmentPayload[] }).attachments,
+    });
+    if (input.label === "Architect is planning the project") {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T1",
+              title: "Create fallback file",
+              instructions: "Create src/fallback.txt.",
+              contextFiles: [],
+              outputPaths: ["src/fallback.txt"],
+              expectedOutputs: "A fallback file.",
+              dependsOn: [],
+              difficulty: 1,
+            },
+          ],
+          notes: "Use default budgets.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label.startsWith("Fallback Worker working on T1")) {
+      return [
+        "Implemented.",
+        "```txt path=src/fallback.txt",
+        "fallback",
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Fallback Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [{ taskId: "T1", verdict: "approve", fixInstructions: "" }],
+          newTasks: [],
+          done: true,
+          notes: "Approved.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed with fallback budgets.";
+    }
+    throw new Error(`Unexpected fallback model call label: ${input.label}`);
+  },
+};
+await runBuildDiscussion(
+  fallbackDiscussion,
+  [fallbackArchitect, fallbackWorker],
+  () => undefined,
+  fallbackHooks
+);
+check(
+  "Build model calls without explicit profiles keep Build minimum budgets",
+  fallbackCalls.some(
+    (call) =>
+      call.label === "Architect is planning the project" &&
+      call.maxTokens === 16_384
+  ) &&
+    fallbackCalls.some(
+      (call) =>
+        call.label.startsWith("Fallback Worker working on T1") &&
+        call.maxTokens === 8_192
+    ),
+  fallbackCalls.map((call) => ({ label: call.label, maxTokens: call.maxTokens }))
 );
 
 if (failed === 0) {

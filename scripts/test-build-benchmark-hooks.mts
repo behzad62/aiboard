@@ -98,6 +98,19 @@ const model: SelectedModel = {
   modelId: "fake:oracle",
   providerId: "fake",
   displayName: "Oracle",
+  contextProfile: {
+    providerId: "fake",
+    modelId: "oracle",
+    fullModelId: "fake:oracle",
+    contextWindowTokens: 32_768,
+    maxOutputTokens: 4_096,
+    buildOutputReserveTokens: 4_096,
+    effectiveBuildInputCeilingTokens: 28_672,
+    longContextQuality: "ok",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker"],
+    source: "default",
+  },
 };
 const structuredOutput: StructuredOutputFormat = {
   name: "architect_action",
@@ -509,6 +522,7 @@ const context: CertifiedRunContext = {
 };
 const patchRunner = await startPatchBenchRunner();
 let patchReasoningEffort: unknown = null;
+let patchMaxTokens: unknown = null;
 try {
   const patchBuild = await runWorkBenchModelPatchBuild({
     ...workBenchBuildInput,
@@ -520,6 +534,7 @@ try {
     reasoningEffort: "high",
     streamChat: async function* (input) {
       patchReasoningEffort = input.params.reasoningEffort;
+      patchMaxTokens = input.params.maxTokens;
       yield {
         type: "token",
         content: JSON.stringify({
@@ -540,8 +555,16 @@ try {
       patchRunner.requests.some((request) => request.path === "/bench/patch-file") &&
       traces.length === 1 &&
       toolCalls.length === 3 &&
-      patchReasoningEffort === "high",
-    { patchBuild, requests: patchRunner.requests, traces, toolCalls, patchReasoningEffort }
+      patchReasoningEffort === "high" &&
+      patchMaxTokens === 8192,
+    {
+      patchBuild,
+      requests: patchRunner.requests,
+      traces,
+      toolCalls,
+      patchReasoningEffort,
+      patchMaxTokens,
+    }
   );
 } finally {
   await patchRunner.stop();

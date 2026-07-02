@@ -746,8 +746,11 @@ export async function runBuildDiscussion(
     (discussion.verbosity ?? "balanced") as Verbosity,
     discussion.styleNote
   );
-  const workerMaxTokens = Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS);
-  const architectMaxTokens = Math.max(config.judgeMaxTokens, BUILD_INTEGRATOR_MIN_TOKENS);
+  const workerMinTokens = Math.max(config.maxTokens, BUILD_ROUND_MIN_TOKENS);
+  const architectMinTokens = Math.max(
+    config.judgeMaxTokens,
+    BUILD_INTEGRATOR_MIN_TOKENS
+  );
 
   const modelIds: string[] = JSON.parse(discussion.modelIds);
   const architectId = discussion.judgeModelId ?? modelIds[0];
@@ -774,6 +777,29 @@ export async function runBuildDiscussion(
   const buildContextManager = new BuildContextManager();
   const modelContextProfile = (model: SelectedModel) =>
     model.contextProfile ?? resolveClientModelContextProfile(model.modelId);
+  const buildMaxTokensForModel = (
+    model: SelectedModel,
+    fallbackTokens: number
+  ): number => {
+    const profile = modelContextProfile(model);
+    const profiledBudget =
+      typeof profile.buildOutputReserveTokens === "number" &&
+      Number.isFinite(profile.buildOutputReserveTokens) &&
+      profile.buildOutputReserveTokens > 0
+        ? Math.floor(profile.buildOutputReserveTokens)
+        : typeof profile.maxOutputTokens === "number" &&
+            Number.isFinite(profile.maxOutputTokens) &&
+            profile.maxOutputTokens > 0
+          ? Math.floor(profile.maxOutputTokens)
+          : null;
+    if (profiledBudget === null) return fallbackTokens;
+    const explicitProfile = profile.source === "registry" || profile.source === "override";
+    return explicitProfile ? profiledBudget : Math.max(fallbackTokens, profiledBudget);
+  };
+  const workerMaxTokens = (model: SelectedModel): number =>
+    buildMaxTokensForModel(model, workerMinTokens);
+  const architectMaxTokens = (model: SelectedModel): number =>
+    buildMaxTokensForModel(model, architectMinTokens);
   const emitContextAssembled = (
     assembled: AssembledBuildContext,
     input: {
@@ -4888,7 +4914,7 @@ export async function runBuildDiscussion(
         );
       }
       const text = await streamConversation(actor, messages, {
-        maxTokens: architectMaxTokens,
+        maxTokens: architectMaxTokens(actor),
         label: forced ? `${args.label} (final verdict)` : args.label,
         attachments: turn === 0 ? args.initialAttachments : undefined,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
@@ -5900,7 +5926,7 @@ export async function runBuildDiscussion(
             });
           }
           output = await streamConversation(worker, workerMessages, {
-            maxTokens: workerMaxTokens,
+            maxTokens: workerMaxTokens(worker),
             label:
               turn === 0
                 ? `${worker.displayName} working on ${task.id}: ${task.title}`
@@ -6073,7 +6099,7 @@ export async function runBuildDiscussion(
             message: `${worker.displayName} hit repeated tool issues for ${task.id}; requesting final file output without more tools`,
           });
           output = await streamConversation(worker, workerMessages, {
-            maxTokens: workerMaxTokens,
+            maxTokens: workerMaxTokens(worker),
             label: `${worker.displayName} finalizing ${task.id}: ${task.title}`,
           });
           workerMessages.push({ role: "assistant", content: output });
@@ -7104,7 +7130,7 @@ export async function runBuildDiscussion(
     {
       systemRole:
         "You are the Architect writing the final hand-off summary in Markdown.",
-      maxTokens: architectMaxTokens,
+      maxTokens: architectMaxTokens(architect),
       label: "Architect is writing the build summary",
       attachments: summaryAttachments,
     }
