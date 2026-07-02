@@ -1,0 +1,199 @@
+{
+  "suite": "GameIQ Connect Four (lib/benchmark/gameiq/connect-four.ts)",
+  "caseInventory": "The pack contains 40 scenarios: 4 hand-authored base cases (connect-four.ts:39-144) plus 36 template-generated ones (connect-four.ts:235-364), giving exactly 10 per category (win-in-one, block-win, trap-setup, avoid-losing-move). All 40 ship in the single pack \"gameiq-v0.1-connect-four\" (lib/benchmark/gameiq/packs.ts:13-20, certificationTier \"first-class\") and are runtime-reachable: runCertifiedGameIq → selectedScenarioPacks → runGameIqScenarios (lib/benchmark/gameiq/certified-runner.ts:85-115), wired into the certified run panel. Scoring is per-scenario exact-column match (validation.ts:350-379) aggregated through group-averaged metrics (runner.ts:145-173) into scoreGameIqAttempt (scoring/gameiq.ts). Authoring-time validation (validateGameIqScenario incl. the trap double-threat check at validation.ts:299-312) runs only in scripts/test-gameiq-scenarios.mts and scripts/review-benchmark-corpus.mts, not at runtime. I reconstructed every board with the real engine (dropDisc/getLegalColumns): all 40 expected actions are legal; all 10 trap boards genuinely create a unique double threat; all 10 block/avoid boards have a unique stopping column; but 2 of 10 win-in-one boards have a second winning column that is scored wrong, 1 board is an exact duplicate, 3 are color-swap duplicates, and the whole pack reduces to 4 decision archetypes (bottom-row horizontal completion, bottom-row horizontal block, bottom-row double-threat creation, vertical-stack block) — no diagonal, no above-bottom-row, no priority-conflict decisions. Prior review finding #5 (broken trap boards, missing trap validator) is already fixed on main: validation.ts:299-312 contains the trap branch and the re-authored boards all pass.",
+  "findings": [
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four-win-right-edge",
+        "gameiq-v0.1-connect-four-win-wide-yellow"
+      ],
+      "file": "lib/benchmark/gameiq/connect-four.ts",
+      "line": 239,
+      "summary": "Two win-in-one boards have TWO immediately winning columns but only one is accepted, so a perfect player choosing the equally-winning alternative is scored wrong — violating the 'perfect deterministic candidate scores 100' rule.",
+      "evidence": "Engine-verified: win-right-edge board bottom row Y..RRR. (red 3,4,5; only filler yellow@0 because the [6,opp] filler is skipped when 6===target, connect-four.ts:254-257) has winning columns [2,6] but expectedActions=[{column:6}]; win-wide-yellow board R.YYY.R (yellow 2,3,4) has winning columns [1,5] but expects only 5. Prompt says 'Return the column index that completes an immediate horizontal four' (connect-four.ts:259) — both columns satisfy it. actionMatchesExpected (validation.ts:360-366) does exact single-column match, and the authoring validator's win-in-one branch (validation.ts:278-283) only checks that the expected column wins, never that it is unique. Note: the prior review DISMISSED the general 'equally-optimal alternatives' claim (review-2026-07-01.md:1618-1621) asserting win-in-one is 'single-answer by construction' — that dismissal is factually wrong for these two boards.",
+      "proposedImprovement": "Either (a) apply the oppositeOpenEnd blocker logic the block templates already use (connect-four.ts:279-291) to the win templates so the non-target open end is plugged, or (b) list all engine-winning columns in expectedActions with weight 1. Additionally harden validateConnectFourCategory's win-in-one branch to require countImmediateConnectFourWins(state, turn) === expectedActions.length (i.e., every winning column is an accepted answer) so this class of regression is caught by scripts/test-gameiq-scenarios.mts.",
+      "verifierCorrections": [
+        "Minor precision only: the filler-skip logic is at connect-four.ts:180 (horizontalBoard's `column !== targetColumn` guard), not lines 254-257 (those are the filler list passed in); line 239 correctly points at the win-right-edge template tuple. Also a strengthening detail the finding understates: the note field ('Complete the only four-in-a-row available this turn') is never shown to the model at all — gameIqScenarioPrompt (certified-runner.ts:252-263) sends only title, prompt, and state JSON — so even the 'only' hint cannot steer the candidate to the authored column.",
+        "Minor precision notes only: (1) the filler-skip guard is in horizontalBoard at connect-four.ts:177/180 ('column !== targetColumn'); lines 254-257 are the filler declarations, not the skip logic. (2) The scenario note 'Complete the only four-in-a-row available this turn' (connect-four.ts:260) is additionally false for these two boards, though it is metadata not shown to the model. (3) For the hardening check, comparing the SET of engine-winning columns to the expected column set is strictly stronger than comparing counts (count equality could pass with a wrong column listed), though the count check as proposed still catches this class. (4) Severity 'high' is defensible for a scoring-validity flaw but affects only 2 of ~40 connect-four scenarios; 'medium-high' would also be reasonable.",
+        "Minor imprecisions only: (1) the [6,opp] filler skip happens inside horizontalBoard at connect-four.ts:177-183 (`column !== targetColumn`), not literally at lines 254-257 (those lines are where the fillers are passed to the template). (2) For win-right-edge specifically, the scenario title shown to the model (\"immediate horizontal win win-right-edge\") weakly leaks the intended answer's location; win-wide-yellow has no such hint — the defect stands regardless since the prompt is the stated objective and both columns satisfy it. (3) If fix option (b) (list all winning columns in expectedActions) is chosen, note validateConnectFourCategory's win-in-one branch validates only expectedActions[0] (validation.ts:273), so the proposed hardening to compare countImmediateConnectFourWins against expectedActions.length should also validate that every listed expected column wins."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/connect-four.ts",
+      "line": 235,
+      "summary": "40 scenarios encode only ~4 distinct decision archetypes; all intra-category variation is column translation and red/yellow color swap of the same bottom-row pattern, so the pack looks 10x larger than the decision space it measures.",
+      "evidence": "Engine reconstruction of all 40 boards: every win-in-one/block-win board is 'three-in-a-row on the bottom row with one gap' (10+10), every trap-setup is 'two adjacent bottom-row stones, play the unique column making an open three' (10), every avoid-losing-move is 'opponent has a 3-stack, play on top' (10). No board has more than 6 stones, no stone above row 3, no diagonal relation anywhere. A model that can do exactly four things — complete/block a bottom-row window and see/block a 3-stack — scores 100. Difficulty labels are only easy/medium; no 'hard' scenario exists despite the enum (types.ts:51).",
+      "proposedImprovement": "Keep ~2 representatives per archetype (one edge, one gap variant) and replace the ~30 re-skins with genuinely distinct decisions: diagonal win-in-one and diagonal blocks (stones stacked at heights 0-3), row-1/row-2 horizontal threats requiring gravity reasoning, scenarios where the mover has BOTH a win and a block available (priority test — currently myWins and oppWins are never simultaneously non-empty in any of the 40), and 'poisoned column' avoid-losing-move cases where the naive block drops the opponent's winning stone on top (the category name promises this; all 10 current ones are plain blocks).",
+      "verifierCorrections": [
+        "(1) Trap evidence says \"two adjacent bottom-row stones\": 2 of 10 (trap-low-red support [1,3]; trap-high-yellow support [3,5]) have the pair split around the target gap, not adjacent — same archetype, slightly imprecise wording. (2) \"Three-in-a-row on the bottom row with one gap\" glosses over split-window (X_XX, e.g. win-center-gap stones at cols 1,3,4) and end-extension (_XXX) variants; precise statement: every win/block board is one bottom-row horizontal 4-window missing exactly one cell. (3) \"No board has more than 6 stones\" is conservative — actual max is 5. (4) The finding understates itself: block-win templates are exact (start,target) mirrors of the win-in-one templates, so the effective decision space is even narrower than the \"~4 archetypes\" claim.",
+        "Three minor precision issues, none verdict-changing: (1) Evidence says every trap-setup is \"two ADJACENT bottom-row stones\" — 2 of 10 (trap-low-red supports [1,3], trap-high-yellow supports [3,5]) use a one-gap split; the archetype is still \"unique bottom-row double-threat column\" in all 10. (2) The \"scores 100\" claim has a caveat cutting slightly the other way: two win-in-one scenarios (win-right-edge, win-wide-yellow) have TWO engine-verified winning columns ([2,6] and [1,5]) but credit only one, so even a perfect tactical model can lose points there — an additional pack flaw (ambiguous expected actions), and the finding's claim that a 4-rule model scores exactly 100 requires it to happen to pick the credited gap on those two. (3) The runner (runner.ts distinctGroupKey) groups scenarios with identical gameId+expectedActions and averages within groups before scoring, so identically-keyed re-skins (e.g. three generated win scenarios expecting column 4 with identical label/note) already collapse partially in outcomeScore/moveQuality — this slightly reduces the effective inflation but keys on expected action rather than board, so it does not mitigate the archetype narrowness the finding describes.",
+        "Three precision corrections, none load-bearing: (1) \"A model that can do exactly four things scores 100\" is slightly overstated — two win-in-one scenarios (win-right-edge, win-wide-yellow) have two engine-verified winning columns but accept only one, so even a perfect tactician can lose points by picking the unlisted winning column; this is additional scoring noise, not a refutation. (2) Trap-setup is not always \"two adjacent bottom-row stones\": trap-low-red (supports [1,3]) and trap-high-yellow ([3,5]) are split X_X patterns; the archetype claim still holds (all bottom-row, unique double-threat column). (3) The proposed \"poisoned column\" avoid-losing-move cases need care with the existing category validator: validateConnectFourCategory (validation.ts:285-297) requires an immediate opponent threat to exist and requires the expected move to remove it, so poisoned-column scenarios must be constructed with a pre-existing immediate threat plus a losing alternative block, or the validator must be extended — a small but real scoring-contract touch. Also note \"hard\" difficulty IS used by other gameiq packs (battleship, codenames, fireworks); only connect-four lacks it."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/connect-four.ts",
+      "line": 39,
+      "summary": "A first-class 'Connect Four IQ' pack with zero diagonal tactics, zero above-bottom-row play, zero move-priority conflicts, and zero legality pressure — it measures bottom-row pattern matching, not Connect Four skill.",
+      "evidence": "All 40 verified boards: 0/40 involve a diagonal line (the win condition that decides most real games); 0/40 require reasoning about a disc landing above row 5 except the vertical stacks; 0/40 test win-over-block priority; 0/40 have a full or near-full column (all 7 columns legal in every scenario), so the 21%-weight legalActionRate (scoring/gameiq.ts:7) can never discriminate — any integer 0-6 is legal everywhere; 0/40 midgame positions (max 6 stones). The pack is labeled 'Certified GameIQ v1: Connect Four' first-class tier (packs.ts:14-19).",
+      "proposedImprovement": "Add concrete new categories/boards: (1) diagonal win-in-one, e.g. red at (5,0),(4,1),(3,2) with supports filled, winning drop at column 3 landing on a 3-stack; (2) diagonal block equivalents; (3) priority scenarios where both players have an immediate win and only taking your own win is correct; (4) at least two scenarios with a full column so an illegal-column answer is actually possible; (5) one 'don't play under their threat' scenario where every column except one loses next move. Then legalActionRate and the avoid-losing-move label become meaningful.",
+      "verifierCorrections": [
+        "Two minor imprecisions: (1) \"max 6 stones\" — actual maximum is 5 stones per board (fillers are skipped on occupied/target columns), which strengthens the no-midgame point. (2) \"legalActionRate can never discriminate\" is slightly overstated: validateConnectFourAction still rejects out-of-range columns (e.g., 7 or -1), so the metric penalizes malformed answers; the precise claim is that no in-range column 0-6 is ever illegal, so game-legality mistakes (playing a full column) can never be tested.",
+        "One nuance: \"legalActionRate can never discriminate\" is slightly overstated. validateConnectFourAction rejects out-of-range integers (e.g., column 7 or -1), and shape failures also set legal=false in runner.ts (line 112), so the metric is not literally constant across models. The precise claim is that it can never test board-state legality — the full-column rejection rule that is Connect Four's only game-specific legality constraint — because all 7 columns are legal in all 40 scenarios; it only catches out-of-range indices and JSON-shape failures, which are range checking and format compliance, not game knowledge. The finding's own evidence sentence (\"any integer 0-6 is legal everywhere\") is exactly correct.",
+        "1) \"legalActionRate can never discriminate\" is overstated: legal = validation.ok (runner.ts:94-112), so malformed shapes and out-of-range columns (e.g., 1-indexing confusion answering 7) still fail legality. The precise claim is that board-state-dependent legality is never exercised — every well-formed 0-6 answer is legal in all 40 boards. 2) The existing avoid-losing-move scenarios are not meaningless (blocking the vertical stack is genuinely the only non-losing column) but are functionally identical to block-win, so the category adds no distinct signal. 3) Fix caveats: adding boards changes stableGameIqScenarioPackDigest (packs.ts:121-125), re-keying certification — bump pack version alongside; new category names require extending the category union in gameiq/types.ts. 4) Additional unmentioned weakness supporting the finding: several generated positions have impossible stone-count parity (mover with 3 stones vs opponent's 1), i.e., unreachable game states."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four-trap-center-red",
+        "gameiq-v0.1-connect-four-open-three-trap",
+        "gameiq-v0.1-connect-four-trap-balanced-red",
+        "gameiq-v0.1-connect-four-trap-spread-yellow",
+        "gameiq-v0.1-connect-four-avoid-vertical-8",
+        "gameiq-v0.1-connect-four-avoid-vertical-3",
+        "gameiq-v0.1-connect-four-avoid-vertical-9",
+        "gameiq-v0.1-connect-four-avoid-vertical-6"
+      ],
+      "file": "lib/benchmark/gameiq/connect-four.ts",
+      "line": 306,
+      "summary": "Four pure duplicate boards: trap-center-red is byte-identical (board, turn, expected column 3) to the base open-three-trap scenario, and trap-balanced-red / avoid-vertical-8 / avoid-vertical-9 are exact color-swaps of trap-spread-yellow / avoid-vertical-3 / avoid-vertical-6.",
+      "evidence": "Engine dump: trap-center-red board '.RR..YY' turn=red expected 3 === open-three-trap (connect-four.ts:88-115 vs 306). trap-balanced-red (line 314, red support [2,3], yellow@0,6, target 4) is the color-mirror of trap-spread-yellow (line 311, yellow support [2,3], red@0,6, target 4). avoid-vertical-8 (line 343, red stack@2, yellow@4,6) mirrors avoid-vertical-3 (line 338); avoid-vertical-9 (line 344) mirrors avoid-vertical-6 (line 341). Deleting all four changes no decision coverage.",
+      "proposedImprovement": "Delete trap-center-red, trap-balanced-red, avoid-vertical-8, avoid-vertical-9 (or re-author them as new archetypes per the coverage finding). Add an authoring test in scripts/test-gameiq-scenarios.mts that hashes each board (and its color-swapped canonical form) + turn and fails on duplicates.",
+      "verifierCorrections": [
+        "Minor precision only: trap-center-red is not byte-identical to open-three-trap as a full scenario object — the prompt text, title, and note differ (\"creates the strongest open-ended bottom-row threat\" vs \"creates two bottom-row threats\") — but the finding already scopes the identity claim to (board, turn, expected column), which is literally true; both also share category trap-setup and difficulty medium. Everything else in the evidence is exact.",
+        "Three refinements: (1) The proposed straight deletion would break existing assertions in scripts/test-gameiq-scenarios.mts — expectedPackCounts requires exactly 40 connect-four scenarios (line 48) and lines 108-120 require exactly 10 per category — so the fix must re-author replacement archetypes (the finding's alternative) or update those counts in the same change. (2) A dedup authoring check partially exists (distinct-tuple check at test-gameiq-scenarios.mts:64-85, currently excluding connect-four); the improvement should extend that check rather than add a parallel one, and note the existing check as written would not catch these cases anyway because it hashes expectedActions including differing note strings and has no color-swap canonicalization — the proposed board+turn hash with color-canonical form is the right shape. (3) Minor precision: for trap-center-red the scenario objects are not fully byte-identical (prompt/title/note text differ between base and template); the byte-identical claim holds exactly for what the finding scoped — board, turn, and expected column."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/certified-runner.ts",
+      "line": 258,
+      "summary": "The model-facing prompt names the exact tactic, orientation, and row ('immediate horizontal four', 'vertical loss', 'bottom-row threats'), and the scenario TITLE — included in the prompt — contains location hints that nearly name the answer (trap-center-* → column 3, trap-left-red → column 1, trap-right-yellow → column 5).",
+      "evidence": "gameIqScenarioPrompt (certified-runner.ts:257-263) sends `${scenario.title}` + `${scenario.prompt}`. Titles embed template ids: 'Connect Four: create open threat trap-center-red' (expected column 3 = center), 'trap-left-red' (expected 1), 'trap-right-yellow' (expected 5), 'immediate horizontal win win-left-edge' / 'block horizontal threat block-center-gap' reveal orientation+region. Prompts (connect-four.ts:259,300,330,359) tell the model what pattern to find ('completes an immediate horizontal four', 'the only column index that prevents an immediate vertical loss', 'strongest open-ended bottom-row threat'), reducing 'find the best move' to 'locate the described bottom-row pattern'.",
+      "proposedImprovement": "Use a neutral prompt for all categories ('It is {player}'s turn. Return the best column.') so the model must detect the threat class itself — that is the capability the category taxonomy claims to measure — and either strip the title from gameIqScenarioPrompt or rename ids/titles to non-positional forms (e.g. 'trap-A', 'win-B'). Keep category-specific wording only in the authoring metadata (note/label), which the model never sees.",
+      "verifierCorrections": [
+        "Minor additions, not corrections: the leak also applies to the four hand-written base scenarios (connect-four.ts lines 43, 67, 91, 119 — titles like 'complete the bottom-row four', 'avoid allowing a vertical loss'), so the proposed fix should cover CONNECT_FOUR_BASE_SCENARIOS too. Also note only 3 of 9 trap ids have positional names (trap-spread/low/high/balanced are vaguer), so the title leak is partial across the trap-setup category while the prompt-level tactic leak affects all 36+4 scenarios.",
+        "Scope/nuance corrections: (1) The tactic-class naming in prompts is a suite-wide, arguably intended puzzle-book convention — the chess pack is even more leading (\"Return the legal knight move that wins black's queen\", chess.ts:40/60/80; cf. \"mate in one\") — so that half is a design choice, not a clear defect; the unambiguous leak is the template-id titles. (2) The title leak affects a subset: 4 of 9 trap templates (trap-center-red/yellow→3, trap-left-red→1, trap-right-yellow→5); trap-spread/low/high/balanced ids leak nothing; win/block ids reveal the run's region but only sometimes the target column (win-right-edge target 6 matches \"right edge\"; win-left-edge target is 3, not 0); all avoid-vertical-* ids are numbered and leak nothing. (3) The proposed fix should also bump GAMEIQ_PROMPT_SET_VERSION (lib/benchmark/gameiq/types.ts:16) so past certified results remain comparable. Severity medium is appropriate."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/scoring/gameiq.ts",
+      "line": 7,
+      "summary": "31% of the pack score is unfailable: legalActionRate (21%) and structuredReliability (10%) are automatically satisfied by any integer 0-6 because every column is legal in all 40 scenarios and the structured-output schema already forces {column:integer}; a trivial always-column-4 bot scores ~48/100.",
+      "evidence": "Engine check: getLegalColumns returns all 7 columns for every scenario (max stack height 3, no full columns). The strict JSON schema (certified-runner.ts:26-28) guarantees structured shape. Expected-column histogram over the 40 scenarios: column 4 appears 11 times (27.5%), column 3 8 times — so a constant 'column 4' answer gets outcome/quality ≈0.27 → total ≈0.37*0.27+0.32*0.27+0.21+0.10 ≈ 48/100, and literally any legal constant gets the 31-point floor with zero game reasoning.",
+      "proposedImprovement": "For this pack, make the unfailable components failable: add full-column scenarios (see coverage finding) so legality discriminates, and diversify expected columns so no constant answer exceeds ~1/7 accuracy (currently center-heavy). Alternatively add a documented random-legal calibration baseline for GameIQ (like Fireworks' calibration bots) so the ~48-point floor is visible on the leaderboard instead of reading as mid-tier competence.",
+      "verifierCorrections": [
+        "1) Constant-bot score: the scorer averages per distinct {gameId, expectedActions} group (runGameIqScenarios in lib/benchmark/gameiq/runner.ts), and generated templates in the same category with the same target column share identical expectedActions, collapsing 40 scenarios into 28 groups. A constant column-4 bot is correct in 5/28 groups → outcomeScore=moveQuality≈0.179 → total ≈43/100, not ≈48. The 11/40 (27.5%) raw histogram is accurate but is not what the scorer uses. 2) 'Unfailable' should read 'unfailable for any fixed in-range constant': out-of-range integers (schema puts no min/max on column), provider errors, and fallback responses do fail legalActionRate/structuredReliability (structured := shape && legal in runner.ts:111), and fallbacks additionally halve the score. 3) Minor: pass threshold is 70 (statusFromScore), so the constant bot fails the attempt; the leaderboard-optics concern is about the ~43 score and 31-point floor compressing the discriminating range, not about passing.",
+        "The evidence's constant-bot math is wrong in mechanism but right in headline number. runGameIqScenarios (lib/benchmark/gameiq/runner.ts:145-171) groups scenarios by stableStringify({gameId, expectedActions}) and averages outcome/moveQuality/legal/structured over the 28 distinct groups, not the 40 scenarios — so repeated expected columns are deduplicated. Measured with the real code: always-column-index-4 (the 11/40 most-frequent expected answer) scores 43.32/100 (outcome = 5/28 ≈ 0.179, not 0.275 as claimed); the best constant bot is always-column-index-3, scoring 48.25/100 (outcome = 7/28 = 0.25). The claimed derivation 0.37*0.27+0.32*0.27+0.21+0.10 ≈ 48 is therefore incorrect as written, but the conclusion 'a trivial constant bot reaches ~48/100' still holds (via index 3). Full constant-bot scores: col0=33.46, col1=40.86, col2=40.86, col3=48.25, col4=43.32, col5=40.86, col6=38.39; any legal constant gets the 31-point legal+structured floor exactly as claimed. Minor precision: structuredReliability is not purely schema-guaranteed — runner.ts:111 requires legality too (structured = shape && validation.ok), and the schema does not bound the integer to 0-6, so an out-of-range integer (e.g. 9) zeroes both legal and structured; the finding's phrasing 'any integer 0-6' is accurate. Severity medium is appropriate."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/runner.ts",
+      "line": 46,
+      "summary": "distinctGroupKey weights scenarios by stableStringify({gameId, expectedActions}) — including label/note prose — so identical duplicate boards count twice while genuinely different boards sharing an expected column collapse to 1/3 weight; scenario weights depend on incidental note text, not content.",
+      "evidence": "runner.ts:46-51 keys groups on expectedActions (which embed label 'Column N' and the per-category template note); metrics average within then across groups (runner.ts:152-171). Concretely: the exact-duplicate boards open-three-trap and trap-center-red land in TWO groups (different note strings: 'Create red threats on both column 1 and column 5.' vs 'Build a three-stone threat with more than one follow-up.'), double-counting one board; while win-open-right, win-middle-red, win-wide-red — three distinct boards — share {column:4} + identical template note and are averaged as ONE group (each worth 1/3 of a scenario). Same collapse for 3 block scenarios (col 4), traps (col 3 x2, col 2 x2, col 4 x3) and avoid (col 2 x2, col 5 x2).",
+      "proposedImprovement": "Group by a digest of (gameId, initialState board, turn) if the intent is de-duplicating repeated positions, or drop grouping entirely and average per scenario id. Add a test asserting group count === distinct-board count for each pack.",
+      "verifierCorrections": [
+        "None material. Minor precision: the grouping key also omits the side to move, so some collapsed groups (e.g. trap-center-red + trap-center-yellow, avoid-vertical-3 + avoid-vertical-8) merge scenarios for opposite players — an even stronger form of the reported collapse. The count metrics (scenarioCount, structuredActions, etc.) are ungrouped; only the rate metrics (outcomeScore, moveQuality, legalActionRate, structuredReliability, fallbackRate) are affected, and latencyFactor averages per case.",
+        "Two minor refinements: (1) the category is better described as a scoring/weighting weakness than \"verifier-weakness\"; (2) an additional aggravator: the key also omits the side-to-move, so positions for opposite players collapse when action/label/note match (e.g., trap-center-red vs trap-center-yellow — the finding's \"col 3 x2\" pair is a red-to-move and a yellow-to-move scenario). The proposed fix (digest of gameId + initialState board + turn, or per-scenario-id averaging, plus a group-count test) is sound."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/connect-four.ts",
+      "line": 254,
+      "summary": "Many boards are unreachable in a legal game (mover ahead by 2 stones on their own turn), e.g. win-left-edge/win-right-edge/win-wide-red have 3 mover stones vs 1 opponent stone with the mover to move, which can confuse parity-aware models and adds noise rather than signal.",
+      "evidence": "Engine dump stone counts: win-left-edge me=3/opp=1, win-right-edge 3/1, win-wide-red 3/1, win-middle-yellow 3/1, base win-horizontal 3/2 with red to move (alternating play requires me<=opp on your own turn, or equality if you started); moveHistory is always [] and clock all zeros (connect-four.ts:11-29).",
+      "proposedImprovement": "Balance filler stones so each board satisfies alternating-move parity (mover count === opponent count, or opponent = mover+1), e.g. add one more opponent filler stone to the 3v1 win boards. Cheap to do inside horizontalBoard/verticalThreatBoard and removes a plausible source of strong-model second-guessing.",
+      "verifierCorrections": [
+        "Scope is broader than the finding states: ALL nine generated win-in-one boards are parity-illegal — the four 3v1 cases listed plus five 3v2 mover-ahead-by-1 cases (win-center-gap, win-open-left, win-open-right, win-middle-red, win-wide-yellow). Also illegal: base block-horizontal (yellow to move, red=3/yellow=1) and generated block-left-edge (same 3v1 pattern via the col-0 filler collision with the attacker's stone). The proposed fix is insufficient as written: adding one opponent filler stone to a 3v1 board yields 3v2, which is still illegal on the mover's turn. 3v1 boards need two extra opponent stones (3v2 boards need one) to reach mover==opponent parity, placed so they don't create an opponent immediate win or a second winning column for the mover (scenarios assume a unique correct answer). Severity low is appropriate.",
+        "Two refinements. (1) Scope is broader than the examples given: 14 of 41 scenarios violate parity, including win-center-gap, win-open-left, win-open-right, win-middle-red, win-wide-yellow (all 3v2 mover-ahead), the base block-horizontal (blocker 1 vs attacker 3), and block-left-edge / block-middle-yellow / block-wide-red (blocker 1 vs attacker 3). (2) The proposed fix is arithmetically insufficient as stated: adding \"one more opponent filler stone\" to a 3v1 win board yields 3v2, which is still illegal (mover still ahead on their own turn). The 3v1 win boards need two extra opponent stones (3v3), the 3v2 win boards need one, and the 1v3 block boards need one extra blocker stone (2v3). Also note horizontalBoard silently drops filler stones on occupied/target columns, so the fix must place fillers on columns guaranteed to be empty (or stack on row 4) rather than just appending to the filler list."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "pointless-dead",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "gameiq-v0.1-connect-four"
+      ],
+      "file": "lib/benchmark/gameiq/runner.ts",
+      "line": 172,
+      "summary": "latencyFactor is still computed per scenario and averaged into metrics, and is still a required field of GameIqScoreInput, but scoreGameIqAttempt no longer reads it — dead residue of the prior review's latency-weight fix.",
+      "evidence": "runner.ts:35-39,116,172 compute/average latencyFactor; scoring/types.ts:41 requires it; scoring/gameiq.ts:4-19 uses only outcomeScore/moveQuality/legalActionRate/structuredReliability/fallbackRate (prior review #35 flagged the old 0.05 weight, since removed).",
+      "proposedImprovement": "Remove latencyFactor from GameIqScoreInput and stop computing it in the runner (or keep it as informational-only metadata outside the score input type) so future scoring edits can't silently re-couple score to wall-clock latency.",
+      "verifierCorrections": [
+        "Minor nuance: the residue is not accidental leftover — docs/superpowers/plans/2026-07-01-benchmark-phase-3-low-nit.md:885 deliberately chose to keep GameIqScoreInput.latencyFactor \"now simply unread by the scorer\" and the runner computation for display. Keeping latencyFactor on GameIqRunMetrics/GameIqScenarioResult is defensible diagnostics (though grep shows no live UI consumer); the genuinely dead part is the required field on GameIqScoreInput, which the proposedImprovement already targets correctly.",
+        "Two precision notes: (1) the retention was explicitly chosen in the phase-3 plan (\"GameIqScoreInput still carries latencyFactor, now simply unread by the scorer\"), so this is deliberate-but-unrealized \"display only\" design rather than accidental leftover — the plan's display rationale is hollow because no UI, verifier output, or test reads the field. (2) Per-scenario latencyMs (unlike latencyFactor) is live — it feeds durationMs in runner.ts:180 and certified-runner.ts:187 — so the fix should remove only latencyFactor from GameIqScoreInput (moving it to GameIqRunMetrics or GameIqScenarioResult as informational metadata is fine) and must keep latencyMs. Removing an unread field does not change scores, so no GAMEIQ_SCORING_VERSION bump is needed."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "gameiq-v0.1-connect-four-trap-right-yellow",
+        "gameiq-v0.1-connect-four-trap-low-red",
+        "gameiq-v0.1-connect-four-trap-high-yellow"
+      ],
+      "file": "lib/benchmark/gameiq/validation.ts",
+      "line": 299,
+      "summary": "Prior review #5 (trap-setup had no authoring-time correctness check; 3 trap boards broken) no longer reproduces on main — the trap double-threat validator exists and all 10 trap boards were engine-verified to create a genuine unique double threat.",
+      "evidence": "validation.ts:299-312 contains the trap-setup branch requiring >=2 winning follow-ups; my engine audit shows every trap scenario has exactly one double-threat column matching the expected action (e.g. trap-right-yellow now target 5 with support [3,4] → follow-up wins at 2 and 6).",
+      "proposedImprovement": "None needed on main; reconcile with the unmerged benchmark-fixes-phase-1 branch to avoid a duplicate/conflicting fix when it merges.",
+      "verifierCorrections": [
+        "The proposedImprovement's premise is stale: benchmark-fixes-phase-1 is not unmerged — `git branch --merged main` lists it, and the trap-validator fix landed on main via commit b67beca (\"[codex] Benchmark Phase 1 critical fixes (#61)\"), which is the most recent commit touching lib/benchmark/gameiq/validation.ts (no uncommitted diff on validation.ts or connect-four.ts). No reconciliation work remains for this item. Minor line-number nit: the trap-setup branch spans validation.ts:299-312 with the comment block at 300-303; the executable check is 304-311 — the cited line 299 is correct as the branch start.",
+        "Minor precision notes only: the evidence's \"e.g. trap-right-yellow now target 5\" phrasing could suggest the board was changed to fix the issue, but the trap boards on main were already sound; the Phase 1 fix (commit b67beca, PR #61) is what added the authoring-time validator. Also, the trap-low-red follow-up wins are at columns 0 and 4 (the finding only gave the trap-right-yellow example, which is correct as stated)."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "suite": "GameIQ Codenames (lib/benchmark/gameiq/codenames.ts, pack \"gameiq-v0.1-codenames\")",
+  "caseInventory": "The suite has 25 scenarios: 1 hand-written base (\"gameiq-v0.1-codenames-opening-safe-clue\", codenames.ts:17-36) plus 24 template-generated (\"gameiq-v0.1-codenames-safe-clue-01\"..\"24\", codenames.ts:65-90) that differ only in RNG seed, alternating red/blue starting team, an index-derived difficulty label, and a decorative expected clue word. All 25 are category \"clue-selection\", all are untouched opening boards (phase \"clue\", zero cards revealed) drawn from the same 50-word DEFAULT_WORDS pool (lib/games/codenames/engine.ts:17-68). They feed the single pack \"gameiq-v0.1-codenames\" (lightweight tier, lib/benchmark/gameiq/packs.ts:38-44), which is reachable at runtime: listCertifiedSuiteOptions returns all GameIQ packs for the gameiq track (lib/benchmark/certified/suite-options.ts:57-60) and certified-runner.ts flattens selected packs and runs every scenario through runGameIqScenarios, feeding the certified leaderboard via the returned BenchmarkAttemptV2. Distinct decision archetypes: 1 (emit any legal non-board one-word clue with count 0-9) versus 25 scenarios — and even that one decision is satisfiable without reading the board.",
+  "findings": [
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-opening-safe-clue",
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/validation.ts",
+      "line": 356,
+      "summary": "All 25 scenarios are passed with a perfect 100 score by a constant board-blind baseline, because correctness is defined as bare clue legality; the suite encodes 1 distinct decision across 25 scenarios and cannot fail any model that emits well-formed JSON.",
+      "evidence": "validation.ts:356-358: `if (scenario.gameId === \"codenames\" && scenario.category === \"clue-selection\") return validateGameIqAction(scenario, action).ok ? 1 : 0;` — quality/correct == legality. validateCodenamesClue (lib/games/codenames/engine.ts:243-283) only checks: non-empty single word, integer count 0-9, word not an unrevealed board word, count <= remaining (9 or 8 at these all-opening states). A fixed response {type:'clue',clue:{word:'XYZZY',count:1}} is legal on every one of the 25 boards (all words come from the 50-word DEFAULT_WORDS pool; 'XYZZY' is not in it, count 1 <= 8), so structured=legal=correct=1 on all scenarios; scoreGameIqAttempt (scoring/gameiq.ts:11-20) then yields (0.37+0.32+0.21+0.1)*100 = 100 and statusFromScore(100)='passed' (types.ts:173-175). The strict structured-output schema (certified-runner.ts:48-60) even eliminates the malformed-JSON failure mode. Nothing about the board, the roles, or the count 'conservativeness' is ever consulted. Note: the prior review explicitly blessed this design as a strength (review-2026-07-01.md:1755 'legality-as-correctness ... is the right model for an open-ended clue task') and did not flag that it makes the pack unfailable.",
+      "proposedImprovement": "Replace the 24 clones with scenarios where legality is actually binding and deterministic skill is required. Concrete additions: (a) 'count-audit' scenarios — 6-8 mid-game states built via submitCodenamesClue/submitCodenamesGuess with varying numbers of own cards already revealed (remaining = 1..6), prompt 'give any legal clue with the maximum legal count'; verifier: legal AND action.clue.count === getRemainingCodenamesCards(state, turnTeam). A board-blind baseline emitting count 1 or count 9 fails most of them. (b) 'tight-count' scenarios — states with remaining = 1, prompt as today; verifier unchanged (legality), but now count>1 fails, so at least the state must be read. (c) Deterministic guess scenarios (see coverage-gap finding). Keep 1-2 pure-legality scenarios as smoke tests, and per the checklist run the trivial baseline to confirm it now fails.",
+      "verifierCorrections": [
+        "Two minor imprecisions: (a) the evidence says count must be \"<= remaining (9 or 8 at these all-opening states)\"; in fact remaining is always 9, because the check uses state.turnTeam and at every opening state turnTeam == startingTeam, which always holds 9 cards (engine.ts:74-82) — the \"8\" case never occurs, and the constant count 1 is legal either way. (b) The guaranteed 100/passed applies when the codenames pack is run alone; runCertifiedGameIq flattens scenarios across all selected packs into one attempt score (certified-runner.ts:88-89), so in a mixed-pack run the codenames scenarios contribute a guaranteed-perfect 25-scenario block rather than a standalone 100 — which if anything strengthens the non-discrimination point.",
+        "Two minor imprecisions: (a) remaining cards for the prompted team is always 9, not \"9 or 8\" — every scenario's prompted team equals startingTeam, which receives 9 cards (roleCounts, engine.ts:74-82); this makes the baseline even safer than stated. (b) \"cannot fail any model that emits well-formed JSON\" is slightly overstated: a schema-valid response with clue:null, a multi-word clue, a board word, or count>9 would still fail; the precise claim is that any constant single non-board word with count 0-9 scores 100 on all 25 scenarios. Severity, category, and proposed improvement are otherwise accurate.",
+        "Three detail corrections, none affecting the verdict: (1) 'cannot fail any model that emits well-formed JSON' is overstated — well-formed JSON can still fail via an illegal clue (board word, multi-word, count>9) or a guess action during clue phase; the precise claim is that a constant board-blind baseline scores a perfect 100 and the suite measures nothing beyond bare legality. (2) Remaining team cards is always 9 at these states (the moving team is always the starting team in each scenario), never 8 — irrelevant to the conclusion since count 1 passes either way. (3) knownFromPriorReview is only partly false: review-2026-07-01.md line ~283 already noted 'Same pattern exists for codenames (single board template re-seeded)' as an unverified add-on to the chess-duplication finding; what is genuinely new here is the unfailability-by-constant-baseline demonstration and the fact that the prior review affirmatively listed the design as a strength. Also a citation nit: statusFromScore lives in lib/benchmark/gameiq/types.ts:173-175, not lib/benchmark/scoring/types.ts. Severity 'high' is defensible for a benchmark-design lens (an entire pack with zero discrimination), though one could argue medium given the pack is 'lightweight' certificationTier and dilutes when run alongside other packs."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-opening-safe-clue",
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/certified/certified-runner.ts",
+      "line": 333,
+      "summary": "The model-facing prompt contains a JSON shape example ({\"word\":\"example\",\"count\":2}) that is itself a legal, full-credit answer for every scenario in the pack — echoing the format example verbatim scores 100.",
+      "evidence": "certified-runner.ts:324-336 gameIqActionShapeExample returns '{\"action\":{\"type\":\"clue\",\"clue\":{\"word\":\"example\",\"count\":2},\"cardId\":null}}' and it is appended to every prompt ('Return JSON exactly in this shape: ...', certified-runner.ts:261). 'EXAMPLE' is not in DEFAULT_WORDS (lib/games/codenames/engine.ts:17-68) so it is never a board word, and count 2 <= remaining 8/9 on all 25 opening states, so validateCodenamesClue accepts it; combined with legality==correctness (validation.ts:356-358) the copied example earns actionQuality 1 on all 25 scenarios.",
+      "proposedImprovement": "Make the shape example self-evidently non-scoring: use an illegal placeholder for codenames (e.g. {\"word\":\"TWO WORDS\",\"count\":-1}) or state 'values are placeholders; a copied example scores zero' and add a verifier assertion rejecting clue.word.toUpperCase()==='EXAMPLE'. This matters for every game's example but only for codenames is the example literally a full-credit answer (chess 'e2->d4' is illegal, connect-four column 3 may be wrong, battleship (1,2) is exact-match-scored).",
+      "verifierCorrections": [
+        "File path is wrong: the file is lib/benchmark/gameiq/certified-runner.ts, not lib/benchmark/certified/certified-runner.ts (no such path exists). The cited line numbers (261, 324-336, 333) are correct for the gameiq file. Minor detail: remaining team words at the opening is 9 in all 25 scenarios (turn team is always the starting team), not \"8/9\" — the conclusion (count 2 is legal) is unaffected.",
+        "File path is wrong: the code is in lib/benchmark/gameiq/certified-runner.ts (codenames example at line 333, prompt append at line 261), not lib/benchmark/certified/certified-runner.ts (which does not exist). Minor evidence nit: remaining team words is always 9, not \"8/9\" — every scenario's turnTeam is the startingTeam (9 cards); count 2 is legal either way. On the proposed fix, prefer the disclaimer + verifier assertion rejecting clue.word.toUpperCase()===\"EXAMPLE\" over an intentionally illegal placeholder like {\"word\":\"TWO WORDS\",\"count\":-1}, which conflicts with the strict structured-output schema guidance and could confuse compliant models."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/codenames.ts",
+      "line": 65,
+      "summary": "The 24 generated scenarios are the same single decision re-skinned (new seed, alternating team, new decorative expected word); deleting 23 of them would not change the score signal for any model.",
+      "evidence": "codenames.ts:65-90: the map over GENERATED_CODENAMES_CLUES changes only id/title/seed/team/difficulty/expected-word; the prompt text and the verifier (legality) are identical, and all boards are shuffles of the same 50-word pool. Prior review already noted this pattern in passing: review-2026-07-01.md (finding on chess clones) 'Same pattern exists for codenames (single board template re-seeded)'.",
+      "proposedImprovement": "Shrink to ~5 legality scenarios and reinvest the case budget in the distinct archetypes proposed above (count-audit, tight-count, guess-phase). If 25 items are wanted for stability, vary the binding constraint (revealed sets, remaining counts, guess phase) so each item encodes a different decision, not the same one 25 times.",
+      "verifierCorrections": [
+        "Minor: \"deleting 23 of them would not change the score signal for any model\" is slightly overstated as a literal claim — boards are different 25-card shuffles (shown to the model as Initial state JSON), so a degenerate model that echoes a board word could pass some items and fail others; soften to \"essentially no additional signal in expectation\". Also the map varies the tags array (team tag) and the prompt's team token in addition to the listed fields — both trivial and consistent with the finding's thrust. The evidence's paraphrase of the prior review as covering codenames is accurate, though that prior review explicitly marked its codenames side-claim as not re-verified (review-2026-07-01.md:289); this pass now verifies it.",
+        "One slight overstatement: \"deleting 23 of them would not change the score signal for ANY model\" is not literally true — each seed yields a different 25-word subset of the 50-word pool, so a degenerate model that always emits the same fixed pool word would pass boards lacking it and fail boards containing it. For realistic models the claim holds (near-1 item correlation). Also, the suite is 25 items total (1 base scenario at codenames.ts:17-36 plus the 24 generated), and the legality-only scoring is enforced by the explicit codenames/clue-selection bypass in actionMatchesExpected (lib/benchmark/gameiq/validation.ts:356-358), which is the precise mechanism making the expected words decorative."
+      ]
+    },
+    {
+      "status": "plausible",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-opening-safe-clue",
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/codenames.ts",
+      "line": 82,
+      "summary": "The decorative, never-compared expected clue words (ORBIT, VECTOR, ...) make each of the 25 identical-decision scenarios count as a distinct scoring group, so the trivially-passable codenames items dominate mixed-pack GameIQ averages, and they are shown as 'Expected result' in verifier details even though they are not required.",
+      "evidence": "codenames.ts:82-86 gives every scenario a unique expectedActions word that actionMatchesExpected never consults for clue-selection (validation.ts:356-358). runner.ts:46-51 distinctGroupKey = stableStringify({gameId, expectedActions}), so the 25 scenarios form 25 groups feeding outcomeScore/moveQuality/legalActionRate averages (runner.ts:145-172) — whereas chess's 60 byte-identical clones correctly collapse to 4 groups. In an all-packs run, codenames therefore contributes 25 guaranteed-1.0 groups to the run average. Additionally, gameIqAssertionDetails (certified-runner.ts:305) renders 'Expected result: [{word: VECTOR, count: 1}...]' for failures, implying VECTOR was the required answer when only legality was tested.",
+      "proposedImprovement": "Either (a) make the expected action honest — a single shared placeholder like {type:'clue',clue:{word:'ANY-LEGAL-CLUE',count:1}} with label 'any legal clue' so the group key collapses the duplicates, or (b) change distinctGroupKey to key codenames clue-selection groups by gameId+category+board digest instead of expectedActions. Also suppress the 'Expected result' block in verifier details for legality-scored scenarios (print 'any legal clue' instead).",
+      "verifierCorrections": [
+        "Three detail corrections: (1) The chess comparison is stale — the 60 byte-identical chess clones were removed in commit c188f4a; current chess.ts has 4 scenarios = 4 groups. The intended-collapse behavior is better illustrated by the fireworks packs (20 scenarios→2 groups, 40→4, 30→1) which still exist. (2) \"25 identical-decision scenarios\" is imprecise: each generated scenario has a distinct board (unique seed at codenames.ts:78-80), so the legal-word constraints differ per scenario even though the tested skill is identical; consequently proposed fix (b) (gameId+category+board digest) would still yield 25 groups — only fix (a) or a category-aware key actually collapses them. (3) \"25 guaranteed-1.0 groups\" overstates: a model can fail by returning a board word or illegal count; \"trivially passable\" is accurate, \"guaranteed\" is not. Measured impact figure: codenames contributes 25 of 88 groups (~28%) in an all-packs run.",
+        "If salvaged, the finding should be narrowed to a low-severity reporting cosmetic: certified-runner.ts:305 renders the decorative expectedActions as 'Expected result' in failure details for codenames clue-selection scenarios where only legality is scored; print 'any legal clue' (or suppress the block for legality-scored categories) instead. The grouping/domination claim should be dropped: the 25 scenarios have 25 distinct boards (verified by execution), so 25 groups is consistent with the grouping semantics, and the chess 60-clone comparison no longer exists in the working tree. A separate, better-supported observation is the inverse inconsistency: fireworks-memory's 30 distinct states collapse to 1 group because the group key ignores initialState."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-pack"
+      ],
+      "file": "lib/benchmark/gameiq/codenames.ts",
+      "line": 17,
+      "summary": "A pack labeled 'Certified GameIQ v1: Codenames Clues' measures zero Codenames skill: no guess-phase scenarios, no mid-game states, no scenario where any legality rule is binding, despite the action type, JSON schema, validator, and equality matcher all already supporting guesses.",
+      "evidence": "All 25 initialStates are createInitialCodenamesState(...) fresh openings (codenames.ts:12-15,78-81): phase 'clue', zero revealed cards, remaining always 9/8. CodenamesGameIqAction includes {type:'guess',cardId} (types.ts:137-139), the structured-output schema accepts guesses (certified-runner.ts:48-60), validateCodenamesAction handles them via submitCodenamesGuess (validation.ts:226-240), and actionsEqual exact-matches guess cardIds (validation.ts:394-402) — but no scenario ever uses the guess branch, so that entire code path is exercised by nothing. Categories 'target-priority'/'hidden-cooperation' (types.ts:35-37) are unused for codenames.",
+      "proposedImprovement": "Add deterministic guess scenarios: hand-build mid-game states (createCodenamesStateFromBoard + submitCodenamesClue/Guess) where the correct guess is deducible, e.g. team has 1 unrevealed own card, activeClue count 1, and moveHistory pins it; score by exact cardId match (already supported). IMPORTANT: for guess scenarios the initialState must be role-redacted (use getCodenamesPublicBoard-style cards with role null for unrevealed) because certified-runner.ts:260 serializes initialState verbatim — sending CodenamesGameState with card.role would leak the answer key to the guesser. Also add clue scenarios with binding constraints (remaining=1 forcing count<=1; 'maximum legal count' audits). This turns the pack into 3-4 real archetypes: legal-clue, state-aware count, deduced guess, guess-phase discipline.",
+      "verifierCorrections": [
+        "Two minor imprecisions, neither fatal: (1) \"measures zero Codenames skill\" slightly overstates — the pack does test minimal clue-legality compliance (one word, not a board word, valid count); the accurate statement is that it tests one trivially-satisfiable archetype 25 times with no binding constraint and no game reasoning. (2) The finding could be strengthened: because actionMatchesExpected collapses correctness to legality for codenames clue-selection (validation.ts:356-358), the hand-picked expectedActions words are never used in scoring, and the difficulty labels are cosmetic — worth folding into the improvement. Also note the caseId \"gameiq-v0.1-codenames-pack\" is runtime context, not in source (certified-runner.ts:138 defaults to \"gameiq-v0.1-scenario-pack\"); the stable identifier is pack id \"gameiq-v0.1-codenames\" (packs.ts:38).",
+        "The caseId \"gameiq-v0.1-codenames-pack\" does not exist in the repo. The actual scenario pack id is \"gameiq-v0.1-codenames\" (lib/benchmark/gameiq/packs.ts:38); the runner's generic fallback caseId is \"gameiq-v0.1-scenario-pack\" (certified-runner.ts:138), likely the source of the conflation. Additionally, the finding understates one point in its favor: actionMatchesExpected (validation.ts:356-358) short-circuits codenames clue-selection to score 1 for any legal clue, so the 25 hardcoded expected clue words (ORBIT, VECTOR, ...) are never compared at all — scoring is pure legality, making the pack even weaker than \"no guess coverage\" alone suggests.",
+        "Three refinements: (1) The pack id is \"gameiq-v0.1-codenames\" (packs.ts:38), not \"gameiq-v0.1-codenames-pack\" — the latter string does not exist in the repo (the runner's generic fallback caseId is \"gameiq-v0.1-scenario-pack\"). (2) \"No scenario where any legality rule is binding\" is slightly overstated: the clue-not-a-board-word rule (engine.ts:266-268) is enforced in every scenario; more precisely, no rule ever requires state-dependent reasoning — any word outside the fixed 50-word pool passes on every board, and the count<=remaining rule is never binding (remaining always 9/8, expected count always 1). (3) The finding understates severity by omitting that actionMatchesExpected (validation.ts:356-358) grants full credit for any legal clue in codenames clue-selection, making all 25 expectedActions words decorative and enabling a constant-answer 100% score."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-opening-safe-clue",
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/codenames.ts",
+      "line": 85,
+      "summary": "The prompt and expected-action notes demand a 'conservative count' but no assertion checks it — count 8, or count 0 (Codenames' unlimited-guess clue, the least conservative option), pass with full credit.",
+      "evidence": "codenames.ts:77 prompt: 'Return a legal one-word clue and a conservative count'; codenames.ts:31,85 note: 'A legal non-board clue with a conservative count.' validateCodenamesClue (engine.ts:256-274) accepts any integer count 0-9 up to remaining (9/8 here), and count 0 sets guessesRemaining to ALL unrevealed cards (engine.ts:304-307). Nothing in validation.ts constrains the count for clue-selection.",
+      "proposedImprovement": "Either drop 'conservative' from the prompt/notes (honest labeling), or enforce it: for these scenarios add an assertion count >= 1 && count <= 2 (matching the stated intent), rejecting count 0 explicitly since it is the aggressive unlimited clue. If enforced, verify a perfect deterministic candidate still scores 100 and re-run the naive baseline.",
+      "verifierCorrections": [
+        "(1) The base scenario's prompt (codenames.ts:26) does NOT contain \"conservative\" — only its expected-action note does; the \"conservative\" prompt wording applies to the 24 generated scenarios (codenames.ts:77). (2) \"9/8 here\" is wrong: in all 25 scenarios the moving team is the starting team with 9 remaining cards, so the legality cap is 9, never 8 (a legal count up to 9, not 8, passes). (3) Additional supporting detail: the expected action {word, count:1} is entirely ignored by scoring for clue-selection — validation.ts:356-358 short-circuits to legality-only before the weight-matching loop.",
+        "(1) The \"(9/8 here)\" detail is wrong: in all 25 scenarios the acting team is the starting team (startingTeam: team, codenames.ts:79-81; opening is red with startingTeam \"red\"), and the starting team always has 9 cards (roleCounts, engine.ts:74-82), so the max legal count is 9 in every scenario, never 8. (2) validateCodenamesClue spans engine.ts:243-283, not 256-274 (count-range check at 256-258, remaining-cards cap at 269-274). (3) For the base scenario gameiq-v0.1-codenames-opening-safe-clue, \"conservative\" appears only in the expected-action note — its prompt (line 26) says only \"legal for the board\" — so the prompt/scorer mismatch fully applies only to the 24 generated safe-clue scenarios; for the opening scenario it is a note-labeling issue only."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/codenames.ts",
+      "line": 74,
+      "summary": "Difficulty labels easy/medium/hard are fabricated from the array index while the task is byte-for-byte identical, misrepresenting the pack in any difficulty-based display or digest.",
+      "evidence": "codenames.ts:74: `difficulty: index < 12 ? \"easy\" : index < 20 ? \"medium\" : \"hard\"` — nothing else about the scenario changes with the tier; scenario 24 ('hard') is the same legal-clue ask on the same 50-word pool as scenario 01 ('easy'). The field is part of the scenario record and pack digest (packs.ts:121-125).",
+      "proposedImprovement": "Set all current clones to difficulty 'easy'; reserve 'medium'/'hard' for the genuinely harder archetypes (count-audit, deduced guess) once added.",
+      "verifierCorrections": [
+        "Two minor imprecisions: (1) \"byte-for-byte identical\" in the summary overstates it — scenarios differ in board seed (different 25-card layouts), team, title, and expected clue word; what is identical is the task archetype and its actual difficulty, which the evidence sentence states correctly. (2) No current UI displays GameIQ scenario difficulty (only WorkBench difficulty is rendered), so the \"difficulty-based display\" impact is prospective; present impact is limited to the scenario records and pack digest, consistent with severity: low.",
+        "Two overstatements: (1) \"byte-for-byte identical\" is literally false — each generated scenario has a distinct seeded board (seed gameiq-v0.1-codenames-NN), alternating startingTeam, and a distinct example clue word; the accurate claim is that the task archetype, prompt template, and scoring criterion (any legal clue scores 1) are identical, making the tiers meaningless. (2) \"misrepresenting the pack in any difficulty-based display\" overstates current impact — no live UI displays GameIQ scenario.difficulty (CertifiedRunPanel.tsx:719 derives case difficulty from the pack's certificationTier, ignoring the scenario field), and the digest inclusion is benign (content fingerprint, not a difficulty summary). The field is currently latent metadata, so harm is prospective rather than actual. Related: fireworks.ts:103 uses the same index-based difficulty pattern (index < 10 ? \"easy\" : \"medium\") and could be reviewed in the same fix."
+      ]
+    },
+    {
+      "status": "plausible",
+      "severity": "low",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-codenames-opening-safe-clue",
+        "gameiq-v0.1-codenames-safe-clue-01..24"
+      ],
+      "file": "lib/benchmark/gameiq/runner.ts",
+      "line": 172,
+      "summary": "maxResponseMs (15s on every codenames scenario) feeds a latencyFactor metric that is computed and averaged but never used by the score or any consumer.",
+      "evidence": "runner.ts:116 computes latencyFactor per scenario against scenario.maxResponseMs and runner.ts:172 averages it into metrics; scoreGameIqAttempt (scoring/gameiq.ts:4-20) reads only outcomeScore/moveQuality/legalActionRate/structuredReliability/fallbackRate. Repo-wide grep shows the only latencyFactor references are its computation, its type declarations (gameiq/types.ts:103, scoring/types.ts:41), and test fixtures — no UI or aggregate consumes it. This is suite-wide across GameIQ, observed here via codenames.ts:34,88.",
+      "proposedImprovement": "Either wire latencyFactor into the score (small multiplicative term like the fallback penalty) or delete latencyFactor + maxResponseMs from the scenario schema and metrics so authors stop maintaining a dead 15_000 constant on every scenario.",
+      "verifierCorrections": [
+        "knownFromPriorReview should be true-ish: docs/bench/review-2026-07-01.md issue #35 flagged latencyFactor's score weight, and docs/superpowers/plans/2026-07-01-benchmark-phase-3-low-nit.md deliberately removed it from scoreGameIqAttempt while keeping the fields \"for display\" — the current computed-but-unscored state is the intended residue of that known fix, with the anticipated display consumer never built (scripts/test-gameiq-scoring.mts:77 now asserts the score ignores wall-clock latency). Also, the first half of the proposedImprovement (\"wire latencyFactor into the score\") should be dropped: it would reverse that deliberate fix and violate the repo's documented \"never score by raw elapsed time\" rule. Only the delete option (remove latencyFactor + maxResponseMs from schema/metrics, or explicitly document them as diagnostics) is appropriate.",
+        "If retained at all, the finding should be reclassified: knownFromPriorReview should be true (the state is the documented output of docs/bench/review-2026-07-01.md item 35 and its phase-3 fix plan, both checked in), the 'wire into score' half of proposedImprovement must be dropped (it regresses a deliberate v0.2 scoring fix and breaks the existing latency-independence regression test), leaving only a nit-level 'delete or actually surface the diagnostics fields' cleanup."
+      ]
+    }
+  ]
+}

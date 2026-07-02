@@ -201,11 +201,10 @@ const firstJsonCall = capturedCalls[0];
 const firstJsonUserPrompt = firstJsonCall?.params.messages.find((message) => message.role === "user")?.content ?? "";
 const firstJsonStructured = firstJsonCall?.params.structuredOutput as StructuredOutputFormat | undefined;
 check(
-  "certified ToolReliability sends JSON schema constraints in prompt and structured output",
+  "certified ToolReliability states the JSON schema in the prompt without provider enforcement",
   firstJsonUserPrompt.includes('"decision"') &&
     firstJsonUserPrompt.includes('"risks"') &&
-    firstJsonStructured?.schema.required?.includes("decision") === true &&
-    firstJsonStructured.schema.properties?.risks?.type === "array",
+    firstJsonStructured === undefined,
   {
     userPrompt: firstJsonUserPrompt,
     structuredOutput: firstJsonStructured,
@@ -215,10 +214,11 @@ const firstToolCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => b
 const firstToolCallPrompt =
   capturedCalls[callIndexForCase(firstToolCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "";
 check(
-  "certified ToolReliability prompts exact tool-call fields when exact matching is used",
-  firstToolCallPrompt.includes('"startLine":1') &&
-    firstToolCallPrompt.includes('"lineCount":20') &&
-    firstToolCallPrompt.includes("read_range"),
+  "certified ToolReliability documents the action grammar without printing the expected action",
+  firstToolCallPrompt.includes("Available JSON tool actions:") &&
+    firstToolCallPrompt.includes("read_range") &&
+    !firstToolCallPrompt.includes("Expected JSON tool action:") &&
+    !firstToolCallPrompt.includes('"startLine":214'),
   firstToolCallPrompt
 );
 const firstPatchCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "patch");
@@ -238,30 +238,90 @@ check(
   firstPatchPrompt
 );
 check(
-  "certified ToolReliability patch calls request structured search/replace when supported",
+  "certified ToolReliability patch calls request a multi-hunk structured envelope",
   firstPatchStructured?.name === "toolreliability_patch" &&
     firstPatchStructured.schema.required?.includes("path") === true &&
-    firstPatchStructured.schema.required?.includes("search") === true &&
-    firstPatchStructured.schema.required?.includes("replace") === true,
+    firstPatchStructured.schema.required?.includes("ops") === true,
   firstPatchStructured
 );
 const firstRepairCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "repair-loop");
+const firstRepairCall = capturedCalls[callIndexForCase(firstRepairCallIndex)];
 check(
-  "certified ToolReliability seeds repair-loop parser failure and calls model only for repair",
-  capturedCalls[callIndexForCase(firstRepairCallIndex)]?.params.structuredOutput?.schema.required?.includes("decision") === true &&
-    (capturedCalls[callIndexForCase(firstRepairCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "").includes("Parser feedback"),
+  "certified ToolReliability repair-loop first attempt is genuine (no seed, no provider schema)",
+  firstRepairCall?.params.structuredOutput === undefined &&
+    !(firstRepairCall?.params.messages.find((message) => message.role === "user")?.content ?? "").includes("Parser feedback"),
   {
-    repairCall: capturedCalls[callIndexForCase(firstRepairCallIndex)]?.params,
+    repairCall: firstRepairCall?.params,
   }
 );
 const firstForbiddenCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "forbidden-action");
 const firstForbiddenPrompt =
   capturedCalls[callIndexForCase(firstForbiddenCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "";
 check(
-  "certified ToolReliability tells models the allowed safe verification command pattern",
-  firstForbiddenPrompt.includes("npm test") && firstForbiddenPrompt.includes('"action":"run"'),
+  "certified ToolReliability describes the run-action shape without printing an allowed command",
+  firstForbiddenPrompt.includes('"action":"run"') &&
+    !firstForbiddenPrompt.includes("Allowed safe verification action:") &&
+    !firstForbiddenPrompt.includes('"command":"npm test"'),
   firstForbiddenPrompt
 );
+
+// Genuine repair loop: an invalid first answer triggers exactly one repair
+// call that shows the model its OWN output plus the parser feedback.
+{
+  const repairCase = TOOL_RELIABILITY_CASES.find(
+    (benchmarkCase) => benchmarkCase.category === "repair-loop"
+  )!;
+  const repairPerfect = perfectOutputs[repairCase.id] ?? [];
+  const repairResponses = ["totally not json", repairPerfect[repairPerfect.length - 1] ?? "{}"];
+  const repairCalls: Array<{ user: string }> = [];
+  let repairCallIndex = 0;
+  const repairAttempts = await runCertifiedToolReliability({
+    context: {
+      runId: "run-certified-toolrel-genuine-repair",
+      mode: "certified",
+      track: "toolreliability",
+      harnessProfile: "raw-single-model",
+      suiteId: "suite-certified-toolrel",
+      startedAt: now,
+      caseIds: ["toolreliability-current-pack"],
+      teamCompositionIds: [team.id],
+      modelBudget: {},
+      recordAttempt: async () => {},
+      recordVerifier: async () => {},
+      recordArtifact: async () => {},
+      recordTrace: async () => {},
+      recordEvent: async () => {},
+      recordToolCall: async () => {},
+      recordFailure: async () => {},
+    },
+    models: [model],
+    teamCompositionIds: [team.id],
+    casePack: [repairCase],
+    streamChat: async function* (input): AsyncIterable<StreamChunk> {
+      repairCalls.push({
+        user: input.params.messages.find((message) => message.role === "user")?.content ?? "",
+      });
+      yield { type: "token", content: repairResponses[repairCallIndex++] ?? "{}" };
+      yield { type: "done" };
+    },
+  });
+  check(
+    "genuine repair loop feeds the model its own failed output and parser feedback",
+    repairCalls.length === 2 &&
+      !repairCalls[0].user.includes("Previous invalid answer:") &&
+      repairCalls[1].user.includes("Previous invalid answer:") &&
+      repairCalls[1].user.includes("totally not json") &&
+      repairCalls[1].user.includes("Parser feedback:"),
+    repairCalls.map((call) => call.user.slice(0, 400))
+  );
+  check(
+    "genuine repair loop scores the repair and passes the attempt",
+    repairAttempts[0]?.status === "passed" &&
+      repairAttempts[0].toolReliabilityScore === 100 &&
+      repairAttempts[0].modelCalls === 2,
+    repairAttempts[0]
+  );
+}
 check(
   "certified ToolReliability traces are keyed to individual ToolReliability cases",
   bundle.traces[0]?.caseId === TOOL_RELIABILITY_CASES[0]?.id &&

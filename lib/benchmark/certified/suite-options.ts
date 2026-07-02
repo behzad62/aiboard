@@ -32,11 +32,11 @@ export function listCertifiedSuiteOptions(
       },
       {
         id: "fireworks-teamiq-tactics-v0.1",
-        label: "Fireworks: Tactics",
+        label: "Fireworks: Tactics (stratified sample)",
       },
       {
         id: "fireworks-teamiq-memory-v0.1",
-        label: "Fireworks: Memory",
+        label: "Fireworks: Memory (stratified sample)",
       },
       {
         id: "fireworks-teamiq-full-v0.1",

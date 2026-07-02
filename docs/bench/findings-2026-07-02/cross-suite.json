@@ -1,0 +1,181 @@
+{
+  "suite": "cross-suite sweep: certified suite wiring, pack duplication, and dead case sources (gameiq / fireworks / teamiq / toolreliability / workbench)",
+  "caseInventory": "The certified benchmark exposes four runnable tracks from components/benchmark/certified/CertifiedRunPanel.tsx via lib/benchmark/certified/suite-options.ts: GameIQ = 7 packs / 184 scenarios (connect-four 40, chess 4, battleship 25, codenames 25, fireworks basic 20 / hard 40 / memory-stress 30 — the three fireworks packs are re-skins of lib/benchmark/fireworks/scenario-packs.ts scenarios); ToolReliability = one fixed 125-case pack (lib/benchmark/toolreliability/cases.ts) plus 70 stress cases (stress-cases.ts) that are exported and tested but unreachable from any UI or runner; TeamIQ = a 6-case \"quick\" sample (toolreliability-quick.ts, literal subset of the 125), an \"all modes\" suite that actually wires the full 125-case pack against a 150-model-call budget (structurally unfinishable), and four Fireworks suites that run runtime slices (20 of 60 tactics, 10 of 40 memory, 10 of 20 full games, 35 mixed) while their persisted case records claim the full sets; WorkBench = 19 challenges (challenges.ts 12 + corpus.ts 7 extra-language) grouped into 15 overlapping packs (all / 8 language / 6 kind). All attempts from all tracks aggregate into one per-team-composition leaderboard row (scoring/aggregate.ts + metrics.ts), so cross-suite duplicated case sources are double-weighted. Separately, lib/benchmark/build-cases.ts creates v1 \"real-work\" cases from Build stop reports that are stored and counted but can never be run by any engine.",
+  "findings": [
+    {
+      "status": "unverified",
+      "severity": "high",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "teamiq-toolreliability-current-all-modes"
+      ],
+      "file": "components/benchmark/certified/CertifiedRunPanel.tsx",
+      "line": 800,
+      "summary": "The selectable 'TeamIQ: ToolReliability quick (all modes)' suite is structurally unpassable: it wires the FULL 125-case ToolReliability pack (not the 6-case quick sample its label and description promise) against a 150-model-call budget, so every run dies on CertifiedBudgetExceededError and writes zero-score scored attempts for all 5 team compositions.",
+      "evidence": "teamIqTaskForSuite (CertifiedRunPanel.tsx:794-803) special-cases only 'teamiq-toolreliability-current-quick'; the all-modes id falls to the fallback `casePack: TOOL_RELIABILITY_CASES` (125 cases, lib/benchmark/toolreliability/cases.ts:161-168). The suite's case record sets budget.maxModelCalls: 150 and describes a 'cross-category ToolReliability sample' (CertifiedRunPanel.tsx:690, 703). The runner executes the pack for up to 3 solo baselines (1 call/case = 125 calls each) plus 5 strategy teams at roles+synthesis = 4 calls/case = 500 calls each (lib/benchmark/teamiq/certified-runner.ts:107-160, 171-219; ui-selection.ts:14-20) — >=1500 calls needed vs 150 allowed. budget.ts:54-58 throws when modelCalls exceeds the cap; run-engine.ts:80-96 catches, classifies 'failed_budget' (run-engine.ts:218-221), and synthesizes verifiedQuality:0 attempts per (case x team) (run-engine.ts:146-199). failed_budget is NOT in INVALID_STATUSES (failures.ts:233-239) so these zero scores are fully counted by isScoredCertifiedAttempt (metrics.ts:682-691) and drag down every selected composition's leaderboard row — the user pays for ~150 real API calls and gets only poison signal.",
+      "proposedImprovement": "Make teamIqTaskForSuite return TEAMIQ_TOOL_RELIABILITY_QUICK_CASES for the all-modes suite too (6 cases x (3 solos + 5 teams x 4 calls) = ~138 calls, fits the 150 budget), or size the case record's budget to the actual pack (125 x compositions x calls-per-case) if full-pack all-modes is intended. Add a bench contract test that computes worst-case model calls for every selectable suite and asserts it fits the suite's persisted budget.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-teamiq-tactics-v0.1",
+        "fireworks-teamiq-memory-v0.1",
+        "fireworks-teamiq-full-v0.1",
+        "fireworks-teamiq-mixed-v0.1"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 109,
+      "summary": "TeamIQ Fireworks case records persist a caseCount and contamination digest computed over the FULL scenario sets (60 tactics / 40 memory / 20 full) while the runner executes different runtime slices (20 / 10 / playerCount-filtered), so the provenance digest describes scenarios that never ran.",
+      "evidence": "fireworksCaseToBenchmarkCaseV2 (scenario-packs.ts:104-135) builds publicContext.caseCount and stableFireworksScenarioPackDigest from getFireworksBenchmarkCasesForSuite(suite) — full clones (scenario-packs.ts:61-72: tactics=60, memory=40, full=20). The only runtime consumer, CertifiedRunPanel.tsx, passes a DIFFERENT set to the runner: fireworksCasesForSuiteId (CertifiedRunPanel.tsx:845-864) slices tactics to 20, memory to 10, and filters full games by playerCount. getFireworksBenchmarkCasesForSuite has no other runtime caller (grep: only scenario-packs.ts:61,109). The digest therefore cannot detect drift between the recorded case and what was actually scored, defeating its purpose as a reproducibility check.",
+      "proposedImprovement": "Compute the persisted digest/caseCount from the exact scenario list handed to runCertifiedFireworksTeamIq: move fireworksCasesForSuiteId into lib/benchmark/fireworks (single source of truth for suite -> runtime cases, parameterized by playerCount) and have fireworksCaseToBenchmarkCaseV2 accept that list. Add a test asserting digest(caseRecord) === digest(cases actually passed to the runner) for all four suites and both player counts.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-teamiq-tactics-v0.1",
+        "fireworks-teamiq-memory-v0.1"
+      ],
+      "file": "components/benchmark/certified/CertifiedRunPanel.tsx",
+      "line": 850,
+      "summary": "The TeamIQ Fireworks 'Tactics' suite runs only 2 of 6 tactics categories (safe_play, needed_clue) and 'Memory' runs only 1 of 4 memory categories (combine_color_and_rank); the trap-state and memory-stress scenarios the suite family was authored for are reachable only as SOLO GameIQ packs, so team cooperation is never tested on any hard scenario.",
+      "evidence": "fireworksCasesForSuiteId: tactics = FIREWORKS_TACTICS_SCENARIOS.slice(0, 20) (CertifiedRunPanel.tsx:850) and FIREWORKS_TACTICS_SCENARIOS is flatMapped in TACTICS_CATEGORIES order (scenario-packs.ts:24-31,42-47), so indexes 0-19 are exactly safe_play 01-10 + needed_clue 01-10; avoid_bad_play, safe_discard, critical_discard_avoidance, endgame_play (40 scenarios) never run under TeamIQ. memory = FIREWORKS_MEMORY_SCENARIOS.slice(0, 10) (CertifiedRunPanel.tsx:851) = combine_color_and_rank only (scenario-packs.ts:33-38,49-54); old_clue_recall/negative_information/timing_inference (30 scenarios) never run under TeamIQ. Those categories exist only in GameIQ packs gameiq-fireworks-hard-v1 / gameiq-fireworks-memory-v1 (lib/benchmark/gameiq/fireworks.ts:83-96), which are direct solo model calls (suite-options.ts:57-60; CertifiedRunPanel.tsx:548-556).",
+      "proposedImprovement": "Change the tactics slice to a stratified sample across all 6 categories (e.g. scenarios 1-4 of each category = 24 cases) and the memory slice to scenarios 1-3 of each of the 4 categories (12 cases), or rename the suites to 'Tactics sample (safe play + clues)' / 'Memory sample (clue combination)' so labels match content. Prefer the stratified fix — the hard categories are where team clue-coordination actually differs from solo play.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-fireworks-basic-v1",
+        "fireworks-teamiq-tactics-v0.1",
+        "fireworks-teamiq-memory-v0.1",
+        "fireworks-teamiq-mixed-v0.1",
+        "toolreliability-current-pack",
+        "teamiq-toolreliability-current-quick",
+        "teamiq-toolreliability-current-all-modes"
+      ],
+      "file": "lib/benchmark/scoring/aggregate.ts",
+      "line": 72,
+      "summary": "The same underlying case sources are selectable under two different tracks and both feed one merged per-team leaderboard row, so a single scenario can be scored twice into the same aggregate: fireworks safe_play 01-10 and combine_color_and_rank 01-10 run in BOTH GameIQ (gameiq-fireworks-basic-v1) and TeamIQ Fireworks suites, and the 125 TOOL_RELIABILITY_CASES run in BOTH the ToolReliability track and TeamIQ toolreliability suites (quick = 6 identical case objects; all-modes = the whole pack).",
+      "evidence": "Duplication of content: gameiq/fireworks.ts:73-81 builds the GameIQ basic pack from FIREWORKS_TACTICS_SCENARIOS (safe_play 01-10) + FIREWORKS_MEMORY_SCENARIOS (combine 01-10) — the same objects the TeamIQ tactics/memory suites run via CertifiedRunPanel.tsx:850-851; teamiq/toolreliability-quick.ts:29-35 selects its 6 cases from TOOL_RELIABILITY_CASES by identity, and CertifiedRunPanel.tsx:800-803 passes the full TOOL_RELIABILITY_CASES to TeamIQ. Double counting: aggregateCertifiedRunScores groups attempts ONLY by teamCompositionId and merges tracks into one row (aggregate.ts:72-114, tracks.add at :98), verifiedQuality and toolReliabilityScore are averaged over all attempts regardless of track (aggregate.ts:99-104, :250-256); solo composition ids are deterministic per model (teamiq/compositions.ts:45-48 comboHashFor), and TeamIQ auto-creates those same solo compositions for baselines (teamiq/certified-runner.ts:139-159), so a GameIQ run and a TeamIQ solo-baseline run of the same scenarios land in the SAME row of the single leaderboard (metrics.ts:450-457, 533-538). Additionally the 'mixed' suite (scenario-packs.ts:67-71) is a strict re-slice of tactics+memory+full, tripling exposure of safe_play/combine scenarios.",
+      "proposedImprovement": "Either (a) aggregate the leaderboard per (teamCompositionId, track) and only merge with explicit de-duplication by underlying scenario id, or (b) make the duplication explicit and inert: key certified attempts by canonical source-scenario ids (fireworks scenario ids, toolrel case ids) and have aggregateCertifiedRunScores weight each unique caseId once per team (e.g. keep latest attempt per (team, canonical case)). At minimum, remove the fireworks safe_play/combine scenarios from one of the two tracks (keep GameIQ hard/memory-stress solo, keep TeamIQ for cooperative categories) so no scenario is reachable from two tracks.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "toolrel-current-large-repeated-001..010",
+        "toolrel-current-large-multihunk-001..010",
+        "toolrel-current-large-json-001..010",
+        "toolrel-current-large-react-001..010",
+        "toolrel-current-large-no-rewrite-001..010",
+        "toolrel-current-tool-strategy-001..020"
+      ],
+      "file": "lib/benchmark/toolreliability/stress-cases.ts",
+      "line": 87,
+      "summary": "The 70-case ToolReliability stress pack (TOOL_RELIABILITY_STRESS_CASES) and its dedicated evaluator (stress-evaluator.ts, incl. maxSearchLines / disallowWholeFileRewrite policies) are exported from the public index and asserted by test scripts, but no UI selection or runner path ever executes them — the only stress policies that would actually catch whole-file rewrites are dead.",
+      "evidence": "Grep over the repo: TOOL_RELIABILITY_STRESS_CASES / TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES / evaluateLargeFilePatchStressCase are referenced only by lib/benchmark/toolreliability/index.ts:6-21 (re-export) and scripts/test-toolreliability-stress-cases.mts / test-toolreliability-current-names.mts. The only runtime consumer of the toolreliability module is CertifiedRunPanel.tsx:75-77, which imports TOOL_RELIABILITY_CASES and runCertifiedToolReliability only (used at :563). suite-options.ts:15-22 offers a single 'toolreliability-current-pack' option. Neither toolreliability/runner.ts nor certified-runner.ts mention stress (grep 'stress' in both: no hits). Note the live 50 large-patch cases in cases.ts:122-125 have no maxSearchLines/whole-file-rewrite policy at all — the rigor lives only in the dead pack.",
+      "proposedImprovement": "Either wire the stress pack in (add a 'ToolReliability: Large-file stress' suite option that runs TOOL_RELIABILITY_STRESS_CASES through evaluateToolReliabilityStress and surfaces its stricter maxSearchLines / disallowWholeFileRewrite assertions), or delete stress-cases.ts + stress-evaluator.ts and port the two policies (maxSearchLines cap, whole-file-rewrite rejection) onto the live LARGE_FILE_PATCH_CASES in cases.ts. Do not keep a tested-but-unreachable pack that inflates apparent coverage.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-large-normalizer-0001..0004",
+        "workbench-json-config-0001",
+        "workbench-react-a11y-0001..0002",
+        "workbench-no-rewrite-0001",
+        "toolrel-current-large-patch-001..050",
+        "toolrel-current-large-repeated-001..010"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 344,
+      "summary": "Three near-identical copies of the same large-file surgical-patch fixture family exist across suites — toolreliability/cases.ts LARGE_FILE_PATCH_CASES (50, live), toolreliability/stress-cases.ts STRESS_PATCH_CASES (50, dead), and workbench/challenges.ts (8 of 12 challenges) — so WorkBench's flagship 'agentic build' cases largely re-test the exact patch decisions ToolReliability already scores, re-skinned.",
+      "evidence": "challenges.ts largeNormalizerFile (:344-359) and stress-cases.ts largeRepeatedBlockFile (:258-278) are the same fixture: 220 generated branches, target at index 117, fix = 'trim().toLowerCase()'. challenges.ts largeConfigJson (:382-390) vs stress-cases.ts largeJsonConfig (:309-323): identical betaCheckout_/legacyCheckout_/sentinel JSON flip. challenges.ts longToolbarFile (:361-380) vs stress-cases.ts largeReactToolbar (:325-353): identical primary/secondary save button aria-label task. challenges.ts noRewriteSource (:392-401) vs stress-cases.ts noRewriteFile (:355-373): identical NO_REWRITE_SENTINEL_ + 'return clamp_(value, 0, 100)' fix. cases.ts LARGE_FILE_PATCH_KINDS (:112-118) shares the kind taxonomy ('large-file-search-replace', 'large-json-object-edit', 'react-large-component-edit', 'repeated-block-disambiguation'). The distinct decisions across ~110 large-patch cases number roughly 6 (pick the marked line among clones; multi-hunk; JSON flag flip; aria-label on the right button; minimal diff; range-preserving edit).",
+      "proposedImprovement": "Keep ONE canonical fixture generator per decision (a shared lib/benchmark/fixtures/large-file.ts) and differentiate the suites by what they actually measure: ToolReliability = single-shot SEARCH/REPLACE emission on these fixtures; WorkBench = multi-step agentic cases that require reading/searching the fixture via the runner before patching (which the current identical single-edit fixtures do not force). Replace the 8 duplicated WorkBench challenges with genuinely agentic ones (multi-file refactor with a failing verifier script, dependency-ordered edits), and delete the dead stress copies.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "build-case-<discussionId>-<timestamp> (dynamic)"
+      ],
+      "file": "lib/benchmark/build-cases.ts",
+      "line": 5,
+      "summary": "createBuildBenchmarkCaseFromStopReport creates v1 'real-work' BenchmarkCase records (with verifierCommand and expectedJson describing a desired outcome) that are saved from the Build stop-report panel but can never be executed: no runner consumes v1 cases, and the only metric they feed is a raw count.",
+      "evidence": "Only producer/consumer chain: build-cases.ts:5-67 -> BuildStopReportPanel.tsx:16,50 (saveBenchmarkCase). Grep for consumers of stored v1 cases: getBenchmarkCases feeds useBenchmarkDashboard.ts:128 -> buildBenchmarkDashboardData, where input.benchmarkCases is used exactly once — totalCases count (metrics.ts:1066). The certified engine runs only BenchmarkCaseV2 (run-engine.ts / CertifiedRunPanel saveBenchmarkCaseV2 at :529). The case's verifierCommand (build-cases.ts:23) and expectedJson 'desiredOutcome: All planned tasks complete and verification passes.' (:48-55) are never read by any engine — a verifier that cannot run and an expectation that cannot be checked.",
+      "proposedImprovement": "Either build the intended replay path — convert stop-report cases to BenchmarkCaseV2 with track 'workbench', fixtureFiles from the stop report's repo/branch, and verifier.command = report.verifyCommand so they can run through runCertifiedWorkBench — or stop persisting them as benchmark cases (keep only the markdown artifact as lab evidence) and delete build-cases.ts, so totalCases stops counting unrunnable records.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-v0.1-chess",
+        "gameiq-v0.1-battleship",
+        "gameiq-v0.1-codenames",
+        "gameiq-fireworks-hard-v1",
+        "gameiq-fireworks-memory-v1",
+        "gameiq-fireworks-basic-v1"
+      ],
+      "file": "lib/benchmark/gameiq/packs.ts",
+      "line": 18,
+      "summary": "GameIQ certificationTier ('first-class' vs 'lightweight') is purely decorative — its only runtime consumer is a cosmetic difficulty string — and the assignments do not track actual case rigor: 'first-class' chess has 4 scenarios (vs 25 in each 'lightweight' pack) and the 'first-class' fireworks packs are template clones encoding ~4 and ~3 distinct decisions across 70 scenarios.",
+      "evidence": "Tier assignments at packs.ts:18-67. Grep for consumers: the only non-test use is CertifiedRunPanel.tsx:719 (difficulty: first-class -> 'medium', else 'easy' on the persisted case record); no gating, weighting, or reporting reads it. Measured pack sizes (executed listGameIqScenarioPacks): connect-four 40 first-class, chess 4 first-class, battleship 25 lightweight, codenames 25 lightweight, fireworks basic 20 lightweight, hard 40 first-class, memory 30 first-class. The 'first-class' fireworks hard/memory scenarios are generated 10-per-category with only color=(n-1)%3 and rank=((n-1)%4)+1 varying (scenario-packs.ts:154-155, 249-250) — one decision template per category — while memory scenarios' answer-leak was prior-review HIGH #3.",
+      "proposedImprovement": "Make the tier mean something: define 'first-class' as (>=N distinct decision points, verified negative controls, no known leak) and enforce it in a bench contract test (fail the build if a first-class pack's scenario/decision ratio exceeds e.g. 3:1). Reclassify: chess to lightweight until it has more than 4 positions; fireworks hard/memory to lightweight until instances vary the decision (different trap layouts, distractor cards, variable hand positions) rather than just color/rank. Surface the tier in the UI leaderboard if it is kept at all; otherwise delete the field.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-teamiq-full-v0.1"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 139,
+      "summary": "The 'Fireworks: Full games' TeamIQ suite in its default configuration (solo baselines ON) very likely cannot finish inside its own budget: 10 full games x ~30+ turns x (1 team + 2-3 solo compositions) needs roughly 900+ model calls against a 500-call cap, and a mid-run budget throw discards ALL completed attempts and replaces them with synthesized zero-score attempts.",
+      "evidence": "fireworksCaseToBenchmarkCaseV2 sets budget maxModelCalls: 500 for every suite (scenario-packs.ts:139); full-game cases are 10 per player count with maxTurns 60/75 (scenario-packs.ts:324-338); the deck is 30 cards (engine.ts:94-104, 3 colors x 10 copies) so a clean 2p game runs ~30-38 turns = ~300-380 calls for 10 games per composition; includeSoloBaselines defaults to true (CertifiedRunPanel.tsx:128) adding 2-3 solo compositions. runCertifiedFireworksTeamIq accumulates attempts and returns them only after the loop (fireworks/certified-runner.ts:123-140), so the CertifiedBudgetExceededError from budget.ts:54-58 propagates to run-engine.ts:80-96, which discards the returned-attempt path and synthesizes verifiedQuality:0 failed_budget attempts — which ARE scored (failures.ts:233-239).",
+      "proposedImprovement": "Size the full-games budget from the actual worst case (playerCount, game count, maxTurns, compositions incl. solo baselines) in certifiedRunBudgetForCases, or run/persist attempts incrementally via context.recordAttempt so completed compositions survive a budget stop. Also add a preflight estimate in the panel ('this selection needs ~N model calls, budget allows M') that blocks obviously unfinishable selections.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "pointless-dead",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "gameiq-fireworks-basic-v1"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 74,
+      "summary": "In the GameIQ fireworks basic pack the needed_clue filter clause is dead code — .slice(0, 10) on a safe_play-first list keeps only safe_play — so clue-giving (the one cooperative tactic and the only multi-expected-action category) is never tested in any GameIQ pack; and the FIREWORKS_GAMEIQ_SCENARIOS export is dead.",
+      "evidence": "BASIC_FIREWORKS_SOURCE = filter(safe_play || needed_clue).slice(0, 10) (fireworks.ts:74-77); executed composition check confirms basic = 10x 'Play a card proven playable by clues' + 10x 'Combine color and rank clues', zero needed_clue; HARD/MEMORY sources (fireworks.ts:83-96) exclude it too. FIREWORKS_GAMEIQ_SCENARIOS (fireworks.ts:126) has no importers (grep: only its definition). The slice behavior was already documented inside the prior review's verification of finding #34 (review-2026-07-01.md:728).",
+      "proposedImprovement": "Change BASIC_FIREWORKS_SOURCE to take 5 safe_play + 5 needed_clue explicitly (filter per category then slice each), which also makes GameIQ exercise multi-weighted expectedActions (clue_rank w=1 / clue_color w=0.8) — pairing with the prior-review #34 fix that preserves the full expectedActions list. Delete the dead FIREWORKS_GAMEIQ_SCENARIOS alias.",
+      "verifierCorrections": []
+    }
+  ]
+}

@@ -209,6 +209,10 @@ function colorLabel(color: PieceColor): string {
 
 function compactReasoningLabel(reasoningEffort: ReasoningEffort): string {
   switch (reasoningEffort) {
+    case "none":
+      return "R: Off";
+    case "default":
+      return "R: Default";
     case "low":
       return "R: Low";
     case "medium":
@@ -217,7 +221,6 @@ function compactReasoningLabel(reasoningEffort: ReasoningEffort): string {
       return "R: High";
     case "max":
       return "R: Max";
-    case "default":
     default:
       return "R: Off";
   }
@@ -566,11 +569,11 @@ export function ChessGameClient({
   );
   const [whiteAI, setWhiteAI] = useState<AIConfig>({
     modelId: "",
-    reasoningEffort: "default",
+    reasoningEffort: "none",
   });
   const [blackAI, setBlackAI] = useState<AIConfig>({
     modelId: "",
-    reasoningEffort: "default",
+    reasoningEffort: "none",
   });
 
   // Game state - use lazy initializer for SSR safety

@@ -34,7 +34,11 @@ Certified cases must be deterministic, versioned, and scored by a verifier or ru
 
 ## WorkBench v0.1 Rules
 
-- Use small fixture repos with public verifiers.
+- Use small fixture repos. The verifier command and its result stay public and
+  readable, but the grading spec (`case-meta.json`: required/forbidden
+  snippets, reference files, negative controls) is hidden from model-facing
+  runner read endpoints — the model must solve the task from the prompt, not
+  from the grading spec.
 - The verifier must return JSON with `passed`, `score`, `summary`, and weighted `assertions`.
 - Do not score from Architect review or subjective model critique.
 - Use `dependency-only` for local command-based setup and verifier cases.

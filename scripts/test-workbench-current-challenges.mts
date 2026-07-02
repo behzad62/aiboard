@@ -38,7 +38,6 @@ function runRuntimeVerifier(
         {
           id: challenge.id,
           baseFiles: challenge.baseFiles,
-          referenceFiles: challenge.referenceFiles,
           verifier: challenge.verifier,
         },
         null,
@@ -68,8 +67,8 @@ function runRuntimeVerifier(
 }
 
 check(
-  "WorkBench has 19 current verified challenges",
-  listWorkBenchChallenges().length === 19,
+  "WorkBench has 20 current verified challenges",
+  listWorkBenchChallenges().length === 20,
   listWorkBenchChallenges().map((item) => item.id)
 );
 
@@ -95,15 +94,16 @@ for (const challenge of currentChallenges) {
     challenge,
     files: challenge.negativeControlFiles,
   });
+  // A genuinely different but equally-correct implementation (not a byte copy
+  // of the reference) must pass; this guards against snippet assertions that
+  // only accept the reference's exact spelling.
   const alternate = runWorkBenchChallengeVerifier({
     challenge,
-    files: Object.fromEntries(
-      Object.entries(challenge.referenceFiles).map(([path, content]) => [
-        path,
-        content.replace(/\r\n/g, "\n"),
-      ])
-    ),
+    files: challenge.alternateSolutionFiles,
   });
+  const alternateIsDistinct = Object.entries(challenge.alternateSolutionFiles).some(
+    ([path, content]) => content !== challenge.referenceFiles[path]
+  );
   const runtimeReference = runRuntimeVerifier(
     challenge,
     challenge.referenceFiles
@@ -112,15 +112,29 @@ for (const challenge of currentChallenges) {
     challenge,
     challenge.negativeControlFiles
   );
+  const runtimeAlternate = runRuntimeVerifier(
+    challenge,
+    challenge.alternateSolutionFiles
+  );
   check(
     `${challenge.id} reference solution passes`,
     reference.passed && reference.score === 1,
     reference
   );
   check(
-    `${challenge.id} behavioral verifier accepts equivalent non-reference formatting`,
+    `${challenge.id} alternate correct solution differs from the reference`,
+    alternateIsDistinct,
+    challenge.alternateSolutionFiles
+  );
+  check(
+    `${challenge.id} verifier accepts an equally-correct alternate solution`,
     alternate.passed && alternate.score === 1,
     alternate
+  );
+  check(
+    `${challenge.id} runtime verifier accepts the alternate solution`,
+    runtimeAlternate.passed === true,
+    runtimeAlternate
   );
   check(
     `${challenge.id} negative control fails`,
@@ -216,6 +230,19 @@ const duplicateSentinelChallenge: WorkBenchChallenge = {
       "}",
       "export function second() {",
       "  return CORRUPTED_SENTINEL;",
+      "}",
+    ].join("\n"),
+  },
+  alternateSolutionFiles: {
+    "src/app.ts": [
+      "export function first() {",
+      "  return SHARED_SENTINEL;",
+      "}",
+      "export function target() {",
+      "  return 'new';",
+      "}",
+      "export function second() {",
+      "  return SHARED_SENTINEL;",
       "}",
     ].join("\n"),
   },

@@ -29,30 +29,32 @@ JobSuccessScore * (
 
 ```text
 100 * (
-  0.35 * OutcomeScore
-  + 0.30 * MoveQuality
-  + 0.20 * LegalActionRate
+  0.37 * OutcomeScore
+  + 0.32 * MoveQuality
+  + 0.21 * LegalActionRate
   + 0.10 * StructuredReliability
-  + 0.05 * LatencyFactor
 ) * (1 - 0.50 * FallbackRate)
 ```
 
-All inputs are normalized to `0..1`.
+All inputs are normalized to `0..1`. `LatencyFactor` is recorded as a
+diagnostic metric only; it does not contribute to the score (speed is not part
+of GameIQ quality).
 
 ## ToolReliability
+
+Scoring version `toolreliability-v2`:
 
 ```text
 100 * (
   0.25 * SchemaValidRate
-  + 0.20 * FirstAttemptValidRate
   + 0.15 * RepairSuccessRate
-  + 0.20 * ToolValidRate
-  + 0.15 * PatchSuccessRate
-  + 0.05 * CommandSafetyRate
+  + 0.25 * ToolValidRate
+  + 0.25 * PatchSuccessRate
+  + 0.10 * CommandSafetyRate
 ) * (1 - ForbiddenActionRate)
 ```
 
-Forbidden actions are multiplicative penalties because they invalidate trust in otherwise well-formed tool output.
+Forbidden actions are multiplicative penalties because they invalidate trust in otherwise well-formed tool output. `ForbiddenActionRate` is computed over applicable cases only (tool-call and forbidden-action cases, plus any case where a violation actually fired), so it cannot be diluted by unrelated cases. `FirstAttemptValidRate` is no longer weighted — it duplicated the category metrics — and remains a diagnostic rate. `RepairSuccessRate` is null (its weight is skipped and renormalized) when no first attempt failed. Schema and repair cases are validated post-hoc from the model's raw text; provider strict structured output is not requested for them, so the rates measure model output discipline, not provider constrained decoding. Attempts scored under the old `toolreliability-current` version are not comparable.
 
 ## TeamIQ
 

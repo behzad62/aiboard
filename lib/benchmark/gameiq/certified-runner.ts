@@ -11,6 +11,11 @@ import type {
   SelectedModel,
   StructuredOutputFormat,
 } from "@/lib/providers/base";
+import { targetToLabel } from "@/lib/games/battleship/engine";
+import type {
+  BattleshipGameState,
+  BattleshipPlayer,
+} from "@/lib/games/battleship/types";
 import {
   GAMEIQ_SCORING_VERSION,
   type GameIqRunResult,
@@ -18,6 +23,7 @@ import {
 } from "./types";
 import { listGameIqScenarioPacks } from "./packs";
 import { runGameIqScenarios } from "./runner";
+import { GAMEIQ_PLACEHOLDER_CLUE_WORD } from "./validation";
 
 const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
   GameIqScenario["gameId"],
@@ -249,17 +255,94 @@ function selectedScenarioPacks(packIds: string[]) {
   });
 }
 
-function gameIqScenarioPrompt(
+// The model-facing prompt deliberately carries ONLY the task instruction, the
+// game rules/answer conventions, and the (per-game redacted) state. Scenario
+// titles, categories, difficulty labels, and expected-action notes are
+// authoring/UI metadata and must never reach the model: titles and notes have
+// historically named the expected answer outright (answer leakage).
+export function gameIqScenarioPrompt(
   scenario: GameIqScenario,
   scenarioIndex: number,
   totalScenarios: number
 ): string {
   return [
-    `Scenario ${scenarioIndex + 1} of ${totalScenarios}: ${scenario.title}`,
+    `Scenario ${scenarioIndex + 1} of ${totalScenarios}.`,
     scenario.prompt,
-    `Initial state JSON: ${JSON.stringify(scenario.initialState)}`,
-    `Return JSON exactly in this shape: ${gameIqActionShapeExample(scenario)}.`,
+    gameIqGameRules(scenario.gameId),
+    `State JSON: ${JSON.stringify(gameIqModelStateView(scenario))}`,
+    `Return JSON matching this shape (the example values are placeholders, not a suggested or legal move — replace them with your own answer): ${gameIqActionShapeExample(scenario)}.`,
   ].join("\n\n");
+}
+
+// Answer conventions each game needs so a correct answer never fails on
+// formatting alone (e.g. the accepted promotion vocabulary, or Battleship's
+// row-letter/column-number labels matching targetToLabel).
+function gameIqGameRules(gameId: GameIqScenario["gameId"]): string {
+  switch (gameId) {
+    case "connect-four":
+      return 'Rules: standard Connect Four on a 6-row by 7-column grid. "column" is the 0-based column index (0-6); a disc dropped in a column lands on the lowest empty cell.';
+    case "chess":
+      return 'Rules: squares use lowercase algebraic notation such as "e2". If your move promotes a pawn, set "promotion" to exactly one of "queen", "rook", "bishop", or "knight"; otherwise set "promotion" to null.';
+    case "battleship":
+      // The convention example cell must never be a scenario's expected
+      // answer (guarded by scripts/test-gameiq-shared-guards.mts).
+      return 'Rules: 10x10 board. "row" and "column" are 0-based indexes. Grid labels use the row letter followed by the column number: rows A-J map to row 0-9 and columns 1-10 map to column 0-9, so {"row":1,"column":6} is cell "B7". The state shows only your own shot history and the sizes of enemy ships still afloat; enemy ship positions are hidden. You may not target a cell you have already shot.';
+    case "codenames":
+      return `Rules: a clue is a single word that is not any unrevealed board word, plus an integer count from 0-9 that does not exceed your team's remaining unrevealed cards. The literal word "${GAMEIQ_PLACEHOLDER_CLUE_WORD}" is a reserved formatting placeholder and is never a legal clue. A guess names the card id to reveal.`;
+    case "fireworks":
+      return "Rules: choose exactly one action that is legal in the provided player view.";
+  }
+}
+
+// Per-game model-facing state projection. Validation and scoring always use
+// the full scenario.initialState; this view only controls what the MODEL
+// sees, so hidden-information games stay hidden. Battleship redacts the
+// opponent fleet: the model gets its own shot history (target, result, and
+// the ship id only once a ship is sunk) plus remaining enemy ship sizes —
+// never ship cells and never per-hit ship ids.
+export function gameIqModelStateView(scenario: GameIqScenario): unknown {
+  if (scenario.gameId === "battleship") {
+    return battleshipModelView(scenario.initialState as BattleshipGameState);
+  }
+  return scenario.initialState;
+}
+
+interface BattleshipModelView {
+  game: "battleship";
+  boardSize: number;
+  youAre: BattleshipPlayer;
+  yourShots: Array<{
+    target: { row: number; column: number };
+    label: string;
+    result: "miss" | "hit" | "sunk";
+    sunkShipId?: string;
+  }>;
+  remainingEnemyShipSizes: number[];
+}
+
+function battleshipModelView(state: BattleshipGameState): BattleshipModelView {
+  const you = state.turn;
+  const opponent: BattleshipPlayer = you === "blue" ? "orange" : "blue";
+  const opponentBoard = state.boards[opponent];
+  const sunkShipIds = new Set(
+    opponentBoard.shotsReceived
+      .map((shot) => shot.sunkShipId)
+      .filter((shipId): shipId is string => typeof shipId === "string")
+  );
+  return {
+    game: "battleship",
+    boardSize: 10,
+    youAre: you,
+    yourShots: opponentBoard.shotsReceived.map((shot) => ({
+      target: { row: shot.target.row, column: shot.target.column },
+      label: targetToLabel(shot.target),
+      result: shot.result,
+      ...(shot.sunkShipId ? { sunkShipId: shot.sunkShipId } : {}),
+    })),
+    remainingEnemyShipSizes: opponentBoard.ships
+      .filter((ship) => !sunkShipIds.has(ship.id))
+      .map((ship) => ship.size),
+  };
 }
 
 function gameIqStructuredOutputForScenario(
@@ -302,7 +385,12 @@ function gameIqAssertionDetails(
     scenario.messages.length > 0
       ? `Messages\n${scenario.messages.join("\n")}`
       : "",
-    `Expected result\n${previewJson(scenario.expectedActions)}`,
+    // Codenames clue-selection is scored on legality alone; its authored
+    // expectedActions are illustrative, so printing them as "Expected result"
+    // would misrepresent the verifier.
+    scenario.gameId === "codenames" && scenario.category === "clue-selection"
+      ? "Expected result\nAny legal clue (scored on legality; authored expected actions are illustrative only)"
+      : `Expected result\n${previewJson(scenario.expectedActions)}`,
     `Parsed action\n${previewJson(scenario.action)}`,
     scenario.rawResponse ? `Raw response\n${previewText(scenario.rawResponse)}` : "",
   ]
@@ -321,18 +409,23 @@ function previewText(value: string): string {
     : `${value.slice(0, limit)}\n[truncated ${value.length - limit} chars]`;
 }
 
-function gameIqActionShapeExample(scenario: GameIqScenario): string {
+// Shape examples must never be a scoreable answer: every placeholder value is
+// deliberately out of band (negative indexes, non-existent squares, the
+// reserved codenames placeholder word) so a model that parrots the example
+// earns zero credit on every scenario. scripts/test-gameiq-shared-guards.mts
+// enforces this against all shipped packs.
+export function gameIqActionShapeExample(scenario: GameIqScenario): string {
   switch (scenario.gameId) {
     case "connect-four":
-      return '{"action":{"column":3}}';
+      return '{"action":{"column":-1}}';
     case "chess":
-      return '{"action":{"from":"e2","to":"d4","promotion":null}}';
+      return '{"action":{"from":"a0","to":"b0","promotion":null}}';
     case "battleship":
-      return '{"action":{"target":{"row":1,"column":2}}}';
+      return '{"action":{"target":{"row":-1,"column":-1}}}';
     case "codenames":
-      return '{"action":{"type":"clue","clue":{"word":"example","count":2},"cardId":null}}';
+      return `{"action":{"type":"clue","clue":{"word":"${GAMEIQ_PLACEHOLDER_CLUE_WORD}","count":2},"cardId":null}}`;
     case "fireworks":
-      return '{"action":{"action":"play","targetPlayerId":null,"color":null,"rank":null,"cardIndex":0}}';
+      return '{"action":{"action":"play","targetPlayerId":null,"color":null,"rank":null,"cardIndex":-1}}';
   }
 }
 

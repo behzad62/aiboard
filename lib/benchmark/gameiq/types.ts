@@ -13,8 +13,13 @@ import type {
 import type { Move, PieceType } from "@/lib/games/chess/types";
 
 export const GAMEIQ_SCORING_VERSION = "certified-gameiq-v0.2";
-export const GAMEIQ_PROMPT_SET_VERSION = "gameiq-v0.1";
-export const GAMEIQ_HARNESS_VERSION = "gameiq-runner-v0.1";
+// v0.2: model prompt no longer includes scenario titles/notes (answer-leak
+// scrub), adds per-game rules/answer conventions, redacts hidden-information
+// state (battleship), and uses non-scoreable shape-example placeholders.
+export const GAMEIQ_PROMPT_SET_VERSION = "gameiq-v0.2";
+// v0.2: distinct-group metric key now includes the canonical initial state and
+// ignores expected-action label/note prose, changing metric aggregation.
+export const GAMEIQ_HARNESS_VERSION = "gameiq-runner-v0.2";
 
 export type GameIqGameId =
   | "connect-four"
@@ -61,7 +66,8 @@ export interface GameIqScenarioPack {
   id: string;
   gameId: GameIqGameId;
   label: string;
-  version: "0.1.0";
+  // Bumped whenever pack content (scenarios or certification tier) changes.
+  version: string;
   certificationTier: GameIqCertificationTier;
   scenarios: GameIqScenario[];
 }
@@ -92,6 +98,9 @@ export interface GameIqScenarioResult {
   scenarioId: string;
   gameId: GameIqGameId;
   category: GameIqScenarioCategory;
+  // Canonical scenario state, carried so metric de-duplication can key on the
+  // actual decision (game + state + expected action content), not on prose.
+  initialState: unknown;
   expectedActions: Array<GameIqExpectedAction>;
   action: unknown;
   rawResponse?: string;
@@ -100,6 +109,8 @@ export interface GameIqScenarioResult {
   correct: boolean;
   actionQuality: number;
   latencyMs: number;
+  // Diagnostic only — never read by scoreGameIqAttempt. GameIQ must not score
+  // wall-clock latency (worker speed is throughput-relative elsewhere too).
   latencyFactor: number;
   fallbackUsed: boolean;
   messages: string[];
@@ -111,6 +122,10 @@ export interface GameIqRunMetrics extends GameIqScoreInput {
   legalActions: number;
   correctActions: number;
   fallbackActions: number;
+  // Diagnostic only — declared here (not just inherited) so it stays typed as
+  // display metadata even if GameIqScoreInput drops it. scoreGameIqAttempt
+  // must never read it: GameIQ does not score wall-clock latency.
+  latencyFactor: number;
 }
 
 export interface GameIqRunResult {

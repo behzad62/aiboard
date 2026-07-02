@@ -1,6 +1,6 @@
 import { scoreGameIqAttempt } from "@/lib/benchmark/scoring/gameiq";
 import { round } from "@/lib/benchmark/scoring/types";
-import { stableStringify } from "./packs";
+import { gameIqDecisionKey } from "./packs";
 import {
   GAMEIQ_HARNESS_VERSION,
   GAMEIQ_PROMPT_SET_VERSION,
@@ -32,6 +32,9 @@ function normalizeProviderResult(value: unknown): GameIqProviderResult {
   return { action: value };
 }
 
+// Diagnostic only: latencyFactor is reported on results/metrics for display
+// but is NEVER read by scoreGameIqAttempt — GameIQ must not score wall-clock
+// latency (see memory: "never score by raw elapsed time").
 function latencyFactor(latencyMs: number, targetMs: number): number {
   if (!Number.isFinite(latencyMs) || latencyMs < 0) return 0;
   if (latencyMs <= targetMs) return 1;
@@ -43,11 +46,11 @@ function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+// Metric de-duplication key: gameIqDecisionKey (game + canonical initial
+// state + expected-action content, no label/note prose), shared with the
+// first-class pack rigor floor in packs.ts.
 function distinctGroupKey(result: GameIqScenarioResult): string {
-  return stableStringify({
-    gameId: result.gameId,
-    expectedActions: result.expectedActions,
-  });
+  return gameIqDecisionKey(result);
 }
 
 function attemptId(input: RunGameIqScenariosInput): string {
@@ -105,6 +108,7 @@ async function evaluateScenario(
     scenarioId: scenario.id,
     gameId: scenario.gameId,
     category: scenario.category,
+    initialState: scenario.initialState,
     expectedActions: scenario.expectedActions,
     action: providerResult.action,
     rawResponse: providerResult.rawResponse,

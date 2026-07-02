@@ -55,7 +55,7 @@ type AIConfig = GameAIConfigValue;
 
 const EMPTY_AI_CONFIG: AIConfig = {
   modelId: "",
-  reasoningEffort: "default",
+  reasoningEffort: "none",
 };
 
 function playerLabel(player: ConnectFourPlayer): string {
@@ -64,6 +64,10 @@ function playerLabel(player: ConnectFourPlayer): string {
 
 function compactReasoningLabel(config: AIConfig): string {
   switch (config.reasoningEffort) {
+    case "none":
+      return "Off";
+    case "default":
+      return "Default";
     case "low":
       return "Low";
     case "medium":
@@ -72,7 +76,6 @@ function compactReasoningLabel(config: AIConfig): string {
       return "High";
     case "max":
       return "Max";
-    case "default":
     default:
       return "Off";
   }

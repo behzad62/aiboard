@@ -46,7 +46,7 @@ export interface AIPlayerConfig {
   modelId: string;
   providerId: string;
   displayName: string;
-  reasoningEffort: string; // 'disabled' | 'low' | 'medium' | 'high' | etc.
+  reasoningEffort: ReasoningEffort;
   apiKey?: string;
   baseURL?: string;
 }

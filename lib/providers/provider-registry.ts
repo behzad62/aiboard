@@ -76,7 +76,8 @@ export const PROVIDER_DEFINITIONS = {
     name: "Anthropic",
     modelSource: "catalog",
     nativeWebSearch: true,
-    reasoningEffort: true,
+    reasoningEffort: (modelId: string) =>
+      modelId !== "claude-haiku-4-5-20251001",
     maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",

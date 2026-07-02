@@ -39,7 +39,7 @@ interface FireworksAIConfig {
 
 const EMPTY_AI_CONFIG: FireworksAIConfig = {
   modelId: "",
-  reasoningEffort: "default",
+  reasoningEffort: "none",
 };
 
 export function FireworksGameClient({

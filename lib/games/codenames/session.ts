@@ -279,6 +279,7 @@ function isGuessResult(value: unknown): value is CodenamesGuessResult {
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
     value === "default" ||
+    value === "none" ||
     value === "low" ||
     value === "medium" ||
     value === "high" ||

@@ -89,7 +89,7 @@ type BattleshipHandoffMode = "placement" | "play";
 
 const EMPTY_AI_CONFIG: AIConfig = {
   modelId: "",
-  reasoningEffort: "default",
+  reasoningEffort: "none",
 };
 const EMPTY_PLACEMENTS: Record<BattleshipPlayer, BattleshipShip[]> = {
   blue: [],

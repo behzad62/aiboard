@@ -364,7 +364,7 @@ const WORKBENCH_PATCH_ACTION_SCHEMA: StructuredOutputFormat = {
   },
 };
 
-const SOURCE_FILE_PATTERN = /\.(?:cjs|css|go|html|js|jsx|json|mjs|py|rs|ts|tsx)$/i;
+const SOURCE_FILE_PATTERN = /\.(?:cjs|cpp|cs|css|go|h|hpp|html|js|jsx|json|mjs|py|rs|ts|tsx)$/i;
 
 export async function runWorkBenchModelPatchBuild(
   input: WorkBenchModelPatchBuildInput

@@ -58,7 +58,7 @@ for (const path of [
 
 const expectedGameIqCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
-  ["gameiq-v0.1-chess", 60],
+  ["gameiq-v0.1-chess", 4],
   ["gameiq-v0.1-battleship", 25],
   ["gameiq-v0.1-codenames", 25],
   ["gameiq-fireworks-basic-v1", 20],
@@ -80,10 +80,10 @@ for (const pack of listGameIqScenarioPacks()) {
 
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack covers required metrics", toolValidation.valid, toolValidation);
-check("ToolReliability canonical pack has 125 cases", TOOL_RELIABILITY_CASES.length === 125, TOOL_RELIABILITY_CASES.length);
+check("ToolReliability canonical pack has 44 cases", TOOL_RELIABILITY_CASES.length === 44, TOOL_RELIABILITY_CASES.length);
 check(
-  "ToolReliability canonical pack has 50 large patch stress cases",
-  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 50
+  "ToolReliability canonical pack has 10 large patch cases",
+  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 10
 );
 
 const workBenchCases = listWorkBenchCaseOptions();

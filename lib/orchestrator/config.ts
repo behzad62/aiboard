@@ -108,6 +108,11 @@ export const REASONING_OPTIONS: ReasoningEffortInfo[] = [
     description: "Each model's built-in setting (OpenAI medium, Claude high).",
   },
   {
+    value: "none",
+    label: "None",
+    description: "No extra reasoning where the provider supports it.",
+  },
+  {
     value: "low",
     label: "Low",
     description: "Fastest and cheapest; minimal reasoning.",

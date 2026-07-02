@@ -1,0 +1,239 @@
+{
+  "suite": "WorkBench (coding tasks)",
+  "caseInventory": "The suite has 19 runtime cases from two composed sources: lib/benchmark/workbench/challenges.ts defines 12 (4 large-normalizer clones, 2 contract clones, 2 python-parser clones, 2 react-a11y clones, 1 JSON config, 1 no-rewrite) and lib/benchmark/workbench/corpus.ts adds 7 extra-language cases (2 C#, 2 C++, 2 Go, 1 Rust) via EXTRA_LANGUAGE_CHALLENGES, wrapping all 19 into inline-fixture WorkBenchCases. Packs (corpus.ts listWorkBenchCasePacks) are: all-19, 8 language packs, and 6 kind packs; they are live and reachable at runtime via lib/benchmark/certified/suite-options.ts and components/benchmark/certified/CertifiedRunPanel.tsx (getWorkBenchCasePack -> runCertifiedWorkBench -> executeWorkBenchVerifierOnly). challenges.ts is NOT dead/redundant with corpus.ts — corpus imports and extends it; however challenges.ts's TS verifier (runWorkBenchChallengeVerifier) is authoring/test-only, while the runtime verifier is the duplicated WORKBENCH_VERIFIER JS string (corpus.ts:505) executed as node verifier.mjs in the bench-runner sandbox; the two are kept in sync only by scripts/test-workbench-current-challenges.mts. All 19 reference solutions pass and all 19 negative controls fail under both verifiers (verified by running the test script logic), and an empty patch fails every case (with partial score 0.5–0.9), so nothing is unfailable — but see findings for gaming, leakage, and false-fail problems.",
+  "findings": [
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-current-all",
+        "all 19 cases"
+      ],
+      "file": "lib/benchmark/workbench/corpus.ts",
+      "line": 134,
+      "summary": "The full reference solution and the verifier's complete criteria are shipped into the model's workspace as readable files (case-meta.json contains referenceFiles verbatim; negative-control.json names the wrong answer), and the runner's read endpoints do not hide them.",
+      "evidence": "corpus.ts:126-137 puts caseMeta = { baseFiles, referenceFiles, verifier } into fixtureFiles['case-meta.json'] plus 'negative-control.json' (challenge.negativeControlFiles) and 'verifier.mjs'. scripts/bench-runner.mjs protects these files from WRITES only (PROTECTED_WORKSPACE_FILES, lines 563-597; assertWritableWorkspacePath at /write and /bench/write-file) — but /ls (line 170), /read (171-175), /read-range (176), /search (191, searchFiles walks every file incl. case-meta.json), /bench/read-tree (104) and /bench/read-file (108) serve them freely. The live default path is the full Build engine (build-adapter.ts runWorkBenchBuildDiscussion, runnerAccess: 'full', line 200), whose Architect routinely lists and reads the whole tree; only the secondary runWorkBenchModelPatchBuild path filters these paths from its candidate set (build-adapter.ts:573-587). corpus.ts:202 declares contamination.referenceSolutionPrivate: true, which is false in practice. Combined with the exact-substring verifier, reading case-meta.json converts every case into copy-the-answer; several cases (see the under-specified-prompt finding) are only reliably passable this way.",
+      "proposedImprovement": "Stop shipping the oracle: remove referenceFiles from case-meta.json (the runtime verifier never uses them — it only reads baseFiles + verifier config), drop reference-solution.md and negative-control.json from fixtureFiles entirely (they are only used by the TS test harness, which builds its own temp dir in scripts/test-workbench-current-challenges.mts:35-56), and filter PROTECTED_WORKSPACE_FILES out of /ls, /read, /read-range, /search, /bench/read-tree and /bench/read-file responses in bench-runner.mjs (verifier.mjs itself can stay readable or be exempted since node runs it from disk). Alternatively move verifier criteria out of the workspace into the runner's meta store (it already persists meta via META_FILE).",
+      "verifierCorrections": [
+        "Two refinements: (a) reference-solution.md contains only generic prose (referenceNotesForChallenge, corpus.ts:304-310), not the reference code — the verbatim solution leak is via case-meta.json's referenceFiles and the verifier's requiredSnippets; dropping reference-solution.md is hygiene rather than the core fix. (b) verifier.mjs reads case-meta.json from disk at runtime, so case-meta.json (minus referenceFiles) must remain in the workspace, or WORKBENCH_VERIFIER must be changed in lockstep if criteria move to the runner META_FILE; hiding it from model-facing read endpoints while leaving it on disk works because node executes the verifier from disk, not over HTTP. Note also that removing referenceFiles alone still leaves requiredSnippets readable (grading criteria leak), so the read-endpoint filtering or META_FILE move is the part that actually closes the copy-the-answer path.",
+        "Minor detail nits only: /search is routed at bench-runner.mjs:192 (not 191); the test harness temp-dir builder spans test-workbench-current-challenges.mts:33-67 (not 35-56). Two clarifications for the fix: (a) case-meta.json itself must remain in the workspace because \"node verifier.mjs\" reads it at runtime — only the referenceFiles key can be dropped; (b) removing referenceFiles alone still leaves the complete pass criteria (verifier.requiredSnippets — the exact substrings the verifier greps for) readable inside case-meta.json, so the case remains largely copy-the-answer unless the verifier config also moves out of model-readable space (the finding's alternative proposal of moving criteria to the runner meta store, or read-filtering case-meta.json and having only the verifier process access it). Also reference-solution.md contains prose notes (referenceNotesForChallenge), not the solution files themselves — the verbatim solution lives in case-meta.json's referenceFiles.",
+        "Minor only. (a) The fixtureFiles block now spans corpus.ts:132-148 (it also seeds verifier-result.json); the finding's 126-137 range and line-134 anchor are otherwise accurate. (b) test-workbench-current-challenges.mts temp-dir construction is at lines 33-56, not 35-56. (c) The dependent claim that several cases are \"only reliably passable this way\" cross-references another finding and was not independently verified; the finding stands without it. (d) Fix nuance: verifier.mjs reads case-meta.json from the workspace cwd, so case-meta.json itself cannot simply be removed — stripping referenceFiles from it is safe, but the load-bearing hardening is hiding protected files from the read/ls/search endpoints or moving criteria into the runner's meta store (the finding's stated alternative), because verifier.requiredSnippets alone also leaks the exact substrings needed to pass."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "gameable",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "all 19 cases (verified on workbench-large-normalizer-0001, workbench-no-rewrite-0001, workbench-contract-0001, workbench-cpp-clamp-0001)"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 67,
+      "summary": "Every case's requiredSnippets are whole-file substring checks and the base file's buggy line is never forbidden, so appending the required snippet inside a comment — without fixing anything — scores a perfect pass on all 19 cases.",
+      "evidence": "challenges.ts:61-74 (and the runtime mirror WORKBENCH_VERIFIER, corpus.ts:520-531) assert only actual.includes(snippet); no case adds the base's buggy line (e.g. 'return raw; // target branch', 'return score;', 'return value;') to forbiddenSnippets, and a 1-line EOF append stays under every maxChangedLines. Empirically verified with runWorkBenchChallengeVerifier: appending '// return raw.trim().toLowerCase(); // target branch' to the unmodified base gives passed=true score=1.000 changedLines=1 on workbench-large-normalizer-0001; same full-pass result for workbench-no-rewrite-0001 ('// return clamp_0001(value, 0, 100);'), workbench-contract-0001 (two comment lines), and workbench-cpp-clamp-0001. verifiedQuality = 1.0 flows straight to the leaderboard (scoring/workbench.ts:6).",
+      "proposedImprovement": "For each case add the buggy base line to forbiddenSnippets (e.g. normalizer: forbid 'return raw; // target branch' remaining; no-rewrite: forbid '  return value;\\n}' after normalizePercent; cpp-clamp: forbid 'return score;'; contract service: forbid 'return { id: invoice.id, total: invoice.totalCents };'), and/or anchor required snippets with their surrounding context (marker comment + next line as one multi-line snippet) so the snippet must appear at the target site. Longer-term, replace presence checks with executed behavioral assertions (see behavioral finding).",
+      "verifierCorrections": [
+        "1) The uniform \"append snippet in a comment\" attack passes 17/19 cases, not all 19. workbench-json-config-0001 resists it (JSON has no comments and a JSON.parse syntax check), and workbench-go-error-0002 fails it because its forbiddenSnippets includes \"errors.New\" — which IS the base file's buggy call, so the claim \"the base file's buggy line is never forbidden\" is false for that one case. 2) Both holdouts remain fully gameable without fixing anything (empirically verified at score=1.000, changedLines=1): the JSON case via same-line duplicate-key injection (\"sentinel_0001_300\": \"keep\", \"gamed\": { \"betaCheckout_0001\": true } — valid JSON, buggy \"betaCheckout_0001\": false still present), and the go-error case by replacing the buggy line with `return nil // fmt.Errorf(\"load failed: %w\", err)` (behaviorally broken, returns nil for a non-nil error). So the summary should read: 17 cases fall to a pure comment append; the other 2 fall to equally trivial one-line no-fix edits. The proposedImprovement's suggestion to add buggy base lines to forbiddenSnippets should also note that forbidding the buggy line alone is insufficient (as go-error shows, a cheater can delete/replace the buggy line with wrong behavior); anchored multi-line context snippets or behavioral assertions are the robust part of the fix.",
+        "The claim \"appending the required snippet inside a comment scores a perfect pass on all 19 cases\" is slightly overbroad: it holds for 17/19. (1) workbench-json-config-0001 resists comment-append (JSON has no comments and there is a JSON.parse syntax check; score 0.833), but is still gameable with a single-line edit — replacing an unprotected sentinel line with a duplicate key '\"betaCheckout_0001\": true,' passes 1.000 with changedLines=1 (verified). (2) workbench-go-error-0002 is the one counterexample to \"the base's buggy line is never forbidden\": its base contains the forbidden snippet 'errors.New', so pure append fails (0.833); however a one-line non-fixing replacement of that return line with 'return err // fmt.Errorf %w' passes 1.000 with changedLines=1 (verified). So every one of the 19 cases is gameable with at most a one-line non-fixing edit, but the uniform comment-append mechanism covers only 17. Severity high and the proposed improvements (forbid the buggy base line, context-anchor required snippets, move to behavioral assertions) remain appropriate.",
+        "Two overclaims, neither substance-changing: (1) \"scores a perfect pass on all 19 cases\" — the pure comment-append passes 17/19. workbench-json-config-0001 fails its JSON syntax check (JSON has no comments) and workbench-go-error-0002 fails because its forbiddenSnippets (\"errors.New\") does cover the buggy base call — which also makes the claim \"the base file's buggy line is never forbidden\" true for only 18/19 cases. However both holdouts fall to equally trivial 1-line non-fixing edits I verified (json-config: replace the unguarded \"sentinel_0001_300\" line with a duplicate \"betaCheckout_0001\": true key → PASS 1.000 changed=1; go-error: replace the buggy return with `return nil // fmt.Errorf w %w` → PASS 1.000 changed=1), so all 19 cases are gameable, just not all via the identical append. (2) On the proposed fix: forbidding the buggy base line alone is insufficient (a model can comment out the buggy line AND append the snippet, still within maxChangedLines for most cases), and even the anchored marker+next-line multi-line snippet can be satisfied by appending the marker+fixed-line pair at EOF (requiredUnchangedSnippets uses >= occurrence counts, so a duplicated marker still passes). The combination (forbid buggy line + anchored context + exact occurrence counts) or the behavioral-assertion route is needed to actually close the hole; the finding's own \"longer-term behavioral assertions\" caveat points the right direction."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-large-normalizer-0001..0004",
+        "workbench-contract-0001..0002",
+        "workbench-react-a11y-0001..0002",
+        "workbench-no-rewrite-0001",
+        "workbench-parser-0001..0002",
+        "workbench-cpp-port-0002",
+        "workbench-go-retry-0001",
+        "workbench-cs-role-0002"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 175,
+      "summary": "Required snippets encode exact implementation details that are NOT stated in the prompt, so a perfect honest candidate cannot reliably score 100 — violating the repo's own authoring rule — while equally-correct alternative implementations fail.",
+      "evidence": "Empirically verified with runWorkBenchChallengeVerifier: (a) normalizer: a correct fix that drops the trailing '// target branch' comment fails (passed=false, 0.900) — the prompt (challenges.ts:170) never says to preserve the comment, and equally-correct 'raw.toLowerCase().trim()' also fails; (b) contract-0001: prompt says only 'so currency is carried through both files' (line 211) but requires the exact union 'currency: \"USD\" | \"EUR\";' (line 217) — 'currency: string' fails (0.750); (c) react-a11y: prompt (line 255) never states the required accessible-name text, but the verifier demands exactly aria-label=\"Save changes 0001\" (line 260) — aria-label=\"Save\" fails (0.833); (d) no-rewrite: prompt 'Patch normalizePercent_0001 only… keep the diff tiny' (line 299) states NO functional requirement at all, yet requires 'return clamp_0001(value, 0, 100);' (line 304) — the intended behavior is only discoverable by reading case-meta.json (see answer-leak); (e) go-retry: a correct switch-case form fails all 3 required snippets (score 0.167); (f) parser-0001: set literal {\"true\",\"1\",\"yes\"} instead of the required tuple spelling fails (0.800); (g) cpp-port-0002: 'port <= 0 || port > 65535' fails vs required 'port < 1 || port > 65535' (0.800), and std::invalid_argument (equally reasonable, prompt says only 'rejects ports outside 1..65535') fails the 'std::out_of_range' snippet.",
+      "proposedImprovement": "Make each prompt fully specify what the verifier demands, or loosen assertions to accept the equivalence class: state the exact label text in the react-a11y prompt; state the currency union in the contract prompt; state clamp-to-0..100 in the no-rewrite prompt; for normalizer either drop the trailing-comment requirement (assert 'raw.trim().toLowerCase()' within the marker-anchored branch) or say 'keep the trailing comment'; for go-retry/parser/cpp-port switch to multiple accepted spellings or (better) executed behavioral tests. Add a test-script check that feeds a plausibly-worded independent solution (not a byte-copy of reference) per case.",
+      "verifierCorrections": [
+        "Minor imprecisions, none affecting validity: (1) The extra-language cases (workbench-cpp-port-0002, workbench-go-retry-0001, workbench-cs-role-0002) are defined in lib/benchmark/workbench/corpus.ts (csharpRoleClaim ~line 341, cppParsePort ~line 385, goRetryStatus ~line 407), not in challenges.ts as the finding's single `file` field implies; the shared snippet-verifier lives in challenges.ts and is duplicated in corpus.ts's WORKBENCH_VERIFIER string, so a fix must touch both. (2) The go-retry 0.167 score is not purely from the 3 required-snippet failures — the switch form also changes 6 lines vs the maxChangedLines limit of 4 (weight-2 assertion); the snippet failures alone would give 0.5 (still a hard fail). (3) The \"authoring rule\" at docs/bench/case-authoring.md:51 sits under the \"GameIQ and ToolReliability Rules\" heading, not a WorkBench-specific section, though the general Authoring Pipeline (steps 6-7: oracle should pass, weak baseline should fail) expresses the same intent for all tracks. (4) workbench-cs-role-0002 is listed in caseIds without explicit evidence, but its required snippets (`claim.Type == \"role\"`, `StringComparison.OrdinalIgnoreCase`) likewise reject equivalent correct forms (e.g., string.Equals(claim.Type, \"role\", ...)), so its inclusion is justified.",
+        "Three minor imprecisions, none affecting validity: (1) The cited authoring rule \"A perfect deterministic candidate must be able to score 100\" (docs/bench/case-authoring.md:51) sits under the \"GameIQ and ToolReliability Rules\" section, not the WorkBench section — so \"violating the repo's own authoring rule\" applies in spirit (and via the shared pipeline steps: oracle must pass, pilot attempts, review of failure modes) rather than by a WorkBench-specific letter-of-the-law rule. (2) For no-rewrite-0001, the claim \"the intended behavior is only discoverable by reading case-meta.json\" understates the problem in the model-patch harness path: case-meta.json is filtered out of the files shown to the model (build-adapter.ts:581), and file snapshots are truncated to 8000 chars (build-adapter.ts:435) while normalizePercent_0001 sits after ~400 sentinel lines (~19k chars) at the end of the file — so in that path the model never even sees the function it must patch; the behavior is not discoverable at all. (3) The go-retry 0.167 score for the natural multi-line switch includes a failed maxChangedLines assertion (weight 2) on top of the three failed required snippets; a hypothetical compact switch that stayed within the 4-line diff cap would still fail all three snippets and score 0.500 with passed=false, so the discriminating-power criticism stands either way.",
+        "Four detail-level corrections; none undermine the finding:\n1. Authoring-rule attribution: \"A perfect deterministic candidate must be able to score 100\" (docs/bench/case-authoring.md:51) sits under \"GameIQ and ToolReliability Rules\", not the WorkBench section. The WorkBench-applicable violations are pipeline step 5 (\"Write a behavioral verifier\") and the case's own publicContext claim of a \"deterministic behavioral verifier\" (corpus.ts:166) versus the actual substring checks.\n2. File attribution: workbench-cpp-port, workbench-go-retry, and workbench-cs-role are defined in lib/benchmark/workbench/corpus.ts (cppParsePort ~385-405, goRetryStatus ~407-426, csharpRoleClaim ~341-361), not lib/benchmark/workbench/challenges.ts. challenges.ts holds the shared verifier and the other cited families.\n3. no-rewrite overstated: \"the intended behavior is only discoverable by reading case-meta.json\" is too strong — the fixture's clamp_0001 helper plus the normalizePercent name make clamp-to-0..100 reasonably inferable. What is NOT derivable is the exact accepted spelling: the behaviorally identical Math.max(0, Math.min(100, value)) fix fails (verified: passed=false, 0.800).\n4. go-retry nuance: part of the switch-case 0.167 comes from legitimately exceeding maxChangedLines=4 (the surgical-diff check is intended design, weight 2). The snippet brittleness there is narrower than in the other cited cases, since any ||-chain with standard `status == 50x` spacing passes regardless of order."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-large-normalizer-0002",
+        "workbench-large-normalizer-0003",
+        "workbench-large-normalizer-0004",
+        "workbench-contract-0002",
+        "workbench-parser-0002",
+        "workbench-react-a11y-0002"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 46,
+      "summary": "6 of the 19 cases are byte-identical clones of another case modulo the 4-digit id suffix, so the suite encodes 13 distinct decisions while presenting 19 scenarios, and the flagship 'All current WorkBench cases (19)' pack is ~32% padding.",
+      "evidence": "challenges.ts:46-49 instantiates largeFileSurgicalPatch x4, multiFileContract x2, parserEdgeCase x2, reactAccessibilityCase x2 from the same generators with only the number changing. Empirically confirmed: after replacing digit ids with a placeholder, normalizer 0001 vs 0002 base files AND prompts are identical, likewise parser, react, and contract pairs. All four normalizer clones even place the target at the same branch index 117 (challenges.ts:350). A model that solves normalizer-0001 solves 0002-0004 by construction, quadruple-weighting one decision in the all-cases pack and in the 'Large-file surgical patch cases (4)' kind pack.",
+      "proposedImprovement": "Differentiate the clones instead of deleting coverage: vary the target branch index per instance (e.g. 23/117/181/209), vary the requested transformation (trim+lower / collapse-whitespace / prefix-strip), vary contract-0002 to a different field (e.g. dueDate ISO string carried through), give parser-0002 a different parse domain (tri-state enum), and make react-a11y-0002 target a different control (icon-only delete button with confirm). If not differentiated, drop the duplicates so pack labels reflect real decision counts.",
+      "verifierCorrections": [
+        "Minor precision notes only: (a) the \"19\" total and the pack labels live in lib/benchmark/workbench/corpus.ts (lines 40-52 add 7 extra single-instance language cases to the 12 in challenges.ts; pack labels at corpus.ts:84 and 97-105), not in challenges.ts itself; (b) the finding slightly understates the duplication for contract-0002 and react-a11y-0002 — their prompts are byte-identical even without the id-placeholder substitution, since those prompt strings contain no id interpolation at all; (c) additionally the parser-edge-case kind pack has 9 cases (2 python clones + 7 extra-language cases), so the python clone pair also double-weights within that pack.",
+        "One overstatement: \"A model that solves normalizer-0001 solves 0002-0004 by construction\" is too strong — WorkBench cases execute through the stochastic Build engine (not a temperature-0 runner like GameIQ's certified runner), so clone outcomes are near-perfectly correlated samples rather than deterministically identical. The substance is unaffected: correlated clones still effectively quadruple-weight one decision and inflate apparent coverage. Also worth noting in the writeup: the parser-0002 clone's dilution differs by pack — the \"Parser edge case\" kind pack contains 9 cases (the 2 flag parsers plus all 7 extra-language cases, which are all kind parser-edge-case), so the clone is 1/9 there rather than 1/2. The proposed improvement for the normalizer instances (varying target branch index per instance, e.g. 23/117/181/209) also requires updating the sentinel list in requiredUnchangedSnippets (challenges.ts:176-185), which currently pins sentinels 116/118 around the fixed index 117."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "all 19 cases"
+      ],
+      "file": "lib/benchmark/workbench/corpus.ts",
+      "line": 166,
+      "summary": "The case description and model-facing publicContext claim a 'deterministic behavioral verifier', but no fixture code is ever executed — every assertion is a text-snapshot check — even though Node is provably available in the sandbox (it runs verifier.mjs).",
+      "evidence": "corpus.ts:154 (description: 'behavioral verifier and fixture-local execution') and corpus.ts:166 (publicContext: 'deterministic behavioral verifier') vs the actual verifier (corpus.ts:505-639 / challenges.ts:54-156): only includes()-substring, occurrence-count, positional line-diff, JSON.parse, and a weight-0 brace count. The TS/JS fixtures (7 typescript cases) could be behaviorally tested by the same node process that already runs 'node verifier.mjs' (allowedCommands, corpus.ts:205) — e.g. import the patched normalizer and assert normalizeBranch_117('  A ') === 'a'. The docs' own rule (docs/bench/case-authoring.md) requires verifiers to be behavioral, not implementation snapshots. This is the root cause enabling both the comment-append gaming and the equally-correct-solution false-fails.",
+      "proposedImprovement": "For the TypeScript/JavaScript/JSON cases, make verifier.mjs execute behavior: compile-free approach — copy the fixture to .mjs-compatible form or write fixtures as plain .mjs/.js so verifier.mjs can dynamic-import and assert input/output pairs (normalizer, no-rewrite clamp, contract summarize output object, JSON config via JSON.parse(features).betaCheckout === true && legacyCheckout === false). Keep snippet checks only as secondary diagnostics for the non-executable languages (C#/C++/Go/Rust), and update description/publicContext to stop claiming behavioral verification for those.",
+      "verifierCorrections": [
+        "Two precision fixes. (a) The evidence's inline example — \"import the patched normalizer and assert normalizeBranch_117('  A ') === 'a'\" — cannot work as literally stated: the 7 TypeScript fixtures are .ts files with type annotations, interfaces, and import-type statements, and the local runner only requires Node 18+, which cannot import TypeScript. Behavioral execution for those cases requires the fixture-format change the proposedImprovement already concedes (plain .mjs/.js fixtures or a type-strip step), which trades away \"editing real TypeScript\" as the tested skill unless stripping is added. (b) The cheapest, zero-fixture-change win is the JSON case (workbench-json-config-0001): verifier.mjs can JSON.parse the config and assert features[\"betaCheckout_0001\"] === true && features[\"legacyCheckout_0001\"] === false today, replacing the current whitespace-sensitive text snippets. Severity medium is appropriate; the mislabeled description/publicContext fix (stop claiming behavioral verification) is trivial and should be done regardless of whether execution is added.",
+        "Two minor precision notes: (1) the docs phrase \"not implementation snapshots\" is the finding's paraphrase — case-authoring.md literally says only \"Write a behavioral verifier.\" (step 5); (2) for the JSON config case, an executed check already exists (JSON.parse syntax assertion at weight 1), so the proposed improvement for that case is partly present — only the flag semantics (betaCheckout true / legacyCheckout false) are still substring-checked rather than asserted on the parsed object. Neither affects the verdict."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-cpp-port-0002",
+        "workbench-parser-0001",
+        "workbench-parser-0002",
+        "all cases with maxChangedLines"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 436,
+      "summary": "changedLines is a positional index-by-index comparison, not an alignment diff, so any line insertion counts every shifted subsequent line as changed — the weight-2 'Diff is surgical' assertion measures 'matches the reference layout', not diff size.",
+      "evidence": "challenges.ts:436-445 (and WORKBENCH_VERIFIER corpus.ts:611-620) compares leftLines[i] !== rightLines[i]. Consequences measured: the cpp-port-0002 reference solution itself consumes exactly 8 of the 8-line limit (adding '#include <stdexcept>' at line 2 shifts everything), so ANY equally-minimal correct solution with one extra/reordered line (a blank line, includes in the other order) fails the weight-2 assertion; the parser reference consumes 6 of 10 for a 5-line function rewrite. Conversely an EOF append (no shift) counts as 1 line, which is exactly what makes the comment-append gaming cheap. So the metric simultaneously over-penalizes honest insertions and under-penalizes appended junk.",
+      "proposedImprovement": "Replace the positional count with an LCS-based line diff (added+removed lines), which is ~20 lines of code and deterministic; then re-tune maxChangedLines budgets to actual edit sizes (cpp-port reference becomes 2 removed + 6 added = 8 → set limit with headroom, e.g. 12). Add a test asserting that reference-plus-one-blank-line still passes each case's limit.",
+      "verifierCorrections": [
+        "Three minor imprecisions: (a) proposedImprovement's LCS arithmetic for cpp-port is 1 removed + 6 added = 7, not \"2 removed + 6 added = 8\" (only \"return std::stoi(raw);\" is removed; the closing brace aligns). (b) The parser cases at 6/10 illustrate inflated counts but do not actually fail for reference-shaped solutions (headroom of 4); only cpp-port-0002 is at zero headroom. (c) Impact is slightly understated: exceeding maxChangedLines fails the whole case (passed requires all scored assertions to pass, challenges.ts:133-135), not just the weight-2 assertion/score fraction.",
+        "Two minor detail corrections: (1) The proposed improvement's arithmetic is slightly off — under an LCS line diff the cpp-port-0002 reference is 1 removed + 6 added = 7 (not \"2 removed + 6 added = 8\"): only `return std::stoi(raw);` is removed; the include, signature, closing brace, and trailing newline are all preserved. The recommendation to set the limit with headroom (~12) still stands. (2) File attribution: the cpp-port-0002 case itself is defined in lib/benchmark/workbench/corpus.ts (cppParsePort, ~line 385), not challenges.ts; challenges.ts:436 is correct for the shared changedLines implementation and corpus.ts:611-620 for the sandbox copy — a fix must patch both copies (they are duplicated, and the sandbox WORKBENCH_VERIFIER string is what runs in certified fixture runs). Also worth strengthening the finding: the includes-reordered failure is the alphabetical order (`<stdexcept>` before `<string>`) that standard C++ style/formatters produce, so a well-behaved model plausibly hits it; and because case pass requires every scored assertion, the weight-2 failure fails the whole case, not just 2/N of the score."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "suite-wide"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 45,
+      "summary": "The suite claims to measure agentic coding but every case is a single, one-to-three-line edit whose exact fix is stated (or supposed to be stated) in the prompt — no diagnosis, no multi-step work, no cross-file reasoning beyond 2 tiny files, and no test-driven task — so it cannot separate skill tiers above 'can do search/replace in a long file'.",
+      "evidence": "All 19 prompts (challenges.ts:170,211,234,255,277,299; corpus.ts:330,352,374,396,418,439,460) directly state the required change; base files are synthetic repetition (largeNormalizerFile 220 identical branches, 300 sentinel JSON keys, 400 sentinel consts) so 'hard'/'expert' difficulty (challenges.ts:169,254,276,298) is purely needle-finding in generated boilerplate, while all 7 extra-language cases are uniform 'medium' one-liners. There is no 'easy' tier despite the difficulty enum (types.ts:9), no case where the model must reproduce/diagnose a failure, none with more than 2 files, none requiring sequencing of edits, and budget allows 60 model calls / 180 tool calls (corpus.ts:186-193) for tasks solvable in 1 call — competent models should ceiling at 100 (modulo the exact-snippet lottery), leaving discrimination to noise.",
+      "proposedImprovement": "Add a genuinely tiered set: (1) an easy tier (current one-liners, relabeled); (2) medium: bug described by failing input/output ('parse_flag(\" TRUE \") returns None, expected True') without naming the fix; (3) hard: a 3-5 file change with a real dependency chain (type -> service -> serializer -> test fixture) verified by executed behavior; (4) expert: a task requiring reading verifier-visible failing test output from an allowed 'node test.mjs' command and iterating. Keep the diff-budget theme but make at least one case where the minimal fix is 10-20 lines.",
+      "verifierCorrections": [
+        "Three imprecisions: (1) 'one-to-three-line edit' understates two cases — parserEdgeCase allows 10 changed lines (reference changes ~6) and cppParsePort allows 8 (~6); all others are 1-2 lines. (2) 'leaving discrimination to noise' is overstated for the composite metric: scoreWorkBenchAttempt in lib/benchmark/scoring/workbench.ts blends cost (0.25), time (0.15), and tool-reliability (0.1) factors into efficiencyScore, so models are still differentiated at a correctness ceiling — but the pure jobSuccessScore would ceiling exactly as claimed, and efficiency is not skill-tier discrimination. (3) 'The suite claims to measure agentic coding' is a paraphrase — no code/docs string says 'agentic'; the UI describes WorkBench as 'Certified software-work attempts scored by verifier quality, cost, time, and tool reliability' (components/BenchmarkLab.tsx:291). The framing remains fair because cases execute through the full Build-mode agentic harness with 60-model-call/180-tool-call budgets.",
+        "Minor imprecisions, none load-bearing: (1) \"one-to-three-line edit\" — maxChangedLines actually ranges 3-10 (parserEdgeCase allows 10, multiFileContract 8, cppParsePort 8); still tiny, but not strictly 1-3 lines. (2) \"no test-driven task\" needs nuance: the harness already exposes and allows `node verifier.mjs` (corpus.ts:180-185, 205), so verifier-iteration capability exists — the gap is that no case *requires* reading failing verifier output to solve it, since every fix is stated in the prompt. The proposed \"expert\" tier is thus a case-design gap, not a missing harness feature. (3) The finding understates the ceiling problem: in the full Build path, case-meta.json (containing requiredSnippets, i.e. the verifier's literal expected strings) and reference-solution.md sit in the agent-readable workspace, so the \"exact-snippet lottery\" is trivially winnable by any agent that reads case-meta.json — worth folding into the proposed improvement (move verifier spec/reference material out of the agent-visible fixture)."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "all 19 cases (test-harness level)"
+      ],
+      "file": "scripts/test-workbench-current-challenges.mts",
+      "line": 98,
+      "summary": "The 'behavioral verifier accepts equivalent non-reference formatting' check is vacuous: it only replaces CRLF with LF in files that are LF-only by construction, so the 'alternate' candidate is byte-identical to the reference and the check can never fail.",
+      "evidence": "test-workbench-current-challenges.mts:98-106 builds the alternate via content.replace(/\\r\\n/g, \"\\n\") over referenceFiles, but every referenceFile is produced with lines.join(\"\\n\") or \\n string literals (challenges.ts:358,379,389; corpus.ts:322-453) and contains no \\r\\n. The assertion at lines 120-124 therefore re-verifies the reference itself while its name promises exactly the equivalence property this audit shows is broken (set-literal, switch-case, and comment-preservation variants all fail). The prior review's clean-bill note ('accepts equivalent non-reference formatting… good validity discipline', review-2026-07-01.md:1795) was earned by this no-op check.",
+      "proposedImprovement": "Give each challenge an explicit alternateSolutionFiles fixture (a genuinely different but correct implementation, e.g. the switch-case go-retry, the set-literal python parser, normalizer without the trailing comment) and assert it passes; this immediately fails today and forces the assertion redesign. At minimum, delete or rename the current check so it stops certifying a property that is untested.",
+      "verifierCorrections": [
+        "Two minor precision fixes: (1) \"the check can never fail\" should be \"can never fail independently\" — since alternate === reference byte-for-byte, it fails exactly when the reference-passes check fails and adds zero information; (2) the prior review file is at docs/bench/review-2026-07-01.md (finding omits the docs/bench/ prefix). Everything else is accurate, including line numbers 98 and 120-124 in scripts/test-workbench-current-challenges.mts.",
+        "The cited review bullet is at approximately line 1791 of docs/bench/review-2026-07-01.md, not 1795. Fixture-construction line cites are off by ~1 (join(\"\\n\") calls near challenges.ts:359/380/390). Neither affects substance."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-current-kind-parser-edge-case",
+        "workbench-cs-email-0001",
+        "workbench-cs-role-0002",
+        "workbench-cpp-clamp-0001",
+        "workbench-cpp-port-0002",
+        "workbench-go-retry-0001",
+        "workbench-go-error-0002",
+        "workbench-rs-saturating-0001"
+      ],
+      "file": "lib/benchmark/workbench/corpus.ts",
+      "line": 332,
+      "summary": "All 7 extra-language cases are hardcoded kind 'parser-edge-case' regardless of content, so the kind-grouped pack 'Parser edge case cases (9)' is 7/9 mislabeled (clamping, retry classification, error wrapping, overflow semantics are not parser cases) and kind-pack coverage claims are wrong.",
+      "evidence": "corpus.ts:328,350,372,394,416,437,458 — every simpleChallenge call passes kind: 'parser-edge-case' (goErrorWrapping wraps errors with %w, rustSaturatingAdd is overflow semantics, cppClampScore is range clamping). listWorkBenchCasePacks groups by challengeKind (corpus.ts:97-105), producing a 'Parser edge case cases (9)' pack whose description says 'Runs current WorkBench parser edge case cases' while most members are unrelated micro-edits; meanwhile kinds like multi-file-contract stay at 2 members. Also cosmetic: instance numbering is discontinuous (cs-role-0002, cpp-port-0002, go-error-0002 exist without a -0001 sibling).",
+      "proposedImprovement": "Add honest kinds (e.g. 'input-validation', 'error-handling', 'numeric-safety') or a per-case kind parameter to simpleChallenge, and assign: cs-email/parser → parser-edge-case; cs-role → input-validation; cpp-clamp/rs-saturating → numeric-safety; cpp-port → input-validation; go-retry → error-handling; go-error → error-handling. Renumber instances contiguously per kind so ids reflect reality.",
+      "verifierCorrections": [
+        "Evidence line 350 should be 351 (csharpRoleClaim's kind). \"7/9 mislabeled\" is overstated and inconsistent with the finding's own proposed mapping: cppParsePort (parse_port with range rejection) is arguably a genuine parser edge case, and the proposal itself keeps cs-email as parser-edge-case, so 5-6/9 clearly mislabeled is more accurate. The proposed fix also requires extending the WorkBenchChallengeKind union in challenges.ts and adding labels in workBenchChallengeKindLabel (corpus.ts:271-288); renumbering case ids would change caseHash values and orphan any persisted stats keyed to the old ids, so id renames should be weighed against that. Severity \"low\" is appropriate.",
+        "The \"7/9 mislabeled\" count is overstated: cppParsePort (workbench-cpp-port-0002) genuinely is a parser edge case (parse a port string and range-validate), and csharpEmailNormalizer is borderline parser-adjacent input normalization; clearly mislabeled are cpp-clamp, go-retry, go-error, rs-saturating, and cs-role — roughly 5/9. Cited line numbers are off by one in two spots (373 not 372, 417 not 416). Category \"redundant\" is a misfit — this is a mislabeling/taxonomy issue, not redundancy. The proposed fix has an unstated cost: kind feeds case tags and description, which are part of the case content hashed by createWorkBenchCaseHash under the \"certified-workbench-current\" scoring version, so reassigning kinds changes certified case hashes; new kind strings also require extending the WorkBenchChallengeKind union and workBenchChallengeKindLabel."
+      ]
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "all 19 cases"
+      ],
+      "file": "lib/benchmark/workbench/challenges.ts",
+      "line": 111,
+      "summary": "Most of each case's assertion weight is pass-by-default (unchanged sentinels, forbidden snippets, weight-2 surgical-diff, syntax), so a no-op patch already earns a partial verifier score of 0.5-0.9, making the 0-1 partial score axis mostly noise between failing candidates.",
+      "evidence": "Measured empty-patch (files = baseFiles) scores across all 19 cases: normalizer clones 0.900, react-a11y/json 0.833, no-rewrite 0.800, cs-email/cpp-clamp/rs 0.750, parser/cs-role/cpp-port 0.600, contract/go 0.500 — all with passed=false. verifiedQuality gates on passed (scoring/workbench.ts:6) so the leaderboard is protected, but the partial score is persisted as BenchmarkVerifierResult.score (executor.ts:167) and surfaced in assertion tables/artifacts, where 0.9 for doing nothing misrepresents progress; it also means the only discriminating weight per case is the 1-3 required-snippet points out of 4-10 total.",
+      "proposedImprovement": "Reweight so the decision carries the mass: give requiredSnippets weight 3 each and demote requiredUnchangedSnippets/forbiddenSnippets to weight 1 collectively (or score them only as gates, weight 0 with pass required), and make the surgical-diff assertion weight conditional on at least one required snippet passing (no 'surgical' credit for an empty diff). Target: empty patch scores <= 0.25 on every case.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "all 19 cases"
+      ],
+      "file": "lib/benchmark/workbench/corpus.ts",
+      "line": 178,
+      "summary": "Cases declare environment.network 'dependency-only' but the runner never enforces any network boundary (re-observation of prior finding #58).",
+      "evidence": "corpus.ts:178 sets network: 'dependency-only' for all generated cases; scripts/bench-runner.mjs:206-209 validates the string but implements no network restriction (memoryMb half is now rejected by case-loader.ts:163-167).",
+      "proposedImprovement": "Per prior review: either enforce (spawn commands with network-isolating env where possible) or relabel the field as declarative-only in types.ts and the case docs.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "pointless-dead",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "all 19 cases"
+      ],
+      "file": "lib/benchmark/workbench/corpus.ts",
+      "line": 137,
+      "summary": "negative-control.json and reference-solution.md are shipped into every runtime fixture workspace but no runtime code path consumes them (re-observation of prior finding #59's fixture-shipping half; the never-run-against-sandbox-verifier half is now covered by scripts/test-workbench-current-challenges.mts runRuntimeVerifier).",
+      "evidence": "corpus.ts:136-137 adds both files to fixtureFiles; WORKBENCH_VERIFIER (corpus.ts:505+) never reads them; only the TS test harness uses negativeControlFiles, from the challenge object not the files. Their only runtime effect is negative: they are model-readable leak surface (see answer-leak finding).",
+      "proposedImprovement": "Remove both from fixtureFiles (keep negativeControlFiles/reference data in the TS challenge objects for the test harness only).",
+      "verifierCorrections": []
+    }
+  ]
+}

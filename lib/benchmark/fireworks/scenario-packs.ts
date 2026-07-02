@@ -4,22 +4,34 @@ import {
   createFireworksGame,
   fireworksActionsEqual,
   getLegalFireworksActions,
+  isCriticalCard,
+  isPlayableCard,
 } from "@/lib/games/fireworks/engine";
 import type {
   FireworksAction,
   FireworksCard,
   FireworksCardKnowledge,
   FireworksColor,
+  FireworksEvent,
   FireworksGameState,
   FireworksRank,
+  FireworksStackState,
 } from "@/lib/games/fireworks/types";
 import type {
+  FireworksBenchmarkCase,
   FireworksBenchmarkSuite,
   FireworksFullGameCase,
   FireworksMemoryCategory,
   FireworksScenario,
   FireworksTacticsCategory,
 } from "./types";
+
+// Bumped whenever generated scenario content changes (ids stay stable).
+// 0.2.0: opaque seeds/card ids (no category or card-role leakage), varied
+// decision slots and acting players, engine-verified expected actions,
+// dead-card memory variants, seeded events consistent with clue knowledge,
+// and engine-derived harm scoring.
+export const FIREWORKS_SCENARIO_PACK_VERSION = "0.2.0";
 
 const TACTICS_CATEGORIES: FireworksTacticsCategory[] = [
   "safe_play",
@@ -38,6 +50,7 @@ const MEMORY_CATEGORIES: FireworksMemoryCategory[] = [
 ];
 
 const COLORS: FireworksColor[] = ["red", "blue", "green"];
+const ALL_RANKS: FireworksRank[] = [1, 2, 3, 4, 5];
 
 export const FIREWORKS_TACTICS_SCENARIOS: FireworksScenario[] =
   TACTICS_CATEGORIES.flatMap((category) =>
@@ -71,6 +84,46 @@ export function getFireworksBenchmarkCasesForSuite(
   ]);
 }
 
+/**
+ * The exact case list a certified TeamIQ run executes for a suite. The
+ * persisted case record's digest, case count, and budget are derived from
+ * THIS list (not the full authoring corpus), so provenance describes what
+ * actually runs.
+ *
+ * Scenario slices are stratified across every category (scenario numbers
+ * 06-08, or 06-07 for the mixed suite) so all six tactics categories and all
+ * four memory categories are exercised, and so the TeamIQ slices stay
+ * disjoint from the GameIQ basic pack (which uses safe_play/needed_clue
+ * 01-05 and combine 01-10... combine overlap is limited to numbers 06-08).
+ */
+export function getFireworksRuntimeCasesForSuite(
+  suite: FireworksBenchmarkSuite,
+  playerCount: 2 | 3 = 2
+): FireworksBenchmarkCase[] {
+  if (suite === "tactics") return clone(pickTacticsNumbers([6, 7, 8]));
+  if (suite === "memory") return clone(pickMemoryNumbers([6, 7, 8]));
+  if (suite === "full") return clone(fullGamesForPlayerCount(playerCount));
+  return clone([
+    ...pickTacticsNumbers([6, 7]),
+    ...pickMemoryNumbers([6, 7]),
+    ...fullGamesForPlayerCount(playerCount).slice(0, 3),
+  ]);
+}
+
+/**
+ * Worst-case model calls one team composition needs to finish these cases:
+ * one call per scenario decision, up to maxTurns calls per full game.
+ */
+export function estimateFireworksModelCallsPerComposition(
+  cases: FireworksBenchmarkCase[]
+): number {
+  return cases.reduce(
+    (sum, benchmarkCase) =>
+      sum + ("maxTurns" in benchmarkCase ? benchmarkCase.maxTurns : 1),
+    0
+  );
+}
+
 export function scoreFireworksScenarioAction(
   scenario: FireworksScenario,
   action: FireworksAction
@@ -86,11 +139,44 @@ export function scoreFireworksScenarioAction(
     fireworksActionsEqual(candidate.action, action)
   );
   if (expected) return expected.weight;
-  return getLegalFireworksActions(scenario.state, scenario.actingPlayerId).some(
-    (candidate) => fireworksActionsEqual(candidate, action)
-  )
-    ? 0.3
-    : 0;
+  const legal = getLegalFireworksActions(
+    scenario.state,
+    scenario.actingPlayerId
+  ).some((candidate) => fireworksActionsEqual(candidate, action));
+  if (!legal) return 0;
+  // Engine-provable harm never earns the neutral legal-action floor: a play
+  // that misfires burns a mistake token and a discard of a critical card
+  // destroys the last copy, so both score 0 even when not enumerated as
+  // forbidden. Clues that touch only dead cards waste a token for almost no
+  // information and score below neutral alternatives.
+  const actingHand = scenario.state.hands.find(
+    (hand) => hand.playerId === scenario.actingPlayerId
+  );
+  if (action.action === "play") {
+    const card = actingHand?.cards[action.cardIndex];
+    if (card && !isPlayableCard(scenario.state, card)) return 0;
+  }
+  if (action.action === "discard") {
+    const card = actingHand?.cards[action.cardIndex];
+    if (card && isCriticalCard(scenario.state, card)) return 0;
+  }
+  if (action.action === "clue_color" || action.action === "clue_rank") {
+    const targetHand = scenario.state.hands.find(
+      (hand) => hand.playerId === action.targetPlayerId
+    );
+    const touched = (targetHand?.cards ?? []).filter((card) =>
+      action.action === "clue_color"
+        ? card.color === action.color
+        : card.rank === action.rank
+    );
+    if (
+      touched.length > 0 &&
+      touched.every((card) => scenario.state.stacks[card.color] >= card.rank)
+    ) {
+      return 0.1;
+    }
+  }
+  return 0.3;
 }
 
 export function stableFireworksScenarioPackDigest(input: {
@@ -103,20 +189,27 @@ export function stableFireworksScenarioPackDigest(input: {
 
 export function fireworksCaseToBenchmarkCaseV2(
   id: string,
-  suite: FireworksBenchmarkSuite = "mixed"
+  suite: FireworksBenchmarkSuite = "mixed",
+  playerCount: 2 | 3 = 2
 ): BenchmarkCaseV2 {
   const timestamp = new Date().toISOString();
-  const cases = getFireworksBenchmarkCasesForSuite(suite);
+  const cases = getFireworksRuntimeCasesForSuite(suite, playerCount);
+  const callsPerComposition = estimateFireworksModelCallsPerComposition(cases);
+  // Budget must let a default run finish: worst case is one selected team
+  // plus up to three auto-derived solo baselines all playing every case.
+  const maxModelCalls = Math.max(200, callsPerComposition * 4);
   return {
     id,
     schemaVersion: 2,
     track: "teamiq",
     title: labelForSuite(suite),
     description:
-      "Fireworks tests whether model teams can cooperate when no player sees their own cards.",
+      suite === "tactics" || suite === "memory"
+        ? "Fireworks single-decision scenario probes with hidden information and objective engine scoring."
+        : "Fireworks tests whether model teams can cooperate when no player sees their own cards.",
     difficulty: suite === "full" || suite === "mixed" ? "hard" : "medium",
     tags: ["teamiq", "fireworks", suite],
-    caseVersion: "0.1.0",
+    caseVersion: FIREWORKS_SCENARIO_PACK_VERSION,
     createdAt: timestamp,
     updatedAt: timestamp,
     prompt: {
@@ -124,11 +217,12 @@ export function fireworksCaseToBenchmarkCaseV2(
         "Run Fireworks TeamIQ with hidden information, limited legal clues, memory pressure, and objective scoring.",
       publicContext: JSON.stringify({
         suite,
+        playerCount,
         caseCount: cases.length,
         deckEmptyRule:
           "In AI Board Fireworks, when the deck is empty, play continues until hands are empty or the benchmark maxTurns limit is reached.",
         digest: stableFireworksScenarioPackDigest({
-          id: `fireworks-${suite}-v0.1`,
+          id: `fireworks-${suite}-${playerCount}p-v${FIREWORKS_SCENARIO_PACK_VERSION}`,
           scenarios: cases.filter(isScenario),
           fullGames: cases.filter(isFullGame),
         }),
@@ -136,8 +230,14 @@ export function fireworksCaseToBenchmarkCaseV2(
     },
     environment: { type: "browser", timeoutSeconds: 120, network: "none" },
     verifier: { scorer: "game-engine" },
-    budget: { maxUsd: 5, maxModelCalls: 500 },
-    scoring: { scoringVersion: "fireworks-teamiq-v0.1", primary: "team_lift" },
+    budget: { maxUsd: 5, maxModelCalls },
+    scoring: {
+      scoringVersion: "fireworks-teamiq-v0.1",
+      // Scenario suites are single-decision probes (one acting player per
+      // case); team lift is only meaningful where full games rotate players.
+      primary:
+        suite === "full" || suite === "mixed" ? "team_lift" : "verified_quality",
+    },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-FIREWORKS-TEAMIQ-V0-1",
@@ -150,82 +250,303 @@ function createTacticsScenario(
   category: FireworksTacticsCategory,
   number: number
 ): FireworksScenario {
-  const seed = `fireworks-tactics-${category}-${number}`;
+  // Opaque seed: the seed and game id reach the model-facing player view, so
+  // they must not encode the category (that leaked the expected action type).
+  const seed = opaqueSeed("tactics", category, number);
+  const actorId = number % 2 === 1 ? "P1" : "P2";
+  const partnerId = actorId === "P1" ? "P2" : "P1";
+  const slot = (number - 1) % 4;
+  const partnerSlot = number % 4;
   const color = COLORS[(number - 1) % COLORS.length];
-  const nextRank = ((number - 1) % 4 + 1) as FireworksRank;
-  const state = createPuzzleState(seed);
-  let expectedActions: FireworksScenario["expectedActions"];
+  const [alt1, alt2] = COLORS.filter((candidate) => candidate !== color);
+  const stacks: FireworksStackState = { red: 0, blue: 0, green: 0 };
+  const actorCards: Array<FireworksCard | null> = [null, null, null, null];
+  const actorKnowledge: FireworksCardKnowledge[] = emptyKnowledgeRow();
+  const partnerCards: Array<FireworksCard | null> = [null, null, null, null];
+  const events: FireworksEvent[] = [];
+  let partnerAvoidColors: FireworksColor[] = [];
+  let partnerAvoidRanks: FireworksRank[] = [];
+  let clueTokens = 6;
+  let expectedActions: FireworksScenario["expectedActions"] = [];
   let forbiddenActions: FireworksAction[] | undefined;
   let title = "";
 
   if (category === "safe_play") {
-    state.stacks[color] = nextRank - 1;
-    state.hands[0].cards[0] = card(seed, color, nextRank, "own-play");
-    state.hands[0].knowledge[0] = knowledge({ color, rank: nextRank });
+    const rank = (((number - 1) % 4) + 1) as FireworksRank;
+    stacks[color] = rank - 1;
+    stacks[alt1] = number % 3;
+    stacks[alt2] = (number + 1) % 3;
+    clueTokens = [6, 2, 0][(number - 1) % 3];
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    events.push(
+      seededClueEvent(seed, 1, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      }),
+      seededClueEvent(seed, 2, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank,
+      })
+    );
     expectedActions = [
-      { action: { action: "play", cardIndex: 0 }, weight: 1, label: "Known playable card" },
+      {
+        action: { action: "play", cardIndex: slot },
+        weight: 1,
+        label: "Play the card proven playable by clues",
+      },
     ];
     title = "Play a card proven playable by clues";
   } else if (category === "needed_clue") {
-    state.hands[1].cards[0] = card(seed, color, 1, "partner-play");
+    const partnerRank = (((number - 1) % 2) + 1) as FireworksRank;
+    stacks[color] = partnerRank - 1;
+    stacks[alt1] = (number + 1) % 3;
+    stacks[alt2] = number % 2;
+    clueTokens = ((number - 1) % 3) + 1;
+    partnerCards[partnerSlot] = card(seed, `b${partnerSlot}`, color, partnerRank);
+    partnerAvoidColors = [color];
+    partnerAvoidRanks = [partnerRank];
     expectedActions = [
       {
-        action: { action: "clue_rank", targetPlayerId: "P2", rank: 1 },
+        action: {
+          action: "clue_rank",
+          targetPlayerId: partnerId,
+          rank: partnerRank,
+        },
         weight: 1,
-        label: "Tell partner about playable rank",
+        label: "Tell partner about the playable rank",
       },
       {
-        action: { action: "clue_color", targetPlayerId: "P2", color },
+        action: { action: "clue_color", targetPlayerId: partnerId, color },
         weight: 0.8,
-        label: "Tell partner about playable color",
+        label: "Tell partner about the playable color",
       },
     ];
     title = "Give the clue that unlocks a partner play";
   } else if (category === "avoid_bad_play") {
-    state.stacks[color] = 1;
-    state.hands[0].cards[0] = card(seed, color, 3, "own-trap");
-    state.hands[0].knowledge[0] = knowledge({});
-    state.hands[1].cards[0] = card(seed, "green", 1, "partner-safe");
+    const stackHeight = (number - 1) % 3;
+    const trapRank = (stackHeight + 2) as FireworksRank;
+    stacks[color] = stackHeight;
+    const partnerColor = alt1;
+    const partnerStack = number % 2;
+    stacks[partnerColor] = partnerStack;
+    const partnerRank = (partnerStack + 1) as FireworksRank;
+    stacks[alt2] = (number + 1) % 3;
+    clueTokens = ((number - 1) % 2) + 1;
+    // Trap card stays unknown: playing it would burn a mistake token.
+    actorCards[slot] = card(seed, `a${slot}`, color, trapRank);
+    partnerCards[partnerSlot] = card(
+      seed,
+      `b${partnerSlot}`,
+      partnerColor,
+      partnerRank
+    );
+    partnerAvoidColors = [partnerColor];
+    partnerAvoidRanks = [partnerRank];
     expectedActions = [
       {
-        action: { action: "clue_rank", targetPlayerId: "P2", rank: 1 },
+        action: {
+          action: "clue_rank",
+          targetPlayerId: partnerId,
+          rank: partnerRank,
+        },
         weight: 1,
-        label: "Clue a known playable partner card instead of guessing",
+        label: "Clue the partner's playable card instead of guessing",
+      },
+      {
+        action: {
+          action: "clue_color",
+          targetPlayerId: partnerId,
+          color: partnerColor,
+        },
+        weight: 0.8,
+        label: "Color clue that also identifies the playable card",
       },
     ];
-    forbiddenActions = [{ action: "play", cardIndex: 0 }];
+    forbiddenActions = [{ action: "play", cardIndex: slot }];
     title = "Avoid playing an unknown non-playable card";
   } else if (category === "safe_discard") {
-    state.stacks[color] = 1;
-    state.hands[0].cards[0] = card(seed, color, 1, "own-dead");
-    state.hands[0].knowledge[0] = knowledge({ color, rank: 1 });
-    state.clueTokens = 2;
-    expectedActions = [
-      { action: { action: "discard", cardIndex: 0 }, weight: 1, label: "Discard already-played card" },
-    ];
-    title = "Discard a card known to be no longer needed";
-  } else if (category === "critical_discard_avoidance") {
-    state.hands[0].cards[0] = card(seed, color, 5, "own-critical");
-    state.hands[0].knowledge[0] = knowledge({ color });
-    state.hands[1].cards[0] = card(seed, "red", 1, "partner-critical-clue");
+    const rank = (((number - 1) % 2) + 1) as FireworksRank;
+    stacks[color] = rank;
+    stacks[alt1] = number % 2;
+    stacks[alt2] = (number + 1) % 3;
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    events.push(
+      seededClueEvent(seed, 1, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      }),
+      seededClueEvent(seed, 3, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank,
+      })
+    );
     expectedActions = [
       {
-        action: { action: "clue_rank", targetPlayerId: "P2", rank: 1 },
+        action: { action: "discard", cardIndex: slot },
+        weight: 1,
+        label: "Discard the already-played card",
+      },
+    ];
+    if (number % 2 === 0) {
+      // Token available: a useful clue on the partner's playable card is an
+      // acceptable alternative, not a failure.
+      clueTokens = 2;
+      const partnerColor = alt1;
+      const partnerRank = (stacks[partnerColor] + 1) as FireworksRank;
+      partnerCards[partnerSlot] = card(
+        seed,
+        `b${partnerSlot}`,
+        partnerColor,
+        partnerRank
+      );
+      partnerAvoidColors = [partnerColor];
+      partnerAvoidRanks = [partnerRank];
+      expectedActions.push({
+        action: {
+          action: "clue_rank",
+          targetPlayerId: partnerId,
+          rank: partnerRank,
+        },
+        weight: 0.8,
+        label: "Useful clue instead of the free discard",
+      });
+    } else {
+      clueTokens = 0;
+    }
+    forbiddenActions = [{ action: "play", cardIndex: slot }];
+    title = "Discard a card known to be no longer needed";
+  } else if (category === "critical_discard_avoidance") {
+    stacks[color] = (number - 1) % 3;
+    const partnerColor = alt2;
+    const partnerStack = number % 2;
+    stacks[partnerColor] = partnerStack;
+    const partnerRank = (partnerStack + 1) as FireworksRank;
+    stacks[alt1] = (number + 1) % 3;
+    clueTokens = [1, 3, 5][(number - 1) % 3];
+    actorCards[slot] = card(seed, `a${slot}`, color, 5);
+    events.push(
+      seededClueEvent(seed, 2, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      })
+    );
+    const cluePartnerSlot = (number + 1) % 4;
+    partnerCards[cluePartnerSlot] = card(
+      seed,
+      `b${cluePartnerSlot}`,
+      partnerColor,
+      partnerRank
+    );
+    partnerAvoidColors = [partnerColor];
+    partnerAvoidRanks = [partnerRank];
+    expectedActions = [
+      {
+        action: {
+          action: "clue_rank",
+          targetPlayerId: partnerId,
+          rank: partnerRank,
+        },
         weight: 1,
         label: "Use a useful clue instead of discarding a unique 5",
       },
+      {
+        action: {
+          action: "clue_color",
+          targetPlayerId: partnerId,
+          color: partnerColor,
+        },
+        weight: 0.9,
+        label: "Equally informative color clue",
+      },
     ];
-    forbiddenActions = [{ action: "discard", cardIndex: 0 }];
+    forbiddenActions = [
+      { action: "discard", cardIndex: slot },
+      { action: "play", cardIndex: slot },
+    ];
     title = "Avoid discarding a critical card";
   } else {
-    state.stacks[color] = 4;
-    state.hands[0].cards[0] = card(seed, color, 5, "own-endgame");
-    state.hands[0].knowledge[0] = knowledge({ color, rank: 5 });
+    stacks[color] = 4;
+    stacks[alt1] = 3 + (number % 2);
+    stacks[alt2] = ((number + 1) % 3) + 2;
+    clueTokens = (number % 3) * 2;
+    actorCards[slot] = card(seed, `a${slot}`, color, 5);
+    events.push(
+      seededClueEvent(seed, 4, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      }),
+      seededClueEvent(seed, 6, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank: 5,
+      })
+    );
     expectedActions = [
-      { action: { action: "play", cardIndex: 0 }, weight: 1, label: "Finish a stack" },
+      {
+        action: { action: "play", cardIndex: slot },
+        weight: 1,
+        label: "Finish a stack",
+      },
     ];
+    if (number % 2 === 0) {
+      // Two proven-playable cards: either play is fine this turn.
+      const secondSlot = (slot + 2) % 4;
+      const secondRank = (stacks[alt1] + 1) as FireworksRank;
+      actorCards[secondSlot] = card(seed, `a${secondSlot}`, alt1, secondRank);
+      events.push(
+        seededClueEvent(seed, 5, partnerId, {
+          action: "clue_color",
+          targetPlayerId: actorId,
+          color: alt1,
+        }),
+        seededClueEvent(seed, 7, partnerId, {
+          action: "clue_rank",
+          targetPlayerId: actorId,
+          rank: secondRank,
+        })
+      );
+      expectedActions.push({
+        action: { action: "play", cardIndex: secondSlot },
+        weight: 0.95,
+        label: "Equally proven playable card",
+      });
+    }
     title = "Finish a stack in the endgame";
   }
+
+  fillHand({
+    seed,
+    prefix: "a",
+    cards: actorCards,
+    stacks,
+    rotate: number,
+  });
+  fillHand({
+    seed,
+    prefix: "b",
+    cards: partnerCards,
+    stacks,
+    avoidColors: partnerAvoidColors,
+    avoidRanks: partnerAvoidRanks,
+    rotate: number + 1,
+  });
+
+  const state = createPuzzleState(seed, {
+    actorId,
+    stacks,
+    clueTokens,
+    actorCards: actorCards as FireworksCard[],
+    actorKnowledge,
+    partnerCards: partnerCards as FireworksCard[],
+    events,
+  });
+  applySeededClueConsistency(state);
 
   return {
     id: `fireworks-tactics-v0.1-${category}-${String(number).padStart(2, "0")}`,
@@ -234,7 +555,7 @@ function createTacticsScenario(
     title: `${title} #${number}`,
     seed,
     state,
-    actingPlayerId: "P1",
+    actingPlayerId: actorId,
     expectedActions,
     forbiddenActions,
     tags: ["fireworks", "tactics", category],
@@ -245,65 +566,194 @@ function createMemoryScenario(
   category: FireworksMemoryCategory,
   number: number
 ): FireworksScenario {
-  const seed = `fireworks-memory-${category}-${number}`;
+  const seed = opaqueSeed("memory", category, number);
+  const actorId = number % 2 === 1 ? "P1" : "P2";
+  const partnerId = actorId === "P1" ? "P2" : "P1";
+  const slot = (number - 1) % 4;
   const color = COLORS[(number - 1) % COLORS.length];
-  const rank = (((number - 1) % 4) + 1) as FireworksRank;
-  const state = createPuzzleState(seed);
-  state.stacks[color] = rank - 1;
-  state.hands[0].cards[0] = card(seed, color, rank, "memory-card");
+  const [alt1, alt2] = COLORS.filter((candidate) => candidate !== color);
+  // Every third scenario the recalled identity proves the card is DEAD, so a
+  // "just play the remembered card" heuristic demonstrably fails: the correct
+  // action flips to discard.
+  const dead = number % 3 === 0;
+  const stacks: FireworksStackState = { red: 0, blue: 0, green: 0 };
+  const actorCards: Array<FireworksCard | null> = [null, null, null, null];
+  const actorKnowledge: FireworksCardKnowledge[] = emptyKnowledgeRow();
+  const partnerCards: Array<FireworksCard | null> = [null, null, null, null];
+  const events: FireworksEvent[] = [];
+  let avoidRanks: FireworksRank[] = [];
+  let avoidColors: FireworksColor[] = [];
   let title = "";
+  let rank: FireworksRank;
+  let postBuild: ((state: FireworksGameState) => void) | undefined;
 
   if (category === "combine_color_and_rank") {
-    state.hands[0].knowledge[0] = knowledge({
-      color,
-      rank,
-      history: [`Turn 1: ${color}`, `Turn 3: rank ${rank}`],
-    });
+    rank = (((number - 1) % 4) + 1) as FireworksRank;
+    stacks[color] = dead ? rank : rank - 1;
+    stacks[alt1] = number % 3;
+    stacks[alt2] = (number + 1) % 2;
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    avoidColors = [color];
+    avoidRanks = [rank];
+    events.push(
+      seededClueEvent(seed, 1, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      }),
+      seededClueEvent(seed, 3, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank,
+      })
+    );
     title = "Combine color and rank clues";
   } else if (category === "old_clue_recall") {
-    state.hands[0].knowledge[0] = knowledge({
-      color,
-      rank,
-      history: [`Turn 1: ${color}`, `Turn 6: rank ${rank}`],
-    });
-    title = "Remember an old clue";
+    rank = (((number - 1) % 3) + 1) as FireworksRank;
+    stacks[color] = dead ? rank : rank - 1;
+    stacks[alt1] = number % 3;
+    stacks[alt2] = (number + 1) % 2;
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    // Distractor: a LATER rank clue on a different slot. Confusing the old
+    // clue with the recent one means misplaying a non-playable card.
+    const distractorSlot = (slot + 1) % 4;
+    actorCards[distractorSlot] = card(seed, `a${distractorSlot}`, alt1, 4);
+    avoidColors = [color];
+    avoidRanks = [rank, 4];
+    events.push(
+      seededClueEvent(seed, 1, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color,
+      }),
+      seededClueEvent(seed, 2, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank,
+      }),
+      seededClueEvent(seed, 5, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank: 4,
+      })
+    );
+    title = "Remember an old clue among newer ones";
   } else if (category === "negative_information") {
-    const possibleColors = COLORS.filter((candidate) => candidate !== color);
-    state.hands[0].knowledge[0] = knowledge({
-      color,
-      rank,
-      notColors: possibleColors,
-      notRanks: [1, 2, 3, 4, 5].filter((candidate) => candidate !== rank) as FireworksRank[],
-      history: ["Earlier clues ruled out every non-playable identity."],
-    });
-    title = "Respect negative information";
+    rank = (((number - 1) % 4) + 1) as FireworksRank;
+    stacks[color] = dead ? rank : rank - 1;
+    stacks[alt1] = number % 2;
+    stacks[alt2] = (number + 1) % 3;
+    // No positive clue ever touched the decision card: its identity is
+    // determined only by elimination (notColors/notRanks).
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    const excluded = ALL_RANKS.filter((candidate) => candidate !== rank);
+    const fillerRankA = pickRank(excluded, [(stacks[alt1] + 1) as FireworksRank]);
+    const fillerRankB = pickRank(excluded, [
+      (stacks[alt2] + 1) as FireworksRank,
+      fillerRankA,
+    ]);
+    const fillerRankC = pickRank(excluded, [
+      (stacks[alt1] + 1) as FireworksRank,
+      fillerRankA,
+      fillerRankB,
+    ]);
+    const remainingRank = excluded.find(
+      (candidate) =>
+        candidate !== fillerRankA &&
+        candidate !== fillerRankB &&
+        candidate !== fillerRankC
+    );
+    const slotA = (slot + 1) % 4;
+    const slotB = (slot + 2) % 4;
+    const slotC = (slot + 3) % 4;
+    actorCards[slotA] = card(seed, `a${slotA}`, alt1, fillerRankA);
+    actorCards[slotB] = card(seed, `a${slotB}`, alt2, fillerRankB);
+    actorCards[slotC] = card(seed, `a${slotC}`, alt1, fillerRankC);
+    events.push(
+      seededClueEvent(seed, 1, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color: alt1,
+      }),
+      seededClueEvent(seed, 2, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank: fillerRankA,
+      }),
+      seededClueEvent(seed, 3, partnerId, {
+        action: "clue_color",
+        targetPlayerId: actorId,
+        color: alt2,
+      }),
+      seededClueEvent(seed, 4, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank: fillerRankB,
+      }),
+      seededClueEvent(seed, 6, partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank: fillerRankC,
+      })
+    );
+    // The one rank the seeded clues cannot justify is recorded as prior
+    // knowledge so the identity is uniquely determined by elimination.
+    postBuild = (state) => {
+      const hand = state.hands.find((candidate) => candidate.playerId === actorId);
+      const decision = hand?.knowledge[slot];
+      if (decision && remainingRank && !decision.notRanks.includes(remainingRank)) {
+        decision.notRanks.push(remainingRank);
+      }
+    };
+    title = "Deduce identity from negative information";
   } else {
-    state.hands[0].knowledge[0] = knowledge({
-      color,
-      rank,
-      history: [
-        "Turn 2: partner clued this card before the stack advanced.",
-        `Turn 5: rank ${rank} is now playable.`,
-      ],
-    });
-    title = "Infer from clue timing";
+    rank = (((number - 1) % 4) + 1) as FireworksRank;
+    // Rank known, color unknown: playability must be inferred from the rank
+    // plus the stack heights (all stacks equal, so the inference is provable).
+    const height = dead ? rank : rank - 1;
+    stacks.red = height;
+    stacks.blue = height;
+    stacks.green = height;
+    actorCards[slot] = card(seed, `a${slot}`, color, rank);
+    avoidRanks = [rank];
+    events.push(
+      seededClueEvent(seed, 2 + (number % 3), partnerId, {
+        action: "clue_rank",
+        targetPlayerId: actorId,
+        rank,
+      })
+    );
+    title = "Infer playability from a rank clue and the stacks";
   }
 
-  state.events = state.hands[0].knowledge[0].clueHistory.map((message, index) => ({
-    id: `${seed}:history:${index + 1}`,
-    turn: index + 1,
-    playerId: "P2",
-    action:
-      index % 2 === 0
-        ? { action: "clue_color", targetPlayerId: "P1", color }
-        : { action: "clue_rank", targetPlayerId: "P1", rank },
-    legal: true,
-    seeded: true,
-    useful: true,
-    memoryConsistent: true,
-    message,
-    resultingScore: state.stacks.red + state.stacks.blue + state.stacks.green,
-  }));
+  fillHand({
+    seed,
+    prefix: "a",
+    cards: actorCards,
+    stacks,
+    avoidColors,
+    avoidRanks,
+    rotate: number,
+  });
+  fillHand({
+    seed,
+    prefix: "b",
+    cards: partnerCards,
+    stacks,
+    rotate: number + 2,
+  });
+
+  const state = createPuzzleState(seed, {
+    actorId,
+    stacks,
+    clueTokens: 4,
+    actorCards: actorCards as FireworksCard[],
+    actorKnowledge,
+    partnerCards: partnerCards as FireworksCard[],
+    events,
+  });
+  applySeededClueConsistency(state);
+  postBuild?.(state);
 
   return {
     id: `fireworks-memory-v0.1-${category}-${String(number).padStart(2, "0")}`,
@@ -312,11 +762,25 @@ function createMemoryScenario(
     title: `${title} #${number}`,
     seed,
     state,
-    actingPlayerId: "P1",
+    actingPlayerId: actorId,
     expectedActions: [
-      { action: { action: "play", cardIndex: 0 }, weight: 1, label: "Use remembered clues to play" },
+      dead
+        ? {
+            action: { action: "discard", cardIndex: slot },
+            weight: 1,
+            label: "Recalled clues prove the card is already played",
+          }
+        : {
+            action: { action: "play", cardIndex: slot },
+            weight: 1,
+            label: "Recalled clues prove the card is playable",
+          },
     ],
-    forbiddenActions: [{ action: "discard", cardIndex: 0 }],
+    forbiddenActions: [
+      dead
+        ? { action: "play", cardIndex: slot }
+        : { action: "discard", cardIndex: slot },
+    ],
     tags: ["fireworks", "memory", category],
   };
 }
@@ -337,7 +801,18 @@ function createFullGameCase(
   };
 }
 
-function createPuzzleState(seed: string): FireworksGameState {
+function createPuzzleState(
+  seed: string,
+  input: {
+    actorId: "P1" | "P2";
+    stacks: FireworksStackState;
+    clueTokens: number;
+    actorCards: FireworksCard[];
+    actorKnowledge: FireworksCardKnowledge[];
+    partnerCards: FireworksCard[];
+    events?: FireworksEvent[];
+  }
+): FireworksGameState {
   const state = createFireworksGame({
     seed,
     players: [
@@ -345,71 +820,182 @@ function createPuzzleState(seed: string): FireworksGameState {
       { id: "P2", label: "Player 2", kind: "ai" },
     ],
   });
+  const actorIndex = input.actorId === "P1" ? 0 : 1;
+  const events = input.events ?? [];
   state.deck = [];
-  state.currentPlayerIndex = 0;
-  state.turn = 0;
+  state.currentPlayerIndex = actorIndex;
+  state.turn = events.reduce((max, event) => Math.max(max, event.turn), -1) + 1;
   state.status = "playing";
-  state.stacks = { red: 0, blue: 0, green: 0 };
-  state.clueTokens = 6;
+  state.stacks = { ...input.stacks };
+  state.clueTokens = input.clueTokens;
   state.mistakeTokens = 3;
-  state.hands = [
-    {
-      playerId: "P1",
-      cards: [
-        card(seed, "red", 1, "p1-0"),
-        card(seed, "blue", 2, "p1-1"),
-        card(seed, "green", 3, "p1-2"),
-        card(seed, "red", 4, "p1-3"),
-      ],
-      knowledge: [
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-      ],
-    },
-    {
-      playerId: "P2",
-      cards: [
-        card(seed, "blue", 1, "p2-0"),
-        card(seed, "red", 2, "p2-1"),
-        card(seed, "green", 4, "p2-2"),
-        card(seed, "blue", 5, "p2-3"),
-      ],
-      knowledge: [
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-        createEmptyFireworksKnowledge(),
-      ],
-    },
-  ];
+  state.events = events;
+  const actorHand = {
+    playerId: input.actorId,
+    cards: input.actorCards,
+    knowledge: input.actorKnowledge,
+  };
+  const partnerHand = {
+    playerId: input.actorId === "P1" ? "P2" : "P1",
+    cards: input.partnerCards,
+    knowledge: emptyKnowledgeRow(),
+  };
+  state.hands =
+    actorIndex === 0 ? [actorHand, partnerHand] : [partnerHand, actorHand];
   return state;
+}
+
+/**
+ * Derives clue knowledge from the seeded clue events exactly the way the
+ * engine would have (positive marks on touched cards, negative marks on the
+ * rest), so the authored state cannot contradict its own history and cannot
+ * leak identity through a channel the clues do not justify.
+ */
+function applySeededClueConsistency(state: FireworksGameState): void {
+  for (const event of state.events) {
+    const action = event.action;
+    if (action.action !== "clue_color" && action.action !== "clue_rank") continue;
+    const hand = state.hands.find(
+      (candidate) => candidate.playerId === action.targetPlayerId
+    );
+    if (!hand) continue;
+    hand.cards.forEach((cardValue, index) => {
+      const know = hand.knowledge[index];
+      if (!know) return;
+      if (action.action === "clue_color") {
+        if (cardValue.color === action.color) {
+          if (know.color !== action.color) {
+            know.color = action.color;
+            know.clueHistory.push(`Turn ${event.turn}: ${action.color}`);
+          }
+        } else if (!know.notColors.includes(action.color)) {
+          know.notColors.push(action.color);
+        }
+      } else if (cardValue.rank === action.rank) {
+        if (know.rank !== action.rank) {
+          know.rank = action.rank;
+          know.clueHistory.push(`Turn ${event.turn}: rank ${action.rank}`);
+        }
+      } else if (!know.notRanks.includes(action.rank)) {
+        know.notRanks.push(action.rank);
+      }
+    });
+  }
+}
+
+function fillHand(input: {
+  seed: string;
+  prefix: string;
+  cards: Array<FireworksCard | null>;
+  stacks: FireworksStackState;
+  avoidColors?: FireworksColor[];
+  avoidRanks?: FireworksRank[];
+  rotate: number;
+}): void {
+  const colorPool = COLORS.filter(
+    (candidate) => !(input.avoidColors ?? []).includes(candidate)
+  );
+  for (let index = 0; index < input.cards.length; index++) {
+    if (input.cards[index]) continue;
+    const color = colorPool[(input.rotate + index) % colorPool.length];
+    const rank = nonPlayableRank(color, input.stacks, input.avoidRanks ?? []);
+    input.cards[index] = card(input.seed, `${input.prefix}${index}`, color, rank);
+  }
+}
+
+function nonPlayableRank(
+  color: FireworksColor,
+  stacks: FireworksStackState,
+  avoidRanks: FireworksRank[]
+): FireworksRank {
+  const playable = stacks[color] + 1;
+  const candidates: FireworksRank[] = [3, 4, 2, 5, 1];
+  const rank = candidates.find(
+    (candidate) => candidate !== playable && !avoidRanks.includes(candidate)
+  );
+  return rank ?? 5;
+}
+
+function pickRank(
+  pool: FireworksRank[],
+  avoid: FireworksRank[]
+): FireworksRank {
+  return pool.find((candidate) => !avoid.includes(candidate)) ?? pool[0];
+}
+
+function seededClueEvent(
+  seed: string,
+  turn: number,
+  playerId: string,
+  action: Extract<FireworksAction, { action: "clue_color" | "clue_rank" }>
+): FireworksEvent {
+  return {
+    id: `${seed}:history:${turn}`,
+    turn,
+    playerId,
+    action,
+    legal: true,
+    seeded: true,
+    useful: true,
+    memoryConsistent: true,
+    message:
+      action.action === "clue_color"
+        ? `${playerId} clued ${action.targetPlayerId} about ${action.color}.`
+        : `${playerId} clued ${action.targetPlayerId} about ${action.rank}s.`,
+    resultingScore: 0,
+  };
 }
 
 function card(
   seed: string,
+  slotKey: string,
   color: FireworksColor,
-  rank: FireworksRank,
-  suffix: string
+  rank: FireworksRank
 ): FireworksCard {
-  return { id: `${seed}:${suffix}:${color}-${rank}`, color, rank };
+  // Positional ids only: card ids are visible for other hands (and in the
+  // discard pile), so they must not describe the card's benchmark role.
+  return { id: `${seed}:${slotKey}`, color, rank };
 }
 
-function knowledge(input: {
-  color?: FireworksColor;
-  rank?: FireworksRank;
-  notColors?: FireworksColor[];
-  notRanks?: FireworksRank[];
-  history?: string[];
-}): FireworksCardKnowledge {
-  return {
-    color: input.color,
-    rank: input.rank,
-    notColors: [...(input.notColors ?? [])],
-    notRanks: [...(input.notRanks ?? [])],
-    clueHistory: [...(input.history ?? [])],
-  };
+function emptyKnowledgeRow(): FireworksCardKnowledge[] {
+  return [
+    createEmptyFireworksKnowledge(),
+    createEmptyFireworksKnowledge(),
+    createEmptyFireworksKnowledge(),
+    createEmptyFireworksKnowledge(),
+  ];
+}
+
+function pickTacticsNumbers(numbers: number[]): FireworksScenario[] {
+  return TACTICS_CATEGORIES.flatMap((_category, categoryIndex) =>
+    numbers.map(
+      (number) => FIREWORKS_TACTICS_SCENARIOS[categoryIndex * 10 + number - 1]
+    )
+  );
+}
+
+function pickMemoryNumbers(numbers: number[]): FireworksScenario[] {
+  return MEMORY_CATEGORIES.flatMap((_category, categoryIndex) =>
+    numbers.map(
+      (number) => FIREWORKS_MEMORY_SCENARIOS[categoryIndex * 10 + number - 1]
+    )
+  );
+}
+
+function fullGamesForPlayerCount(playerCount: 2 | 3): FireworksFullGameCase[] {
+  return FIREWORKS_FULL_GAME_CASES.filter(
+    (benchmarkCase) => benchmarkCase.playerCount === playerCount
+  );
+}
+
+function opaqueSeed(
+  kind: "tactics" | "memory",
+  category: string,
+  number: number
+): string {
+  // Hash the descriptive key so the seed is deterministic but carries no
+  // category text into the player view (gameId/seed are model-visible).
+  return `fw-${hashString(`fireworks-${kind}-${category}-${number}`)}`;
 }
 
 function labelForSuite(suite: FireworksBenchmarkSuite): string {

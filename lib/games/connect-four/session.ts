@@ -212,6 +212,7 @@ function isStatus(value: unknown): value is ConnectFourStatus {
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
     value === "default" ||
+    value === "none" ||
     value === "low" ||
     value === "medium" ||
     value === "high" ||

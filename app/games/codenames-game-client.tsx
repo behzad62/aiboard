@@ -68,7 +68,7 @@ type SeatKind = "human" | "ai";
 
 const EMPTY_AI_CONFIG: AIConfig = {
   modelId: "",
-  reasoningEffort: "default",
+  reasoningEffort: "none",
 };
 
 function normalizeAIConfig(

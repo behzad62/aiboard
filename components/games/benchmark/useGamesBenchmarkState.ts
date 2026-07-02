@@ -29,8 +29,8 @@ function createDefaultConfigMap(): GameBenchmarkConfigMap {
       {
         firstModelId: "",
         secondModelId: "",
-        firstReasoning: "default",
-        secondReasoning: "default",
+        firstReasoning: "none",
+        secondReasoning: "none",
         maxMoves: definition.defaultMaxMoves,
         numGames: 1,
       } satisfies StandardGameBenchmarkConfig,

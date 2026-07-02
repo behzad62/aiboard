@@ -29,19 +29,32 @@ export type FireworksCalibrationBotId =
 export interface FireworksCalibrationBot {
   id: FireworksCalibrationBotId;
   label: string;
-  chooseAction: (state: FireworksGameState, playerId: string) => FireworksAction;
+  chooseAction: (
+    state: FireworksGameState,
+    playerId: string,
+    trialSalt?: string
+  ) => FireworksAction;
 }
 
 export interface FireworksCalibrationResult {
   botId: FireworksCalibrationBotId;
   label: string;
   caseCount: number;
+  /** Seeded trials per case (only random_legal samples more than one). */
+  trialCount: number;
   averageScore: number;
+  scoreStdDev: number;
   averageStackScore: number;
   averageBadPlays: number;
   averageCriticalDiscards: number;
   averageUsefulClueRate: number;
 }
+
+// random_legal is a stochastic baseline: a single deterministic trajectory
+// per case is not a random baseline at all, so it samples several seeded
+// trials per case and reports mean/stddev. The other bots are deterministic
+// policies and need only one trial.
+const RANDOM_LEGAL_TRIALS = 5;
 
 export const FIREWORKS_CALIBRATION_BOTS: FireworksCalibrationBot[] = [
   {
@@ -77,19 +90,26 @@ export function runFireworksCalibrationBots(input: {
   maxTurns?: number;
 }): FireworksCalibrationResult[] {
   return FIREWORKS_CALIBRATION_BOTS.map((bot) => {
-    const metrics = input.cases.map((benchmarkCase) =>
-      runCalibrationCase({
-        bot,
-        benchmarkCase,
-        playerCount: input.playerCount,
-        maxTurns: input.maxTurns ?? benchmarkCase.maxTurns,
-      })
+    const trialCount = bot.id === "random_legal" ? RANDOM_LEGAL_TRIALS : 1;
+    const metrics = input.cases.flatMap((benchmarkCase) =>
+      Array.from({ length: trialCount }, (_, trialIndex) =>
+        runCalibrationCase({
+          bot,
+          benchmarkCase,
+          playerCount: input.playerCount,
+          maxTurns: input.maxTurns ?? benchmarkCase.maxTurns,
+          trialSalt: `trial:${trialIndex + 1}`,
+        })
+      )
     );
+    const scores = metrics.map((item) => scoreFireworksTeamIq({ metrics: item }));
     return {
       botId: bot.id,
       label: bot.label,
-      caseCount: metrics.length,
-      averageScore: round(average(metrics.map((item) => scoreFireworksTeamIq({ metrics: item })))),
+      caseCount: input.cases.length,
+      trialCount,
+      averageScore: round(average(scores)),
+      scoreStdDev: round(stdDev(scores)),
       averageStackScore: round(average(metrics.map((item) => item.finalScore ?? 0))),
       averageBadPlays: round(average(metrics.map((item) => item.badPlays))),
       averageCriticalDiscards: round(
@@ -111,6 +131,7 @@ function runCalibrationCase(input: {
   benchmarkCase: FireworksFullGameCase;
   playerCount: 2 | 3;
   maxTurns: number;
+  trialSalt: string;
 }): FireworksGameMetrics {
   let state = createFireworksGame({
     seed: input.benchmarkCase.seed,
@@ -126,7 +147,7 @@ function runCalibrationCase(input: {
 
   while (state.status === "playing" && state.turn < input.maxTurns) {
     const playerId = state.players[state.currentPlayerIndex]?.id ?? "P1";
-    const action = input.bot.chooseAction(state, playerId);
+    const action = input.bot.chooseAction(state, playerId, input.trialSalt);
     state = applyFireworksAction(state, playerId, action);
   }
 
@@ -135,11 +156,18 @@ function runCalibrationCase(input: {
 
 function chooseRandomLegal(
   state: FireworksGameState,
-  playerId: string
+  playerId: string,
+  trialSalt?: string
 ): FireworksAction {
   const legal = getLegalFireworksActions(state, playerId);
-  return legal[hashIndex(`${state.seed}:${state.turn}:${playerId}`, legal.length)] ??
-    chooseDeterministicFireworksFallback(state, playerId);
+  return (
+    legal[
+      hashIndex(
+        `${state.seed}:${state.turn}:${playerId}:${trialSalt ?? ""}`,
+        legal.length
+      )
+    ] ?? chooseDeterministicFireworksFallback(state, playerId)
+  );
 }
 
 function chooseAlwaysDiscard(
@@ -275,6 +303,14 @@ function hashIndex(value: string, modulo: number): number {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stdDev(values: number[]): number {
+  if (values.length <= 1) return 0;
+  const mean = average(values);
+  return Math.sqrt(
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length
+  );
 }
 
 function round(value: number): number {

@@ -10,7 +10,7 @@ import type {
 } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
-import { anthropicEffort } from "./reasoning";
+import { anthropicReasoningFields } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 import { anthropicStructuredToolConfig } from "./structured-output";
 
@@ -203,10 +203,13 @@ export async function* streamAnthropicChat(
       };
     });
 
-    // output_config.effort is newer than the pinned SDK's types; the cast lets
-    // it pass through. Omitted (and skipped for unsupported models) by default.
-    const effort = anthropicEffort(params.model, params.reasoningEffort ?? "default");
-    const effortField = effort ? { output_config: { effort } } : {};
+    // Adaptive thinking + output_config.effort are newer than the pinned SDK's
+    // types; the cast lets them pass through. Omitted by default/off and
+    // skipped for unsupported models.
+    const reasoningField = anthropicReasoningFields(
+      params.model,
+      params.reasoningEffort ?? "default"
+    );
     const structuredToolConfig = anthropicStructuredToolConfig(
       params.structuredOutput
     );
@@ -243,7 +246,7 @@ export async function* streamAnthropicChat(
         max_tokens: params.maxTokens ?? 1500,
         system: systemMessage?.content,
         messages: chatMessages,
-        ...(effortField as Record<string, never>),
+        ...(reasoningField as Record<string, never>),
         ...(combinedToolField as Record<string, never>),
       });
 

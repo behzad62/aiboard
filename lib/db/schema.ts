@@ -408,7 +408,13 @@ export type DiscussionMode = "panel" | "debate" | "specialist" | "build";
 export type EffortLevel = "low" | "medium" | "high";
 export type Verbosity = "brief" | "balanced" | "comprehensive" | "exhaustive";
 /** Per-model reasoning effort, mapped to each provider's parameter. */
-export type ReasoningEffort = "default" | "low" | "medium" | "high" | "max";
+export type ReasoningEffort =
+  | "default"
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "max";
 
 // Legacy schema export for imports
 export const schema = {};

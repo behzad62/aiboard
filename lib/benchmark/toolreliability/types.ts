@@ -45,9 +45,40 @@ export interface JsonSchemaToolReliabilityCase extends BaseToolReliabilityCase {
   schema: ToolReliabilityJsonSchema;
 }
 
+/**
+ * One acceptable tool action for a tool-call case. The verifier accepts ANY
+ * listed expectation, and expectations are behavioral (range containment,
+ * query substring) rather than exact-object equality, so equally-optimal
+ * answers pass without the prompt ever printing the expected action.
+ */
+export type ToolCallActionExpectation =
+  | {
+      kind: "search";
+      /** The emitted search query must contain this text (case-insensitive). */
+      queryIncludes: string;
+    }
+  | {
+      kind: "read_range";
+      path: string;
+      /** The read must cover this inclusive line range... */
+      mustCoverStartLine: number;
+      mustCoverEndLine: number;
+      /** ...without requesting more than this many lines (anti whole-file read). */
+      maxLineCount: number;
+    };
+
 export interface ToolCallReliabilityCase extends BaseToolReliabilityCase {
   category: "tool-call";
-  expectedAction: Record<string, unknown>;
+  /** Any one matching expectation passes the case. */
+  expectedActions: ToolCallActionExpectation[];
+}
+
+/** Minimality policy enforced by the live patch evaluator. */
+export interface PatchMinimalityPolicy {
+  /** Max lines allowed in any single SEARCH section. */
+  maxSearchLines?: number;
+  /** Reject SEARCH sections that reproduce the entire original file. */
+  disallowWholeFileRewrite?: boolean;
 }
 
 export interface PatchReliabilityCase extends BaseToolReliabilityCase {
@@ -55,6 +86,18 @@ export interface PatchReliabilityCase extends BaseToolReliabilityCase {
   path: string;
   originalContent: string;
   expectedContent: string;
+  policy?: PatchMinimalityPolicy;
+  /** Second candidate file shown in the prompt for path-selection cases. */
+  distractorPath?: string;
+  distractorContent?: string;
+  /** When true, pathless SEARCH/REPLACE output is rejected (path selection is scored). */
+  requireExplicitPath?: boolean;
+  /**
+   * Private reference solution ops (never shown to the model). Used by the
+   * deterministic perfect candidate so multi-hunk/insertion/deletion cases
+   * have a guaranteed minimal, policy-conformant oracle.
+   */
+  referenceOps?: Array<{ search: string; replace: string }>;
 }
 
 export interface RepairLoopReliabilityCase extends BaseToolReliabilityCase {
@@ -65,6 +108,8 @@ export interface RepairLoopReliabilityCase extends BaseToolReliabilityCase {
 export interface ForbiddenActionReliabilityCase extends BaseToolReliabilityCase {
   category: "forbidden-action";
   safeCommandPattern: RegExp;
+  /** Private reference safe command (never shown to the model). */
+  safeCommandExample: string;
 }
 
 export type ToolReliabilityCase =

@@ -107,7 +107,9 @@ async function route(pathname, body) {
       }));
     case "/bench/read-file":
       return withAttempt(body, async ({ attemptRoot }) => {
-        const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+        const relPath = requiredString(body, "path");
+        assertModelReadableWorkspacePath(relPath);
+        const file = resolveSafePath(attemptRoot, relPath);
         const content = await readFile(file, "utf8");
         return { content, bytes: Buffer.byteLength(content) };
       });
@@ -169,7 +171,9 @@ async function routeCompat(attemptId, endpoint, body) {
     case "/ls":
       return { files: await listWorkspaceFiles(attemptRoot) };
     case "/read": {
-      const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+      const relPath = requiredString(body, "path");
+      assertModelReadableWorkspacePath(relPath);
+      const file = resolveSafePath(attemptRoot, relPath);
       const content = await readFile(file, "utf8");
       return { content, bytes: Buffer.byteLength(content) };
     }
@@ -342,7 +346,9 @@ async function appendFile(attemptRoot, body) {
 }
 
 async function readFileRange(attemptRoot, body) {
-  const file = resolveSafePath(attemptRoot, requiredString(body, "path"));
+  const rangePath = requiredString(body, "path");
+  assertModelReadableWorkspacePath(rangePath);
+  const file = resolveSafePath(attemptRoot, rangePath);
   const content = await readFile(file, "utf8");
   const lines = content.split(/\r?\n/);
   const startLine = Math.max(1, Math.floor(optionalNumber(body, "startLine") ?? 1));
@@ -366,13 +372,14 @@ async function searchFiles(attemptRoot, body) {
   const matches = [];
   await walk(attemptRoot, async (file) => {
     if (matches.length >= 100) return;
+    const relPath = toWorkspacePath(attemptRoot, file);
+    if (isModelHiddenWorkspaceFile(relPath)) return;
     let content = "";
     try {
       content = await readFile(file, "utf8");
     } catch {
       return;
     }
-    const relPath = toWorkspacePath(attemptRoot, file);
     const lines = content.split(/\r?\n/);
     for (let index = 0; index < lines.length && matches.length < 100; index++) {
       if (lines[index].toLowerCase().includes(query)) {
@@ -486,7 +493,9 @@ function runCommand(command, cwd, timeoutSeconds) {
 async function listWorkspaceFiles(attemptRoot) {
   const files = [];
   await walk(attemptRoot, async (file) => {
-    files.push(toWorkspacePath(attemptRoot, file));
+    const relPath = toWorkspacePath(attemptRoot, file);
+    if (isModelHiddenWorkspaceFile(relPath)) return;
+    files.push(relPath);
   });
   return files.sort();
 }
@@ -577,6 +586,36 @@ function isProtectedWorkspaceFile(relPath) {
     PROTECTED_WORKSPACE_FILES.has(normalized) ||
     PROTECTED_WORKSPACE_FILES.has(base)
   );
+}
+
+// Files that carry the verifier's grading spec or other oracle material. They
+// must stay on disk (node verifier.mjs reads case-meta.json from the
+// workspace) but the model under test must not be able to READ them through
+// the runner's list/read/search endpoints - otherwise every snippet-checked
+// case degrades into copy-the-answer. verifier.mjs itself stays readable: it
+// contains only generic scoring logic, and verifier-result.json stays readable
+// so models can iterate on verifier feedback.
+const MODEL_HIDDEN_WORKSPACE_FILES = new Set([
+  "case-meta.json",
+  "negative-control.json",
+  "reference-solution.md",
+  META_FILE,
+]);
+
+function isModelHiddenWorkspaceFile(relPath) {
+  if (typeof relPath !== "string") return false;
+  const normalized = normalizeWorkspacePath(relPath);
+  const base = normalized.split("/").pop() ?? normalized;
+  return (
+    MODEL_HIDDEN_WORKSPACE_FILES.has(normalized) ||
+    MODEL_HIDDEN_WORKSPACE_FILES.has(base)
+  );
+}
+
+function assertModelReadableWorkspacePath(relPath) {
+  if (isModelHiddenWorkspaceFile(relPath)) {
+    throw new HttpError(404, `File not found: ${relPath}`);
+  }
 }
 
 function isConfiguredVerifierResultFile(relPath, meta) {

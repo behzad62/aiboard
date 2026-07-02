@@ -326,6 +326,7 @@ function formatMinutes(ms: number): string {
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
     value === "default" ||
+    value === "none" ||
     value === "low" ||
     value === "medium" ||
     value === "high" ||

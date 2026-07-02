@@ -7,6 +7,12 @@ import type {
 import type { WorkBenchScore } from "@/lib/benchmark/scoring/types";
 
 export type WorkBenchDifficulty = "easy" | "medium" | "hard" | "expert";
+/**
+ * Declarative-only in WorkBench v0.1: the local bench runner validates the
+ * value but cannot enforce an OS-level network boundary for child processes.
+ * `none` additionally rejects any command execution; `dependency-only` is a
+ * documented policy label, not a sandbox guarantee.
+ */
 export type WorkBenchNetwork = "none" | "dependency-only";
 
 export interface WorkBenchPrompt {

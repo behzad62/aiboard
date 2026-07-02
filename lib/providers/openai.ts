@@ -156,7 +156,11 @@ async function* streamOpenAIResponses(
       input: input as never,
       ...(params.maxTokens != null ? { max_output_tokens: params.maxTokens } : {}),
       ...(reasoningValue
-        ? { reasoning: { effort: reasoningValue as "low" | "medium" | "high" } }
+        ? {
+            reasoning: {
+              effort: reasoningValue,
+            } as never,
+          }
         : {}),
       ...(structuredOutputField as Record<string, never>),
       ...(combinedToolField as Record<string, never>),

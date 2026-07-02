@@ -28,6 +28,8 @@ export function roleText(role: CodenamesCardRole | null): string {
 }
 
 export function compactReasoningLabel(reasoningEffort: string): string {
+  if (reasoningEffort === "none") return "Off";
+  if (reasoningEffort === "default") return "Default";
   if (reasoningEffort === "low") return "Low";
   if (reasoningEffort === "medium") return "Medium";
   if (reasoningEffort === "high") return "High";

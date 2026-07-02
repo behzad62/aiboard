@@ -158,14 +158,22 @@ function eventSearchText(result: ToolReliabilityCaseResult): string {
 
 function patchFailureClassForResult(
   result: ToolReliabilityCaseResult
-): "unsupported_patch_format" | "patch_did_not_apply" | "content_mismatch" | null {
+):
+  | "unsupported_patch_format"
+  | "patch_did_not_apply"
+  | "content_mismatch"
+  | "non_minimal_patch"
+  | "missing_explicit_path"
+  | null {
   if (result.category !== "patch") return null;
   for (const event of result.events) {
     const failureClass = event.details?.failureClass;
     if (
       failureClass === "unsupported_patch_format" ||
       failureClass === "patch_did_not_apply" ||
-      failureClass === "content_mismatch"
+      failureClass === "content_mismatch" ||
+      failureClass === "non_minimal_patch" ||
+      failureClass === "missing_explicit_path"
     ) {
       return failureClass;
     }

@@ -42,4 +42,8 @@ export {
 } from "./ui-selection";
 export type { CreateTeamIqCompositionSelectionInput } from "./ui-selection";
 
-export { TEAMIQ_TOOL_RELIABILITY_QUICK_CASES } from "./toolreliability-quick";
+export {
+  TEAMIQ_TOOL_RELIABILITY_ALL_MODES_CASES,
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
+  teamIqToolReliabilityCasePackForSuite,
+} from "./toolreliability-quick";

@@ -24,7 +24,8 @@ interface GameAIConfigPanelProps {
 }
 
 const REASONING_LEVELS: { value: ReasoningEffort; label: string }[] = [
-  { value: "default", label: "Disabled" },
+  { value: "none", label: "Off" },
+  { value: "default", label: "Default" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },

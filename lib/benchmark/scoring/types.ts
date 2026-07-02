@@ -38,7 +38,8 @@ export interface GameIqScoreInput {
   legalActionRate: number;
   structuredReliability: number;
   fallbackRate: number;
-  latencyFactor: number;
+  /** Diagnostic only — never read by scoreGameIqAttempt (speed is not GameIQ quality). */
+  latencyFactor?: number;
 }
 
 export interface ToolReliabilityScoreInput {

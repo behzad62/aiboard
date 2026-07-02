@@ -89,10 +89,13 @@ const chessPack = getGameIqScenarioPack("chess");
 const battleshipPack = getGameIqScenarioPack("battleship");
 const fireworksPack = firstListing.find((pack) => pack.id === "gameiq-fireworks-basic-v1");
 check(
-  "Connect Four and Chess are first-class packs",
+  "Connect Four is first-class; Chess is demoted to lightweight (4 scenarios is below the rigor floor)",
   connectFourPack?.certificationTier === "first-class" &&
-    chessPack?.certificationTier === "first-class",
-  { connectFourPack, chessPack }
+    chessPack?.certificationTier === "lightweight",
+  {
+    connectFour: connectFourPack?.certificationTier,
+    chess: chessPack?.certificationTier,
+  }
 );
 
 const connectFourCategories = new Set(

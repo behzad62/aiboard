@@ -4,19 +4,22 @@ import type { ReasoningEffort } from "../db/schema";
 
 /**
  * Maps the app's unified reasoning-effort level to each provider's native
- * parameter. Sources (verified 2026-06-10):
+ * parameter. Sources (verified 2026-07-02):
  *  - OpenAI GPT-5.5 `reasoning_effort`: none|low|medium|high|xhigh (default medium)
- *  - Anthropic `output_config.effort`: low|medium|high|xhigh|max (default high);
+ *  - Anthropic adaptive thinking + `output_config.effort`: low|medium|high|xhigh|max (default high);
  *    Haiku 4.5 does NOT support it; xhigh is Fable 5 / Opus-tier only.
- *  - OpenRouter `reasoning.effort` / `reasoning_effort`: maps to nearest supported.
- *  - Gemini 3+: `thinkingLevel` (low|medium|high); Gemini 2.5: `thinkingBudget`
+ *  - OpenRouter `reasoning.effort` / `reasoning_effort`: none|low|medium|high|xhigh|max.
+ *  - Gemini 3+: `thinkingLevel` (minimal|low|medium|high); Gemini 2.5: `thinkingBudget`
  *    (int). Sending both is a 400, so we pick one by model generation.
- * "default" always means: send nothing, use the model's built-in behavior.
+ * "default" means omit provider reasoning controls except on Gemini 2.5, where
+ * the existing bounded budget prevents hidden thinking from starving the answer.
  */
 
 /** OpenAI / OpenRouter `reasoning_effort` string, or null to omit. */
 export function openAIReasoningEffort(effort: ReasoningEffort): string | null {
   switch (effort) {
+    case "none":
+      return "none";
     case "low":
       return "low";
     case "medium":
@@ -30,10 +33,38 @@ export function openAIReasoningEffort(effort: ReasoningEffort): string | null {
   }
 }
 
+/** OpenRouter `reasoning_effort` string, or null to omit. */
+export function openRouterReasoningEffort(
+  effort: ReasoningEffort
+): string | null {
+  switch (effort) {
+    case "none":
+      return "none";
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "max":
+      return "max";
+    default:
+      return null;
+  }
+}
+
 // Anthropic models that reject `output_config.effort` (would 400).
 const ANTHROPIC_EFFORT_UNSUPPORTED = new Set<string>([
   "claude-haiku-4-5-20251001",
 ]);
+
+function anthropicThinkingAlwaysOn(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return (
+    normalized.startsWith("claude-fable-5") ||
+    normalized.startsWith("claude-mythos-5")
+  );
+}
 
 /** Anthropic `output_config.effort`, gated by model support, or null to omit. */
 export function anthropicEffort(
@@ -42,6 +73,9 @@ export function anthropicEffort(
 ): string | null {
   if (effort === "default") return null;
   if (ANTHROPIC_EFFORT_UNSUPPORTED.has(model)) return null;
+  if (effort === "none") {
+    return anthropicThinkingAlwaysOn(model) ? "low" : null;
+  }
   switch (effort) {
     case "low":
       return "low";
@@ -56,9 +90,57 @@ export function anthropicEffort(
   }
 }
 
+export function anthropicReasoningFields(
+  model: string,
+  effort: ReasoningEffort
+): Record<string, unknown> {
+  const value = anthropicEffort(model, effort);
+  return value
+    ? { thinking: { type: "adaptive" }, output_config: { effort: value } }
+    : {};
+}
+
 function geminiMajorVersion(model: string): number {
   const match = /gemini-(\d+)/i.exec(model);
   return match ? parseInt(match[1], 10) : 0;
+}
+
+function geminiThinkingLevel(
+  model: string,
+  effort: ReasoningEffort
+): string | null {
+  const normalized = model.toLowerCase();
+  const proSupportsOnlyLowHigh =
+    normalized.includes("pro") && !normalized.startsWith("gemini-3.5-");
+
+  if (proSupportsOnlyLowHigh) {
+    switch (effort) {
+      case "none":
+      case "low":
+        return "low";
+      case "medium":
+      case "high":
+      case "max":
+        return "high";
+      default:
+        return null;
+    }
+  }
+
+  switch (effort) {
+    case "none":
+      return "minimal";
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "max":
+      return "high";
+    default:
+      return null;
+  }
 }
 
 /**
@@ -73,21 +155,13 @@ export function geminiThinkingConfig(
   maxTokens: number
 ): Record<string, unknown> | null {
   if (geminiMajorVersion(model) >= 3) {
-    switch (effort) {
-      case "low":
-        return { thinkingLevel: "low" };
-      case "medium":
-        return { thinkingLevel: "medium" };
-      case "high":
-        return { thinkingLevel: "high" };
-      case "max":
-        return { thinkingLevel: "high" };
-      default:
-        return null; // let Gemini 3 manage thinking
-    }
+    const thinkingLevel = geminiThinkingLevel(model, effort);
+    return thinkingLevel ? { thinkingLevel } : null;
   }
 
   switch (effort) {
+    case "none":
+      return { thinkingBudget: 0 };
     case "low":
       return { thinkingBudget: 512 };
     case "medium":

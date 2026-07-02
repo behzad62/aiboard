@@ -1,0 +1,273 @@
+{
+  "suite": "Fireworks (GameIQ port + TeamIQ scenario packs + calibration bots)",
+  "caseInventory": "The Fireworks corpus is fully programmatic: lib/benchmark/fireworks/scenario-packs.ts generates 60 tactics scenarios (6 categories x 10), 40 memory scenarios (4 categories x 10), and 20 full-game cases (10 seeds x 2p/3p). These feed four UI-reachable TeamIQ suites (tactics/memory/full/mixed via lib/benchmark/certified/suite-options.ts and CertifiedRunPanel.tsx:675 -> runCertifiedFireworksTeamIq); the default \"mixed\" suite is 20 tactics (safe_play + needed_clue only) + 10 memory (combine only) + 5 full games. The same scenario objects are re-wrapped by lib/benchmark/gameiq/fireworks.ts into three GameIQ packs — basic (20), hard/\"Trap States\" (40), memory-stress (30) — all reachable by pack id via listGameIqScenarioPacks. All packs are live; the only dead item is the FIREWORKS_GAMEIQ_SCENARIOS alias export. Despite 120 TeamIQ cases + 90 GameIQ scenarios on paper, the scenario content encodes only ~7 distinct decision archetypes (6 tactics + 1 memory), every scenario uses the same fixed 2-player hand fixture with the decision card always at hand index 0, and the 20 full-game deals are the only genuinely independent samples.",
+  "findings": [
+    {
+      "status": "unverified",
+      "severity": "high",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-tactics-v0.1-* (all 60)",
+        "fireworks-memory-v0.1-* (all 40)",
+        "gameiq-fireworks-basic-v1-*",
+        "gameiq-fireworks-hard-v1-*",
+        "gameiq-fireworks-memory-v1-*"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 153,
+      "summary": "Scenario category names and card-role labels leak into the model-facing view via seed, gameId, and partner card ids, nearly dictating the expected action type",
+      "evidence": "Seeds are `fireworks-tactics-${category}-${number}` (scenario-packs.ts:153, 248) and createFireworksGame sets id `fireworks:${seed}`; getFireworksPlayerView (lib/games/fireworks/hidden-view.ts:42-45) copies both `gameId` and `seed` into the view, and otherHands cards keep full ids (hidden-view.ts:78-82) built as `${seed}:${suffix}:${color}-${rank}` with suffixes like \"partner-play\", \"partner-safe\", \"partner-critical-clue\" (scenario-packs.ts:170, 188, 210, 390-397). The whole view is JSON.stringify'd into the prompt (lib/games/fireworks/ai.ts:92-93) and used verbatim as GameIQ initialState (lib/benchmark/gameiq/fireworks.ts:36). So a \"safe_discard\" prompt literally contains the string safe_discard, and the trap scenarios label the card the model is supposed to clue.",
+      "proposedImprovement": "Strip or opacify metadata in the benchmark view: in getFireworksPlayerView add an option (used by both benchmark paths) that (a) omits seed and replaces gameId with an opaque hash, (b) replaces other-hand card ids with positional ids (e.g. \"P2-card-0\"). In scenario-packs.ts stop encoding the category in seeds/card-id suffixes (use hashed seeds like `fw-t-<hash>`), and add a test asserting JSON.stringify(view) for every scenario contains none of the category strings or role suffixes.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "high",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-memory-v0.1-* (all 40)",
+        "gameiq-fireworks-memory-v1-* (all 30)"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 292,
+      "summary": "The redactOwnIdentity fix is defeated: seeded events and clueHistory strings still hand the model the exact color and rank of the memory card, so the memory packs remain transcription tests",
+      "evidence": "createMemoryScenario builds state.events from clueHistory with `action: index % 2 === 0 ? {clue_color, color} : {clue_rank, rank}` using the TRUE color/rank (scenario-packs.ts:292-306); getFireworksPlayerView copies events wholesale including actions even when redact=true (hidden-view.ts:96-99), and clueHistory strings like `Turn 1: ${color}` / `Turn 3: rank ${rank}` (scenario-packs.ts:260, 267) survive redaction (hidden-view.ts:60). negative_information additionally gets a positive clue_color event with the true color, contradicting its own premise, and its history says \"Earlier clues ruled out every non-playable identity\" — i.e. \"this card is playable\" (scenario-packs.ts:277).",
+      "proposedImprovement": "Make redaction cover all identity channels: when redactOwnIdentity is set, drop or genericize seeded event actions targeting the acting player (e.g. `{action: \"clue_color\", color: \"<redacted>\"}` or omit events entirely and rely on clueHistory), and author clueHistory so it contains only what the category is testing (negative_information: only 'not X' statements, no positive color event; timing_inference: clue timing without naming the rank). Add per-category leak tests: reconstruct identity from the redacted view programmatically and assert it is NOT uniquely determined except through the intended channel.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "high",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-memory-v0.1-* (all 40)",
+        "gameiq-fireworks-memory-v1-* (all 30)",
+        "gameiq-fireworks-basic-v1-* (all 20)",
+        "fireworks-tactics-v0.1-safe_play-*",
+        "fireworks-tactics-v0.1-endgame_play-*"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 316,
+      "summary": "A trivial 'always play cardIndex 0' baseline scores 100% on the entire TeamIQ memory suite and on both the GameIQ basic and memory packs, because every scenario puts the decision card at hand slot 0 and 60 of 100 scenarios expect exactly play-0",
+      "evidence": "Every scenario constructor overwrites hands[0].cards[0] (scenario-packs.ts:163, 186, 200, 208, 222, 253) and every memory scenario's sole expectedAction is `{action: \"play\", cardIndex: 0}, weight 1` (scenario-packs.ts:316-318), as is safe_play's and endgame_play's. Playing card 0 is always legal (engine.ts:154-155). So the positional heuristic gets 40/40 = 100% on the memory suite (all assertions pass, certified-runner.ts:338-345), 20/20 on GameIQ basic and 30/30 on GameIQ memory (validation.ts:350-366 exact-match), violating the authoring rule that a naive baseline must fail at least one meaningful assertion.",
+      "proposedImprovement": "Vary the decision position and archetype: place the target card at indices 0-3 (derive from `number % 4`), add memory scenarios whose correct answer is NOT play (e.g. recalled knowledge proves card 0 is a dead duplicate -> discard, or proves nothing -> clue instead), and add at least a few scenarios per category where play-0 is a misplay so the positional baseline demonstrably fails. Add a calibration check that runs an 'always play 0' bot over each scenario pack (like runFireworksCalibrationBots does for full games) and asserts its pack score is well below 100.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "high",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-tactics-v0.1-* (60 -> 6 decisions)",
+        "fireworks-memory-v0.1-* (40 -> 1 decision)",
+        "gameiq-fireworks-memory-v1-* (30 -> 1 group)",
+        "gameiq-fireworks-basic-v1-* (20 -> 2 groups)"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 42,
+      "summary": "The 'x10 per category' generation is pure re-skinning: 100 scenarios encode ~7 distinct decisions, and the TeamIQ runner averages them without any dedup, inflating apparent sample size ~10x (fireworks analogue of prior chess finding #12)",
+      "evidence": "createTacticsScenario varies only color = COLORS[(number-1)%3] and nextRank (scenario-packs.ts:154-155); for 5 of 6 categories the expectedActions JSON is byte-identical across all 10 variants (e.g. always `play cardIndex 0` or `clue_rank P2 1`), and categories that ignore nextRank collapse to 3 distinct states repeated ~3x each. All 40 memory scenarios share one expected action. GameIQ's own distinctGroupKey (gameiq/runner.ts:46-51) collapses the 30-scenario memory pack into a single metrics group — 30 temperature-0 model calls (certified-runner paths use temperature 0) for 1 effective sample — while the TeamIQ runner has no grouping at all (`average(caseResults.map(score))`, fireworks/certified-runner.ts:208-210).",
+      "proposedImprovement": "Either author genuinely distinct positions per category (vary hand contents, card position, stack heights, clue/mistake token counts, which player is acting, and which action is optimal — 10 real variants per category), or cut each category to its 1-3 truly distinct states and stop charging 10 model calls for one decision. For the TeamIQ runner, adopt the same distinct-group weighting GameIQ uses so duplicated decisions cannot dominate the average. Add a pack test asserting a minimum count of distinct (state-minus-ids, expectedActions) tuples per suite.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-fireworks-basic-v1-01..20"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 73,
+      "summary": "The GameIQ basic pack's filter+slice silently drops all 10 needed_clue scenarios, so needed_clue is unreachable from every GameIQ pack and the 'basic' tier is a single play-known-card archetype",
+      "evidence": "BASIC_FIREWORKS_SOURCE filters `safe_play || needed_clue` (20 matches, ordered safe_play first because TACTICS_CATEGORIES lists safe_play before needed_clue) then `.slice(0, 10)` keeps only the 10 safe_play scenarios (gameiq/fireworks.ts:73-81). needed_clue also fails the hard-pack filter (83-89) and the memory filter (91-96), so the only clue-giving-to-unlock-a-play decision (and the only multi-weight expectedActions scenario) never appears in any GameIQ pack. The difficulty lambda `index < 10 ? \"easy\" : \"medium\"` (line 103) shows the intent was two tactic categories in the first 20 slots. scripts/test-gameiq-scenarios.mts:52 only asserts count==20, so it cannot catch this.",
+      "proposedImprovement": "Change the source to take 5 safe_play + 5 needed_clue (or 10 of each without the slice): e.g. `[...tactics.filter(s => s.category === \"safe_play\").slice(0,5), ...tactics.filter(s => s.category === \"needed_clue\").slice(0,5), ...memory...]`, and add a test asserting the basic pack contains at least one scenario per intended category. This also restores the port's only multi-expected-action coverage (weights 1.0/0.8).",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-tactics-v0.1-avoid_bad_play-03",
+        "fireworks-tactics-v0.1-avoid_bad_play-06",
+        "fireworks-tactics-v0.1-avoid_bad_play-09",
+        "gameiq-fireworks-hard-v1-03",
+        "gameiq-fireworks-hard-v1-06",
+        "gameiq-fireworks-hard-v1-09"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 184,
+      "summary": "In the green avoid_bad_play variants the weight-1 'correct' action clues a dead card: the hardcoded partner-safe green 1 collides with stacks.green=1, so the trap scenario's oracle rewards a useless clue and there is no defensible unique correct action",
+      "evidence": "avoid_bad_play sets `state.stacks[color] = 1` and `state.hands[1].cards[0] = card(seed, \"green\", 1, ...)` with green hardcoded (scenario-packs.ts:185-188). For numbers 3/6/9 color === \"green\", so green 1 is already played (isPlayableCard requires rank === stacks[color]+1, engine.ts:293) — P2's hand (green1 dead, red2, green4, blue5) then contains NO playable card, yet `clue_rank P2 1` still scores 1.0 while a sensible discard scores 0.3 (scoreFireworksScenarioAction, scenario-packs.ts:74-94). In GameIQ hard the useless clue is the only 'correct' answer (validation.ts:350-366).",
+      "proposedImprovement": "Make the safe partner card avoid the trap color: use `card(seed, color === \"green\" ? \"blue\" : \"green\", 1, \"partner-safe\")` (and mirror the fix in the expected clue rank/color), or better, re-derive the oracle from the engine at authoring time — assert the expected action actually points at a playable card, in the same spirit as the connect-four/chess category validators (validation.ts:254-315), and add a fireworks branch to validateScenarioCategory that fails packs whose weight-1 clue touches no playable card.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-fireworks-basic-v1-*",
+        "gameiq-fireworks-hard-v1-*",
+        "gameiq-fireworks-memory-v1-*",
+        "fireworks-teamiq tactics/memory suites"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 2,
+      "summary": "The GameIQ port re-wraps the identical TeamIQ scenario objects, so the same ~7 decisions are scored in two tracks — cross-track aggregates double-count one underlying capability sample",
+      "evidence": "gameiq/fireworks.ts:2-5 imports FIREWORKS_TACTICS_SCENARIOS / FIREWORKS_MEMORY_SCENARIOS directly and toGameIqScenario (19-52) only re-labels them; 90 of the 100 scenario states/answers appear verbatim in both the GameIQ packs (track \"gameiq\", runner.ts:194) and the TeamIQ suites (track \"teamiq\", fireworks/certified-runner.ts:275). A model evaluated on both tracks answers the same deterministic positions twice under two scoring rules, and pack digests (packs.ts:121-125 vs scenario-packs.ts:96-102) present them as independent corpora.",
+      "proposedImprovement": "Split the corpus: reserve one disjoint subset of positions (or freshly authored ones) for the GameIQ solo-control port and keep the rest TeamIQ-only, or explicitly tag the GameIQ packs as derived (sharedSourceDigest field) and exclude one of the two from any cross-track model aggregate. At minimum document in the pack labels that basic/hard/memory GameIQ packs are re-skins of the TeamIQ scenario packs.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-teamiq-tactics-v0.1",
+        "fireworks-teamiq-memory-v0.1",
+        "fireworks-teamiq-mixed-v0.1"
+      ],
+      "file": "lib/benchmark/fireworks/certified-runner.ts",
+      "line": 320,
+      "summary": "Scenario suites claim to test team cooperation with team_lift as the primary metric, but every scenario is a single P1 decision — non-P1 team members never act on 100 of 120 cases, making team_lift structurally ~0 for tactics/memory suites",
+      "evidence": "All scenarios set actingPlayerId \"P1\" (scenario-packs.ts:237, 315) and runScenarioCase calls only that player (certified-runner.ts:320); roleForPlayer maps P1 to one role (certified-runner.ts:839-849), so a multi-model 'team' attempt on the tactics/memory suites is just its P1 model, while the case manifest declares `scoring.primary: \"team_lift\"` and the description says it 'tests whether model teams can cooperate' (scenario-packs.ts:115-116, 140). Only the 20 full-game cases (5 in the default mixed suite) rotate players and exercise cooperation.",
+      "proposedImprovement": "Either (a) make scenario attempts alternate actingPlayerId across the pack (author P2-acting variants — the fixture already defines P2's hand) so each team member is probed, and set scoring.primary to a scenario-quality metric for tactics/memory suites (team_lift only for full/mixed), or (b) drop team compositions for scenario suites entirely and run them solo-only, reserving team_lift for full games. Also raise the mixed suite's full-game share (e.g. 10 of 35) since those are the only cooperation samples.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-tactics-v0.1-safe_discard-*",
+        "fireworks-tactics-v0.1-critical_discard_avoidance-*",
+        "fireworks-tactics-v0.1-avoid_bad_play-*"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 89,
+      "summary": "The 0.3 legal-action floor gives strictly bad moves (misplays that burn a mistake token) the same partial credit as reasonable alternative moves, because only the single enumerated forbiddenAction is zeroed",
+      "evidence": "scoreFireworksScenarioAction (scenario-packs.ts:78-94) returns 0.3 for ANY legal non-expected action; in safe_discard, playing the known-dead card 0 (a guaranteed misplay, engine.ts:235-245) scores 0.3 — identical to giving a useful clue — and in critical_discard_avoidance playing the unknown 5 (misplay) also gets 0.3; only the one listed forbidden action scores 0. Prior finding #66 examined the 0.3-floor vs 0.7-assertion split and defended the floor as credit for 'legal but suboptimal', but a token-burning misplay is not 'suboptimal-neutral'.",
+      "proposedImprovement": "Compute badness from the engine instead of an enumerated list: in scoreFireworksScenarioAction, simulate the action with applyFireworksAction and return 0 for any play that misfires (playResult === \"misplay\") or any discard where isCriticalCard is true, keeping 0.3 only for genuinely neutral legal actions. This also fixes trap coverage generically (every misplay becomes a trap, not just the authored one) and keeps the documented 0.3 semantics honest.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "gameiq-fireworks-hard-v1-31..40 (endgame_play)",
+        "gameiq-fireworks-hard-v1-11..20 (safe_discard)"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 107,
+      "summary": "The basic/hard/memory difficulty tiers are largely decorative: half of the first-class 'Trap States' pack (endgame_play, safe_discard) is the same fully-resolved-knowledge one-step decision as the 'easy' basic pack",
+      "evidence": "endgame_play (scenario-packs.ts:220-228) is 'play card 0 whose color+rank are both known and playable' — the identical decision to basic safe_play (161-168), just with rank 5; safe_discard (198-206) is equally fully resolved (knowledge has color+rank, stack already covers it). Yet the hard pack labels them medium under a first-class \"Trap States\" certification tier (packs.ts:54-60), and tests assert only the difficulty labels, not difficulty (scripts/test-gameiq-scenarios.mts:205-206). Genuine traps exist only in avoid_bad_play and critical_discard_avoidance (20 of 40).",
+      "proposedImprovement": "Rebuild the hard tier around decisions requiring inference: partially-resolved knowledge (rank known, color not) where playing is only probabilistically safe; discard choices among multiple non-obvious candidates; endgame states where the play order across two playable cards matters (deck empty, limited turns). Move endgame_play/safe_discard as currently authored into the basic pack and rename tiers to match actual content, or gate difficulty labels with an authoring-time check (e.g. hard requires knowledge.color xor knowledge.rank unset on the decision card).",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "fireworks-memory-v0.1-* (all 40)"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 244,
+      "summary": "The 'memory' suite involves no memory: all clue history is delivered in the same single-turn prompt as the decision, so old_clue_recall/timing_inference measure reading a 1-3 line JSON field, not recall under context pressure",
+      "evidence": "Each memory scenario is a one-shot position whose clueHistory (2-3 short strings, scenario-packs.ts:256-290) and seeded events are serialized into the very prompt that asks for the action (ai.ts:90-95); 'old' clue recall differs from 'recent' only by the literal text \"Turn 6\" vs \"Turn 3\" (scenario-packs.ts:260 vs 267 — the states are otherwise identical, making the two categories near-duplicates of each other). Nothing spans turns, and full games — the only place real memory pressure exists via accumulating events — have no memory-specific scoring (memoryConsistentActions is computed but scenario suites dominate the memory label).",
+      "proposedImprovement": "Convert memory scenarios into short multi-turn episodes: replay 5-15 scripted turns as prior conversation messages (clues given, cards drawn, distractor clues to other slots), then present the current position WITHOUT restating clue history and require the action — the scripted-events machinery (seeded FireworksEvent[]) already exists to drive this. Alternatively, score memoryConsistentActions from full games as the memory metric and rename the current pack to 'clue-integration' since that is what it tests. Also merge old_clue_recall into combine_color_and_rank (they differ only in a turn-number string).",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "gameiq-fireworks-hard-v1-* (avoid_bad_play, critical_discard_avoidance)"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 44,
+      "summary": "GameIQ port still drops forbiddenActions, so 'trap-state' scenarios cannot distinguish falling into the trap from any ordinary wrong move (expectedActions truncation half of the finding is fixed in-tree)",
+      "evidence": "toGameIqScenario maps all expectedActions now (gameiq/fireworks.ts:44-48) but forbiddenActions are never carried onto FireworksGameIqScenario, and actionMatchesExpected (validation.ts:350-366) has no blunder flag — matching prior review finding #34.",
+      "proposedImprovement": "Carry forbiddenActions onto FireworksGameIqScenario and surface a distinct forbidden/blunder flag in GameIqScenarioResult and assertion details (diagnostic only, per the prior review's verified analysis).",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "verifier-weakness",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "fireworks-full-v0.1-* (calibration baselines)"
+      ],
+      "file": "lib/benchmark/fireworks/calibration-bots.ts",
+      "line": 136,
+      "summary": "random_legal calibration baseline remains a single deterministic trajectory per case (hashIndex of seed/turn/player), not a sampled random baseline",
+      "evidence": "chooseRandomLegal indexes legal actions via hashIndex(`${state.seed}:${state.turn}:${playerId}`) (calibration-bots.ts:136-143) and runFireworksCalibrationBots runs each case once — as catalogued in the prior review's Fireworks section.",
+      "proposedImprovement": "Run N seeded trials per case with a trial index mixed into the hash and report mean/stddev, as the prior review suggested.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "medium",
+      "category": "gameable",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "fireworks-full-v0.1-2p-*",
+        "fireworks-full-v0.1-3p-*"
+      ],
+      "file": "lib/benchmark/fireworks/certified-runner.ts",
+      "line": 412,
+      "summary": "On the full-game path, invalid/illegal model output is still replaced turn-by-turn by the strong deterministic fallback whose moves shape the final game score (scenario path now zeroes fallback credit)",
+      "evidence": "runFullGameCase applies `call.action` even when fallbackUsed (certified-runner.ts:396-415) and scores the resulting game via scoreFireworksTeamIq; only status is downgraded to failed_tool_use (825-827) — re-observation of prior HIGH finding #2, whose scenario-path fix (score 0 on fallback, certified-runner.ts:332-337) is present in the working tree.",
+      "proposedImprovement": "Apply the branch fix (or equivalent) to full games: score fallback turns as wasted/neutral moves or cap the game score by (1 - fallbackRate).",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "weak-nondiscriminating",
+      "knownFromPriorReview": true,
+      "caseIds": [
+        "fireworks-tactics-v0.1-critical_discard_avoidance-*",
+        "fireworks-tactics-v0.1-safe_discard-*"
+      ],
+      "file": "lib/benchmark/fireworks/scenario-packs.ts",
+      "line": 211,
+      "summary": "Equally-good alternative moves are scored as failures: clue_color red (touching the playable red 1 plus the next-up red 2) scores 0.3/0 while the near-identical clue_rank 1 scores 1.0; in safe_discard, cluing the partner's playable 1 scores 0.3 vs the expected discard's 1.0",
+      "evidence": "critical_discard_avoidance's expectedActions list only clue_rank P2 1 (scenario-packs.ts:211-217) though P2's hand is [red1, red2, green4, blue5] where a red color clue is at least as informative; safe_discard (198-206, clueTokens=2) accepts only the discard though P2 holds a cluable playable blue 1 — instances of the prior review's catalogued GameIQ-track weakness that only the single exact expected action counts.",
+      "proposedImprovement": "Add the near-equivalent actions with weights >= 0.8 (clue_color red in critical_discard_avoidance; clue_rank 1 with weight ~0.7-0.8 in safe_discard) so the 0.7 pass threshold reflects 'made a good move' rather than 'guessed the author's move'.",
+      "verifierCorrections": []
+    },
+    {
+      "status": "unverified",
+      "severity": "low",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "FIREWORKS_GAMEIQ_SCENARIOS"
+      ],
+      "file": "lib/benchmark/gameiq/fireworks.ts",
+      "line": 126,
+      "summary": "FIREWORKS_GAMEIQ_SCENARIOS is a dead alias export (equals the basic pack) referenced nowhere else in the repo",
+      "evidence": "gameiq/fireworks.ts:126 `export const FIREWORKS_GAMEIQ_SCENARIOS = FIREWORKS_GAMEIQ_BASIC_SCENARIOS;` — repo-wide grep finds no other reference; packs.ts imports the three named pack constants directly.",
+      "proposedImprovement": "Delete the alias (or re-point it to all three packs if a combined export is ever wanted) to avoid a future consumer silently benchmarking only the basic tier while believing it covers fireworks.",
+      "verifierCorrections": []
+    }
+  ]
+}

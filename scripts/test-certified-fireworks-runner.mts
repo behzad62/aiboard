@@ -168,8 +168,19 @@ check(
   capturedMemoryView
 );
 
+// The fake "perfect" model below always answers play cardIndex 0, so pick
+// safe_play scenarios whose oracle answer is exactly that (decision slots and
+// acting players vary across the pack by design).
 const selectedCases = FIREWORKS_TACTICS_SCENARIOS.filter(
-  (scenario) => scenario.category === "safe_play"
+  (scenario) =>
+    scenario.category === "safe_play" &&
+    scenario.actingPlayerId === "P1" &&
+    scenario.expectedActions.some(
+      (expected) =>
+        expected.weight === 1 &&
+        expected.action.action === "play" &&
+        expected.action.cardIndex === 0
+    )
 ).slice(0, 3);
 const caseV2 = fireworksCaseToBenchmarkCaseV2("fireworks-teamiq-test-safe-play");
 const roles: BenchmarkTeamCompositionRole[] = [

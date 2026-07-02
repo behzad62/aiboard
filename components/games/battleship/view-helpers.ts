@@ -38,6 +38,10 @@ export function compactReasoningLabel(config: {
   reasoningEffort: string;
 }): string {
   switch (config.reasoningEffort) {
+    case "none":
+      return "Off";
+    case "default":
+      return "Default";
     case "low":
       return "Low";
     case "medium":
@@ -46,7 +50,6 @@ export function compactReasoningLabel(config: {
       return "High";
     case "max":
       return "Max";
-    case "default":
     default:
       return "Off";
   }

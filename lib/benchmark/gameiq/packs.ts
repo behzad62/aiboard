@@ -8,7 +8,23 @@ import {
   FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
 } from "./fireworks";
 import type { GameIqGameId, GameIqScenario, GameIqScenarioPack } from "./types";
+import { actionMatchesExpected } from "./validation";
 
+// Certification tiers are honest labels, not decoration. A pack may only be
+// marked "first-class" when it passes gameIqPackFirstClassFloor (a mechanical
+// necessary-but-not-sufficient rigor check defined below and enforced by
+// scripts/test-gameiq-shared-guards.mts) AND the pack's scenarios have been
+// review-verified to measure the labeled skill. Tier history (2026-07 review):
+// - chess: demoted — 4 scenarios (~2 real decisions) is below any floor.
+// - fireworks-memory / fireworks-basic / codenames: a single constant answer
+//   scores correct on 100% of scenarios, so they cannot discriminate.
+// - fireworks-hard: a single constant clue action aces half the pack.
+// - battleship: passes the mechanical floor but its scenarios were authored
+//   against a leaked full-information state; pending re-authoring it stays
+//   lightweight.
+// - 2026-07-02: all three fireworks packs regenerated (decision-slot variance,
+//   needed_clue reachable, dead-card clue oracles fixed); they stay lightweight
+//   pending a fresh discrimination review.
 const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
   {
     id: "gameiq-v0.1-connect-four",
@@ -22,8 +38,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-chess",
     gameId: "chess",
     label: "Certified GameIQ v1: Chess Tactics",
-    version: "0.1.0",
-    certificationTier: "first-class",
+    version: "0.2.0",
+    certificationTier: "lightweight",
     scenarios: CHESS_GAMEIQ_SCENARIOS,
   },
   {
@@ -46,7 +62,7 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-fireworks-basic-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Solo Control Basic",
-    version: "0.1.0",
+    version: "0.2.0",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   },
@@ -54,16 +70,16 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-fireworks-hard-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Trap States",
-    version: "0.1.0",
-    certificationTier: "first-class",
+    version: "0.2.0",
+    certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   },
   {
     id: "gameiq-fireworks-memory-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Memory Stress",
-    version: "0.1.0",
-    certificationTier: "first-class",
+    version: "0.2.0",
+    certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
   },
 ];
@@ -107,6 +123,95 @@ export function stableStringify(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
     .join(",")}}`;
+}
+
+// Shared "same decision" identity used by runner metric de-duplication and by
+// the first-class rigor floor: two scenarios are the same decision only when
+// the game, the canonical initial state, and the expected-action CONTENT
+// (action + weight) all match. Label/note prose is deliberately excluded so
+// duplicate boards cannot dodge collapse by rewording a note, and genuinely
+// different boards that happen to share an expected action never merge.
+export function gameIqDecisionKey(input: {
+  gameId: GameIqGameId;
+  initialState: unknown;
+  expectedActions: Array<{ action: unknown; weight: number }>;
+}): string {
+  return stableStringify({
+    gameId: input.gameId,
+    initialState: input.initialState,
+    expectedActions: input.expectedActions.map((expected) => ({
+      action: expected.action,
+      weight: expected.weight,
+    })),
+  });
+}
+
+export interface GameIqPackRigorFloor {
+  ok: boolean;
+  distinctDecisions: number;
+  maxConstantAnswerRate: number;
+  messages: string[];
+}
+
+export const GAMEIQ_FIRST_CLASS_MIN_DISTINCT_DECISIONS = 10;
+export const GAMEIQ_FIRST_CLASS_MAX_CONSTANT_ANSWER_RATE = 0.5;
+
+// Mechanical, necessary-but-not-sufficient rigor floor for the "first-class"
+// certification tier (see the tier comment above GAMEIQ_SCENARIO_PACKS):
+// 1. The pack must encode enough DISTINCT decisions (gameIqDecisionKey) that
+//    its score carries real signal — re-skinned clones do not count.
+// 2. No single constant answer may score correct on half or more of the
+//    pack's scenarios; otherwise a board-blind baseline passes, violating the
+//    "a naive baseline must fail" authoring rule. Candidate constants are the
+//    pack's own expected actions (the strongest constants available), scored
+//    through the real actionMatchesExpected path so legality-scored
+//    categories (e.g. codenames clue-selection) are measured honestly.
+// Passing this floor is required for first-class but does not grant it: a
+// pack can pass mechanically and still be review-demoted (e.g. battleship's
+// scenarios were authored against a leaked full-information state).
+export function gameIqPackFirstClassFloor(
+  pack: GameIqScenarioPack
+): GameIqPackRigorFloor {
+  const messages: string[] = [];
+  const distinctDecisions = new Set(
+    pack.scenarios.map((scenario) => gameIqDecisionKey(scenario))
+  ).size;
+  if (distinctDecisions < GAMEIQ_FIRST_CLASS_MIN_DISTINCT_DECISIONS) {
+    messages.push(
+      `Pack ${pack.id} has ${distinctDecisions} distinct decision(s); first-class needs at least ${GAMEIQ_FIRST_CLASS_MIN_DISTINCT_DECISIONS}.`
+    );
+  }
+
+  const candidates = new Map<string, unknown>();
+  for (const scenario of pack.scenarios) {
+    for (const expected of scenario.expectedActions) {
+      candidates.set(stableStringify(expected.action), expected.action);
+    }
+  }
+  let maxConstantAnswerRate = 0;
+  if (pack.scenarios.length > 0) {
+    for (const candidate of candidates.values()) {
+      const matched = pack.scenarios.filter(
+        (scenario) => actionMatchesExpected(scenario, candidate) > 0
+      ).length;
+      maxConstantAnswerRate = Math.max(
+        maxConstantAnswerRate,
+        matched / pack.scenarios.length
+      );
+    }
+  }
+  if (maxConstantAnswerRate >= GAMEIQ_FIRST_CLASS_MAX_CONSTANT_ANSWER_RATE) {
+    messages.push(
+      `Pack ${pack.id}: a single constant answer scores correct on ${Math.round(maxConstantAnswerRate * 100)}% of scenarios; first-class requires under ${Math.round(GAMEIQ_FIRST_CLASS_MAX_CONSTANT_ANSWER_RATE * 100)}%.`
+    );
+  }
+
+  return {
+    ok: messages.length === 0,
+    distinctDecisions,
+    maxConstantAnswerRate,
+    messages,
+  };
 }
 
 function hashString(value: string): string {

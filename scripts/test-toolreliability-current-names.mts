@@ -20,7 +20,7 @@ const listCertifiedSuiteOptions = suiteApi.listCertifiedSuiteOptions as
 
 check(
   "current ToolReliability case export exists",
-  Array.isArray(cases) && cases.length === 125,
+  Array.isArray(cases) && cases.length === 44,
   { length: cases?.length, exportType: typeof publicApi.TOOL_RELIABILITY_CASES }
 );
 check(
@@ -29,15 +29,13 @@ check(
   typeof publicApi.runToolReliability
 );
 check(
-  "current ToolReliability stress exports exist",
-  Array.isArray(publicApi.TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES) &&
-    Array.isArray(publicApi.TOOL_RELIABILITY_TOOL_STRATEGY_CASES) &&
-    Array.isArray(publicApi.TOOL_RELIABILITY_STRESS_CASES),
-  {
-    large: typeof publicApi.TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES,
-    tool: typeof publicApi.TOOL_RELIABILITY_TOOL_STRATEGY_CASES,
-    stress: typeof publicApi.TOOL_RELIABILITY_STRESS_CASES,
-  }
+  "retired stress-pack exports are gone (its enforcement value moved into the live pack)",
+  !("TOOL_RELIABILITY_LARGE_FILE_STRESS_CASES" in publicApi) &&
+    !("TOOL_RELIABILITY_TOOL_STRATEGY_CASES" in publicApi) &&
+    !("TOOL_RELIABILITY_STRESS_CASES" in publicApi) &&
+    !("runLargeFilePatchStressPack" in publicApi) &&
+    !("evaluateLargeFilePatchStressCase" in publicApi),
+  Object.keys(publicApi).filter((key) => /STRESS|Stress/.test(key))
 );
 check(
   "versioned ToolReliability exports are absent",

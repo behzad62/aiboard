@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 
 const scripts = [
-  "scripts/test-toolreliability-stress-cases.mts",
+  "scripts/test-toolreliability-authoring-guard.mts",
   "scripts/test-workbench-current-challenges.mts",
 ];
 let failures = 0;

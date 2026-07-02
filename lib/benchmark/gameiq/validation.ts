@@ -41,6 +41,12 @@ import type {
   GameIqValidationResult,
 } from "./types";
 
+// Reserved codenames clue word used by the prompt's JSON shape example
+// (certified-runner.ts). Because clue-selection scenarios score bare legality,
+// the literal example word must never be a legal clue, or echoing the format
+// example would earn full credit.
+export const GAMEIQ_PLACEHOLDER_CLUE_WORD = "example";
+
 function ok(): GameIqValidationResult {
   return { ok: true, messages: [] };
 }
@@ -229,6 +235,14 @@ function validateCodenamesAction(
 ): GameIqValidationResult {
   try {
     if (action.type === "clue") {
+      if (
+        action.clue.word.trim().toUpperCase() ===
+        GAMEIQ_PLACEHOLDER_CLUE_WORD.toUpperCase()
+      ) {
+        return fail(
+          `Clue word "${GAMEIQ_PLACEHOLDER_CLUE_WORD}" is the reserved format placeholder and is not a legal clue.`
+        );
+      }
       const validation = validateCodenamesClue(state, action.clue);
       return validation.ok ? ok() : fail(validation.error);
     }

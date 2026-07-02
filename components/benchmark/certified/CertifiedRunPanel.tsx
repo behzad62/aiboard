@@ -57,13 +57,11 @@ import {
   deriveSoloTeamComposition,
   deriveTeamComposition,
   runCertifiedTeamIq,
-  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
+  teamIqToolReliabilityCasePackForSuite,
 } from "@/lib/benchmark/teamiq";
 import {
-  FIREWORKS_FULL_GAME_CASES,
-  FIREWORKS_MEMORY_SCENARIOS,
-  FIREWORKS_TACTICS_SCENARIOS,
   fireworksCaseToBenchmarkCaseV2,
+  getFireworksRuntimeCasesForSuite,
   type FireworksBenchmarkCase,
   type FireworksBenchmarkSuite,
 } from "@/lib/benchmark/fireworks";
@@ -73,6 +71,7 @@ import {
 } from "@/lib/benchmark/gameiq";
 import {
   TOOL_RELIABILITY_CASES,
+  TOOL_RELIABILITY_CASE_PACK_VERSION,
   runCertifiedToolReliability,
 } from "@/lib/benchmark/toolreliability";
 import {
@@ -524,7 +523,7 @@ export function CertifiedRunPanel({
                 workBenchCaseToBenchmarkCaseV2(caseOption)
               )
             : []
-          : [caseForSelection(selectedTrack, suiteId)];
+          : [caseForSelection(selectedTrack, suiteId, fireworksPlayerCount)];
       for (const caseRecord of caseRecords) {
         await saveBenchmarkCaseV2(caseRecord);
       }
@@ -641,7 +640,11 @@ export function CertifiedRunPanel({
   }
 }
 
-function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV2 {
+function caseForSelection(
+  track: RunnableTrack,
+  suiteId: string,
+  fireworksPlayerCount: 2 | 3
+): BenchmarkCaseV2 {
   const timestamp = new Date().toISOString();
   if (track === "workbench") {
     throw new Error("WorkBench runs require a selected case pack.");
@@ -652,17 +655,18 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       schemaVersion: 2,
       track: "toolreliability",
       title: "ToolReliability current challenge pack",
-      description: "Current schema, tool-call, large-file patch, repair, and safety challenge pack.",
+      description:
+        "Current schema, tool-call, large-file patch, repair, and safety challenge pack (44 distinct cases).",
       difficulty: "medium",
       tags: ["toolreliability"],
-      caseVersion: "current",
+      caseVersion: TOOL_RELIABILITY_CASE_PACK_VERSION,
       createdAt: timestamp,
       updatedAt: timestamp,
       prompt: { userRequest: "Complete each current ToolReliability challenge." },
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
       budget: { maxUsd: 5, maxWallClockSeconds: 1800, maxModelCalls: 150 },
-      scoring: { scoringVersion: "toolreliability-current", primary: "tool_reliability" },
+      scoring: { scoringVersion: "toolreliability-v2", primary: "tool_reliability" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TOOLREL",
@@ -674,7 +678,8 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
     if (isFireworksSuite(suiteId)) {
       return fireworksCaseToBenchmarkCaseV2(
         suiteId,
-        fireworksSuiteForSuiteId(suiteId)
+        fireworksSuiteForSuiteId(suiteId),
+        fireworksPlayerCount
       );
     }
     const allModes = isTeamIqToolReliabilityAllModesSuite(suiteId);
@@ -691,7 +696,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
           : "TeamIQ solo baselines and team attempt over a cross-category ToolReliability sample.",
       difficulty: "medium",
       tags: ["teamiq", "toolreliability"],
-      caseVersion: "1.0.0",
+      caseVersion: "2.0.0",
       createdAt: timestamp,
       updatedAt: timestamp,
       prompt: {
@@ -701,7 +706,7 @@ function caseForSelection(track: RunnableTrack, suiteId: string): BenchmarkCaseV
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
       budget: { maxUsd: 5, maxWallClockSeconds: 900, maxModelCalls: 150 },
-      scoring: { scoringVersion: "teamiq-toolreliability-current", primary: "team_lift" },
+      scoring: { scoringVersion: "teamiq-toolreliability-v2", primary: "team_lift" },
       contamination: {
         originalTask: true,
         canary: "AIBENCH-UI-TEAMIQ",
@@ -791,15 +796,9 @@ function teamIqTaskForSuite(
       cases: fireworksCasesForSuiteId(suiteId, fireworksPlayerCount),
     };
   }
-  if (suiteId === "teamiq-toolreliability-current-quick") {
-    return {
-      kind: "toolreliability" as const,
-      casePack: TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
-    };
-  }
   return {
     kind: "toolreliability" as const,
-    casePack: TOOL_RELIABILITY_CASES,
+    casePack: teamIqToolReliabilityCasePackForSuite(suiteId),
   };
 }
 
@@ -846,21 +845,10 @@ function fireworksCasesForSuiteId(
   suiteId: string,
   playerCount: 2 | 3
 ): FireworksBenchmarkCase[] {
-  const suite = fireworksSuiteForSuiteId(suiteId);
-  if (suite === "tactics") return FIREWORKS_TACTICS_SCENARIOS.slice(0, 20);
-  if (suite === "memory") return FIREWORKS_MEMORY_SCENARIOS.slice(0, 10);
-  if (suite === "full") {
-    return FIREWORKS_FULL_GAME_CASES.filter(
-      (benchmarkCase) => benchmarkCase.playerCount === playerCount
-    );
-  }
-  return [
-    ...FIREWORKS_TACTICS_SCENARIOS.slice(0, 20),
-    ...FIREWORKS_MEMORY_SCENARIOS.slice(0, 10),
-    ...FIREWORKS_FULL_GAME_CASES.filter(
-      (benchmarkCase) => benchmarkCase.playerCount === playerCount
-    ).slice(0, 5),
-  ];
+  return getFireworksRuntimeCasesForSuite(
+    fireworksSuiteForSuiteId(suiteId),
+    playerCount
+  );
 }
 
 function fireworksCaseCountForSuite(

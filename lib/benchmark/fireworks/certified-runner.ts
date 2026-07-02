@@ -120,7 +120,12 @@ export async function runCertifiedFireworksTeamIq(
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
     throwIfCertifiedRunAborted(input.signal);
-    attempts.push(await runFireworksAttempt(input, team));
+    const attempt = await runFireworksAttempt(input, team);
+    attempts.push(attempt);
+    // Once the certified budget is exhausted every further model call fails
+    // the same way; stop cleanly instead of grinding the remaining teams
+    // through zero-cost fallback loops. Attempts already completed are kept.
+    if (attempt.status === "failed_budget") break;
   }
 
   const links = linkTeamLiftBaselines({
@@ -199,6 +204,12 @@ async function runFireworksAttempt(
           failures,
         });
     caseResults.push(result);
+    // A budget failure is terminal for the whole run: stop after the case in
+    // which it happened so the attempt records the cases that actually ran
+    // instead of padding the transcript with all-fallback cases.
+    if (calls.some((call) => call.failureCode === "fireworks_budget_exceeded")) {
+      break;
+    }
   }
 
   for (const failure of failures) {
@@ -387,6 +398,8 @@ async function runFullGameCase(params: {
     })),
   });
   const actions: unknown[] = [];
+  let fallbackTurns = 0;
+  let totalTurns = 0;
 
   while (
     state.status === "playing" &&
@@ -409,13 +422,20 @@ async function runFullGameCase(params: {
       action: call.action,
       fallbackUsed: call.call.fallbackUsed,
     });
+    totalTurns += 1;
+    if (call.call.fallbackUsed) fallbackTurns += 1;
     state = applyFireworksAction(state, playerId, call.action, {
       fallbackUsed: call.call.fallbackUsed,
     });
   }
 
   const metrics = computeFireworksGameMetrics({ state });
-  const score = scoreFireworksTeamIq({ metrics }) / 100;
+  // Invalid/illegal model output is replaced turn-by-turn by the strong
+  // deterministic fallback so the simulation can continue, but those turns
+  // must not earn the model credit: cap the game score by the share of turns
+  // the model actually produced (mirrors the scenario path's fallback -> 0).
+  const fallbackRate = totalTurns > 0 ? fallbackTurns / totalTurns : 0;
+  const score = (scoreFireworksTeamIq({ metrics }) / 100) * (1 - fallbackRate);
   return {
     caseId: params.benchmarkCase.id,
     kind: "full_game",
@@ -427,6 +447,9 @@ async function runFullGameCase(params: {
       seed: params.benchmarkCase.seed,
       playerCount: params.benchmarkCase.playerCount,
       actions,
+      fallbackTurns,
+      totalTurns,
+      fallbackRate,
       finalState: state,
       metrics,
       score,

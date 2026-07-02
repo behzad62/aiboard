@@ -3,7 +3,11 @@ import { getAllProviders } from "../lib/client/providers";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { PROVIDER_IDS } from "../lib/providers/constants";
 import { providerSupportsMaxTokensFeature } from "../lib/providers/provider-registry";
-import { providerSupportsReasoning } from "../lib/providers/reasoning";
+import {
+  openAIReasoningEffort,
+  providerSupportsReasoning,
+} from "../lib/providers/reasoning";
+import type { ReasoningEffort } from "../lib/db/schema";
 import { getModelRuntimeBehavior } from "../lib/providers/runtime-behavior";
 import { shouldEnableProviderNativeWebSearch } from "../lib/providers/web-search";
 
@@ -54,6 +58,21 @@ check(
   "GitHub Copilot Claude chat-completions models do not claim reasoning effort",
   !providerSupportsReasoning("github-copilot:claude-sonnet-4.5"),
   null
+);
+check(
+  "Anthropic Opus models claim reasoning effort",
+  providerSupportsReasoning("anthropic:claude-opus-4-8"),
+  null
+);
+check(
+  "Anthropic Haiku 4.5 does not claim reasoning effort",
+  !providerSupportsReasoning("anthropic:claude-haiku-4-5-20251001"),
+  null
+);
+check(
+  "OpenAI none reasoning effort is forwarded explicitly",
+  openAIReasoningEffort("none" as ReasoningEffort) === "none",
+  openAIReasoningEffort("none" as ReasoningEffort)
 );
 check(
   "ChatGPT account runner exposes provider-native web search",

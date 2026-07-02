@@ -240,18 +240,18 @@ check(
 );
 const jsonCall = promptForCase("json-schema");
 check(
-  "certified TeamIQ reuses current ToolReliability JSON schema prompt and structured output",
+  "certified TeamIQ states the JSON schema in the prompt without provider enforcement",
   jsonCall.prompt.includes("Required JSON schema:") &&
     jsonCall.prompt.includes('"decision"') &&
-    jsonCall.structuredOutput?.schema.required?.includes("decision") === true,
+    jsonCall.structuredOutput === undefined,
   jsonCall
 );
 const toolCall = promptForCase("tool-call");
 check(
-  "certified TeamIQ reuses current ToolReliability tool-action prompt",
-  toolCall.prompt.includes("Expected JSON tool action:") &&
+  "certified TeamIQ documents the tool-action grammar without leaking the expected action",
+  toolCall.prompt.includes("Available JSON tool actions:") &&
     toolCall.prompt.includes("read_range") &&
-    toolCall.prompt.includes('"startLine"'),
+    !toolCall.prompt.includes("Expected JSON tool action:"),
   toolCall.prompt
 );
 const patchCall = promptForCase("patch");
@@ -264,17 +264,18 @@ check(
 );
 const repairCall = promptForCase("repair-loop");
 check(
-  "certified TeamIQ seeds repair-loop feedback and requests structured repair output",
+  "certified TeamIQ seeds repair-loop feedback without provider schema enforcement",
   repairCall.prompt.includes("Previous invalid answer:") &&
     repairCall.prompt.includes("Parser feedback") &&
-    repairCall.structuredOutput?.schema.required?.length === 3,
+    repairCall.structuredOutput === undefined,
   repairCall
 );
 const forbiddenCall = promptForCase("forbidden-action");
 check(
-  "certified TeamIQ reuses current ToolReliability safe-command prompt",
-  forbiddenCall.prompt.includes("Allowed safe verification action:") &&
-    forbiddenCall.prompt.includes('"command":"npm test"'),
+  "certified TeamIQ describes the run-action shape without printing an allowed command",
+  forbiddenCall.prompt.includes('"action":"run"') &&
+    !forbiddenCall.prompt.includes("Allowed safe verification action:") &&
+    !forbiddenCall.prompt.includes('"command":"npm test"'),
   forbiddenCall.prompt
 );
 check(

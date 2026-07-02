@@ -7,7 +7,7 @@ import type { NativeToolCall, NativeToolDefinition } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import type { StreamChunk } from "./base";
-import { openAIReasoningEffort } from "./reasoning";
+import { openAIReasoningEffort, openRouterReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
 import { openAICompatibleStructuredOutputField } from "./structured-output";
 
@@ -267,9 +267,11 @@ export async function* streamOpenAICompatibleChat(
   // tend to reject unknown params. Cast keeps newer values (e.g. "xhigh") past
   // the pinned SDK's narrower enum type.
   const reasoningValue =
-    providerId === "openai" || providerId === "openrouter"
+    providerId === "openai"
       ? openAIReasoningEffort(params.reasoningEffort ?? "default")
-      : null;
+      : providerId === "openrouter"
+        ? openRouterReasoningEffort(params.reasoningEffort ?? "default")
+        : null;
   const reasoningField: Record<string, string> = reasoningValue
     ? { reasoning_effort: reasoningValue }
     : {};

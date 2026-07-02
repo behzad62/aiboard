@@ -46,7 +46,16 @@ export function toGameIqScenario(input: {
       label: action.label,
       weight: action.weight,
     })),
-    tags: ["fireworks", "solo-control", "hidden-information", ...input.tags],
+    // The `source:` tag records that this GameIQ scenario is a re-wrap of a
+    // TeamIQ fireworks scenario, so cross-track aggregation can de-duplicate
+    // the shared underlying decision instead of counting it twice.
+    tags: [
+      "fireworks",
+      "solo-control",
+      "hidden-information",
+      `source:${input.scenario.id}`,
+      ...input.tags,
+    ],
     maxResponseMs: 15_000,
   };
 }
@@ -70,11 +79,17 @@ function mapScenarios(input: {
   );
 }
 
+// Take each tactic category explicitly: the old combined
+// filter(safe_play || needed_clue).slice(0, 10) silently dropped every
+// needed_clue scenario (safe_play fills the first ten slots), so clue-giving
+// was never tested by any GameIQ pack.
 const BASIC_FIREWORKS_SOURCE = [
   ...FIREWORKS_TACTICS_SCENARIOS.filter(
-    (scenario) =>
-      scenario.category === "safe_play" || scenario.category === "needed_clue"
-  ).slice(0, 10),
+    (scenario) => scenario.category === "safe_play"
+  ).slice(0, 5),
+  ...FIREWORKS_TACTICS_SCENARIOS.filter(
+    (scenario) => scenario.category === "needed_clue"
+  ).slice(0, 5),
   ...FIREWORKS_MEMORY_SCENARIOS.filter(
     (scenario) => scenario.category === "combine_color_and_rank"
   ).slice(0, 10),
@@ -122,5 +137,3 @@ export const FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS: FireworksGameIqScenario[]
     difficulty: () => "hard",
     tags: ["hard", "memory-stress"],
   });
-
-export const FIREWORKS_GAMEIQ_SCENARIOS = FIREWORKS_GAMEIQ_BASIC_SCENARIOS;

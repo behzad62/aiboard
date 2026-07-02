@@ -1,0 +1,97 @@
+{
+  "suite": "Build benchmark cases (lib/benchmark/build-cases.ts + workbench build-adapter context)",
+  "caseInventory": "lib/benchmark/build-cases.ts defines ZERO static cases. It is a single factory, createBuildBenchmarkCaseFromStopReport (build-cases.ts:5-67), that mints one v1 BenchmarkCase (kind \"real-work\") plus one markdown artifact per Build-mode stop report, triggered only by the \"Save case\" button in components/BuildStopReportPanel.tsx:48-54 (rendered on the discussion page when a build stops). Saved cases land in store.benchmarkCases, but no pack, runner, executor, or scorer ever consumes them: the only downstream reads are the dashboard count (lib/benchmark/metrics.ts:1066 totalCases -> components/benchmark/BenchmarkSummaryStrip.tsx:19 \"Cases\" card), report counts (lib/benchmark/reports.ts:32,83), and export/import bundles (lib/benchmark/store.ts:551,620). The BenchmarkCase.verifierCommand and expectedJson fields (lib/benchmark/types.ts:112,115) are write-only repo-wide — build-cases.ts is their sole writer and nothing reads them. So the suite is reachable at save time but encodes 0 distinct runtime decision points; the actual live Build-capability benchmark is the entirely separate certified WorkBench track (BenchmarkCaseV2 + lib/benchmark/workbench/corpus.ts/challenges.ts + build-adapter/executor), which the certified UI runs via runWorkBenchBuild (CertifiedRunPanel.tsx:567-588). The companion patch harness runWorkBenchModelPatchBuild (build-adapter.ts:369) is also production-dead, exercised only by scripts/test-build-benchmark-hooks.mts:507. No test script imports build-cases.ts at all.",
+  "findings": [
+    {
+      "status": "confirmed",
+      "severity": "high",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "build-case-<discussionId>-<createdAt> (all generated real-work cases)"
+      ],
+      "file": "lib/benchmark/build-cases.ts",
+      "line": 5,
+      "summary": "Every case this suite produces is inert: saved 'real-work' build cases are never run, verified, or scored by anything — they only increment the dashboard 'Cases' count and pad export bundles.",
+      "evidence": "createBuildBenchmarkCaseFromStopReport (build-cases.ts:5-67) is imported only by components/BuildStopReportPanel.tsx:16 and saved via saveBenchmarkCase (BuildStopReportPanel.tsx:48-54). Tracing every consumer of the v1 BenchmarkCase store: metrics.ts:1066 uses only benchmarkCases.length; useBenchmarkDashboard.ts:128/178 only counts; BenchmarkSummaryStrip.tsx:19 renders the count; store.ts:551/620 export bundles; reports.ts:32/83 print counts. No runner or executor consumes v1 cases — all certified runners (workbench certified-runner.ts, fireworks, teamiq, toolreliability, gameiq) source cases from BenchmarkCaseV2/corpus/scenario packs. BenchmarkCase.verifierCommand (types.ts:112) and expectedJson (types.ts:115) have zero readers repo-wide (grep: only writer is build-cases.ts:23,48). No script under scripts/ imports build-cases.ts, so it also has zero test coverage.",
+      "proposedImprovement": "Pick one: (a) delete build-cases.ts and the 'Save case' button, and stop counting v1 cases in totalCases so the dashboard 'Cases' card reflects only runnable cases; or (b) make the capture real by upgrading the factory to emit a BenchmarkCaseV2: snapshot the build workspace (virtual-FS zip or project-folder copy) as the fixture, set prompt.userRequest = original topic + incomplete-task instructions, wrap report.verifyCommand in a verifier-json contract (passed/score/assertions), register the result in a selectable 'real-work' WorkBench pack in CertifiedRunPanel, and validate with an oracle (reference workspace) and a weak baseline before allowing certification. If (b), keep the UI count but split 'saved (not yet runnable)' from certified cases.",
+      "verifierCorrections": [
+        "Two minor precision notes, neither weakening the finding: (a) the factory also emits a companion BenchmarkArtifact (stop-report markdown) that is equally inert (counted in reportCounts/artifacts and exported, never consumed); (b) scripts/test-benchmark-lab.mts does exercise the v1 case store round-trip (saveBenchmarkCase/listBenchmarkCases/export/import) with an inline-constructed case, so the v1 storage layer has coverage — only the build-cases.ts factory itself has zero coverage, which is what the finding states.",
+        "Minor: the capture is not entirely valueless — the saved markdown artifact and case JSON ride along in export bundles that reports.ts explicitly positions as external-debugging input, so a user who exports gets the stop-report data out. This doesn't change the verdict (the case record adds nothing over the artifact, and the verification fields remain dead), but 'only increment the dashboard Cases count and pad export bundles' slightly understates that the exported artifact has some standalone documentation value. Severity 'high' is defensible for a benchmark-quality review given the metric inflation, though 'medium' would also be reasonable since no scoring output is corrupted — only counts are.",
+        "Severity is better rated medium than high: the inert cases inflate the dashboard \"Cases\" card, report counts, and export bundles, but they do not distort any model score or leaderboard number (nothing ever scores them). Additional minor symptom not in the finding: the companion markdown artifact saved alongside each case also inflates the artifacts count (useBenchmarkDashboard.ts:181). All file/line citations in the evidence are otherwise accurate."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "redundant",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "build-case-* (generated real-work cases)"
+      ],
+      "file": "lib/benchmark/build-cases.ts",
+      "line": 12,
+      "summary": "The v1 'real-work' build-case path duplicates the intent of the live certified WorkBench track in a schema the certified pipeline cannot consume, creating apparent coverage (dashboard 'Cases: N') with zero score signal.",
+      "evidence": "The live Build-capability benchmark already exists end-to-end: workbench corpus/challenges (lib/benchmark/workbench/corpus.ts, challenges.ts) -> case-loader -> executor with deterministic node verifier -> runWorkBenchBuild through the real build engine (certified-runner.ts:50-71, CertifiedRunPanel.tsx:567-588), scored into BenchmarkAttemptV2/leaderboard. build-cases.ts:12-56 mints a parallel v1 BenchmarkCase (kind 'real-work', types.ts:14-18) that this pipeline cannot ingest (runners take WorkBenchCase/BenchmarkCaseV2 only). Deleting every saved real-work case would change no leaderboard, pass rate, or verifier output — only the 'Cases' summary number.",
+      "proposedImprovement": "Merge the two concepts: either migrate the stop-report capture into the BenchmarkCaseV2/WorkBench pack system (see finding 1 option b) so saved real-work cases become genuine leaderboard-feeding cases, or delete the v1 path and keep the stop report as a plain markdown artifact ('Copy report' already covers the diagnostic use). Do not keep both schemas for the same concept.",
+      "verifierCorrections": [
+        "Minor precision only: (1) besides the dashboard \"Cases\" summary card, deleting real-work cases would also change the export bundle case list and the markdown report line \"- Cases: N\" (reports.ts:83) plus reportCounts.cases — all still count-only surfaces, so the substance of \"no score signal\" is unchanged. (2) \"runners take WorkBenchCase/BenchmarkCaseV2 only\" is slightly incomplete — other certified tracks take FireworksBenchmarkCase and tool-reliability case types — but the load-bearing point (no runner consumes v1 BenchmarkCase) is correct.",
+        "Evidence slightly understates the dead path's footprint: besides the \"Cases\" summary number, saved v1 cases and their stop-report artifacts also round-trip through the export/import report bundle (bundle.cases/artifacts; exercised by scripts/test-benchmark-lab.mts:204-337) and bump the \"Artifacts\" count. Core claim (no leaderboard/pass-rate/verifier impact) remains exactly correct. Also a strengthening fact worth adding: build-cases.ts is the only production producer of any v1 BenchmarkCase kind — \"game-match\", \"build-run\", and \"fixed-pack\" are never constructed — so removing/migrating this path would orphan the entire v1 case schema, reinforcing the \"delete or migrate, don't keep both\" recommendation. Severity medium is appropriate."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "medium",
+      "category": "pointless-dead",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "workbench-contract-0001..* (multi-file-contract cases, when run via patch harness)",
+        "runWorkBenchModelPatchBuild"
+      ],
+      "file": "lib/benchmark/workbench/build-adapter.ts",
+      "line": 369,
+      "summary": "runWorkBenchModelPatchBuild — the raw-single-model one-patch harness — has no production caller (test-only), and if ever wired up it is structurally unpassable on multi-file WorkBench cases (one patch action, first-5-files candidate cap).",
+      "evidence": "Grep for callers: only scripts/test-build-benchmark-hooks.mts:507 invokes runWorkBenchModelPatchBuild; the live workbench paths always use runWorkBenchBuild (certified-runner.ts:62, CertifiedRunPanel.tsx:581-587), and the panel derives workbench harness profiles only as aiboard-build-single/multi-worker (CertifiedRunPanel.tsx:200-212, 1006-1012) — 'raw-single-model' is used for other tracks. Structurally: build-adapter.ts:421 `tree.files.filter(isCandidateSourceFile).slice(0, 5)` and lines 456-494 apply exactly ONE patch action to ONE file, while multi-file-contract challenges (challenges.ts:190-221) require snippets in two files (typesPath and servicePath, challenges.ts:216-219) — a perfect candidate cannot score 100 through this harness, violating case-authoring.md:51. ~140 lines of harness code plus its test assertions cover behavior that is unreachable at runtime.",
+      "proposedImprovement": "Either wire the patch harness into the UI as a genuine raw-single-model workbench baseline — in which case allow a bounded sequence of patch actions (e.g. up to 3, one per file) and select candidates by relevance rather than first-5 tree order so multi-file cases are passable — or delete runWorkBenchModelPatchBuild and its test block (scripts/test-build-benchmark-hooks.mts:507+) to stop the hook test suite from certifying dead code. If kept, add a test asserting the patch harness can pass a multi-file-contract reference solution.",
+      "verifierCorrections": [
+        "Two detail-level imprecisions: (a) case-authoring.md:51 (\"A perfect deterministic candidate must be able to score 100\") sits under the \"GameIQ and ToolReliability Rules\" heading, not a WorkBench section — citing it as a violated WorkBench rule overstates the doc; the principle applies only in spirit. (b) The \"first-5-files candidate cap\" is not the operative blocker for multi-file-contract cases: those fixtures contain only 2 files, both within slice(0,5); the single-patch-action limit alone makes them unpassable, and the cap is only a latent issue for larger fixtures. Also note the caseIds impact is hypothetical — no runtime path currently routes any workbench case through this harness, consistent with the pointless-dead categorization and medium severity.",
+        "Two evidence details are off. (1) The \"first-5-files candidate cap\" is not what blocks multi-file-contract cases: their fixtures contain only 2 candidate source files after isCandidateSourceFile (build-adapter.ts:573-587) excludes verifier.mjs/case-meta.json/reference-solution.md/negative-control.json, so both files are in the candidate set; the sole structural blocker is the single-patch-action design. The slice(0,5) cap is only a latent risk for larger fixtures. (2) case-authoring.md:51 (\"perfect deterministic candidate must be able to score 100\") is under the \"GameIQ and ToolReliability Rules\" section, not WorkBench rules; the WorkBench-applicable citation is pipeline step 6 (line 27, \"Run an oracle or fake model that should pass\"). Minor: the test block (test-build-benchmark-hooks.mts:507-536) does provide some value exercising recordToolCall/trace-evidence hook plumbing, so \"delete\" should preserve equivalent hook coverage elsewhere. Severity medium is defensible but arguably low, since no live scoring path is affected today."
+      ]
+    },
+    {
+      "status": "plausible",
+      "severity": "low",
+      "category": "answer-leak",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "build-case-* (generated real-work cases)"
+      ],
+      "file": "lib/benchmark/build-cases.ts",
+      "line": 57,
+      "summary": "The case's only artifact is the full stop-report markdown, which embeds the failure diagnosis (primary cause, failing command output, recovery log, remaining tasks) — oracle-grade hints if these cases are ever replayed against a model.",
+      "evidence": "build-cases.ts:57-65 attaches formatBuildStopReportMarkdown(report) as the case artifact, and configJson (lines 31-47) duplicates primaryCause, commandProblems (with output previews per BuildStopReportPanel.tsx:158-162), and recoveryLog. Any future replay harness that presents the case with its artifact/config would hand the candidate exactly what blocked the original run and which tasks remain — the diagnosis IS the answer for a 'finish this stalled build' task. Currently unreachable (see finding 1), so severity is conditional.",
+      "proposedImprovement": "If the real-work capture is made runnable: split the record into a public prompt (topic + task list + verify command) and a private/hidden diagnostic blob (primaryCause, commandProblems, recoveryLog) stored as a non-model-facing artifact or behind hiddenNotesHash, mirroring BenchmarkCaseV2's prompt.publicContext vs hiddenNotesHash separation.",
+      "verifierCorrections": [
+        "Minor citation imprecision: BuildStopReportPanel.tsx:158-162 shows the UI rendering of latestCommand.outputPreview, not the leak path itself. The actual carriers of output previews into the case are (a) configJson serializing commandProblems whose BuildCommandProblem.outputPreview fields come from lib/db/schema, and (b) formatBuildStopReportMarkdown fencing command.outputPreview at lib/orchestrator/build-stop-report.ts:260-267 and primaryCause.details at line 254. Also worth noting the markdown's 'Next Action' section (buildNextAction) is an even stronger leak than listed: it explicitly instructs which failing command to fix first. Unreachability confirmed more precisely: configJson is write-only across the repo (no reader exists), and saved cases feed only dashboard counts."
+      ]
+    },
+    {
+      "status": "confirmed",
+      "severity": "low",
+      "category": "coverage-gap",
+      "knownFromPriorReview": false,
+      "caseIds": [
+        "build-case-* (generated real-work cases)"
+      ],
+      "file": "components/BuildStopReportPanel.tsx",
+      "line": 36,
+      "summary": "Real-work case capture is failure-biased by construction: cases can only be minted from stop reports (failed/incomplete builds), so a revived 'real-work' pack would sample exclusively from builds where the harness already broke, never from representative successful workloads.",
+      "evidence": "BuildStopReportPanel renders only when a buildStopReport exists (app/discussion/discussion-client.tsx:1319), and BuildStopReport.stopReason is 'failed' | 'incomplete' | BuildStopReason (lib/db/schema.ts:159) — there is no capture path from completed builds, and no other producer of createBuildBenchmarkCaseFromStopReport exists. A capability suite built from these cases would measure 'recover from the specific ways this app's build engine stalls' rather than Build-mode capability generally.",
+      "proposedImprovement": "If reviving real-work capture, add a 'Save as benchmark case' affordance on successful build hand-off summaries as well (capture pre-build workspace + verify command as the fixture, with the completed build serving as the reference solution), so the pack mixes success-reproducible tasks with failure-recovery tasks. Otherwise fold this constraint into the decision to delete the path (finding 1).",
+      "verifierCorrections": [
+        "Two minor precision issues: (a) the summary says cases are minted from \"failed/incomplete builds\", but stop reports are also produced for budget/time guardrail stops and blocked states — the sampled set is all non-successful terminations, and budget/time stops are user-configured limits firing rather than \"the harness already broke\", so the evidence's phrasing is slightly overbroad (the zero-successful-builds asymmetry is exactly right); (b) the schema type technically permits stopReason \"completed\" on a BuildStopReport (BuildStopReason includes \"completed\" at lib/db/schema.ts:38-43), but no producer emits it, so the gap is real in practice rather than enforced by the type.",
+        "The capture population is slightly broader than \"failed/incomplete builds where the harness already broke\": budget/time guardrail stops (build-engine.ts:1356-1366) and blocked stops also produce stop reports, and a budget/time stop can be a healthy build intentionally paused. The bias is more precisely \"non-completed terminal states\" (failures, stalls, blocks, budget/time interruptions) rather than strictly failures — the substantive conclusion (no representative successful workloads are ever sampled) is unchanged. Severity \"low\" is appropriate since the capture path is currently dormant (no app-side consumer of the saved v1 cases)."
+      ]
+    }
+  ]
+}

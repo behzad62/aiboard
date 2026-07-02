@@ -239,6 +239,46 @@ try {
   );
   check("runner sends account id header", captured?.headers["chatgpt-account-id"] === "fake-account-id", captured?.headers);
   check("runner sends bearer token header", captured?.headers.authorization === "Bearer fake-access-token", captured?.headers);
+
+  const reasoningCases = [
+    { input: "default", expected: undefined },
+    { input: "none", expected: "none" },
+    { input: "low", expected: "low" },
+    { input: "medium", expected: "medium" },
+    { input: "high", expected: "high" },
+    { input: "max", expected: "xhigh" },
+  ];
+  for (const reasoningCase of reasoningCases) {
+    const effortResponse = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        reasoningEffort: reasoningCase.input,
+        messages: [{ role: "user", content: "Reply with exactly: ok" }],
+      }),
+    });
+    const effortData = await effortResponse.json();
+    const effortCaptured = capturedRequests.at(-1);
+    check(
+      `ChatGPT ${reasoningCase.input} reasoning request returns HTTP 200`,
+      effortResponse.ok,
+      effortData
+    );
+    check(
+      reasoningCase.expected
+        ? `runner forwards ChatGPT ${reasoningCase.input} reasoning effort`
+        : "runner omits ChatGPT default reasoning effort",
+      reasoningCase.expected
+        ? JSON.stringify(effortCaptured?.body.reasoning) ===
+            JSON.stringify({ effort: reasoningCase.expected })
+        : !Object.prototype.hasOwnProperty.call(
+            effortCaptured?.body ?? {},
+            "reasoning"
+          ),
+      effortCaptured?.body
+    );
+  }
 } catch (err) {
   check("account-provider runner ChatGPT chat integration", false, err instanceof Error ? err.message : String(err));
 } finally {
