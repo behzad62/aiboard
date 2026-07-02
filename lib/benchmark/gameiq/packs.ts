@@ -79,7 +79,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-fireworks-basic-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Solo Control Basic",
-    version: "0.2.0",
+    // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
+    version: "0.3.0",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   },
@@ -87,7 +88,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-fireworks-hard-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Trap States",
-    version: "0.2.0",
+    // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
+    version: "0.3.0",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   },
@@ -95,7 +97,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-fireworks-memory-v1",
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Memory Stress",
-    version: "0.2.0",
+    // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
+    version: "0.3.0",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
   },

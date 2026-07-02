@@ -32,9 +32,9 @@ function expected(
 // Categories: mates use "mate-in-one" (shared validateChessMateInOne replays
 // them). Captures, defenses and promotions use "avoid-losing-move"; the shared
 // validator only checks expected-action legality for that chess category, so the
-// deep tactical assertions live in the pack test. The weak
-// "legal-tactic"/validateChessLegalTactic path is deliberately unused by this
-// pack.
+// deep tactical assertions live in the pack test. The weak "legal-tactic"
+// category is deliberately unused by this pack (its validator was removed
+// 2026-07-02).
 const WHITE_MOVE_PROMPT = "It is White to move. Return White's single best move as JSON.";
 const BLACK_MOVE_PROMPT = "It is Black to move. Return Black's single best move as JSON.";
 

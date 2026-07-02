@@ -8,11 +8,10 @@ import type {
 } from "@/lib/games/connect-four/types";
 import {
   fromFEN,
-  getPiece,
   isLegalMove,
   makeMove,
 } from "@/lib/games/chess/engine";
-import type { Move } from "@/lib/games/chess/types";
+import type { Move, PieceType } from "@/lib/games/chess/types";
 import {
   isLegalBattleshipTarget,
 } from "@/lib/games/battleship/engine";
@@ -67,6 +66,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// Canonical chess promotion vocabulary (matches the engine's PieceType and the
+// model-visible prompt) mapped from every accepted synonym: single-letter UCI
+// style (q/r/b/n) and the full words, any case. Expected actions already use
+// the canonical strings; this only rescues a chess-correct candidate whose
+// promotion piece is spelled differently on providers without schema
+// enforcement.
+const CHESS_PROMOTION_SYNONYMS: Record<string, PieceType> = {
+  q: "queen",
+  queen: "queen",
+  r: "rook",
+  rook: "rook",
+  b: "bishop",
+  bishop: "bishop",
+  n: "knight",
+  knight: "knight",
+};
+
+// Normalize a candidate chess action's promotion field to the canonical piece
+// string, in place. Runs candidate-side only (at the isStructuredGameIqAction
+// gate that every scoring path shares) so downstream legality
+// (validateChessAction) and equality (actionsEqual) see one canonical value.
+// A no-op for already-canonical values and for unrecognized strings (those
+// stay as-is and correctly fail legality).
+function normalizeChessPromotion(action: Record<string, unknown>): void {
+  if (typeof action.promotion !== "string") return;
+  const canonical = CHESS_PROMOTION_SYNONYMS[action.promotion.trim().toLowerCase()];
+  if (canonical) action.promotion = canonical;
+}
+
 function nextConnectFourPlayer(
   player: ConnectFourPlayer
 ): ConnectFourPlayer {
@@ -111,11 +139,17 @@ export function isStructuredGameIqAction(
     case "connect-four":
       return Number.isInteger(action.column);
     case "chess":
-      return (
+      if (
         typeof action.from === "string" &&
         typeof action.to === "string" &&
         (action.promotion == null || typeof action.promotion === "string")
-      );
+      ) {
+        // Canonicalize promotion synonyms once here, at the gate every scoring
+        // path shares, so legality and equality checks see canonical strings.
+        normalizeChessPromotion(action);
+        return true;
+      }
+      return false;
     case "battleship":
       return (
         isRecord(action.target) &&
@@ -274,9 +308,6 @@ function validateScenarioCategory(
   if (scenario.gameId === "chess" && scenario.category === "mate-in-one") {
     return validateChessMateInOne(scenario);
   }
-  if (scenario.gameId === "chess" && scenario.category === "legal-tactic") {
-    return validateChessLegalTactic(scenario);
-  }
   return ok();
 }
 
@@ -338,25 +369,6 @@ function validateChessMateInOne(
     return nextState.status === "checkmate"
       ? ok()
       : fail(`Expected mate-in-one did not checkmate: ${expectedAction.label}`);
-  });
-  return combine(results);
-}
-
-function validateChessLegalTactic(
-  scenario: GameIqScenario
-): GameIqValidationResult {
-  const state = fromFEN((scenario.initialState as { fen: string }).fen);
-  const results = scenario.expectedActions.map((expectedAction) => {
-    const action = expectedAction.action as ChessGameIqAction;
-    const targetPiece = getPiece(state, action.to);
-    const isCapture =
-      targetPiece != null && targetPiece.color !== state.turn;
-    const isPromotion = action.promotion != null;
-    return isCapture || isPromotion
-      ? ok()
-      : fail(
-          `Expected legal tactic neither captures nor promotes: ${expectedAction.label}`
-        );
   });
   return combine(results);
 }

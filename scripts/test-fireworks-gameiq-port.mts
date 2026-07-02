@@ -8,6 +8,9 @@ import {
   FIREWORKS_MEMORY_SCENARIOS,
   FIREWORKS_TACTICS_SCENARIOS,
 } from "../lib/benchmark/fireworks/scenario-packs";
+import { runGameIqScenarios } from "../lib/benchmark/gameiq/runner";
+import { fireworksActionsEqual } from "../lib/games/fireworks/engine";
+import type { FireworksAction } from "../lib/games/fireworks/types";
 
 let failures = 0;
 
@@ -139,10 +142,144 @@ check(
   allPacks.length
 );
 
-if (failures === 0) {
-  console.log("PASS");
-} else {
-  console.log(`FAIL ${failures} check(s) failed`);
+// --- forbiddenActions carry-through (prior-review #34 remaining half) ---
+
+// Every TeamIQ source scenario that declares forbiddenActions must have them
+// preserved (deep-equal) on its ported GameIQ scenario, so trap-state packs can
+// tell falling into the trap from an ordinary wrong move.
+const teamIqById = new Map(
+  [...FIREWORKS_TACTICS_SCENARIOS, ...FIREWORKS_MEMORY_SCENARIOS].map(
+    (scenario) => [scenario.id, scenario]
+  )
+);
+const portedWithForbidden = allPacks.filter((scenario) => {
+  const source = sourceIdOf(scenario.tags);
+  const teamiq = source ? teamIqById.get(source) : undefined;
+  return (teamiq?.forbiddenActions?.length ?? 0) > 0;
+});
+check(
+  "port preserves forbiddenActions for every TeamIQ source that declares them",
+  portedWithForbidden.length > 0 &&
+    portedWithForbidden.every((scenario) => {
+      const source = sourceIdOf(scenario.tags);
+      const teamiq = source ? teamIqById.get(source) : undefined;
+      const expected = teamiq?.forbiddenActions ?? [];
+      const actual = scenario.forbiddenActions ?? [];
+      return (
+        actual.length === expected.length &&
+        expected.every((forbidden, index) =>
+          fireworksActionsEqual(forbidden, actual[index] as FireworksAction)
+        )
+      );
+    }),
+  {
+    portedWithForbidden: portedWithForbidden.length,
+    firstMissing: portedWithForbidden.find((scenario) => {
+      const source = sourceIdOf(scenario.tags);
+      const teamiq = source ? teamIqById.get(source) : undefined;
+      const expected = teamiq?.forbiddenActions ?? [];
+      const actual = scenario.forbiddenActions ?? [];
+      return actual.length !== expected.length;
+    })?.id,
+  }
+);
+
+check(
+  "scenarios with no source forbiddenActions do not gain a forbiddenActions field",
+  allPacks
+    .filter((scenario) => {
+      const source = sourceIdOf(scenario.tags);
+      const teamiq = source ? teamIqById.get(source) : undefined;
+      return (teamiq?.forbiddenActions?.length ?? 0) === 0;
+    })
+    .every((scenario) => scenario.forbiddenActions === undefined)
+);
+
+async function runOne(
+  scenario: (typeof allPacks)[number],
+  action: FireworksAction
+) {
+  const result = await runGameIqScenarios({
+    runId: "test-forbidden",
+    modelId: "test:model",
+    teamCompositionId: "test-team",
+    scenarios: [scenario],
+    moveProvider: () => ({ action }),
+  });
+  return result.caseResults[0];
 }
 
-process.exit(failures === 0 ? 0 : 1);
+async function main(): Promise<void> {
+  // Pick a scenario whose forbidden action is legal (so it isn't rejected for
+  // shape/legality first) and whose expected weight-1 answer is a different
+  // legal action, plus a third legal action that is neither expected nor
+  // forbidden (the "ordinary wrong-but-legal move").
+  const trap = allPacks.find((scenario) => {
+    const view = scenario.initialState as { legalActions: FireworksAction[] };
+    const forbidden = scenario.forbiddenActions ?? [];
+    if (forbidden.length === 0) return false;
+    const forbiddenLegal = forbidden.every((f) =>
+      view.legalActions.some((legal) => fireworksActionsEqual(legal, f))
+    );
+    const expected = scenario.expectedActions.map(
+      (e) => e.action as FireworksAction
+    );
+    const ordinaryWrong = view.legalActions.find(
+      (legal) =>
+        !forbidden.some((f) => fireworksActionsEqual(f, legal)) &&
+        !expected.some((e) => fireworksActionsEqual(e, legal))
+    );
+    return forbiddenLegal && ordinaryWrong !== undefined;
+  });
+
+  check("a fireworks trap scenario is available for runner assertions", trap !== undefined);
+  if (!trap) return;
+
+  const view = trap.initialState as { legalActions: FireworksAction[] };
+  const forbidden = (trap.forbiddenActions ?? [])[0]!;
+  const expected = trap.expectedActions.map((e) => e.action as FireworksAction);
+  const ordinaryWrong = view.legalActions.find(
+    (legal) =>
+      !(trap.forbiddenActions ?? []).some((f) =>
+        fireworksActionsEqual(f, legal)
+      ) && !expected.some((e) => fireworksActionsEqual(e, legal))
+  )!;
+
+  const trapResult = await runOne(trap, forbidden);
+  check(
+    "a forbidden action scores 0 with forbiddenBlunder set (legal but a trap)",
+    trapResult.legal === true &&
+      trapResult.forbiddenBlunder === true &&
+      trapResult.correct === false &&
+      trapResult.actionQuality === 0,
+    {
+      legal: trapResult.legal,
+      forbiddenBlunder: trapResult.forbiddenBlunder,
+      correct: trapResult.correct,
+      actionQuality: trapResult.actionQuality,
+    }
+  );
+
+  const ordinaryResult = await runOne(trap, ordinaryWrong);
+  check(
+    "an ordinary wrong-but-legal action does NOT set forbiddenBlunder",
+    ordinaryResult.legal === true &&
+      ordinaryResult.forbiddenBlunder === false &&
+      ordinaryResult.correct === false,
+    {
+      action: ordinaryWrong,
+      legal: ordinaryResult.legal,
+      forbiddenBlunder: ordinaryResult.forbiddenBlunder,
+      correct: ordinaryResult.correct,
+    }
+  );
+
+  if (failures === 0) {
+    console.log("PASS");
+  } else {
+    console.log(`FAIL ${failures} check(s) failed`);
+  }
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+void main();

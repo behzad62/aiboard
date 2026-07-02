@@ -46,6 +46,14 @@ export function toGameIqScenario(input: {
       label: action.label,
       weight: action.weight,
     })),
+    // Carry the TeamIQ scenario's trap actions through the port so trap-state
+    // packs can distinguish falling into the trap (forbiddenBlunder) from an
+    // ordinary wrong-but-legal move. Omit the field entirely when the source
+    // scenario has none, so unaffected scenarios stay untouched.
+    ...(input.scenario.forbiddenActions &&
+    input.scenario.forbiddenActions.length > 0
+      ? { forbiddenActions: input.scenario.forbiddenActions }
+      : {}),
     // The `source:` tag records that this GameIQ scenario is a re-wrap of a
     // TeamIQ fireworks scenario, so cross-track aggregation can de-duplicate
     // the shared underlying decision instead of counting it twice.

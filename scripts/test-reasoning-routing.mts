@@ -1,6 +1,6 @@
 /** Provider reasoning-effort routing checks (run: npx tsx scripts/test-reasoning-routing.mts) */
 import type { ReasoningEffort } from "../lib/db/schema";
-import { formatModelId } from "../lib/providers/base";
+import { formatModelId, parseModelId } from "../lib/providers/base";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { providerSupportsReasoningEffortFeature } from "../lib/providers/provider-registry";
 import {
@@ -80,6 +80,25 @@ check(
   json(anthropicReasoningFields("claude-opus-4-8", "max")) ===
     json({ thinking: { type: "adaptive" }, output_config: { effort: "max" } }),
   anthropicReasoningFields("claude-opus-4-8", "max")
+);
+check(
+  "Claude Opus 4.5 medium sends effort without unsupported adaptive thinking",
+  json(anthropicReasoningFields("claude-opus-4-5", "medium")) ===
+    json({ output_config: { effort: "medium" } }),
+  anthropicReasoningFields("claude-opus-4-5", "medium")
+);
+check(
+  "Claude Opus 4.5 max falls back to its highest supported effort",
+  json(anthropicReasoningFields("claude-opus-4-5", "max")) ===
+    json({ output_config: { effort: "high" } }),
+  anthropicReasoningFields("claude-opus-4-5", "max")
+);
+const foundryOpus45Model = parseModelId("foundry:claude-opus-4-5").model;
+check(
+  "Azure Foundry Opus 4.5 medium uses the Anthropic-compatible Opus 4.5 payload",
+  json(anthropicReasoningFields(foundryOpus45Model, "medium")) ===
+    json({ output_config: { effort: "medium" } }),
+  anthropicReasoningFields(foundryOpus45Model, "medium")
 );
 check(
   "Claude Fable off maps to its lowest supported adaptive thinking effort",

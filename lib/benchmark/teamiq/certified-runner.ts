@@ -26,8 +26,9 @@ import {
 import {
   buildCertifiedToolReliabilityPrompt,
   certifiedToolReliabilityStructuredOutputForCase,
-  malformedToolReliabilityRepairSeed,
+  type ToolReliabilityRepairContext,
 } from "@/lib/benchmark/toolreliability/certified-runner";
+import { validateToolReliabilityJsonOutput } from "@/lib/benchmark/toolreliability";
 import {
   diagnoseToolReliabilityCaseResult,
   summarizeToolReliabilityDiagnostics,
@@ -171,77 +172,41 @@ async function runTeamIqToolReliabilityAttempt(
   for (const benchmarkCase of casePack) {
     throwIfCertifiedRunAborted(input.signal);
     const caseOutputs: string[] = [];
+    // Genuine repair loop: attempt 0 is the team's OWN real output. Only if it
+    // fails post-hoc validation does the team get one repair round that carries
+    // its own failed output plus the specific parser feedback. This mirrors the
+    // solo ToolReliability path so TeamIQ repair scores measure recovery from
+    // the team's own failed output rather than from a seeded constant.
+    const firstOutput = await runTeamRound({
+      input,
+      team,
+      benchmarkCase,
+      attemptId,
+      attemptIndex: 0,
+      calls,
+    });
+    caseOutputs.push(firstOutput);
+
     if (benchmarkCase.category === "repair-loop") {
-      caseOutputs.push(malformedToolReliabilityRepairSeed(benchmarkCase));
-    }
-    const modelAttemptIndexes = benchmarkCase.category === "repair-loop" ? [1] : [0];
-    for (const attemptIndex of modelAttemptIndexes) {
-      const roleOutputs: string[] = [];
-      for (const role of team.roles) {
-        const call = await callCertifiedModel({
-          model: selectedModelForRole(role),
-          system:
-            "You are participating in a certified TeamIQ benchmark. Return only the requested benchmark answer.",
-          user: teamIqToolReliabilityPrompt({
-            team,
-            role,
-            benchmarkCase,
-            attemptIndex,
-            previousOutputs: roleOutputs,
-          }),
-          maxTokens: input.maxTokens ?? role.maxTokens ?? 512,
-          temperature: 0,
-          reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
-          structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
-            benchmarkCase,
-            attemptIndex
-          ),
-          allowInvalidStructuredOutput: true,
-          context: input.context,
-          caseId: benchmarkCase.id,
+      const firstValidation = validateToolReliabilityJsonOutput(
+        firstOutput,
+        benchmarkCase.schema
+      );
+      if (!firstValidation.valid) {
+        throwIfCertifiedRunAborted(input.signal);
+        const repairOutput = await runTeamRound({
+          input,
+          team,
+          benchmarkCase,
           attemptId,
-          participantId: `${team.id}:${role.slot}`,
-          pricing: input.pricing,
-          streamChat: input.streamChat,
-          signal: input.signal,
+          attemptIndex: 1,
+          calls,
+          repairContext: {
+            previousOutput: firstOutput,
+            feedback: firstValidation.message,
+          },
         });
-        calls.push(call);
-        roleOutputs.push(call.rawResponse);
-      }
-      if (team.roles.length > 1) {
-        const synthesisRole = preferredRoleForTeam(team, roleOutputs);
-        const synthesisCall = await callCertifiedModel({
-          model: selectedModelForRole(synthesisRole),
-          system:
-            "You are the final synthesizer for a certified TeamIQ benchmark. Return only the requested benchmark answer.",
-          user: teamIqToolReliabilitySynthesisPrompt({
-            team,
-            benchmarkCase,
-            attemptIndex,
-            roleOutputs,
-          }),
-          maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? 512,
-          temperature: 0,
-          reasoningEffort: certifiedReasoningEffort(
-            synthesisRole.reasoningEffort
-          ),
-          structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
-            benchmarkCase,
-            attemptIndex
-          ),
-          allowInvalidStructuredOutput: true,
-          context: input.context,
-          caseId: benchmarkCase.id,
-          attemptId,
-          participantId: `${team.id}:${synthesisRole.slot}:synthesis`,
-          pricing: input.pricing,
-          streamChat: input.streamChat,
-          signal: input.signal,
-        });
-        calls.push(synthesisCall);
-        caseOutputs.push(synthesisCall.rawResponse);
-      } else {
-        caseOutputs.push(finalOutputForTeam(team, roleOutputs));
+        caseOutputs.push(repairOutput);
       }
     }
     outputs[benchmarkCase.id] = caseOutputs;
@@ -296,6 +261,93 @@ async function runTeamIqToolReliabilityAttempt(
   };
 }
 
+/**
+ * Runs one full team round for a single case at the given attemptIndex and
+ * returns the team's final output for that round (synthesized answer for
+ * multi-role teams, preferred-role output otherwise). All per-call latency /
+ * token / cost bookkeeping is appended to `calls`. When `repairContext` is
+ * supplied it is threaded into both the per-role and synthesis prompts so the
+ * repair round carries the team's own previous output plus parser feedback.
+ */
+async function runTeamRound(params: {
+  input: RunCertifiedTeamIqInput;
+  team: BenchmarkTeamComposition;
+  benchmarkCase: ToolReliabilityCase;
+  attemptId: string;
+  attemptIndex: number;
+  calls: TeamIqParticipantCall[];
+  repairContext?: ToolReliabilityRepairContext;
+}): Promise<string> {
+  const { input, team, benchmarkCase, attemptId, attemptIndex, calls, repairContext } =
+    params;
+  const roleOutputs: string[] = [];
+  for (const role of team.roles) {
+    const call = await callCertifiedModel({
+      model: selectedModelForRole(role),
+      system:
+        "You are participating in a certified TeamIQ benchmark. Return only the requested benchmark answer.",
+      user: teamIqToolReliabilityPrompt({
+        team,
+        role,
+        benchmarkCase,
+        attemptIndex,
+        previousOutputs: roleOutputs,
+        repairContext,
+      }),
+      maxTokens: input.maxTokens ?? role.maxTokens ?? 512,
+      temperature: 0,
+      reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
+      structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
+        benchmarkCase,
+        attemptIndex
+      ),
+      allowInvalidStructuredOutput: true,
+      context: input.context,
+      caseId: benchmarkCase.id,
+      attemptId,
+      participantId: `${team.id}:${role.slot}`,
+      pricing: input.pricing,
+      streamChat: input.streamChat,
+      signal: input.signal,
+    });
+    calls.push(call);
+    roleOutputs.push(call.rawResponse);
+  }
+  if (team.roles.length > 1) {
+    const synthesisRole = preferredRoleForTeam(team, roleOutputs);
+    const synthesisCall = await callCertifiedModel({
+      model: selectedModelForRole(synthesisRole),
+      system:
+        "You are the final synthesizer for a certified TeamIQ benchmark. Return only the requested benchmark answer.",
+      user: teamIqToolReliabilitySynthesisPrompt({
+        team,
+        benchmarkCase,
+        attemptIndex,
+        roleOutputs,
+        repairContext,
+      }),
+      maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? 512,
+      temperature: 0,
+      reasoningEffort: certifiedReasoningEffort(synthesisRole.reasoningEffort),
+      structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
+        benchmarkCase,
+        attemptIndex
+      ),
+      allowInvalidStructuredOutput: true,
+      context: input.context,
+      caseId: benchmarkCase.id,
+      attemptId,
+      participantId: `${team.id}:${synthesisRole.slot}:synthesis`,
+      pricing: input.pricing,
+      streamChat: input.streamChat,
+      signal: input.signal,
+    });
+    calls.push(synthesisCall);
+    return synthesisCall.rawResponse;
+  }
+  return finalOutputForTeam(team, roleOutputs);
+}
+
 function selectedModelForRole(role: BenchmarkTeamCompositionRole): SelectedModel {
   return {
     modelId: role.modelId,
@@ -318,10 +370,12 @@ function teamIqToolReliabilityPrompt(input: {
   benchmarkCase: ToolReliabilityCase;
   attemptIndex: number;
   previousOutputs: string[];
+  repairContext?: ToolReliabilityRepairContext;
 }): string {
   const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
     input.benchmarkCase,
-    input.attemptIndex
+    input.attemptIndex,
+    input.repairContext
   );
   const collaborationNote =
     input.previousOutputs.length > 0
@@ -344,10 +398,12 @@ function teamIqToolReliabilitySynthesisPrompt(input: {
   benchmarkCase: ToolReliabilityCase;
   attemptIndex: number;
   roleOutputs: string[];
+  repairContext?: ToolReliabilityRepairContext;
 }): string {
   const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
     input.benchmarkCase,
-    input.attemptIndex
+    input.attemptIndex,
+    input.repairContext
   );
   const memberOutputs = input.team.roles
     .map((role, index) =>

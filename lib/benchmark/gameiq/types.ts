@@ -54,10 +54,17 @@ export interface GameIqScenario<TState = unknown, TAction = GameIqAction> {
   title: string;
   category: GameIqScenarioCategory;
   difficulty: "easy" | "medium" | "hard";
-  version: "0.1.0";
+  // String (not a literal) so ported scenarios can carry their own content
+  // version; forbiddenActions carry-through widened this from "0.1.0".
+  version: string;
   prompt: string;
   initialState: TState;
   expectedActions: Array<GameIqExpectedAction<TAction>>;
+  // Actions that are specifically wrong for this scenario (e.g. falling into a
+  // trap state), distinct from any ordinary legal-but-suboptimal move. A match
+  // scores 0 AND raises a distinct blunder flag on the result so a trap failure
+  // is visible as a trap failure, not a generic miss.
+  forbiddenActions?: TAction[];
   tags: string[];
   maxResponseMs: number;
 }
@@ -109,9 +116,11 @@ export interface GameIqScenarioResult {
   correct: boolean;
   actionQuality: number;
   latencyMs: number;
-  // Diagnostic only — never read by scoreGameIqAttempt. GameIQ must not score
-  // wall-clock latency (worker speed is throughput-relative elsewhere too).
-  latencyFactor: number;
+  // True when the chosen action matched one of the scenario's forbiddenActions
+  // (e.g. fell into a trap). Distinct from a generic wrong move: correct is
+  // false and actionQuality is forced to 0, but this flag lets the verifier
+  // surface a trap failure as a trap failure.
+  forbiddenBlunder: boolean;
   fallbackUsed: boolean;
   messages: string[];
 }
@@ -122,10 +131,10 @@ export interface GameIqRunMetrics extends GameIqScoreInput {
   legalActions: number;
   correctActions: number;
   fallbackActions: number;
-  // Diagnostic only — declared here (not just inherited) so it stays typed as
-  // display metadata even if GameIqScoreInput drops it. scoreGameIqAttempt
-  // must never read it: GameIQ does not score wall-clock latency.
-  latencyFactor: number;
+  // Count of scenarios where the model matched a forbiddenAction (trap). These
+  // also count as wrong (not correct) but are surfaced separately so a pack
+  // with trap states can report how often models fell into the trap.
+  forbiddenBlunders: number;
 }
 
 export interface GameIqRunResult {

@@ -167,21 +167,25 @@ const codenamesScenario = getGameIqScenarioPack("codenames")?.scenarios[0];
 if (!codenamesScenario) {
   check("Codenames scenarios available for behavioral clue scoring", false);
 } else {
-  const alternateLegalClue = await runGameIqScenarios({
-    runId: "gameiq-test-run-codenames-alternate-legal-clue",
+  // Since the 2026-07-02 re-authoring, codenames clue scenarios are
+  // skill-binding ("hidden-cooperation"): a legal but board-blind clue that is
+  // not in the scenario's defensible allowlist must count as LEGAL yet score
+  // ZERO correctness. GALAXY is not a board word on any codenames board.
+  const legalBoardBlindClue = await runGameIqScenarios({
+    runId: "gameiq-test-run-codenames-legal-board-blind-clue",
     modelId: "fake:codenames",
     teamCompositionId: "team-fake-codenames",
     scenarios: [codenamesScenario],
     moveProvider: () => ({
       action: {
         type: "clue",
-        clue: { word: "PLANET", count: 2 },
+        clue: { word: "GALAXY", count: 2 },
         cardId: null,
       },
       rawResponse: JSON.stringify({
         action: {
           type: "clue",
-          clue: { word: "PLANET", count: 2 },
+          clue: { word: "GALAXY", count: 2 },
           cardId: null,
         },
       }),
@@ -190,13 +194,13 @@ if (!codenamesScenario) {
   });
 
   check(
-    "Codenames clue-selection scores alternate legal clues behaviorally",
-    alternateLegalClue.metrics.structuredReliability === 1 &&
-      alternateLegalClue.metrics.legalActionRate === 1 &&
-      alternateLegalClue.metrics.outcomeScore === 1 &&
-      alternateLegalClue.metrics.moveQuality === 1 &&
-      alternateLegalClue.attempt.status === "passed",
-    alternateLegalClue
+    "Codenames binding clue: legal board-blind clue is legal but scores zero",
+    legalBoardBlindClue.metrics.structuredReliability === 1 &&
+      legalBoardBlindClue.metrics.legalActionRate === 1 &&
+      legalBoardBlindClue.metrics.outcomeScore === 0 &&
+      legalBoardBlindClue.metrics.moveQuality === 0 &&
+      legalBoardBlindClue.attempt.status !== "passed",
+    legalBoardBlindClue
   );
 }
 

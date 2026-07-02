@@ -9,6 +9,124 @@ import { finiteOrNull, round } from "./types";
 
 const MIN_CONFIDENT_ATTEMPTS = 3;
 
+// Cross-track de-duplication.
+//
+// The same underlying decision can be scored into ONE merged (per-model /
+// per-team) leaderboard row twice through two different tracks:
+//   (a) fireworks — each GameIQ fireworks scenario is a re-wrap of a TeamIQ
+//       fireworks scenario and carries an explicit `source:<teamiq-id>` tag
+//       (see lib/benchmark/gameiq/fireworks.ts). The `gameiq` attempt and the
+//       `teamiq` attempt then describe the same decision.
+//   (b) toolreliability — the TeamIQ ToolReliability suites run the SAME case
+//       ids as the dedicated solo ToolReliability track, so a `teamiq` attempt
+//       and a `toolreliability` attempt can share the same underlying case id.
+//
+// When such attempts land in the SAME team group they must count once, not
+// twice. We key strictly on the explicit `source:` tag or the shared case id —
+// never on fuzzy matching — and keep the sample from the track-primary (richer)
+// track. Track-scoped views and per-track rates are left untouched: they never
+// run through this helper.
+//
+// Track priority (higher wins the shared decision):
+//   toolreliability > gameiq > teamiq > workbench > harnessbench
+// Rationale: the dedicated solo ToolReliability track carries the full
+// tool-reliability scoring dimension the TeamIQ re-run lacks, and the GameIQ
+// fireworks pack carries full move-quality scoring the TeamIQ fireworks re-wrap
+// lacks — so in both real overlaps the TeamIQ re-wrap loses to the richer,
+// dedicated track. Ties (same priority) break deterministically by attempt id.
+const CROSS_TRACK_PRIORITY: Record<string, number> = {
+  toolreliability: 5,
+  gameiq: 4,
+  teamiq: 3,
+  workbench: 2,
+  harnessbench: 1,
+};
+
+function trackPriority(track: string | undefined): number {
+  return track != null && track in CROSS_TRACK_PRIORITY
+    ? CROSS_TRACK_PRIORITY[track]
+    : 0;
+}
+
+/**
+ * Resolve an attempt to the id of the underlying decision it scores. Prefers an
+ * explicit `source:<id>` tag on the attempt's case (the fireworks re-wrap
+ * mechanism); otherwise falls back to the attempt's own case id (the shared
+ * toolreliability case id). Never fuzzy-matches.
+ */
+function underlyingDecisionId(
+  attempt: AttemptLike,
+  caseById: Map<string, BenchmarkCaseV2>
+): string {
+  const caseId = attempt.caseId ?? "";
+  const benchmarkCase = caseId ? caseById.get(caseId) : undefined;
+  const sourceTag = benchmarkCase?.tags?.find((tag) => tag.startsWith("source:"));
+  if (sourceTag) return sourceTag.slice("source:".length);
+  return caseId;
+}
+
+/**
+ * Drop the cross-track DUPLICATES of a shared underlying decision within a team
+ * group. When the same decision is reached through more than one track, only
+ * the samples from the single track-primary (richest) track survive; the
+ * re-wrap track's samples are dropped. Repeated attempts of one decision WITHIN
+ * a single track are kept intact (legitimate repetition for confidence), and
+ * attempts with no resolvable underlying id (no case id) are always kept.
+ * Used only by merged (cross-track) aggregates; callers that want a per-track
+ * view must NOT run their attempts through this.
+ */
+export function dedupeCrossTrackAttempts(
+  attempts: BenchmarkAttemptV2[],
+  cases: BenchmarkCaseV2[] = []
+): BenchmarkAttemptV2[] {
+  const caseById = new Map(cases.map((item) => [item.id, item]));
+  const passthrough: BenchmarkAttemptV2[] = [];
+  // key -> attempts grouped by (team, decision), tracking which track wins.
+  const groups = new Map<
+    string,
+    { winningTrack: string | undefined; attempts: AttemptLike[] }
+  >();
+
+  for (const attempt of attempts as AttemptLike[]) {
+    const decisionId = underlyingDecisionId(attempt, caseById);
+    if (!decisionId) {
+      passthrough.push(attempt);
+      continue;
+    }
+    const teamId = attempt.teamCompositionId ?? "unknown";
+    const key = `${teamId}::${decisionId}`;
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { winningTrack: attempt.track, attempts: [attempt] });
+      continue;
+    }
+    group.attempts.push(attempt);
+    if (winsTrack(attempt.track, group.winningTrack)) {
+      group.winningTrack = attempt.track;
+    }
+  }
+
+  const deduped: BenchmarkAttemptV2[] = [...passthrough];
+  for (const group of groups.values()) {
+    // Keep every same-track repeat from the winning track; drop the re-wrap
+    // track's samples entirely.
+    for (const attempt of group.attempts) {
+      if (attempt.track === group.winningTrack) deduped.push(attempt);
+    }
+  }
+  return deduped;
+}
+
+// Which of two tracks owns a shared decision: higher priority wins. On equal
+// priority the incumbent keeps ownership, so a decision reached only within one
+// track (same priority) is never split — all its samples are retained.
+function winsTrack(
+  candidate: string | undefined,
+  incumbent: string | undefined
+): boolean {
+  return trackPriority(candidate) > trackPriority(incumbent);
+}
+
 type AttemptLike = BenchmarkAttemptV2 & {
   status?: string;
   verifiedQuality?: number;
@@ -60,11 +178,14 @@ interface MutableCertifiedRunScore {
 export function aggregateCertifiedRunScores(
   input: CertifiedAggregateInput | BenchmarkAttemptV2[]
 ): CertifiedRunScore[] {
-  const attempts = (Array.isArray(input) ? input : input.attempts).filter(
+  const rawAttempts = (Array.isArray(input) ? input : input.attempts).filter(
     (attempt) => (attempt as AttemptLike).mode === undefined || (attempt as AttemptLike).mode === "certified"
   );
   const teams = Array.isArray(input) ? [] : input.teamCompositions ?? [];
   const cases = Array.isArray(input) ? [] : input.cases ?? [];
+  // Leaderboard rows MERGE all tracks for a team into one row, so the same
+  // underlying decision reached via two tracks must be counted once.
+  const attempts = dedupeCrossTrackAttempts(rawAttempts, cases);
   const teamById = new Map(teams.map((team) => [team.id, team as TeamLike]));
   const caseById = new Map(cases.map((item) => [item.id, item]));
   const groups = new Map<string, MutableCertifiedRunScore>();

@@ -6,8 +6,9 @@ import type { ReasoningEffort } from "../db/schema";
  * Maps the app's unified reasoning-effort level to each provider's native
  * parameter. Sources (verified 2026-07-02):
  *  - OpenAI GPT-5.5 `reasoning_effort`: none|low|medium|high|xhigh (default medium)
- *  - Anthropic adaptive thinking + `output_config.effort`: low|medium|high|xhigh|max (default high);
- *    Haiku 4.5 does NOT support it; xhigh is Fable 5 / Opus-tier only.
+ *  - Anthropic `output_config.effort`: low|medium|high|xhigh|max (default high);
+ *    Opus 4.5 supports effort without adaptive thinking and not max; Haiku 4.5
+ *    does NOT support effort.
  *  - OpenRouter `reasoning.effort` / `reasoning_effort`: none|low|medium|high|xhigh|max.
  *  - Gemini 3+: `thinkingLevel` (minimal|low|medium|high); Gemini 2.5: `thinkingBudget`
  *    (int). Sending both is a 400, so we pick one by model generation.
@@ -53,16 +54,49 @@ export function openRouterReasoningEffort(
   }
 }
 
-// Anthropic models that reject `output_config.effort` (would 400).
-const ANTHROPIC_EFFORT_UNSUPPORTED = new Set<string>([
-  "claude-haiku-4-5-20251001",
-]);
+function normalizeAnthropicModel(model: string): string {
+  return model.trim().toLowerCase();
+}
+
+function hasAnthropicModelPrefix(model: string, prefix: string): boolean {
+  const normalized = normalizeAnthropicModel(model);
+  return (
+    normalized === prefix ||
+    normalized.startsWith(`${prefix}-`) ||
+    normalized.startsWith(`${prefix}@`)
+  );
+}
 
 function anthropicThinkingAlwaysOn(model: string): boolean {
-  const normalized = model.toLowerCase();
   return (
-    normalized.startsWith("claude-fable-5") ||
-    normalized.startsWith("claude-mythos-5")
+    hasAnthropicModelPrefix(model, "claude-fable-5") ||
+    hasAnthropicModelPrefix(model, "claude-mythos-5")
+  );
+}
+
+function anthropicUsesAdaptiveThinkingField(model: string): boolean {
+  return (
+    anthropicThinkingAlwaysOn(model) ||
+    hasAnthropicModelPrefix(model, "claude-mythos-preview") ||
+    hasAnthropicModelPrefix(model, "claude-opus-4-8") ||
+    hasAnthropicModelPrefix(model, "claude-opus-4-7") ||
+    hasAnthropicModelPrefix(model, "claude-opus-4-6") ||
+    hasAnthropicModelPrefix(model, "claude-sonnet-5") ||
+    hasAnthropicModelPrefix(model, "claude-sonnet-4-6")
+  );
+}
+
+function anthropicSupportsEffort(model: string): boolean {
+  return (
+    anthropicUsesAdaptiveThinkingField(model) ||
+    hasAnthropicModelPrefix(model, "claude-opus-4-5")
+  );
+}
+
+function anthropicSupportsMaxEffort(model: string): boolean {
+  return (
+    anthropicUsesAdaptiveThinkingField(model) &&
+    !hasAnthropicModelPrefix(model, "claude-haiku-4-5")
   );
 }
 
@@ -72,7 +106,7 @@ export function anthropicEffort(
   effort: ReasoningEffort
 ): string | null {
   if (effort === "default") return null;
-  if (ANTHROPIC_EFFORT_UNSUPPORTED.has(model)) return null;
+  if (!anthropicSupportsEffort(model)) return null;
   if (effort === "none") {
     return anthropicThinkingAlwaysOn(model) ? "low" : null;
   }
@@ -84,7 +118,7 @@ export function anthropicEffort(
     case "high":
       return "high";
     case "max":
-      return "max";
+      return anthropicSupportsMaxEffort(model) ? "max" : "high";
     default:
       return null;
   }
@@ -95,9 +129,13 @@ export function anthropicReasoningFields(
   effort: ReasoningEffort
 ): Record<string, unknown> {
   const value = anthropicEffort(model, effort);
-  return value
-    ? { thinking: { type: "adaptive" }, output_config: { effort: value } }
-    : {};
+  if (!value) return {};
+  return {
+    ...(anthropicUsesAdaptiveThinkingField(model)
+      ? { thinking: { type: "adaptive" } }
+      : {}),
+    output_config: { effort: value },
+  };
 }
 
 function geminiMajorVersion(model: string): number {

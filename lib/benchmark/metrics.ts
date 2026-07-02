@@ -14,6 +14,7 @@ import type {
 } from "@/lib/benchmark/types";
 import {
   aggregateCertifiedRunScores,
+  dedupeCrossTrackAttempts,
   rankByCostPerPass,
   rankByEfficiency,
   rankBySpeedPerPass,
@@ -482,6 +483,15 @@ export function buildCertifiedBenchmarkDashboardData(
     teamCompositions: input.teamCompositions,
     track: "teamiq",
   });
+  // Summary quality/pass/cost/duration averages MERGE every track into one set
+  // of headline numbers, so the same underlying decision reached via two tracks
+  // must count once here too (leaderboard rows already dedupe internally).
+  // Track-scoped views below (trackRows, combo matrix, role leaderboards) keep
+  // the full scoredAttempts so per-track counts stay intact.
+  const mergedSummaryAttempts = dedupeCrossTrackAttempts(
+    scoredAttempts,
+    input.caseV2
+  );
 
   return {
     summary: {
@@ -507,22 +517,26 @@ export function buildCertifiedBenchmarkDashboardData(
       certifiedCases: input.caseV2.length,
       certifiedTeams: leaderboard.length,
       verifiedPassRate: rate(
-        scoredAttempts.filter((attempt) =>
+        mergedSummaryAttempts.filter((attempt) =>
           isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))
         ).length,
-        scoredAttempts.length
+        mergedSummaryAttempts.length
       ),
       averageVerifiedQuality: averageNumbers(
-        scoredAttempts.map((attempt) => finiteMetric(attempt.verifiedQuality))
+        mergedSummaryAttempts.map((attempt) =>
+          finiteMetric(attempt.verifiedQuality)
+        )
       ),
       averageEfficiencyScore: averageNumbers(
-        scoredAttempts.map((attempt) => finiteMetric(attempt.efficiencyScore))
+        mergedSummaryAttempts.map((attempt) =>
+          finiteMetric(attempt.efficiencyScore)
+        )
       ),
       averageCostUsd: averageNumbers(
-        scoredAttempts.map((attempt) => finiteMetric(attempt.costUsd))
+        mergedSummaryAttempts.map((attempt) => finiteMetric(attempt.costUsd))
       ),
       averageDurationMs: averageNumbers(
-        scoredAttempts.map((attempt) => finiteMetric(attempt.durationMs))
+        mergedSummaryAttempts.map((attempt) => finiteMetric(attempt.durationMs))
       ),
       harnessCertificationPassRate: rate(
         input.harnessCertifications.filter((certification) => certification.passed)

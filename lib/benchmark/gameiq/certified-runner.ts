@@ -203,7 +203,11 @@ function createGameIqVerifierResult(
     const passed = scenario.legal && scenario.correct;
     return {
       id: scenario.scenarioId,
-      label: `${scenario.gameId} ${scenario.category}`,
+      // A trap failure is surfaced distinctly in the label so a forbidden-action
+      // blunder reads as a trap failure, not a generic miss.
+      label: scenario.forbiddenBlunder
+        ? `${scenario.gameId} ${scenario.category} (trap blunder)`
+        : `${scenario.gameId} ${scenario.category}`,
       passed,
       weight: 1,
       message:
@@ -225,6 +229,7 @@ function createGameIqVerifierResult(
       structured: scenario.structured,
       legal: scenario.legal,
       correct: scenario.correct,
+      forbiddenBlunder: scenario.forbiddenBlunder,
       actionQuality: scenario.actionQuality,
       expectedActions: scenario.expectedActions,
       action: scenario.action,
@@ -382,6 +387,7 @@ function gameIqAssertionDetails(
     `Structured: ${scenario.structured ? "yes" : "no"}`,
     `Legal: ${scenario.legal ? "yes" : "no"}`,
     `Correct: ${scenario.correct ? "yes" : "no"}`,
+    scenario.forbiddenBlunder ? "Trap blunder: yes (matched a forbidden action)" : "",
     scenario.messages.length > 0
       ? `Messages\n${scenario.messages.join("\n")}`
       : "",

@@ -19,6 +19,30 @@ import {
   validateGameIqAction,
 } from "./validation";
 
+// Detect whether a (structured) action matches one of the scenario's
+// forbiddenActions. We reuse actionMatchesExpected (the exported per-game
+// equality path) by probing a scenario whose expectedActions ARE the forbidden
+// actions. forbiddenActions only appear on fireworks scenarios today, whose
+// category ("hidden-cooperation") never triggers actionMatchesExpected's
+// codenames clue-selection legality branch, so this measures exact equality.
+function matchesForbiddenAction(
+  scenario: GameIqScenario,
+  action: unknown
+): boolean {
+  const forbidden = scenario.forbiddenActions;
+  if (!forbidden || forbidden.length === 0) return false;
+  if (!isStructuredGameIqAction(scenario, action)) return false;
+  const probe: GameIqScenario = {
+    ...scenario,
+    expectedActions: forbidden.map((forbiddenAction) => ({
+      action: forbiddenAction,
+      label: "forbidden",
+      weight: 1,
+    })),
+  };
+  return actionMatchesExpected(probe, action) > 0;
+}
+
 function isProviderResult(value: unknown): value is GameIqProviderResult {
   return (
     value !== null &&
@@ -30,15 +54,6 @@ function isProviderResult(value: unknown): value is GameIqProviderResult {
 function normalizeProviderResult(value: unknown): GameIqProviderResult {
   if (isProviderResult(value)) return value;
   return { action: value };
-}
-
-// Diagnostic only: latencyFactor is reported on results/metrics for display
-// but is NEVER read by scoreGameIqAttempt — GameIQ must not score wall-clock
-// latency (see memory: "never score by raw elapsed time").
-function latencyFactor(latencyMs: number, targetMs: number): number {
-  if (!Number.isFinite(latencyMs) || latencyMs < 0) return 0;
-  if (latencyMs <= targetMs) return 1;
-  return round(targetMs / latencyMs, 4);
 }
 
 function average(values: number[]): number {
@@ -100,9 +115,23 @@ async function evaluateScenario(
         ok: false,
         messages: ["Action does not match the expected GameIQ action shape."],
       };
-  const quality = validation.ok
-    ? actionMatchesExpected(scenario, providerResult.action)
-    : 0;
+  const forbiddenBlunder = matchesForbiddenAction(
+    scenario,
+    providerResult.action
+  );
+  // A forbidden (trap) action always scores 0 regardless of any weight it might
+  // otherwise pick up, so a trap failure can never be rewarded.
+  const quality = forbiddenBlunder
+    ? 0
+    : validation.ok
+      ? actionMatchesExpected(scenario, providerResult.action)
+      : 0;
+  const messages = forbiddenBlunder
+    ? [
+        ...validation.messages,
+        "Action fell into a forbidden trap state for this scenario.",
+      ]
+    : validation.messages;
 
   return {
     scenarioId: scenario.id,
@@ -117,9 +146,9 @@ async function evaluateScenario(
     correct: quality > 0,
     actionQuality: quality,
     latencyMs,
-    latencyFactor: latencyFactor(latencyMs, scenario.maxResponseMs),
+    forbiddenBlunder,
     fallbackUsed: providerResult.fallbackUsed === true,
-    messages: validation.messages,
+    messages,
   };
 }
 
@@ -146,6 +175,9 @@ export async function runGameIqScenarios(
   const legalActions = caseResults.filter((result) => result.legal).length;
   const correctActions = caseResults.filter((result) => result.correct).length;
   const fallbackActions = caseResults.filter((result) => result.fallbackUsed).length;
+  const forbiddenBlunders = caseResults.filter(
+    (result) => result.forbiddenBlunder
+  ).length;
   const groups = new Map<string, GameIqScenarioResult[]>();
   for (const result of caseResults) {
     const key = distinctGroupKey(result);
@@ -166,6 +198,7 @@ export async function runGameIqScenarios(
     legalActions,
     correctActions,
     fallbackActions,
+    forbiddenBlunders,
     outcomeScore: average(groupAverages.map((group) => group.correct)),
     moveQuality: average(groupAverages.map((group) => group.quality)),
     legalActionRate: average(groupAverages.map((group) => group.legal)),
@@ -173,7 +206,6 @@ export async function runGameIqScenarios(
       groupAverages.map((group) => group.structured)
     ),
     fallbackRate: average(groupAverages.map((group) => group.fallback)),
-    latencyFactor: average(caseResults.map((result) => result.latencyFactor)),
   };
   const score = scoreGameIqAttempt(metrics);
   const completedAt = new Date().toISOString();
