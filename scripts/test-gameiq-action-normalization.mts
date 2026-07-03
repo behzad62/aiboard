@@ -49,7 +49,6 @@ const whitePromotion: ChessGameIqScenario = {
     },
   ],
   tags: ["chess", "promotion"],
-  maxResponseMs: 15_000,
 };
 
 // Non-promotion scenario: a simple king move, expected e1->e2 (no promotion).
@@ -66,7 +65,6 @@ const nonPromotion: ChessGameIqScenario = {
     { action: { from: "e1", to: "e2" }, label: "Ke2", weight: 1 },
   ],
   tags: ["chess"],
-  maxResponseMs: 15_000,
 };
 
 // Replicate the runner's scoring sequence so we exercise the same boundary the

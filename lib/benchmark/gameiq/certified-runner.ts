@@ -83,7 +83,13 @@ const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
   }),
 };
 
-const DEFAULT_GAMEIQ_MAX_TOKENS = 2048;
+// Reasoning models stream thinking tokens against maxTokens before emitting
+// their short structured answer; 2048 truncated them into empty/failed
+// responses on providers that hard-enforce the cap (observed with GPT-5.5
+// GameIQ calls emitting thousands of thinking tokens before a ~20-token
+// action). Conciseness is controlled by the structured-output schema +
+// prompt, never by maxTokens as a length control (repo convention).
+const DEFAULT_GAMEIQ_MAX_TOKENS = 16_384;
 
 export interface RunCertifiedGameIqInput {
   context: CertifiedRunContext;

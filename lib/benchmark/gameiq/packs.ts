@@ -48,7 +48,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-connect-four",
     gameId: "connect-four",
     label: "Certified GameIQ v1: Connect Four",
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: CONNECT_FOUR_GAMEIQ_SCENARIOS,
   },
@@ -56,7 +57,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-chess",
     gameId: "chess",
     label: "Certified GameIQ v1: Chess Tactics",
-    version: "0.3.0",
+    // 0.3.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.3.1",
     certificationTier: "first-class",
     scenarios: CHESS_GAMEIQ_SCENARIOS,
   },
@@ -64,7 +66,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-battleship",
     gameId: "battleship",
     label: "Certified GameIQ v1: Battleship Targeting",
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: BATTLESHIP_GAMEIQ_SCENARIOS,
   },
@@ -76,7 +79,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // clones with 10 distinct skill-binding decisions (6 deduced guesses, 4
     // binding clues). Passes gameIqPackFirstClassFloor (>=10 distinct
     // decisions, 0% constant-answer rate), so first-class is now honest.
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: CODENAMES_GAMEIQ_SCENARIOS,
   },
@@ -90,7 +94,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // stripped of clue-identity channels). Content unchanged; scoring identical.
     // 0.4.1: equivalent-information clue widening pass now applies (no content
     // change in this pack; oracle-narrowness fix, 2026-07-03)
-    version: "0.4.1",
+    // 0.4.2: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.2",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   },
@@ -100,7 +105,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     label: "Certified GameIQ v1: Fireworks Trap States",
     // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
     // 0.4.0: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
-    version: "0.4.0",
+    // 0.4.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.1",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   },
@@ -115,7 +121,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // model must RECALL. Content unchanged; scoring identical.
     // 0.4.1: equivalent-information clue widening pass now applies (no content
     // change in this pack; oracle-narrowness fix, 2026-07-03)
-    version: "0.4.1",
+    // 0.4.2: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.2",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
   },

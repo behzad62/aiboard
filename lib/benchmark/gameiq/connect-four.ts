@@ -108,7 +108,6 @@ function scenarioFromCase(entry: ConnectFourCase): ConnectFourGameIqScenario {
     initialState: state(boardFromStacks(entry.stacks), entry.player),
     expectedActions: expected(entry.columns, entry.note),
     tags: ["connect-four", ...entry.tags],
-    maxResponseMs: 15_000,
   };
 }
 

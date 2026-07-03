@@ -85,7 +85,6 @@ export interface GameIqScenario<TState = unknown, TAction = GameIqAction> {
   // is visible as a trap failure, not a generic miss.
   forbiddenActions?: TAction[];
   tags: string[];
-  maxResponseMs: number;
 }
 
 export interface GameIqScenarioPack {
