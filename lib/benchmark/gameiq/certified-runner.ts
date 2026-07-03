@@ -224,17 +224,30 @@ function createGameIqVerifierResult(
 ): BenchmarkVerifierResult {
   const assertions = result.caseResults.map((scenario) => {
     const passed = scenario.legal && scenario.correct;
+    // A transport-unscored scenario never "passes" — it is honestly surfaced
+    // as a containment gap (message prefix + label suffix + `unscored` on the
+    // caseResults entry below), not faked as a pass. It still counts against
+    // `passed` here; the attempt-level status/score already account for it
+    // via the GAMEIQ_MAX_UNSCORED_RATE validity rule in the runner.
+    const rawMessage =
+      scenario.messages.length > 0 ? scenario.messages.join("; ") : undefined;
+    const message =
+      scenario.unscored === "transport"
+        ? `UNSCORED (transport): ${rawMessage ?? "Provider transport failure after retries."}`
+        : rawMessage;
     return {
       id: scenario.scenarioId,
       // A trap failure is surfaced distinctly in the label so a forbidden-action
-      // blunder reads as a trap failure, not a generic miss.
-      label: scenario.forbiddenBlunder
-        ? `${scenario.gameId} ${scenario.category} (trap blunder)`
-        : `${scenario.gameId} ${scenario.category}`,
+      // blunder reads as a trap failure, not a generic miss. An unscored
+      // transport gap is likewise labeled distinctly from a scored miss.
+      label:
+        (scenario.forbiddenBlunder
+          ? `${scenario.gameId} ${scenario.category} (trap blunder)`
+          : `${scenario.gameId} ${scenario.category}`) +
+        (scenario.unscored === "transport" ? " (unscored: transport)" : ""),
       passed,
       weight: 1,
-      message:
-        scenario.messages.length > 0 ? scenario.messages.join("; ") : undefined,
+      message,
       ...(!passed ? { details: gameIqAssertionDetails(scenario) } : {}),
     };
   });
@@ -258,6 +271,7 @@ function createGameIqVerifierResult(
       action: scenario.action,
       rawResponse: scenario.rawResponse,
       messages: scenario.messages,
+      ...(scenario.unscored ? { unscored: scenario.unscored } : {}),
     })),
   });
   return {

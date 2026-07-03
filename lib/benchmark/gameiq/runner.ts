@@ -1,9 +1,11 @@
+import { CertifiedProviderError } from "@/lib/benchmark/certified/model-call";
 import { scoreGameIqAttempt } from "@/lib/benchmark/scoring/gameiq";
 import { round } from "@/lib/benchmark/scoring/types";
 import { gameIqDecisionKey } from "./packs";
 import {
   GAMEIQ_CORRECT_QUALITY_BAR,
   GAMEIQ_HARNESS_VERSION,
+  GAMEIQ_MAX_UNSCORED_RATE,
   GAMEIQ_PROMPT_SET_VERSION,
   GAMEIQ_SCORING_VERSION,
   type GameIqProviderResult,
@@ -85,9 +87,42 @@ async function evaluateScenario(
     typeof performance !== "undefined" && performance.now
       ? performance.now()
       : Date.now();
-  const providerResult = normalizeProviderResult(
-    await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
-  );
+  let providerResult: GameIqProviderResult;
+  try {
+    providerResult = normalizeProviderResult(
+      await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
+    );
+  } catch (error) {
+    if (
+      error instanceof CertifiedProviderError &&
+      error.classification === "transient"
+    ) {
+      // Transient transport failure survived B1's retries: contain it as an
+      // unscored scenario instead of scoring it wrong or voiding the whole
+      // run. Excluded from every metric denominator by runGameIqScenarios.
+      return {
+        scenarioId: scenario.id,
+        gameId: scenario.gameId,
+        category: scenario.category,
+        initialState: scenario.initialState,
+        expectedActions: scenario.expectedActions,
+        action: null,
+        rawResponse: error.message,
+        structured: false,
+        legal: false,
+        correct: false,
+        actionQuality: 0,
+        latencyMs: 0,
+        forbiddenBlunder: false,
+        fallbackUsed: false,
+        unscored: "transport",
+        messages: [`Provider transport failure after retries: ${error.message}`],
+      };
+    }
+    // Fatal / other classification, budget errors, or any non-provider throw:
+    // abort the attempt (caller/run engine handle the rethrow).
+    throw error;
+  }
 
   const completed =
     typeof performance !== "undefined" && performance.now
@@ -164,15 +199,21 @@ export async function runGameIqScenarios(
   }
 
   const scenarioCount = caseResults.length;
-  const structuredActions = caseResults.filter((result) => result.structured).length;
-  const legalActions = caseResults.filter((result) => result.legal).length;
-  const correctActions = caseResults.filter((result) => result.correct).length;
-  const fallbackActions = caseResults.filter((result) => result.fallbackUsed).length;
-  const forbiddenBlunders = caseResults.filter(
+  // Transport-failed scenarios are excluded from every scoring metric
+  // denominator (informational counts + grouped rate metrics) so a transport
+  // blip never masquerades as a wrong answer nor trips the failed_tool_use
+  // gate on a pack the model otherwise aced.
+  const scored = caseResults.filter((result) => !result.unscored);
+  const unscoredTransport = caseResults.length - scored.length;
+  const structuredActions = scored.filter((result) => result.structured).length;
+  const legalActions = scored.filter((result) => result.legal).length;
+  const correctActions = scored.filter((result) => result.correct).length;
+  const fallbackActions = scored.filter((result) => result.fallbackUsed).length;
+  const forbiddenBlunders = scored.filter(
     (result) => result.forbiddenBlunder
   ).length;
   const groups = new Map<string, GameIqScenarioResult[]>();
-  for (const result of caseResults) {
+  for (const result of scored) {
     const key = distinctGroupKey(result);
     const bucket = groups.get(key);
     if (bucket) bucket.push(result);
@@ -187,6 +228,8 @@ export async function runGameIqScenarios(
   }));
   const metrics: GameIqRunMetrics = {
     scenarioCount,
+    scoredScenarioCount: scored.length,
+    unscoredTransport,
     structuredActions,
     legalActions,
     correctActions,
@@ -201,6 +244,15 @@ export async function runGameIqScenarios(
     fallbackRate: average(groupAverages.map((group) => group.fallback)),
   };
   const score = scoreGameIqAttempt(metrics);
+  // Validity rule: too many transport gaps (or none scored at all) means this
+  // attempt cannot honestly represent the model's GameIQ ability, so it is
+  // invalidated for the leaderboard rather than scored on a partial pack.
+  const unscoredRate =
+    caseResults.length === 0 ? 0 : (caseResults.length - scored.length) / caseResults.length;
+  const status =
+    scored.length === 0 || unscoredRate > GAMEIQ_MAX_UNSCORED_RATE
+      ? "provider_unavailable"
+      : statusFromScore(score, metrics);
   const completedAt = new Date().toISOString();
   const measuredDurationMs = Math.max(0, Date.now() - runStartedMs);
   const durationMs = round(
@@ -222,7 +274,7 @@ export async function runGameIqScenarios(
       mode: "certified",
       track: "gameiq",
       harnessProfile: input.harnessProfile ?? "raw-single-model",
-      status: statusFromScore(score, metrics),
+      status,
       startedAt,
       completedAt,
       verifiedQuality: score / 100,
