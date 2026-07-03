@@ -12,20 +12,43 @@
  *  - scenarioId-keyed tuple pairing (B4+ run files): each scenario is paired to
  *    its OWN trace by id, and tuples are filtered, so a dropped middle trace
  *    removes exactly its own scenario and never shifts its neighbors' actions.
- *  - positional filter-then-slice (pre-B4 legacy run files): traces have no
- *    scenarioId, but were recorded sequentially one-per-scenario in order, so
- *    positional pairing is correct for them. Its exact behavior is a
- *    byte-identical guarantee — do not "improve" it.
+ *  - gap/duplicate-aware positional pairing (pre-B4 legacy run files): traces
+ *    have no scenarioId, but were recorded sequentially one-per-scenario-attempt
+ *    in scenario order (INCLUDING an empty trace for a failed transport call).
+ *    We first DEDUP duplicates — a double-recorded call or a retry re-hashes to
+ *    the SAME promptHash, so we collapse same-promptHash traces to one, keeping
+ *    the FINAL recorded state (latest completedAt) because that is exactly the
+ *    trace the live verifier scored — then index-pair dedupedTraces[i] ↔
+ *    scenarios[i] and filter out pairs whose trace is empty. Each empty removes
+ *    ONLY its own scenario, mirroring the scenarioId branch's tuple-then-filter
+ *    shape but keyed by deduped position.
+ *    This REPLACES a previous filter-then-slice that mis-attributed mid-list
+ *    gaps: when an empty trace landed in the MIDDLE (e.g. the Spark chess
+ *    smothered-mate timeout at position 2), filtering before slicing collapsed
+ *    past the gap so every trailing scenario inherited its neighbor's action —
+ *    scoring chess 2/15 where the live verifier said 14/15. promptHash
+ *    uniqueness (each scenario's prompt begins "Scenario N of M" over a distinct
+ *    board, so distinct scenarios never collide; only retries share a hash) was
+ *    verified across all four legacy reference run files before relying on it.
  */
 import type { GameIqScenario, GameIqScenarioPack } from "./types";
 
 export interface PackTraceRow {
   caseId: string;
   startedAt: string;
+  completedAt?: string;
   parsedResponseJson?: string | null;
   rawResponse?: string | null;
   latencyMs?: number;
   scenarioId?: string;
+  /**
+   * Stable hash of the scored prompt. Each GameIQ scenario's prompt begins
+   * "Scenario N of M" over a distinct board, so a promptHash is UNIQUE per
+   * scenario; a duplicate (a double-recorded call or a retry of the same
+   * scenario) re-hashes to the SAME value. The positional branch uses this to
+   * collapse those duplicates (see below).
+   */
+  promptHash?: string;
 }
 
 export interface PackTraceReplay {
@@ -46,6 +69,87 @@ function actionFromParsedJson(parsedJson: unknown): unknown {
     return (parsedJson as { action: unknown }).action;
   }
   return parsedJson;
+}
+
+/** A trace is usable iff it recorded a non-empty parsedResponseJson (a failed
+ * transport call records an empty one). */
+function traceHasParsedResponse(trace: PackTraceRow): boolean {
+  return Boolean(trace.parsedResponseJson && trace.parsedResponseJson.length > 0);
+}
+
+function actionForTrace(trace: PackTraceRow): unknown {
+  try {
+    return actionFromParsedJson(JSON.parse(trace.parsedResponseJson as string));
+  } catch {
+    return trace.rawResponse ?? null;
+  }
+}
+
+/**
+ * Collapse duplicate traces (a double-recorded call, or a retry of the same
+ * scenario — both re-hash to the same promptHash) in an (already startedAt-
+ * ordered) trace list, keeping ONE trace per promptHash: the FINAL recorded
+ * state of that scenario's call, i.e. the latest by completedAt (falling back
+ * to startedAt, then array order). This is exactly the trace the LIVE verifier
+ * scored, so a duplicate where the final recording was a parse/transport error
+ * (empty parsedResponseJson) is kept as empty and later filtered out as a gap —
+ * reproducing the run's actual verdict rather than a "better" earlier attempt.
+ * (Verified on the Spark connect-four avoid-loss-5 double-record: the later
+ * completedAt was the parse_error the official verifier scored as failed.)
+ * Traces without a promptHash are each kept as-is (they can't be deduped and are
+ * treated as distinct). Order is preserved by first-appearance so the survivors
+ * stay in scenario order.
+ */
+function dedupTracesByPromptHash(orderedTraces: PackTraceRow[]): PackTraceRow[] {
+  const byHash = new Map<string, PackTraceRow>();
+  const noHash: { index: number; trace: PackTraceRow }[] = [];
+  const firstSeenIndex = new Map<string, number>();
+  const traceOrderIndex = new Map<PackTraceRow, number>();
+  orderedTraces.forEach((trace, index) => {
+    traceOrderIndex.set(trace, index);
+    if (!trace.promptHash) {
+      noHash.push({ index, trace });
+      return;
+    }
+    const existing = byHash.get(trace.promptHash);
+    if (!existing) {
+      byHash.set(trace.promptHash, trace);
+      firstSeenIndex.set(trace.promptHash, index);
+      return;
+    }
+    // Keep whichever was recorded LAST: latest completedAt, then latest
+    // startedAt, then latest array position. The final state is what the live
+    // run scored.
+    if (isLaterRecording(trace, existing, traceOrderIndex)) {
+      byHash.set(trace.promptHash, trace);
+    }
+  });
+  // Reassemble in first-appearance order (= scenario order for legacy files).
+  const hashed = [...byHash.entries()].map(([hash, trace]) => ({
+    index: firstSeenIndex.get(hash) as number,
+    trace,
+  }));
+  return [...hashed, ...noHash]
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.trace);
+}
+
+/** True if `candidate` was recorded after `existing` (latest completedAt, then
+ * startedAt, then array order). */
+function isLaterRecording(
+  candidate: PackTraceRow,
+  existing: PackTraceRow,
+  traceOrderIndex: Map<PackTraceRow, number>
+): boolean {
+  const byCompleted = (candidate.completedAt ?? "").localeCompare(
+    existing.completedAt ?? ""
+  );
+  if (byCompleted !== 0) return byCompleted > 0;
+  const byStarted = candidate.startedAt.localeCompare(existing.startedAt);
+  if (byStarted !== 0) return byStarted > 0;
+  return (
+    (traceOrderIndex.get(candidate) ?? 0) > (traceOrderIndex.get(existing) ?? 0)
+  );
 }
 
 /**
@@ -96,29 +200,29 @@ export function resolvePackTraceReplay(
       }
     });
   } else {
-    // Positional pairing assumes one trace per scenario in scenario order —
-    // valid only for pre-B4 sequential run files; newer files use
-    // scenarioId. Pre-B4 run files have no scenarioId; positional pairing
-    // is correct for them because they were recorded sequentially, one
-    // trace per scenario.
+    // Gap/duplicate-aware positional pairing for pre-B4 legacy run files (no
+    // scenarioId). Traces were recorded one-per-scenario-attempt in scenario
+    // order, INCLUDING an empty trace for a failed transport call.
+    //  1. Sort by startedAt (stable).
+    //  2. DEDUP by promptHash (a double-record or retry re-hashes to the same
+    //     value): keep one per hash — the FINAL recorded state (latest
+    //     completedAt), the trace the live verifier scored. This collapses e.g.
+    //     the Spark connect-four 41→40 duplicate.
+    //  3. INDEX-PAIR dedupedTraces[i] ↔ scenarios[i], then FILTER out pairs
+    //     whose trace is empty. Each empty removes ONLY its own scenario, so a
+    //     mid-list gap no longer shifts trailing scenarios' actions (the old
+    //     filter-then-slice scored Spark chess 2/15 instead of 14/15).
     const orderedTraces = [...packTraces].sort((a, b) =>
       a.startedAt.localeCompare(b.startedAt)
     );
-    const scenarios = pack.scenarios.slice(0, orderedTraces.length);
-    // usable = traces whose parsedResponseJson is non-empty (the dying call
-    // records an empty response)
-    const usable = orderedTraces.filter(
-      (t) => t.parsedResponseJson && t.parsedResponseJson.length > 0
-    );
-    const n = Math.min(usable.length, scenarios.length);
-    replayScenarios = scenarios.slice(0, n);
-    actions = usable.slice(0, n).map((t) => {
-      try {
-        return actionFromParsedJson(JSON.parse(t.parsedResponseJson as string));
-      } catch {
-        return t.rawResponse ?? null;
-      }
-    });
+    const dedupedTraces = dedupTracesByPromptHash(orderedTraces);
+    const n = Math.min(dedupedTraces.length, pack.scenarios.length);
+    const usablePairs = pack.scenarios
+      .slice(0, n)
+      .map((scenario, index) => ({ scenario, trace: dedupedTraces[index] }))
+      .filter(({ trace }) => traceHasParsedResponse(trace));
+    replayScenarios = usablePairs.map((p) => p.scenario);
+    actions = usablePairs.map(({ trace }) => actionForTrace(trace));
   }
   const replayed = replayScenarios.length;
   return {
