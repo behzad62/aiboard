@@ -16,6 +16,10 @@ export { runCertifiedGameIq, createGameIqVerifierResult } from "./certified-runn
 export { resolvePackTraceReplay } from "./trace-replay";
 export type { PackTraceRow, PackTraceReplay } from "./trace-replay";
 export {
+  GAMEIQ_SATURATED_SCENARIO_IDS,
+  GAMEIQ_SATURATION_MIN_MODELS,
+} from "./saturation";
+export {
   actionMatchesExpected,
   gradeFireworksAction,
   isStructuredGameIqAction,
