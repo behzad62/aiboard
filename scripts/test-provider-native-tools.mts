@@ -180,12 +180,12 @@ check(
             {
               name: "read",
               description: sampleTools[0].description,
-              parameters: sampleTools[0].parameters,
+              parametersJsonSchema: sampleTools[0].parameters,
             },
             {
               name: "search",
               description: sampleTools[1].description,
-              parameters: sampleTools[1].parameters,
+              parametersJsonSchema: sampleTools[1].parameters,
             },
           ],
         },

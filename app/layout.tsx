@@ -4,8 +4,8 @@ import Link from "next/link";
 import {
   BarChart3,
   Coffee,
+  Code,
   Gamepad2,
-  Github,
   Info,
   Mail,
   MessageSquare,
@@ -135,7 +135,7 @@ export default function RootLayout({
                   title="View source on GitHub"
                   className={navIconBtn}
                 >
-                  <Github className="h-4 w-4" />
+                  <Code className="h-4 w-4" />
                   <span className="sr-only">View source on GitHub</span>
                 </a>
                 <ThemeToggle />

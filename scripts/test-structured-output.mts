@@ -125,7 +125,7 @@ const googleConfig = googleStructuredOutputConfig(format);
 check(
   "Google receives JSON MIME type and schema",
   googleConfig.responseMimeType === "application/json" &&
-    googleConfig.responseSchema?.properties?.action?.enum?.includes("review"),
+    googleConfig.responseJsonSchema?.properties?.action?.enum?.includes("review"),
   googleConfig
 );
 
@@ -150,21 +150,27 @@ const googleNullableEnumConfig = googleStructuredOutputConfig(
   googleNullableEnumFormat
 );
 const googlePromotionSchema =
-  googleNullableEnumConfig.responseSchema?.properties?.promotion;
+  googleNullableEnumConfig.responseJsonSchema?.properties?.promotion;
 const googleRankSchema =
-  googleNullableEnumConfig.responseSchema?.properties?.rank;
+  googleNullableEnumConfig.responseJsonSchema?.properties?.rank;
 check(
-  "Google nullable string enums use nullable plus string-only enum values",
-  googlePromotionSchema?.nullable === true &&
+  "Google JSON schema preserves nullable string enum values for the new SDK",
+  Array.isArray(googlePromotionSchema?.type) &&
+    googlePromotionSchema.type.includes("string") &&
+    googlePromotionSchema.type.includes("null") &&
     Array.isArray(googlePromotionSchema.enum) &&
-    googlePromotionSchema.enum.join(",") === "queen,rook",
+    googlePromotionSchema.enum.includes("queen") &&
+    googlePromotionSchema.enum.includes(null),
   googlePromotionSchema
 );
 check(
-  "Google numeric enums are omitted because Gemini schema enum is string-only",
-  googleRankSchema?.nullable === true &&
-    googleRankSchema.type === "integer" &&
-    googleRankSchema.enum === undefined,
+  "Google JSON schema preserves numeric nullable enums for the new SDK",
+  Array.isArray(googleRankSchema?.type) &&
+    googleRankSchema.type.includes("integer") &&
+    googleRankSchema.type.includes("null") &&
+    Array.isArray(googleRankSchema.enum) &&
+    googleRankSchema.enum.includes(1) &&
+    googleRankSchema.enum.includes(null),
   googleRankSchema
 );
 

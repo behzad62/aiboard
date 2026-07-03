@@ -666,10 +666,26 @@ async function expectSquareAbove(
   expect(upperBox!.y).toBeLessThan(lowerBox!.y);
 }
 
+async function selectChessBoard(page: Page): Promise<void> {
+  await page.getByTestId("game-card-chess").click();
+  await expect(page.getByText("Player vs Player")).toBeVisible();
+}
+
+async function openChessBoard(page: Page): Promise<void> {
+  await page.goto("/games");
+  await page.waitForLoadState("networkidle");
+  await selectChessBoard(page);
+}
+
+async function reloadAndSelectChessBoard(page: Page): Promise<void> {
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await selectChessBoard(page);
+}
+
 test.describe("Chess game", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/games");
-    await page.waitForLoadState("networkidle");
+    await openChessBoard(page);
   });
 
   test("setup screen shows game modes", async ({ page }) => {
@@ -727,7 +743,9 @@ test.describe("Chess game", () => {
     await page.getByTestId("square-e4").click();
     await page.waitForTimeout(300);
 
-    await expect(page.getByTestId("chess-clock-black")).toContainText("Black");
+    await expect(page.getByTestId("chess-clock-black")).toContainText(
+      /\d{2}:\d{2}/
+    );
 
     await page.waitForTimeout(1000);
     const whiteClockTime = page.locator(".font-mono.tabular-nums").first();
@@ -896,8 +914,7 @@ test.describe("Chess game", () => {
 
   test("checked king is outlined on the board", async ({ page }) => {
     await seedCheckedChessSession(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await expect(page.getByTestId("restore-game-banner")).toBeVisible();
     await page.getByTestId("resume-game-button").click();
@@ -914,17 +931,16 @@ test.describe("Chess game", () => {
     await page.getByTestId("square-e2").click();
     await page.getByTestId("square-e4").click();
 
-    await expect(page.getByText("e4")).toBeVisible();
+    await expect(page.getByTestId("move-history-ply-1")).toContainText("e4");
     await waitForPersistedChessMove(page, "e4");
     await waitForPersistedBlackClock(page, 4_000);
 
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await expect(page.getByTestId("restore-game-banner")).toBeVisible();
     await page.getByTestId("resume-game-button").click();
 
-    await expect(page.getByText("e4")).toBeVisible();
+    await expect(page.getByTestId("move-history-ply-1")).toContainText("e4");
     await expect(page.getByTestId("chess-clock-white")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).toContainText(/\d{2}:\d{2}/);
     await expect(page.getByTestId("chess-clock-black")).not.toContainText("00:00");
@@ -968,9 +984,9 @@ test.describe("Chess game", () => {
         try {
           await promotionPage.goto("/games");
           await promotionPage.waitForLoadState("networkidle");
+          await selectChessBoard(promotionPage);
           await seedPromotionChessSession(promotionPage);
-          await promotionPage.reload();
-          await promotionPage.waitForLoadState("networkidle");
+          await reloadAndSelectChessBoard(promotionPage);
 
           await expect(promotionPage.getByTestId("restore-game-banner")).toBeVisible();
           await promotionPage.getByTestId("resume-game-button").click();
@@ -1003,8 +1019,7 @@ test.describe("Chess game", () => {
 
   test("promotion dialog supports keyboard focus, trapping, cancel, and selection", async ({ page }) => {
     await seedPromotionChessSession(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await expect(page.getByTestId("restore-game-banner")).toBeVisible();
     await page.getByTestId("resume-game-button").click();
@@ -1073,8 +1088,7 @@ test.describe("Chess game", () => {
     });
 
     await seedDelayedChessAIModel(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await page.getByTestId("game-mode-pvai").click();
     await page.getByTestId("color-black").click();
@@ -1084,10 +1098,10 @@ test.describe("Chess game", () => {
       page.getByTestId("square-e4").getByTestId("chess-piece")
     ).toHaveCount(1);
     await expect(page.getByTestId("ai-presence")).toContainText(
-      "White AI - Confident"
+      "White - Confident"
     );
     await expect(page.getByTestId("ai-presence")).toContainText(
-      "I like the central control here."
+      "I like this turn."
     );
   });
 
@@ -1107,8 +1121,7 @@ test.describe("Chess game", () => {
     });
 
     await seedDelayedChessAIModel(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await page.getByTestId("game-mode-aivai").click();
     await expect(page.getByTestId("model-select-white")).toHaveValue(
@@ -1160,8 +1173,7 @@ test.describe("Chess game", () => {
     });
 
     await seedDelayedChessAIModel(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await page.getByTestId("game-mode-aivai").click();
     await page.getByTestId("start-game-button").click();
@@ -1205,8 +1217,7 @@ test.describe("Chess game", () => {
 
     await installDelayedAIResponseObserver(page);
     await seedDelayedChessAIModel(page);
-    await page.reload();
-    await page.waitForLoadState("networkidle");
+    await reloadAndSelectChessBoard(page);
 
     await page.getByTestId("game-mode-pvai").click();
     await page.getByTestId("color-black").click();
@@ -1241,7 +1252,7 @@ test.describe("Chess game", () => {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
 
     const benchmarkSection = page.locator("h2", {
-      hasText: "AI vs AI Chess Benchmark",
+      hasText: "Benchmark Overview",
     });
     await expect(benchmarkSection).toBeVisible({ timeout: 10000 });
   });

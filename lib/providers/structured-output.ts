@@ -74,56 +74,15 @@ export function anthropicStructuredToolConfig(
   };
 }
 
-function toGoogleSchema(schema: JsonSchemaObject): JsonSchemaObject {
-  const next: JsonSchemaObject = {};
-  let nullable = schema.nullable === true;
-  if (Array.isArray(schema.type)) {
-    const nonNullTypes = schema.type.filter((type) => type !== "null");
-    if (nonNullTypes.length === 1) next.type = nonNullTypes[0];
-    else if (nonNullTypes.length > 1) next.type = nonNullTypes;
-    if (schema.type.includes("null")) nullable = true;
-  } else if (schema.type) {
-    next.type = schema.type;
-  }
-  if (schema.description) next.description = schema.description;
-  if (schema.maxLength !== undefined) next.maxLength = schema.maxLength;
-  if (schema.minimum !== undefined) next.minimum = schema.minimum;
-  if (schema.maximum !== undefined) next.maximum = schema.maximum;
-  if (schema.minItems !== undefined) next.minItems = schema.minItems;
-  if (schema.enum) {
-    const enumValues = schema.enum.filter((value) => value !== null);
-    if (enumValues.length < schema.enum.length) nullable = true;
-    if (
-      enumValues.length > 0 &&
-      enumValues.every((value): value is string => typeof value === "string")
-    ) {
-      next.enum = enumValues;
-    }
-  }
-  if (schema.required) next.required = schema.required;
-  if (nullable) next.nullable = true;
-  else if (schema.nullable !== undefined) next.nullable = schema.nullable;
-  if (schema.items) next.items = toGoogleSchema(schema.items);
-  if (schema.properties) {
-    next.properties = Object.fromEntries(
-      Object.entries(schema.properties).map(([key, value]) => [
-        key,
-        toGoogleSchema(value),
-      ])
-    );
-  }
-  return next;
-}
-
 export function googleStructuredOutputConfig(
   format: StructuredOutputFormat | undefined
 ): {
   responseMimeType?: "application/json";
-  responseSchema?: JsonSchemaObject;
+  responseJsonSchema?: JsonSchemaObject;
 } {
   if (!format) return {};
   return {
     responseMimeType: "application/json",
-    responseSchema: toGoogleSchema(format.schema),
+    responseJsonSchema: format.schema,
   };
 }

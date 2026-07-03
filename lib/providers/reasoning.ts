@@ -10,7 +10,7 @@ import type { ReasoningEffort } from "../db/schema";
  *    Opus 4.5 supports effort plus manual `thinking.budget_tokens`, but not
  *    adaptive thinking or max effort; Haiku 4.5 does NOT support effort.
  *  - OpenRouter `reasoning.effort` / `reasoning_effort`: none|low|medium|high|xhigh|max.
- *  - Gemini 3+: `thinkingLevel` (minimal|low|medium|high); Gemini 2.5: `thinkingBudget`
+ *  - Gemini 3+: `thinkingLevel` (MINIMAL|LOW|MEDIUM|HIGH); Gemini 2.5: `thinkingBudget`
  *    (int). Sending both is a 400, so we pick one by model generation.
  * "default" means omit provider reasoning controls except on Gemini 2.5, where
  * the existing bounded budget prevents hidden thinking from starving the answer.
@@ -201,11 +201,11 @@ function geminiThinkingLevel(
     switch (effort) {
       case "none":
       case "low":
-        return "low";
+        return "LOW";
       case "medium":
       case "high":
       case "max":
-        return "high";
+        return "HIGH";
       default:
         return null;
     }
@@ -213,15 +213,15 @@ function geminiThinkingLevel(
 
   switch (effort) {
     case "none":
-      return "minimal";
+      return "MINIMAL";
     case "low":
-      return "low";
+      return "LOW";
     case "medium":
-      return "medium";
+      return "MEDIUM";
     case "high":
-      return "high";
+      return "HIGH";
     case "max":
-      return "high";
+      return "HIGH";
     default:
       return null;
   }

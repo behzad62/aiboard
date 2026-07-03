@@ -1,9 +1,11 @@
 import {
-  GoogleGenerativeAI,
-  type GenerationConfig,
+  FunctionCallingConfigMode,
+  GoogleGenAI,
+  type Content,
+  type GenerateContentConfig,
   type Part,
   type Tool,
-} from "@google/generative-ai";
+} from "@google/genai";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type {
@@ -70,7 +72,7 @@ export function googleWebSearchTools(
 
 export function googleNativeToolConfig(
   tools: NativeToolDefinition[] | undefined
-): { tools?: Tool[]; toolConfig?: unknown } {
+): { tools?: Tool[]; toolConfig?: GenerateContentConfig["toolConfig"] } {
   if (!tools?.length) return {};
   return {
     tools: [
@@ -78,11 +80,13 @@ export function googleNativeToolConfig(
         functionDeclarations: tools.map((tool) => ({
           name: tool.name,
           description: tool.description,
-          parameters: tool.parameters,
+          parametersJsonSchema: tool.parameters,
         })),
-      } as unknown as Tool,
+      },
     ],
-    toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+    toolConfig: {
+      functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+    },
   };
 }
 
@@ -91,7 +95,21 @@ export function googleHostedBuildToolConfig(
 ): { tools?: Tool[] } {
   if (!enabled) return {};
   return {
-    tools: [{ codeExecution: {} } as unknown as Tool],
+    tools: [{ codeExecution: {} }],
+  };
+}
+
+function chatRoleToGeminiRole(role: "system" | "user" | "assistant"): string {
+  return role === "assistant" ? "model" : "user";
+}
+
+function messageToGeminiContent(message: {
+  role: "system" | "user" | "assistant";
+  content: string;
+}): Content {
+  return {
+    role: chatRoleToGeminiRole(message.role),
+    parts: [{ text: message.content }],
   };
 }
 
@@ -107,11 +125,11 @@ export const googleProvider: AIProvider = {
 
   async validateApiKey(apiKey: string) {
     try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({
+      const genAI = new GoogleGenAI({ apiKey });
+      await genAI.models.generateContent({
         model: getValidationModelId("google"),
+        contents: "Hi",
       });
-      await model.generateContent("Hi");
       return true;
     } catch {
       return false;
@@ -120,7 +138,7 @@ export const googleProvider: AIProvider = {
 
   async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
     try {
-      const genAI = new GoogleGenerativeAI(params.apiKey);
+      const genAI = new GoogleGenAI({ apiKey: params.apiKey });
       const webSearchTools = googleWebSearchTools(
         params.model,
         params.webSearch && !params.structuredOutput
@@ -136,96 +154,100 @@ export const googleProvider: AIProvider = {
         ...(nativeToolConfig.tools ?? []),
         ...(hostedBuildToolConfig.tools ?? []),
       ];
-      const model = genAI.getGenerativeModel({
-        model: params.model,
-        ...(tools.length > 0 ? { tools } : {}),
-      });
       const caps = getModelCapabilities(formatModelId("google", params.model));
 
       const systemMessage = params.messages.find((m) => m.role === "system");
       const history = params.messages.filter((m) => m.role !== "system");
       const lastMessage = history[history.length - 1];
       const prior = history.slice(0, -1);
+      if (!lastMessage) {
+        throw new Error("Google request requires at least one user message.");
+      }
 
       // Gemini reasoning control: Gemini 3+ uses thinkingLevel, Gemini 2.5 uses
       // thinkingBudget (sending both is a 400). At "default", 2.5 still gets a
       // bounded budget so hidden thinking can't truncate the visible answer.
-      // (thinkingConfig is newer than this SDK's GenerationConfig type.)
       const thinking = geminiThinkingConfig(
         params.model,
         params.reasoningEffort ?? "default",
         params.maxTokens ?? 1500
       );
-      const generationConfig = {
+      const generationConfig: GenerateContentConfig = {
         maxOutputTokens: params.maxTokens ?? 1500,
         temperature: params.temperature ?? 0.7,
-        ...(thinking ? { thinkingConfig: thinking } : {}),
-        ...googleStructuredOutputConfig(params.structuredOutput),
-      } as GenerationConfig;
-
-      const chat = model.startChat({
-        history: prior.map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content }],
-        })),
-        generationConfig,
-        ...(nativeToolConfig.toolConfig
-          ? { toolConfig: nativeToolConfig.toolConfig as never }
-          : {}),
-        systemInstruction: systemMessage
+        ...(thinking
           ? {
-              role: "system",
-              parts: [{ text: systemMessage.content }],
+              thinkingConfig:
+                thinking as GenerateContentConfig["thinkingConfig"],
             }
-          : undefined,
-      });
+          : {}),
+        ...(tools.length > 0 ? { tools } : {}),
+        ...(nativeToolConfig.toolConfig
+          ? { toolConfig: nativeToolConfig.toolConfig }
+          : {}),
+        ...(systemMessage ? { systemInstruction: systemMessage.content } : {}),
+        ...googleStructuredOutputConfig(params.structuredOutput),
+      };
 
-      const parts = buildGeminiParts(
-        lastMessage.content,
-        params.attachments,
-        caps
-      );
-      const result = await chat.sendMessageStream(parts);
+      const contents: Content[] = [
+        ...prior.map(messageToGeminiContent),
+        {
+          role: chatRoleToGeminiRole(lastMessage.role),
+          parts: buildGeminiParts(lastMessage.content, params.attachments, caps),
+        },
+      ];
+      const stream = await genAI.models.generateContentStream({
+        model: params.model,
+        contents,
+        config: generationConfig,
+      });
       const pendingToolCalls: NativeToolCall[] = [];
       let reportedInputTokens: number | undefined;
       let reportedOutputTokens: number | undefined;
       const captureGeminiUsage = (metadata: unknown): void => {
         const usage = metadata as
-          | { promptTokenCount?: number; candidatesTokenCount?: number }
+          | {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              thoughtsTokenCount?: number;
+            }
           | undefined;
         if (typeof usage?.promptTokenCount === "number") {
           reportedInputTokens = usage.promptTokenCount;
         }
-        if (typeof usage?.candidatesTokenCount === "number") {
-          reportedOutputTokens = usage.candidatesTokenCount;
+        const candidateTokens =
+          typeof usage?.candidatesTokenCount === "number"
+            ? usage.candidatesTokenCount
+            : undefined;
+        const thoughtTokens =
+          typeof usage?.thoughtsTokenCount === "number"
+            ? usage.thoughtsTokenCount
+            : undefined;
+        if (candidateTokens != null || thoughtTokens != null) {
+          reportedOutputTokens = (candidateTokens ?? 0) + (thoughtTokens ?? 0);
         }
       };
 
-      for await (const chunk of result.stream) {
+      for await (const chunk of stream) {
         captureGeminiUsage(
           (chunk as unknown as { usageMetadata?: unknown }).usageMetadata
         );
         const chunkWithCalls = chunk as unknown as {
-          functionCalls?: () => Array<{
-            name?: string;
-            args?: Record<string, unknown>;
+          functionCalls?: Array<{ name?: string; args?: Record<string, unknown> }>;
+          candidates?: Array<{
+            content?: {
+              parts?: Array<{
+                functionCall?: {
+                  name?: string;
+                  args?: Record<string, unknown>;
+                };
+              }>;
+            };
           }>;
-          response?: {
-            candidates?: Array<{
-              content?: {
-                parts?: Array<{
-                  functionCall?: {
-                    name?: string;
-                    args?: Record<string, unknown>;
-                  };
-                }>;
-              };
-            }>;
-          };
         };
         const functionCalls =
-          chunkWithCalls.functionCalls?.() ??
-          chunkWithCalls.response?.candidates
+          chunkWithCalls.functionCalls ??
+          chunkWithCalls.candidates
             ?.flatMap((candidate) => candidate.content?.parts ?? [])
             .map((part) => part.functionCall)
             .filter(
@@ -243,36 +265,9 @@ export const googleProvider: AIProvider = {
           }
         }
         let text = "";
-        try {
-          text = chunk.text();
-        } catch {
-          text = "";
-        }
+        if (typeof chunk.text === "string") text = chunk.text;
         if (text) {
           yield { type: "token", content: text };
-        }
-      }
-      const responseWithCalls = (await result.response) as unknown as {
-        usageMetadata?: unknown;
-        functionCalls?: () => Array<{
-          name?: string;
-          args?: Record<string, unknown>;
-        }>;
-      };
-      captureGeminiUsage(responseWithCalls.usageMetadata);
-      for (const call of responseWithCalls.functionCalls?.() ?? []) {
-        const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`;
-        const alreadyCaptured = pendingToolCalls.some(
-          (existing) =>
-            `${existing.name}:${JSON.stringify(existing.arguments ?? {})}` ===
-            signature
-        );
-        if (call.name && !alreadyCaptured) {
-          pendingToolCalls.push({
-            name: call.name,
-            arguments: call.args,
-            argumentsJson: call.args ? JSON.stringify(call.args) : undefined,
-          });
         }
       }
       for (const toolCall of pendingToolCalls) {
