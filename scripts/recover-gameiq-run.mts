@@ -65,6 +65,10 @@ export interface RecoverBundleResult {
   bundle: BenchmarkReportBundleV2;
   recoveredPacks: RecoveredPackReport[];
   skipped: SkippedPackReport[];
+  /** Count of pre-existing attemptsV2 entries the recover REPLACED (removed). */
+  replacedAttempts: number;
+  /** Count of pre-existing failures the recover dropped (recovered packs). */
+  droppedFailures: number;
 }
 
 export interface RecoverBundleOptions {
@@ -72,17 +76,11 @@ export interface RecoverBundleOptions {
   recoveredAt?: string;
 }
 
-const SYNTHESIZED_STATUSES = new Set<BenchmarkAttemptV2["status"]>([
-  "provider_unavailable",
-  "invalid_harness",
-  "failed_budget",
-  "aborted_user",
-]);
-
 interface BundleRecoveryMeta {
   recoveredAt?: string;
   recoveredPacks: string[];
   skippedIncomplete: string[];
+  skippedNoTraces: string[];
   tool: string;
   note: string;
 }
@@ -207,41 +205,57 @@ export async function recoverBundle(
     skippedIncomplete: skipped
       .filter((pack) => pack.reason === "incomplete")
       .map((pack) => pack.packId),
+    skippedNoTraces: skipped
+      .filter((pack) => pack.reason === "no-traces")
+      .map((pack) => pack.packId),
     tool: "recover-gameiq-run",
     note: "pack scores rebuilt from recorded traces; run status left 'failed'",
   };
 
-  // Rewrite the bundle:
-  //  - drop each recovered pack's synthesized failed attempt (match by caseId),
-  //    add the recovered scored attempt;
-  //  - add the recovered verifiers;
-  //  - drop the recovered packs' provider_unavailable FAILURE entries (no
-  //    longer failures) but KEEP the top-level run_engine_failed failure;
-  //  - leave incomplete packs' synthesized attempts + failures untouched;
-  //  - runs[0].status stays "failed".
-  const removedAttemptIds = new Set(
-    bundle.attemptsV2
-      .filter(
-        (attempt) =>
-          recoveredCaseIds.has(attempt.caseId) &&
-          SYNTHESIZED_STATUSES.has(attempt.status) &&
-          attempt.id.endsWith(":failed")
-      )
-      .map((attempt) => attempt.id)
+  // Rewrite the bundle IDEMPOTENTLY (a user re-running the tool on irreplaceable
+  // data must be safe). For each recovered pack, remove EVERY existing
+  // attemptsV2 entry whose caseId === pack.id — this covers BOTH the synthesized
+  // `:failed` attempt AND any `+recovered` attempt from a prior recovery — then
+  // add exactly one fresh recovered attempt. Each pack has one attempt per team
+  // in these bundles, so remove-by-caseId-then-add-one is clean, correct, and
+  // makes recoverBundle(recoverBundle(x)) byte-stable (modulo recoveredAt).
+  //  - drop those attempts' verifierResults (by attemptId / verifierResultId);
+  //  - drop those attempts' FAILURE entries (by attemptId) — no longer failures;
+  //  - KEEP the top-level run_engine_failed failure (attemptId null → unmatched);
+  //  - leave incomplete / no-trace packs' synthesized attempts + failures as-is;
+  //  - runs[0].status stays "failed" (recovery does not rewrite history).
+  const removedAttempts = bundle.attemptsV2.filter((attempt) =>
+    recoveredCaseIds.has(attempt.caseId)
   );
+  const removedAttemptIds = new Set(removedAttempts.map((attempt) => attempt.id));
+  // Verifiers to drop: any whose attemptId is a removed attempt, plus any
+  // verifierResultId those attempts referenced (covers a prior +recovered
+  // attempt's verifier even if its id scheme differs).
+  const removedVerifierIds = new Set<string>();
+  for (const verifier of bundle.verifierResults) {
+    if (removedAttemptIds.has(verifier.attemptId)) {
+      removedVerifierIds.add(verifier.id);
+    }
+  }
+  for (const attempt of removedAttempts) {
+    if (attempt.verifierResultId) removedVerifierIds.add(attempt.verifierResultId);
+  }
 
   const nextAttemptsV2: BenchmarkAttemptV2[] = [
     ...bundle.attemptsV2.filter((attempt) => !removedAttemptIds.has(attempt.id)),
     ...recoveredAttempts,
   ];
   const nextVerifierResults: BenchmarkVerifierResult[] = [
-    ...bundle.verifierResults,
+    ...bundle.verifierResults.filter(
+      (verifier) => !removedVerifierIds.has(verifier.id)
+    ),
     ...recoveredVerifiers,
   ];
   const nextFailures = bundle.failures.filter(
     (failure) =>
       failure.attemptId == null || !removedAttemptIds.has(failure.attemptId)
   );
+  const droppedFailures = bundle.failures.length - nextFailures.length;
 
   const nextBundle: BenchmarkReportBundleV2 & { recovery: BundleRecoveryMeta } = {
     ...bundle,
@@ -251,7 +265,13 @@ export async function recoverBundle(
     recovery,
   };
 
-  return { bundle: nextBundle, recoveredPacks, skipped };
+  return {
+    bundle: nextBundle,
+    recoveredPacks,
+    skipped,
+    replacedAttempts: removedAttempts.length,
+    droppedFailures,
+  };
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -328,10 +348,13 @@ async function main(): Promise<void> {
 
   const bundle = JSON.parse(readFileSync(filePath, "utf8")) as BenchmarkReportBundleV2;
   const recoveredAt = new Date().toISOString();
-  const { bundle: nextBundle, recoveredPacks, skipped } = await recoverBundle(
-    bundle,
-    { recoveredAt }
-  );
+  const {
+    bundle: nextBundle,
+    recoveredPacks,
+    skipped,
+    replacedAttempts,
+    droppedFailures,
+  } = await recoverBundle(bundle, { recoveredAt });
 
   const mode = write ? "WRITE" : "DRY-RUN";
   console.log(`\n=== recover-gameiq-run [${mode}] ===`);
@@ -358,6 +381,7 @@ async function main(): Promise<void> {
   }
 
   const prunePlan = planIndexPrune(filePath);
+  const willPruneIndex = Boolean(prunePlan && prunePlan.removed.length > 0);
   console.log("\nindex.json prune plan:");
   if (!prunePlan) {
     console.log("  (no sibling index.json found)");
@@ -372,16 +396,36 @@ async function main(): Promise<void> {
     console.log(`  keep ${prunePlan.kept} entries`);
   }
 
+  // The backup suffix is computed BEFORE the write branch so dry-run can preview
+  // the exact .bak paths --write would create, and the change summary reads the
+  // same regardless of mode.
+  const backupSuffix = `recover-${Date.now()}`;
+  const runBackupPath = `${filePath}.${backupSuffix}.bak`;
+  const indexBackupPath =
+    prunePlan && willPruneIndex
+      ? `${prunePlan.indexPath}.${backupSuffix}.bak`
+      : null;
+
+  console.log("\nChange summary (what --write would do):");
+  console.log(
+    `  replace ${replacedAttempts} synthesized/prior attempt(s), add ${recoveredPacks.length} recovered attempt(s) + verifier(s), drop ${droppedFailures} failure(s)`
+  );
+  console.log(`  back up run file -> ${runBackupPath}`);
+  if (indexBackupPath) {
+    console.log(`  back up index    -> ${indexBackupPath}`);
+  } else {
+    console.log(`  index.json: no backup (nothing to prune)`);
+  }
+
   if (!write) {
     console.log("\nDRY-RUN: no files written. Re-run with --write to apply.");
     return;
   }
 
-  const backupSuffix = `recover-${Date.now()}`;
-  copyFileSync(filePath, `${filePath}.${backupSuffix}.bak`);
+  copyFileSync(filePath, runBackupPath);
   writeFileSync(filePath, JSON.stringify(nextBundle, null, 2));
-  console.log(`\nWROTE ${filePath} (backup: ${filePath}.${backupSuffix}.bak)`);
-  if (prunePlan && prunePlan.removed.length > 0) {
+  console.log(`\nWROTE ${filePath} (backup: ${runBackupPath})`);
+  if (prunePlan && willPruneIndex) {
     applyIndexPrune(prunePlan, backupSuffix);
     console.log(
       `WROTE ${prunePlan.indexPath} (backup: ${prunePlan.indexPath}.${backupSuffix}.bak)`

@@ -147,7 +147,7 @@ const run: BenchmarkRun = {
   completedAt: "2026-07-03T02:00:00.000Z",
   source: "manual",
   modelIds: [MODEL_ID],
-  caseIds: [completePack.id, partialPack.id],
+  caseIds: packs.map((pack) => pack.id),
   summaryJson: "{}",
   metricValueIds: [],
   artifactIds: [],
@@ -165,6 +165,12 @@ const runEngineFailure: BenchmarkFailure = {
   createdAt: "2026-07-03T02:00:00.000Z",
 };
 
+// Mirror the real dead files: run-engine synthesizes ONE provider_unavailable
+// attempt (+ failure) for EVERY pack, whether or not traces exist. So the
+// fixture carries a synthesized attempt/failure for all 7 packs.
+const synthesizedAttempts = packs.map((pack) => failedAttempt(pack.id));
+const synthesizedFailures = packs.map((pack) => providerFailure(pack.id));
+
 const bundle: BenchmarkReportBundleV2 = {
   version: 2,
   exportedAt: "2026-07-03T02:00:00.000Z",
@@ -174,14 +180,10 @@ const bundle: BenchmarkReportBundleV2 = {
   attempts: [],
   metricValues: [],
   artifacts: [],
-  failures: [
-    runEngineFailure,
-    providerFailure(completePack.id),
-    providerFailure(partialPack.id),
-  ],
+  failures: [runEngineFailure, ...synthesizedFailures],
   traces,
   caseV2: [],
-  attemptsV2: [failedAttempt(completePack.id), failedAttempt(partialPack.id)],
+  attemptsV2: synthesizedAttempts,
   verifierResults: [],
   runEvents: [],
   toolCallTraces: [],
@@ -350,6 +352,44 @@ check(
   recovery?.tool === "recover-gameiq-run"
 );
 
+// ── Zero-trace packs (early-skip branch) ──────────────────────────────────────
+// Every pack other than codenames (complete) and connect-four (partial) has NO
+// traces in the fixture; the chess pack exercises the no-traces early-skip.
+const zeroTracePack = packs.find((pack) => pack.id === "gameiq-v0.1-chess")!;
+check(
+  "zero-trace pack skipped cleanly with reason no-traces (0/total)",
+  skipped.some(
+    (pack) =>
+      pack.packId === zeroTracePack.id &&
+      pack.reason === "no-traces" &&
+      pack.replayed === 0 &&
+      pack.total === zeroTracePack.scenarios.length
+  ),
+  skipped.filter((pack) => pack.reason === "no-traces").map((pack) => pack.packId)
+);
+check(
+  "zero-trace pack not recovered (no recovered attempt for it)",
+  !out.attemptsV2.some(
+    (attempt) =>
+      attempt.caseId === zeroTracePack.id && attempt.id.includes(":pack:")
+  )
+);
+check(
+  "zero-trace pack's synthesized failed attempt preserved untouched",
+  out.attemptsV2.some(
+    (attempt) =>
+      attempt.id === `${RUN_ID}:${zeroTracePack.id}:${TEAM_ID}:failed` &&
+      attempt.status === "provider_unavailable"
+  )
+);
+check(
+  "recovery.skippedNoTraces lists the zero-trace packs including chess",
+  Array.isArray(recovery?.skippedNoTraces) &&
+    (recovery?.skippedNoTraces as string[]).includes(zeroTracePack.id) &&
+    !(recovery?.skippedNoTraces as string[]).includes(partialPack.id),
+  recovery?.skippedNoTraces
+);
+
 // ── recoveredAt omitted when not passed ───────────────────────────────────────
 const { bundle: outNoTs } = await recoverBundle(bundle);
 const recoveryNoTs = (
@@ -381,6 +421,105 @@ check(
   out.failures.every(
     (failure) => failure.attemptId == null || attemptIds.has(failure.attemptId)
   )
+);
+
+// ── Idempotency: re-running on an already-recovered file is safe ──────────────
+// Regression pin for the blocker: recovery leaves runs[0].status === "failed",
+// so the CLI's only precondition still passes on a recovered file. A second run
+// must REPLACE the prior recovered attempt (not duplicate it). Feed run-1 output
+// into run-2 and assert counts stable + no duplicate ids + same recovered ids.
+const {
+  bundle: out2,
+  recoveredPacks: recoveredPacks2,
+  replacedAttempts: replaced2,
+} = await recoverBundle(out, { recoveredAt: "2026-07-03T04:00:00.000Z" });
+
+check(
+  "second run still recovers the same one complete pack",
+  recoveredPacks2.length === 1 && recoveredPacks2[0].packId === completePack.id,
+  recoveredPacks2.map((p) => p.packId)
+);
+check(
+  "second run reports it REPLACED the prior recovered attempt (replacedAttempts === 1)",
+  replaced2 === 1,
+  replaced2
+);
+check(
+  "attemptsV2 count is STABLE across a re-run",
+  out2.attemptsV2.length === out.attemptsV2.length,
+  { run1: out.attemptsV2.length, run2: out2.attemptsV2.length }
+);
+check(
+  "verifierResults count is STABLE across a re-run",
+  out2.verifierResults.length === out.verifierResults.length,
+  { run1: out.verifierResults.length, run2: out2.verifierResults.length }
+);
+const attemptIds2 = out2.attemptsV2.map((attempt) => attempt.id);
+check(
+  "NO duplicate attempt ids after re-run",
+  new Set(attemptIds2).size === attemptIds2.length,
+  attemptIds2.filter((id, i) => attemptIds2.indexOf(id) !== i)
+);
+const verifierIds2 = out2.verifierResults.map((verifier) => verifier.id);
+check(
+  "NO duplicate verifier ids after re-run",
+  new Set(verifierIds2).size === verifierIds2.length,
+  verifierIds2.filter((id, i) => verifierIds2.indexOf(id) !== i)
+);
+check(
+  "recovered pack keeps the SAME attempt id as after run-1",
+  out2.attemptsV2.some((attempt) => attempt.id === expectedAttemptId),
+  expectedAttemptId
+);
+check(
+  "recovered pack keeps the SAME verifier id as after run-1",
+  out2.verifierResults.some(
+    (verifier) => verifier.id === `${expectedAttemptId}:verifier`
+  )
+);
+check(
+  "re-run bundle still has exactly one attempt per pack caseId",
+  packs.every(
+    (pack) =>
+      out2.attemptsV2.filter((attempt) => attempt.caseId === pack.id).length ===
+      1
+  ),
+  packs
+    .map((pack) => ({
+      pack: pack.id,
+      count: out2.attemptsV2.filter((a) => a.caseId === pack.id).length,
+    }))
+    .filter((entry) => entry.count !== 1)
+);
+// Byte-stability modulo the fields the SCORER stamps fresh each run: the
+// recovered attempts carry runGameIqScenarios' wall-clock startedAt/completedAt
+// /durationMs (inherent non-determinism, not a recovery concern) and
+// recovery.recoveredAt. Normalize exactly those, then everything recovery
+// itself controls — ids, order, caseIds, statuses, scores, verifiers, failures
+// — must be byte-identical across a re-run.
+function normalizeForStability(bundle: BenchmarkReportBundleV2): string {
+  const clone = JSON.parse(JSON.stringify(bundle)) as BenchmarkReportBundleV2 & {
+    recovery?: { recoveredAt?: string };
+  };
+  if (clone.recovery) delete clone.recovery.recoveredAt;
+  for (const attempt of clone.attemptsV2) {
+    const record = attempt as unknown as Record<string, unknown>;
+    record.startedAt = "<normalized>";
+    record.completedAt = "<normalized>";
+    record.durationMs = 0;
+  }
+  for (const verifier of clone.verifierResults) {
+    (verifier as unknown as Record<string, unknown>).durationMs = 0;
+  }
+  return JSON.stringify(clone);
+}
+check(
+  "recoverBundle(recoverBundle(x)) is byte-stable (modulo scorer timestamps)",
+  normalizeForStability(out) === normalizeForStability(out2),
+  {
+    run1Len: out.attemptsV2.length,
+    run2Len: out2.attemptsV2.length,
+  }
 );
 
 // ── Refuses a non-failed run ──────────────────────────────────────────────────
