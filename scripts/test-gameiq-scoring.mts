@@ -6,6 +6,12 @@ import {
   type GameIqMoveProvider,
   type GameIqScenario,
 } from "../lib/benchmark/gameiq";
+import { gradeFireworksAction } from "../lib/benchmark/gameiq/validation";
+import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  GAMEIQ_SCORING_VERSION,
+} from "../lib/benchmark/gameiq/types";
+import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 
 let failures = 0;
 
@@ -42,7 +48,7 @@ check(
     perfect.attempt.verifiedQuality === 1 &&
     perfect.attempt.jobSuccessScore === 100 &&
     perfect.attempt.efficiencyScore === 100 &&
-    perfect.attempt.scoringVersion === "certified-gameiq-v0.2",
+    perfect.attempt.scoringVersion === "certified-gameiq-v0.3",
   perfect.attempt
 );
 check(
@@ -222,6 +228,101 @@ if (!codenamesScenario) {
       legalBoardBlindClue.metrics.moveQuality === 0 &&
       legalBoardBlindClue.attempt.status !== "passed",
     legalBoardBlindClue
+  );
+}
+
+// --- v0.3 scoring: graded fireworks quality + correct bar + reweight ---
+const hard27 = scenarios.find((s) => s.id === "gameiq-fireworks-hard-v1-27");
+if (!hard27) {
+  check("gameiq-fireworks-hard-v1-27 scenario available for graded-quality checks", false);
+} else {
+  check(
+    "gradeFireworksAction: keyed clue_rank matches its weight (1)",
+    gradeFireworksAction(hard27, {
+      action: "clue_rank",
+      targetPlayerId: "P2",
+      rank: 2,
+    }) === 1,
+    hard27
+  );
+  check(
+    "gradeFireworksAction: forbidden play scores 0",
+    gradeFireworksAction(hard27, { action: "play", cardIndex: 2 }) === 0,
+    hard27
+  );
+  const neutralDiscard = gradeFireworksAction(hard27, {
+    action: "discard",
+    cardIndex: 0,
+  });
+  check(
+    "gradeFireworksAction: neutral legal discard (blue4, not critical, not keyed) scores 0.3",
+    neutralDiscard === 0.3,
+    neutralDiscard
+  );
+  check(
+    "gradeFireworksAction: the 0.3 neutral floor is below the correct bar",
+    neutralDiscard < GAMEIQ_CORRECT_QUALITY_BAR,
+    { neutralDiscard, GAMEIQ_CORRECT_QUALITY_BAR }
+  );
+}
+
+check(
+  "GAMEIQ_SCORING_VERSION bumped to v0.3",
+  GAMEIQ_SCORING_VERSION === "certified-gameiq-v0.3",
+  GAMEIQ_SCORING_VERSION
+);
+
+check(
+  "scoreGameIqAttempt: outcome/quality at 0.5 with full legality/structure scores 50",
+  scoreGameIqAttempt({
+    outcomeScore: 0.5,
+    moveQuality: 0.5,
+    legalActionRate: 1,
+    structuredReliability: 1,
+    fallbackRate: 0,
+  }) === 50
+);
+
+check(
+  "scoreGameIqAttempt: all-legal-but-all-wrong no longer harvests the 31 free legality/structure points",
+  scoreGameIqAttempt({
+    outcomeScore: 0,
+    moveQuality: 0,
+    legalActionRate: 1,
+    structuredReliability: 1,
+    fallbackRate: 0,
+  }) === 0
+);
+
+// Regression guard for the forbidden-action probe interaction bug: the probe
+// constructed by matchesForbiddenAction (runner.ts) must clear the scenario's
+// own forbiddenActions, or the graded fireworks path would check the
+// (still-present) forbidden list FIRST and return 0, making the probe
+// misreport "not forbidden" and silently breaking trap detection.
+if (hard27) {
+  const forbiddenPlayResult = await runGameIqScenarios({
+    runId: "gameiq-test-run-forbidden-probe-regression",
+    modelId: "fake:forbidden-probe",
+    teamCompositionId: "team-fake-forbidden-probe",
+    scenarios: [hard27],
+    moveProvider: () => ({
+      action: {
+        action: "play",
+        targetPlayerId: null,
+        color: null,
+        rank: null,
+        cardIndex: 2,
+      },
+      rawResponse: "forbidden-probe-regression",
+      latencyMs: 0,
+    }),
+  });
+  const forbiddenCaseResult = forbiddenPlayResult.caseResults[0];
+  check(
+    "forbidden-action probe still detects the trap under graded fireworks scoring",
+    forbiddenCaseResult?.forbiddenBlunder === true &&
+      forbiddenCaseResult.actionQuality === 0,
+    forbiddenCaseResult
   );
 }
 

@@ -7,7 +7,12 @@ import {
   FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
 } from "./fireworks";
-import type { GameIqGameId, GameIqScenario, GameIqScenarioPack } from "./types";
+import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  type GameIqGameId,
+  type GameIqScenario,
+  type GameIqScenarioPack,
+} from "./types";
 import { actionMatchesExpected } from "./validation";
 
 // Certification tiers are honest labels, not decoration. A pack may only be
@@ -219,7 +224,8 @@ export function gameIqPackFirstClassFloor(
   if (pack.scenarios.length > 0) {
     for (const candidate of candidates.values()) {
       const matched = pack.scenarios.filter(
-        (scenario) => actionMatchesExpected(scenario, candidate) > 0
+        (scenario) =>
+          actionMatchesExpected(scenario, candidate) >= GAMEIQ_CORRECT_QUALITY_BAR
       ).length;
       maxConstantAnswerRate = Math.max(
         maxConstantAnswerRate,

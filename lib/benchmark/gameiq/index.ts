@@ -15,10 +15,17 @@ export { runGameIqScenarios } from "./runner";
 export { runCertifiedGameIq } from "./certified-runner";
 export {
   actionMatchesExpected,
+  gradeFireworksAction,
   isStructuredGameIqAction,
   validateGameIqAction,
   validateGameIqScenario,
 } from "./validation";
+export {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  GAMEIQ_HARNESS_VERSION,
+  GAMEIQ_PROMPT_SET_VERSION,
+  GAMEIQ_SCORING_VERSION,
+} from "./types";
 export type {
   BattleshipGameIqAction,
   ChessGameIqAction,

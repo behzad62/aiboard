@@ -29,6 +29,7 @@ import {
   validateGameIqAction,
 } from "../lib/benchmark/gameiq/validation";
 import { runGameIqScenarios } from "../lib/benchmark/gameiq/runner";
+import { GAMEIQ_CORRECT_QUALITY_BAR } from "../lib/benchmark/gameiq/types";
 import type { GameIqScenario } from "../lib/benchmark/gameiq/types";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 
@@ -312,6 +313,20 @@ check(
     withoutLatency: scoreGameIqAttempt({ ...baseMetrics, latencyFactor: 0 }),
   }
 );
+
+// 9. Every keyed expected-action weight must clear the correct bar: a scenario
+// that keys a sub-bar weight would mean its own "best" answer can never count
+// as correct, which is a pack-authoring defect this task must not paper over.
+for (const pack of listGameIqScenarioPacks()) {
+  for (const scenario of pack.scenarios) {
+    for (const expected of scenario.expectedActions) {
+      check(
+        `${scenario.id}: keyed weight ${expected.weight} >= correct bar`,
+        expected.weight >= GAMEIQ_CORRECT_QUALITY_BAR
+      );
+    }
+  }
+}
 
 if (failures === 0) {
   console.log("PASS");

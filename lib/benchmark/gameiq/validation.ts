@@ -383,6 +383,10 @@ export function actionMatchesExpected(
     return validateGameIqAction(scenario, action).ok ? 1 : 0;
   }
 
+  if (scenario.gameId === "fireworks") {
+    return gradeFireworksAction(scenario, action);
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {
@@ -390,6 +394,62 @@ export function actionMatchesExpected(
     }
   }
   return Math.min(1, Math.max(0, bestWeight));
+}
+
+// Graded quality for fireworks actions (GameIQ port of TeamIQ's
+// scoreFireworksScenarioAction). Keyed match earns the keyed weight; a
+// forbidden action earns 0; a clue that touches only already-played cards
+// earns 0.1; any other legal action earns the 0.3 neutral floor. The neutral
+// floor is deliberately below GAMEIQ_CORRECT_QUALITY_BAR so it feeds
+// moveQuality without ever counting as a correct outcome.
+export function gradeFireworksAction(
+  scenario: GameIqScenario,
+  action: unknown
+): number {
+  if (!isStructuredGameIqAction(scenario, action)) return 0;
+  const candidate = action as FireworksAction;
+  const view = scenario.initialState as FireworksPlayerView;
+
+  if (
+    (scenario.forbiddenActions ?? []).some((forbidden) =>
+      fireworksActionsEqual(forbidden as FireworksAction, candidate)
+    )
+  ) {
+    return 0;
+  }
+  let bestWeight = 0;
+  for (const expected of scenario.expectedActions) {
+    if (fireworksActionsEqual(expected.action as FireworksAction, candidate)) {
+      bestWeight = Math.max(bestWeight, expected.weight);
+    }
+  }
+  if (bestWeight > 0) return Math.min(1, bestWeight);
+
+  if (!view.legalActions.some((legal) => fireworksActionsEqual(legal, candidate))) {
+    return 0;
+  }
+  if (candidate.action === "clue_color" || candidate.action === "clue_rank") {
+    const target = view.otherHands.find(
+      (hand) => hand.playerId === candidate.targetPlayerId
+    );
+    const touched = (target?.cards ?? []).filter((card) =>
+      candidate.action === "clue_color"
+        ? card.color === candidate.color
+        : card.rank === candidate.rank
+    );
+    if (
+      touched.length > 0 &&
+      touched.every(
+        (card) =>
+          card.color !== null &&
+          card.rank !== null &&
+          view.stacks[card.color] >= card.rank
+      )
+    ) {
+      return 0.1;
+    }
+  }
+  return 0.3;
 }
 
 function actionsEqual(

@@ -1,7 +1,10 @@
 import { scoreGameIqAttempt } from "@/lib/benchmark/scoring/gameiq";
 import { round } from "@/lib/benchmark/scoring/types";
+import { fireworksActionsEqual } from "@/lib/games/fireworks/engine";
+import type { FireworksAction } from "@/lib/games/fireworks/types";
 import { gameIqDecisionKey } from "./packs";
 import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
   GAMEIQ_HARNESS_VERSION,
   GAMEIQ_PROMPT_SET_VERSION,
   GAMEIQ_SCORING_VERSION,
@@ -20,11 +23,21 @@ import {
 } from "./validation";
 
 // Detect whether a (structured) action matches one of the scenario's
-// forbiddenActions. We reuse actionMatchesExpected (the exported per-game
-// equality path) by probing a scenario whose expectedActions ARE the forbidden
-// actions. forbiddenActions only appear on fireworks scenarios today, whose
-// category ("hidden-cooperation") never triggers actionMatchesExpected's
-// codenames clue-selection legality branch, so this measures exact equality.
+// forbiddenActions. forbiddenActions only appear on fireworks scenarios today
+// (see the fireworks-specific dispatch below).
+//
+// This checks exact equality against the forbidden list directly (via
+// fireworksActionsEqual) rather than routing through actionMatchesExpected /
+// gradeFireworksAction. It used to probe actionMatchesExpected with a
+// scenario whose expectedActions were relabeled as the forbidden list, which
+// worked when that function was a pure binary matcher (0 = no match, weight =
+// match). Since GameIQ scoring v0.3, gradeFireworksAction grades quality
+// rather than testing membership: any OTHER legal action -- one that matches
+// neither the (relabeled) expected list nor the real forbidden list -- falls
+// through to the 0.3 neutral-legal floor, which is > 0 and so was
+// misdetected as "forbidden" for every ordinary legal action (verified via a
+// perfect-play run: 70 of 90 fireworks scenarios false-flagged). Testing
+// membership directly sidesteps grading semantics entirely.
 function matchesForbiddenAction(
   scenario: GameIqScenario,
   action: unknown
@@ -32,6 +45,14 @@ function matchesForbiddenAction(
   const forbidden = scenario.forbiddenActions;
   if (!forbidden || forbidden.length === 0) return false;
   if (!isStructuredGameIqAction(scenario, action)) return false;
+  if (scenario.gameId === "fireworks") {
+    return forbidden.some((forbiddenAction) =>
+      fireworksActionsEqual(
+        forbiddenAction as FireworksAction,
+        action as FireworksAction
+      )
+    );
+  }
   const probe: GameIqScenario = {
     ...scenario,
     expectedActions: forbidden.map((forbiddenAction) => ({
@@ -39,6 +60,7 @@ function matchesForbiddenAction(
       label: "forbidden",
       weight: 1,
     })),
+    forbiddenActions: [],
   };
   return actionMatchesExpected(probe, action) > 0;
 }
@@ -133,7 +155,7 @@ async function evaluateScenario(
     rawResponse: providerResult.rawResponse,
     structured: structuredShape && validation.ok,
     legal: validation.ok,
-    correct: quality > 0,
+    correct: quality >= GAMEIQ_CORRECT_QUALITY_BAR,
     actionQuality: quality,
     latencyMs,
     forbiddenBlunder,
