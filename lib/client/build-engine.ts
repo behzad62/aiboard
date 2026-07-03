@@ -148,6 +148,7 @@ import {
   hasCompleteBuildToolAction,
   inspectStrictToolActionBatchOutput,
   isBuildTaskDependencySatisfied,
+  isReviewResultApproved,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
@@ -159,6 +160,7 @@ import {
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
   buildReviewFixTaskUpdate,
+  buildReviewGateFixInstructions,
   recordToolCall,
   runBudgetStatus,
   filterNovelReviewTasks,
@@ -170,6 +172,7 @@ import {
   FORCED_REVIEW_INSTRUCTION,
   STRICT_RETRY_INSTRUCTION,
   type ArchitectAction,
+  type BuildPhaseSpec,
   type BuildTask,
   type CodeIntelAction,
   type ContextRetrieveAction,
@@ -1348,6 +1351,7 @@ export async function runBuildDiscussion(
       tasks: input.tasks.map((task) => ({ ...task })),
       architectNotes: input.architectNotes,
       verifyCommand: input.verifyCommand,
+      phaseSpec: activePhaseSpec,
       branch: repoActiveBranch,
       prUrl: repoPrUrl,
       milestone: repoMilestoneTitle,
@@ -4943,7 +4947,7 @@ export async function runBuildDiscussion(
         if (terminal === "review") {
           emitArchitectLoopDiag(
             "judging",
-            "Architect did not return a review verdict even after being forced — defaulting to approve this wave's landed work and continuing"
+            "Architect did not return a review verdict even after being forced - sending this wave's landed work back for explicit two-gate review"
           );
           return defaultReview(text);
         }
@@ -5042,7 +5046,7 @@ export async function runBuildDiscussion(
     if (terminal === "review") {
       emitArchitectLoopDiag(
         "judging",
-        "Architect review hit the turn cap — defaulting to approve this wave's landed work and continuing"
+        "Architect review hit the turn cap - sending this wave's landed work back for explicit two-gate review"
       );
       return defaultReview("");
     }
@@ -5051,6 +5055,8 @@ export async function runBuildDiscussion(
     );
   };
 
+  let activePhaseSpec: BuildPhaseSpec | undefined;
+
   const toTask = (
     raw: PlanAction["tasks"][number],
     index: number
@@ -5058,6 +5064,7 @@ export async function runBuildDiscussion(
     id: raw.id?.trim() || `T${index + 1}`,
     title: raw.title || `Task ${index + 1}`,
     instructions: raw.instructions || raw.title || "",
+    phaseSpec: activePhaseSpec,
     contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
     outputPaths: outputPathsForTask(raw),
     expectedOutputs: raw.expectedOutputs,
@@ -5089,6 +5096,21 @@ export async function runBuildDiscussion(
   let extraFileContext = "";
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
+  const synthesizePhaseSpec = (objective?: string): BuildPhaseSpec => ({
+    id: "P0",
+    objective:
+      objective?.trim() ||
+      `Satisfy the current Build request: ${discussion.topic}`,
+    acceptanceCriteria: [
+      "The completed work satisfies the user request and any queued user notes for this phase.",
+      "Each task's expected outputs are present in the files it owns.",
+    ],
+    qualityCriteria: [
+      "Changes are scoped to the assigned files and preserve existing architecture.",
+      "Relevant verification is run or the unverified gap is reported explicitly.",
+    ],
+    verification: planVerifyCommand ? [planVerifyCommand] : [],
+  });
 
   // Give the Architect the obvious entry points of an existing project up front
   // so it usually doesn't need to spend a read hop on them.
@@ -5130,6 +5152,10 @@ export async function runBuildDiscussion(
     })));
     architectNotes = existingCheckpoint.architectNotes;
     planVerifyCommand = existingCheckpoint.verifyCommand;
+    activePhaseSpec =
+      existingCheckpoint.phaseSpec ??
+      tasks.find((task) => task.phaseSpec)?.phaseSpec ??
+      synthesizePhaseSpec(existingCheckpoint.architectNotes);
     repoActiveBranch = existingCheckpoint.branch;
     repoPrUrl = existingCheckpoint.prUrl;
     repoMilestoneTitle = existingCheckpoint.milestone;
@@ -5239,12 +5265,14 @@ export async function runBuildDiscussion(
       },
     });
     const planAction = planResult.action as PlanAction;
-    tasks = planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE).map(toTask);
     architectNotes = planAction.notes ?? "";
     planVerifyCommand =
       typeof planAction.verifyCommand === "string"
         ? planAction.verifyCommand.trim()
         : "";
+    activePhaseSpec =
+      planAction.phaseSpec ?? synthesizePhaseSpec(architectNotes);
+    tasks = planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE).map(toTask);
     // The Architect may scaffold files alongside the plan JSON.
     const { issues } = await writeEmittedFiles(planResult.text);
     if (issues.length > 0) {
@@ -6481,8 +6509,8 @@ export async function runBuildDiscussion(
 
     // The Architect inspects files / runs commands in a real conversation, then
     // returns a verdict. If it loops or exhausts its budget the loop FORCES a
-    // verdict (and defaults to approving this wave's landed work) instead of
-    // throwing away the whole build the way it used to.
+    // verdict; tasks without explicit two-gate approvals are sent back for review
+    // rather than being approved blind.
     // Stop cleanly before the (expensive) Architect review call if spent.
     if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
       return;
@@ -6490,6 +6518,9 @@ export async function runBuildDiscussion(
     const reviewAttachments = claimRawBuildAttachmentsForArchitect();
     const reviewSkillEvidenceText = formatSkillEvidenceDigest(waveSkillEvidence);
     const reviewOutstandingTasks = buildOutstandingTasksDigest(tasks);
+    const reviewPhaseSpec =
+      executed.find((item) => item.task.phaseSpec)?.task.phaseSpec ??
+      activePhaseSpec;
     const reviewChangedFiles = [
       ...new Set(executed.flatMap(({ files }) => files)),
     ];
@@ -6556,6 +6587,7 @@ export async function runBuildDiscussion(
         shellHint,
         skillContext: reviewSkillContext,
         skillEvidenceText: "",
+        phaseSpec: reviewPhaseSpec,
         assembledContext: reviewAssembledContext,
       }),
       initialAttachments: reviewAttachments,
@@ -6575,8 +6607,10 @@ export async function runBuildDiscussion(
           const prior = executed.find((item) => item.task.id === result.taskId);
           return {
             taskId: result.taskId,
-            verdict: result.verdict,
-            fixInstructions: result.fixInstructions,
+            verdict: isReviewResultApproved(result) ? "approve" : "fix",
+            fixInstructions: isReviewResultApproved(result)
+              ? result.fixInstructions
+              : buildReviewGateFixInstructions(result),
             paths:
               prior?.files ??
               task?.outputPaths ??
@@ -6636,7 +6670,7 @@ export async function runBuildDiscussion(
       // Credit/debit the worker that produced this task's output.
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
-      if (result.verdict === "approve") {
+      if (isReviewResultApproved(result)) {
         const evidenceFix = buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
         if (evidenceFix) {
           sendTaskBackForFix(
@@ -6662,7 +6696,7 @@ export async function runBuildDiscussion(
           task,
           buildReviewFixTaskUpdate(
             task,
-            result.fixInstructions,
+            buildReviewGateFixInstructions(result),
             prior?.files ?? [],
             MAX_CONTEXT_FILES
           )
@@ -6687,11 +6721,11 @@ export async function runBuildDiscussion(
           sendTaskBackForFix(
             task,
             reviewResult.forced
-              ? "Architect review did not return an explicit verdict before the inspection budget ended. Inspect the landed files, run the relevant verification, and return a concrete approval or fix with evidence."
-              : "Architect review omitted this task. Inspect the landed files, run the relevant verification, and return an explicit approval or fix verdict.",
+              ? "Architect review did not return explicit specVerdict and qualityVerdict before the inspection budget ended. Inspect the landed files against the current phase spec, run the relevant verification, and return concrete two-gate approval or fix verdicts with evidence."
+              : "Architect review omitted this task. Inspect the landed files against the current phase spec, run the relevant verification, and return explicit specVerdict and qualityVerdict values.",
             reviewResult.forced
-              ? `Forced review could not explicitly approve ${task.id}.`
-              : `Review omitted explicit verdict for ${task.id}.`
+              ? `Forced review could not explicitly approve both gates for ${task.id}.`
+              : `Review omitted explicit two-gate verdict for ${task.id}.`
           );
           continue;
         }
@@ -6717,6 +6751,9 @@ export async function runBuildDiscussion(
       tasks,
       (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
     );
+    if (action.phaseSpec) {
+      activePhaseSpec = action.phaseSpec;
+    }
     for (const skipped of novelTasks.skipped) {
       emit({
         type: "diagnostic",

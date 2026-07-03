@@ -34,10 +34,21 @@ export type BuildTaskStatus =
   | "done"
   | "failed";
 
+export interface BuildPhaseSpec {
+  id: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  qualityCriteria: string[];
+  verification: string[];
+  constraints?: string[];
+}
+
 export interface BuildTask {
   id: string;
   title: string;
   instructions: string;
+  /** Current wave/phase contract this task must satisfy. */
+  phaseSpec?: BuildPhaseSpec;
   /** Existing files the worker needs to see to do the task. */
   contextFiles: string[];
   /** Exact files this task is allowed/expected to create or modify. */
@@ -269,6 +280,8 @@ export interface ContextRetrieveAction {
 
 export interface PlanAction {
   action: "plan";
+  /** Compact contract for the current build wave. */
+  phaseSpec?: BuildPhaseSpec;
   tasks: Array<{
     id?: string;
     title: string;
@@ -295,14 +308,25 @@ export interface PlanAction {
   verifyCommand?: string;
 }
 
+export type ReviewGateVerdict = "approve" | "fix";
+
+export interface ReviewResult {
+  taskId: string;
+  /** Backward-compatible aggregate verdict. Derived from the two gates. */
+  verdict?: ReviewGateVerdict;
+  specVerdict: ReviewGateVerdict;
+  qualityVerdict: ReviewGateVerdict;
+  specIssues?: string;
+  qualityIssues?: string;
+  fixInstructions?: string;
+}
+
 export interface ReviewAction {
   action: "review";
-  results: Array<{
-    taskId: string;
-    verdict: "approve" | "fix";
-    fixInstructions?: string;
-  }>;
+  results: ReviewResult[];
   newTasks?: PlanAction["tasks"];
+  /** Optional next phase spec for newly planned follow-up tasks. */
+  phaseSpec?: BuildPhaseSpec;
   done: boolean;
   notes?: string;
 }
@@ -317,6 +341,95 @@ const stringArraySchema = (description?: string): JsonSchemaObject => ({
   ...(description ? { description } : {}),
   items: { type: "string" },
 });
+
+function stringArrayFromUnknown(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function normalizeBuildPhaseSpec(value: unknown): BuildPhaseSpec | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const objective = stringFromUnknown(raw.objective);
+  if (!objective) return undefined;
+  const id = stringFromUnknown(raw.id) ?? "P1";
+  return {
+    id,
+    objective,
+    acceptanceCriteria: stringArrayFromUnknown(raw.acceptanceCriteria),
+    qualityCriteria: stringArrayFromUnknown(raw.qualityCriteria),
+    verification: stringArrayFromUnknown(raw.verification),
+    ...(stringArrayFromUnknown(raw.constraints).length
+      ? { constraints: stringArrayFromUnknown(raw.constraints) }
+      : {}),
+  };
+}
+
+function normalizeReviewGateVerdict(value: unknown): ReviewGateVerdict | undefined {
+  return value === "approve" || value === "fix" ? value : undefined;
+}
+
+export function normalizeReviewResult(value: unknown): ReviewResult | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const taskId = stringFromUnknown(raw.taskId);
+  if (!taskId) return null;
+  const legacyVerdict = normalizeReviewGateVerdict(raw.verdict);
+  const specVerdict =
+    normalizeReviewGateVerdict(raw.specVerdict) ?? legacyVerdict ?? "fix";
+  const qualityVerdict =
+    normalizeReviewGateVerdict(raw.qualityVerdict) ?? legacyVerdict ?? "fix";
+  return {
+    taskId,
+    specVerdict,
+    qualityVerdict,
+    verdict:
+      specVerdict === "approve" && qualityVerdict === "approve"
+        ? "approve"
+        : "fix",
+    ...(stringFromUnknown(raw.specIssues)
+      ? { specIssues: stringFromUnknown(raw.specIssues) }
+      : {}),
+    ...(stringFromUnknown(raw.qualityIssues)
+      ? { qualityIssues: stringFromUnknown(raw.qualityIssues) }
+      : {}),
+    ...(stringFromUnknown(raw.fixInstructions)
+      ? { fixInstructions: stringFromUnknown(raw.fixInstructions) }
+      : {}),
+  };
+}
+
+export function isReviewResultApproved(
+  result: Pick<ReviewResult, "specVerdict" | "qualityVerdict">
+): boolean {
+  return result.specVerdict === "approve" && result.qualityVerdict === "approve";
+}
+
+export function buildReviewGateFixInstructions(result: ReviewResult): string {
+  const sections = [
+    result.specVerdict === "fix"
+      ? `Spec-compliance issues: ${
+          result.specIssues?.trim() ||
+          "Review did not approve the implementation against the phase spec."
+        }`
+      : "",
+    result.qualityVerdict === "fix"
+      ? `Code-quality issues: ${
+          result.qualityIssues?.trim() ||
+          "Review did not approve the code-quality gate."
+        }`
+      : "",
+    result.fixInstructions?.trim()
+      ? `Fix instructions: ${result.fixInstructions.trim()}`
+      : "",
+  ].filter(Boolean);
+  return sections.join("\n");
+}
 
 const buildTaskActionSchema = (): JsonSchemaObject => ({
   type: "object",
@@ -338,6 +451,20 @@ const buildTaskActionSchema = (): JsonSchemaObject => ({
   additionalProperties: false,
 });
 
+const buildPhaseSpecSchema = (): JsonSchemaObject => ({
+  type: "object",
+  properties: {
+    id: stringSchema("Short stable phase id such as P1."),
+    objective: stringSchema("Current phase objective."),
+    acceptanceCriteria: stringArraySchema("Spec-compliance criteria for this phase."),
+    qualityCriteria: stringArraySchema("Code-quality criteria for this phase."),
+    verification: stringArraySchema("Commands or evidence expected for this phase."),
+    constraints: stringArraySchema("Constraints that workers and reviewers must preserve."),
+  },
+  required: ["objective", "acceptanceCriteria", "qualityCriteria", "verification"],
+  additionalProperties: false,
+});
+
 /**
  * JSON schema for the Build Architect protocol. It is intentionally a single
  * object shape with an `action` discriminator instead of a root union, because
@@ -345,6 +472,7 @@ const buildTaskActionSchema = (): JsonSchemaObject => ({
  */
 export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
   const taskSchema = buildTaskActionSchema();
+  const phaseSpecSchema = buildPhaseSpecSchema();
   return {
     name: "architect_action",
     strict: false,
@@ -403,6 +531,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         },
         startLine: { type: "number" },
         lineCount: { type: "number" },
+        phaseSpec: phaseSpecSchema,
         tasks: { type: "array", items: taskSchema },
         notes: stringSchema("Brief persistent Architect notes."),
         verifyCommand: stringSchema("Optional mechanical verification command."),
@@ -413,9 +542,13 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             properties: {
               taskId: stringSchema("Task id being reviewed."),
               verdict: { type: "string", enum: ["approve", "fix"] },
+              specVerdict: { type: "string", enum: ["approve", "fix"] },
+              qualityVerdict: { type: "string", enum: ["approve", "fix"] },
+              specIssues: stringSchema("Spec-compliance issues when specVerdict is fix."),
+              qualityIssues: stringSchema("Code-quality issues when qualityVerdict is fix."),
               fixInstructions: stringSchema("Instructions for a fix round."),
             },
-            required: ["taskId", "verdict"],
+            required: ["taskId"],
             additionalProperties: false,
           },
         },
@@ -1524,13 +1657,26 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         };
       }
       if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
-        return parsed as PlanAction;
+        const plan = parsed as PlanAction;
+        return {
+          ...plan,
+          phaseSpec: normalizeBuildPhaseSpec(
+            (parsed as { phaseSpec?: unknown }).phaseSpec
+          ),
+        };
       }
       if (parsed.action === "review") {
-        const review = parsed as ReviewAction;
+        const review = parsed as ReviewAction & { results?: unknown[] };
         return {
           ...review,
-          results: Array.isArray(review.results) ? review.results : [],
+          results: Array.isArray(review.results)
+            ? review.results
+                .map(normalizeReviewResult)
+                .filter((item): item is ReviewResult => item != null)
+            : [],
+          phaseSpec: normalizeBuildPhaseSpec(
+            (parsed as { phaseSpec?: unknown }).phaseSpec
+          ),
           done: !!review.done,
         };
       }
@@ -2235,7 +2381,7 @@ export const DUPLICATE_TOOL_CALL_FEEDBACK =
 export const FORCED_REVIEW_INSTRUCTION = [
   "STOP USING TOOLS. You have used your inspection budget for this review (or repeated the same lookups). Any further read/search/command requests will be IGNORED.",
   "Using ONLY the file contents, change digests, and tool results already in this conversation, produce your final review now as exactly ONE fenced ```json block matching the review schema.",
-  "If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, or is a web app without browser acceptance evidence, return a `fix` verdict with concrete instructions. Approve only tasks that are demonstrably complete.",
+  "For every reviewed task, return both `specVerdict` and `qualityVerdict`. If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, misses the current phase spec, has code-quality problems, or is a web app without browser acceptance evidence, set the relevant gate to `fix` with concrete instructions. Approve only tasks whose spec and quality gates are demonstrably complete.",
 ].join("\n");
 
 export const FORCED_PLAN_INSTRUCTION = [
@@ -2312,6 +2458,29 @@ function userNotesSection(notes?: string): string {
   return notes?.trim()
     ? `NOTES FROM THE USER (added while the team was building — treat them as requirements and address every one):\n${notes}`
     : "";
+}
+
+function bulletList(items: string[]): string {
+  return items.length ? items.map((item) => `- ${item}`).join("\n") : "- None declared.";
+}
+
+export function buildPhaseSpecSection(phaseSpec?: BuildPhaseSpec): string {
+  if (!phaseSpec) return "";
+  return [
+    `Current phase spec (${phaseSpec.id}):`,
+    `Objective: ${phaseSpec.objective}`,
+    "Acceptance criteria:",
+    bulletList(phaseSpec.acceptanceCriteria),
+    "Code-quality criteria:",
+    bulletList(phaseSpec.qualityCriteria),
+    "Verification expectations:",
+    bulletList(phaseSpec.verification),
+    phaseSpec.constraints?.length
+      ? `Constraints:\n${bulletList(phaseSpec.constraints)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
@@ -2695,9 +2864,10 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
+    "Before listing worker tasks, define a compact current phase spec. This is the contract for the current wave only: objective, acceptance criteria, code-quality criteria, verification expectations, and constraints workers/reviewers must follow.",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
+    `{"action":"plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
     "```",
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
@@ -2731,6 +2901,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     input.request,
     "",
     treeSection(input.treeText),
+    buildPhaseSpecSection(input.task.phaseSpec),
     hasAssembledContext ? assembledContext : "",
     !hasAssembledContext && input.architectNotes
       ? `\nArchitect's conventions:\n${input.architectNotes}`
@@ -2801,6 +2972,8 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   memoryBrief?: string;
   /** Durable worker skill evidence and gaps captured by the engine. */
   skillEvidenceText?: string;
+  /** Current phase contract that review verdicts must check against. */
+  phaseSpec?: BuildPhaseSpec;
 }): string {
   const assembledContext = renderAssembledContext(input.assembledContext);
   const hasAssembledContext = assembledContext.trim().length > 0;
@@ -2811,6 +2984,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     input.request,
     "",
     treeSection(input.treeText),
+    buildPhaseSpecSection(input.phaseSpec),
     hasAssembledContext ? assembledContext : "",
     !hasAssembledContext && input.fileContext?.trim()
       ? `\nFile contents you have already read — ground every decision in these; NEVER invent replacement content for an existing file:${input.fileContext}`
@@ -2831,7 +3005,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
     !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
-    "Review each task's output from the digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    "Review each task's output from the current phase spec, task instructions, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
     skillRequestDoc(),
@@ -2849,9 +3023,10 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     "",
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","verdict":"approve" /* or "fix" */,"fixInstructions":"required when verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"done":false,"notes":"updated conventions if any"}`,
     "```",
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles.`,
+    "Spec-compliance review checks whether the landed work satisfies the current phase spec and task contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()
       ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'
