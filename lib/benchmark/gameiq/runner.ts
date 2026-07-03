@@ -73,6 +73,61 @@ function distinctGroupKey(result: GameIqScenarioResult): string {
   return gameIqDecisionKey(result);
 }
 
+// Pure metric aggregation over a set of scenario results, shared by
+// runGameIqScenarios (the live run path) and the frontier report
+// (scripts/report-gameiq-frontier.mts, which re-aggregates over a
+// saturation-filtered subset of caseResults). Transport-failed scenarios are
+// excluded from every scoring metric denominator (informational counts +
+// grouped rate metrics) so a transport blip never masquerades as a wrong
+// answer nor trips the failed_tool_use gate on a pack the model otherwise
+// aced. `scenarioCount` is caseResults.length (the full input size, including
+// unscored), NOT the scored/filtered count.
+export function aggregateGameIqMetrics(
+  caseResults: GameIqScenarioResult[]
+): GameIqRunMetrics {
+  const scenarioCount = caseResults.length;
+  const scored = caseResults.filter((result) => !result.unscored);
+  const unscoredTransport = caseResults.length - scored.length;
+  const structuredActions = scored.filter((result) => result.structured).length;
+  const legalActions = scored.filter((result) => result.legal).length;
+  const correctActions = scored.filter((result) => result.correct).length;
+  const fallbackActions = scored.filter((result) => result.fallbackUsed).length;
+  const forbiddenBlunders = scored.filter(
+    (result) => result.forbiddenBlunder
+  ).length;
+  const groups = new Map<string, GameIqScenarioResult[]>();
+  for (const result of scored) {
+    const key = distinctGroupKey(result);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(result);
+    else groups.set(key, [result]);
+  }
+  const groupAverages = Array.from(groups.values()).map((bucket) => ({
+    correct: average(bucket.map((result) => (result.correct ? 1 : 0))),
+    quality: average(bucket.map((result) => result.actionQuality)),
+    legal: average(bucket.map((result) => (result.legal ? 1 : 0))),
+    structured: average(bucket.map((result) => (result.structured ? 1 : 0))),
+    fallback: average(bucket.map((result) => (result.fallbackUsed ? 1 : 0))),
+  }));
+  return {
+    scenarioCount,
+    scoredScenarioCount: scored.length,
+    unscoredTransport,
+    structuredActions,
+    legalActions,
+    correctActions,
+    fallbackActions,
+    forbiddenBlunders,
+    outcomeScore: average(groupAverages.map((group) => group.correct)),
+    moveQuality: average(groupAverages.map((group) => group.quality)),
+    legalActionRate: average(groupAverages.map((group) => group.legal)),
+    structuredReliability: average(
+      groupAverages.map((group) => group.structured)
+    ),
+    fallbackRate: average(groupAverages.map((group) => group.fallback)),
+  };
+}
+
 function attemptId(input: RunGameIqScenariosInput): string {
   return `gameiq-attempt:${input.runId}:${input.teamCompositionId}:${input.modelId}`;
 }
@@ -236,59 +291,18 @@ export async function runGameIqScenarios(
   // the metrics computation.
   if (firstFatal) throw firstFatal;
 
-  const scenarioCount = caseResults.length;
-  // Transport-failed scenarios are excluded from every scoring metric
-  // denominator (informational counts + grouped rate metrics) so a transport
-  // blip never masquerades as a wrong answer nor trips the failed_tool_use
-  // gate on a pack the model otherwise aced.
-  const scored = caseResults.filter((result) => !result.unscored);
-  const unscoredTransport = caseResults.length - scored.length;
-  const structuredActions = scored.filter((result) => result.structured).length;
-  const legalActions = scored.filter((result) => result.legal).length;
-  const correctActions = scored.filter((result) => result.correct).length;
-  const fallbackActions = scored.filter((result) => result.fallbackUsed).length;
-  const forbiddenBlunders = scored.filter(
-    (result) => result.forbiddenBlunder
-  ).length;
-  const groups = new Map<string, GameIqScenarioResult[]>();
-  for (const result of scored) {
-    const key = distinctGroupKey(result);
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(result);
-    else groups.set(key, [result]);
-  }
-  const groupAverages = Array.from(groups.values()).map((bucket) => ({
-    correct: average(bucket.map((result) => (result.correct ? 1 : 0))),
-    quality: average(bucket.map((result) => result.actionQuality)),
-    legal: average(bucket.map((result) => (result.legal ? 1 : 0))),
-    structured: average(bucket.map((result) => (result.structured ? 1 : 0))),
-    fallback: average(bucket.map((result) => (result.fallbackUsed ? 1 : 0))),
-  }));
-  const metrics: GameIqRunMetrics = {
-    scenarioCount,
-    scoredScenarioCount: scored.length,
-    unscoredTransport,
-    structuredActions,
-    legalActions,
-    correctActions,
-    fallbackActions,
-    forbiddenBlunders,
-    outcomeScore: average(groupAverages.map((group) => group.correct)),
-    moveQuality: average(groupAverages.map((group) => group.quality)),
-    legalActionRate: average(groupAverages.map((group) => group.legal)),
-    structuredReliability: average(
-      groupAverages.map((group) => group.structured)
-    ),
-    fallbackRate: average(groupAverages.map((group) => group.fallback)),
-  };
+  const metrics = aggregateGameIqMetrics(caseResults);
   const score = scoreGameIqAttempt(metrics);
   // Validity rule: too many transport gaps (or none scored at all) means this
   // attempt cannot honestly represent the model's GameIQ ability, so it is
   // invalidated for the leaderboard rather than scored on a partial pack.
+  const scoredCount = metrics.scoredScenarioCount;
   const unscoredRate =
-    caseResults.length === 0 ? 0 : (caseResults.length - scored.length) / caseResults.length;
+    caseResults.length === 0
+      ? 0
+      : (caseResults.length - scoredCount) / caseResults.length;
   const status =
-    scored.length === 0 || unscoredRate > GAMEIQ_MAX_UNSCORED_RATE
+    scoredCount === 0 || unscoredRate > GAMEIQ_MAX_UNSCORED_RATE
       ? "provider_unavailable"
       : statusFromScore(score, metrics);
   const completedAt = new Date().toISOString();
@@ -322,7 +336,7 @@ export async function runGameIqScenarios(
       costUsd: null,
       inputTokens: 0,
       outputTokens: 0,
-      modelCalls: scenarioCount,
+      modelCalls: metrics.scenarioCount,
       toolCalls: 0,
       durationMs,
       artifactIds: [],

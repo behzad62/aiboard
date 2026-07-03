@@ -6,6 +6,10 @@
  * solo team, one scored attempt per pack), fanned out with Promise.allSettled so
  * one model throwing does not abort the others. Uses the same fake/oracle model
  * path as scripts/test-certified-e2e-gameiq.mts / test-gameiq-bundle-suite.mts.
+ *
+ * The bundle excludes the saturated Battleship pack (see
+ * lib/benchmark/gameiq/saturation.ts / gameIqBundlePackIds), so this test's
+ * per-run pack count is bundlePacks.length (6), not the full catalog (7).
  */
 import {
   __resetBenchmarkStoreForTests,
@@ -44,13 +48,20 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
+// Full pack CATALOG (7 packs, battleship included) vs the BUNDLE expansion
+// (6 packs — battleship excluded: 11/11 saturated across all four 2026-07
+// reference models, see lib/benchmark/gameiq/saturation.ts). Mirrors
+// CertifiedRunPanel: caseRecords/oracle/run loop are all scoped to the
+// bundle's pack ids, not the raw catalog, so battleship never gets a case or
+// a call in this bundle-driven run.
 const packs = listGameIqScenarioPacks();
-const packIds = packs.map((pack) => pack.id);
-const totalScenarios = packs.reduce(
+const packIdsInRunOrder = gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID);
+const bundlePacks = packs.filter((pack) => packIdsInRunOrder.includes(pack.id));
+const packIds = bundlePacks.map((pack) => pack.id);
+const totalScenarios = bundlePacks.reduce(
   (sum, pack) => sum + pack.scenarios.length,
   0
 );
-const packIdsInRunOrder = gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID);
 
 // --- Shared cases: model-independent pack case ids, built once. --------------
 const now = "2026-07-02T12:00:00.000Z";
@@ -78,7 +89,7 @@ function caseForPack(packId: string, label: string): BenchmarkCaseV2 {
     },
   };
 }
-const caseRecords = packs.map((pack) => caseForPack(pack.id, pack.label));
+const caseRecords = bundlePacks.map((pack) => caseForPack(pack.id, pack.label));
 const caseIds = caseRecords.map((caseRecord) => caseRecord.id);
 
 check(
@@ -125,7 +136,7 @@ const selectedModels: SelectedModel[] = [
 const throwingModelId = "openai:gpt-gameiq-b";
 
 function oracleForModel(): string[] {
-  return packs.flatMap((pack) =>
+  return bundlePacks.flatMap((pack) =>
     pack.scenarios.map((scenario) => scenario.expectedActions[0]?.action)
   );
 }
@@ -268,15 +279,15 @@ check(
 );
 
 check(
-  "each passing model has one scored attempt per pack (model x pack)",
+  "each passing model has one scored attempt per bundle pack (model x pack, battleship excluded)",
   passedRuns.every((run) => {
     const runAttempts = attempts.filter(
       (attempt) => attempt.runId === run.runId
     );
     return (
-      runAttempts.length === packs.length &&
+      runAttempts.length === bundlePacks.length &&
       new Set(runAttempts.map((attempt) => attempt.caseId)).size ===
-        packs.length &&
+        bundlePacks.length &&
       runAttempts.every(
         (attempt) =>
           typeof attempt.gameIqScore === "number" &&
@@ -325,7 +336,7 @@ check(
       scoredAttemptIds.has(verifier.attemptId)
     );
     return (
-      linkedVerifiers.length === passedRuns.length * packs.length &&
+      linkedVerifiers.length === passedRuns.length * bundlePacks.length &&
       linkedVerifiers.every((verifier) => scoredAttemptIds.has(verifier.attemptId))
     );
   })(),
