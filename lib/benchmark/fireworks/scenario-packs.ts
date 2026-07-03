@@ -156,6 +156,11 @@ export function scoreFireworksScenarioAction(
   // destroys the last copy, so both score 0 even when not enumerated as
   // forbidden. Clues that touch only dead cards waste a token for almost no
   // information and score below neutral alternatives.
+  //
+  // The 0.1 dead-clue and 0.3 neutral-legal grades below are mirrored by the
+  // GameIQ port (gradeFireworksAction in lib/benchmark/gameiq/validation.ts:
+  // FIREWORKS_DEAD_CLUE_GRADE / FIREWORKS_NEUTRAL_LEGAL_GRADE) — keep the two
+  // in lockstep so the same action grades identically on both tracks.
   const actingHand = scenario.state.hands.find(
     (hand) => hand.playerId === scenario.actingPlayerId
   );

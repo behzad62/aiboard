@@ -25,6 +25,7 @@ import {
   reidGameIqPackAttempt,
 } from "../lib/benchmark/certified/suite-options";
 import {
+  GAMEIQ_SCORING_VERSION,
   listGameIqScenarioPacks,
   runCertifiedGameIq,
 } from "../lib/benchmark/gameiq";
@@ -98,7 +99,7 @@ function caseForPack(packId: string, label: string): BenchmarkCaseV2 {
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
-    scoring: { scoringVersion: "certified-gameiq-v0.2", primary: "game_iq" },
+    scoring: { scoringVersion: GAMEIQ_SCORING_VERSION, primary: "game_iq" },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-UI-GAMEIQ",

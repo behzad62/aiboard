@@ -6,12 +6,19 @@ import {
   type GameIqMoveProvider,
   type GameIqScenario,
 } from "../lib/benchmark/gameiq";
-import { gradeFireworksAction } from "../lib/benchmark/gameiq/validation";
+import {
+  FIREWORKS_DEAD_CLUE_GRADE,
+  FIREWORKS_NEUTRAL_LEGAL_GRADE,
+  gradeFireworksAction,
+} from "../lib/benchmark/gameiq/validation";
 import {
   GAMEIQ_CORRECT_QUALITY_BAR,
   GAMEIQ_SCORING_VERSION,
+  type FireworksGameIqScenario,
 } from "../lib/benchmark/gameiq/types";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
+import { fireworksActionsEqual } from "../lib/games/fireworks/engine";
+import type { FireworksAction } from "../lib/games/fireworks/types";
 
 let failures = 0;
 
@@ -232,7 +239,9 @@ if (!codenamesScenario) {
 }
 
 // --- v0.3 scoring: graded fireworks quality + correct bar + reweight ---
-const hard27 = scenarios.find((s) => s.id === "gameiq-fireworks-hard-v1-27");
+const hard27 = scenarios.find(
+  (s) => s.id === "gameiq-fireworks-hard-v1-27"
+) as FireworksGameIqScenario | undefined;
 if (!hard27) {
   check("gameiq-fireworks-hard-v1-27 scenario available for graded-quality checks", false);
 } else {
@@ -266,6 +275,97 @@ if (!hard27) {
   );
 }
 
+// Pin the partial-credit grade VALUES once (TeamIQ lockstep contract), so the
+// constant-based assertions below cannot drift into tautologies.
+check(
+  "fireworks partial-credit grades stay pinned (0.1 dead clue / 0.3 neutral legal)",
+  FIREWORKS_DEAD_CLUE_GRADE === 0.1 && FIREWORKS_NEUTRAL_LEGAL_GRADE === 0.3,
+  { FIREWORKS_DEAD_CLUE_GRADE, FIREWORKS_NEUTRAL_LEGAL_GRADE }
+);
+
+// Dead-clue grade coverage: the most intricate branch of gradeFireworksAction
+// (target-hand lookup, touched-set filter, null guards, stacks-vs-rank over
+// every()). Search the SHIPPED fireworks packs for real scenarios exercising
+// it, so these checks survive pack regeneration: a legal, non-keyed,
+// non-forbidden clue touching ONLY already-played cards must grade exactly
+// FIREWORKS_DEAD_CLUE_GRADE, and one touching a MIX of dead and live cards
+// must fall through to the neutral floor — the mixed case is what
+// distinguishes every() from some() (an all-dead touched set satisfies both).
+const fireworksScenarios = scenarios.filter(
+  (s): s is FireworksGameIqScenario => s.gameId === "fireworks"
+);
+function findClueTouching(
+  kind: "all-dead" | "mixed"
+): { scenario: FireworksGameIqScenario; clue: FireworksAction } | null {
+  for (const scenario of fireworksScenarios) {
+    const view = scenario.initialState;
+    for (const legal of view.legalActions) {
+      if (legal.action !== "clue_color" && legal.action !== "clue_rank") continue;
+      if (
+        (scenario.forbiddenActions ?? []).some((forbidden) =>
+          fireworksActionsEqual(forbidden, legal)
+        ) ||
+        scenario.expectedActions.some((expected) =>
+          fireworksActionsEqual(expected.action, legal)
+        )
+      ) {
+        continue;
+      }
+      const target = view.otherHands.find(
+        (hand) => hand.playerId === legal.targetPlayerId
+      );
+      const touched = (target?.cards ?? []).filter((card) =>
+        legal.action === "clue_color"
+          ? card.color === legal.color
+          : card.rank === legal.rank
+      );
+      if (touched.length === 0) continue;
+      const deadCount = touched.filter(
+        (card) =>
+          card.color !== null &&
+          card.rank !== null &&
+          view.stacks[card.color] >= card.rank
+      ).length;
+      const matches =
+        kind === "all-dead"
+          ? deadCount === touched.length
+          : deadCount > 0 && deadCount < touched.length;
+      if (matches) return { scenario, clue: legal };
+    }
+  }
+  return null;
+}
+
+const deadClue = findClueTouching("all-dead");
+if (!deadClue) {
+  check(
+    "a shipped fireworks scenario offers an all-dead-touch clue for the dead-clue branch",
+    false
+  );
+} else {
+  const grade = gradeFireworksAction(deadClue.scenario, deadClue.clue);
+  check(
+    `gradeFireworksAction: clue touching only already-played cards grades the dead-clue 0.1 (${deadClue.scenario.id})`,
+    grade === FIREWORKS_DEAD_CLUE_GRADE && grade < GAMEIQ_CORRECT_QUALITY_BAR,
+    { scenario: deadClue.scenario.id, clue: deadClue.clue, grade }
+  );
+}
+
+const mixedClue = findClueTouching("mixed");
+if (!mixedClue) {
+  check(
+    "a shipped fireworks scenario offers a mixed dead/live-touch clue for the neutral branch",
+    false
+  );
+} else {
+  const grade = gradeFireworksAction(mixedClue.scenario, mixedClue.clue);
+  check(
+    `gradeFireworksAction: clue touching dead AND live cards stays at the neutral floor, not dead-clue (${mixedClue.scenario.id})`,
+    grade === FIREWORKS_NEUTRAL_LEGAL_GRADE,
+    { scenario: mixedClue.scenario.id, clue: mixedClue.clue, grade }
+  );
+}
+
 check(
   "GAMEIQ_SCORING_VERSION bumped to v0.3",
   GAMEIQ_SCORING_VERSION === "certified-gameiq-v0.3",
@@ -294,11 +394,15 @@ check(
   }) === 0
 );
 
-// Regression guard for the forbidden-action probe interaction bug: the probe
-// constructed by matchesForbiddenAction (runner.ts) must clear the scenario's
-// own forbiddenActions, or the graded fireworks path would check the
-// (still-present) forbidden list FIRST and return 0, making the probe
-// misreport "not forbidden" and silently breaking trap detection.
+// Regression guard for trap detection under graded scoring:
+// matchesForbiddenAction (runner.ts) answers "is this action forbidden?" by
+// DIRECT per-game membership (gameIqActionsEqual), never through
+// actionMatchesExpected/gradeFireworksAction. If a probe-through-the-grader
+// pattern were ever re-inlined it fails visibly: grading the trap action
+// against a probe still carrying the scenario's forbiddenActions returns 0
+// and THIS check fails, while clearing them lets the nonzero neutral legal
+// floor false-flag every ordinary legal action as a trap, which the
+// perfect-run score-100 check above catches.
 if (hard27) {
   const forbiddenPlayResult = await runGameIqScenarios({
     runId: "gameiq-test-run-forbidden-probe-regression",
@@ -319,7 +423,7 @@ if (hard27) {
   });
   const forbiddenCaseResult = forbiddenPlayResult.caseResults[0];
   check(
-    "forbidden-action probe still detects the trap under graded fireworks scoring",
+    "direct-membership trap detection survives graded fireworks scoring",
     forbiddenCaseResult?.forbiddenBlunder === true &&
       forbiddenCaseResult.actionQuality === 0,
     forbiddenCaseResult

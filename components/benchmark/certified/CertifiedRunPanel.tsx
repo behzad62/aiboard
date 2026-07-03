@@ -70,6 +70,7 @@ import {
   type FireworksBenchmarkSuite,
 } from "@/lib/benchmark/fireworks";
 import {
+  GAMEIQ_SCORING_VERSION,
   listGameIqScenarioPacks,
   runCertifiedGameIq,
 } from "@/lib/benchmark/gameiq";
@@ -1032,7 +1033,11 @@ function caseForSelection(
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
-    scoring: { scoringVersion: "certified-gameiq-v0.2", primary: "game_iq" },
+    // Live constant, not a literal: this case record is PERSISTED via
+    // saveBenchmarkCaseV2 on every UI run and must agree with the attempt's
+    // scoringVersion stamp (same invariant as TEAMIQ_SCORING_VERSION in
+    // lib/benchmark/teamiq/certified-runner.ts).
+    scoring: { scoringVersion: GAMEIQ_SCORING_VERSION, primary: "game_iq" },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-UI-GAMEIQ",
