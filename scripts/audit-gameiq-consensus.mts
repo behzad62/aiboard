@@ -4,7 +4,11 @@
  * Run: npx tsx scripts/audit-gameiq-consensus.mts <run-file.json> [...more]
  */
 import { readFileSync } from "node:fs";
-import { listGameIqScenarioPacks, stableStringify } from "../lib/benchmark/gameiq";
+import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  listGameIqScenarioPacks,
+  stableStringify,
+} from "../lib/benchmark/gameiq";
 import { actionMatchesExpected } from "../lib/benchmark/gameiq/validation";
 import type { GameIqScenario } from "../lib/benchmark/gameiq/types";
 
@@ -72,7 +76,10 @@ for (const [id, row] of table) {
   for (const group of groups.values()) {
     if (group.models.length < 2) continue;
     const quality = actionMatchesExpected(row.scenario, group.action);
-    if (quality > 0) continue; // keyed (full or partial credit) — fine
+    // Graded fireworks scoring awards sub-bar partial credit (0.1-0.3) to any
+    // merely-legal action, so only correct-grade answers (>= the bar) count
+    // as keyed here — a bare quality > 0 check would be blind on fireworks.
+    if (quality >= GAMEIQ_CORRECT_QUALITY_BAR) continue; // keyed — fine
     flagged++;
     const expected = row.scenario.expectedActions
       .map((e) => `${JSON.stringify(e.action)}@${e.weight}`)
@@ -87,3 +94,7 @@ for (const [id, row] of table) {
   }
 }
 console.log(`${flagged} convergence flag(s) across ${table.size} scenarios with 2+ model answers.`);
+// Non-zero exit lets this audit gate pack releases. Convergence flags are
+// review triggers for human adjudication, not automatic failures of the
+// packs themselves — a flag means "a human should look," not "this is wrong."
+process.exit(flagged === 0 ? 0 : 1);
