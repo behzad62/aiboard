@@ -47,8 +47,11 @@
  *    the newly-harmful action as forbidden or accept the inflation and update
  *    the pin with a comment explaining why;
  *  - widening fingerprint: exactly 5 keyed entries across all three packs
- *    carry the label "Equivalent-information clue (auto-widened)" (a cheap
- *    blast-radius pin that complements test-fireworks-gameiq-port.mts).
+ *    carry the label "Equivalent-information clue (auto-widened)". This is
+ *    deliberately the SAME count===5 pin test-fireworks-gameiq-port.mts
+ *    already carries — duplicated, not complementary — so each file stands
+ *    alone as a complete guard; a widening change is expected to update the
+ *    pin in both files.
  */
 import {
   FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
@@ -139,8 +142,13 @@ const TRAP_SOURCE_CATEGORIES = new Set([
   "critical_discard_avoidance",
 ]);
 
+// Closed label union: PINNED_UNFORBIDDEN_HARM is keyed by this, so adding a
+// fourth pack without a conscious pin fails at compile time (missing Record
+// key) instead of comparing against a runtime `pinned: undefined`.
+type GameIqFireworksPackLabel = "basic" | "hard" | "memory";
+
 interface PackSpec {
-  label: string;
+  label: GameIqFireworksPackLabel;
   scenarios: FireworksGameIqScenario[];
 }
 
@@ -153,6 +161,10 @@ const PACKS: PackSpec[] = [
 // Pinned harm-completeness drift alarm (invariant 6). Counts of legal but
 // engine-harmful plays/discards (misplay-certain plays, critical-card
 // discards) that are NOT already enumerated as forbiddenActions, per pack.
+// Scope: deliberately NARROWER than the forbidden-discard soundness
+// disjunction above — class-2 harm (discarding the keyed play's card) is not
+// counted, because it is scenario-decision-relative rather than state-harm,
+// and counting it would double-count the keyed decision itself.
 // These numbers were computed by running this file against the packs landed
 // through commit f55739d (A1 graded scoring + A2 clue widening). They are a
 // DRIFT ALARM, not an endorsement: each unforbidden-harmful action is a case
@@ -172,17 +184,19 @@ const PACKS: PackSpec[] = [
 // is a real (if un-narrated) misplay the redacted view cannot help the model
 // detect. This is expected scale for an un-curated-for-this-purpose pack, not
 // a sign of a new bug.
-const PINNED_UNFORBIDDEN_HARM: Record<string, number> = {
+const PINNED_UNFORBIDDEN_HARM: Record<GameIqFireworksPackLabel, number> = {
   basic: 65,
   hard: 125,
   memory: 98,
 };
 
 const WIDENED_LABEL = "Equivalent-information clue (auto-widened)";
-let widenedEntryCount = 0;
+const widenedEntries: Array<{ scenarioId: string; action: FireworksAction }> = [];
 
 for (const pack of PACKS) {
-  let unforbiddenHarm = 0;
+  // One entry per harmful-but-unforbidden action ("<scenario-id> <action-json>"),
+  // so a drift failure names every offender instead of a bare count.
+  const harmOffenders: string[] = [];
 
   for (const scenario of pack.scenarios) {
     const source = sourceOf(scenario.tags);
@@ -268,6 +282,9 @@ for (const pack of PACKS) {
     }
 
     // --- clue-equivalence completeness ------------------------------------
+    // 0.75 = widenEquivalentClues' keyed-clue threshold (scenario-packs.ts)
+    // = GAMEIQ_CORRECT_QUALITY_BAR (gameiq/types.ts); keep all three in
+    // lockstep.
     const keyedSets = new Set(
       scenario.expectedActions
         .filter((expected) => expected.weight >= 0.75)
@@ -295,7 +312,8 @@ for (const pack of PACKS) {
       );
     }
 
-    // --- harm-completeness drift alarm (count only, not asserted here) -----
+    // --- harm-completeness drift alarm (collect offenders; asserted per
+    // pack below with the full offender list in the failure detail) ---------
     const forbidden = scenario.forbiddenActions ?? [];
     for (const candidate of legal) {
       const alreadyForbidden = forbidden.some((f) =>
@@ -304,31 +322,48 @@ for (const pack of PACKS) {
       if (alreadyForbidden) continue;
       if (candidate.action === "play") {
         const card = hand.cards[candidate.cardIndex];
-        if (card && !isPlayableCard(state, card)) unforbiddenHarm++;
+        if (card && !isPlayableCard(state, card)) {
+          harmOffenders.push(`${scenario.id} ${JSON.stringify(candidate)}`);
+        }
       } else if (candidate.action === "discard") {
         const card = hand.cards[candidate.cardIndex];
-        if (card && isCriticalCard(state, card)) unforbiddenHarm++;
+        if (card && isCriticalCard(state, card)) {
+          harmOffenders.push(`${scenario.id} ${JSON.stringify(candidate)}`);
+        }
       }
     }
 
-    // --- widening fingerprint (accumulate) ----------------------------------
-    widenedEntryCount += scenario.expectedActions.filter(
-      (expected) => expected.label === WIDENED_LABEL
-    ).length;
+    // --- widening fingerprint (accumulate identity, asserted after loop) ---
+    for (const expected of scenario.expectedActions) {
+      if (expected.label === WIDENED_LABEL) {
+        widenedEntries.push({ scenarioId: scenario.id, action: expected.action });
+      }
+    }
   }
 
+  // Offender identity rides in the detail (printed only on failure), so a
+  // drift is diagnosable from the failure line alone — no re-instrumenting.
   check(
-    `${pack.label} pack: unforbidden-harm count (${unforbiddenHarm}) matches the pinned drift alarm (${PINNED_UNFORBIDDEN_HARM[pack.label]})`,
-    unforbiddenHarm === PINNED_UNFORBIDDEN_HARM[pack.label],
-    { pack: pack.label, actual: unforbiddenHarm, pinned: PINNED_UNFORBIDDEN_HARM[pack.label] }
+    `${pack.label} pack: unforbidden-harm count (${harmOffenders.length}) matches the pinned drift alarm (${PINNED_UNFORBIDDEN_HARM[pack.label]})`,
+    harmOffenders.length === PINNED_UNFORBIDDEN_HARM[pack.label],
+    {
+      pack: pack.label,
+      actual: harmOffenders.length,
+      pinned: PINNED_UNFORBIDDEN_HARM[pack.label],
+      offenders: harmOffenders,
+    }
   );
 }
 
 // --- widening fingerprint --------------------------------------------------
+// Deliberately duplicates test-fireworks-gameiq-port.mts's count===5 pin so
+// each file stands alone; a widening change updates both. The collected
+// entries (scenario id + action) ride in the detail so a fingerprint failure
+// names exactly which widened keys exist.
 check(
   "exactly 5 auto-widened clue entries across all three GameIQ fireworks packs",
-  widenedEntryCount === 5,
-  widenedEntryCount
+  widenedEntries.length === 5,
+  widenedEntries
 );
 
 if (failures === 0) {
