@@ -1,28 +1,17 @@
 /* GameIQ transport containment checks (run: npx tsx scripts/test-gameiq-transport-containment.mts) */
-// NOTE on the createRequire below: lib/benchmark/gameiq/runner.ts is a plain
-// .ts file (CommonJS by default, since this package has no "type": "module"),
-// while this script is .mts (always ESM). runner.ts's own
-// `import { CertifiedProviderError } from "@/lib/benchmark/certified/model-call"`
-// therefore resolves via require() at runtime. If this script instead reaches
-// CertifiedProviderError via a plain ESM `import`, tsx's CJS/ESM interop can
-// load lib/benchmark/certified/model-call.ts a SECOND time under a distinct
-// module instance (observable as a `?tsx-commonjs-export-preparse=1` copy),
-// which mints a second CertifiedProviderError class — `instanceof` checks
-// then silently fail across the two instances even though both sides "look"
-// like the same import. Using createRequire to load it exactly like
-// runner.ts does keeps both sides pointing at the same CJS singleton. This is
-// purely a test-harness (tsx) artifact: the real production call path
-// (certified-runner.ts -> callCertifiedModel -> throw, caught by
-// runner.ts's evaluateScenario within a single module graph traversal) never
-// crosses this boundary and is unaffected.
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const {
-  CertifiedProviderError,
-} = require("../lib/benchmark/certified/model-call.ts") as typeof import("../lib/benchmark/certified/model-call");
-const {
-  CertifiedBudgetExceededError,
-} = require("../lib/benchmark/certified/budget.ts") as typeof import("../lib/benchmark/certified/budget");
+// This is a plain .mts/ESM test that CONSTRUCTS CertifiedProviderError /
+// CertifiedBudgetExceededError to feed the runner — exactly the shape a natural
+// ESM caller has. Constructing across the CJS/ESM boundary is fine; only
+// identity comparison (`instanceof`) was fragile there, because runner.ts is a
+// .ts/CJS module and tsx interop can load model-call.ts twice (distinct class
+// objects). The runner now contains transient failures via a STRUCTURAL guard
+// (isCertifiedProviderError + classification check), and the assertions below
+// likewise use structural checks (isCertifiedProviderError / name tag) — so
+// these checks passing is the proof the production guard works across the
+// boundary a real .mts caller hits.
+import { CertifiedProviderError } from "../lib/benchmark/certified/model-call";
+import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
+import { isCertifiedProviderError } from "../lib/benchmark/certified/classify-provider-failure";
 import {
   runGameIqScenarios,
   listGameIqScenarioPacks,
@@ -170,7 +159,7 @@ try {
 }
 check(
   "fatal: rethrows a CertifiedProviderError instead of containing it",
-  fatalThrew instanceof CertifiedProviderError,
+  isCertifiedProviderError(fatalThrew) && fatalThrew.classification === "fatal",
   fatalThrew
 );
 
@@ -191,7 +180,7 @@ try {
 }
 check(
   "budget: rethrows a CertifiedBudgetExceededError instead of containing it",
-  budgetThrew instanceof CertifiedBudgetExceededError,
+  (budgetThrew as { name?: string } | null)?.name === "CertifiedBudgetExceededError",
   budgetThrew
 );
 
@@ -212,7 +201,7 @@ try {
 }
 check(
   "other: rethrows a CertifiedProviderError instead of containing it",
-  otherThrew instanceof CertifiedProviderError,
+  isCertifiedProviderError(otherThrew) && otherThrew.classification === "other",
   otherThrew
 );
 
@@ -242,6 +231,22 @@ check(
     Number.isFinite(allUnscored.metrics.structuredReliability) &&
     Number.isFinite(allUnscored.metrics.fallbackRate),
   { score: allUnscored.score, metrics: allUnscored.metrics }
+);
+
+// --- 0/10: no failures -> additive fields pinned, nothing unscored ---
+const clean = await runGameIqScenarios({
+  runId: "t-clean",
+  modelId: "m",
+  teamCompositionId: "team",
+  scenarios,
+  moveProvider: ({ scenario }) => ({ action: perfectAction(scenario) }),
+});
+check(
+  "0/10: happy path pins unscoredTransport=0 and scoredScenarioCount=scenarioCount",
+  clean.metrics.unscoredTransport === 0 &&
+    clean.metrics.scoredScenarioCount === clean.metrics.scenarioCount &&
+    clean.attempt.status === "passed",
+  clean.metrics
 );
 
 if (failures === 0) {

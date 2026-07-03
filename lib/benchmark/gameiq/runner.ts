@@ -1,4 +1,4 @@
-import { CertifiedProviderError } from "@/lib/benchmark/certified/model-call";
+import { isCertifiedProviderError } from "@/lib/benchmark/certified/classify-provider-failure";
 import { scoreGameIqAttempt } from "@/lib/benchmark/scoring/gameiq";
 import { round } from "@/lib/benchmark/scoring/types";
 import { gameIqDecisionKey } from "./packs";
@@ -93,13 +93,14 @@ async function evaluateScenario(
       await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
     );
   } catch (error) {
-    if (
-      error instanceof CertifiedProviderError &&
-      error.classification === "transient"
-    ) {
+    if (isCertifiedProviderError(error) && error.classification === "transient") {
       // Transient transport failure survived B1's retries: contain it as an
       // unscored scenario instead of scoring it wrong or voiding the whole
       // run. Excluded from every metric denominator by runGameIqScenarios.
+      // Uses a STRUCTURAL guard (not `instanceof`): this runner is a .ts/CJS
+      // module and a .mts/ESM caller can hold a distinct CertifiedProviderError
+      // class object under tsx interop, so `instanceof` would spuriously miss a
+      // genuinely-typed error crossing that boundary.
       return {
         scenarioId: scenario.id,
         gameId: scenario.gameId,

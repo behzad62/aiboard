@@ -20,3 +20,27 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
   if (TRANSIENT_PATTERN.test(message)) return "transient";
   return "other";
 }
+
+/**
+ * Structural type guard for CertifiedProviderError that survives the CJS/ESM
+ * module boundary. `instanceof` is unreliable across it: a .mts/ESM caller and
+ * a .ts/CJS module can each hold a DISTINCT CertifiedProviderError class object
+ * (tsx interop loads model-call.ts twice), so `instanceof` returns false for a
+ * genuinely-typed error. We match on the stable `name` tag + a valid
+ * `classification` instead. Same-module throw+catch (the retry loop in
+ * model-call.ts) may keep using `instanceof` — it never crosses a boundary.
+ */
+export function isCertifiedProviderError(
+  error: unknown
+): error is { name: "CertifiedProviderError"; message: string; classification: ProviderFailureClass } {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { name?: unknown; classification?: unknown };
+  return (
+    e.name === "CertifiedProviderError" &&
+    (e.classification === "transient" || e.classification === "fatal" || e.classification === "other")
+  );
+}
+
+export function isTransientProviderError(error: unknown): boolean {
+  return isCertifiedProviderError(error) && error.classification === "transient";
+}
