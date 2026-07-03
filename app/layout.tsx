@@ -65,10 +65,11 @@ export const metadata: Metadata = {
 };
 
 const navLink =
-  "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+  "inline-flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:px-3";
 const navIconBtn =
-  "inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
-const navDivider = "mx-1.5 h-5 w-px bg-border";
+  "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+const navDivider = "mx-1.5 h-5 w-px shrink-0 bg-border";
+const navGroup = "flex shrink-0 items-center gap-1";
 
 export default function RootLayout({
   children,
@@ -83,62 +84,68 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <div className="min-h-screen bg-background">
           <header className="border-b bg-background">
-            <div className="mx-auto flex min-h-14 max-w-[100rem] flex-wrap items-center justify-between gap-2 px-4 py-2 md:flex-nowrap">
-              <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold">
+            <div className="mx-auto flex max-w-[100rem] flex-col gap-2 px-4 py-2 xl:min-h-14 xl:flex-row xl:items-center xl:justify-between">
+              <Link href="/" className="flex min-h-10 shrink-0 items-center gap-2 font-semibold">
                 <MessageSquare className="h-5 w-5 text-primary" />
                 {SITE_NAME}
               </Link>
-              <nav className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1">
-                {/* Project */}
-                <Link href="/about" className={navLink}>
-                  <Info className="h-4 w-4" />
-                  About
-                </Link>
-                <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={navLink}>
-                  <Mail className="h-4 w-4" />
-                  Contact
-                </a>
-                <a
-                  href="https://paypal.me/behzadashams"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={navLink}
-                >
-                  <Coffee className="h-4 w-4" />
-                  Support this project
-                </a>
+              <nav className="-mx-2 flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto px-2 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:mx-0 xl:flex-1 xl:justify-end xl:overflow-visible xl:px-0 xl:pb-0">
+                <div className={`${navGroup} order-1 xl:order-2`}>
+                  {/* App */}
+                  <Link href="/games" className={navLink}>
+                    <Gamepad2 className="h-4 w-4" />
+                    Games
+                  </Link>
+                  <Link href="/benchmark" className={navLink}>
+                    <BarChart3 className="h-4 w-4" />
+                    Benchmark
+                  </Link>
+                  <Link href="/settings" className={navLink}>
+                    <Settings className="h-4 w-4" />
+                    Settings
+                  </Link>
+                </div>
 
-                <span className={navDivider} aria-hidden="true" />
+                <div className={`${navGroup} order-2 xl:order-3`}>
+                  <span className={navDivider} aria-hidden="true" />
 
-                {/* App */}
-                <Link href="/games" className={navLink}>
-                  <Gamepad2 className="h-4 w-4" />
-                  Games
-                </Link>
-                <Link href="/benchmark" className={navLink}>
-                  <BarChart3 className="h-4 w-4" />
-                  Benchmark
-                </Link>
-                <Link href="/settings" className={navLink}>
-                  <Settings className="h-4 w-4" />
-                  Settings
-                </Link>
+                  {/* Controls */}
+                  <a
+                    href={SITE_GITHUB_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="View source on GitHub"
+                    title="View source on GitHub"
+                    className={navIconBtn}
+                  >
+                    <Code className="h-4 w-4" />
+                    <span className="sr-only">View source on GitHub</span>
+                  </a>
+                  <ThemeToggle />
+                </div>
 
-                <span className={navDivider} aria-hidden="true" />
+                <div className={`${navGroup} order-3 xl:order-1`}>
+                  {/* Project */}
+                  <Link href="/about" className={navLink}>
+                    <Info className="h-4 w-4" />
+                    About
+                  </Link>
+                  <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={navLink}>
+                    <Mail className="h-4 w-4" />
+                    Contact
+                  </a>
+                  <a
+                    href="https://paypal.me/behzadashams"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={navLink}
+                  >
+                    <Coffee className="h-4 w-4" />
+                    Support this project
+                  </a>
 
-                {/* Controls */}
-                <a
-                  href={SITE_GITHUB_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="View source on GitHub"
-                  title="View source on GitHub"
-                  className={navIconBtn}
-                >
-                  <Code className="h-4 w-4" />
-                  <span className="sr-only">View source on GitHub</span>
-                </a>
-                <ThemeToggle />
+                  <span className={navDivider} aria-hidden="true" />
+                </div>
               </nav>
             </div>
           </header>
