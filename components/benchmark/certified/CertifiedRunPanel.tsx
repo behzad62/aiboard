@@ -33,6 +33,7 @@ import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget"
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
 import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/types";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
+import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import {
   classifyGameIqModelRunOutcome,
   gameIqBundlePackIds,
@@ -773,27 +774,55 @@ export function CertifiedRunPanel({
                 trials: 1,
                 signal: options?.signal,
               });
-              attempts.push(
-                ...packAttempts.map((attempt) =>
-                  reidGameIqPackAttempt(attempt, packId)
-                )
+              const reidd = packAttempts.map((attempt) =>
+                reidGameIqPackAttempt(attempt, packId)
               );
+              // Persist immediately: a fatal/budget failure in a LATER pack
+              // must not void packs that already completed and verified
+              // (createFailedAttemptsForRunError in run-engine.ts skips
+              // already-recorded cases via its existingKeys check). Record
+              // against the OUTER context — reidGameIqPackAttempt already
+              // scopes the id/caseId/verifierResultId by pack, so no
+              // packContext is needed here.
+              await persistReturnedAttempts(context, reidd);
+              attempts.push(...reidd);
+              capturedAttempts = [...attempts];
             }
             capturedAttempts = attempts;
-            return attempts;
+            // Already recorded incrementally above; returning attempts here
+            // too would double-record (harmless — recordAttempt is a
+            // Map-by-id and persistFailureForAttempt checks recordedFailureIds
+            // — but returning [] keeps the final persistReturnedAttempts a
+            // clean no-op).
+            return [];
           },
         });
         // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
         // the provider/budget error into the summary status; treat that as a
         // failure for the batch tally too.
         if (result.status !== "completed") {
+          // The run itself failed (fatal/budget error mid-run), but packs
+          // already recorded before the failure are preserved by the engine
+          // (see run-engine.ts's existingKeys skip). Surface those partial
+          // numbers on the row instead of a bare failure so the badge can
+          // read e.g. "failed (4/7 packs scored)".
+          const partialOutcome =
+            capturedAttempts.length > 0
+              ? classifyGameIqModelRunOutcome(false, capturedAttempts)
+              : undefined;
+          const baseError = result.error ?? "Run did not complete.";
           const state: GameIqModelRunState = {
             modelId: model.modelId,
             displayName: model.displayName,
             providerId: model.providerId,
             status: "failed",
             summary: result,
-            error: result.error ?? "Run did not complete.",
+            packsScored: partialOutcome?.packsScored,
+            packsPassed: partialOutcome?.packsPassed,
+            avgQuality: partialOutcome?.avgQuality,
+            error: partialOutcome
+              ? `${baseError} (${partialOutcome.packsPassed}/${partialOutcome.packsScored} packs scored before the failure)`
+              : baseError,
           };
           updateGameIqModelRun(model.modelId, state);
           return state;
