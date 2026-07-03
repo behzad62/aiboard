@@ -2,10 +2,13 @@ import type { GameIqScoreInput } from "./types";
 import { clamp01, round } from "./types";
 
 const GAME_IQ_WEIGHTS = {
-  outcomeScore: 0.37,
-  moveQuality: 0.32,
-  legalActionRate: 0.21,
-  structuredReliability: 0.1,
+  outcomeScore: 0.6,
+  moveQuality: 0.4,
+  // Legality and structured output are pass/fail gates (statusFromScore →
+  // failed_tool_use), not score components: a model must not harvest 31 free
+  // points for emitting valid JSON.
+  legalActionRate: 0,
+  structuredReliability: 0,
 } as const;
 
 export function scoreGameIqAttempt(input: GameIqScoreInput): number {

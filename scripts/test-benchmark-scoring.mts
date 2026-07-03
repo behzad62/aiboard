@@ -101,7 +101,6 @@ const gameIq = scoreGameIqAttempt({
   legalActionRate: 1,
   structuredReliability: 1,
   fallbackRate: 0,
-  latencyFactor: 1,
 });
 check("perfect GameIQ scores 100", gameIq === 100, gameIq);
 const weightedGameIq = scoreGameIqAttempt({
@@ -110,9 +109,12 @@ const weightedGameIq = scoreGameIqAttempt({
   legalActionRate: 1,
   structuredReliability: 1,
   fallbackRate: 0.2,
-  latencyFactor: 1,
 });
-check("GameIQ uses plan weights and fallback multiplier", weightedGameIq === 56.7, weightedGameIq);
+check(
+  "GameIQ uses v0.3 plan weights (outcome 0.6 / quality 0.4; legality+structure are gates) and fallback multiplier",
+  weightedGameIq === 36,
+  weightedGameIq
+);
 
 const toolReliability = scoreToolReliability({
   schemaValidRate: 1,

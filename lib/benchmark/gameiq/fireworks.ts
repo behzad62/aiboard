@@ -72,7 +72,6 @@ export function toGameIqScenario(input: {
       ...(isMemory ? [FIREWORKS_MEMORY_RECALL_TAG] : []),
       ...input.tags,
     ],
-    maxResponseMs: 15_000,
   };
 }
 

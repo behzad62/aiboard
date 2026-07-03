@@ -383,6 +383,10 @@ export function actionMatchesExpected(
     return validateGameIqAction(scenario, action).ok ? 1 : 0;
   }
 
+  if (scenario.gameId === "fireworks") {
+    return gradeFireworksAction(scenario as FireworksGameIqScenario, action);
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {
@@ -390,6 +394,86 @@ export function actionMatchesExpected(
     }
   }
   return Math.min(1, Math.max(0, bestWeight));
+}
+
+// Sub-bar partial-credit grades for fireworks actions. Both values must stay
+// in lockstep with TeamIQ's scoreFireworksScenarioAction
+// (lib/benchmark/fireworks/scenario-packs.ts), which grades the same
+// decisions on the TeamIQ track — a drift would score the identical action
+// differently across tracks.
+export const FIREWORKS_DEAD_CLUE_GRADE = 0.1;
+export const FIREWORKS_NEUTRAL_LEGAL_GRADE = 0.3;
+
+// Graded quality for fireworks actions (GameIQ port of TeamIQ's
+// scoreFireworksScenarioAction). Keyed match earns the keyed weight; a
+// forbidden action earns 0; a clue that touches only already-played cards
+// earns FIREWORKS_DEAD_CLUE_GRADE; any other legal action earns the
+// FIREWORKS_NEUTRAL_LEGAL_GRADE floor. The neutral floor is deliberately
+// below GAMEIQ_CORRECT_QUALITY_BAR so it feeds moveQuality without ever
+// counting as a correct outcome.
+export function gradeFireworksAction(
+  scenario: FireworksGameIqScenario,
+  action: unknown
+): number {
+  if (!isStructuredGameIqAction(scenario, action)) return 0;
+  const candidate = action as FireworksAction;
+  const view = scenario.initialState;
+
+  if (
+    (scenario.forbiddenActions ?? []).some((forbidden) =>
+      fireworksActionsEqual(forbidden, candidate)
+    )
+  ) {
+    return 0;
+  }
+  let bestWeight = 0;
+  for (const expected of scenario.expectedActions) {
+    if (fireworksActionsEqual(expected.action, candidate)) {
+      bestWeight = Math.max(bestWeight, expected.weight);
+    }
+  }
+  if (bestWeight > 0) return Math.min(1, bestWeight);
+
+  if (!view.legalActions.some((legal) => fireworksActionsEqual(legal, candidate))) {
+    return 0;
+  }
+  if (candidate.action === "clue_color" || candidate.action === "clue_rank") {
+    const target = view.otherHands.find(
+      (hand) => hand.playerId === candidate.targetPlayerId
+    );
+    const touched = (target?.cards ?? []).filter((card) =>
+      candidate.action === "clue_color"
+        ? card.color === candidate.color
+        : card.rank === candidate.rank
+    );
+    if (
+      touched.length > 0 &&
+      touched.every(
+        (card) =>
+          card.color !== null &&
+          card.rank !== null &&
+          view.stacks[card.color] >= card.rank
+      )
+    ) {
+      return FIREWORKS_DEAD_CLUE_GRADE;
+    }
+  }
+  return FIREWORKS_NEUTRAL_LEGAL_GRADE;
+}
+
+// Exact per-game action equality (candidate vs reference), exported for the
+// runner's forbidden-action membership test. Membership in a list must be
+// answered by direct equality — never by actionMatchesExpected or
+// gradeFireworksAction, which are graded/legality-scoring functions:
+// gradeFireworksAction returns the nonzero neutral floor for any unrelated
+// legal action, and codenames clue-selection scores bare legality while
+// ignoring expectedActions entirely.
+export function gameIqActionsEqual(
+  gameId: GameIqScenario["gameId"],
+  left: GameIqAction,
+  right: unknown
+): boolean {
+  return actionsEqual(gameId, left, right);
 }
 
 function actionsEqual(

@@ -134,7 +134,6 @@ function makeScenario(spec: ScenarioSpec): BattleshipGameIqScenario {
     initialState: blueShotHistory(spec.orangeShips, spec.shots.map(cell)),
     expectedActions: spec.expected,
     tags: ["battleship", ...spec.tags],
-    maxResponseMs: 15_000,
   };
 }
 
@@ -187,7 +186,6 @@ const FOLLOW_LINE_SCENARIO: BattleshipGameIqScenario = {
     ),
   ],
   tags: ["battleship", "line-extension"],
-  maxResponseMs: 15_000,
 };
 
 // -----------------------------------------------------------------------------

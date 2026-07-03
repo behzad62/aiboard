@@ -83,7 +83,13 @@ const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
   }),
 };
 
-const DEFAULT_GAMEIQ_MAX_TOKENS = 2048;
+// Reasoning models stream thinking tokens against maxTokens before emitting
+// their short structured answer; 2048 truncated them into empty/failed
+// responses on providers that hard-enforce the cap (observed with GPT-5.5
+// GameIQ calls emitting thousands of thinking tokens before a ~20-token
+// action). Conciseness is controlled by the structured-output schema +
+// prompt, never by maxTokens as a length control (repo convention).
+const DEFAULT_GAMEIQ_MAX_TOKENS = 16_384;
 
 export interface RunCertifiedGameIqInput {
   context: CertifiedRunContext;
@@ -95,6 +101,9 @@ export interface RunCertifiedGameIqInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  // Max scenarios evaluated in parallel per pack; threaded through to
+  // runGameIqScenarios. Default 1 (sequential) when omitted.
+  concurrency?: number;
 }
 
 export async function runCertifiedGameIq(
@@ -153,6 +162,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
     caseId: input.context.caseIds[0] ?? "gameiq-v0.1-scenario-pack",
     startedAt: input.context.startedAt,
     harnessProfile: input.context.harnessProfile,
+    concurrency: input.concurrency,
     moveProvider: async ({ scenario, scenarioIndex, totalScenarios }) => {
       const system =
         "You are a certified GameIQ benchmark participant. Return only the requested structured JSON.";
@@ -178,6 +188,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         context: input.context,
         caseId: input.context.caseIds[0],
         attemptId: plannedAttemptId,
+        scenarioId: scenario.id,
         participantId: input.teamCompositionId,
         pricing: input.pricing,
         streamChat: input.streamChat,
@@ -218,23 +229,39 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
   };
 }
 
-function createGameIqVerifierResult(
+// Exported so recovery (scripts/recover-gameiq-run.mts) produces a verifier
+// byte-identical to production from a replayed GameIqRunResult. Pure builder,
+// no IO — the certified runner and recovery share this one implementation.
+export function createGameIqVerifierResult(
   attemptId: string,
   result: GameIqRunResult
 ): BenchmarkVerifierResult {
   const assertions = result.caseResults.map((scenario) => {
     const passed = scenario.legal && scenario.correct;
+    // A transport-unscored scenario never "passes" — it is honestly surfaced
+    // as a containment gap (message prefix + label suffix + `unscored` on the
+    // caseResults entry below), not faked as a pass. It still counts against
+    // `passed` here; the attempt-level status/score already account for it
+    // via the GAMEIQ_MAX_UNSCORED_RATE validity rule in the runner.
+    const rawMessage =
+      scenario.messages.length > 0 ? scenario.messages.join("; ") : undefined;
+    const message =
+      scenario.unscored === "transport"
+        ? `UNSCORED (transport): ${rawMessage ?? "Provider transport failure after retries."}`
+        : rawMessage;
     return {
       id: scenario.scenarioId,
       // A trap failure is surfaced distinctly in the label so a forbidden-action
-      // blunder reads as a trap failure, not a generic miss.
-      label: scenario.forbiddenBlunder
-        ? `${scenario.gameId} ${scenario.category} (trap blunder)`
-        : `${scenario.gameId} ${scenario.category}`,
+      // blunder reads as a trap failure, not a generic miss. An unscored
+      // transport gap is likewise labeled distinctly from a scored miss.
+      label:
+        (scenario.forbiddenBlunder
+          ? `${scenario.gameId} ${scenario.category} (trap blunder)`
+          : `${scenario.gameId} ${scenario.category}`) +
+        (scenario.unscored === "transport" ? " (unscored: transport)" : ""),
       passed,
       weight: 1,
-      message:
-        scenario.messages.length > 0 ? scenario.messages.join("; ") : undefined,
+      message,
       ...(!passed ? { details: gameIqAssertionDetails(scenario) } : {}),
     };
   });
@@ -258,6 +285,7 @@ function createGameIqVerifierResult(
       action: scenario.action,
       rawResponse: scenario.rawResponse,
       messages: scenario.messages,
+      ...(scenario.unscored ? { unscored: scenario.unscored } : {}),
     })),
   });
   return {

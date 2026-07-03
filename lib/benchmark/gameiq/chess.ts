@@ -55,7 +55,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Back-rank checkmate; the only mate among 20 legal moves.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-queen-mate",
@@ -72,7 +71,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "King-supported queen mate; the only mate, though several other checks exist.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-smothered-mate",
@@ -89,7 +87,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Smothered mate; capturing the rook instead only wins material.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-promotion-mate",
@@ -106,7 +103,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Promote with mate; promoting to a rook only checks.",
     }),
     tags: ["chess", "mate", "promotion"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-double-mate",
@@ -130,7 +126,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       }
     ),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   // ---- mate-in-one: Black ----
   {
@@ -148,7 +143,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Back-rank checkmate for Black.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-black-smothered-mate",
@@ -165,7 +159,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Smothered mate for Black in the corner.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-black-queen-mate",
@@ -182,7 +175,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "King-supported queen mate for Black.",
     }),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-black-double-mate",
@@ -206,7 +198,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       }
     ),
     tags: ["chess", "mate"],
-    maxResponseMs: 15_000,
   },
   // ---- winning captures ----
   {
@@ -224,7 +215,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Capture the undefended queen; nothing recaptures.",
     }),
     tags: ["chess", "capture", "material"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-hanging-rook-trap",
@@ -241,7 +231,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Win the undefended rook; the f5 pawn is defended and capturing it loses the knight.",
     }),
     tags: ["chess", "capture", "distractor", "material"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-black-wins-rook-trap",
@@ -258,7 +247,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Win the undefended rook; the f4 pawn is defended and capturing it loses the knight.",
     }),
     tags: ["chess", "capture", "distractor", "material"],
-    maxResponseMs: 15_000,
   },
   // ---- defense: the only move that averts mate ----
   {
@@ -276,7 +264,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Capturing the queen is the only move that stops the threatened mate on g2.",
     }),
     tags: ["chess", "defense", "mate-threat"],
-    maxResponseMs: 15_000,
   },
   // ---- promotion best-move ----
   {
@@ -294,7 +281,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Promote to a queen; every non-promoting alternative keeps the pawn.",
     }),
     tags: ["chess", "promotion", "material"],
-    maxResponseMs: 15_000,
   },
   {
     id: "gameiq-v0.1-chess-black-promotion",
@@ -311,7 +297,6 @@ const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
       note: "Promote to a queen; every non-promoting alternative keeps the pawn.",
     }),
     tags: ["chess", "promotion", "material"],
-    maxResponseMs: 15_000,
   },
 ];
 

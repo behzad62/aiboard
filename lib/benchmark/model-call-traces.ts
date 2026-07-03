@@ -21,6 +21,7 @@ export interface CreateGameModelCallTraceInput {
   runId?: string;
   caseId?: string;
   attemptId?: string;
+  scenarioId?: string;
   reasoningEffort?: ReasoningEffort | string;
   schemaMode?: BenchmarkModelCallTrace["schemaMode"];
   promptText?: string;
@@ -80,6 +81,7 @@ export function createGameModelCallTrace(
     ...(input.runId ? { runId: input.runId } : {}),
     ...(input.caseId ? { caseId: input.caseId } : {}),
     ...(input.attemptId ? { attemptId: input.attemptId } : {}),
+    ...(input.scenarioId ? { scenarioId: input.scenarioId } : {}),
     ...(input.participantId ? { participantId: input.participantId } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     schemaMode: input.schemaMode ?? "structured",

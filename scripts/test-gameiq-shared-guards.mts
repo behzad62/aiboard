@@ -11,7 +11,8 @@
  * 5. Metric de-duplication keys on game + canonical state + expected-action
  *    content, not on label/note prose.
  * 6. Every pack labeled "first-class" passes the mechanical rigor floor.
- * 7. The GameIQ score ignores the diagnostic latencyFactor.
+ * 7. (removed) latencyFactor no longer exists on GameIqScoreInput; see the
+ *    comment at guard 8's former location below.
  */
 import {
   gameIqDecisionKey,
@@ -29,8 +30,8 @@ import {
   validateGameIqAction,
 } from "../lib/benchmark/gameiq/validation";
 import { runGameIqScenarios } from "../lib/benchmark/gameiq/runner";
+import { GAMEIQ_CORRECT_QUALITY_BAR } from "../lib/benchmark/gameiq/types";
 import type { GameIqScenario } from "../lib/benchmark/gameiq/types";
-import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 
 let failures = 0;
 
@@ -294,24 +295,26 @@ if (!chessScenario) {
   );
 }
 
-// 8. latencyFactor is diagnostic only: the score must ignore it.
-const baseMetrics = {
-  outcomeScore: 0.8,
-  moveQuality: 0.7,
-  legalActionRate: 0.9,
-  structuredReliability: 1,
-  fallbackRate: 0,
-  latencyFactor: 1,
-};
-check(
-  "GameIQ score ignores the diagnostic latencyFactor",
-  scoreGameIqAttempt(baseMetrics) ===
-    scoreGameIqAttempt({ ...baseMetrics, latencyFactor: 0 }),
-  {
-    withLatency: scoreGameIqAttempt(baseMetrics),
-    withoutLatency: scoreGameIqAttempt({ ...baseMetrics, latencyFactor: 0 }),
+// 8. (removed) latencyFactor was a diagnostic-only field on GameIqScoreInput;
+// the B6 task removed the last maxResponseMs latency plumbing, and
+// GameIqScoreInput (lib/benchmark/scoring/types.ts) no longer has a
+// latencyFactor field at all, so there is nothing left for scoreGameIqAttempt
+// to ignore. This guard is intentionally gone rather than kept as a
+// tautological x === x check against a field the type no longer accepts.
+
+// 9. Every keyed expected-action weight must clear the correct bar: a scenario
+// that keys a sub-bar weight would mean its own "best" answer can never count
+// as correct, which is a pack-authoring defect this task must not paper over.
+for (const pack of listGameIqScenarioPacks()) {
+  for (const scenario of pack.scenarios) {
+    for (const expected of scenario.expectedActions) {
+      check(
+        `${scenario.id}: keyed weight ${expected.weight} >= correct bar`,
+        expected.weight >= GAMEIQ_CORRECT_QUALITY_BAR
+      );
+    }
   }
-);
+}
 
 if (failures === 0) {
   console.log("PASS");

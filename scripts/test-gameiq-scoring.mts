@@ -6,6 +6,19 @@ import {
   type GameIqMoveProvider,
   type GameIqScenario,
 } from "../lib/benchmark/gameiq";
+import {
+  FIREWORKS_DEAD_CLUE_GRADE,
+  FIREWORKS_NEUTRAL_LEGAL_GRADE,
+  gradeFireworksAction,
+} from "../lib/benchmark/gameiq/validation";
+import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  GAMEIQ_SCORING_VERSION,
+  type FireworksGameIqScenario,
+} from "../lib/benchmark/gameiq/types";
+import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
+import { fireworksActionsEqual } from "../lib/games/fireworks/engine";
+import type { FireworksAction } from "../lib/games/fireworks/types";
 
 let failures = 0;
 
@@ -42,7 +55,7 @@ check(
     perfect.attempt.verifiedQuality === 1 &&
     perfect.attempt.jobSuccessScore === 100 &&
     perfect.attempt.efficiencyScore === 100 &&
-    perfect.attempt.scoringVersion === "certified-gameiq-v0.2",
+    perfect.attempt.scoringVersion === "certified-gameiq-v0.3",
   perfect.attempt
 );
 check(
@@ -224,6 +237,256 @@ if (!codenamesScenario) {
     legalBoardBlindClue
   );
 }
+
+// --- v0.3 scoring: graded fireworks quality + correct bar + reweight ---
+const hard27 = scenarios.find(
+  (s) => s.id === "gameiq-fireworks-hard-v1-27"
+) as FireworksGameIqScenario | undefined;
+if (!hard27) {
+  check("gameiq-fireworks-hard-v1-27 scenario available for graded-quality checks", false);
+} else {
+  check(
+    "gradeFireworksAction: keyed clue_rank matches its weight (1)",
+    gradeFireworksAction(hard27, {
+      action: "clue_rank",
+      targetPlayerId: "P2",
+      rank: 2,
+    }) === 1,
+    hard27
+  );
+  check(
+    "gradeFireworksAction: forbidden play scores 0",
+    gradeFireworksAction(hard27, { action: "play", cardIndex: 2 }) === 0,
+    hard27
+  );
+  const neutralDiscard = gradeFireworksAction(hard27, {
+    action: "discard",
+    cardIndex: 0,
+  });
+  check(
+    "gradeFireworksAction: neutral legal discard (blue4, not critical, not keyed) scores 0.3",
+    neutralDiscard === 0.3,
+    neutralDiscard
+  );
+  check(
+    "gradeFireworksAction: the 0.3 neutral floor is below the correct bar",
+    neutralDiscard < GAMEIQ_CORRECT_QUALITY_BAR,
+    { neutralDiscard, GAMEIQ_CORRECT_QUALITY_BAR }
+  );
+}
+
+// Pin the partial-credit grade VALUES once (TeamIQ lockstep contract), so the
+// constant-based assertions below cannot drift into tautologies.
+check(
+  "fireworks partial-credit grades stay pinned (0.1 dead clue / 0.3 neutral legal)",
+  FIREWORKS_DEAD_CLUE_GRADE === 0.1 && FIREWORKS_NEUTRAL_LEGAL_GRADE === 0.3,
+  { FIREWORKS_DEAD_CLUE_GRADE, FIREWORKS_NEUTRAL_LEGAL_GRADE }
+);
+
+// Dead-clue grade coverage: the most intricate branch of gradeFireworksAction
+// (target-hand lookup, touched-set filter, null guards, stacks-vs-rank over
+// every()). Search the SHIPPED fireworks packs for real scenarios exercising
+// it, so these checks survive pack regeneration: a legal, non-keyed,
+// non-forbidden clue touching ONLY already-played cards must grade exactly
+// FIREWORKS_DEAD_CLUE_GRADE, and one touching a MIX of dead and live cards
+// must fall through to the neutral floor — the mixed case is what
+// distinguishes every() from some() (an all-dead touched set satisfies both).
+const fireworksScenarios = scenarios.filter(
+  (s): s is FireworksGameIqScenario => s.gameId === "fireworks"
+);
+function findClueTouching(
+  kind: "all-dead" | "mixed"
+): { scenario: FireworksGameIqScenario; clue: FireworksAction } | null {
+  for (const scenario of fireworksScenarios) {
+    const view = scenario.initialState;
+    for (const legal of view.legalActions) {
+      if (legal.action !== "clue_color" && legal.action !== "clue_rank") continue;
+      if (
+        (scenario.forbiddenActions ?? []).some((forbidden) =>
+          fireworksActionsEqual(forbidden, legal)
+        ) ||
+        scenario.expectedActions.some((expected) =>
+          fireworksActionsEqual(expected.action, legal)
+        )
+      ) {
+        continue;
+      }
+      const target = view.otherHands.find(
+        (hand) => hand.playerId === legal.targetPlayerId
+      );
+      const touched = (target?.cards ?? []).filter((card) =>
+        legal.action === "clue_color"
+          ? card.color === legal.color
+          : card.rank === legal.rank
+      );
+      if (touched.length === 0) continue;
+      const deadCount = touched.filter(
+        (card) =>
+          card.color !== null &&
+          card.rank !== null &&
+          view.stacks[card.color] >= card.rank
+      ).length;
+      const matches =
+        kind === "all-dead"
+          ? deadCount === touched.length
+          : deadCount > 0 && deadCount < touched.length;
+      if (matches) return { scenario, clue: legal };
+    }
+  }
+  return null;
+}
+
+const deadClue = findClueTouching("all-dead");
+if (!deadClue) {
+  check(
+    "a shipped fireworks scenario offers an all-dead-touch clue for the dead-clue branch",
+    false
+  );
+} else {
+  const grade = gradeFireworksAction(deadClue.scenario, deadClue.clue);
+  check(
+    `gradeFireworksAction: clue touching only already-played cards grades the dead-clue 0.1 (${deadClue.scenario.id})`,
+    grade === FIREWORKS_DEAD_CLUE_GRADE && grade < GAMEIQ_CORRECT_QUALITY_BAR,
+    { scenario: deadClue.scenario.id, clue: deadClue.clue, grade }
+  );
+}
+
+const mixedClue = findClueTouching("mixed");
+if (!mixedClue) {
+  check(
+    "a shipped fireworks scenario offers a mixed dead/live-touch clue for the neutral branch",
+    false
+  );
+} else {
+  const grade = gradeFireworksAction(mixedClue.scenario, mixedClue.clue);
+  check(
+    `gradeFireworksAction: clue touching dead AND live cards stays at the neutral floor, not dead-clue (${mixedClue.scenario.id})`,
+    grade === FIREWORKS_NEUTRAL_LEGAL_GRADE,
+    { scenario: mixedClue.scenario.id, clue: mixedClue.clue, grade }
+  );
+}
+
+check(
+  "GAMEIQ_SCORING_VERSION bumped to v0.3",
+  GAMEIQ_SCORING_VERSION === "certified-gameiq-v0.3",
+  GAMEIQ_SCORING_VERSION
+);
+
+check(
+  "scoreGameIqAttempt: outcome/quality at 0.5 with full legality/structure scores 50",
+  scoreGameIqAttempt({
+    outcomeScore: 0.5,
+    moveQuality: 0.5,
+    legalActionRate: 1,
+    structuredReliability: 1,
+    fallbackRate: 0,
+  }) === 50
+);
+
+check(
+  "scoreGameIqAttempt: all-legal-but-all-wrong no longer harvests the 31 free legality/structure points",
+  scoreGameIqAttempt({
+    outcomeScore: 0,
+    moveQuality: 0,
+    legalActionRate: 1,
+    structuredReliability: 1,
+    fallbackRate: 0,
+  }) === 0
+);
+
+// Regression guard for trap detection under graded scoring:
+// matchesForbiddenAction (runner.ts) answers "is this action forbidden?" by
+// DIRECT per-game membership (gameIqActionsEqual), never through
+// actionMatchesExpected/gradeFireworksAction. If a probe-through-the-grader
+// pattern were ever re-inlined it fails visibly: grading the trap action
+// against a probe still carrying the scenario's forbiddenActions returns 0
+// and THIS check fails, while clearing them lets the nonzero neutral legal
+// floor false-flag every ordinary legal action as a trap, which the
+// perfect-run score-100 check above catches.
+if (hard27) {
+  const forbiddenPlayResult = await runGameIqScenarios({
+    runId: "gameiq-test-run-forbidden-probe-regression",
+    modelId: "fake:forbidden-probe",
+    teamCompositionId: "team-fake-forbidden-probe",
+    scenarios: [hard27],
+    moveProvider: () => ({
+      action: {
+        action: "play",
+        targetPlayerId: null,
+        color: null,
+        rank: null,
+        cardIndex: 2,
+      },
+      rawResponse: "forbidden-probe-regression",
+      latencyMs: 0,
+    }),
+  });
+  const forbiddenCaseResult = forbiddenPlayResult.caseResults[0];
+  check(
+    "direct-membership trap detection survives graded fireworks scoring",
+    forbiddenCaseResult?.forbiddenBlunder === true &&
+      forbiddenCaseResult.actionQuality === 0,
+    forbiddenCaseResult
+  );
+}
+
+// --- concurrency: bounded pool preserves scenario order regardless of
+// completion order; concurrency omitted stays sequential (unchanged behavior) ---
+const concurrencyScenarios = scenarios.slice(0, 8);
+const order: number[] = [];
+const parallel = await runGameIqScenarios({
+  runId: "gameiq-test-run-concurrency",
+  modelId: "fake:concurrency",
+  teamCompositionId: "team-fake-concurrency",
+  scenarios: concurrencyScenarios,
+  concurrency: 4,
+  moveProvider: async ({ scenario, scenarioIndex }) => {
+    // Reverse-ordered delay so later-indexed scenarios finish first, forcing
+    // completion order out of scenario order under a bounded pool.
+    await new Promise((resolve) => setTimeout(resolve, (8 - scenarioIndex) * 5));
+    order.push(scenarioIndex);
+    return { action: scenario.expectedActions[0]?.action };
+  },
+});
+check(
+  "concurrency: caseResults preserve scenario order regardless of completion order",
+  parallel.caseResults.map((r) => r.scenarioId).join() ===
+    concurrencyScenarios.map((s) => s.id).join(),
+  { got: parallel.caseResults.map((r) => r.scenarioId), expected: concurrencyScenarios.map((s) => s.id) }
+);
+check(
+  "concurrency: completions actually interleaved out of scenario order",
+  order.join() !== [...order].sort((a, b) => a - b).join(),
+  order
+);
+
+const sequentialOrder: number[] = [];
+const sequential = await runGameIqScenarios({
+  runId: "gameiq-test-run-sequential-default",
+  modelId: "fake:sequential-default",
+  teamCompositionId: "team-fake-sequential-default",
+  scenarios: concurrencyScenarios,
+  // concurrency omitted: must stay sequential, byte-identical to pre-B4 behavior.
+  moveProvider: async ({ scenario, scenarioIndex }) => {
+    sequentialOrder.push(scenarioIndex);
+    return { action: scenario.expectedActions[0]?.action };
+  },
+});
+check(
+  "concurrency omitted: caseResults in scenario order (sequential default unchanged)",
+  sequential.caseResults.map((r) => r.scenarioId).join() ===
+    concurrencyScenarios.map((s) => s.id).join()
+);
+check(
+  "concurrency omitted: moveProvider invoked strictly in scenario order",
+  sequentialOrder.join() === concurrencyScenarios.map((_, i) => i).join(),
+  sequentialOrder
+);
+check(
+  "concurrency omitted: metrics identical to a perfect run's shape (score 100)",
+  sequential.score === 100 && sequential.metrics.scoredScenarioCount === concurrencyScenarios.length,
+  sequential
+);
 
 if (failures === 0) {
   console.log("PASS");
