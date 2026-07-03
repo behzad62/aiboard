@@ -8,15 +8,16 @@
  * inherits its neighbor's action (scored WRONG) and a good trailing scenario
  * is silently dropped. The fix pairs scenario↔trace as TUPLES keyed by
  * scenarioId and filters the tuples, so a dropped middle trace removes exactly
- * its own scenario and never shifts the others. This test replicates that
- * id-keyed tuple pairing (the exact logic used in replay-gameiq-traces.mts's
- * hasScenarioIds branch) and asserts s0/s2 keep their OWN actions while s1 is
- * skipped.
+ * its own scenario and never shifts the others. This test now exercises the
+ * SHARED resolvePackTraceReplay (the ONE implementation both replay and
+ * recovery call) and asserts s0/s2 keep their OWN actions while s1 is skipped.
  */
 import {
   getGameIqScenarioPack,
+  resolvePackTraceReplay,
   runGameIqScenarios,
   type GameIqScenario,
+  type PackTraceRow,
 } from "../lib/benchmark/gameiq";
 
 let failures = 0;
@@ -25,14 +26,6 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(
     `${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`
   );
-}
-
-interface TraceRow {
-  caseId: string;
-  startedAt: string;
-  parsedResponseJson?: string | null;
-  rawResponse?: string | null;
-  scenarioId?: string;
 }
 
 function actionFromParsedJson(parsedJson: unknown): unknown {
@@ -57,7 +50,7 @@ if (!pack) {
 // actions; s1's trace is a failed transport call (empty parsedResponseJson).
 const scenarios: GameIqScenario[] = pack.scenarios.slice(0, 3);
 
-const traceFor = (scenario: GameIqScenario, empty: boolean): TraceRow => ({
+const traceFor = (scenario: GameIqScenario, empty: boolean): PackTraceRow => ({
   caseId: pack.id,
   startedAt: `2026-07-03T00:00:0${scenarios.indexOf(scenario)}.000Z`,
   scenarioId: scenario.id,
@@ -67,37 +60,18 @@ const traceFor = (scenario: GameIqScenario, empty: boolean): TraceRow => ({
   rawResponse: empty ? "provider transport failure" : undefined,
 });
 
-// All three traces carry a scenarioId; only the MIDDLE one (s1) is empty.
-const packTraces: TraceRow[] = [
+// All three traces carry a scenarioId; only the MIDDLE one (s1) is empty. Build
+// a pack scoped to just these three scenarios so the shared resolver's
+// scenario-order filtering is exercised against exactly this slice.
+const packTraces: PackTraceRow[] = [
   traceFor(scenarios[0], false),
   traceFor(scenarios[1], true),
   traceFor(scenarios[2], false),
 ];
 
-// --- Replicate replay-gameiq-traces.mts hasScenarioIds tuple pairing ---
-const byScenarioId = new Map<string, TraceRow>();
-for (const trace of packTraces) {
-  if (!trace.scenarioId) continue;
-  const existing = byScenarioId.get(trace.scenarioId);
-  if (!existing || trace.startedAt.localeCompare(existing.startedAt) > 0) {
-    byScenarioId.set(trace.scenarioId, trace);
-  }
-}
-const keyed = pack.scenarios.filter((s) => byScenarioId.has(s.id));
-const usablePairs = keyed
-  .map((scenario) => ({ scenario, trace: byScenarioId.get(scenario.id)! }))
-  .filter(
-    ({ trace }) =>
-      trace && trace.parsedResponseJson && trace.parsedResponseJson.length > 0
-  );
-const replayScenarios = usablePairs.map((p) => p.scenario);
-const actions = usablePairs.map(({ trace }) => {
-  try {
-    return actionFromParsedJson(JSON.parse(trace.parsedResponseJson as string));
-  } catch {
-    return trace.rawResponse ?? null;
-  }
-});
+// --- Drive the SHARED resolver (hasScenarioIds tuple pairing branch) ---
+const slicePack = { ...pack, scenarios };
+const { replayScenarios, actions } = resolvePackTraceReplay(slicePack, packTraces);
 
 // The failed middle scenario is dropped (not replayed), and exactly the two
 // good scenarios remain — in scenario order, each still paired to its OWN

@@ -229,7 +229,10 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
   };
 }
 
-function createGameIqVerifierResult(
+// Exported so recovery (scripts/recover-gameiq-run.mts) produces a verifier
+// byte-identical to production from a replayed GameIqRunResult. Pure builder,
+// no IO — the certified runner and recovery share this one implementation.
+export function createGameIqVerifierResult(
   attemptId: string,
   result: GameIqRunResult
 ): BenchmarkVerifierResult {

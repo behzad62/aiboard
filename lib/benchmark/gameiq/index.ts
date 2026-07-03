@@ -12,7 +12,9 @@ export {
 } from "./packs";
 export type { GameIqPackRigorFloor } from "./packs";
 export { runGameIqScenarios } from "./runner";
-export { runCertifiedGameIq } from "./certified-runner";
+export { runCertifiedGameIq, createGameIqVerifierResult } from "./certified-runner";
+export { resolvePackTraceReplay } from "./trace-replay";
+export type { PackTraceRow, PackTraceReplay } from "./trace-replay";
 export {
   actionMatchesExpected,
   gradeFireworksAction,
