@@ -52,12 +52,12 @@ for (const file of runFiles) {
     if (packTraces.length === 0) continue;
 
     // Prefer scenarioId when the pack's traces carry it (B4+ run files):
-    // build an ordered list of one usable trace per scenario (in scenario
-    // order), using the LAST trace by startedAt when a scenario has multiple
-    // traces (retries) — the final attempt is the scored one.
+    // pair each scenario to its own trace by id, using the LAST trace by
+    // startedAt when a scenario has multiple traces (retries) — the final
+    // attempt is the scored one.
     const hasScenarioIds = packTraces.some((t) => Boolean(t.scenarioId));
-    let orderedTraces: TraceRow[];
-    let scenarios;
+    let replayScenarios;
+    let actions: unknown[];
     if (hasScenarioIds) {
       const byScenarioId = new Map<string, TraceRow>();
       for (const trace of packTraces) {
@@ -67,34 +67,54 @@ for (const file of runFiles) {
           byScenarioId.set(trace.scenarioId, trace);
         }
       }
-      scenarios = pack.scenarios.filter((s) => byScenarioId.has(s.id));
-      orderedTraces = scenarios.map((s) => byScenarioId.get(s.id)!);
+      const scenarios = pack.scenarios.filter((s) => byScenarioId.has(s.id));
+      // Pair scenario↔trace as tuples and filter the TUPLES: a scenario whose
+      // trace has an empty parsedResponseJson (a failed transport call, which
+      // B4 runs record WITH a scenarioId at model-call.ts's error trace site)
+      // drops exactly its own tuple and never shifts its neighbors' actions.
+      // (A filter-then-positional-slice would collapse past a middle gap and
+      // misattribute every trailing scenario — the exact fragility scenarioId
+      // exists to eliminate.)
+      const usablePairs = scenarios
+        .map((scenario) => ({ scenario, trace: byScenarioId.get(scenario.id)! }))
+        .filter(
+          ({ trace }) =>
+            trace && trace.parsedResponseJson && trace.parsedResponseJson.length > 0
+        );
+      replayScenarios = usablePairs.map((p) => p.scenario);
+      actions = usablePairs.map(({ trace }) => {
+        try {
+          return actionFromParsedJson(JSON.parse(trace.parsedResponseJson as string));
+        } catch {
+          return trace.rawResponse ?? null;
+        }
+      });
     } else {
       // Positional pairing assumes one trace per scenario in scenario order —
       // valid only for pre-B4 sequential run files; newer files use
       // scenarioId. Pre-B4 run files have no scenarioId; positional pairing
       // is correct for them because they were recorded sequentially, one
       // trace per scenario.
-      orderedTraces = [...packTraces].sort((a, b) =>
+      const orderedTraces = [...packTraces].sort((a, b) =>
         a.startedAt.localeCompare(b.startedAt)
       );
-      scenarios = pack.scenarios.slice(0, orderedTraces.length);
+      const scenarios = pack.scenarios.slice(0, orderedTraces.length);
+      // usable = traces whose parsedResponseJson is non-empty (the dying call
+      // records an empty response)
+      const usable = orderedTraces.filter(
+        (t) => t.parsedResponseJson && t.parsedResponseJson.length > 0
+      );
+      const n = Math.min(usable.length, scenarios.length);
+      replayScenarios = scenarios.slice(0, n);
+      actions = usable.slice(0, n).map((t) => {
+        try {
+          return actionFromParsedJson(JSON.parse(t.parsedResponseJson as string));
+        } catch {
+          return t.rawResponse ?? null;
+        }
+      });
     }
-
-    // usable = traces whose parsedResponseJson is non-empty (the dying call
-    // records an empty response)
-    const usable = orderedTraces.filter(
-      (t) => t.parsedResponseJson && t.parsedResponseJson.length > 0
-    );
-    const n = Math.min(usable.length, scenarios.length);
-    const replayScenarios = scenarios.slice(0, n);
-    const actions = usable.slice(0, n).map((t) => {
-      try {
-        return actionFromParsedJson(JSON.parse(t.parsedResponseJson as string));
-      } catch {
-        return t.rawResponse ?? null;
-      }
-    });
+    const n = replayScenarios.length;
 
     let i = 0;
     const result = await runGameIqScenarios({

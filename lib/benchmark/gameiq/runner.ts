@@ -195,6 +195,12 @@ export async function runGameIqScenarios(
   const concurrency = Math.max(1, Math.floor(input.concurrency ?? 1));
   const caseResults: GameIqScenarioResult[] = new Array(input.scenarios.length);
   let cursor = 0;
+  // Doubles as the stop-sentinel (truthy → stop pulling work) and the error
+  // to rethrow. Invariant: every value ever assigned here is a truthy thrown
+  // error (evaluateScenario contains all transients and only ever rethrows a
+  // real Error / CertifiedBudgetExceededError), so `if (firstFatal)` is a
+  // sound guard. A future refactor that could `throw 0`/`throw ""` must add a
+  // separate boolean flag rather than rely on this truthiness.
   let firstFatal: unknown = null;
   const workers = Array.from(
     { length: Math.min(concurrency, input.scenarios.length) },
