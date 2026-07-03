@@ -31,6 +31,18 @@ async function expectReject(
   }
 }
 
+// Reads the 1-based `attempt` marker out of a run-event's serialized details.
+// Returns NaN when absent so a missing marker fails the assertion loudly.
+function eventDetailAttempt(detailsJson: string | undefined): number {
+  if (!detailsJson) return Number.NaN;
+  try {
+    const parsed = JSON.parse(detailsJson) as { attempt?: unknown };
+    return typeof parsed.attempt === "number" ? parsed.attempt : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
 const model: SelectedModel = {
   modelId: "openai:gpt-retry",
   providerId: "openai",
@@ -115,7 +127,7 @@ check(
     attemptId: "attempt-retry-success",
     participantId: "p",
     streamChat: () => flaky(),
-    retryDelaysMs: [0, 0], // no real sleeping in tests
+    retryDelaysMs: [0, 0], // near-instant retries (jitter only)
   });
   check(
     "transient error retried to success",
@@ -232,6 +244,37 @@ check(
         trace.retryHistory.some((attempt) => attempt.status === "provider_error")
       ),
     traces
+  );
+
+  // Each physical attempt's run-events carry a 1-based `attempt` marker so an
+  // operator can tell "one call retried twice" from "three separate calls".
+  const startedAttemptNumbers = context
+    .snapshot()
+    .events.filter(
+      (event) =>
+        event.attemptId === "attempt-retry-exhausted" &&
+        event.type === "model_call_started"
+    )
+    .map((event) => eventDetailAttempt(event.detailsJson))
+    .sort((a, b) => a - b);
+  check(
+    "exhausted retries emit started events numbered 1, 2, 3",
+    JSON.stringify(startedAttemptNumbers) === JSON.stringify([1, 2, 3]),
+    startedAttemptNumbers
+  );
+  const failedAttemptNumbers = context
+    .snapshot()
+    .events.filter(
+      (event) =>
+        event.attemptId === "attempt-retry-exhausted" &&
+        event.type === "model_call_failed"
+    )
+    .map((event) => eventDetailAttempt(event.detailsJson))
+    .sort((a, b) => a - b);
+  check(
+    "exhausted retries emit failed events numbered 1, 2, 3",
+    JSON.stringify(failedAttemptNumbers) === JSON.stringify([1, 2, 3]),
+    failedAttemptNumbers
   );
 }
 

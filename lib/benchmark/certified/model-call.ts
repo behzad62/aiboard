@@ -33,7 +33,14 @@ import {
 } from "./classify-provider-failure";
 
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
-const DEFAULT_RETRY_DELAYS_MS = [2_000, 8_000];
+
+/**
+ * Default backoff policy for transient provider failures: one retry per entry,
+ * so `[2_000, 8_000]` means up to 2 retries (3 attempts total). Exported so
+ * downstream callers reference the canonical policy instead of hardcoding the
+ * delays in a second place.
+ */
+export const DEFAULT_RETRY_DELAYS_MS: number[] = [2_000, 8_000];
 
 /**
  * Thrown by `callCertifiedModelOnce` for every non-budget failure, tagged
@@ -88,12 +95,21 @@ export interface CallCertifiedModelInput {
   allowInvalidStructuredOutput?: boolean;
   signal?: AbortSignal;
   /**
-   * Delays (ms, before jitter) between retry attempts for transient provider
-   * failures. One retry is made per entry, so `[2_000, 8_000]` (the default)
-   * means up to 2 retries (3 attempts total). Pass `[]` to disable retries;
-   * tests pass `[0, 0]` to retry without real sleeping.
+   * Base delays (ms, before jitter) between retry attempts for transient
+   * provider failures. One retry is made per array entry, so `[2_000, 8_000]`
+   * (the default) means up to 2 retries / 3 attempts total. Pass `[]` to
+   * disable retries entirely. `[0, 0]` still retries but is near-instant: only
+   * the 0-499ms jitter is slept, never the base delay — tests use it to
+   * exercise the retry path without waiting out the real backoff.
    */
   retryDelaysMs?: number[];
+  /**
+   * 1-based attempt number for this physical call, set by the retry loop in
+   * `callCertifiedModel` so each attempt's run-events carry an `attempt`
+   * marker (an operator can then tell "one call retried twice" apart from
+   * "three separate calls"). Absent → treated as 1.
+   */
+  attemptNumber?: number;
 }
 
 export interface CertifiedModelCallResult {
@@ -179,6 +195,7 @@ async function callCertifiedModelOnce(
     phase: "model-call",
     message: `Certified model call started for ${fullModelId}.`,
     details: {
+      attempt: input.attemptNumber ?? 1,
       maxTokens: input.maxTokens,
       timeoutMs: certifiedModelCallTimeoutMs(input),
       schemaMode: input.structuredOutput ? "structured" : "text",
@@ -289,6 +306,7 @@ async function callCertifiedModelOnce(
       phase: "model-call",
       message: `Certified model call completed for ${fullModelId}.`,
       details: {
+        attempt: input.attemptNumber ?? 1,
         traceId,
         latencyMs,
         inputTokens: usage.inputTokens,
@@ -361,6 +379,7 @@ async function callCertifiedModelOnce(
       phase: parsePhase ? "model-parse" : "model-call",
       message,
       details: {
+        attempt: input.attemptNumber ?? 1,
         traceId,
         latencyMs,
         inputTokens: usage.inputTokens,
@@ -400,9 +419,11 @@ async function callCertifiedModelOnce(
  * Each physical attempt runs through `callCertifiedModelOnce`, which records
  * its own trace/event; a retried call therefore leaves an auditable trail of
  * every attempt (failed + eventual success) in the trace store, not just the
- * final outcome. Consumers that map traces positionally to scenarios
- * (audit/replay scripts) are updated in Task B4 to key by scenarioId instead
- * of assuming one trace per scenario.
+ * final outcome. Each attempt's run-events carry a 1-based `attempt` marker
+ * (in `details`) so the retried attempts are distinguishable in the event log.
+ * Consumers that map traces positionally to scenarios (audit/replay scripts)
+ * must be updated in Task B4 to key by scenarioId instead of assuming one
+ * trace per scenario.
  */
 export async function callCertifiedModel(
   input: CallCertifiedModelInput
@@ -416,7 +437,7 @@ export async function callCertifiedModel(
     }
     throwIfCertifiedRunAborted(input.signal);
     try {
-      return await callCertifiedModelOnce(input);
+      return await callCertifiedModelOnce({ ...input, attemptNumber: attempt + 1 });
     } catch (error) {
       lastError = error;
       if (error instanceof CertifiedBudgetExceededError) throw error;
