@@ -79,11 +79,20 @@ export {
   __enableBenchmarkRunBlobStorageForTests,
   __exportClientStoreForPersistenceForTests,
   __getBenchmarkRunBlobsForTests,
+  __setAdapterForTests,
 } from "../client/store";
 export {
   clearAllBenchmarkData,
   type ClearAllBenchmarkDataResult,
 } from "../client/store";
+// Re-export the store-level persistence entry points that already back the
+// benchmark save functions, so a single-instance test can drive both the
+// benchmark record path (saveBenchmarkTrace) and the raw adapter path
+// (flush/saveBenchmarkRunBlob) through the SAME client-store module instance.
+// Importing these directly from ../client/store in the same test file as a
+// benchmark save loads two client-store copies under tsx (ESM + the CJS
+// pre-parse), which desyncs the module-level memory/adapter.
+export { flush, saveBenchmarkRunBlob, __resetClientStoreForTests };
 
 async function ensureWritableStore(): Promise<void> {
   if (!isInitialized()) {
