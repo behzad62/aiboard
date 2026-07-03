@@ -39,7 +39,8 @@ import type {
 // turn carries no clue-identity channels, so the model must RECALL rather than
 // transcribe. Scenario CONTENT (states/expected/forbidden) is unchanged; only
 // the memory suite's prompt path changed. Scoring is identical.
-export const FIREWORKS_SCENARIO_PACK_VERSION = "0.3.0";
+// 0.3.1: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
+export const FIREWORKS_SCENARIO_PACK_VERSION = "0.3.1";
 
 const TACTICS_CATEGORIES: FireworksTacticsCategory[] = [
   "safe_play",
@@ -60,12 +61,21 @@ const MEMORY_CATEGORIES: FireworksMemoryCategory[] = [
 const COLORS: FireworksColor[] = ["red", "blue", "green"];
 const ALL_RANKS: FireworksRank[] = [1, 2, 3, 4, 5];
 
-// Key every clue that carries the same information as an already-keyed clue:
-// if a keyed clue (weight >= 0.75) touches card set S of a target hand, then
-// any other legal clue on the same target touching exactly S is
-// informationally equivalent and must be keyed at the same weight — three
-// frontier models independently chose such a twin on safe_discard-04/-10 and
-// were scored 0 (2026-07-03 oracle audit).
+// Add missing keys for clue twins that single out the same cards: if a keyed
+// clue (weight >= 0.75) touches card set S of a target hand, any other legal
+// clue on the same target touching exactly S singles out the same card(s) —
+// the decision the scenario tests — so an UNKEYED twin is added at the
+// highest keyed weight of S. Equivalence here is same-touched-set (focus
+// equivalence), a deliberate simplification: a color twin and a rank twin
+// still leave different negative information on the untouched cards. That is
+// also why this pass only ADDS missing twins and never rewrites existing
+// entries — the hand-authored scenarios in this file deliberately key
+// set-identical twins at unequal weights (rank@1 vs color@0.8/0.9), and those
+// authored weights stand; do not "consistency-fix" them to be equal. Three
+// frontier models independently chose an unkeyed twin on safe_discard-04/-10
+// and were scored 0 (2026-07-03 oracle audit).
+// Mutates the freshly generated scenarios in place (module init only);
+// idempotent — alreadyKeyed makes re-application a no-op.
 function widenEquivalentClues(scenarios: FireworksScenario[]): FireworksScenario[] {
   for (const scenario of scenarios) {
     const keyedClues = scenario.expectedActions.filter(
