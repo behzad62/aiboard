@@ -1,5 +1,6 @@
 import type { BenchmarkCaseV2 } from "@/lib/benchmark/types";
 import {
+  cloneFireworksState,
   createEmptyFireworksKnowledge,
   createFireworksGame,
   fireworksActionsEqual,
@@ -59,19 +60,87 @@ const MEMORY_CATEGORIES: FireworksMemoryCategory[] = [
 const COLORS: FireworksColor[] = ["red", "blue", "green"];
 const ALL_RANKS: FireworksRank[] = [1, 2, 3, 4, 5];
 
-export const FIREWORKS_TACTICS_SCENARIOS: FireworksScenario[] =
+// Key every clue that carries the same information as an already-keyed clue:
+// if a keyed clue (weight >= 0.75) touches card set S of a target hand, then
+// any other legal clue on the same target touching exactly S is
+// informationally equivalent and must be keyed at the same weight — three
+// frontier models independently chose such a twin on safe_discard-04/-10 and
+// were scored 0 (2026-07-03 oracle audit).
+function widenEquivalentClues(scenarios: FireworksScenario[]): FireworksScenario[] {
+  for (const scenario of scenarios) {
+    const keyedClues = scenario.expectedActions.filter(
+      (expected) =>
+        expected.weight >= 0.75 &&
+        (expected.action.action === "clue_color" || expected.action.action === "clue_rank")
+    );
+    if (keyedClues.length === 0) continue;
+    const touchedIds = (action: FireworksAction): string | null => {
+      if (action.action !== "clue_color" && action.action !== "clue_rank") return null;
+      const hand = scenario.state.hands.find(
+        (candidate) => candidate.playerId === action.targetPlayerId
+      );
+      if (!hand) return null;
+      const ids = hand.cards
+        .filter((card) =>
+          action.action === "clue_color" ? card.color === action.color : card.rank === action.rank
+        )
+        .map((card) => card.id)
+        .sort();
+      return `${action.targetPlayerId}:${ids.join(",")}`;
+    };
+    const keyedSets = new Map<string, number>();
+    for (const keyed of keyedClues) {
+      const key = touchedIds(keyed.action);
+      if (key) keyedSets.set(key, Math.max(keyedSets.get(key) ?? 0, keyed.weight));
+    }
+    const alreadyKeyed = (candidate: FireworksAction) =>
+      scenario.expectedActions.some((expected) =>
+        fireworksActionsEqual(expected.action, candidate)
+      );
+    for (const legal of legalActionsFor(scenario)) {
+      if (legal.action !== "clue_color" && legal.action !== "clue_rank") continue;
+      if (alreadyKeyed(legal)) continue;
+      const key = touchedIds(legal);
+      if (!key) continue;
+      const weight = keyedSets.get(key);
+      if (weight === undefined) continue;
+      scenario.expectedActions.push({
+        action: legal,
+        weight,
+        label: "Equivalent-information clue (auto-widened)",
+      });
+    }
+  }
+  return scenarios;
+}
+
+// Legal actions on a PREPARED clone: the generated scenario states already
+// carry status "playing" with the actor current, but computing on a clone
+// with those invariants re-asserted keeps this pass correct even if a future
+// generator forgets to set them (mirrors scripts/test-fireworks-gameiq-port.mts).
+function legalActionsFor(scenario: FireworksScenario): FireworksAction[] {
+  const state = cloneFireworksState(scenario.state);
+  const index = state.players.findIndex((player) => player.id === scenario.actingPlayerId);
+  if (index >= 0) state.currentPlayerIndex = index;
+  state.status = "playing";
+  return getLegalFireworksActions(state, scenario.actingPlayerId);
+}
+
+export const FIREWORKS_TACTICS_SCENARIOS: FireworksScenario[] = widenEquivalentClues(
   TACTICS_CATEGORIES.flatMap((category) =>
     Array.from({ length: 10 }, (_, index) =>
       createTacticsScenario(category, index + 1)
     )
-  );
+  )
+);
 
-export const FIREWORKS_MEMORY_SCENARIOS: FireworksScenario[] =
+export const FIREWORKS_MEMORY_SCENARIOS: FireworksScenario[] = widenEquivalentClues(
   MEMORY_CATEGORIES.flatMap((category) =>
     Array.from({ length: 10 }, (_, index) =>
       createMemoryScenario(category, index + 1)
     )
-  );
+  )
+);
 
 export const FIREWORKS_FULL_GAME_CASES: FireworksFullGameCase[] = [
   ...Array.from({ length: 10 }, (_, index) => createFullGameCase(2, index + 1)),

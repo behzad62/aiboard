@@ -88,7 +88,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // 0.4.0: its combine_color_and_rank memory scenarios are now delivered as
     // multi-turn recall episodes (clue history as earlier turns; decision turn
     // stripped of clue-identity channels). Content unchanged; scoring identical.
-    version: "0.4.0",
+    // 0.4.1: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
+    version: "0.4.1",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   },
@@ -97,7 +98,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Trap States",
     // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
-    version: "0.3.0",
+    // 0.4.0: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
+    version: "0.4.0",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   },
@@ -110,7 +112,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // episodes — the seeded clue history is replayed as earlier conversation
     // turns and the decision turn carries no clue-identity channels, so the
     // model must RECALL. Content unchanged; scoring identical.
-    version: "0.4.0",
+    // 0.4.1: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
+    version: "0.4.1",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
   },

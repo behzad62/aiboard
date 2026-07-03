@@ -274,6 +274,22 @@ async function main(): Promise<void> {
     }
   );
 
+  // --- Equivalent-information clue widening (2026-07-03 oracle audit) ---
+  // hard-v1-14/-20 were miskeyed: models chose a clue_color that touches the
+  // identical card set as the keyed clue_rank and scored 0. Equal information
+  // must earn equal credit — see widenEquivalentClues in scenario-packs.ts.
+  for (const id of ["gameiq-fireworks-hard-v1-14", "gameiq-fireworks-hard-v1-20"]) {
+    const scenario = FIREWORKS_GAMEIQ_HARD_SCENARIOS.find((s) => s.id === id)!;
+    check(
+      `${id}: equivalent color clue is keyed`,
+      scenario.expectedActions.some(
+        (e) =>
+          (e.action as { action?: string }).action === "clue_color" &&
+          (e.action as { color?: string }).color === "blue"
+      )
+    );
+  }
+
   if (failures === 0) {
     console.log("PASS");
   } else {
