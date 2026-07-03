@@ -27,8 +27,31 @@ import {
   createCertifiedModelCallTrace,
   recordCertifiedModelCallTrace,
 } from "./trace-recorder";
+import {
+  classifyProviderFailure,
+  type ProviderFailureClass,
+} from "./classify-provider-failure";
 
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
+const DEFAULT_RETRY_DELAYS_MS = [2_000, 8_000];
+
+/**
+ * Thrown by `callCertifiedModelOnce` for every non-budget failure, tagged
+ * with a classification so the retry loop in `callCertifiedModel` (and
+ * downstream containment logic in the GameIQ runner) can tell a transient
+ * transport blip from a fatal account/config problem without re-parsing the
+ * message string. The message itself is preserved byte-for-byte from the
+ * original error so `statusForRunError` (run-engine.ts) and
+ * `isProviderFailureMessage` keep matching on the same text they always have.
+ */
+export class CertifiedProviderError extends Error {
+  readonly classification: ProviderFailureClass;
+  constructor(message: string, classification: ProviderFailureClass) {
+    super(message);
+    this.name = "CertifiedProviderError";
+    this.classification = classification;
+  }
+}
 
 export interface CertifiedModelStreamInput {
   providerId: string;
@@ -64,6 +87,13 @@ export interface CallCertifiedModelInput {
   streamChat?: CertifiedModelStream;
   allowInvalidStructuredOutput?: boolean;
   signal?: AbortSignal;
+  /**
+   * Delays (ms, before jitter) between retry attempts for transient provider
+   * failures. One retry is made per entry, so `[2_000, 8_000]` (the default)
+   * means up to 2 retries (3 attempts total). Pass `[]` to disable retries;
+   * tests pass `[0, 0]` to retry without real sleeping.
+   */
+  retryDelaysMs?: number[];
 }
 
 export interface CertifiedModelCallResult {
@@ -81,7 +111,13 @@ export interface CertifiedModelCallResult {
   usageSource: "reported" | "estimated";
 }
 
-export async function callCertifiedModel(
+/**
+ * Runs a single certified model call attempt: builds params, streams the
+ * response, parses/traces the result. Every call — success or failure —
+ * records its own trace/event, which is what makes each retry attempt in
+ * `callCertifiedModel` individually auditable in the trace store.
+ */
+async function callCertifiedModelOnce(
   input: CallCertifiedModelInput
 ): Promise<CertifiedModelCallResult> {
   throwIfCertifiedRunAborted(input.signal);
@@ -345,8 +381,82 @@ export async function callCertifiedModel(
       }
       // Otherwise preserve the provider/parser error that caused the failed model call.
     }
-    throw error;
+    // Wrap in a classified, typed error for the retry loop above. The
+    // message is preserved byte-for-byte (via `message`, computed above from
+    // the original error) so message-text consumers — `statusForRunError` in
+    // run-engine.ts and `isProviderFailureMessage` — keep matching exactly
+    // what they always have.
+    throw new CertifiedProviderError(message, classifyProviderFailure(message));
   }
+}
+
+/**
+ * Runs a certified model call, retrying transient provider failures (5xx,
+ * timeouts, empty responses, rate limits, network blips) with backoff before
+ * giving up. Fatal failures (quota/billing, invalid key, unauthorized) and
+ * everything else (parse errors, budget errors, aborts) are never retried —
+ * they rethrow from the first attempt.
+ *
+ * Each physical attempt runs through `callCertifiedModelOnce`, which records
+ * its own trace/event; a retried call therefore leaves an auditable trail of
+ * every attempt (failed + eventual success) in the trace store, not just the
+ * final outcome. Consumers that map traces positionally to scenarios
+ * (audit/replay scripts) are updated in Task B4 to key by scenarioId instead
+ * of assuming one trace per scenario.
+ */
+export async function callCertifiedModel(
+  input: CallCertifiedModelInput
+): Promise<CertifiedModelCallResult> {
+  const delays = input.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) {
+      const jitterMs = Math.floor(Math.random() * 500);
+      await sleepUnlessAborted(delays[attempt - 1] + jitterMs, input.signal);
+    }
+    throwIfCertifiedRunAborted(input.signal);
+    try {
+      return await callCertifiedModelOnce(input);
+    } catch (error) {
+      lastError = error;
+      if (error instanceof CertifiedBudgetExceededError) throw error;
+      const transient =
+        error instanceof CertifiedProviderError && error.classification === "transient";
+      if (!transient) throw error;
+      // transient: fall through and loop for the next attempt.
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Sleeps for `ms`, but rejects immediately (with the same abort error
+ * `throwIfCertifiedRunAborted` would throw) if `signal` fires first — abort
+ * always wins over a pending retry sleep. The pending timer is always
+ * cleared so an aborted run never leaves a dangling timer behind.
+ */
+async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    throwIfCertifiedRunAborted(signal);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortedError(signal as AbortSignal));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 
 async function recordCertifiedBudgetEvent(
