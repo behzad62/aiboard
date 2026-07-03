@@ -788,7 +788,6 @@ export function CertifiedRunPanel({
               attempts.push(...reidd);
               capturedAttempts = [...attempts];
             }
-            capturedAttempts = attempts;
             // Already recorded incrementally above; returning attempts here
             // too would double-record (harmless — recordAttempt is a
             // Map-by-id and persistFailureForAttempt checks recordedFailureIds
