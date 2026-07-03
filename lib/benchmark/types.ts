@@ -419,6 +419,10 @@ export interface BenchmarkModelCallTrace {
   runId?: string;
   caseId?: string;
   attemptId?: string;
+  // The GameIQ scenario id this call answered. Lets trace consumers map by
+  // id instead of positional order — required once retries/concurrency
+  // produce out-of-order or multiple traces per scenario.
+  scenarioId?: string;
   modelId: string;
   providerId: string;
   participantId?: string;

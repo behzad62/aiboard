@@ -95,6 +95,9 @@ export interface RunCertifiedGameIqInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  // Max scenarios evaluated in parallel per pack; threaded through to
+  // runGameIqScenarios. Default 1 (sequential) when omitted.
+  concurrency?: number;
 }
 
 export async function runCertifiedGameIq(
@@ -153,6 +156,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
     caseId: input.context.caseIds[0] ?? "gameiq-v0.1-scenario-pack",
     startedAt: input.context.startedAt,
     harnessProfile: input.context.harnessProfile,
+    concurrency: input.concurrency,
     moveProvider: async ({ scenario, scenarioIndex, totalScenarios }) => {
       const system =
         "You are a certified GameIQ benchmark participant. Return only the requested structured JSON.";
@@ -178,6 +182,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         context: input.context,
         caseId: input.context.caseIds[0],
         attemptId: plannedAttemptId,
+        scenarioId: scenario.id,
         participantId: input.teamCompositionId,
         pricing: input.pricing,
         streamChat: input.streamChat,

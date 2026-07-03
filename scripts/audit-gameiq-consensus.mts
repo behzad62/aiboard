@@ -16,6 +16,7 @@ interface TraceRow {
   caseId: string;
   startedAt: string;
   parsedResponseJson?: string | null;
+  scenarioId?: string;
 }
 
 function actionFromParsedJson(parsedJson: unknown): unknown {
@@ -37,13 +38,56 @@ const table = new Map<
   { scenario: GameIqScenario; answers: Map<string, unknown> }
 >();
 
-for (const file of process.argv.slice(2)) {
+const runFiles = process.argv.slice(2);
+if (runFiles.length === 0) {
+  console.log("Usage: npx tsx scripts/audit-gameiq-consensus.mts <run-file.json> [...more]");
+  process.exit(2);
+}
+
+for (const file of runFiles) {
   const run = JSON.parse(readFileSync(file, "utf8"));
   const model: string = String(run.runs[0].modelIds);
   const traces: TraceRow[] = run.traces;
   for (const pack of packs) {
-    const caseTraces = traces
-      .filter((t) => t.caseId === pack.id)
+    const packTraces = traces.filter((t) => t.caseId === pack.id);
+    if (packTraces.length === 0) continue;
+
+    // Prefer scenarioId when the pack's traces carry it (B4+ run files):
+    // pair each scenario directly by id, using the LAST trace by startedAt
+    // when a scenario has multiple traces (retries) — the final attempt is
+    // the one that was actually scored.
+    const hasScenarioIds = packTraces.some((t) => Boolean(t.scenarioId));
+    if (hasScenarioIds) {
+      const byScenarioId = new Map<string, TraceRow>();
+      for (const trace of packTraces) {
+        if (!trace.scenarioId) continue;
+        const existing = byScenarioId.get(trace.scenarioId);
+        if (!existing || trace.startedAt.localeCompare(existing.startedAt) > 0) {
+          byScenarioId.set(trace.scenarioId, trace);
+        }
+      }
+      for (const scenario of pack.scenarios) {
+        const trace = byScenarioId.get(scenario.id);
+        if (!trace?.parsedResponseJson || trace.parsedResponseJson.length === 0) continue;
+        let action: unknown;
+        try {
+          action = actionFromParsedJson(JSON.parse(trace.parsedResponseJson));
+        } catch {
+          continue;
+        }
+        const row = table.get(scenario.id) ?? { scenario, answers: new Map() };
+        row.answers.set(model, action);
+        table.set(scenario.id, row);
+      }
+      continue;
+    }
+
+    // Positional pairing assumes one trace per scenario in scenario order —
+    // valid only for pre-B4 sequential run files; newer files use
+    // scenarioId. Pre-B4 run files have no scenarioId; positional pairing is
+    // correct for them because they were recorded sequentially, one trace
+    // per scenario.
+    const caseTraces = [...packTraces]
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
       .filter((t) => t.parsedResponseJson && t.parsedResponseJson.length > 0);
     const n = Math.min(caseTraces.length, pack.scenarios.length);

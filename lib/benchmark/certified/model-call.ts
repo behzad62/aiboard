@@ -88,6 +88,9 @@ export interface CallCertifiedModelInput {
   participantId: string;
   caseId?: string;
   attemptId?: string;
+  // The GameIQ scenario id this call answers, threaded onto the recorded
+  // trace so trace consumers can map by id instead of positional order.
+  scenarioId?: string;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   apiKey?: string;
   baseURL?: string;
@@ -284,6 +287,7 @@ async function callCertifiedModelOnce(
       runId: input.context.runId,
       caseId: input.caseId,
       attemptId: input.attemptId,
+      scenarioId: input.scenarioId,
       reasoningEffort: input.reasoningEffort,
       schemaMode: input.structuredOutput ? "structured" : "text",
       promptText: certifiedPromptText(messages),
@@ -354,6 +358,7 @@ async function callCertifiedModelOnce(
       runId: input.context.runId,
       caseId: input.caseId,
       attemptId: input.attemptId,
+      scenarioId: input.scenarioId,
       reasoningEffort: input.reasoningEffort,
       schemaMode: input.structuredOutput ? "structured" : "text",
       promptText: certifiedPromptText(messages),

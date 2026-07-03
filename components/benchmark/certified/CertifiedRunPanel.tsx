@@ -773,6 +773,9 @@ export function CertifiedRunPanel({
                 teamCompositionIds: [team.id],
                 trials: 1,
                 signal: options?.signal,
+                // Scenario calls are independent single calls; concurrency 4
+                // cuts wall-clock ~4x and shrinks the provider-failure window.
+                concurrency: 4,
               });
               const reidd = packAttempts.map((attempt) =>
                 reidGameIqPackAttempt(attempt, packId)

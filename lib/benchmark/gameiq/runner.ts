@@ -186,18 +186,49 @@ export async function runGameIqScenarios(
 ): Promise<GameIqRunResult> {
   const runStartedMs = Date.now();
   const startedAt = input.startedAt ?? new Date(runStartedMs).toISOString();
-  const caseResults: GameIqScenarioResult[] = [];
 
-  for (let index = 0; index < input.scenarios.length; index++) {
-    caseResults.push(
-      await evaluateScenario(
-        input.scenarios[index],
-        index,
-        input.scenarios.length,
-        input
-      )
-    );
-  }
+  // Bounded worker pool: up to `concurrency` scenarios evaluate in parallel,
+  // but each result is written to its own scenario-indexed slot so
+  // `caseResults` always comes out in scenario order regardless of which
+  // worker finishes first. Default concurrency 1 = one worker = the original
+  // sequential loop, byte-identical to pre-B4 behavior.
+  const concurrency = Math.max(1, Math.floor(input.concurrency ?? 1));
+  const caseResults: GameIqScenarioResult[] = new Array(input.scenarios.length);
+  let cursor = 0;
+  let firstFatal: unknown = null;
+  const workers = Array.from(
+    { length: Math.min(concurrency, input.scenarios.length) },
+    async () => {
+      for (;;) {
+        if (firstFatal) return;
+        const index = cursor++;
+        if (index >= input.scenarios.length) return;
+        try {
+          caseResults[index] = await evaluateScenario(
+            input.scenarios[index],
+            index,
+            input.scenarios.length,
+            input
+          );
+        } catch (error) {
+          // Fatal/budget: evaluateScenario already contained every transient
+          // provider error into an "unscored" result, so only a fatal/budget
+          // throw reaches here. Record the first one and stop pulling new
+          // work; other in-flight workers finish their current scenario (its
+          // slot fills normally) then exit on the next `firstFatal` check.
+          firstFatal = firstFatal ?? error;
+          return;
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  // Rethrow before any metrics are computed: `caseResults` can have empty
+  // slots at this point (scenarios never picked up by a worker once
+  // firstFatal was set), but that can never reach the `scored` filter below
+  // because we throw first — there is no scenario where a hole survives to
+  // the metrics computation.
+  if (firstFatal) throw firstFatal;
 
   const scenarioCount = caseResults.length;
   // Transport-failed scenarios are excluded from every scoring metric

@@ -184,6 +184,9 @@ export interface RunGameIqScenariosInput {
   caseId?: string;
   startedAt?: string;
   harnessProfile?: BenchmarkAttemptV2["harnessProfile"];
+  // Max scenarios evaluated in parallel; default 1 (sequential). Bounded
+  // pool; results stay in scenario order regardless of completion order.
+  concurrency?: number;
 }
 
 export type ConnectFourGameIqAction = { column: number };

@@ -430,6 +430,64 @@ if (hard27) {
   );
 }
 
+// --- concurrency: bounded pool preserves scenario order regardless of
+// completion order; concurrency omitted stays sequential (unchanged behavior) ---
+const concurrencyScenarios = scenarios.slice(0, 8);
+const order: number[] = [];
+const parallel = await runGameIqScenarios({
+  runId: "gameiq-test-run-concurrency",
+  modelId: "fake:concurrency",
+  teamCompositionId: "team-fake-concurrency",
+  scenarios: concurrencyScenarios,
+  concurrency: 4,
+  moveProvider: async ({ scenario, scenarioIndex }) => {
+    // Reverse-ordered delay so later-indexed scenarios finish first, forcing
+    // completion order out of scenario order under a bounded pool.
+    await new Promise((resolve) => setTimeout(resolve, (8 - scenarioIndex) * 5));
+    order.push(scenarioIndex);
+    return { action: scenario.expectedActions[0]?.action };
+  },
+});
+check(
+  "concurrency: caseResults preserve scenario order regardless of completion order",
+  parallel.caseResults.map((r) => r.scenarioId).join() ===
+    concurrencyScenarios.map((s) => s.id).join(),
+  { got: parallel.caseResults.map((r) => r.scenarioId), expected: concurrencyScenarios.map((s) => s.id) }
+);
+check(
+  "concurrency: completions actually interleaved out of scenario order",
+  order.join() !== [...order].sort((a, b) => a - b).join(),
+  order
+);
+
+const sequentialOrder: number[] = [];
+const sequential = await runGameIqScenarios({
+  runId: "gameiq-test-run-sequential-default",
+  modelId: "fake:sequential-default",
+  teamCompositionId: "team-fake-sequential-default",
+  scenarios: concurrencyScenarios,
+  // concurrency omitted: must stay sequential, byte-identical to pre-B4 behavior.
+  moveProvider: async ({ scenario, scenarioIndex }) => {
+    sequentialOrder.push(scenarioIndex);
+    return { action: scenario.expectedActions[0]?.action };
+  },
+});
+check(
+  "concurrency omitted: caseResults in scenario order (sequential default unchanged)",
+  sequential.caseResults.map((r) => r.scenarioId).join() ===
+    concurrencyScenarios.map((s) => s.id).join()
+);
+check(
+  "concurrency omitted: moveProvider invoked strictly in scenario order",
+  sequentialOrder.join() === concurrencyScenarios.map((_, i) => i).join(),
+  sequentialOrder
+);
+check(
+  "concurrency omitted: metrics identical to a perfect run's shape (score 100)",
+  sequential.score === 100 && sequential.metrics.scoredScenarioCount === concurrencyScenarios.length,
+  sequential
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {
