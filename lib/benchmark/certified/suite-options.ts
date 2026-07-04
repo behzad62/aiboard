@@ -21,11 +21,21 @@ export function isGameIqBundleSuite(suiteId: string): boolean {
   return suiteId === GAMEIQ_ALL_PACKS_SUITE_ID;
 }
 
-// The concrete GameIQ pack ids a suite selection expands to: the bundle expands
-// to every pack; any single-pack selection stays itself.
+// battleship: 11/11 saturated across all four 2026-07 reference models (see
+// lib/benchmark/gameiq/saturation.ts) — zero discrimination; excluded from
+// the default bundle. Standalone battleship runs remain available until the
+// pack is re-authored (Phase D charter).
+const GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS = new Set(["gameiq-v0.1-battleship"]);
+
+// The concrete GameIQ pack ids a suite selection expands to: the bundle
+// expands to every pack except the excluded (saturated) ones above; any
+// single-pack selection — including battleship — stays itself, so battleship
+// is still selectable as a standalone pack.
 export function gameIqBundlePackIds(suiteId: string): string[] {
   if (isGameIqBundleSuite(suiteId)) {
-    return listGameIqScenarioPacks().map((pack) => pack.id);
+    return listGameIqScenarioPacks()
+      .map((pack) => pack.id)
+      .filter((packId) => !GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS.has(packId));
   }
   return [suiteId];
 }
@@ -173,10 +183,11 @@ export function listCertifiedSuiteOptions(
     }));
   }
   const packs = listGameIqScenarioPacks();
+  const bundlePackCount = gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).length;
   return [
     {
       id: GAMEIQ_ALL_PACKS_SUITE_ID,
-      label: `All GameIQ packs (${packs.length} packs - one run per pack)`,
+      label: `All GameIQ packs (${bundlePackCount} packs - one run per pack)`,
     },
     ...packs.map((pack) => ({
       id: pack.id,

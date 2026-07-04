@@ -11,14 +11,27 @@ export {
   stableGameIqScenarioPackDigest,
 } from "./packs";
 export type { GameIqPackRigorFloor } from "./packs";
-export { runGameIqScenarios } from "./runner";
-export { runCertifiedGameIq } from "./certified-runner";
+export { aggregateGameIqMetrics, runGameIqScenarios } from "./runner";
+export { runCertifiedGameIq, createGameIqVerifierResult } from "./certified-runner";
+export { resolvePackTraceReplay } from "./trace-replay";
+export type { PackTraceRow, PackTraceReplay } from "./trace-replay";
+export {
+  GAMEIQ_SATURATED_SCENARIO_IDS,
+  GAMEIQ_SATURATION_MIN_MODELS,
+} from "./saturation";
 export {
   actionMatchesExpected,
+  gradeFireworksAction,
   isStructuredGameIqAction,
   validateGameIqAction,
   validateGameIqScenario,
 } from "./validation";
+export {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  GAMEIQ_HARNESS_VERSION,
+  GAMEIQ_PROMPT_SET_VERSION,
+  GAMEIQ_SCORING_VERSION,
+} from "./types";
 export type {
   BattleshipGameIqAction,
   ChessGameIqAction,

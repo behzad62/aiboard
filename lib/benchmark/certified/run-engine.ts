@@ -22,7 +22,7 @@ import {
   persistCertifiedRunRecord,
   rebuildCertifiedDashboardData,
 } from "./run-persistence";
-import { isProviderFailureMessage } from "./classify-provider-failure";
+import { classifyProviderFailure, isProviderFailureMessage } from "./classify-provider-failure";
 import { persistReturnedAttempts, type CertifiedTrackRunner } from "./model-runner";
 import type { CertifiedRunBudget } from "./run-context";
 import { throwIfCertifiedRunAborted } from "./model-call";
@@ -207,7 +207,7 @@ function attemptKey(caseId: string, teamCompositionId: string): string {
   return `${caseId}\u0000${teamCompositionId}`;
 }
 
-function statusForRunError(message: string): BenchmarkAttemptV2["status"] {
+export function statusForRunError(message: string): BenchmarkAttemptV2["status"] {
   const normalized = message.toLowerCase();
   if (/abort|cancel/.test(normalized)) {
     return "aborted_user";
@@ -217,6 +217,16 @@ function statusForRunError(message: string): BenchmarkAttemptV2["status"] {
   }
   if (/budget|token limit|cost limit|wall.?clock/.test(normalized)) {
     return "failed_budget";
+  }
+  // A fatal/transient provider or account error whose message lacks
+  // isProviderFailureMessage's keywords (e.g. "insufficient funds", "billing",
+  // a bare "credits depleted" without a 429) is still the provider's fault, not
+  // a broken harness. Consult the B1 classifier (which owns the billing/credits/
+  // quota/key patterns) before falling to invalid_harness, so this synthesized
+  // status matches how B1/B2 classify the same error. Placed AFTER the budget
+  // branch so budget errors (which classify as "other") stay failed_budget.
+  if (classifyProviderFailure(message) !== "other") {
+    return "provider_unavailable";
   }
   return "invalid_harness";
 }

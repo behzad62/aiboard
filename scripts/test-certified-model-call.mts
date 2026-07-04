@@ -107,6 +107,9 @@ await expectReject(
       caseId: "case-model-call",
       attemptId: "attempt-model-call-error",
       participantId: "single",
+      // 503 classifies transient; disable retries so this asserts a single
+      // attempt's message/trace (not 3 retried attempts burning real backoff).
+      retryDelaysMs: [],
       streamChat: async function* (): AsyncIterable<StreamChunk> {
         yield { type: "error", error: "Provider 503 before output" };
       },
@@ -127,6 +130,9 @@ await expectReject(
       caseId: "case-model-call",
       attemptId: "attempt-model-call-empty",
       participantId: "single",
+      // Empty response classifies transient; disable retries so this asserts a
+      // single attempt without burning real backoff.
+      retryDelaysMs: [],
       streamChat: async function* (): AsyncIterable<StreamChunk> {
         yield { type: "done" };
       },
@@ -462,6 +468,9 @@ await expectReject(
       caseId: "case-timeout",
       attemptId: "attempt-timeout",
       participantId: "single",
+      // Timeout classifies transient; disable retries so this asserts a single
+      // timed-out attempt rather than recording 3 timeout traces + real backoff.
+      retryDelaysMs: [],
       streamChat: async function* (): AsyncIterable<StreamChunk> {
         await new Promise<void>(() => undefined);
       },

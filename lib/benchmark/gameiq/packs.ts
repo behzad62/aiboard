@@ -7,7 +7,12 @@ import {
   FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
 } from "./fireworks";
-import type { GameIqGameId, GameIqScenario, GameIqScenarioPack } from "./types";
+import {
+  GAMEIQ_CORRECT_QUALITY_BAR,
+  type GameIqGameId,
+  type GameIqScenario,
+  type GameIqScenarioPack,
+} from "./types";
 import { actionMatchesExpected } from "./validation";
 
 // Certification tiers are honest labels, not decoration. A pack may only be
@@ -43,7 +48,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-connect-four",
     gameId: "connect-four",
     label: "Certified GameIQ v1: Connect Four",
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: CONNECT_FOUR_GAMEIQ_SCENARIOS,
   },
@@ -51,7 +57,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-chess",
     gameId: "chess",
     label: "Certified GameIQ v1: Chess Tactics",
-    version: "0.3.0",
+    // 0.3.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.3.1",
     certificationTier: "first-class",
     scenarios: CHESS_GAMEIQ_SCENARIOS,
   },
@@ -59,7 +66,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     id: "gameiq-v0.1-battleship",
     gameId: "battleship",
     label: "Certified GameIQ v1: Battleship Targeting",
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: BATTLESHIP_GAMEIQ_SCENARIOS,
   },
@@ -71,7 +79,8 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // clones with 10 distinct skill-binding decisions (6 deduced guesses, 4
     // binding clues). Passes gameIqPackFirstClassFloor (>=10 distinct
     // decisions, 0% constant-answer rate), so first-class is now honest.
-    version: "0.2.0",
+    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.2.1",
     certificationTier: "first-class",
     scenarios: CODENAMES_GAMEIQ_SCENARIOS,
   },
@@ -83,7 +92,10 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // 0.4.0: its combine_color_and_rank memory scenarios are now delivered as
     // multi-turn recall episodes (clue history as earlier turns; decision turn
     // stripped of clue-identity channels). Content unchanged; scoring identical.
-    version: "0.4.0",
+    // 0.4.1: equivalent-information clue widening pass now applies (no content
+    // change in this pack; oracle-narrowness fix, 2026-07-03)
+    // 0.4.2: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.2",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   },
@@ -92,7 +104,9 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     gameId: "fireworks",
     label: "Certified GameIQ v1: Fireworks Trap States",
     // 0.3.0: port now carries TeamIQ forbiddenActions (trap-blunder detection).
-    version: "0.3.0",
+    // 0.4.0: equivalent-information clues auto-keyed (oracle-narrowness fix, 2026-07-03)
+    // 0.4.1: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.1",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_HARD_SCENARIOS,
   },
@@ -105,7 +119,10 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     // episodes — the seeded clue history is replayed as earlier conversation
     // turns and the decision turn carries no clue-identity channels, so the
     // model must RECALL. Content unchanged; scoring identical.
-    version: "0.4.0",
+    // 0.4.1: equivalent-information clue widening pass now applies (no content
+    // change in this pack; oracle-narrowness fix, 2026-07-03)
+    // 0.4.2: removed dead maxResponseMs field (never enforced, never model-visible)
+    version: "0.4.2",
     certificationTier: "lightweight",
     scenarios: FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
   },
@@ -219,7 +236,8 @@ export function gameIqPackFirstClassFloor(
   if (pack.scenarios.length > 0) {
     for (const candidate of candidates.values()) {
       const matched = pack.scenarios.filter(
-        (scenario) => actionMatchesExpected(scenario, candidate) > 0
+        (scenario) =>
+          actionMatchesExpected(scenario, candidate) >= GAMEIQ_CORRECT_QUALITY_BAR
       ).length;
       maxConstantAnswerRate = Math.max(
         maxConstantAnswerRate,

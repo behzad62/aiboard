@@ -33,6 +33,7 @@ import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget"
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
 import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/types";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
+import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import {
   classifyGameIqModelRunOutcome,
   gameIqBundlePackIds,
@@ -70,6 +71,7 @@ import {
   type FireworksBenchmarkSuite,
 } from "@/lib/benchmark/fireworks";
 import {
+  GAMEIQ_SCORING_VERSION,
   listGameIqScenarioPacks,
   runCertifiedGameIq,
 } from "@/lib/benchmark/gameiq";
@@ -771,28 +773,58 @@ export function CertifiedRunPanel({
                 teamCompositionIds: [team.id],
                 trials: 1,
                 signal: options?.signal,
+                // Scenario calls are independent single calls; concurrency 4
+                // cuts wall-clock ~4x and shrinks the provider-failure window.
+                concurrency: 4,
               });
-              attempts.push(
-                ...packAttempts.map((attempt) =>
-                  reidGameIqPackAttempt(attempt, packId)
-                )
+              const reidd = packAttempts.map((attempt) =>
+                reidGameIqPackAttempt(attempt, packId)
               );
+              // Persist immediately: a fatal/budget failure in a LATER pack
+              // must not void packs that already completed and verified
+              // (createFailedAttemptsForRunError in run-engine.ts skips
+              // already-recorded cases via its existingKeys check). Record
+              // against the OUTER context — reidGameIqPackAttempt already
+              // scopes the id/caseId/verifierResultId by pack, so no
+              // packContext is needed here.
+              await persistReturnedAttempts(context, reidd);
+              attempts.push(...reidd);
+              capturedAttempts = [...attempts];
             }
-            capturedAttempts = attempts;
-            return attempts;
+            // Already recorded incrementally above; returning attempts here
+            // too would double-record (harmless — recordAttempt is a
+            // Map-by-id and persistFailureForAttempt checks recordedFailureIds
+            // — but returning [] keeps the final persistReturnedAttempts a
+            // clean no-op).
+            return [];
           },
         });
         // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
         // the provider/budget error into the summary status; treat that as a
         // failure for the batch tally too.
         if (result.status !== "completed") {
+          // The run itself failed (fatal/budget error mid-run), but packs
+          // already recorded before the failure are preserved by the engine
+          // (see run-engine.ts's existingKeys skip). Surface those partial
+          // numbers on the row instead of a bare failure so the badge can
+          // read e.g. "failed (4/7 packs scored)".
+          const partialOutcome =
+            capturedAttempts.length > 0
+              ? classifyGameIqModelRunOutcome(false, capturedAttempts)
+              : undefined;
+          const baseError = result.error ?? "Run did not complete.";
           const state: GameIqModelRunState = {
             modelId: model.modelId,
             displayName: model.displayName,
             providerId: model.providerId,
             status: "failed",
             summary: result,
-            error: result.error ?? "Run did not complete.",
+            packsScored: partialOutcome?.packsScored,
+            packsPassed: partialOutcome?.packsPassed,
+            avgQuality: partialOutcome?.avgQuality,
+            error: partialOutcome
+              ? `${baseError} (${partialOutcome.packsPassed}/${partialOutcome.packsScored} packs scored before the failure)`
+              : baseError,
           };
           updateGameIqModelRun(model.modelId, state);
           return state;
@@ -1032,7 +1064,11 @@ function caseForSelection(
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
-    scoring: { scoringVersion: "certified-gameiq-v0.2", primary: "game_iq" },
+    // Live constant, not a literal: this case record is PERSISTED via
+    // saveBenchmarkCaseV2 on every UI run and must agree with the attempt's
+    // scoringVersion stamp (same invariant as TEAMIQ_SCORING_VERSION in
+    // lib/benchmark/teamiq/certified-runner.ts).
+    scoring: { scoringVersion: GAMEIQ_SCORING_VERSION, primary: "game_iq" },
     contamination: {
       originalTask: true,
       canary: "AIBENCH-UI-GAMEIQ",

@@ -274,6 +274,62 @@ async function main(): Promise<void> {
     }
   );
 
+  // --- Equivalent-information clue widening (2026-07-03 oracle audit) ---
+  // hard-v1-14/-20 were miskeyed: models chose a clue_color that touches the
+  // identical card set as the keyed clue_rank and scored 0. Equal information
+  // must earn equal credit — see widenEquivalentClues in scenario-packs.ts.
+  for (const id of ["gameiq-fireworks-hard-v1-14", "gameiq-fireworks-hard-v1-20"]) {
+    const scenario = FIREWORKS_GAMEIQ_HARD_SCENARIOS.find((s) => s.id === id)!;
+    check(
+      `${id}: equivalent color clue is keyed`,
+      scenario.expectedActions.some(
+        (e) =>
+          (e.action as { action?: string }).action === "clue_color" &&
+          (e.action as { color?: string }).color === "blue"
+      )
+    );
+  }
+
+  // Negative space for the widening pass: it must not fire where no keyed
+  // (weight >= 0.75) clue exists, must add exactly ONE twin where it fires,
+  // and must leave the basic/memory packs untouched.
+  const WIDENED_LABEL = "Equivalent-information clue (auto-widened)";
+  const hard13 = FIREWORKS_GAMEIQ_HARD_SCENARIOS.find(
+    (s) => s.id === "gameiq-fireworks-hard-v1-13"
+  )!;
+  check(
+    "gameiq-fireworks-hard-v1-13: no keyed clue to widen, expectedActions stays at 1",
+    hard13.expectedActions.length === 1,
+    hard13.expectedActions
+  );
+  const hard14 = FIREWORKS_GAMEIQ_HARD_SCENARIOS.find(
+    (s) => s.id === "gameiq-fireworks-hard-v1-14"
+  )!;
+  check(
+    "gameiq-fireworks-hard-v1-14: exactly one widened twin (discard + clue_rank-1 + clue_color-blue; non-equivalent red/green/rank-4 clues stay unkeyed)",
+    hard14.expectedActions.length === 3,
+    hard14.expectedActions
+  );
+  const widenedOutsideHard = [
+    ...FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
+    ...FIREWORKS_GAMEIQ_MEMORY_STRESS_SCENARIOS,
+  ].filter((scenario) =>
+    scenario.expectedActions.some((e) => e.label === WIDENED_LABEL)
+  );
+  check(
+    "widening adds nothing to the basic/memory packs (their version bumps are no-content-change)",
+    widenedOutsideHard.length === 0,
+    widenedOutsideHard.map((s) => s.id)
+  );
+  const widenedEntryCount = allPacks
+    .flatMap((scenario) => scenario.expectedActions)
+    .filter((e) => e.label === WIDENED_LABEL).length;
+  check(
+    "exactly 5 auto-widened entries across all GameIQ fireworks packs (safe_discard-02/04/06/08/10)",
+    widenedEntryCount === 5,
+    widenedEntryCount
+  );
+
   if (failures === 0) {
     console.log("PASS");
   } else {

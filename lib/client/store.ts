@@ -562,6 +562,26 @@ function store(): ClientStore {
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistDirty = false;
 
+// File System Access createWritable() is not safe for overlapping writes to the
+// same file: a second write that starts before the first closes throws
+// InvalidStateError ("...state had changed since it was read from disk"). The
+// certified benchmark records traces/events concurrently (scenario-level
+// parallelism), so two record saves can reach flush()/saveBenchmarkRun at once.
+// Serialize every adapter write through one queue — concurrent callers are
+// ordered, never overlapped. IndexedDB serializes via its own transactions, so
+// this only matters for the folder adapter, but the queue is harmless there.
+let adapterWriteQueue: Promise<unknown> = Promise.resolve();
+function serializeAdapterWrite<T>(op: () => Promise<T>): Promise<T> {
+  const result = adapterWriteQueue.then(op, op);
+  // Keep the chain alive past individual failures; the caller still receives
+  // this op's own rejection via `result`.
+  adapterWriteQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 function schedulePersist(): void {
   persistDirty = true;
   if (persistTimer) clearTimeout(persistTimer);
@@ -582,15 +602,18 @@ export async function flush(): Promise<void> {
     return;
   }
   if (!adapter) return;
+  const currentAdapter = adapter;
   if (config.encryptionEnabled && !isUnlocked()) {
     persistDirty = true;
     return;
   }
+  // Compute the envelope from the current memory snapshot BEFORE queueing the
+  // write, so each serialized save persists the latest state (last-write-wins).
   const env = await wrap(
     JSON.stringify(clientStoreForMainPersistence(memory)),
     config.encryptionEnabled
   );
-  await adapter.save(JSON.stringify(env));
+  await serializeAdapterWrite(() => currentAdapter.save(JSON.stringify(env)));
   persistDirty = false;
 }
 
@@ -1248,13 +1271,14 @@ export async function saveBenchmarkRunBlob(
     return;
   }
   if (!adapter) return;
+  const currentAdapter = adapter;
   if (config.encryptionEnabled && !isUnlocked()) {
     throw new Error("Unlock storage before saving benchmark data.");
   }
   const blob = config.encryptionEnabled
     ? JSON.stringify(await wrap(plaintextJson, true))
     : plaintextJson;
-  await adapter.saveBenchmarkRun(runId, blob);
+  await serializeAdapterWrite(() => currentAdapter.saveBenchmarkRun(runId, blob));
 }
 
 export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
@@ -1265,7 +1289,8 @@ export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
     return;
   }
   if (!adapter) return;
-  await adapter.deleteBenchmarkRun(runId);
+  const currentAdapter = adapter;
+  await serializeAdapterWrite(() => currentAdapter.deleteBenchmarkRun(runId));
 }
 
 export interface ClearAllBenchmarkDataResult {
@@ -1322,6 +1347,12 @@ export function __enableBenchmarkRunBlobStorageForTests(): void {
   benchmarkRunBlobStorageForTests = new Map();
   mergedBenchmarkRunIds.clear();
   corruptBenchmarkRunIds.clear();
+}
+
+/** Test helper: inject (or clear) the storage adapter so tests can exercise the
+ * real adapter-write path (e.g. write serialization) without a browser. */
+export function __setAdapterForTests(next: StorageAdapter | null): void {
+  adapter = next;
 }
 
 /** Test helper: writes a raw run blob directly, bypassing the in-app save path

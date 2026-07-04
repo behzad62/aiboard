@@ -2,8 +2,11 @@
 import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
+  buildWorkerTaskPrompt,
+  buildReviewGateFixInstructions,
   buildOutstandingTasksDigest,
   isBuildTaskDependencySatisfied,
+  isReviewResultApproved,
   isBuildToolAction,
   isSafeFirstToolAction,
   outputPathsForTask,
@@ -42,6 +45,48 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
   ["shell cmd alias parses as run", '{"action":"shell","cmd":"node -e \\"console.log(1)\\""}', (a) => a?.action === "run" && (a as { command: string }).command.includes("console.log")],
   ["read_file alias parses as read", '{"action":"read_file","path":"src/game.js"}', (a) => a?.action === "read" && (a as { paths: string[] }).paths[0] === "src/game.js"],
   ["last block wins over earlier braces", 'first {not json}\n```json\n{"action":"review","results":[],"done":false}\n```', (a) => a?.action === "review"],
+  [
+    "plan action preserves current phase spec",
+    '{"action":"plan","phaseSpec":{"id":"P1","objective":"Ship review gates","acceptanceCriteria":["Both gates are parsed"],"qualityCriteria":["Legacy verdicts still work"],"verification":["npm run lint"]},"tasks":[{"id":"T1","title":"Parser","instructions":"Update parser"}]}',
+    (a) =>
+      a?.action === "plan" &&
+      (a as { phaseSpec?: { acceptanceCriteria?: string[] } }).phaseSpec?.acceptanceCriteria?.[0] ===
+        "Both gates are parsed",
+  ],
+  [
+    "review action preserves explicit spec and quality gates",
+    '{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","qualityIssues":"Missing test","fixInstructions":"Add parser test"}],"done":false}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.specVerdict === "approve" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.qualityVerdict === "fix" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.qualityIssues === "Missing test",
+  ],
+  [
+    "legacy approve review maps to both gates approved",
+    '{"action":"review","results":[{"taskId":"T1","verdict":"approve"}],"done":true}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string }> }).results[0]?.specVerdict ===
+        "approve" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string }> }).results[0]?.qualityVerdict ===
+        "approve",
+  ],
+  [
+    "legacy fix review preserves explicit approved spec gate and maps missing quality gate to fix",
+    '{"action":"review","results":[{"taskId":"T1","verdict":"fix","specVerdict":"approve","qualityIssues":"Needs cleanup"}],"done":false}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.specVerdict === "approve" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.qualityVerdict === "fix" &&
+      (a as { results: Array<{ specVerdict?: string; qualityVerdict?: string; qualityIssues?: string }> }).results[0]
+        ?.qualityIssues === "Needs cleanup",
+  ],
   [
     "read_range action",
     '{"action":"read_range","path":"src/index.ts","startLine":25,"lineCount":40}',
@@ -217,6 +262,65 @@ for (const [name, input, check] of cases) {
   if (!ok) failed++;
 }
 
+const reviewGateChecks: Array<[string, boolean]> = [
+  [
+    "review gate helper approves only when both gates approve",
+    isReviewResultApproved({
+      taskId: "T1",
+      specVerdict: "approve",
+      qualityVerdict: "approve",
+    }),
+  ],
+  [
+    "review gate helper rejects spec failures",
+    !isReviewResultApproved({
+      taskId: "T1",
+      specVerdict: "fix",
+      qualityVerdict: "approve",
+    }),
+  ],
+  [
+    "review gate helper rejects quality failures",
+    !isReviewResultApproved({
+      taskId: "T1",
+      specVerdict: "approve",
+      qualityVerdict: "fix",
+    }),
+  ],
+  [
+    "review gate fix instructions label spec and quality issues",
+    buildReviewGateFixInstructions({
+      taskId: "T1",
+      specVerdict: "fix",
+      qualityVerdict: "fix",
+      specIssues: "Missing setting",
+      qualityIssues: "No test",
+      fixInstructions: "Update files",
+    }).includes("Spec-compliance issues: Missing setting") &&
+      buildReviewGateFixInstructions({
+        taskId: "T1",
+        specVerdict: "fix",
+        qualityVerdict: "fix",
+        specIssues: "Missing setting",
+        qualityIssues: "No test",
+        fixInstructions: "Update files",
+      }).includes("Code-quality issues: No test") &&
+      buildReviewGateFixInstructions({
+        taskId: "T1",
+        specVerdict: "fix",
+        qualityVerdict: "fix",
+        specIssues: "Missing setting",
+        qualityIssues: "No test",
+        fixInstructions: "Update files",
+      }).includes("Fix instructions: Update files"),
+  ],
+];
+
+for (const [name, ok] of reviewGateChecks) {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}`);
+  if (!ok) failed++;
+}
+
 const pathCases: Array<[string, Parameters<typeof outputPathsForTask>[0], string[]]> = [
   [
     "explicit outputPaths are normalized",
@@ -362,6 +466,75 @@ for (const [name, ok] of safeFirstChecks) {
 }
 
 // ── Typed repo actions: prompt doc gating (NRW-004) ─────────────────────────
+// Phase spec protocol prompt coverage.
+const parsedPhaseSpec = {
+  id: "P1",
+  objective: "Ship phase review gates",
+  acceptanceCriteria: ["Both review gates are enforced"],
+  qualityCriteria: ["Review parsing stays backward-compatible"],
+  verification: ["npx tsx scripts/test-parse-action.mts"],
+};
+const parsedTaskWithPhaseSpec = {
+  id: "T1",
+  title: "Wire review gates",
+  instructions: "Update Build mode review handling.",
+  contextFiles: [],
+  outputPaths: ["lib/orchestrator/build.ts"],
+  status: "planned" as const,
+  phaseSpec: parsedPhaseSpec,
+};
+const phasePlanPrompt = buildArchitectPlanPrompt({
+  request: "build review gates",
+  treeText: "lib/orchestrator/build.ts",
+  fileContext: "",
+  maxTasks: 3,
+  workerNames: ["W1"],
+  readHopsLeft: 0,
+});
+const phaseWorkerPrompt = buildWorkerTaskPrompt({
+  request: "build review gates",
+  treeText: "lib/orchestrator/build.ts",
+  task: parsedTaskWithPhaseSpec,
+  contextFileText: "",
+  architectNotes: "",
+});
+const phaseReviewPrompt = buildArchitectReviewPrompt({
+  request: "build review gates",
+  treeText: "lib/orchestrator/build.ts",
+  executedText: "T1 changed lib/orchestrator/build.ts",
+  maxNewTasks: 3,
+  cyclesLeft: 1,
+  phaseSpec: parsedPhaseSpec,
+} as Parameters<typeof buildArchitectReviewPrompt>[0] & {
+  phaseSpec: typeof parsedPhaseSpec;
+});
+
+const phasePromptChecks: Array<[string, boolean]> = [
+  [
+    "plan prompt requires phaseSpec",
+    phasePlanPrompt.includes('"phaseSpec"') &&
+      phasePlanPrompt.includes("current phase"),
+  ],
+  [
+    "worker prompt includes current phase spec",
+    phaseWorkerPrompt.includes("Current phase spec") &&
+      phaseWorkerPrompt.includes("Both review gates are enforced"),
+  ],
+  [
+    "review prompt requests spec verdict",
+    phaseReviewPrompt.includes("specVerdict"),
+  ],
+  [
+    "review prompt requests quality verdict",
+    phaseReviewPrompt.includes("qualityVerdict"),
+  ],
+];
+
+for (const [name, ok] of phasePromptChecks) {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}`);
+  if (!ok) failed++;
+}
+
 const repoPlanPrompt = buildArchitectPlanPrompt({
   request: "fix a bug",
   treeText: "src/index.ts",

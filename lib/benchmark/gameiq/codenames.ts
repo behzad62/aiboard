@@ -175,9 +175,6 @@ function clueSet(
   }));
 }
 
-const CLUE_MAX_MS = 15_000;
-const GUESS_MAX_MS = 12_000;
-
 // =========================================================================
 // GUESS scenarios (category "target-priority", exact cardId scoring).
 // Each board is hand-built so exactly one hidden card is the forced guess for
@@ -347,7 +344,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       "APPLE + PEAR are the two red fruits; TREE is on the board (illegal). Count pinned to 2."
     ),
     tags: ["codenames", "clue", "legality", "binding"],
-    maxResponseMs: CLUE_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-clue-count-three-metals",
@@ -365,7 +361,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       "GOLD + SILVER + COPPER are the three red metals; count pinned to 3."
     ),
     tags: ["codenames", "clue", "count", "binding"],
-    maxResponseMs: CLUE_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-clue-avoid-assassin",
@@ -389,7 +384,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       "PIANO + FLUTE are the two red instruments; DRUM is the assassin, so broad ensemble clues are traps. Count pinned to 2."
     ),
     tags: ["codenames", "clue", "assassin", "binding"],
-    maxResponseMs: CLUE_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-clue-tight-count-one",
@@ -407,7 +401,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       "WHALE is the only red sea creature; nothing else fits, so the count is pinned to 1."
     ),
     tags: ["codenames", "clue", "count", "binding"],
-    maxResponseMs: CLUE_MAX_MS,
   },
 
   // ---- GUESS scenarios ----
@@ -429,7 +422,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "association"],
-    maxResponseMs: GUESS_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-guess-elimination",
@@ -449,7 +441,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "elimination"],
-    maxResponseMs: GUESS_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-guess-count-second",
@@ -469,7 +460,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "count"],
-    maxResponseMs: GUESS_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-guess-either-twin",
@@ -494,7 +484,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "either"],
-    maxResponseMs: GUESS_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-guess-cold",
@@ -514,7 +503,6 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "association"],
-    maxResponseMs: GUESS_MAX_MS,
   },
   {
     id: "gameiq-v0.1-codenames-guess-last-animal",
@@ -534,6 +522,5 @@ export const CODENAMES_GAMEIQ_SCENARIOS: CodenamesGameIqScenario[] = [
       ),
     ],
     tags: ["codenames", "guess", "elimination"],
-    maxResponseMs: GUESS_MAX_MS,
   },
 ];

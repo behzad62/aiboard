@@ -13,6 +13,7 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
+import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
 export type {
   ContextBlob,
   ContextBlobKind,
@@ -186,6 +187,7 @@ export interface BuildCheckpointTask {
   contextFiles: string[];
   outputPaths?: string[];
   expectedOutputs?: string;
+  phaseSpec?: BuildPhaseSpec;
   status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
   dependsOn?: string[];
   assignTo?: string;
@@ -205,6 +207,7 @@ export interface BuildCheckpoint {
   tasks: BuildCheckpointTask[];
   architectNotes: string;
   verifyCommand: string;
+  phaseSpec?: BuildPhaseSpec;
   branch: string | null;
   prUrl: string | null;
   milestone: string | null;
