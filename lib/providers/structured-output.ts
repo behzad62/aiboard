@@ -13,6 +13,9 @@ export function openAICompatibleStructuredOutputField(
     type: "json_schema";
     json_schema: StructuredOutputFormat;
   };
+  provider?: {
+    require_parameters: true;
+  };
 } {
   if (!format || !OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_PROVIDERS.has(providerId)) {
     return {};
@@ -23,6 +26,9 @@ export function openAICompatibleStructuredOutputField(
       type: "json_schema",
       json_schema: format,
     },
+    ...(providerId === "openrouter"
+      ? { provider: { require_parameters: true as const } }
+      : {}),
   };
 }
 

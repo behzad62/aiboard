@@ -105,12 +105,22 @@ check(
     openRouterField.response_format.json_schema.name === "architect_action",
   openRouterField
 );
+check(
+  "OpenRouter structured-output calls require schema-capable routes",
+  openRouterField.provider?.require_parameters === true,
+  openRouterField
+);
 
 const openAIField = openAICompatibleStructuredOutputField("openai", format);
 check(
   "OpenAI chat completions receives response_format json_schema",
   openAIField.response_format?.type === "json_schema" &&
     openAIField.response_format.json_schema.schema.required.includes("action"),
+  openAIField
+);
+check(
+  "OpenAI structured-output calls do not receive OpenRouter routing params",
+  !("provider" in openAIField),
   openAIField
 );
 
