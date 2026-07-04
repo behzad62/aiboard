@@ -346,6 +346,13 @@ export async function* streamOpenAICompatibleChat(
     >();
     let reportedInputTokens: number | undefined;
     let reportedOutputTokens: number | undefined;
+    let reportedTotalTokens: number | undefined;
+    let reportedReasoningTokens: number | undefined;
+    let reportedCachedInputTokens: number | undefined;
+    let reportedCacheWriteInputTokens: number | undefined;
+    let reportedInputAudioTokens: number | undefined;
+    let reportedOutputAudioTokens: number | undefined;
+    let reportedProviderCost: number | undefined;
     const stream = await client.chat.completions.create({
       model: params.model,
       messages,
@@ -362,7 +369,21 @@ export async function* streamOpenAICompatibleChat(
     for await (const chunk of stream) {
       const usage = (
         chunk as unknown as {
-          usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            total_tokens?: number;
+            prompt_tokens_details?: {
+              cached_tokens?: number;
+              cache_write_tokens?: number;
+              audio_tokens?: number;
+            };
+            completion_tokens_details?: {
+              reasoning_tokens?: number;
+              audio_tokens?: number;
+            };
+            cost?: number;
+          } | null;
         }
       ).usage;
       if (usage) {
@@ -371,6 +392,30 @@ export async function* streamOpenAICompatibleChat(
         }
         if (typeof usage.completion_tokens === "number") {
           reportedOutputTokens = usage.completion_tokens;
+        }
+        if (typeof usage.total_tokens === "number") {
+          reportedTotalTokens = usage.total_tokens;
+        }
+        if (typeof usage.completion_tokens_details?.reasoning_tokens === "number") {
+          reportedReasoningTokens =
+            usage.completion_tokens_details.reasoning_tokens;
+        }
+        if (typeof usage.prompt_tokens_details?.cached_tokens === "number") {
+          reportedCachedInputTokens = usage.prompt_tokens_details.cached_tokens;
+        }
+        if (typeof usage.prompt_tokens_details?.cache_write_tokens === "number") {
+          reportedCacheWriteInputTokens =
+            usage.prompt_tokens_details.cache_write_tokens;
+        }
+        if (typeof usage.prompt_tokens_details?.audio_tokens === "number") {
+          reportedInputAudioTokens = usage.prompt_tokens_details.audio_tokens;
+        }
+        if (typeof usage.completion_tokens_details?.audio_tokens === "number") {
+          reportedOutputAudioTokens =
+            usage.completion_tokens_details.audio_tokens;
+        }
+        if (typeof usage.cost === "number") {
+          reportedProviderCost = usage.cost;
         }
       }
       const delta = chunk.choices[0]?.delta;
@@ -398,12 +443,32 @@ export async function* streamOpenAICompatibleChat(
     )) {
       yield { type: "tool_call", toolCall };
     }
-    if (reportedInputTokens != null || reportedOutputTokens != null) {
+    if (
+      reportedInputTokens != null ||
+      reportedOutputTokens != null ||
+      reportedTotalTokens != null ||
+      reportedReasoningTokens != null ||
+      reportedCachedInputTokens != null ||
+      reportedCacheWriteInputTokens != null ||
+      reportedInputAudioTokens != null ||
+      reportedOutputAudioTokens != null ||
+      reportedProviderCost != null
+    ) {
       yield {
         type: "usage",
         usage: {
           inputTokens: reportedInputTokens,
           outputTokens: reportedOutputTokens,
+          totalTokens: reportedTotalTokens,
+          reasoningTokens: reportedReasoningTokens,
+          cachedInputTokens: reportedCachedInputTokens,
+          cacheWriteInputTokens: reportedCacheWriteInputTokens,
+          inputAudioTokens: reportedInputAudioTokens,
+          outputAudioTokens: reportedOutputAudioTokens,
+          providerCost: reportedProviderCost,
+          ...(reportedProviderCost != null && providerId === "openrouter"
+            ? { providerCostUnit: "credits" as const }
+            : {}),
         },
       };
     }

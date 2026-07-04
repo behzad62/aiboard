@@ -163,12 +163,28 @@ const fallback = await resolveBuildModelContent({
   maxTokens: 64,
   label: "Fallback",
   reasoningEffort: "default",
-  collect: async () => "provider-content",
+  collect: async () => ({
+    content: "provider-content",
+    reportedUsage: {
+      inputTokens: 41,
+      outputTokens: 9,
+      reasoningTokens: 3,
+      cachedInputTokens: 12,
+    },
+  }),
 });
 
 check(
   "model content resolver falls back to provider collector",
   !fallback.overrideUsed && fallback.content === "provider-content",
+  fallback
+);
+check(
+  "model content resolver preserves provider usage from collector",
+  fallback.reportedUsage?.inputTokens === 41 &&
+    fallback.reportedUsage.outputTokens === 9 &&
+    fallback.reportedUsage.reasoningTokens === 3 &&
+    fallback.reportedUsage.cachedInputTokens === 12,
   fallback
 );
 

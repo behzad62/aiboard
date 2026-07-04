@@ -24,6 +24,7 @@ import type {
   ChatMessage,
   NativeToolDefinition,
   SelectedModel,
+  StreamUsage,
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
@@ -257,11 +258,15 @@ import {
 import { drainBuildNotes } from "./build-notes";
 import {
   abortError,
-  collectStream,
+  collectStreamWithUsage,
+  type CollectedStreamResult,
   isAbortError,
   type OrchestratorEvent,
 } from "./engine";
-import { estimateModelCallUsage } from "./token-usage";
+import {
+  estimateModelCallUsage,
+  resolveModelCallUsage,
+} from "./token-usage";
 import {
   createSkillEvidence,
   formatSkillEvidenceDigest,
@@ -403,9 +408,13 @@ export async function resolveBuildModelContent(input: {
   structuredOutput?: StructuredOutputFormat;
   attachments?: AttachmentPayload[];
   hooks?: BuildHooks;
-  collect: () => Promise<string>;
+  collect: () => Promise<string | CollectedStreamResult>;
   emitToken?: (token: string) => void;
-}): Promise<{ content: string; overrideUsed: boolean }> {
+}): Promise<{
+  content: string;
+  overrideUsed: boolean;
+  reportedUsage?: StreamUsage;
+}> {
   if (input.hooks?.modelCallOverride) {
     const content = await input.hooks.modelCallOverride({
       model: input.model,
@@ -420,9 +429,17 @@ export async function resolveBuildModelContent(input: {
     input.emitToken?.(content);
     return { content, overrideUsed: true };
   }
-  const content = await input.collect();
+  const collected = await input.collect();
+  const content =
+    typeof collected === "string" ? collected : collected.content;
   assertNonEmptyBenchmarkModelContent(content, input.hooks);
-  return { content, overrideUsed: false };
+  return {
+    content,
+    overrideUsed: false,
+    ...(typeof collected === "string" || !collected.reportedUsage
+      ? {}
+      : { reportedUsage: collected.reportedUsage }),
+  };
 }
 
 function assertNonEmptyBenchmarkModelContent(
@@ -3649,6 +3666,7 @@ export async function runBuildDiscussion(
       throw error;
     }
     let content: string;
+    let reportedUsage: StreamUsage | undefined;
     try {
       const resolved = await resolveBuildModelContent({
         model,
@@ -3661,7 +3679,7 @@ export async function runBuildDiscussion(
         hooks,
         emitToken: (token) => emit({ type: "message_token", messageId, token }),
         collect: () =>
-          collectStream(
+          collectStreamWithUsage(
             model.modelId,
             providerId,
             rawModel,
@@ -3687,6 +3705,7 @@ export async function runBuildDiscussion(
           ),
       });
       content = resolved.content;
+      reportedUsage = resolved.reportedUsage;
       if (nativeTools) {
         diagnostics.push({
           attempt: 1,
@@ -3761,10 +3780,11 @@ export async function runBuildDiscussion(
       createdAt: new Date().toISOString(),
     });
     emit({ type: "message_complete", messageId, content });
-    const usage = estimateModelCallUsage({
+    const usage = resolveModelCallUsage({
       messages,
       output: content,
       maxTokens: opts.maxTokens,
+      reportedUsage,
     });
     const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
     const estimatedUsd = pricing
@@ -3798,6 +3818,15 @@ export async function runBuildDiscussion(
         latencyMs: Date.now() - traceStartMs,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        usageSource: usage.usageSource,
+        reasoningTokens: usage.reasoningTokens,
+        cachedInputTokens: usage.cachedInputTokens,
+        cacheWriteInputTokens: usage.cacheWriteInputTokens,
+        inputAudioTokens: usage.inputAudioTokens,
+        outputAudioTokens: usage.outputAudioTokens,
+        providerCost: usage.providerCost,
+        providerCostUnit: usage.providerCostUnit,
         estimatedUsd,
         rawResponse: content,
         parsedResponseJson: traceParsedJson,
@@ -3819,6 +3848,14 @@ export async function runBuildDiscussion(
       totalTokens: usage.totalTokens,
       maxTokens: usage.maxTokens,
       estimated: usage.estimated,
+      usageSource: usage.usageSource,
+      reasoningTokens: usage.reasoningTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheWriteInputTokens: usage.cacheWriteInputTokens,
+      inputAudioTokens: usage.inputAudioTokens,
+      outputAudioTokens: usage.outputAudioTokens,
+      providerCost: usage.providerCost,
+      providerCostUnit: usage.providerCostUnit,
     });
     // Fold the call into the active Build budget window (aggregate per-model
     // tokens + estimated USD). Unknown-priced models leave USD null and surface

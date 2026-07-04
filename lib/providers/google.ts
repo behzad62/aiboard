@@ -204,16 +204,27 @@ export const googleProvider: AIProvider = {
       const pendingToolCalls: NativeToolCall[] = [];
       let reportedInputTokens: number | undefined;
       let reportedOutputTokens: number | undefined;
+      let reportedTotalTokens: number | undefined;
+      let reportedReasoningTokens: number | undefined;
+      let reportedCachedInputTokens: number | undefined;
       const captureGeminiUsage = (metadata: unknown): void => {
         const usage = metadata as
           | {
               promptTokenCount?: number;
               candidatesTokenCount?: number;
               thoughtsTokenCount?: number;
+              totalTokenCount?: number;
+              cachedContentTokenCount?: number;
             }
           | undefined;
         if (typeof usage?.promptTokenCount === "number") {
           reportedInputTokens = usage.promptTokenCount;
+        }
+        if (typeof usage?.totalTokenCount === "number") {
+          reportedTotalTokens = usage.totalTokenCount;
+        }
+        if (typeof usage?.cachedContentTokenCount === "number") {
+          reportedCachedInputTokens = usage.cachedContentTokenCount;
         }
         const candidateTokens =
           typeof usage?.candidatesTokenCount === "number"
@@ -223,8 +234,14 @@ export const googleProvider: AIProvider = {
           typeof usage?.thoughtsTokenCount === "number"
             ? usage.thoughtsTokenCount
             : undefined;
+        if (thoughtTokens != null) {
+          reportedReasoningTokens = thoughtTokens;
+        }
         if (candidateTokens != null || thoughtTokens != null) {
-          reportedOutputTokens = (candidateTokens ?? 0) + (thoughtTokens ?? 0);
+          reportedOutputTokens =
+            reportedTotalTokens != null && reportedInputTokens != null
+              ? Math.max(0, reportedTotalTokens - reportedInputTokens)
+              : (candidateTokens ?? 0) + (thoughtTokens ?? 0);
         }
       };
 
@@ -273,12 +290,21 @@ export const googleProvider: AIProvider = {
       for (const toolCall of pendingToolCalls) {
         yield { type: "tool_call", toolCall };
       }
-      if (reportedInputTokens != null || reportedOutputTokens != null) {
+      if (
+        reportedInputTokens != null ||
+        reportedOutputTokens != null ||
+        reportedTotalTokens != null ||
+        reportedReasoningTokens != null ||
+        reportedCachedInputTokens != null
+      ) {
         yield {
           type: "usage",
           usage: {
             inputTokens: reportedInputTokens,
             outputTokens: reportedOutputTokens,
+            totalTokens: reportedTotalTokens,
+            reasoningTokens: reportedReasoningTokens,
+            cachedInputTokens: reportedCachedInputTokens,
           },
         };
       }

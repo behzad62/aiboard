@@ -1284,6 +1284,15 @@ function validateBenchmarkModelCallTrace(record: BenchmarkModelCallTrace): void 
     !isOptionalFiniteNumber(record.latencyMs) ||
     !isOptionalFiniteNumber(record.inputTokens) ||
     !isOptionalFiniteNumber(record.outputTokens) ||
+    !isOptionalFiniteNumber(record.totalTokens) ||
+    !isOptionalString(record.usageSource) ||
+    !isOptionalFiniteNumber(record.reasoningTokens) ||
+    !isOptionalFiniteNumber(record.cachedInputTokens) ||
+    !isOptionalFiniteNumber(record.cacheWriteInputTokens) ||
+    !isOptionalFiniteNumber(record.inputAudioTokens) ||
+    !isOptionalFiniteNumber(record.outputAudioTokens) ||
+    !isOptionalFiniteNumber(record.providerCost) ||
+    !isOptionalString(record.providerCostUnit) ||
     !(record.estimatedUsd === undefined ||
       record.estimatedUsd === null ||
       isFiniteNumber(record.estimatedUsd)) ||

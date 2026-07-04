@@ -434,8 +434,16 @@ export interface BenchmarkModelCallTrace {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
-  /** "reported" when the provider returned real usage; "estimated" for chars/4 fallback. */
-  usageSource?: "reported" | "estimated";
+  totalTokens?: number;
+  /** "reported" when the provider returned full real usage; "partial" for mixed provider+estimate; "estimated" for chars/4 fallback. */
+  usageSource?: "reported" | "partial" | "estimated";
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputAudioTokens?: number;
+  outputAudioTokens?: number;
+  providerCost?: number;
+  providerCostUnit?: "usd" | "credits" | "unknown";
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;

@@ -283,11 +283,20 @@ export async function* streamAnthropicChat(
       // usage chunk before `done`.
       let reportedInputTokens: number | undefined;
       let reportedOutputTokens: number | undefined;
+      let reportedCachedInputTokens: number | undefined;
+      let reportedCacheWriteInputTokens: number | undefined;
       for await (const event of stream) {
         if (event.type === "message_start") {
           const usage = (
             event as unknown as {
-              message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+              message?: {
+                usage?: {
+                  input_tokens?: number;
+                  output_tokens?: number;
+                  cache_read_input_tokens?: number;
+                  cache_creation_input_tokens?: number;
+                };
+              };
             }
           ).message?.usage;
           if (typeof usage?.input_tokens === "number") {
@@ -296,12 +305,34 @@ export async function* streamAnthropicChat(
           if (typeof usage?.output_tokens === "number") {
             reportedOutputTokens = usage.output_tokens;
           }
+          if (typeof usage?.cache_read_input_tokens === "number") {
+            reportedCachedInputTokens = usage.cache_read_input_tokens;
+          }
+          if (typeof usage?.cache_creation_input_tokens === "number") {
+            reportedCacheWriteInputTokens = usage.cache_creation_input_tokens;
+          }
         } else if (event.type === "message_delta") {
           const usage = (
-            event as unknown as { usage?: { output_tokens?: number } }
+            event as unknown as {
+              usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              };
+            }
           ).usage;
+          if (typeof usage?.input_tokens === "number") {
+            reportedInputTokens = usage.input_tokens;
+          }
           if (typeof usage?.output_tokens === "number") {
             reportedOutputTokens = usage.output_tokens;
+          }
+          if (typeof usage?.cache_read_input_tokens === "number") {
+            reportedCachedInputTokens = usage.cache_read_input_tokens;
+          }
+          if (typeof usage?.cache_creation_input_tokens === "number") {
+            reportedCacheWriteInputTokens = usage.cache_creation_input_tokens;
           }
         }
         if (
@@ -350,12 +381,23 @@ export async function* streamAnthropicChat(
           yield { type: "tool_call", toolCall };
         }
       }
-      if (reportedInputTokens != null || reportedOutputTokens != null) {
+      if (
+        reportedInputTokens != null ||
+        reportedOutputTokens != null ||
+        reportedCachedInputTokens != null ||
+        reportedCacheWriteInputTokens != null
+      ) {
         yield {
           type: "usage",
           usage: {
             inputTokens: reportedInputTokens,
             outputTokens: reportedOutputTokens,
+            totalTokens:
+              reportedInputTokens != null && reportedOutputTokens != null
+                ? reportedInputTokens + reportedOutputTokens
+                : undefined,
+            cachedInputTokens: reportedCachedInputTokens,
+            cacheWriteInputTokens: reportedCacheWriteInputTokens,
           },
         };
       }

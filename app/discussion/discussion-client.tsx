@@ -503,7 +503,7 @@ function DiscussionPageInner() {
               id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
               at: new Date().toLocaleTimeString(),
               phase: "model_completed",
-              message: `${event.modelName}: estimated ${event.totalTokens.toLocaleString()} tokens (${event.inputTokens.toLocaleString()} in / ${event.outputTokens.toLocaleString()} out)`,
+              message: `${event.modelName}: ${event.usageSource === "reported" ? "reported" : event.usageSource === "partial" ? "partially reported" : "estimated"} ${event.totalTokens.toLocaleString()} tokens (${event.inputTokens.toLocaleString()} in / ${event.outputTokens.toLocaleString()} out)`,
               modelName: event.modelName,
               providerId: event.providerId,
               round: event.round,
@@ -513,6 +513,14 @@ function DiscussionPageInner() {
                 totalTokens: event.totalTokens,
                 maxTokens: event.maxTokens,
                 estimated: event.estimated,
+                usageSource: event.usageSource,
+                reasoningTokens: event.reasoningTokens,
+                cachedInputTokens: event.cachedInputTokens,
+                cacheWriteInputTokens: event.cacheWriteInputTokens,
+                inputAudioTokens: event.inputAudioTokens,
+                outputAudioTokens: event.outputAudioTokens,
+                providerCost: event.providerCost,
+                providerCostUnit: event.providerCostUnit,
               },
             };
             const next: DiagnosticEntry[] = [

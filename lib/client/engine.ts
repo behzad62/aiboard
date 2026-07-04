@@ -36,6 +36,7 @@ import {
   type ModelContextProfile,
   type NativeToolDefinition,
   type SelectedModel,
+  type StreamUsage,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
@@ -54,7 +55,11 @@ import type { AttachmentPayload } from "@/lib/attachments/types";
 import { buildAttachmentPromptSection } from "@/lib/attachments/prompt-text";
 import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
-import { estimateModelCallUsage } from "./token-usage";
+import {
+  mergeStreamUsage,
+  resolveModelCallUsage,
+  type ResolvedTokenUsage,
+} from "./token-usage";
 import {
   createGameModelCallTrace,
   type GameAIDiagnosticLike,
@@ -72,6 +77,10 @@ type EventCallback = (event: OrchestratorEvent) => void;
 type StructuredTraceValidation =
   | { ok: true; parsedResponseJson?: string }
   | { ok: false; message: string };
+export interface CollectedStreamResult {
+  content: string;
+  reportedUsage?: StreamUsage;
+}
 
 const runningDiscussions = new Set<string>();
 const abortControllers = new Map<string, AbortController>();
@@ -170,6 +179,51 @@ export async function collectStream(
   nativeTools?: NativeToolDefinition[],
   hostedBuildTools = false
 ): Promise<string> {
+  const result = await collectStreamWithUsage(
+    modelId,
+    providerId,
+    model,
+    messages,
+    maxTokens,
+    temperature,
+    reasoningEffort,
+    attachments,
+    onToken,
+    signal,
+    stopWhen,
+    structuredOutput,
+    onProviderRetry,
+    contextProfile,
+    allowWebSearch,
+    nativeTools,
+    hostedBuildTools
+  );
+  return result.content;
+}
+
+export async function collectStreamWithUsage(
+  modelId: string,
+  providerId: string,
+  model: string,
+  messages: ChatMessage[],
+  maxTokens: number,
+  temperature: number,
+  reasoningEffort: ReasoningEffort,
+  attachments: AttachmentPayload[],
+  onToken?: (token: string) => void,
+  signal?: AbortSignal,
+  stopWhen?: (content: string) => boolean,
+  structuredOutput?: StructuredOutputFormat,
+  onProviderRetry?: (retry: {
+    attempt: number;
+    delayMs: number;
+    message: string;
+  }) => void,
+  contextProfile?: ModelContextProfile,
+  allowWebSearch = true,
+  nativeTools?: NativeToolDefinition[],
+  hostedBuildTools = false
+): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
     const customModel = getCustomModelByFullId(modelId);
@@ -186,6 +240,7 @@ export async function collectStream(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
     let customContent = "";
+    let customReportedUsage: StreamUsage | undefined;
     return withTransientRetry(
       async () => {
         for await (const chunk of streamCustomChat(customModel, {
@@ -218,11 +273,20 @@ export async function collectStream(
               onToken?.(serialized);
             }
           }
+          if (chunk.type === "usage") {
+            customReportedUsage = mergeStreamUsage(
+              customReportedUsage,
+              chunk.usage
+            );
+          }
           if (chunk.type === "error") {
             throw new Error(chunk.error ?? "Stream error");
           }
         }
-        return customContent;
+        return {
+          content: customContent,
+          ...(customReportedUsage ? { reportedUsage: customReportedUsage } : {}),
+        };
       },
       () => customContent.length > 0,
       modelId,
@@ -257,6 +321,7 @@ export async function collectStream(
     : messages;
 
   let content = "";
+  let reportedUsage: StreamUsage | undefined;
   return withTransientRetry(
     async () => {
       for await (const chunk of provider.streamChat({
@@ -292,11 +357,17 @@ export async function collectStream(
             onToken?.(serialized);
           }
         }
+        if (chunk.type === "usage") {
+          reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
+        }
         if (chunk.type === "error") {
           throw new Error(chunk.error ?? "Stream error");
         }
       }
-      return content;
+      return {
+        content,
+        ...(reportedUsage ? { reportedUsage } : {}),
+      };
     },
     () => content.length > 0,
     modelId,
@@ -405,15 +476,8 @@ export async function runDiscussion(
       providerId: string;
       round: number;
       label: string;
-      messages: ChatMessage[];
-      output: string;
-      maxTokens: number;
+      usage: ResolvedTokenUsage;
     }): void => {
-      const usage = estimateModelCallUsage({
-        messages: input.messages,
-        output: input.output,
-        maxTokens: input.maxTokens,
-      });
       emit({
         type: "token_usage",
         messageId: input.messageId,
@@ -422,11 +486,19 @@ export async function runDiscussion(
         providerId: input.providerId,
         round: input.round,
         label: input.label,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        totalTokens: usage.totalTokens,
-        maxTokens: usage.maxTokens,
-        estimated: usage.estimated,
+        inputTokens: input.usage.inputTokens,
+        outputTokens: input.usage.outputTokens,
+        totalTokens: input.usage.totalTokens,
+        maxTokens: input.usage.maxTokens,
+        estimated: input.usage.estimated,
+        usageSource: input.usage.usageSource,
+        reasoningTokens: input.usage.reasoningTokens,
+        cachedInputTokens: input.usage.cachedInputTokens,
+        cacheWriteInputTokens: input.usage.cacheWriteInputTokens,
+        inputAudioTokens: input.usage.inputAudioTokens,
+        outputAudioTokens: input.usage.outputAudioTokens,
+        providerCost: input.usage.providerCost,
+        providerCostUnit: input.usage.providerCostUnit,
       });
     };
 
@@ -445,7 +517,7 @@ export async function runDiscussion(
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
       validateStructuredOutput?: (output: string) => StructuredTraceValidation;
-    }): Promise<string> => {
+    }): Promise<{ output: string; usage: ResolvedTokenUsage }> => {
       const startedAt = new Date().toISOString();
       const startMs = Date.now();
       const promptText = input.messages
@@ -454,7 +526,7 @@ export async function runDiscussion(
       const diagnostics: GameAIDiagnosticLike[] = [];
 
       try {
-        const output = await collectStream(
+        const collected = await collectStreamWithUsage(
           input.modelId,
           input.providerId,
           input.rawModel,
@@ -474,10 +546,12 @@ export async function runDiscussion(
               message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
             })
         );
-        const usage = estimateModelCallUsage({
+        const output = collected.content;
+        const usage = resolveModelCallUsage({
           messages: input.messages,
           output,
           maxTokens: input.maxTokens,
+          reportedUsage: collected.reportedUsage,
         });
         const validation = input.validateStructuredOutput?.(output);
         const traceParsedJson =
@@ -503,6 +577,15 @@ export async function runDiscussion(
             latencyMs: Date.now() - startMs,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            usageSource: usage.usageSource,
+            reasoningTokens: usage.reasoningTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            cacheWriteInputTokens: usage.cacheWriteInputTokens,
+            inputAudioTokens: usage.inputAudioTokens,
+            outputAudioTokens: usage.outputAudioTokens,
+            providerCost: usage.providerCost,
+            providerCostUnit: usage.providerCostUnit,
             rawResponse: output,
             parsedResponseJson: traceParsedJson,
             diagnostics,
@@ -510,7 +593,7 @@ export async function runDiscussion(
             error: validation?.ok === false ? validation.message : undefined,
           })
         );
-        return output;
+        return { output, usage };
       } catch (error) {
         await recordBenchmarkModelCallTrace(
           createGameModelCallTrace({
@@ -687,7 +770,7 @@ export async function runDiscussion(
             message: `${model.displayName} is generating a response`,
           });
 
-          const content = await runTracedModelCall({
+          const { output: content, usage } = await runTracedModelCall({
             modelId: model.modelId,
             providerId,
             rawModel: modelName,
@@ -707,9 +790,7 @@ export async function runDiscussion(
             providerId,
             round,
             label: `${model.displayName} round ${round}`,
-            messages,
-            output: content,
-            maxTokens: roundMaxTokens,
+            usage,
           });
 
           insertMessage({
@@ -806,30 +887,32 @@ export async function runDiscussion(
                 content: buildConvergencePrompt(discussion.topic, voteTranscript),
               },
             ];
-            const voteText = await runTracedModelCall({
-              modelId: model.modelId,
-              providerId,
-              rawModel: modelName,
-              label: `${model.displayName} convergence vote`,
-              messages: voteMessages,
-              maxTokens: 200,
-              temperature: 0.2,
-              reasoningEffort: "low",
-              attachments: [],
-              structuredOutput: buildConvergenceVoteResponseFormat(),
-              validateStructuredOutput: (output) => {
-                const parsed = parseJsonResponse<{ score: number; reason?: string }>(
-                  output
-                );
-                return typeof parsed?.score === "number"
-                  ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
-                  : {
-                      ok: false,
-                      message:
-                        "Convergence vote response could not be parsed as JSON with a numeric score.",
-                    };
-              },
-            });
+            const { output: voteText, usage: voteUsage } =
+              await runTracedModelCall({
+                modelId: model.modelId,
+                providerId,
+                rawModel: modelName,
+                label: `${model.displayName} convergence vote`,
+                messages: voteMessages,
+                maxTokens: 200,
+                temperature: 0.2,
+                reasoningEffort: "low",
+                attachments: [],
+                structuredOutput: buildConvergenceVoteResponseFormat(),
+                validateStructuredOutput: (output) => {
+                  const parsed = parseJsonResponse<{
+                    score: number;
+                    reason?: string;
+                  }>(output);
+                  return typeof parsed?.score === "number"
+                    ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
+                    : {
+                        ok: false,
+                        message:
+                          "Convergence vote response could not be parsed as JSON with a numeric score.",
+                      };
+                },
+              });
             emitTokenUsage({
               messageId: uuidv4(),
               modelId: model.modelId,
@@ -837,9 +920,7 @@ export async function runDiscussion(
               providerId,
               round,
               label: `${model.displayName} convergence vote`,
-              messages: voteMessages,
-              output: voteText,
-              maxTokens: 200,
+              usage: voteUsage,
             });
             const parsed = parseJsonResponse<{ score: number; reason?: string }>(
               voteText
@@ -896,7 +977,7 @@ export async function runDiscussion(
       },
     ];
 
-    const judgeRaw = await runTracedModelCall({
+    const { output: judgeRaw, usage: judgeUsage } = await runTracedModelCall({
       modelId: judgeFullId,
       providerId: judgeProviderId,
       rawModel: judgeModel,
@@ -915,9 +996,7 @@ export async function runDiscussion(
       providerId: judgeProviderId,
       round: config.maxRounds + 1,
       label: "Judge synthesis",
-      messages: judgeMessages,
-      output: judgeRaw,
-      maxTokens: finalMaxTokens,
+      usage: judgeUsage,
     });
 
     const { answer, confidence, dissent } = extractJudgeResult(judgeRaw);

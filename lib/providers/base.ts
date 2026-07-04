@@ -88,6 +88,14 @@ export interface ChatParams {
 export interface StreamUsage {
   inputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputAudioTokens?: number;
+  outputAudioTokens?: number;
+  providerCost?: number;
+  providerCostUnit?: "usd" | "credits" | "unknown";
 }
 
 export interface StreamChunk {

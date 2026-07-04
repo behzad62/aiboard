@@ -19,6 +19,14 @@ export interface DiagnosticEntry {
     totalTokens: number;
     maxTokens: number;
     estimated: boolean;
+    usageSource?: "reported" | "partial" | "estimated";
+    reasoningTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    inputAudioTokens?: number;
+    outputAudioTokens?: number;
+    providerCost?: number;
+    providerCostUnit?: "usd" | "credits" | "unknown";
   };
 }
 
@@ -70,6 +78,16 @@ function totalTokens(entries: DiagnosticEntry[]): number {
   );
 }
 
+function tokenUsagePrefix(usage: NonNullable<DiagnosticEntry["tokenUsage"]>): string {
+  return usage.usageSource === "reported" ? "" : "~";
+}
+
+function tokenUsageLabel(usage: NonNullable<DiagnosticEntry["tokenUsage"]>): string {
+  if (usage.usageSource === "reported") return "reported";
+  if (usage.usageSource === "partial") return "partial";
+  return "estimated";
+}
+
 function EntriesList({
   entries,
   roundLabel = "round",
@@ -115,9 +133,11 @@ function EntriesList({
               )}
               {showEntryTokenUsage && entry.tokenUsage && (
                 <span>
-                  · ~{formatTokens(entry.tokenUsage.totalTokens)} tokens (
+                  · {tokenUsagePrefix(entry.tokenUsage)}
+                  {formatTokens(entry.tokenUsage.totalTokens)} tokens (
                   {formatTokens(entry.tokenUsage.inputTokens)} in /{" "}
-                  {formatTokens(entry.tokenUsage.outputTokens)} out)
+                  {formatTokens(entry.tokenUsage.outputTokens)} out,{" "}
+                  {tokenUsageLabel(entry.tokenUsage)})
                 </span>
               )}
             </div>
@@ -141,7 +161,7 @@ function LogHeader({ entries }: { entries: DiagnosticEntry[] }) {
       )}
       {tokens > 0 && (
         <span className="font-mono text-xs text-muted-foreground">
-          ~{formatTokens(tokens)} tok
+          {formatTokens(tokens)} tok
         </span>
       )}
     </span>

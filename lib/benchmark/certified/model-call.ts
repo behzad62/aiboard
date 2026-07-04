@@ -8,7 +8,11 @@ import {
   streamCustomChat,
 } from "@/lib/client/providers";
 import { getUserSettings } from "@/lib/client/store";
-import { estimateModelCallUsage } from "@/lib/client/token-usage";
+import {
+  estimateModelCallUsage,
+  mergeStreamUsage,
+  resolveModelCallUsage,
+} from "@/lib/client/token-usage";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import {
   formatModelId,
@@ -16,6 +20,7 @@ import {
   type ChatMessage,
   type ChatParams,
   type SelectedModel,
+  type StreamUsage,
   type StreamChunk,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
@@ -127,7 +132,14 @@ export interface CertifiedModelCallResult {
    * "reported" when the provider surfaced real billed token counts for this
    * call; "estimated" when we fell back to the chars/4 approximation.
    */
-  usageSource: "reported" | "estimated";
+  usageSource: "reported" | "partial" | "estimated";
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputAudioTokens?: number;
+  outputAudioTokens?: number;
+  providerCost?: number;
+  providerCostUnit?: "usd" | "credits" | "unknown";
 }
 
 /**
@@ -208,8 +220,7 @@ async function callCertifiedModelOnce(
   let parsePhase = false;
   // Provider-reported billed token counts, captured from the "usage" chunk when
   // the provider emits one. Preferred over the chars/4 estimate below.
-  let reportedInputTokens: number | undefined;
-  let reportedOutputTokens: number | undefined;
+  let reportedUsage: StreamUsage | undefined;
   const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
   const runStartedMs = new Date(input.context.startedAt).getTime();
 
@@ -246,12 +257,7 @@ async function callCertifiedModelOnce(
           throw error;
         }
       } else if (chunk.type === "usage" && chunk.usage) {
-        if (typeof chunk.usage.inputTokens === "number") {
-          reportedInputTokens = chunk.usage.inputTokens;
-        }
-        if (typeof chunk.usage.outputTokens === "number") {
-          reportedOutputTokens = chunk.usage.outputTokens;
-        }
+        reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
       } else if (chunk.type === "error") {
         throw new Error(chunk.error ?? "Certified provider returned an error.");
       }
@@ -270,8 +276,7 @@ async function callCertifiedModelOnce(
       messages,
       output: rawResponse,
       maxTokens: input.maxTokens,
-      reportedInputTokens,
-      reportedOutputTokens,
+      reportedUsage,
     });
     const estimatedUsd = estimateCertifiedModelUsd({
       fullModelId,
@@ -296,7 +301,15 @@ async function callCertifiedModelOnce(
       latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
       usageSource: usage.usageSource,
+      reasoningTokens: usage.reasoningTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheWriteInputTokens: usage.cacheWriteInputTokens,
+      inputAudioTokens: usage.inputAudioTokens,
+      outputAudioTokens: usage.outputAudioTokens,
+      providerCost: usage.providerCost,
+      providerCostUnit: usage.providerCostUnit,
       estimatedUsd,
       rawResponse,
       parsedResponseJson:
@@ -337,6 +350,13 @@ async function callCertifiedModelOnce(
       outputTokens: usage.outputTokens,
       estimatedUsd,
       usageSource: usage.usageSource,
+      reasoningTokens: usage.reasoningTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheWriteInputTokens: usage.cacheWriteInputTokens,
+      inputAudioTokens: usage.inputAudioTokens,
+      outputAudioTokens: usage.outputAudioTokens,
+      providerCost: usage.providerCost,
+      providerCostUnit: usage.providerCostUnit,
     };
   } catch (error) {
     if (error instanceof CertifiedBudgetExceededError) {
@@ -347,8 +367,7 @@ async function callCertifiedModelOnce(
       messages,
       output: rawResponse,
       maxTokens: input.maxTokens,
-      reportedInputTokens,
-      reportedOutputTokens,
+      reportedUsage,
     });
     const latencyMs = Math.max(0, Date.now() - startedMs);
     const trace = createCertifiedModelCallTrace({
@@ -367,7 +386,15 @@ async function callCertifiedModelOnce(
       latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
       usageSource: usage.usageSource,
+      reasoningTokens: usage.reasoningTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheWriteInputTokens: usage.cacheWriteInputTokens,
+      inputAudioTokens: usage.inputAudioTokens,
+      outputAudioTokens: usage.outputAudioTokens,
+      providerCost: usage.providerCost,
+      providerCostUnit: usage.providerCostUnit,
       estimatedUsd: estimateCertifiedModelUsd({
         fullModelId,
         inputTokens: usage.inputTokens,
@@ -635,43 +662,6 @@ function parseCertifiedStructuredOutput(
     if (!options.allowInvalid) throw error;
     return { error: errorMessage(error) };
   }
-}
-
-/**
- * Resolve the token counts to record for a model call, preferring the
- * provider's real billed counts (from the "usage" stream chunk) and falling
- * back to the chars/4 estimate per side. `usageSource` is "reported" when at
- * least one side was provider-reported, otherwise "estimated".
- */
-function resolveModelCallUsage(input: {
-  messages: ChatMessage[];
-  output: string;
-  maxTokens: number;
-  reportedInputTokens?: number;
-  reportedOutputTokens?: number;
-}): { inputTokens: number; outputTokens: number; usageSource: "reported" | "estimated" } {
-  const estimate = estimateModelCallUsage({
-    messages: input.messages,
-    output: input.output,
-    maxTokens: input.maxTokens,
-  });
-  const inputReported =
-    typeof input.reportedInputTokens === "number" &&
-    Number.isFinite(input.reportedInputTokens) &&
-    input.reportedInputTokens >= 0;
-  const outputReported =
-    typeof input.reportedOutputTokens === "number" &&
-    Number.isFinite(input.reportedOutputTokens) &&
-    input.reportedOutputTokens >= 0;
-  return {
-    inputTokens: inputReported
-      ? (input.reportedInputTokens as number)
-      : estimate.inputTokens,
-    outputTokens: outputReported
-      ? (input.reportedOutputTokens as number)
-      : estimate.outputTokens,
-    usageSource: inputReported || outputReported ? "reported" : "estimated",
-  };
 }
 
 function estimateCertifiedModelUsd(input: {

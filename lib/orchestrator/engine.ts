@@ -81,6 +81,14 @@ export type OrchestratorEvent =
       totalTokens: number;
       maxTokens: number;
       estimated: boolean;
+      usageSource?: "reported" | "partial" | "estimated";
+      reasoningTokens?: number;
+      cachedInputTokens?: number;
+      cacheWriteInputTokens?: number;
+      inputAudioTokens?: number;
+      outputAudioTokens?: number;
+      providerCost?: number;
+      providerCostUnit?: "usd" | "credits" | "unknown";
     }
   | {
       type: "build_usage";

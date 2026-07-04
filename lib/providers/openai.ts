@@ -152,6 +152,9 @@ async function* streamOpenAIResponses(
     >();
     let reportedInputTokens: number | undefined;
     let reportedOutputTokens: number | undefined;
+    let reportedTotalTokens: number | undefined;
+    let reportedReasoningTokens: number | undefined;
+    let reportedCachedInputTokens: number | undefined;
     const stream = await client.responses.create({
       model: params.model,
       ...(instructions ? { instructions } : {}),
@@ -193,7 +196,13 @@ async function* streamOpenAIResponses(
       const responseUsage = (
         event as unknown as {
           response?: {
-            usage?: { input_tokens?: number; output_tokens?: number } | null;
+            usage?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              total_tokens?: number;
+              input_tokens_details?: { cached_tokens?: number };
+              output_tokens_details?: { reasoning_tokens?: number };
+            } | null;
           };
         }
       ).response?.usage;
@@ -203,6 +212,20 @@ async function* streamOpenAIResponses(
         }
         if (typeof responseUsage.output_tokens === "number") {
           reportedOutputTokens = responseUsage.output_tokens;
+        }
+        if (typeof responseUsage.total_tokens === "number") {
+          reportedTotalTokens = responseUsage.total_tokens;
+        }
+        if (typeof responseUsage.input_tokens_details?.cached_tokens === "number") {
+          reportedCachedInputTokens =
+            responseUsage.input_tokens_details.cached_tokens;
+        }
+        if (
+          typeof responseUsage.output_tokens_details?.reasoning_tokens ===
+          "number"
+        ) {
+          reportedReasoningTokens =
+            responseUsage.output_tokens_details.reasoning_tokens;
         }
       }
       if (event.type === "response.output_text.delta" && event.delta) {
@@ -298,12 +321,21 @@ async function* streamOpenAIResponses(
     )) {
       yield { type: "tool_call", toolCall };
     }
-    if (reportedInputTokens != null || reportedOutputTokens != null) {
+    if (
+      reportedInputTokens != null ||
+      reportedOutputTokens != null ||
+      reportedTotalTokens != null ||
+      reportedReasoningTokens != null ||
+      reportedCachedInputTokens != null
+    ) {
       yield {
         type: "usage",
         usage: {
           inputTokens: reportedInputTokens,
           outputTokens: reportedOutputTokens,
+          totalTokens: reportedTotalTokens,
+          reasoningTokens: reportedReasoningTokens,
+          cachedInputTokens: reportedCachedInputTokens,
         },
       };
     }

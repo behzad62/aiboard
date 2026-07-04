@@ -30,7 +30,15 @@ export interface CreateGameModelCallTraceInput {
   latencyMs?: number;
   inputTokens?: number;
   outputTokens?: number;
-  usageSource?: "reported" | "estimated";
+  totalTokens?: number;
+  usageSource?: "reported" | "partial" | "estimated";
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputAudioTokens?: number;
+  outputAudioTokens?: number;
+  providerCost?: number;
+  providerCostUnit?: "usd" | "credits" | "unknown";
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;
@@ -93,7 +101,29 @@ export function createGameModelCallTrace(
     ...(input.outputTokens !== undefined
       ? { outputTokens: input.outputTokens }
       : {}),
+    ...(input.totalTokens !== undefined ? { totalTokens: input.totalTokens } : {}),
     ...(input.usageSource ? { usageSource: input.usageSource } : {}),
+    ...(input.reasoningTokens !== undefined
+      ? { reasoningTokens: input.reasoningTokens }
+      : {}),
+    ...(input.cachedInputTokens !== undefined
+      ? { cachedInputTokens: input.cachedInputTokens }
+      : {}),
+    ...(input.cacheWriteInputTokens !== undefined
+      ? { cacheWriteInputTokens: input.cacheWriteInputTokens }
+      : {}),
+    ...(input.inputAudioTokens !== undefined
+      ? { inputAudioTokens: input.inputAudioTokens }
+      : {}),
+    ...(input.outputAudioTokens !== undefined
+      ? { outputAudioTokens: input.outputAudioTokens }
+      : {}),
+    ...(input.providerCost !== undefined
+      ? { providerCost: input.providerCost }
+      : {}),
+    ...(input.providerCostUnit
+      ? { providerCostUnit: input.providerCostUnit }
+      : {}),
     ...(input.estimatedUsd !== undefined
       ? { estimatedUsd: input.estimatedUsd }
       : {}),
