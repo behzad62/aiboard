@@ -2,6 +2,7 @@
   "name": "ai-discussion-board",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "scripts": {
     "copy-runner": "node scripts/build-runner.mjs",
     "predev": "npm run copy-runner",
@@ -20,6 +21,7 @@
     "test:benchmark-corpus": "tsx scripts/review-benchmark-corpus.mts && tsx scripts/test-gameiq-scenarios.mts && tsx scripts/test-toolreliability-cases.mts && tsx scripts/test-fireworks-scenarios.mts && tsx scripts/test-benchmark-case-manifests.mts",
     "test:fireworks": "tsx scripts/test-fireworks-engine.mts && tsx scripts/test-fireworks-hidden-view.mts && tsx scripts/test-fireworks-ai-schema.mts && tsx scripts/test-fireworks-scoring.mts && tsx scripts/test-fireworks-scenarios.mts && tsx scripts/test-fireworks-calibration-bots.mts && tsx scripts/test-certified-fireworks-ui.mts && tsx scripts/test-fireworks-ui.tsx && tsx scripts/test-certified-fireworks-runner.mts && tsx scripts/test-certified-e2e-fireworks-teamiq.mts",
     "test:certified": "npm run test:benchmark:unit && npm run test:benchmark:tracks && npm run test:benchmark:workbench && npm run test:benchmark:e2e && npm run test:gameiq-guards",
+    "test:openrouter-live": "tsx scripts/test-openrouter-structured-output-live.mts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

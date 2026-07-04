@@ -44,7 +44,8 @@ export const openrouterProvider: AIProvider = {
       client,
       params,
       "openrouter",
-      "OpenRouter"
+      "OpenRouter",
+      "max_tokens"
     );
   },
 };

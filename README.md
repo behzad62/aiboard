@@ -127,4 +127,6 @@ Optional donations: [paypal.me/behzadashams](https://paypal.me/behzadashams)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](LICENSE).
+
+Copyright (C) 2026 Behzad Shams. See [NOTICE](NOTICE).

@@ -162,6 +162,20 @@ export function openAICompatibleNativeToolField(
   };
 }
 
+export function openAICompatibleStreamOptionsField(
+  providerId: string,
+  structuredOutput?: ChatParams["structuredOutput"]
+): {
+  stream_options?: { include_usage: true };
+} {
+  if (providerId !== "openai" && providerId !== "openrouter") return {};
+  // OpenRouter's provider.require_parameters applies to every extra request
+  // parameter. Structured-output calls use that routing guard, while
+  // stream_options is not listed on OpenRouter endpoint parameter manifests.
+  if (providerId === "openrouter" && structuredOutput) return {};
+  return { stream_options: { include_usage: true } };
+}
+
 /**
  * Mark the stable prompt prefix of the last user message as ephemeral
  * cacheable content (mirrors the native Anthropic provider's split at the
@@ -318,14 +332,12 @@ export async function* streamOpenAICompatibleChat(
         }
       : {};
 
-  // Ask OpenAI/OpenRouter to append a final usage-only chunk. Local
-  // OpenAI-compatible servers (Ollama, LM Studio) can reject unknown stream
-  // options, so only the hosted providers opt in; if a custom endpoint happens
-  // to include usage anyway, the parsing below still picks it up.
-  const streamOptionsField =
-    providerId === "openai" || providerId === "openrouter"
-      ? { stream_options: { include_usage: true } }
-      : {};
+  // Ask OpenAI/OpenRouter to append a final usage-only chunk where that does not
+  // conflict with OpenRouter strict provider-parameter routing.
+  const streamOptionsField = openAICompatibleStreamOptionsField(
+    providerId,
+    params.structuredOutput
+  );
 
   try {
     const pendingToolCalls = new Map<

@@ -19,6 +19,10 @@ const connectFourAIModule = await import("../lib/games/connect-four/ai").catch(
 const providerModule = await import("../lib/providers/structured-output").catch(
   (err: unknown) => err
 );
+const openAICompatModule = await import("../lib/providers/openai-compat").catch(
+  (err: unknown) => err
+);
+const fs = await import("node:fs/promises");
 
 check(
   "Build module exports architect structured-output schema",
@@ -32,6 +36,23 @@ check(
     typeof providerModule.googleStructuredOutputConfig === "function" &&
     typeof providerModule.anthropicStructuredToolConfig === "function",
   providerModule instanceof Error ? providerModule.message : Object.keys(providerModule)
+);
+check(
+  "OpenAI-compatible stream-options helper exists",
+  !(openAICompatModule instanceof Error) &&
+    typeof openAICompatModule.openAICompatibleStreamOptionsField === "function",
+  openAICompatModule instanceof Error
+    ? openAICompatModule.message
+    : Object.keys(openAICompatModule)
+);
+const openRouterProviderSource = await fs.readFile(
+  new URL("../lib/providers/openrouter.ts", import.meta.url),
+  "utf8"
+);
+check(
+  "OpenRouter provider uses max_tokens for provider-parameter routing",
+  openRouterProviderSource.includes('"max_tokens"'),
+  openRouterProviderSource
 );
 check(
   "JSON-producing app modules expose structured-output schemas",
@@ -64,7 +85,9 @@ if (
   providerModule instanceof Error ||
   typeof providerModule.openAICompatibleStructuredOutputField !== "function" ||
   typeof providerModule.googleStructuredOutputConfig !== "function" ||
-  typeof providerModule.anthropicStructuredToolConfig !== "function"
+  typeof providerModule.anthropicStructuredToolConfig !== "function" ||
+  openAICompatModule instanceof Error ||
+  typeof openAICompatModule.openAICompatibleStreamOptionsField !== "function"
 ) {
   process.exit(1);
 }
@@ -78,6 +101,7 @@ const {
   googleStructuredOutputConfig,
   openAICompatibleStructuredOutputField,
 } = providerModule;
+const { openAICompatibleStreamOptionsField } = openAICompatModule;
 
 const format = buildArchitectActionResponseFormat();
 
@@ -122,6 +146,24 @@ check(
   "OpenAI structured-output calls do not receive OpenRouter routing params",
   !("provider" in openAIField),
   openAIField
+);
+
+check(
+  "OpenRouter structured-output calls omit stream_options so require_parameters can route",
+  Object.keys(openAICompatibleStreamOptionsField("openrouter", format)).length === 0,
+  openAICompatibleStreamOptionsField("openrouter", format)
+);
+check(
+  "OpenRouter text-mode calls still request usage stream options",
+  openAICompatibleStreamOptionsField("openrouter", undefined).stream_options
+    ?.include_usage === true,
+  openAICompatibleStreamOptionsField("openrouter", undefined)
+);
+check(
+  "OpenAI structured-output calls keep usage stream options",
+  openAICompatibleStreamOptionsField("openai", format).stream_options
+    ?.include_usage === true,
+  openAICompatibleStreamOptionsField("openai", format)
 );
 
 const customField = openAICompatibleStructuredOutputField("custom", format);
