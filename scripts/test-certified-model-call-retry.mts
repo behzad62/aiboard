@@ -81,6 +81,12 @@ check(
   "empty response classifies transient",
   classifyProviderFailure("Certified provider returned an empty response.") === "transient"
 );
+const genericOpenAiProcessingError =
+  "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 12857d04-3d48-4f42-821c-7ef7eba4efc3 in your message.";
+check(
+  "generic OpenAI processing error classifies transient",
+  classifyProviderFailure(genericOpenAiProcessingError) === "transient"
+);
 check(
   "quota-depleted classifies fatal (fatal wins over 429 in the same message)",
   classifyProviderFailure(
@@ -148,6 +154,38 @@ check(
         trace.retryHistory.some((attempt) => attempt.status === "parsed")
       ),
     traces
+  );
+}
+
+{
+  let calls = 0;
+  async function* flakyGenericOpenAiError(): AsyncIterable<StreamChunk> {
+    calls++;
+    if (calls === 1) {
+      throw new Error(genericOpenAiProcessingError);
+    }
+    yield { type: "token", content: '{"action":{"column":2}}' };
+    yield { type: "done" };
+  }
+
+  const context = makeTestContext();
+  const result = await callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-retry-generic-openai-error",
+    participantId: "p",
+    streamChat: () => flakyGenericOpenAiError(),
+    retryDelaysMs: [0, 0],
+  });
+  check(
+    "generic OpenAI processing error retried to success",
+    result.rawResponse === '{"action":{"column":2}}' && calls === 2,
+    { rawResponse: result.rawResponse, calls }
   );
 }
 

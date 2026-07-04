@@ -46,6 +46,10 @@ checkStatus(
   "There is a billing problem with your account",
   "provider_unavailable"
 );
+checkStatus(
+  "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 12857d04-3d48-4f42-821c-7ef7eba4efc3 in your message.",
+  "provider_unavailable"
+);
 
 // --- REGRESSION GUARDS: the fix must NOT reclassify budget or genuine-harness
 // errors. classifyProviderFailure is only consulted AFTER the budget branch,

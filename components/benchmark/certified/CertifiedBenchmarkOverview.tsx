@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  duration,
+  duration as formatDuration,
   formatNormalizedScore,
   formatScore,
   pct,
@@ -745,7 +745,10 @@ function CertifiedFullStatGrid({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <CertifiedStat label="Avg duration" value={duration(summary.averageDurationMs)} />
+        <CertifiedStat
+          label="Avg duration"
+          value={formatDuration(summary.averageDurationMs)}
+        />
       </div>
     </div>
   );
@@ -813,7 +816,7 @@ function CertifiedLeaderboard({
         </CardContent>
       ) : (
         <CardContent className="overflow-x-auto">
-          <table className="w-full min-w-[920px] text-sm">
+          <table className="w-full min-w-[1020px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="py-2 pr-3 font-medium">Team or model</th>
@@ -826,6 +829,7 @@ function CertifiedLeaderboard({
                 <th className="px-3 py-2 text-right font-medium">Efficiency</th>
                 <th className="px-3 py-2 text-right font-medium">Tool</th>
                 <th className="px-3 py-2 text-right font-medium">Tokens</th>
+                <th className="px-3 py-2 text-right font-medium">Time</th>
                 <th className="py-2 pl-3 text-right font-medium">Cost</th>
                 <th className="py-2 pl-3 text-right font-medium">Actions</th>
               </tr>
@@ -891,6 +895,14 @@ function CertifiedLeaderboard({
                     {row.tokensPerPass != null && (
                       <div className="text-xs text-muted-foreground">
                         {formatTokenCount(row.tokensPerPass)}/pass
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    <div>{formatDuration(row.durationMs)}</div>
+                    {row.speedPerPassMs != null && (
+                      <div className="text-xs text-muted-foreground">
+                        {formatDuration(row.speedPerPassMs)}/pass
                       </div>
                     )}
                   </td>
@@ -1008,7 +1020,7 @@ function buildRecommendations(
     recommendations.push({
       label: "Fastest",
       name: fastest.label,
-      value: duration(fastest.averageDurationMs),
+      value: formatDuration(fastest.averageDurationMs),
     });
   }
   if (tool) {
@@ -1105,6 +1117,8 @@ interface CertifiedLeaderboardRow {
   toolReliabilityScore: number | null;
   averageCostUsd: number | null;
   averageDurationMs: number | null;
+  durationMs: number | null;
+  speedPerPassMs: number | null;
   totalTokens: number | null;
   tokensPerPass: number | null;
   costBasis: "usd" | "tokens" | null;
@@ -1367,6 +1381,11 @@ function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | null {
       readNumber(row.averageDurationMs) ??
       readNumber(row.averageLatencyMs) ??
       readNumber(row.durationMs),
+    durationMs:
+      readNumber(row.durationMs) ??
+      readNumber(row.averageDurationMs) ??
+      readNumber(row.averageLatencyMs),
+    speedPerPassMs: readNumber(row.speedPerPassMs),
     totalTokens: readNumber(row.totalTokens),
     tokensPerPass: readNumber(row.tokensPerPass),
     costBasis: readCostBasis(row.costBasis),

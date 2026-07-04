@@ -11,7 +11,10 @@
 // boundary a real .mts caller hits.
 import { CertifiedProviderError } from "../lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
-import { isCertifiedProviderError } from "../lib/benchmark/certified/classify-provider-failure";
+import {
+  classifyProviderFailure,
+  isCertifiedProviderError,
+} from "../lib/benchmark/certified/classify-provider-failure";
 import {
   runGameIqScenarios,
   listGameIqScenarioPacks,
@@ -39,6 +42,8 @@ if (scenarios.length !== 10) {
 }
 const perfectAction = (scenario: GameIqScenario) =>
   scenario.expectedActions[0]?.action;
+const genericOpenAiProcessingError =
+  "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 12857d04-3d48-4f42-821c-7ef7eba4efc3 in your message.";
 
 // --- 1/10 transient (index 3): excluded from scoring, attempt still passes ---
 const one = await runGameIqScenarios({
@@ -140,6 +145,52 @@ check(
   boundaryOverLimit.attempt.status === "provider_unavailable" &&
     boundaryOverLimit.metrics.unscoredTransport === 2,
   boundaryOverLimit.attempt
+);
+
+// --- real-world regression: ChatGPT generic processing error in Fireworks
+// Memory Stress scenario 12 under the UI's concurrency-4 pack shape. The saved
+// failing run showed this exact message on gameiq-fireworks-memory-v1-12. Before
+// the classifier fix it was "other", rethrew out of the pack, and the run engine
+// synthesized invalid_harness. It must be a transient provider transport gap.
+const memoryPack = listGameIqScenarioPacks().find(
+  (p) => p.id === "gameiq-fireworks-memory-v1"
+);
+if (!memoryPack) {
+  throw new Error("Fireworks Memory Stress GameIQ pack is required for this test.");
+}
+const memoryScenario12Index = memoryPack.scenarios.findIndex(
+  (scenario) => scenario.id === "gameiq-fireworks-memory-v1-12"
+);
+if (memoryScenario12Index < 0) {
+  throw new Error("Fireworks Memory Stress scenario 12 is required for this test.");
+}
+const memoryScenario12 = await runGameIqScenarios({
+  runId: "t-memory-scenario-12-openai-processing-error",
+  modelId: "chatgpt:gpt-5.5",
+  teamCompositionId: "team-chatgpt",
+  scenarios: memoryPack.scenarios,
+  concurrency: 4,
+  moveProvider: ({ scenario }) => {
+    if (scenario.id === "gameiq-fireworks-memory-v1-12") {
+      throw new CertifiedProviderError(
+        genericOpenAiProcessingError,
+        classifyProviderFailure(genericOpenAiProcessingError)
+      );
+    }
+    return { action: perfectAction(scenario) };
+  },
+});
+check(
+  "Memory Stress scenario 12 generic ChatGPT processing error is contained as transport, not invalid_harness",
+  memoryScenario12.caseResults[memoryScenario12Index]?.unscored === "transport" &&
+    memoryScenario12.metrics.scenarioCount === memoryPack.scenarios.length &&
+    memoryScenario12.metrics.unscoredTransport === 1 &&
+    memoryScenario12.attempt.status === "passed",
+  {
+    attempt: memoryScenario12.attempt,
+    metrics: memoryScenario12.metrics,
+    scenario12: memoryScenario12.caseResults[memoryScenario12Index],
+  }
 );
 
 // --- fatal provider error rethrows out of runGameIqScenarios ---

@@ -1,4 +1,5 @@
 /* Certified result UI view-model checks (run: npx tsx scripts/test-certified-result-ui-viewmodel.mts) */
+import { readFileSync } from "node:fs";
 import {
   buildAttemptDetailViewModel,
   type AttemptDetailViewModel,
@@ -21,6 +22,20 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
+
+const certifiedOverviewSource = readFileSync(
+  "components/benchmark/certified/CertifiedBenchmarkOverview.tsx",
+  "utf8"
+);
+
+check(
+  "certified leaderboard table exposes a visible Time column",
+  certifiedOverviewSource.includes(">Time</th>") &&
+    certifiedOverviewSource.includes("formatDuration(row.durationMs)") &&
+    certifiedOverviewSource.includes("formatDuration(row.speedPerPassMs)") &&
+    certifiedOverviewSource.includes("/pass"),
+  null
+);
 
 function buildDetail(input: {
   status: BenchmarkAttemptV2["status"];

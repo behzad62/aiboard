@@ -1,5 +1,5 @@
 const PROVIDER_FAILURE_PATTERN =
-  /provider|api key|unauthorized|rate.?limit|quota|429|502|503|timed?\s?out|timeout/;
+  /provider|api key|unauthorized|rate.?limit|quota|429|502|503|timed?\s?out|timeout|processing your request|retry your request|help\.openai\.com|request id/;
 
 export function isProviderFailureMessage(message: string): boolean {
   return PROVIDER_FAILURE_PATTERN.test(message.toLowerCase());
@@ -13,7 +13,7 @@ export type ProviderFailureClass = "transient" | "fatal" | "other";
 const FATAL_PATTERN =
   /credits? (are )?depleted|prepayment|billing|quota exceeded|insufficient (funds|quota|credit)|payment required|api key|unauthorized|forbidden|invalid.*key|model.*not.*(found|exist)/i;
 const TRANSIENT_PATTERN =
-  /timed?\s?out|timeout|too many requests|rate.?limit|429|500|502|503|504|overloaded|server error|unavailable|network|fetch failed|econn|socket|empty response/i;
+  /timed?\s?out|timeout|too many requests|rate.?limit|429|500|502|503|504|overloaded|server error|unavailable|network|fetch failed|econn|socket|empty response|processing your request|retry your request|help\.openai\.com|request id/i;
 
 export function classifyProviderFailure(message: string): ProviderFailureClass {
   if (FATAL_PATTERN.test(message)) return "fatal";
