@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { duration, formatScore, usd } from "@/components/benchmark/format";
+import { duration, formatNormalizedScore, usd } from "@/components/benchmark/format";
 import type { TeamIqComboMatrixRow } from "@/lib/benchmark/teamiq";
 
 export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
@@ -60,7 +60,7 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
                   {row.attempts}
                 </td>
                 <td className="px-3 py-3 text-right tabular-nums">
-                  {formatScore(row.verifiedQuality)}
+                  {formatNormalizedScore(row.verifiedQuality)}
                 </td>
                 <td className="px-3 py-3 text-right tabular-nums">
                   {formatLift(row.teamLift)}

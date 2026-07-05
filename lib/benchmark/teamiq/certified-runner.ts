@@ -506,7 +506,10 @@ function createTeamIqVerifierResult(input: {
     caseId: input.caseId,
     passed,
     score: input.score / 100,
-    durationMs: input.caseResults.reduce((sum, result) => sum + result.attempts, 0),
+    // Verification is synchronous deterministic re-scoring; the field is a
+    // millisecond duration, so never report attempt COUNTS here. Real model
+    // latency lives on the attempt record.
+    durationMs: 0,
     resultJson,
     assertionResults: assertions,
     artifactIds: [],

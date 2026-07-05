@@ -249,6 +249,11 @@ check(
   summary
 );
 check(
+  "certified TeamIQ verifier durationMs is not an attempt-count sum",
+  teamVerifier?.durationMs === 0,
+  { durationMs: teamVerifier?.durationMs }
+);
+check(
   "certified TeamIQ automatically saves solo baselines",
   soloAttempts.length === roles.length &&
     roles.every((role) =>
