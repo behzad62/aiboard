@@ -92,7 +92,8 @@ export type BuildProblemCode =
   | "browser_acceptance_missing"
   | "repeated_no_progress"
   | "incomplete_tasks"
-  | "quality_gate_failed";
+  | "quality_gate_failed"
+  | "plan_critique_unresolved";
 
 export interface BuildProblem {
   id: string;

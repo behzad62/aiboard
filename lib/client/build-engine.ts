@@ -165,6 +165,10 @@ import {
   applyTaskSplit,
   parseWorkerSplitAction,
   parseArchitectAction,
+  parsePlanCritique,
+  planCritiqueHasBlockingIssues,
+  buildPlanCritiquePrompt,
+  buildPlanRevisionPrompt,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
   buildReviewFixTaskUpdate,
@@ -5302,6 +5306,157 @@ export async function runBuildDiscussion(
       },
     });
     const planAction = planResult.action as PlanAction;
+
+    // ── Plan critique gate ─────────────────────────────────────────────────
+    // Before wave 1, a second model attacks the plan. Wrong decomposition is
+    // the most expensive Build failure mode; one critique call + at most one
+    // bounded revision catches it while it is still cheap. Skipped under the
+    // benchmark harness and when no distinct-model critic is available (a model
+    // critiquing its own plan is noise). Runs BEFORE any planAction consumption
+    // so a revision fully replaces the plan the wave scheduler will build.
+    const pickPlanCritic = (): SelectedModel | null => {
+      if (reviewer && reviewer.modelId !== architect.modelId) return reviewer;
+      for (const ranked of rankedActiveWorkers()) {
+        const candidate = workers[ranked.index];
+        if (candidate && candidate.modelId !== architect.modelId) return candidate;
+      }
+      return null;
+    };
+    const planCritic = pickPlanCritic();
+    if (planCritic && !benchmark) {
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `${planCritic.displayName} is critiquing the plan before work starts`,
+      });
+      try {
+        const tasksJson = JSON.stringify(planAction.tasks, null, 1);
+        const critiqueText = await streamConversation(
+          planCritic,
+          [
+            {
+              role: "system",
+              content:
+                "You are a principal engineer reviewing a build plan before execution. Respond with a short rationale and the requested JSON verdict.",
+            },
+            {
+              role: "user",
+              content: buildPlanCritiquePrompt({
+                request: discussion.topic,
+                treeText: treeText(),
+                phaseSpec: planAction.phaseSpec,
+                tasksJson,
+                notes: planAction.notes,
+                verifyCommand: planAction.verifyCommand,
+                workerNames: workers.map((w) => w.displayName),
+              }),
+            },
+          ],
+          {
+            maxTokens: architectMaxTokens(planCritic),
+            label: `${planCritic.displayName} critiquing the plan`,
+          }
+        );
+        const critique = parsePlanCritique(critiqueText);
+        if (critique && planCritiqueHasBlockingIssues(critique)) {
+          const blocking = critique.issues.filter((i) => i.severity === "blocking");
+          const digestLines = [
+            ...blocking.map(
+              (i) =>
+                `- [blocking${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}${
+                  i.suggestion ? ` — fix: ${i.suggestion}` : ""
+                }`
+            ),
+            ...critique.missingWork.map((w) => `- [missing work] ${w}`),
+            ...critique.issues
+              .filter((i) => i.severity === "minor")
+              .map((i) => `- [minor${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}`),
+          ];
+          const critiqueDigest = truncate(digestLines.join("\n"), 2000);
+          emit({
+            type: "diagnostic",
+            phase: "round_preparing",
+            message: `Plan critique found ${blocking.length} blocking issue(s) and ${critique.missingWork.length} missing-work item(s) — asking the Architect for one revision`,
+          });
+          const revisionText = await streamConversation(
+            architect,
+            [
+              { role: "system", content: ARCHITECT_SYSTEM_ROLE },
+              {
+                role: "user",
+                content: buildPlanRevisionPrompt({
+                  request: discussion.topic,
+                  treeText: treeText(),
+                  originalPlanJson: tasksJson,
+                  critiqueDigest,
+                  maxTasks: BUILD_TASKS_PER_WAVE,
+                }),
+              },
+            ],
+            {
+              maxTokens: architectMaxTokens(architect),
+              label: "Architect revising plan after critique",
+              structuredOutput: architectActionResponseFormat,
+            }
+          );
+          const revised = parseArchitectAction(revisionText);
+          if (
+            revised &&
+            revised.action === "plan" &&
+            Array.isArray(revised.tasks) &&
+            revised.tasks.length > 0
+          ) {
+            // tasks come WHOLLY from the revision; the other fields fall back to
+            // the original when the revision omitted them.
+            planAction.tasks = revised.tasks;
+            if (revised.notes?.trim()) planAction.notes = revised.notes;
+            if (revised.phaseSpec) planAction.phaseSpec = revised.phaseSpec;
+            if (
+              typeof revised.verifyCommand === "string" &&
+              revised.verifyCommand.trim()
+            ) {
+              planAction.verifyCommand = revised.verifyCommand;
+            }
+            emit({
+              type: "diagnostic",
+              phase: "round_preparing",
+              message: `Plan revised after critique (${blocking.length} blocking issue(s) addressed)`,
+            });
+          } else {
+            recordBuildProblem({
+              code: "plan_critique_unresolved",
+              severity: "warning",
+              source: "architect",
+              message:
+                "The Architect did not produce a parseable revised plan after a blocking critique; continuing with the original plan.",
+              details: critiqueDigest,
+            });
+          }
+        } else if (critique && critique.issues.length > 0) {
+          // Minor-only critique: fold the notes into planAction.notes so they
+          // flow into architectNotes below and the review phase remembers them.
+          planAction.notes = [
+            planAction.notes,
+            truncate(
+              `Plan critique (minor): ${critique.issues.map((i) => i.issue).join("; ")}`,
+              500
+            ),
+          ]
+            .filter(Boolean)
+            .join("\n");
+        }
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: `Plan critique skipped: ${
+            err instanceof Error ? err.message : "error"
+          }`,
+        });
+      }
+    }
+
     architectNotes = planAction.notes ?? "";
     planVerifyCommand =
       typeof planAction.verifyCommand === "string"
@@ -6036,6 +6191,7 @@ export async function runBuildDiscussion(
                 role: "user",
                 content: `SPLIT REJECTED: ${applied.reason}. Either fix the split (2-4 subtasks, disjoint outputPaths within your task's declared files) or complete the task normally.`,
               });
+              // Deliberate asymmetry: SPLIT REJECTED feedback is actionable and split-specific (unlike opaque malformed JSON), so it is NOT charged against the tighter badToolCalls budget; the tool-turn cap still bounds the worst case.
               continue;
             }
           }

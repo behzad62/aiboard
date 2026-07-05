@@ -468,6 +468,15 @@ const buildPhaseSpecSchema = (): JsonSchemaObject => ({
 });
 
 /**
+ * Bounds for a worker `split_task` decomposition (see {@link SplitTaskAction}).
+ * Declared here (ahead of the schema and tool descriptions that interpolate
+ * them at module load) so every site — schema, prompt text, validator — derives
+ * the same numbers.
+ */
+const SPLIT_MIN_SUBTASKS = 2;
+const SPLIT_MAX_SUBTASKS = 4;
+
+/**
  * JSON schema for the Build Architect protocol. It is intentionally a single
  * object shape with an `action` discriminator instead of a root union, because
  * provider schema subsets vary. The existing parser remains the final validator.
@@ -508,6 +517,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "repo_push",
             "repo_pr_create",
           ],
+          // split_task is worker-only (see WORKER_NATIVE_ACTIONS); intentionally NOT an architect action despite the shared subtasks property below.
           description: "Architect action discriminator.",
         },
         paths: stringArraySchema("Paths for read or repo_commit actions."),
@@ -614,6 +624,8 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         subtasks: {
           type: "array",
           description: "Subtasks for a worker split_task action.",
+          minItems: SPLIT_MIN_SUBTASKS,
+          maxItems: SPLIT_MAX_SUBTASKS,
           items: {
             type: "object",
             properties: {
@@ -621,7 +633,9 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
               instructions: stringSchema("Complete self-contained instructions."),
               contextFiles: stringArraySchema("Existing files the subtask must see."),
               outputPaths: stringArraySchema("Files this subtask owns exclusively."),
-              dependsOn: stringArraySchema("Earlier sibling ids this subtask needs."),
+              dependsOn: stringArraySchema(
+                'Earlier sibling ordinals ("1", "2", ...) this subtask depends on.'
+              ),
               difficulty: { type: "number", description: "Subtask difficulty 1-5." },
             },
             required: ["title", "instructions", "outputPaths"],
@@ -664,7 +678,7 @@ const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
   repo_issue_read: "Read a GitHub issue through the runner.",
   repo_push: "Push a branch through the runner after approval.",
   repo_pr_create: "Open a GitHub pull request through the runner after approval.",
-  split_task: "End your turn by splitting this oversized task into 2-4 subtasks.",
+  split_task: `End your turn by splitting this oversized task into ${SPLIT_MIN_SUBTASKS}-${SPLIT_MAX_SUBTASKS} subtasks.`,
 };
 
 const ARCHITECT_PLAN_NATIVE_ACTIONS = [
@@ -1371,6 +1385,7 @@ export function applyTaskSplit(
     let candidate = `${parentId}.${i + 1}`;
     if (existingIds.has(candidate)) {
       let suffixCode = "b".charCodeAt(0);
+      // collisions past 'z' fall through to later ASCII chars; unreachable in practice.
       while (existingIds.has(`${candidate}${String.fromCharCode(suffixCode)}`)) {
         suffixCode += 1;
       }
@@ -2222,7 +2237,11 @@ function normalizeSplitTaskAction(parsed: unknown): SplitTaskAction | null {
   const reason = typeof raw.reason === "string" ? raw.reason.trim() : "";
   if (!reason) return null;
   if (!Array.isArray(raw.subtasks)) return null;
-  if (raw.subtasks.length < 2 || raw.subtasks.length > 4) return null;
+  if (
+    raw.subtasks.length < SPLIT_MIN_SUBTASKS ||
+    raw.subtasks.length > SPLIT_MAX_SUBTASKS
+  )
+    return null;
 
   const subtasks: SplitTaskAction["subtasks"] = [];
   for (const entry of raw.subtasks) {
@@ -2485,6 +2504,121 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
     if (action) return action;
   }
   return null;
+}
+
+// ── Plan critique gate ────────────────────────────────────────────────────────
+//
+// Before wave 1, a second model attacks the Architect's plan. Wrong
+// decomposition is the most expensive Build failure mode, and it is far cheaper
+// to catch here — one critique call, at most one bounded revision — than after
+// workers have already built against a broken plan.
+
+/** One issue a plan critic raised against the Architect's decomposition. */
+export interface PlanCritiqueIssue {
+  /** Task id the issue is about, when the critic named one. */
+  taskId?: string;
+  /** "blocking" only when the build will fail or produce wrong output otherwise. */
+  severity: "blocking" | "minor";
+  issue: string;
+  suggestion?: string;
+}
+
+/** A parsed plan critique verdict. */
+export interface PlanCritiqueResult {
+  verdict: "approve" | "revise";
+  issues: PlanCritiqueIssue[];
+  missingWork: string[];
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed) out.push(trimmed);
+  }
+  return out;
+}
+
+function normalizeTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizePlanCritique(parsed: unknown): PlanCritiqueResult | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const raw = parsed as {
+    verdict?: unknown;
+    issues?: unknown;
+    missingWork?: unknown;
+  };
+  if (raw.verdict !== "approve" && raw.verdict !== "revise") return null;
+
+  const issues: PlanCritiqueIssue[] = [];
+  if (Array.isArray(raw.issues)) {
+    for (const entry of raw.issues) {
+      if (!entry || typeof entry !== "object") continue;
+      const item = entry as {
+        taskId?: unknown;
+        severity?: unknown;
+        issue?: unknown;
+        suggestion?: unknown;
+      };
+      const issue = normalizeTrimmedString(item.issue);
+      if (!issue) continue; // an issue with no text is noise; drop it.
+      issues.push({
+        ...(normalizeTrimmedString(item.taskId)
+          ? { taskId: normalizeTrimmedString(item.taskId) }
+          : {}),
+        severity: item.severity === "blocking" ? "blocking" : "minor",
+        issue,
+        ...(normalizeTrimmedString(item.suggestion)
+          ? { suggestion: normalizeTrimmedString(item.suggestion) }
+          : {}),
+      });
+    }
+  }
+
+  return {
+    verdict: raw.verdict,
+    issues,
+    missingWork: normalizeStringList(raw.missingWork),
+  };
+}
+
+/**
+ * Scan model output for a plan critique verdict object and return the first one
+ * whose `verdict` is "approve"|"revise". Reuses the shared action-candidate
+ * extraction so the critique may appear in a ```json fence or as a bare balanced
+ * object inside prose. Returns null when nothing matches.
+ */
+export function parsePlanCritique(text: string): PlanCritiqueResult | null {
+  for (const candidate of uniqueActionCandidates(text)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const normalized = normalizePlanCritique(parsed);
+      if (normalized) return normalized;
+    } catch {
+      // not a valid JSON candidate — keep scanning
+    }
+  }
+  return null;
+}
+
+/**
+ * True when the critique asks for a revision AND names something that would
+ * break the build if ignored: a blocking issue, or missing work. A "revise"
+ * verdict carrying only minor issues does not trip this — minor notes are folded
+ * into the Architect's notes instead of forcing a revision round.
+ */
+export function planCritiqueHasBlockingIssues(critique: PlanCritiqueResult): boolean {
+  return (
+    critique.verdict === "revise" &&
+    (critique.issues.some((issue) => issue.severity === "blocking") ||
+      critique.missingWork.length > 0)
+  );
 }
 
 // ── Tool-loop robustness: dedup, forced verdicts, conversation compaction ─────
@@ -2979,8 +3113,8 @@ export function buildWorkerToolInstructions(budget: {
     budget.allowSplit
       ? [
           "ESCAPE HATCH — split an oversized task: if you genuinely cannot complete this task well in one response, END your turn with ONLY:",
-          '{"action":"split_task","reason":"why this must be decomposed","subtasks":[{"title":"...","instructions":"complete self-contained instructions","outputPaths":["files this subtask owns"],"dependsOn":[],"difficulty":3}]}',
-          "2-4 subtasks; each must own disjoint outputPaths within your task's declared files; subtasks may only depend on earlier siblings. Splitting ends your turn — do not also emit files. Use this ONCE and only when truly necessary; prefer completing the task.",
+          '{"action":"split_task","reason":"why this must be decomposed","subtasks":[{"title":"...","instructions":"complete self-contained instructions","outputPaths":["files this subtask owns"],"dependsOn":[],"difficulty":3},{"title":"...","instructions":"...","outputPaths":["another file"],"dependsOn":["1"],"difficulty":3}]}',
+          `${SPLIT_MIN_SUBTASKS}-${SPLIT_MAX_SUBTASKS} subtasks; each must own disjoint outputPaths within your task's declared files; dependsOn lists earlier sibling ordinals ("1", "2", ...) — a subtask may only depend on earlier siblings. Splitting ends your turn — do not also emit files. Use this ONCE and only when truly necessary; prefer completing the task.`,
         ].join("\n")
       : "",
     "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
@@ -3187,6 +3321,90 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
     `List in every task's "outputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Prompt for the plan critic: a second model attacks the Architect's plan
+ * BEFORE any worker starts. The critic gets no tools and no structured-output
+ * format — it replies with a short rationale and one fenced json verdict that
+ * {@link parsePlanCritique} tolerantly extracts.
+ */
+export function buildPlanCritiquePrompt(input: {
+  request: string;
+  treeText: string;
+  phaseSpec?: BuildPhaseSpec;
+  tasksJson: string;
+  notes?: string;
+  verifyCommand?: string;
+  workerNames: string[];
+}): string {
+  return [
+    "You are a principal engineer reviewing another architect's task plan BEFORE any work starts. Attack the decomposition, not the style. Workers are AI models that each get ONE task and see nothing else.",
+    "",
+    "Project request from the user:",
+    input.request,
+    "",
+    treeSection(input.treeText),
+    buildPhaseSpecSection(input.phaseSpec),
+    input.notes?.trim() ? `Architect notes for the workers:\n${input.notes.trim()}` : "",
+    input.verifyCommand?.trim()
+      ? `Architect's verifyCommand: ${input.verifyCommand.trim()}`
+      : "",
+    `The workers who will implement this plan: ${input.workerNames.join(", ")}.`,
+    "",
+    "The plan's tasks (JSON):",
+    input.tasksJson,
+    "",
+    "Attack the plan on these points, in order:",
+    "1. Missing work: anything the request needs that no task covers.",
+    '2. Wrong or missing dependsOn edges: a task that consumes another task\'s files MUST depend on it. Workers cannot see each other\'s in-progress output.',
+    "3. Overlapping outputPaths between tasks that are supposed to be independent (they will clobber each other or be serialized, defeating the split).",
+    "4. Tasks too large to complete well in one model response — these should have been pre-split into smaller tasks.",
+    "5. contextFiles a worker will obviously need to do its task but was not given.",
+    "6. An unrealistic or missing verifyCommand for this stack (must be a real, non-mutating compile/check command).",
+    "",
+    "Reply with a short rationale then ONE fenced json block:",
+    "```json",
+    '{"verdict":"approve"|"revise","issues":[{"taskId":"T1","severity":"blocking"|"minor","issue":"what is wrong","suggestion":"how to fix"}],"missingWork":["work the plan forgot"]}',
+    "```",
+    'Blocking = the build will fail or produce wrong output if unaddressed. Minor = improvement. Use verdict "approve" when nothing is blocking.',
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Prompt sent back to the Architect after an independent critique found blocking
+ * problems. Asks for exactly ONE revised complete plan (same plan schema the
+ * plan prompt uses) that addresses every blocking issue.
+ */
+export function buildPlanRevisionPrompt(input: {
+  request: string;
+  treeText: string;
+  originalPlanJson: string;
+  critiqueDigest: string;
+  maxTasks: number;
+}): string {
+  return [
+    ARCHITECT_ROLE,
+    "",
+    "An independent review found blocking problems in your plan. Produce a REVISED complete plan that addresses every blocking issue (and any minor ones you agree with). Do not restart from scratch — keep what was right.",
+    "",
+    "Project request from the user:",
+    input.request,
+    "",
+    treeSection(input.treeText),
+    "",
+    "Your original plan:",
+    input.originalPlanJson,
+    "",
+    "Review findings:",
+    input.critiqueDigest,
+    "",
+    `End with ONE fenced json block matching the plan schema (action "plan" with phaseSpec, tasks[], notes, verifyCommand). At most ${input.maxTasks} tasks.`,
   ]
     .filter(Boolean)
     .join("\n");
