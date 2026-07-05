@@ -39,8 +39,14 @@ export {
   TEAMIQ_TOOL_BENCH_STRATEGIES,
   createTeamIqCompositionFromSelection,
   createTeamIqToolBenchCompositionsFromSelection,
+  normalizeTeamIqModelSelectionForSlots,
+  teamIqRoleSlotsForStrategy,
 } from "./ui-selection";
-export type { CreateTeamIqCompositionSelectionInput } from "./ui-selection";
+export type {
+  CreateTeamIqCompositionSelectionInput,
+  TeamIqRoleAssignment,
+  TeamIqRoleSlot,
+} from "./ui-selection";
 
 export {
   TEAMIQ_TOOL_RELIABILITY_ALL_MODES_CASES,
