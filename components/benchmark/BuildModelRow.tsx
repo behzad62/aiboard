@@ -7,6 +7,7 @@ import {
   charsPerSecond,
   qualityPerAttempt,
   qualityScore,
+  tokensPerApproval,
 } from "@/lib/client/model-stats";
 import type { ModelBuildStat } from "@/lib/db/schema";
 import { BuildModelDetail } from "@/components/benchmark/BuildModelDetail";
@@ -39,6 +40,7 @@ export function BuildModelRow({
   const quality = round(qualityScore(s));
   const qpa = qualityPerAttempt(s);
   const speed = charsPerSecond(s);
+  const tokensPerApproved = tokensPerApproval(s);
   const rate = approvalRate(s);
   const availText = formatBuildAvailability(s);
 
@@ -83,6 +85,9 @@ export function BuildModelRow({
         <td className="px-2 py-2 text-right tabular-nums">{pct(rate)}</td>
         <td className="px-2 py-2 text-right tabular-nums">
           {speed == null ? "-" : `${Math.round(speed)}`}
+        </td>
+        <td className="px-2 py-2 text-right tabular-nums">
+          {tokensPerApproved == null ? "-" : tokensPerApproved.toLocaleString()}
         </td>
         <td className="px-2 py-2 text-right tabular-nums">{availText}</td>
         <td className="px-2 py-2 text-right tabular-nums">{s.builds}</td>

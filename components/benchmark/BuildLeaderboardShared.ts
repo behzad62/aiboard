@@ -9,6 +9,7 @@ export type BuildSortKey =
   | "qualityPerAttempt"
   | "approval"
   | "speed"
+  | "tokensPerApproved"
   | "availability"
   | "builds"
   | "attempts"
@@ -32,6 +33,7 @@ export const BUILD_LEADERBOARD_COLUMNS: {
   { key: "qualityPerAttempt", label: "Architect-reviewed quality/att.", align: "right" },
   { key: "approval", label: "Approval", align: "right" },
   { key: "speed", label: "Throughput", align: "right" },
+  { key: "tokensPerApproved", label: "Tokens / approved", align: "right" },
   { key: "availability", label: "Avail.", align: "right" },
   { key: "builds", label: "Builds", align: "right" },
   { key: "attempts", label: "Attempts", align: "right" },

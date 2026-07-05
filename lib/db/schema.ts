@@ -394,6 +394,14 @@ export interface ModelBuildStat {
   /** Time + output of successful responses only (for clean throughput). */
   responseMs: number;
   responseChars: number;
+  /**
+   * Worker token totals across ALL of this model's Build calls (tool turns +
+   * finalize), including calls on tasks that later failed or were fixed — the
+   * point of the tokens-per-approved-task KPI is that failure waste is visible.
+   * Reviews/architect/critique calls are never worker-attributed here.
+   */
+  inputTokens: number;
+  outputTokens: number;
   /** judge modelId -> Architect approve/fix verdicts that judge contributed. */
   judges: Record<string, number>;
   /** Architect approve/fix verdicts made by a judge that was NOT this model. */

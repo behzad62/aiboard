@@ -22,6 +22,7 @@ import {
   charsPerSecond,
   qualityPerAttempt,
   qualityScore,
+  tokensPerApproval,
 } from "@/lib/client/model-stats";
 import type { ModelBuildStat } from "@/lib/db/schema";
 import {
@@ -44,6 +45,8 @@ function sortValue(s: ModelBuildStat, key: BuildSortKey): number | string | null
       return approvalRate(s);
     case "speed":
       return charsPerSecond(s);
+    case "tokensPerApproved":
+      return tokensPerApproval(s);
     case "availability":
       return availability(s);
     case "builds":

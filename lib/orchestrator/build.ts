@@ -3522,6 +3522,10 @@ const REVIEW_DIFF_FILES_CAP = 40;
  * empty/whitespace. The non-patch prefix is built first; the patch then gets
  * whatever room remains (floor 0), so a tiny budget yields a prefix-only pack
  * with no Patch section rather than a broken half-line.
+ *
+ * The prefix (files list + stat) is assumed small — a `git diff --stat` over
+ * ≤{@link REVIEW_DIFF_FILES_CAP} paths is a few KB — and is intentionally NOT
+ * bounded by `maxChars`; only the patch body is.
  */
 export function buildReviewDiffPackContent(input: {
   stat?: string;

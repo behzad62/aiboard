@@ -61,6 +61,11 @@ import {
   mergeBuildMemoryRecord,
   rekeyBuildMemoryRecord,
 } from "@/lib/build-context/memory-store";
+import {
+  mergeModelStatsRecord,
+  normalizeModelStat,
+  type ModelStatDelta,
+} from "@/lib/client/model-stats";
 
 export interface ClientStore {
   userSettings: UserSettings;
@@ -776,7 +781,7 @@ export function hasAttemptedGameStatsLegacyImport(): boolean {
   return store().gameStatsLegacyImportAttempted ?? false;
 }
 export function getModelStats(): ModelBuildStat[] {
-  return (store().modelStats ?? []).map(normalizeStat);
+  return (store().modelStats ?? []).map(normalizeModelStat);
 }
 export function resetModelStats(modelId?: string): void {
   const s = store();
@@ -817,35 +822,12 @@ export function deleteDiscussion(id: string): void {
   );
   schedulePersist();
 }
-/** One build's per-worker contribution to a model's global stats. */
-export type ModelStatDelta = Omit<
-  ModelBuildStat,
-  "builds" | "judges" | "independentVerdicts" | "updatedAt"
->;
-
-/** Fill any fields absent from a record persisted before they existed. */
-function normalizeStat(m: Partial<ModelBuildStat> & { modelId: string }): ModelBuildStat {
-  return {
-    modelId: m.modelId,
-    displayName: m.displayName ?? m.modelId,
-    builds: m.builds ?? 0,
-    attempts: m.attempts ?? 0,
-    approvals: m.approvals ?? 0,
-    fixes: m.fixes ?? 0,
-    badOutput: m.badOutput ?? 0,
-    unavailable: m.unavailable ?? 0,
-    wApprovals: m.wApprovals ?? 0,
-    wFixes: m.wFixes ?? 0,
-    wBadOutput: m.wBadOutput ?? 0,
-    responseMs: m.responseMs ?? 0,
-    responseChars: m.responseChars ?? 0,
-    judges: { ...(m.judges ?? {}) },
-    independentVerdicts: m.independentVerdicts ?? 0,
-    updatedAt: m.updatedAt ?? new Date(0).toISOString(),
-  };
-}
-
-/** Fold one build's per-worker results into the global per-model stats. */
+/**
+ * Fold one build's per-worker results into the global per-model stats. The
+ * per-record arithmetic (including legacy-field normalization and token-total
+ * summing) lives in {@link mergeModelStatsRecord} so it stays testable without
+ * the store; this wrapper only handles find/insert and persistence.
+ */
 export function accumulateModelStats(input: {
   judgeModelId: string;
   workers: ModelStatDelta[];
@@ -855,44 +837,10 @@ export function accumulateModelStats(input: {
   const now = new Date().toISOString();
   for (const d of input.workers) {
     if (d.attempts <= 0) continue;
-    // Only Architect approve/fix verdicts count as judge verdicts; engine-
-    // detected bad output and provider denials were never graded by anyone.
-    const verdicts = d.approvals + d.fixes;
-    const independent = input.judgeModelId !== d.modelId ? verdicts : 0;
     const prev = s.modelStats.find((m) => m.modelId === d.modelId);
-    if (prev) {
-      // Coalesce against records persisted before these fields existed.
-      const existing = normalizeStat(prev);
-      existing.displayName = d.displayName;
-      existing.builds += 1;
-      existing.attempts += d.attempts;
-      existing.approvals += d.approvals;
-      existing.fixes += d.fixes;
-      existing.badOutput += d.badOutput;
-      existing.unavailable += d.unavailable;
-      existing.wApprovals += d.wApprovals;
-      existing.wFixes += d.wFixes;
-      existing.wBadOutput += d.wBadOutput;
-      existing.responseMs += d.responseMs;
-      existing.responseChars += d.responseChars;
-      // Don't list a judge that contributed no verdicts (e.g. all attempts
-      // were provider denials) — it never actually graded this model.
-      if (verdicts > 0) {
-        existing.judges[input.judgeModelId] =
-          (existing.judges[input.judgeModelId] ?? 0) + verdicts;
-      }
-      existing.independentVerdicts += independent;
-      existing.updatedAt = now;
-      s.modelStats[s.modelStats.indexOf(prev)] = existing;
-    } else {
-      s.modelStats.push({
-        ...d,
-        builds: 1,
-        judges: verdicts > 0 ? { [input.judgeModelId]: verdicts } : {},
-        independentVerdicts: independent,
-        updatedAt: now,
-      });
-    }
+    const merged = mergeModelStatsRecord(prev, d, input.judgeModelId, now);
+    if (prev) s.modelStats[s.modelStats.indexOf(prev)] = merged;
+    else s.modelStats.push(merged);
   }
   schedulePersist();
 }

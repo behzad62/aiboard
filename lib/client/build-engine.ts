@@ -915,6 +915,11 @@ export async function runBuildDiscussion(
     responseMs: number; // time of SUCCESSFUL responses only (clean throughput)
     responseChars: number; // output chars of successful responses only
     responses: number; // successful, non-empty responses
+    // Token totals across ALL of this worker's calls on its tasks (tool turns +
+    // finalize), including tasks that later fail or get fixed — that waste is
+    // exactly what the tokens-per-approved-task KPI is meant to surface.
+    inputTokens: number;
+    outputTokens: number;
     active: boolean;
   }
   const scoreboard: WorkerStat[] = workers.map((w, index) => ({
@@ -931,6 +936,8 @@ export async function runBuildDiscussion(
     responseMs: 0,
     responseChars: 0,
     responses: 0,
+    inputTokens: 0,
+    outputTokens: 0,
     active: true,
   }));
 
@@ -3614,6 +3621,13 @@ export async function runBuildDiscussion(
       nativeTools?: NativeToolDefinition[];
       attachments?: AttachmentPayload[];
       validateStructuredOutput?: (content: string) => StructuredTraceValidation;
+      /**
+       * Invoked exactly once per successful call, right after usage resolves,
+       * with the same estimated-or-reported token counts the USD window gets.
+       * Used to attribute worker tokens to the scoreboard (workers only —
+       * architect/reviewer/critique calls do not pass this).
+       */
+      onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
     }
   ): Promise<string> => {
     round += 1;
@@ -3792,6 +3806,13 @@ export async function runBuildDiscussion(
       output: content,
       maxTokens: opts.maxTokens,
       reportedUsage,
+    });
+    // Attribute this call's tokens (workers fold them into the scoreboard for
+    // the tokens-per-approved-task KPI). Same estimated-or-reported numbers the
+    // USD window receives below; fired once per successful call.
+    opts.onUsage?.({
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
     });
     const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
     const estimatedUsd = pricing
@@ -6164,6 +6185,10 @@ export async function runBuildDiscussion(
                 : `${worker.displayName} continuing ${task.id}: ${task.title}`,
             stopWhen: hasCompleteBuildToolAction,
             nativeTools: buildNativeBuildToolDefinitions("worker"),
+            onUsage: (u) => {
+              stat.inputTokens += u.inputTokens;
+              stat.outputTokens += u.outputTokens;
+            },
           });
           workerMessages.push({ role: "assistant", content: output });
           // Escape hatch: a worker may split an oversized task ONCE per lineage.
@@ -6381,6 +6406,10 @@ export async function runBuildDiscussion(
           output = await streamConversation(worker, workerMessages, {
             maxTokens: workerMaxTokens(worker),
             label: `${worker.displayName} finalizing ${task.id}: ${task.title}`,
+            onUsage: (u) => {
+              stat.inputTokens += u.inputTokens;
+              stat.outputTokens += u.outputTokens;
+            },
           });
           workerMessages.push({ role: "assistant", content: output });
         }
@@ -6791,6 +6820,7 @@ export async function runBuildDiscussion(
     if (runner && repoIsGit && reviewChangedFiles.length > 0 && !benchmark) {
       try {
         const scopedPaths = reviewChangedFiles.slice(0, REPO_DIFF_FILE_CAP);
+        // Two calls: getRepoDiffViaRunner returns one mode per request — full patch + a separate --stat summary.
         const [patchDiff, statDiff] = await Promise.all([
           getRepoDiffViaRunner(runner, { paths: scopedPaths, staged: false }),
           getRepoDiffViaRunner(runner, { paths: scopedPaths, staged: false, stat: true }),
@@ -7245,6 +7275,8 @@ export async function runBuildDiscussion(
         wBadOutput: s.wBadOutput,
         responseMs: s.responseMs,
         responseChars: s.responseChars,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
       })),
   });
 

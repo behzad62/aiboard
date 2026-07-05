@@ -62,6 +62,21 @@ check(
   check("small patch has no truncation marker", !out.includes(TRUNCATION_MARKER), out);
 }
 
+// 4b. Both stat and patch present: Stat block precedes the Patch section, both payloads included.
+{
+  const stat = " a.ts | 2 +-\n 1 file changed";
+  const patch = "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-old\n+new";
+  const out = buildReviewDiffPackContent({
+    stat,
+    patch,
+    files: ["a.ts"],
+    maxChars: 24_000,
+  });
+  check("stat+patch orders Stat before Patch", /Stat:[\s\S]*Patch:/.test(out), out);
+  check("stat+patch includes the stat payload text", out.includes("1 file changed"), out);
+  check("stat+patch includes the patch payload text", out.includes(patch), out);
+}
+
 // 5. Oversized patch is truncated: total length <= maxChars + marker length, ends with marker.
 {
   const maxChars = 1_000;

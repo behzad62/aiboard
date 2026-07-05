@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   charsPerSecond,
   judgeSummary,
+  tokensPerApproval,
 } from "@/lib/client/model-stats";
 import type { ModelBuildStat } from "@/lib/db/schema";
 import {
@@ -30,6 +31,7 @@ export function BuildModelDetail({
   const judge = judgeSummary(s);
   const speed = charsPerSecond(s);
   const totalSecs = s.responseMs / 1000;
+  const tokensPerApproved = tokensPerApproval(s);
   const { total, counts } = outcomeSegmentCounts(s);
 
   return (
@@ -79,6 +81,19 @@ export function BuildModelDetail({
             <span>{s.responseChars.toLocaleString()} chars</span>
             <span>{round(totalSecs)}s total</span>
             <span>{speed == null ? "-" : `${Math.round(speed)} chars/s`}</span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-semibold">Token efficiency</h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
+            <span>{s.inputTokens.toLocaleString()} in</span>
+            <span>{s.outputTokens.toLocaleString()} out</span>
+            <span>
+              {tokensPerApproved == null
+                ? "- / approved"
+                : `${tokensPerApproved.toLocaleString()} / approved`}
+            </span>
           </div>
         </div>
 
