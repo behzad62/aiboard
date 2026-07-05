@@ -20,6 +20,12 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
   check("difficulty 3: toolTurns 24", b.toolTurns === 24, b);
 }
 
+// Default difficulty (omitted) -> BASE tier; runsLeft 24 does not cap runs at 2.
+{
+  const b = createBuildWorkerBudget({ runsLeft: 24 });
+  check("default difficulty + runsLeft 24: toolTurns 24 && runs 2", b.toolTurns === 24 && b.runs === 2, b);
+}
+
 // difficulty 4 -> HARD tier
 {
   const b = createBuildWorkerBudget({ difficulty: 4, runsLeft: PHASE_POOL });

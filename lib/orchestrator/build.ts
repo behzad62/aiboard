@@ -74,6 +74,8 @@ export interface BuildTask {
   failCount?: number;
   /** Epoch milliseconds before this task may be retried after transient failure. */
   retryAfterMs?: number;
+  /** 1 = created by a worker split; such tasks may not split again. */
+  splitDepth?: number;
 }
 
 export const BUILD_TASK_MAX_FAILURES = 3;
@@ -609,6 +611,23 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         setUpstream: { type: "boolean" },
         head: stringSchema("PR head branch."),
         draft: { type: "boolean" },
+        subtasks: {
+          type: "array",
+          description: "Subtasks for a worker split_task action.",
+          items: {
+            type: "object",
+            properties: {
+              title: stringSchema("Short subtask title."),
+              instructions: stringSchema("Complete self-contained instructions."),
+              contextFiles: stringArraySchema("Existing files the subtask must see."),
+              outputPaths: stringArraySchema("Files this subtask owns exclusively."),
+              dependsOn: stringArraySchema("Earlier sibling ids this subtask needs."),
+              difficulty: { type: "number", description: "Subtask difficulty 1-5." },
+            },
+            required: ["title", "instructions", "outputPaths"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["action"],
       additionalProperties: false,
@@ -645,6 +664,7 @@ const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
   repo_issue_read: "Read a GitHub issue through the runner.",
   repo_push: "Push a branch through the runner after approval.",
   repo_pr_create: "Open a GitHub pull request through the runner after approval.",
+  split_task: "End your turn by splitting this oversized task into 2-4 subtasks.",
 };
 
 const ARCHITECT_PLAN_NATIVE_ACTIONS = [
@@ -706,6 +726,7 @@ const WORKER_NATIVE_ACTIONS = [
   "append",
   "run",
   "tool",
+  "split_task",
 ] as const;
 
 const NATIVE_BUILD_TOOL_REQUIRED: Record<string, string[]> = {
@@ -730,6 +751,7 @@ const NATIVE_BUILD_TOOL_REQUIRED: Record<string, string[]> = {
   repo_issue_read: ["repo", "issue"],
   repo_push: ["branch"],
   repo_pr_create: ["title", "body"],
+  split_task: ["reason", "subtasks"],
 };
 
 function nativeActionNames(profile: NativeBuildToolProfile): readonly string[] {
@@ -1103,6 +1125,20 @@ export interface RepoPrCreateAction {
   reason?: string;
 }
 
+/** Worker terminal action: decompose an oversized task into 2-4 subtasks. */
+export interface SplitTaskAction {
+  action: "split_task";
+  reason: string;
+  subtasks: Array<{
+    title: string;
+    instructions: string;
+    contextFiles?: string[];
+    outputPaths: string[];
+    dependsOn?: string[];
+    difficulty?: number;
+  }>;
+}
+
 export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
@@ -1117,6 +1153,7 @@ export type ArchitectAction =
   | SkillRequestAction
   | PatchAction
   | AppendAction
+  | SplitTaskAction
   | RepoStatusAction
   | RepoDiffAction
   | RepoBranchCreateAction
@@ -1233,6 +1270,176 @@ export function isTaskWritePathAllowed(
       : normalizedPathSet(task.contextFiles ?? []);
   if (scope.size === 0) return false;
   return scope.has(path.toLowerCase());
+}
+
+export interface TaskSplitResult {
+  ok: boolean;
+  reason?: string;
+  childIds?: string[];
+}
+
+/**
+ * Apply a worker `split_task` action to the live task array IN PLACE.
+ *
+ * The Build engine runs up to 8 workers concurrently, each mutating its own
+ * captured task object; this function therefore VALIDATES FULLY FIRST and makes
+ * ZERO mutations if anything is rejected, then mutates `tasks` in place while
+ * preserving the object identity of every pre-existing task (the parent and any
+ * dependents are the SAME references, never clones). Children are inserted
+ * immediately after the parent, get `splitDepth: 1` (so they can never split
+ * again), and other tasks' `dependsOn` edges from the parent are rewritten to
+ * all child ids.
+ */
+export function applyTaskSplit(
+  tasks: BuildTask[],
+  parentId: string,
+  split: SplitTaskAction,
+  maxContextFiles: number
+): TaskSplitResult {
+  const parentIndex = tasks.findIndex((task) => task.id === parentId);
+  if (parentIndex < 0) {
+    return { ok: false, reason: `no task with id ${parentId} to split` };
+  }
+  const parent = tasks[parentIndex];
+  if ((parent.splitDepth ?? 0) !== 0) {
+    return {
+      ok: false,
+      reason: "task was already created by a split and cannot split again",
+    };
+  }
+
+  // Normalize + validate every child's outputPaths before touching the array.
+  const normalizedOutputsPerChild: string[][] = [];
+  for (const subtask of split.subtasks) {
+    const normalized: string[] = [];
+    for (const rawPath of subtask.outputPaths) {
+      const path = normalizeExplicitOutputPath(rawPath);
+      if (!path) {
+        return { ok: false, reason: `invalid subtask output path: ${rawPath}` };
+      }
+      if (isSuspiciousBuildArtifactPath(path)) {
+        return {
+          ok: false,
+          reason: `subtask output path looks like a scratch artifact and is not allowed: ${path}`,
+        };
+      }
+      normalized.push(path);
+    }
+    if (normalized.length === 0) {
+      return { ok: false, reason: "each subtask must declare at least one output path" };
+    }
+    normalizedOutputsPerChild.push(normalized);
+  }
+
+  // Every child path must fall within the parent's declared outputs (when the
+  // parent declared any).
+  const parentOutputs = outputPathsForTask(parent);
+  if (parentOutputs.length > 0) {
+    const parentSet = new Set(parentOutputs.map((path) => path.toLowerCase()));
+    for (const normalized of normalizedOutputsPerChild) {
+      for (const path of normalized) {
+        if (!parentSet.has(path.toLowerCase())) {
+          return {
+            ok: false,
+            reason: `subtask output path ${path} is outside the parent task's declared files`,
+          };
+        }
+      }
+    }
+  }
+
+  // Sibling outputPaths must be disjoint (case-insensitive).
+  const claimed = new Set<string>();
+  for (const normalized of normalizedOutputsPerChild) {
+    for (const path of normalized) {
+      const key = path.toLowerCase();
+      if (claimed.has(key)) {
+        return {
+          ok: false,
+          reason: `two subtasks both claim the output path ${path}`,
+        };
+      }
+      claimed.add(key);
+    }
+  }
+
+  // Compute child ids up front (needed to resolve dependsOn), resolving any
+  // collision with an existing task id by suffixing "b", "c", …
+  const existingIds = new Set(tasks.map((task) => task.id));
+  const childIds: string[] = [];
+  for (let i = 0; i < split.subtasks.length; i++) {
+    let candidate = `${parentId}.${i + 1}`;
+    if (existingIds.has(candidate)) {
+      let suffixCode = "b".charCodeAt(0);
+      while (existingIds.has(`${candidate}${String.fromCharCode(suffixCode)}`)) {
+        suffixCode += 1;
+      }
+      candidate = `${candidate}${String.fromCharCode(suffixCode)}`;
+    }
+    existingIds.add(candidate);
+    childIds.push(candidate);
+  }
+
+  // Build the child tasks. dependsOn accepts either an ordinal ("1".."N") or a
+  // would-be child id, and only edges pointing at a LOWER-numbered sibling are
+  // kept; anything else is silently dropped (not an error).
+  const children: BuildTask[] = split.subtasks.map((subtask, i) => {
+    const deps: string[] = [];
+    for (const rawDep of subtask.dependsOn ?? []) {
+      let targetIndex = -1;
+      const ordinal = Number(rawDep);
+      if (Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= childIds.length) {
+        targetIndex = ordinal - 1;
+      } else {
+        targetIndex = childIds.indexOf(rawDep);
+      }
+      if (targetIndex >= 0 && targetIndex < i) {
+        const childId = childIds[targetIndex];
+        if (!deps.includes(childId)) deps.push(childId);
+      }
+    }
+    return {
+      id: childIds[i],
+      title: subtask.title,
+      instructions: subtask.instructions,
+      phaseSpec: parent.phaseSpec,
+      contextFiles: [
+        ...new Set([...parent.contextFiles, ...(subtask.contextFiles ?? [])]),
+      ].slice(0, maxContextFiles),
+      outputPaths: normalizedOutputsPerChild[i],
+      status: "planned",
+      ...(deps.length > 0 ? { dependsOn: deps } : {}),
+      difficulty: subtask.difficulty ?? parent.difficulty,
+      splitDepth: 1,
+    };
+  });
+
+  // ---- Mutation only past this point (validation fully passed). ----
+  tasks.splice(parentIndex + 1, 0, ...children);
+  parent.status = "done";
+  parent.workerIndex = undefined;
+  parent.assignTo = undefined;
+  parent.title = `${parent.title} (split into ${childIds.join(", ")})`;
+
+  // Rewrite every other task's dependency on the parent to all child ids.
+  for (const task of tasks) {
+    if (task === parent) continue;
+    if (!task.dependsOn?.length) continue;
+    if (!task.dependsOn.includes(parentId)) continue;
+    const rewritten: string[] = [];
+    for (const dep of task.dependsOn) {
+      if (dep === parentId) {
+        for (const childId of childIds) {
+          if (!rewritten.includes(childId)) rewritten.push(childId);
+        }
+      } else if (!rewritten.includes(dep)) {
+        rewritten.push(dep);
+      }
+    }
+    task.dependsOn = rewritten;
+  }
+
+  return { ok: true, childIds };
 }
 
 export function findIncompleteBuildTasks(tasks: BuildTask[]): BuildTask[] {
@@ -1988,9 +2195,103 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof pr.reason === "string" ? pr.reason : undefined,
         };
       }
+      if (parsed.action === "split_task") {
+        return normalizeSplitTaskAction(parsed);
+      }
     }
   } catch {
     // not a valid action candidate
+  }
+  return null;
+}
+
+/**
+ * Tolerant validator/normalizer for a worker `split_task` action. Returns a
+ * clean {@link SplitTaskAction} only when `reason` is a non-empty string and
+ * `subtasks` is an array of 2-4 entries each with a non-empty title, non-empty
+ * instructions, and at least one usable outputPath; otherwise null. Fields are
+ * trimmed; contextFiles/dependsOn are filtered to non-empty strings; difficulty
+ * is rounded and clamped to 1-5 (dropped when non-numeric).
+ */
+function normalizeSplitTaskAction(parsed: unknown): SplitTaskAction | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const raw = parsed as {
+    reason?: unknown;
+    subtasks?: unknown;
+  };
+  const reason = typeof raw.reason === "string" ? raw.reason.trim() : "";
+  if (!reason) return null;
+  if (!Array.isArray(raw.subtasks)) return null;
+  if (raw.subtasks.length < 2 || raw.subtasks.length > 4) return null;
+
+  const subtasks: SplitTaskAction["subtasks"] = [];
+  for (const entry of raw.subtasks) {
+    if (!entry || typeof entry !== "object") return null;
+    const sub = entry as {
+      title?: unknown;
+      instructions?: unknown;
+      contextFiles?: unknown;
+      outputPaths?: unknown;
+      dependsOn?: unknown;
+      difficulty?: unknown;
+    };
+    const title = typeof sub.title === "string" ? sub.title.trim() : "";
+    if (!title) return null;
+    const instructions =
+      typeof sub.instructions === "string" ? sub.instructions.trim() : "";
+    if (!instructions) return null;
+    const outputPaths = Array.isArray(sub.outputPaths)
+      ? sub.outputPaths
+          .filter((p): p is string => typeof p === "string")
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : [];
+    if (outputPaths.length === 0) return null;
+    const contextFiles = Array.isArray(sub.contextFiles)
+      ? sub.contextFiles
+          .filter((p): p is string => typeof p === "string")
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : undefined;
+    const dependsOn = Array.isArray(sub.dependsOn)
+      ? sub.dependsOn
+          .filter((p): p is string => typeof p === "string")
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : undefined;
+    const difficulty =
+      typeof sub.difficulty === "number" && Number.isFinite(sub.difficulty)
+        ? Math.max(1, Math.min(5, Math.round(sub.difficulty)))
+        : undefined;
+    subtasks.push({
+      title,
+      instructions,
+      ...(contextFiles && contextFiles.length > 0 ? { contextFiles } : {}),
+      outputPaths,
+      ...(dependsOn && dependsOn.length > 0 ? { dependsOn } : {}),
+      ...(difficulty !== undefined ? { difficulty } : {}),
+    });
+  }
+
+  return { action: "split_task", reason, subtasks };
+}
+
+/**
+ * Scan model output for a worker `split_task` action and return the first one
+ * that validates. Reuses the shared action-candidate extraction so a split can
+ * appear in a ```json fence or as a bare balanced object inside prose.
+ */
+export function parseWorkerSplitAction(text: string): SplitTaskAction | null {
+  for (const candidate of uniqueActionCandidatesInDocumentOrder(text)) {
+    try {
+      const parsed = JSON.parse(candidate) as { action?: unknown };
+      if (parsed && typeof parsed === "object" && parsed.action === "split_task") {
+        const normalized = normalizeSplitTaskAction(parsed);
+        if (normalized) return normalized;
+      }
+    } catch {
+      // not a valid JSON candidate — keep scanning
+    }
   }
   return null;
 }
@@ -2635,6 +2936,7 @@ export function buildWorkerToolInstructions(budget: {
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   localServerUrls?: string[];
+  allowSplit?: boolean;
 }): string {
   const localServers = [...new Set(budget.localServerUrls ?? [])].filter(Boolean);
   return [
@@ -2673,6 +2975,13 @@ export function buildWorkerToolInstructions(budget: {
       : "",
     localServers.length > 0
       ? `Active local server URL${localServers.length === 1 ? "" : "s"} for browser MCP navigation: ${localServers.join(", ")}. Use these exact URL(s) instead of guessing localhost ports.`
+      : "",
+    budget.allowSplit
+      ? [
+          "ESCAPE HATCH — split an oversized task: if you genuinely cannot complete this task well in one response, END your turn with ONLY:",
+          '{"action":"split_task","reason":"why this must be decomposed","subtasks":[{"title":"...","instructions":"complete self-contained instructions","outputPaths":["files this subtask owns"],"dependsOn":[],"difficulty":3}]}',
+          "2-4 subtasks; each must own disjoint outputPaths within your task's declared files; subtasks may only depend on earlier siblings. Splitting ends your turn — do not also emit files. Use this ONCE and only when truly necessary; prefer completing the task.",
+        ].join("\n")
       : "",
     "Patch SEARCH text must come from the current file content. If a patch fails, read/search and try again. Do not emit full-file blocks for existing files. For large or missing files, use append chunks instead of one giant fenced block.",
   ]

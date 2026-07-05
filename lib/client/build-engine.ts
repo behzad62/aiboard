@@ -162,6 +162,8 @@ import {
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
   outputPathsForTask,
+  applyTaskSplit,
+  parseWorkerSplitAction,
   parseArchitectAction,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
@@ -457,6 +459,7 @@ function assertNonEmptyBenchmarkModelContent(
 }
 
 const SEARCHES_PER_PHASE = 4;
+// MCP pools are runaway-loop stops like RUNS_PER_PHASE (see build.ts), not cost controls — the USD/time budget window governs spend; sized to outlast a wave's realistic browser-acceptance usage.
 const MCP_CALLS_PER_PHASE = 24;
 const TOTAL_MCP_CALLS = 96;
 const CODE_INTEL_CALLS_PER_PHASE = 3;
@@ -5635,12 +5638,16 @@ export async function runBuildDiscussion(
     const classifyError = (message: string): "bad" | "unavailable" =>
       UNAVAILABLE.test(message) ? "unavailable" : "bad";
 
-    const workerToolInstructions = (budget: BuildWorkerToolInstructionBudget): string =>
+    const workerToolInstructions = (
+      budget: BuildWorkerToolInstructionBudget,
+      allowSplit = false
+    ): string =>
       buildWorkerToolInstructions({
         ...budget,
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         localServerUrls,
+        allowSplit,
       });
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
@@ -5727,7 +5734,10 @@ export async function runBuildDiscussion(
               contextFileText: "",
               architectNotes: "",
               memoryBrief: "",
-              toolInstructions: workerToolInstructions(workerBudgetToolInstructionInput(budgets)),
+              toolInstructions: workerToolInstructions(
+                workerBudgetToolInstructionInput(budgets),
+                (task.splitDepth ?? 0) === 0
+              ),
               verbosityInstruction,
               skillContext: workerSkillContext,
               assembledContext: workerAssembledContext,
@@ -5981,6 +5991,54 @@ export async function runBuildDiscussion(
             nativeTools: buildNativeBuildToolDefinitions("worker"),
           });
           workerMessages.push({ role: "assistant", content: output });
+          // Escape hatch: a worker may split an oversized task ONCE per lineage.
+          // Children run in the next batch of the same wave; the parent is marked
+          // done and never reaches review, so its scoreboard is left untouched.
+          if ((task.splitDepth ?? 0) === 0) {
+            const split = parseWorkerSplitAction(output);
+            if (split) {
+              const applied = applyTaskSplit(tasks, task.id, split, MAX_CONTEXT_FILES);
+              if (applied.ok && applied.childIds) {
+                architectNotes = [
+                  architectNotes,
+                  `${task.id} was split by ${worker.displayName} into ${applied.childIds.join(", ")}: ${truncate(split.reason, 300)}`,
+                ]
+                  .filter(Boolean)
+                  .join("\n");
+                emit({
+                  type: "task_status",
+                  taskId: task.id,
+                  title: task.title,
+                  status: "done",
+                  worker: worker.displayName,
+                  cycle,
+                });
+                for (const childId of applied.childIds) {
+                  const child = tasks.find((t) => t.id === childId);
+                  if (child) {
+                    emit({
+                      type: "task_status",
+                      taskId: child.id,
+                      title: child.title,
+                      status: "planned",
+                      cycle,
+                    });
+                  }
+                }
+                emit({
+                  type: "diagnostic",
+                  phase: "round_preparing",
+                  message: `${worker.displayName} split ${task.id} into ${applied.childIds.length} subtasks (${applied.childIds.join(", ")})`,
+                });
+                return;
+              }
+              workerMessages.push({
+                role: "user",
+                content: `SPLIT REJECTED: ${applied.reason}. Either fix the split (2-4 subtasks, disjoint outputPaths within your task's declared files) or complete the task normally.`,
+              });
+              continue;
+            }
+          }
           const inspected = inspectStrictToolActionBatchOutput(output);
           if (inspected.actions.length === 0) {
             if (inspected.feedback && !inspected.valid) {
