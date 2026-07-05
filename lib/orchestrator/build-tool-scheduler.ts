@@ -43,6 +43,9 @@ export function classifyBuildToolActionForScheduling(
     case "context_retrieve":
     case "code_intel":
     case "search":
+    // fetch is a non-mutating network read (no repo side effects), so it batches
+    // with reads — the same servable safety class the Architect fetch path implies.
+    case "fetch":
     case "repo_status":
     case "repo_diff":
     case "repo_issue_list":
@@ -95,6 +98,8 @@ function labelFor(action: ArchitectAction): string {
       return `search ${action.query}`;
     case "run":
       return `run ${action.command}`;
+    case "fetch":
+      return `fetch ${action.url}`;
     case "tool":
       return `mcp:${action.server}.${action.tool}`;
     case "patch":
@@ -207,7 +212,8 @@ function replayableExactKey(action: ArchitectAction): string | null {
     action.action !== "read" &&
     action.action !== "search" &&
     action.action !== "context_retrieve" &&
-    action.action !== "code_intel"
+    action.action !== "code_intel" &&
+    action.action !== "fetch"
   ) {
     return null;
   }

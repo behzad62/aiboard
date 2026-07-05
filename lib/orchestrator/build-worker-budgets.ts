@@ -3,6 +3,7 @@ export interface BuildWorkerBudget {
   rangeReads: number;
   searches: number;
   runs: number;
+  fetches: number;
   patches: number;
   appends: number;
   toolTurns: number;
@@ -11,13 +12,16 @@ export interface BuildWorkerBudget {
 
 export type BuildWorkerToolInstructionBudget = Pick<
   BuildWorkerBudget,
-  "reads" | "rangeReads" | "searches" | "runs" | "patches" | "appends"
+  "reads" | "rangeReads" | "searches" | "runs" | "fetches" | "patches" | "appends"
 >;
 
 export interface BuildWorkerBudgetInput {
   difficulty?: number | null;
   activeSkillIds?: readonly string[];
   runsLeft: number;
+  /** Remaining fetches in the shared phase pool — 0 when no runner. The per-task
+   * fetch budget is capped by this so architect + worker never exceed the pool. */
+  fetchesLeft: number;
   /** Prior failed attempts on this task — fix rounds escalate one tier per
    * failure (capped) so a retry is never starved into the same failure. */
   failCount?: number | null;
@@ -28,6 +32,7 @@ const BASE_WORKER_BUDGET: BuildWorkerBudget = {
   rangeReads: 8,
   searches: 4,
   runs: 2,
+  fetches: 2,
   patches: 8,
   appends: 12,
   toolTurns: 24,
@@ -39,6 +44,7 @@ const HARD_WORKER_BUDGET: BuildWorkerBudget = {
   rangeReads: 12,
   searches: 6,
   runs: 4,
+  fetches: 3,
   patches: 10,
   appends: 14,
   toolTurns: 32,
@@ -50,6 +56,7 @@ const HARDEST_WORKER_BUDGET: BuildWorkerBudget = {
   rangeReads: 16,
   searches: 8,
   runs: 6,
+  fetches: 4,
   patches: 12,
   appends: 16,
   toolTurns: 40,
@@ -79,8 +86,11 @@ function baseBudgetForDifficulty(difficulty: number): BuildWorkerBudget {
   return BASE_WORKER_BUDGET;
 }
 
-function finiteRunBudget(runsLeft: number): number {
-  return Number.isFinite(runsLeft) ? Math.max(0, Math.floor(runsLeft)) : 0;
+/** Floor a shared phase-pool remaining count to a safe non-negative integer;
+ * a non-finite pool (e.g. Infinity) collapses to 0. Used for both the run and
+ * fetch pools. */
+function finiteRunBudget(poolLeft: number): number {
+  return Number.isFinite(poolLeft) ? Math.max(0, Math.floor(poolLeft)) : 0;
 }
 
 function hasTddSkill(activeSkillIds: readonly string[]): boolean {
@@ -98,6 +108,7 @@ export function createBuildWorkerBudget(input: BuildWorkerBudgetInput): BuildWor
   return {
     ...baseBudget,
     runs: Math.min(uncappedRuns, finiteRunBudget(input.runsLeft)),
+    fetches: Math.min(baseBudget.fetches, finiteRunBudget(input.fetchesLeft)),
   };
 }
 
@@ -109,6 +120,7 @@ export function workerBudgetToolInstructionInput(
     rangeReads: budget.rangeReads,
     searches: budget.searches,
     runs: budget.runs,
+    fetches: budget.fetches,
     patches: budget.patches,
     appends: budget.appends,
   };

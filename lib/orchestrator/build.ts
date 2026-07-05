@@ -740,6 +740,7 @@ const WORKER_NATIVE_ACTIONS = [
   "append",
   "run",
   "tool",
+  "fetch",
   "split_task",
 ] as const;
 
@@ -2350,7 +2351,8 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
     action.action === "patch" ||
     action.action === "append" ||
     action.action === "run" ||
-    action.action === "tool"
+    action.action === "tool" ||
+    action.action === "fetch"
   );
 }
 
@@ -2619,6 +2621,34 @@ export function planCritiqueHasBlockingIssues(critique: PlanCritiqueResult): boo
     (critique.issues.some((issue) => issue.severity === "blocking") ||
       critique.missingWork.length > 0)
   );
+}
+
+/**
+ * Render a plan critique into a compact digest for the revision prompt: blocking
+ * issues first (`- [blocking T1] issue — fix: suggestion`), then missing work
+ * (`- [missing work] ...`), then minor issues (`- [minor ...] ...`), truncated
+ * to `maxChars` (matching the engine's truncate: a trailing `\n…[truncated]`).
+ */
+export function buildPlanCritiqueDigest(
+  critique: PlanCritiqueResult,
+  maxChars: number
+): string {
+  const digestLines = [
+    ...critique.issues
+      .filter((i) => i.severity === "blocking")
+      .map(
+        (i) =>
+          `- [blocking${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}${
+            i.suggestion ? ` — fix: ${i.suggestion}` : ""
+          }`
+      ),
+    ...critique.missingWork.map((w) => `- [missing work] ${w}`),
+    ...critique.issues
+      .filter((i) => i.severity === "minor")
+      .map((i) => `- [minor${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}`),
+  ];
+  const digest = digestLines.join("\n");
+  return digest.length <= maxChars ? digest : `${digest.slice(0, maxChars)}\n…[truncated]`;
 }
 
 // ── Tool-loop robustness: dedup, forced verdicts, conversation compaction ─────
@@ -3065,6 +3095,7 @@ export function buildWorkerToolInstructions(budget: {
   rangeReads: number;
   searches: number;
   runs?: number;
+  fetches?: number;
   patches: number;
   appends: number;
   mcpToolsDoc?: string;
@@ -3086,6 +3117,9 @@ export function buildWorkerToolInstructions(budget: {
       : "",
     budget.runs && budget.runs > 0
       ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs, file writes, or long-running dev servers.`
+      : "",
+    budget.fetches && budget.fetches > 0
+      ? `- Fetch a PUBLIC docs/API-reference URL through the user's runner: {"action":"fetch","url":"https://example.com/docs","reason":"why"} (${budget.fetches} left). Known URLs only — this is not a search engine; local/private addresses are refused. The user may deny a fetch — respect that and continue.`
       : "",
     `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text from that character offset up to the cap; use read/read_range for current source files.`,
     budget.patches > 0
@@ -3392,6 +3426,7 @@ export function buildPlanRevisionPrompt(input: {
     ARCHITECT_ROLE,
     "",
     "An independent review found blocking problems in your plan. Produce a REVISED complete plan that addresses every blocking issue (and any minor ones you agree with). Do not restart from scratch — keep what was right.",
+    "Keep each surviving task's id from your original plan (do not renumber), so dependsOn edges between tasks stay valid.",
     "",
     "Project request from the user:",
     input.request,

@@ -167,6 +167,7 @@ import {
   parseArchitectAction,
   parsePlanCritique,
   planCritiqueHasBlockingIssues,
+  buildPlanCritiqueDigest,
   buildPlanCritiquePrompt,
   buildPlanRevisionPrompt,
   prCreateRefusalReason,
@@ -468,8 +469,9 @@ const MCP_CALLS_PER_PHASE = 24;
 const TOTAL_MCP_CALLS = 96;
 const CODE_INTEL_CALLS_PER_PHASE = 3;
 const TOTAL_CODE_INTEL_CALLS = 10;
-const FETCHES_PER_PHASE = 4;
-const TOTAL_FETCHES = 12;
+// Fetch pools are runaway-loop stops (like the MCP/run pools), not cost controls; the USD/time budget window governs spend. Architect AND workers now draw from this one shared pool, so it is sized to outlast a wave's realistic docs-lookup usage.
+const FETCHES_PER_PHASE = 8;
+const TOTAL_FETCHES = 24;
 const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 
 // Tool batching: one combined tool-result message is capped so it fits common
@@ -5360,19 +5362,7 @@ export async function runBuildDiscussion(
         const critique = parsePlanCritique(critiqueText);
         if (critique && planCritiqueHasBlockingIssues(critique)) {
           const blocking = critique.issues.filter((i) => i.severity === "blocking");
-          const digestLines = [
-            ...blocking.map(
-              (i) =>
-                `- [blocking${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}${
-                  i.suggestion ? ` — fix: ${i.suggestion}` : ""
-                }`
-            ),
-            ...critique.missingWork.map((w) => `- [missing work] ${w}`),
-            ...critique.issues
-              .filter((i) => i.severity === "minor")
-              .map((i) => `- [minor${i.taskId ? ` ${i.taskId}` : ""}] ${i.issue}`),
-          ];
-          const critiqueDigest = truncate(digestLines.join("\n"), 2000);
+          const critiqueDigest = buildPlanCritiqueDigest(critique, 2000);
           emit({
             type: "diagnostic",
             phase: "round_preparing",
@@ -5850,6 +5840,7 @@ export async function runBuildDiscussion(
         difficulty: task.difficulty,
         activeSkillIds: activeSkillIds(workerSkills),
         runsLeft: runsLeftThisPhase(),
+        fetchesLeft: fetchesLeftThisPhase(),
         failCount: task.failCount,
       });
       const workerAssembledContext = buildContextManager.buildWorkerContext({
@@ -6022,6 +6013,34 @@ export async function runBuildDiscussion(
                 result
               );
               serveRunResult(packedResult);
+              continue;
+            }
+            if (action.action === "fetch") {
+              // Fetch is a non-mutating network read; workers draw from the SAME
+              // shared phase pool as the Architect via executeFetch (which handles
+              // the runner, per-fetch approval, pool accounting, and diagnostics).
+              const replayed = replayCache.replay(action);
+              if (replayed) {
+                served.push({ label: `${item.label} (replayed)`, result: replayed });
+                continue;
+              }
+              if (budgets.fetches <= 0) {
+                skipped.push({ label: item.label, reason: "no fetch budget left in this task" });
+                continue;
+              }
+              if (fetchesLeftThisPhase() <= 0) {
+                served.push({
+                  label: item.label,
+                  result: "No web fetches left in this phase. Produce your final task output using what you already have.",
+                });
+                continue;
+              }
+              budgets.fetches -= 1;
+              const result = await executeFetch(action);
+              const packedResult = storeLongToolResult("fetch", `Fetch: ${action.url}`, result);
+              recordToolCall(tracker, action);
+              replayCache.remember(action, packedResult);
+              served.push({ label: item.label, result: packedResult });
               continue;
             }
             if (action.action === "read" && budgets.reads > 0) {

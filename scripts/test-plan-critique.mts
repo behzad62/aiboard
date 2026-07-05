@@ -2,6 +2,7 @@
 import {
   parsePlanCritique,
   planCritiqueHasBlockingIssues,
+  buildPlanCritiqueDigest,
   buildPlanCritiquePrompt,
   buildPlanRevisionPrompt,
   type PlanCritiqueResult,
@@ -101,6 +102,18 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 // Text with no candidates -> null.
 {
   check("no candidates -> null", parsePlanCritique("just some prose, no json here") === null);
+}
+
+// Disambiguation: a plan action object and a critique verdict object both appear;
+// the critique parser must pick the verdict object, not the plan action.
+{
+  const text = [
+    "```json", '{"action":"plan","tasks":[{"id":"T1","title":"x"}]}', "```",
+    "```json", '{"verdict":"revise","issues":[{"severity":"blocking","issue":"missing dep"}],"missingWork":[]}', "```",
+  ].join("\n");
+  const parsed = parsePlanCritique(text);
+  check("picks critique verdict over a plan action object",
+    parsed?.verdict === "revise" && parsed?.issues[0]?.issue === "missing dep", parsed);
 }
 
 // missingWork entries trimmed + non-empty filtered.
@@ -242,6 +255,37 @@ check(
     "revision prompt asks for a plan action",
     prompt.includes('action "plan"') || prompt.includes('"action":"plan"'),
     "missing plan-emission instruction"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// buildPlanCritiqueDigest
+// ---------------------------------------------------------------------------
+
+{
+  const critiqueResult: PlanCritiqueResult = {
+    verdict: "revise",
+    issues: [
+      { taskId: "T1", severity: "blocking", issue: "missing error handling", suggestion: "add try/catch" },
+      { severity: "minor", issue: "prefer const" },
+    ],
+    missingWork: ["no tests for the parser"],
+  };
+  const digest = buildPlanCritiqueDigest(critiqueResult, 2000);
+  const lines = digest.split("\n");
+  check(
+    "digest renders blocking, then missing work, then minor — in that order",
+    lines[0] === "- [blocking T1] missing error handling — fix: add try/catch" &&
+      lines[1] === "- [missing work] no tests for the parser" &&
+      lines[2] === "- [minor] prefer const",
+    lines
+  );
+  // A tiny maxChars cap truncates with the engine's trailing marker.
+  const capped = buildPlanCritiqueDigest(critiqueResult, 10);
+  check(
+    "digest truncates at a tiny maxChars cap",
+    capped.length < digest.length && capped.endsWith("…[truncated]") && capped.startsWith(digest.slice(0, 10)),
+    capped
   );
 }
 
