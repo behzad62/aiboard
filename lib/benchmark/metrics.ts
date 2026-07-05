@@ -279,9 +279,14 @@ export function buildBenchmarkDashboardData(
     score.buildBadOutput += stat.badOutput;
     score.providerErrors += stat.unavailable;
     score.completions += Math.max(0, stat.attempts - stat.unavailable);
-    // Build stats do not record independent schema/tool/verifier outcomes.
-    // Keep bad output in the build outcome fields instead of fanning it out
-    // into three separate reliability axes.
+    // Build stats do not record independent schema/tool/verifier outcomes —
+    // they expose only approvals/fixes/badOutput, so deriving structuredOutput,
+    // toolUse, AND verifier axes from those same three tallies would make the
+    // radar look multi-dimensional while all three axes were near-perfectly
+    // correlated by construction. Keep bad output in the build outcome fields
+    // instead of fanning it out into three separate reliability axes; those
+    // axes stay reserved for signals that actually measure them (game matches,
+    // certified verifier results).
     if (stat.responseMs > 0) {
       score.latencyMs += stat.responseMs;
       score.latencySamples += Math.max(1, stat.approvals + stat.fixes);

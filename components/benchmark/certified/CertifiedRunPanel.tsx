@@ -61,8 +61,11 @@ import {
   createTeamIqToolBenchCompositionsFromSelection,
   deriveSoloTeamComposition,
   deriveTeamComposition,
+  normalizeTeamIqModelSelectionForSlots,
   runCertifiedTeamIq,
+  teamIqRoleSlotsForStrategy,
   teamIqToolReliabilityCasePackForSuite,
+  type TeamIqRoleAssignment,
 } from "@/lib/benchmark/teamiq";
 import {
   fireworksCaseToBenchmarkCaseV2,
@@ -326,13 +329,13 @@ export function CertifiedRunPanel({
             ) : selectedTrack === "teamiq" ? (
               <StaticField
                 label="Models"
-                value={
-                  teamModelIds.length >= 1
-                    ? isFireworksSuite(suiteId)
-                      ? `${teamModelIds.length} / ${fireworksPlayerCount} Fireworks players selected`
-                      : `${teamModelIds.length} models selected`
-                    : "Select at least one model"
-                }
+                value={teamIqSelectionSummary({
+                  models,
+                  selectedModelIds: teamModelIds,
+                  suiteId,
+                  strategy: teamIqStrategy,
+                  fireworksPlayerCount,
+                })}
               />
             ) : selectedTrack === "workbench" ? (
               <StaticField
@@ -373,6 +376,11 @@ export function CertifiedRunPanel({
                 models={models}
                 selectedModelIds={teamModelIds}
                 strategy={teamIqStrategy}
+                roleMode={
+                  isFireworksSuite(suiteId) ? "fireworks_players" : "default"
+                }
+                playerCount={fireworksPlayerCount}
+                allModes={isTeamIqToolReliabilityAllModesSuite(suiteId)}
                 onChange={setTeamModelIds}
                 onStrategyChange={setTeamIqStrategy}
               />
@@ -1157,8 +1165,56 @@ function teamIqCompositionsForRun(input: {
       strategy: input.strategy,
       roleMode: input.roleMode,
       playerCount: input.playerCount,
+      roleAssignments:
+        input.roleMode === "default" &&
+        !isTeamIqToolReliabilityAllModesSuite(input.suiteId)
+          ? roleAssignmentsForTeamIqSelection(input)
+          : undefined,
     }),
   ];
+}
+
+function teamIqSelectionSummary(input: {
+  models: SelectedModel[];
+  selectedModelIds: string[];
+  suiteId: string;
+  strategy: TeamIqUiStrategy;
+  fireworksPlayerCount: 2 | 3;
+}): string {
+  if (input.selectedModelIds.length < 1) return "Select at least one model";
+  if (isFireworksSuite(input.suiteId)) {
+    return `${input.selectedModelIds.length} / ${input.fireworksPlayerCount} Fireworks players selected`;
+  }
+  const slotCount = isTeamIqToolReliabilityAllModesSuite(input.suiteId)
+    ? 3
+    : teamIqRoleSlotsForStrategy(input.strategy).length;
+  const normalized = normalizeTeamIqModelSelectionForSlots({
+    models: input.models,
+    selectedModelIds: input.selectedModelIds,
+    slotCount,
+  });
+  if (isTeamIqToolReliabilityAllModesSuite(input.suiteId)) {
+    return `${normalized.length} model slot${normalized.length === 1 ? "" : "s"} assigned`;
+  }
+  return `${normalized.length} role${normalized.length === 1 ? "" : "s"} assigned`;
+}
+
+function roleAssignmentsForTeamIqSelection(input: {
+  models: SelectedModel[];
+  selectedModelIds: string[];
+  strategy: TeamIqUiStrategy;
+}): TeamIqRoleAssignment[] {
+  const slots = teamIqRoleSlotsForStrategy(input.strategy);
+  const modelIds = normalizeTeamIqModelSelectionForSlots({
+    models: input.models,
+    selectedModelIds: input.selectedModelIds,
+    slotCount: slots.length,
+  });
+  return slots.map((slot, index) => ({
+    role: slot.role,
+    slot: slot.slot,
+    modelId: modelIds[index]!,
+  }));
 }
 
 function isTeamIqToolReliabilityAllModesSuite(suiteId: string): boolean {

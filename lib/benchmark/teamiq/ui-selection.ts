@@ -9,6 +9,7 @@ export interface CreateTeamIqCompositionSelectionInput {
   strategy?: Exclude<TeamIqStrategy, "solo">;
   roleMode?: "default" | "fireworks_players";
   playerCount?: 2 | 3;
+  roleAssignments?: TeamIqRoleAssignment[];
 }
 
 export const TEAMIQ_TOOL_BENCH_STRATEGIES: Exclude<TeamIqStrategy, "solo">[] = [
@@ -19,14 +20,23 @@ export const TEAMIQ_TOOL_BENCH_STRATEGIES: Exclude<TeamIqStrategy, "solo">[] = [
   "cheap_swarm_strong_judge",
 ];
 
+export interface TeamIqRoleSlot {
+  role: BenchmarkTeamCompositionRole["role"];
+  slot: string;
+  label: string;
+}
+
+export interface TeamIqRoleAssignment {
+  role: BenchmarkTeamCompositionRole["role"];
+  slot: string;
+  modelId: string;
+}
+
 export function createTeamIqCompositionFromSelection(
   input: CreateTeamIqCompositionSelectionInput
 ) {
   const strategy = input.strategy ?? "architect_worker_reviewer";
-  const selectedModels = input.selectedModelIds
-    .map((modelId) => input.models.find((model) => model.modelId === modelId))
-    .filter((model): model is SelectedModel => Boolean(model))
-    .slice(0, maxModelsForSelection(strategy, input));
+  const selectedModels = selectedModelsForSelection(input, strategy);
   if (selectedModels.length < 1) {
     throw new Error("TeamIQ requires at least one selected model.");
   }
@@ -46,7 +56,9 @@ export function createTeamIqCompositionFromSelection(
         : teamNameForSelection(strategy, selectedModels),
     strategy: input.roleMode === "fireworks_players" ? "panel" : strategy,
     roles:
-      input.roleMode === "fireworks_players"
+      input.roleAssignments && input.roleAssignments.length > 0
+        ? rolesForAssignments(input.models, input.roleAssignments)
+        : input.roleMode === "fireworks_players"
         ? rolesForFireworksPlayers(selectedModels, input.playerCount ?? 3)
         : rolesForStrategy(strategy, selectedModels),
   });
@@ -64,6 +76,74 @@ export function createTeamIqToolBenchCompositionsFromSelection(
   );
 }
 
+export function teamIqRoleSlotsForStrategy(
+  strategy: Exclude<TeamIqStrategy, "solo">,
+  options: { roleMode?: "default" | "fireworks_players"; playerCount?: 2 | 3 } = {}
+): TeamIqRoleSlot[] {
+  if (options.roleMode === "fireworks_players") {
+    const playerCount = options.playerCount ?? 3;
+    return Array.from({ length: playerCount }, (_, index) => ({
+      role: "player",
+      slot: `P${index + 1}`,
+      label: `P${index + 1}`,
+    }));
+  }
+  if (strategy === "panel") {
+    return [0, 1, 2].map((index) => ({
+      role: "specialist",
+      slot: `panel-${String(index + 1).padStart(2, "0")}`,
+      label: `Specialist ${index + 1}`,
+    }));
+  }
+  if (strategy === "debate") {
+    return [
+      { role: "critic", slot: "01-debater", label: "Critic 1" },
+      { role: "critic", slot: "02-debater", label: "Critic 2" },
+      { role: "judge", slot: "03-debate-judge", label: "Judge" },
+    ];
+  }
+  if (strategy === "architect_worker") {
+    return [
+      { role: "architect", slot: "01-architect", label: "Architect" },
+      { role: "worker", slot: "02-worker", label: "Worker" },
+    ];
+  }
+  if (strategy === "cheap_swarm_strong_judge") {
+    return [
+      { role: "worker", slot: "01-swarm-worker", label: "Worker 1" },
+      { role: "worker", slot: "02-swarm-worker", label: "Worker 2" },
+      { role: "judge", slot: "99-strong-judge", label: "Judge" },
+    ];
+  }
+  return [
+    { role: "architect", slot: "01-architect", label: "Architect" },
+    { role: "worker", slot: "02-worker", label: "Worker" },
+    { role: "reviewer", slot: "03-reviewer", label: "Reviewer" },
+  ];
+}
+
+export function normalizeTeamIqModelSelectionForSlots(input: {
+  models: SelectedModel[];
+  selectedModelIds: string[];
+  slotCount: number;
+}): string[] {
+  const validIds = input.selectedModelIds.filter((modelId) =>
+    input.models.some((model) => model.modelId === modelId)
+  );
+  return Array.from({ length: input.slotCount }, (_, index) => {
+    const existing = input.selectedModelIds[index];
+    if (existing && input.models.some((model) => model.modelId === existing)) {
+      return existing;
+    }
+    if (index < input.selectedModelIds.length) {
+      return input.models[index % input.models.length]?.modelId ?? "";
+    }
+    const recycled = validIds[index % Math.max(validIds.length, 1)];
+    if (recycled) return recycled;
+    return input.models[index % input.models.length]?.modelId ?? "";
+  }).filter(Boolean);
+}
+
 function maxModelsForSelection(
   strategy: Exclude<TeamIqStrategy, "solo">,
   input: CreateTeamIqCompositionSelectionInput
@@ -74,6 +154,23 @@ function maxModelsForSelection(
 
 function maxModelsForStrategy(strategy: Exclude<TeamIqStrategy, "solo">): number {
   return strategy === "architect_worker" ? 2 : 3;
+}
+
+function selectedModelsForSelection(
+  input: CreateTeamIqCompositionSelectionInput,
+  strategy: Exclude<TeamIqStrategy, "solo">
+): SelectedModel[] {
+  if (input.roleAssignments && input.roleAssignments.length > 0) {
+    return input.roleAssignments
+      .map((assignment) =>
+        input.models.find((model) => model.modelId === assignment.modelId)
+      )
+      .filter((model): model is SelectedModel => Boolean(model));
+  }
+  return input.selectedModelIds
+    .map((modelId) => input.models.find((model) => model.modelId === modelId))
+    .filter((model): model is SelectedModel => Boolean(model))
+    .slice(0, maxModelsForSelection(strategy, input));
 }
 
 function rolesForFireworksPlayers(
@@ -125,6 +222,19 @@ function rolesForStrategy(
     roleFor("worker", "02-worker", modelForSlot(models, 1)),
     roleFor("reviewer", "03-reviewer", modelForSlot(models, 2)),
   ];
+}
+
+function rolesForAssignments(
+  models: SelectedModel[],
+  assignments: TeamIqRoleAssignment[]
+): BenchmarkTeamCompositionRole[] {
+  return assignments.map((assignment) => {
+    const model = models.find((candidate) => candidate.modelId === assignment.modelId);
+    if (!model) {
+      throw new Error(`TeamIQ role ${assignment.slot} has no selected model.`);
+    }
+    return roleFor(assignment.role, assignment.slot, model);
+  });
 }
 
 function modelForSlot(models: SelectedModel[], index: number): SelectedModel {

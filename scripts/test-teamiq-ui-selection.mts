@@ -6,6 +6,8 @@ import {
   deriveSoloTeamComposition,
   isSoloTeamComposition,
   linkTeamLiftBaselines,
+  normalizeTeamIqModelSelectionForSlots,
+  teamIqRoleSlotsForStrategy,
 } from "../lib/benchmark/teamiq";
 import type { BenchmarkAttemptV2 } from "../lib/benchmark/types";
 import type { SelectedModel } from "../lib/providers/base";
@@ -36,6 +38,102 @@ const models: SelectedModel[] = [
     displayName: "Claude Team Reviewer",
   },
 ];
+
+const architectWorkerReviewerSlots = teamIqRoleSlotsForStrategy(
+  "architect_worker_reviewer"
+);
+check(
+  "TeamIQ UI exposes explicit architect-worker-reviewer role slots",
+  JSON.stringify(
+    architectWorkerReviewerSlots.map((slot) => [
+      slot.role,
+      slot.slot,
+      slot.label,
+    ])
+  ) ===
+    JSON.stringify([
+      ["architect", "01-architect", "Architect"],
+      ["worker", "02-worker", "Worker"],
+      ["reviewer", "03-reviewer", "Reviewer"],
+    ]),
+  architectWorkerReviewerSlots
+);
+
+const explicitRoleTeam = createTeamIqCompositionFromSelection({
+  models,
+  selectedModelIds: [models[0].modelId],
+  strategy: "architect_worker_reviewer",
+  roleAssignments: [
+    {
+      role: "architect",
+      slot: "01-architect",
+      modelId: models[2].modelId,
+    },
+    {
+      role: "worker",
+      slot: "02-worker",
+      modelId: models[0].modelId,
+    },
+    {
+      role: "reviewer",
+      slot: "03-reviewer",
+      modelId: models[1].modelId,
+    },
+  ],
+} as Parameters<typeof createTeamIqCompositionFromSelection>[0] & {
+  roleAssignments: Array<{
+    role: "architect" | "worker" | "reviewer";
+    slot: string;
+    modelId: string;
+  }>;
+});
+check(
+  "TeamIQ UI selection honors explicit role-to-model assignments",
+  explicitRoleTeam.roles[0]?.role === "architect" &&
+    explicitRoleTeam.roles[0]?.modelId === models[2].modelId &&
+    explicitRoleTeam.roles[1]?.role === "worker" &&
+    explicitRoleTeam.roles[1]?.modelId === models[0].modelId &&
+    explicitRoleTeam.roles[2]?.role === "reviewer" &&
+    explicitRoleTeam.roles[2]?.modelId === models[1].modelId,
+  explicitRoleTeam
+);
+
+check(
+  "TeamIQ slot selection normalization expands to the visible slot count",
+  JSON.stringify(
+    normalizeTeamIqModelSelectionForSlots({
+      models,
+      selectedModelIds: [models[0].modelId],
+      slotCount: 3,
+    })
+  ) ===
+    JSON.stringify([
+      models[0].modelId,
+      models[0].modelId,
+      models[0].modelId,
+    ]),
+  normalizeTeamIqModelSelectionForSlots({
+    models,
+    selectedModelIds: [models[0].modelId],
+    slotCount: 3,
+  })
+);
+
+check(
+  "TeamIQ slot selection normalization removes stale model ids",
+  JSON.stringify(
+    normalizeTeamIqModelSelectionForSlots({
+      models,
+      selectedModelIds: ["missing-model", models[1].modelId],
+      slotCount: 2,
+    })
+  ) === JSON.stringify([models[0].modelId, models[1].modelId]),
+  normalizeTeamIqModelSelectionForSlots({
+    models,
+    selectedModelIds: ["missing-model", models[1].modelId],
+    slotCount: 2,
+  })
+);
 
 const team = createTeamIqCompositionFromSelection({
   models,
