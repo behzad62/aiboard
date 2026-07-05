@@ -134,4 +134,20 @@ check(
   tokensPerApproval({ inputTokens: 50_000, outputTokens: 10_000, approvals: 0 })
 );
 
+// 7. Judge gating + independent-verdict semantics (locks the store-refactor equivalence).
+{
+  const now = new Date("2026-07-05T00:00:00.000Z").toISOString();
+  const indep = mergeModelStatsRecord(undefined, delta({ approvals: 2, fixes: 1, attempts: 4, badOutput: 1, unavailable: 0 }), JUDGE, now);
+  check("independent judge records 3 verdicts (approvals+fixes)", indep.judges[JUDGE] === 3 && indep.independentVerdicts === 3, indep);
+
+  const selfNow = mergeModelStatsRecord(undefined, delta({ modelId: JUDGE, approvals: 2, fixes: 0 }), JUDGE, now);
+  check("self-graded verdicts are not independent", selfNow.judges[JUDGE] === 2 && selfNow.independentVerdicts === 0, selfNow);
+
+  const denied = mergeModelStatsRecord(undefined, delta({ approvals: 0, fixes: 0, badOutput: 0, unavailable: 2, wApprovals: 0 }), JUDGE, now);
+  check("judge with zero verdicts is not added to judges map", Object.keys(denied.judges).length === 0 && denied.independentVerdicts === 0, denied);
+
+  const again = mergeModelStatsRecord(indep, delta({ approvals: 2, fixes: 1, attempts: 4, badOutput: 1 }), JUDGE, now);
+  check("second build adds to the same judge's verdict tally", again.judges[JUDGE] === 6 && again.independentVerdicts === 6, again);
+}
+
 process.exit(failed === 0 ? 0 : 1);

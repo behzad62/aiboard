@@ -95,6 +95,10 @@ export function BuildModelDetail({
                 : `${tokensPerApproved.toLocaleString()} / approved`}
             </span>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Total worker tokens (incl. failed and fixed tasks) per approved task
+            - lower is better.
+          </p>
         </div>
 
         <div className="space-y-1.5">

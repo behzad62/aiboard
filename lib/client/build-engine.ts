@@ -5821,6 +5821,12 @@ export async function runBuildDiscussion(
       const worker = workers[task.workerIndex!];
       const stat = scoreboard[task.workerIndex!];
       stat.attempts += 1;
+      // Fold a worker call's tokens into the scoreboard for the
+      // tokens-per-approved-task KPI; shared by every streamConversation below.
+      const attributeUsage = (u: { inputTokens: number; outputTokens: number }): void => {
+        stat.inputTokens += u.inputTokens;
+        stat.outputTokens += u.outputTokens;
+      };
 
       emit({
         type: "task_status",
@@ -6185,10 +6191,7 @@ export async function runBuildDiscussion(
                 : `${worker.displayName} continuing ${task.id}: ${task.title}`,
             stopWhen: hasCompleteBuildToolAction,
             nativeTools: buildNativeBuildToolDefinitions("worker"),
-            onUsage: (u) => {
-              stat.inputTokens += u.inputTokens;
-              stat.outputTokens += u.outputTokens;
-            },
+            onUsage: attributeUsage,
           });
           workerMessages.push({ role: "assistant", content: output });
           // Escape hatch: a worker may split an oversized task ONCE per lineage.
@@ -6406,10 +6409,7 @@ export async function runBuildDiscussion(
           output = await streamConversation(worker, workerMessages, {
             maxTokens: workerMaxTokens(worker),
             label: `${worker.displayName} finalizing ${task.id}: ${task.title}`,
-            onUsage: (u) => {
-              stat.inputTokens += u.inputTokens;
-              stat.outputTokens += u.outputTokens;
-            },
+            onUsage: attributeUsage,
           });
           workerMessages.push({ role: "assistant", content: output });
         }
