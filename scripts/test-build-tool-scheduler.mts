@@ -123,4 +123,17 @@ check(
   replayCache.replay(searchAction)
 );
 
+check("fetch action is batch safe",
+  classifyBuildToolActionForScheduling({ action: "fetch", url: "https://x.dev/docs", reason: "docs" }) === "batch_read");
+const withFetch = scheduleBuildToolActions(
+  [{ action: "read", paths: ["a.ts"] }, { action: "fetch", url: "https://x.dev/docs", reason: "docs" }],
+  { allowSafeRunQueue: true, maxSafeRuns: 3 });
+check("fetch batches with reads and gets a url label",
+  withFetch.served.length === 2 && withFetch.skipped.length === 0 &&
+    withFetch.served.some((s) => s.label === "fetch https://x.dev/docs"), withFetch);
+const fetchAction = { action: "fetch" as const, url: "https://x.dev/docs", reason: "docs" };
+replayCache.remember(fetchAction, "fetched docs body");
+check("exact fetch duplicate can be replayed from cache",
+  !!replayCache.replay(fetchAction)?.includes("fetched docs body"), replayCache.replay(fetchAction));
+
 process.exit(failed === 0 ? 0 : 1);

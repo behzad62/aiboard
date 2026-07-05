@@ -45,6 +45,8 @@ export function classifyBuildToolActionForScheduling(
     case "search":
     // fetch is a non-mutating network read (no repo side effects), so it batches
     // with reads — the same servable safety class the Architect fetch path implies.
+    // (Unlike other batch_reads it may block on a per-fetch user approval prompt,
+    // but it never mutates, so batch ordering stays safe.)
     case "fetch":
     case "repo_status":
     case "repo_diff":

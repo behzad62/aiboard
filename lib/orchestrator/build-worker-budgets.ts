@@ -89,7 +89,7 @@ function baseBudgetForDifficulty(difficulty: number): BuildWorkerBudget {
 /** Floor a shared phase-pool remaining count to a safe non-negative integer;
  * a non-finite pool (e.g. Infinity) collapses to 0. Used for both the run and
  * fetch pools. */
-function finiteRunBudget(poolLeft: number): number {
+function finitePoolBudget(poolLeft: number): number {
   return Number.isFinite(poolLeft) ? Math.max(0, Math.floor(poolLeft)) : 0;
 }
 
@@ -107,8 +107,8 @@ export function createBuildWorkerBudget(input: BuildWorkerBudgetInput): BuildWor
 
   return {
     ...baseBudget,
-    runs: Math.min(uncappedRuns, finiteRunBudget(input.runsLeft)),
-    fetches: Math.min(baseBudget.fetches, finiteRunBudget(input.fetchesLeft)),
+    runs: Math.min(uncappedRuns, finitePoolBudget(input.runsLeft)),
+    fetches: Math.min(baseBudget.fetches, finitePoolBudget(input.fetchesLeft)),
   };
 }
 

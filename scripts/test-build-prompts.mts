@@ -234,6 +234,34 @@ check(
     /visible stuck loading/i.test(reviewPrompt),
   reviewPrompt
 );
+check(
+  "review prompt omits the diff-first line when hasDiffDigest is absent",
+  !/PRIMARY evidence for this review/i.test(reviewPrompt),
+  reviewPrompt
+);
+const reviewPromptWithDiff = buildArchitectReviewPrompt({
+  request: "Create a web app for exploring a local git repository.",
+  treeText: "public/app.js\nserver/server.js",
+  executedText: "T1 landed UI and backend changes.",
+  outstandingTasks: "",
+  maxNewTasks: 2,
+  cyclesLeft: 1,
+  fileContext: "",
+  readHopsLeft: 0,
+  rangeReadsLeft: 0,
+  runsLeft: 0,
+  searchesLeft: 0,
+  mcpToolsDoc: "",
+  mcpCallsLeft: 0,
+  hasDiffDigest: true,
+} as Parameters<typeof buildArchitectReviewPrompt>[0]);
+check(
+  "review prompt tells the reviewer to judge the Wave diff first when hasDiffDigest is true",
+  /"Wave diff" pack .* PRIMARY evidence for this review/i.test(reviewPromptWithDiff) &&
+    reviewPromptWithDiff.indexOf("PRIMARY evidence for this review") <
+      reviewPromptWithDiff.indexOf("Review each task's output"),
+  reviewPromptWithDiff
+);
 
 const serverUrls = extractLocalServerUrls(
   "npx next dev --turbopack -p 3001 &\nLocal: http://localhost:3001"

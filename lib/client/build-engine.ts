@@ -139,6 +139,7 @@ import {
   buildArchitectSummaryPrompt,
   buildIncompleteTaskFailure,
   buildOutstandingTasksDigest,
+  buildReviewDiffPackContent,
   buildWorkerToolInstructions,
   buildWaveReviewDigest,
   compactToolConversation,
@@ -6780,6 +6781,59 @@ export async function runBuildDiscussion(
       reviewChangedFiles,
       cycle
     );
+    // Diff-first review evidence: when a runner is connected to a Git repo, feed
+    // the ACTUAL unified diff of this wave's changed files as the highest-priority
+    // context pack so the reviewer judges real landed changes, not summaries.
+    // Skipped for certified benchmark runs (repo side effects are policy-blocked
+    // there) and when the fetch fails — a diff failure NEVER fails the review.
+    const reviewContextPacks = [...reviewImpactPacks];
+    let hasReviewDiffDigest = false;
+    if (runner && repoIsGit && reviewChangedFiles.length > 0 && !benchmark) {
+      try {
+        const scopedPaths = reviewChangedFiles.slice(0, REPO_DIFF_FILE_CAP);
+        const [patchDiff, statDiff] = await Promise.all([
+          getRepoDiffViaRunner(runner, { paths: scopedPaths, staged: false }),
+          getRepoDiffViaRunner(runner, { paths: scopedPaths, staged: false, stat: true }),
+        ]);
+        const rawPatch = (patchDiff?.diff ?? "").trim();
+        const stat = (statDiff?.diff ?? "").trim();
+        // A huge patch is parked as a ctx blob first; the reviewer can
+        // context_retrieve the rest from the digest reference.
+        const patch =
+          rawPatch.length > 24_000
+            ? storeLongToolResult("repo_diff", `Wave ${cycle} diff`, rawPatch)
+            : rawPatch;
+        const diffContent = buildReviewDiffPackContent({
+          stat,
+          patch,
+          files: reviewChangedFiles,
+          maxChars: 24_000,
+        });
+        if (diffContent) {
+          reviewContextPacks.push({
+            id: `review-diff-wave-${cycle}`,
+            kind: "diagnostic" as const,
+            title: "Wave diff (primary review evidence)",
+            content: diffContent,
+            // Above the code-intel impact packs (145) so the real diff outranks
+            // derived summaries when the token budget squeezes.
+            priority: 160,
+          });
+          hasReviewDiffDigest = true;
+          emitFileToolDiagnostic(
+            `Wave ${cycle} diff attached for review · ${kbOf(rawPatch)}`,
+            reviewActor
+          );
+        }
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        emit({
+          type: "diagnostic",
+          phase: "judging",
+          message: `Wave diff unavailable for review: ${err instanceof Error ? err.message : "runner error"}`,
+        });
+      }
+    }
     const reviewAssembledContext = buildContextManager.buildReviewContext({
       modelContextProfile: modelContextProfile(reviewActor),
       request: discussion.topic,
@@ -6795,7 +6849,7 @@ export async function runBuildDiscussion(
       memoryRecords: activeBuildMemories(),
       scoreboard: scoreboard.some((s) => s.attempts > 0) ? scoreboardText() : "",
       skillEvidenceText: reviewSkillEvidenceText,
-      contextPacks: reviewImpactPacks,
+      contextPacks: reviewContextPacks,
     });
     emitBuildMemoryEvent();
     emitContextAssembled(reviewAssembledContext, {
@@ -6840,6 +6894,7 @@ export async function runBuildDiscussion(
         skillEvidenceText: "",
         phaseSpec: reviewPhaseSpec,
         assembledContext: reviewAssembledContext,
+        hasDiffDigest: hasReviewDiffDigest,
       }),
       initialAttachments: reviewAttachments,
       budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },

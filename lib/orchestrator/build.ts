@@ -3504,6 +3504,66 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     .join("\n");
 }
 
+/** Marker appended when the wave diff patch is cut to fit the pack budget. */
+const REVIEW_DIFF_TRUNCATION_MARKER =
+  "\n...[diff truncated - use read_range for the rest]";
+
+/** Cap on the number of changed-file paths listed in the review diff pack. */
+const REVIEW_DIFF_FILES_CAP = 40;
+
+/**
+ * Render the wave's actual git diff as a bounded review context-pack body.
+ *
+ * Sections, in order: a header, the comma-joined changed-file list (capped at
+ * {@link REVIEW_DIFF_FILES_CAP} with a `(+N more)` suffix), an optional `Stat:`
+ * block, and the `Patch:` body. The patch is truncated so the TOTAL output never
+ * exceeds `maxChars` (plus the marker's own length) — when cut, it ends with
+ * {@link REVIEW_DIFF_TRUNCATION_MARKER}. Returns "" when both stat and patch are
+ * empty/whitespace. The non-patch prefix is built first; the patch then gets
+ * whatever room remains (floor 0), so a tiny budget yields a prefix-only pack
+ * with no Patch section rather than a broken half-line.
+ */
+export function buildReviewDiffPackContent(input: {
+  stat?: string;
+  patch?: string;
+  files: string[];
+  maxChars: number;
+}): string {
+  const stat = (input.stat ?? "").trim();
+  const patch = (input.patch ?? "").trim();
+  if (!stat && !patch) return "";
+
+  const shownFiles = input.files.slice(0, REVIEW_DIFF_FILES_CAP);
+  const overflow = input.files.length - shownFiles.length;
+  const filesLine = `${shownFiles.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}`;
+
+  const prefixLines = [
+    "Unified diff of this wave's landed changes (primary review evidence):",
+    filesLine,
+  ];
+  if (stat) prefixLines.push("Stat:", stat);
+  const prefix = prefixLines.join("\n");
+
+  if (!patch) return prefix;
+
+  // Reserve room for the patch header, the patch body, and the marker within
+  // maxChars. The marker only counts against maxChars when we actually truncate,
+  // but reserving it up front keeps the "when full, no marker" output within
+  // maxChars while a truncated output stays within maxChars + marker length.
+  const patchHeader = "\nPatch:\n";
+  const patchBudget =
+    input.maxChars -
+    prefix.length -
+    patchHeader.length -
+    REVIEW_DIFF_TRUNCATION_MARKER.length;
+  if (patchBudget <= 0) return prefix;
+
+  if (patch.length <= patchBudget) {
+    return `${prefix}${patchHeader}${patch}`;
+  }
+  return `${prefix}${patchHeader}${patch.slice(0, patchBudget)}${REVIEW_DIFF_TRUNCATION_MARKER}`;
+}
+
 export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
@@ -3540,6 +3600,9 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   skillEvidenceText?: string;
   /** Current phase contract that review verdicts must check against. */
   phaseSpec?: BuildPhaseSpec;
+  /** Whether a "Wave diff" pack (the actual landed git diff) is in the assembled
+   * context — when true, tell the reviewer to judge from the diff first. */
+  hasDiffDigest?: boolean;
 }): string {
   const assembledContext = renderAssembledContext(input.assembledContext);
   const hasAssembledContext = assembledContext.trim().length > 0;
@@ -3571,6 +3634,9 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
     !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
+    input.hasDiffDigest
+      ? 'A "Wave diff" pack in the assembled context is the PRIMARY evidence for this review — judge the landed changes from the diff first; use read/read_range only for surrounding context the diff does not show.'
+      : "",
     "Review each task's output from the current phase spec, task instructions, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
