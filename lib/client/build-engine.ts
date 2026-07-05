@@ -45,6 +45,11 @@ import {
   shouldStopForBuildGuardrail,
 } from "@/lib/orchestrator/build-policy";
 import {
+  createBuildWorkerBudget,
+  workerBudgetToolInstructionInput,
+  type BuildWorkerToolInstructionBudget,
+} from "@/lib/orchestrator/build-worker-budgets";
+import {
   buildVerificationFailureTask,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
@@ -452,20 +457,12 @@ function assertNonEmptyBenchmarkModelContent(
 }
 
 const SEARCHES_PER_PHASE = 4;
-const MCP_CALLS_PER_PHASE = 8;
-const TOTAL_MCP_CALLS = 24;
+const MCP_CALLS_PER_PHASE = 24;
+const TOTAL_MCP_CALLS = 96;
 const CODE_INTEL_CALLS_PER_PHASE = 3;
 const TOTAL_CODE_INTEL_CALLS = 10;
 const FETCHES_PER_PHASE = 4;
 const TOTAL_FETCHES = 12;
-const WORKER_READS_PER_TASK = 4;
-const WORKER_RANGE_READS_PER_TASK = 8;
-const WORKER_SEARCHES_PER_TASK = 4;
-const WORKER_RUNS_PER_TASK = 2;
-const WORKER_PATCHES_PER_TASK = 8;
-const WORKER_APPENDS_PER_TASK = 12;
-const WORKER_TOOL_TURNS_PER_TASK = 24;
-const WORKER_BAD_TOOL_CALLS_PER_TASK = 3;
 const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 
 // Tool batching: one combined tool-result message is capped so it fits common
@@ -5638,14 +5635,7 @@ export async function runBuildDiscussion(
     const classifyError = (message: string): "bad" | "unavailable" =>
       UNAVAILABLE.test(message) ? "unavailable" : "bad";
 
-    const workerToolInstructions = (budget: {
-      reads: number;
-      rangeReads: number;
-      searches: number;
-      runs: number;
-      patches: number;
-      appends: number;
-    }): string =>
+    const workerToolInstructions = (budget: BuildWorkerToolInstructionBudget): string =>
       buildWorkerToolInstructions({
         ...budget,
         mcpToolsDoc,
@@ -5694,6 +5684,12 @@ export async function runBuildDiscussion(
         ? `\nContext files:${contextChunks.join("\n")}`
         : "";
       const workerSkillContext = renderSkillContext(workerSkills);
+      const budgets = createBuildWorkerBudget({
+        difficulty: task.difficulty,
+        activeSkillIds: activeSkillIds(workerSkills),
+        runsLeft: runsLeftThisPhase(),
+        failCount: task.failCount,
+      });
       const workerAssembledContext = buildContextManager.buildWorkerContext({
         modelContextProfile: modelContextProfile(worker),
         request: discussion.topic,
@@ -5731,28 +5727,13 @@ export async function runBuildDiscussion(
               contextFileText: "",
               architectNotes: "",
               memoryBrief: "",
-              toolInstructions: workerToolInstructions({
-                reads: WORKER_READS_PER_TASK,
-                rangeReads: WORKER_RANGE_READS_PER_TASK,
-                searches: WORKER_SEARCHES_PER_TASK,
-                runs: Math.min(WORKER_RUNS_PER_TASK, runsLeftThisPhase()),
-                patches: WORKER_PATCHES_PER_TASK,
-                appends: WORKER_APPENDS_PER_TASK,
-              }),
+              toolInstructions: workerToolInstructions(workerBudgetToolInstructionInput(budgets)),
               verbosityInstruction,
               skillContext: workerSkillContext,
               assembledContext: workerAssembledContext,
             }),
           },
         ];
-        const budgets = {
-          reads: WORKER_READS_PER_TASK,
-          rangeReads: WORKER_RANGE_READS_PER_TASK,
-          searches: WORKER_SEARCHES_PER_TASK,
-          runs: Math.min(WORKER_RUNS_PER_TASK, runsLeftThisPhase()),
-          patches: WORKER_PATCHES_PER_TASK,
-          appends: WORKER_APPENDS_PER_TASK,
-        };
         const tracker = createToolCallTracker();
         const replayCache = createToolReplayCache();
         let badToolCalls = 0;
@@ -5970,7 +5951,7 @@ export async function runBuildDiscussion(
           };
         };
 
-        for (let turn = 0; turn < WORKER_TOOL_TURNS_PER_TASK; turn++) {
+        for (let turn = 0; turn < budgets.toolTurns; turn++) {
           const compacted = compactToolConversation(
             workerMessages,
             80_000,
@@ -6029,7 +6010,7 @@ export async function runBuildDiscussion(
                 role: "user",
                 content: `${feedback}\nDo not repeat the same malformed response. Reply with one or more valid JSON tool actions, or stop using tools and provide final file output.`,
               });
-              if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+              if (badToolCalls >= budgets.badToolCalls) {
                 toolIssues.push(
                   `Too many malformed tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
                 );
@@ -6131,7 +6112,7 @@ export async function runBuildDiscussion(
               providerId: parseModelId(worker.modelId).providerId,
               message: `${worker.displayName} tool batch for ${task.id} served nothing (all duplicate, unsupported, or budget-exhausted)`,
             });
-            if (badToolCalls >= WORKER_BAD_TOOL_CALLS_PER_TASK) {
+            if (badToolCalls >= budgets.badToolCalls) {
               toolIssues.push(
                 `Too many repeated or unusable tool calls (${badToolCalls}); task stopped to avoid wasting more turns.`
               );

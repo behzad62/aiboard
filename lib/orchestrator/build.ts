@@ -834,8 +834,12 @@ export interface RunCommandSafety {
   reason?: string;
 }
 
-export const RUNS_PER_PHASE = 8;
-export const TOTAL_RUNS = 24;
+// Shared run-command pools are runaway-loop stops, NOT cost controls: the
+// USD/time budget window governs spend. They must exceed the sum of realistic
+// per-task run budgets so a wave never starves — a wave of 8 hardest-tier tasks
+// can legitimately need ~48 runs (6 each), so the per-phase pool sits above that.
+export const RUNS_PER_PHASE = 24;
+export const TOTAL_RUNS = 120;
 
 export function classifyRunCommand(command: string): RunCommandSafety {
   const trimmed = command.trim();
