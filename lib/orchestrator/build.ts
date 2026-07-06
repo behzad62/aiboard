@@ -1144,6 +1144,27 @@ export function nativeToolCallsToActionText(calls: NativeToolCall[]): string {
  * projects are left to the Architect's explicit verifyCommand. Compiled
  * languages are checked first; `files` are project-relative paths.
  */
+export function mergeNativeToolActionContent(input: {
+  content: string;
+  nativeActionContent: string;
+  actionText: string;
+}): { content: string; nativeActionContent: string } {
+  const actionText = input.actionText.trim();
+  if (!actionText) {
+    return {
+      content: input.content,
+      nativeActionContent: input.nativeActionContent,
+    };
+  }
+  const nativeActionContent = input.nativeActionContent
+    ? `${input.nativeActionContent}\n${actionText}`
+    : actionText;
+  return {
+    content: nativeActionContent,
+    nativeActionContent,
+  };
+}
+
 export function detectVerifyCommand(files: string[]): string {
   const has = (re: RegExp) => files.some((f) => re.test(f));
   if (has(/(^|\/)go\.mod$/)) return "go build ./...";

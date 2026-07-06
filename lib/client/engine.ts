@@ -69,7 +69,10 @@ import {
   shouldEnableProviderNativeWebSearch,
   withWebSearchCapabilityNote,
 } from "@/lib/providers/web-search";
-import { nativeToolCallsToActionText } from "@/lib/orchestrator/build";
+import {
+  mergeNativeToolActionContent,
+  nativeToolCallsToActionText,
+} from "@/lib/orchestrator/build";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -240,6 +243,7 @@ export async function collectStreamWithUsage(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
     let customContent = "";
+    let customNativeActionContent = "";
     let customReportedUsage: StreamUsage | undefined;
     return withTransientRetry(
       async () => {
@@ -257,7 +261,11 @@ export async function collectStreamWithUsage(
           hostedBuildTools,
         })) {
           if (signal?.aborted) throw abortError();
-          if (chunk.type === "token" && chunk.content) {
+          if (
+            chunk.type === "token" &&
+            chunk.content &&
+            !customNativeActionContent
+          ) {
             customContent += chunk.content;
             onToken?.(chunk.content);
             if (stopWhen?.(customContent)) break;
@@ -265,12 +273,14 @@ export async function collectStreamWithUsage(
           if (chunk.type === "tool_call" && chunk.toolCall) {
             const actionText = nativeToolCallsToActionText([chunk.toolCall]);
             if (actionText) {
-              const serialized =
-                customContent.length > 0 && !customContent.endsWith("\n")
-                  ? `\n${actionText}`
-                  : actionText;
-              customContent += serialized;
-              onToken?.(serialized);
+              const merged = mergeNativeToolActionContent({
+                content: customContent,
+                nativeActionContent: customNativeActionContent,
+                actionText,
+              });
+              customContent = merged.content;
+              customNativeActionContent = merged.nativeActionContent;
+              onToken?.(actionText);
             }
           }
           if (chunk.type === "usage") {
@@ -321,6 +331,7 @@ export async function collectStreamWithUsage(
     : messages;
 
   let content = "";
+  let nativeActionContent = "";
   let reportedUsage: StreamUsage | undefined;
   return withTransientRetry(
     async () => {
@@ -341,7 +352,7 @@ export async function collectStreamWithUsage(
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
         if (signal?.aborted) throw abortError();
-        if (chunk.type === "token" && chunk.content) {
+        if (chunk.type === "token" && chunk.content && !nativeActionContent) {
           content += chunk.content;
           onToken?.(chunk.content);
           if (stopWhen?.(content)) break;
@@ -349,12 +360,14 @@ export async function collectStreamWithUsage(
         if (chunk.type === "tool_call" && chunk.toolCall) {
           const actionText = nativeToolCallsToActionText([chunk.toolCall]);
           if (actionText) {
-            const serialized =
-              content.length > 0 && !content.endsWith("\n")
-                ? `\n${actionText}`
-                : actionText;
-            content += serialized;
-            onToken?.(serialized);
+            const merged = mergeNativeToolActionContent({
+              content,
+              nativeActionContent,
+              actionText,
+            });
+            content = merged.content;
+            nativeActionContent = merged.nativeActionContent;
+            onToken?.(actionText);
           }
         }
         if (chunk.type === "usage") {

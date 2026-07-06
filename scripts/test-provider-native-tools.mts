@@ -1,6 +1,7 @@
 /* Provider-native Build tool calls (run: npx tsx scripts/test-provider-native-tools.mts) */
 import {
   buildNativeBuildToolDefinitions,
+  mergeNativeToolActionContent,
   nativeToolCallsToActionText,
 } from "../lib/orchestrator/build";
 import {
@@ -92,6 +93,24 @@ check(
   actionText ===
     "{\"action\":\"read\",\"paths\":[\"src/a.ts\"]}\n{\"action\":\"run\",\"command\":\"npm test\"}",
   actionText
+);
+
+const mergedAfterProse = mergeNativeToolActionContent({
+  content: "I'll inspect the file first.",
+  nativeActionContent: "",
+  actionText: "{\"action\":\"read\",\"paths\":[\"src/a.ts\"]}",
+});
+const mergedAfterSecondTool = mergeNativeToolActionContent({
+  content: mergedAfterProse.content,
+  nativeActionContent: mergedAfterProse.nativeActionContent,
+  actionText: "{\"action\":\"search\",\"query\":\"TODO\"}",
+});
+check(
+  "provider-native tool calls replace surrounding prose with JSON actions only",
+  mergedAfterProse.content === "{\"action\":\"read\",\"paths\":[\"src/a.ts\"]}" &&
+    mergedAfterSecondTool.content ===
+      "{\"action\":\"read\",\"paths\":[\"src/a.ts\"]}\n{\"action\":\"search\",\"query\":\"TODO\"}",
+  { mergedAfterProse, mergedAfterSecondTool }
 );
 
 const sampleTools = workerTools.filter((tool) =>
