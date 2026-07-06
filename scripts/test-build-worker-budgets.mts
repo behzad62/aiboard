@@ -15,8 +15,12 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 // difficulty 3 -> BASE tier
 {
   const b = createBuildWorkerBudget({ difficulty: 3, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
-  check("difficulty 3: reads 4", b.reads === 4, b);
+  check("difficulty 3: reads 20", b.reads === 20, b);
+  check("difficulty 3: rangeReads 30", b.rangeReads === 30, b);
+  check("difficulty 3: searches 20", b.searches === 20, b);
   check("difficulty 3: runs 10", b.runs === 10, b);
+  check("difficulty 3: patches 30", b.patches === 30, b);
+  check("difficulty 3: appends 40", b.appends === 40, b);
   check("difficulty 3: toolTurns 24", b.toolTurns === 24, b);
 }
 
@@ -29,16 +33,24 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 // difficulty 4 -> HARD tier
 {
   const b = createBuildWorkerBudget({ difficulty: 4, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
-  check("difficulty 4: reads 6", b.reads === 6, b);
+  check("difficulty 4: reads 35", b.reads === 35, b);
+  check("difficulty 4: rangeReads 45", b.rangeReads === 45, b);
+  check("difficulty 4: searches 35", b.searches === 35, b);
   check("difficulty 4: runs 20", b.runs === 20, b);
+  check("difficulty 4: patches 45", b.patches === 45, b);
+  check("difficulty 4: appends 50", b.appends === 50, b);
   check("difficulty 4: toolTurns 32", b.toolTurns === 32, b);
 }
 
 // difficulty 5 -> HARDEST tier
 {
   const b = createBuildWorkerBudget({ difficulty: 5, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
-  check("difficulty 5: reads 8", b.reads === 8, b);
+  check("difficulty 5: reads 50", b.reads === 50, b);
+  check("difficulty 5: rangeReads 60", b.rangeReads === 60, b);
+  check("difficulty 5: searches 50", b.searches === 50, b);
   check("difficulty 5: runs 30", b.runs === 30, b);
+  check("difficulty 5: patches 60", b.patches === 60, b);
+  check("difficulty 5: appends 60", b.appends === 60, b);
   check("difficulty 5: toolTurns 40", b.toolTurns === 40, b);
 }
 
@@ -92,22 +104,22 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 
 // ── fetch budget by tier (capped by the shared phase pool) ──────────────────
 
-// BASE tier: fetches 2 (fetchesLeft high enough not to cap).
+// BASE tier: fetches 4 (fetchesLeft high enough not to cap).
 {
   const b = createBuildWorkerBudget({ difficulty: 3, runsLeft: PHASE_POOL, fetchesLeft: 24 });
-  check("difficulty 3: fetches 2", b.fetches === 2, b);
+  check("difficulty 3: fetches 4", b.fetches === 4, b);
 }
 
-// HARD tier: fetches 3.
+// HARD tier: fetches 6.
 {
   const b = createBuildWorkerBudget({ difficulty: 4, runsLeft: PHASE_POOL, fetchesLeft: 24 });
-  check("difficulty 4: fetches 3", b.fetches === 3, b);
+  check("difficulty 4: fetches 6", b.fetches === 6, b);
 }
 
-// HARDEST tier: fetches 4.
+// HARDEST tier: fetches 8.
 {
   const b = createBuildWorkerBudget({ difficulty: 5, runsLeft: PHASE_POOL, fetchesLeft: 24 });
-  check("difficulty 5: fetches 4", b.fetches === 4, b);
+  check("difficulty 5: fetches 8", b.fetches === 8, b);
 }
 
 // Shared phase pool caps fetches: fetchesLeft 1 -> 1 even on the hardest tier.
@@ -128,10 +140,10 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
   check("non-finite fetchesLeft -> fetches 0", b.fetches === 0, b);
 }
 
-// failCount escalation also raises the fetch budget: difficulty 3 + failCount 1 -> HARD -> fetches 3.
+// failCount escalation also raises the fetch budget: difficulty 3 + failCount 1 -> HARD -> fetches 6.
 {
   const b = createBuildWorkerBudget({ difficulty: 3, failCount: 1, runsLeft: PHASE_POOL, fetchesLeft: 24 });
-  check("difficulty 3 + failCount 1: fetches 3 (escalated to HARD)", b.fetches === 3, b);
+  check("difficulty 3 + failCount 1: fetches 6 (escalated to HARD)", b.fetches === 6, b);
 }
 
 // workerBudgetToolInstructionInput omits toolTurns/badToolCalls and keeps runs

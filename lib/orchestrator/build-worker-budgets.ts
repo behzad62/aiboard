@@ -28,37 +28,37 @@ export interface BuildWorkerBudgetInput {
 }
 
 const BASE_WORKER_BUDGET: BuildWorkerBudget = {
-  reads: 4,
-  rangeReads: 8,
-  searches: 4,
+  reads: 20,
+  rangeReads: 30,
+  searches: 20,
   runs: 10,
-  fetches: 2,
-  patches: 8,
-  appends: 12,
+  fetches: 4,
+  patches: 30,
+  appends: 40,
   toolTurns: 24,
   badToolCalls: 3,
 };
 
 const HARD_WORKER_BUDGET: BuildWorkerBudget = {
-  reads: 6,
-  rangeReads: 12,
-  searches: 6,
+  reads: 35,
+  rangeReads: 45,
+  searches: 35,
   runs: 20,
-  fetches: 3,
-  patches: 10,
-  appends: 14,
+  fetches: 6,
+  patches: 45,
+  appends: 50,
   toolTurns: 32,
   badToolCalls: 3,
 };
 
 const HARDEST_WORKER_BUDGET: BuildWorkerBudget = {
-  reads: 8,
-  rangeReads: 16,
-  searches: 8,
+  reads: 50,
+  rangeReads: 60,
+  searches: 50,
   runs: 30,
-  fetches: 4,
-  patches: 12,
-  appends: 16,
+  fetches: 8,
+  patches: 60,
+  appends: 60,
   toolTurns: 40,
   badToolCalls: 3,
 };
