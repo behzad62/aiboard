@@ -272,6 +272,12 @@ export interface McpToolCallResult {
   text: string;
   isError: boolean;
   truncated: boolean;
+  /**
+   * A screenshot (or other image) the MCP tool returned, for vision review.
+   * Only newer runners set this; absence is always safe (feature-detected by
+   * field presence — the SAFE_MCP_RUNNER_VERSION gate is NOT raised for it).
+   */
+  image?: { mimeType: string; dataBase64: string };
 }
 
 /** MCP servers the runner bridges. Null when unsupported/unreachable. */
@@ -306,10 +312,25 @@ export async function callMcpTool(
   if (!res.ok) {
     throw new Error(data.error ?? `MCP call failed (HTTP ${res.status})`);
   }
+  // Newer runners may attach one image (e.g. a Playwright screenshot). Validate
+  // its shape so a malformed/old response can never inject a broken attachment;
+  // absence is safe (feature-detected by presence, not a version bump).
+  const rawImage = (data as { image?: unknown }).image;
+  const image =
+    rawImage &&
+    typeof (rawImage as { mimeType?: unknown }).mimeType === "string" &&
+    typeof (rawImage as { dataBase64?: unknown }).dataBase64 === "string" &&
+    (rawImage as { dataBase64: string }).dataBase64.length > 0
+      ? {
+          mimeType: (rawImage as { mimeType: string }).mimeType,
+          dataBase64: (rawImage as { dataBase64: string }).dataBase64,
+        }
+      : undefined;
   return {
     text: typeof data.text === "string" ? data.text : "",
     isError: !!data.isError,
     truncated: !!data.truncated,
+    ...(image ? { image } : {}),
   };
 }
 

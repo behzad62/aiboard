@@ -45,6 +45,27 @@ export function appendTextToUtf8ByteCap(current, chunk, maxBytes) {
   return capTextToUtf8Bytes(`${current ?? ""}${chunkText}`, maxBytes);
 }
 
+/**
+ * Extract the first usable image content item from an MCP `tools/call` result's
+ * `content` array (MCP image items are `{type:"image", data:<base64>, mimeType}`).
+ * Returns `{ mimeType, dataBase64 }` for the reviewer, or null when none qualify.
+ * First qualifying image wins. Oversized images are SKIPPED (not truncated) so the
+ * base64 always stays valid — a torn base64 string would be undecodable, not just
+ * big. mimeType is normalized to a real `image/*` value, defaulting to image/png.
+ */
+export function extractMcpImageContent(content, maxBase64Chars = 400_000) {
+  if (!Array.isArray(content)) return null;
+  for (const item of content) {
+    if (!item || item.type !== "image" || typeof item.data !== "string") continue;
+    if (!item.data || item.data.length > maxBase64Chars) continue;
+    const mimeType = typeof item.mimeType === "string" && item.mimeType.startsWith("image/")
+      ? item.mimeType
+      : "image/png";
+    return { mimeType, dataBase64: item.data };
+  }
+  return null;
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 /** Constant-time string compare. Returns false on length mismatch (no throw). */

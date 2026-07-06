@@ -20,6 +20,7 @@ import type {
   Verbosity,
 } from "@/lib/db/schema";
 import type { AttachmentPayload } from "@/lib/attachments/types";
+import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
 import type {
   ChatMessage,
   NativeToolDefinition,
@@ -1720,7 +1721,13 @@ export async function runBuildDiscussion(
   const executeTool = async (
     action: ToolAction,
     actor: SelectedModel = architect
-  ): Promise<{ text: string; status: ToolCallResultStatus }> => {
+  ): Promise<{
+    text: string;
+    status: ToolCallResultStatus;
+    /** A screenshot/image the MCP tool returned (vision review). Older runners
+     * never set this; the architect dispatch path ignores it. */
+    image?: { mimeType: string; dataBase64: string };
+  }> => {
     if (!runner) return { text: "No runner is available.", status: "error" };
     const label = `mcp:${action.server}.${action.tool} ${truncate(JSON.stringify(action.args ?? {}), 200)}`;
     const providerId = parseModelId(actor.modelId).providerId;
@@ -1917,6 +1924,7 @@ export async function runBuildDiscussion(
           text: result.text,
         }),
         status: result.isError ? "error" : "ok",
+        ...(result.image ? { image: result.image } : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : "MCP call failed";
@@ -5733,6 +5741,14 @@ export async function runBuildDiscussion(
       changes: string[];
     }> = [];
 
+    // Latest screenshot per task this wave (e.g. a Playwright browser_take_screenshot),
+    // for the reviewer to judge visual acceptance. WAVE-scoped (like `executed`),
+    // NOT batch-scoped like waveWrites — a screenshot outlives the tool batch that
+    // produced it. Keyed by task id; a later shot for the same task replaces the
+    // earlier one. Only wired when a vision-capable reviewer is used and not under
+    // the benchmark harness (see the review-call assembly below).
+    const waveScreenshots = new Map<string, AttachmentPayload>();
+
     // A failed attempt (threw, or returned no files) goes back to the pool
     // once so another — or a better — worker can retry it, instead of the
     // deliverable silently dying with the wave. The second failure is final.
@@ -5988,12 +6004,30 @@ export async function runBuildDiscussion(
               if (shouldRecordToolCallResult(action, toolResult.status)) {
                 recordToolCall(tracker, action);
               }
+              // Any MCP tool result carrying an image (e.g. Playwright
+              // browser_take_screenshot) becomes this task's LATEST acceptance
+              // screenshot for the reviewer. Off under the benchmark harness.
+              // Keep the base64 out of the served text (it would blow the tool
+              // digest); instead tell the worker the shot was captured.
+              let toolResultText = toolResult.text;
+              if (toolResult.image && !benchmark) {
+                const subtype = toolResult.image.mimeType.split("/")[1] ?? "png";
+                const ext = subtype === "jpeg" ? "jpeg" : subtype === "png" ? "png" : subtype;
+                waveScreenshots.set(task.id, {
+                  id: uuidv4(),
+                  filename: `${task.id}-acceptance.${ext}`,
+                  mimeType: toolResult.image.mimeType,
+                  category: "image",
+                  base64Data: toolResult.image.dataBase64,
+                });
+                toolResultText += "\n[screenshot captured and stored for the reviewer]";
+              }
               served.push({
                 label: item.label,
                 result: storeLongToolResult(
                   "tool_exchange",
                   `MCP ${action.server}.${action.tool}`,
-                  toolResult.text
+                  toolResultText
                 ),
               });
               continue;
@@ -6797,6 +6831,19 @@ export async function runBuildDiscussion(
       return;
     const reviewSkillContext = renderSkillContext(reviewSkills);
     const reviewAttachments = claimRawBuildAttachmentsForArchitect();
+    // Attach this wave's acceptance screenshots so the reviewer can judge visual
+    // acceptance (layout, blank screens, error states) — not just the a11y tree
+    // and console text. Only the LATEST four tasks' shots: each image is heavy
+    // context, and four covers the most recently touched work without ballooning
+    // the review call. Inert when: benchmark harness, no screenshots captured, or
+    // the reviewer model can't accept images.
+    const screenshotTaskIds = [...waveScreenshots.keys()];
+    const screenshotAttachments =
+      !benchmark &&
+      screenshotTaskIds.length > 0 &&
+      modelSupportsInputTypes(reviewActor.modelId, ["image"])
+        ? screenshotTaskIds.slice(-4).map((id) => waveScreenshots.get(id)!)
+        : [];
     const reviewSkillEvidenceText = formatSkillEvidenceDigest(waveSkillEvidence);
     const reviewOutstandingTasks = buildOutstandingTasksDigest(tasks);
     const reviewPhaseSpec =
@@ -6925,8 +6972,12 @@ export async function runBuildDiscussion(
         phaseSpec: reviewPhaseSpec,
         assembledContext: reviewAssembledContext,
         hasDiffDigest: hasReviewDiffDigest,
+        // Name the tasks whose screenshots are attached so the prompt tells the
+        // reviewer to judge them visually. Only when shots were actually attached.
+        screenshotTaskIds:
+          screenshotAttachments.length > 0 ? screenshotTaskIds.slice(-4) : undefined,
       }),
-      initialAttachments: reviewAttachments,
+      initialAttachments: [...reviewAttachments, ...screenshotAttachments],
       budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
       appendContext: (textChunk) => {
         extraFileContext += textChunk;

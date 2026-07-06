@@ -3054,6 +3054,7 @@ function playwrightWorkerToolDoc(
     '- Fill a form with exactly: {"action":"tool","server":"playwright","tool":"browser_fill_form","args":{"fields":[{"name":"Local Repository Path","type":"textbox","target":"e19","value":"C:\\\\Users\\\\...\\\\CodeSketch"}]},"reason":"fill form from snapshot refs"}',
     '- For browser_fill_form fields, use "target". Do not use "ref". If a Playwright error says the target is invalid, call browser_snapshot again and use the latest ref.',
     '- Use browser_evaluate only for DOM/page-state checks after browser_navigate; never put require, child_process, process, fs, npm, shell commands, or project file reads in browser_evaluate.',
+    '- After the main workflow settles, capture ONE screenshot for the reviewer with exactly: {"action":"tool","server":"playwright","tool":"browser_take_screenshot","args":{},"reason":"visual acceptance evidence"}',
     '- Do not emit bare calls such as {"action":"browser_snapshot"}. Do not use "arguments" instead of "args". Do not put MCP actions in arrays. Do not concatenate multiple JSON objects without waiting for tool results when the next action depends on the prior result.',
     "- Browser acceptance evidence must name the URL, the action performed, the visible settled result, stuck-loading/error/blank/overlay absence, and console result.",
   ].join("\n");
@@ -3607,6 +3608,9 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   /** Whether a "Wave diff" pack (the actual landed git diff) is in the assembled
    * context — when true, tell the reviewer to judge from the diff first. */
   hasDiffDigest?: boolean;
+  /** Task ids whose acceptance screenshots are ATTACHED to this review call —
+   * when non-empty, tell the reviewer to judge visual acceptance from them. */
+  screenshotTaskIds?: string[];
 }): string {
   const assembledContext = renderAssembledContext(input.assembledContext);
   const hasAssembledContext = assembledContext.trim().length > 0;
@@ -3644,6 +3648,9 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     "Review each task's output from the current phase spec, task instructions, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
+    input.screenshotTaskIds && input.screenshotTaskIds.length > 0
+      ? `Screenshot(s) of the running app are ATTACHED for: ${input.screenshotTaskIds.join(", ")} — judge visual acceptance from them (layout, obvious breakage, error states, blank screens), in addition to the textual evidence.`
+      : "",
     skillRequestDoc(),
     contextRetrieveToolDoc(),
     input.readHopsLeft && input.readHopsLeft > 0

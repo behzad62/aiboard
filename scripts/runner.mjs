@@ -68,6 +68,7 @@ import {
   buildPreservedArgv,
   capTextToUtf8Bytes,
   appendTextToUtf8ByteCap,
+  extractMcpImageContent,
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
@@ -1905,7 +1906,16 @@ class McpServer {
       .map((c) => (c?.type === "text" ? c.text : `[${c?.type ?? "unknown"} content]`))
       .join("\n");
     const capped = capTextToUtf8Bytes(text, MAX_MCP_RESULT_BYTES);
-    return { text: capped.text, isError: !!result?.isError, truncated: capped.truncated };
+    // Surface at most one image (e.g. a Playwright screenshot) to the client for
+    // vision review. First qualifying image wins; oversized ones are skipped so
+    // the base64 stays valid. Older clients simply ignore the extra field.
+    const image = extractMcpImageContent(content);
+    return {
+      text: capped.text,
+      isError: !!result?.isError,
+      truncated: capped.truncated,
+      ...(image ? { image } : {}),
+    };
   }
 
   kill() {

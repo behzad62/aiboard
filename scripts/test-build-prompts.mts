@@ -209,6 +209,13 @@ check(
     /browser_click/i.test(workerTools),
   workerTools
 );
+check(
+  "worker tool instructions tell Playwright workers to capture ONE acceptance screenshot",
+  /"tool":"browser_take_screenshot","args":\{\}/.test(workerTools) &&
+    /visual acceptance evidence/i.test(workerTools) &&
+    /After the main workflow settles/i.test(workerTools),
+  workerTools
+);
 
 const reviewPrompt = buildArchitectReviewPrompt({
   request: "Create a web app for exploring a local git repository.",
@@ -238,6 +245,34 @@ check(
   "review prompt omits the diff-first line when hasDiffDigest is absent",
   !/PRIMARY evidence for this review/i.test(reviewPrompt),
   reviewPrompt
+);
+check(
+  "review prompt omits the screenshot line when no screenshotTaskIds are attached",
+  !/Screenshot\(s\) of the running app are ATTACHED/i.test(reviewPrompt),
+  reviewPrompt
+);
+
+const reviewPromptWithShots = buildArchitectReviewPrompt({
+  request: "Create a web app for exploring a local git repository.",
+  treeText: "public/app.js\nserver/server.js",
+  executedText: "T1 landed UI changes.",
+  outstandingTasks: "",
+  maxNewTasks: 2,
+  cyclesLeft: 1,
+  fileContext: "",
+  readHopsLeft: 0,
+  rangeReadsLeft: 0,
+  runsLeft: 0,
+  searchesLeft: 0,
+  mcpToolsDoc: "",
+  mcpCallsLeft: 0,
+  screenshotTaskIds: ["T1", "T2"],
+} as Parameters<typeof buildArchitectReviewPrompt>[0]);
+check(
+  "review prompt names attached screenshots and asks for visual acceptance when screenshotTaskIds present",
+  /Screenshot\(s\) of the running app are ATTACHED for: T1, T2/i.test(reviewPromptWithShots) &&
+    /judge visual acceptance from them/i.test(reviewPromptWithShots),
+  reviewPromptWithShots
 );
 const reviewPromptWithDiff = buildArchitectReviewPrompt({
   request: "Create a web app for exploring a local git repository.",
