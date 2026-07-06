@@ -8,6 +8,7 @@ import {
 import type { BenchmarkReportBundleV2 } from "../lib/benchmark/types";
 import {
   normalizeBuildTasksForResume,
+  reopenBuildTasksForBlockedQualityGateCheckpoint,
   reopenBuildTasksForQualityGate,
 } from "../lib/orchestrator/build";
 
@@ -225,6 +226,56 @@ check(
   reopenedT1?.instructions
 );
 check("quality gate resume leaves unrelated done tasks alone", untouchedT2?.status === "done", qualityGateReopened);
+
+const legacyCheckpointResume = reopenBuildTasksForBlockedQualityGateCheckpoint(
+  normalizeBuildTasksForResume([
+    {
+      id: "T1",
+      title: "Build web app",
+      instructions: "Create the browser game.",
+      contextFiles: [],
+      outputPaths: ["index.html", "src/main.js"],
+      status: "done",
+    },
+  ]),
+  {
+    status: "blocked",
+    stopReason: "blocked",
+    recoveryLog: ["Stopped as blocked by final quality gate after wave 1."],
+    stopMessage:
+      "Build blocked by final quality gate:\n- Required skill evidence is missing for T1.\n- A web app or UI-affecting build cannot be marked done because no real-browser acceptance evidence was recorded.",
+    problems: [
+      {
+        code: "quality_gate_failed",
+        message: "Required skill evidence is missing for T1.",
+      },
+      {
+        code: "browser_acceptance_missing",
+        message:
+          "A web app or UI-affecting build cannot be marked done because no real-browser acceptance evidence was recorded.",
+        details:
+          "This appears to be a web app or UI-affecting build; Build mode must record a real-browser acceptance pass before completion.",
+      },
+    ],
+    skillEvidence: [
+      {
+        taskId: "T1",
+        skillId: "superpowers:strict-test-driven-development",
+        actor: "worker-a",
+        required: ["GREEN"],
+        reportedEvidence: [],
+        missingEvidence: ["GREEN test/check pass after implementation"],
+        violations: [],
+      },
+    ],
+  }
+);
+check(
+  "legacy quality-gate checkpoint resumes with runnable remediation",
+  legacyCheckpointResume[0]?.status === "fixing" &&
+    /final Build quality gate/i.test(legacyCheckpointResume[0]?.instructions ?? ""),
+  legacyCheckpointResume
+);
 
 function benchmarkBundleWithGuidance(guidance: unknown): BenchmarkReportBundleV2 {
   return {

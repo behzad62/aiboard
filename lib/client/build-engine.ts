@@ -166,6 +166,7 @@ import {
   isTaskWritePathAllowed,
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
+  reopenBuildTasksForBlockedQualityGateCheckpoint,
   reopenBuildTasksForQualityGate,
   outputPathsForTask,
   applyTaskSplit,
@@ -5529,7 +5530,7 @@ export async function runBuildDiscussion(
   ) {
     // Failed checkpoint tasks must be reopened on Resume; otherwise dependents
     // stay blocked and the build can burn waves without dispatching any work.
-    tasks = normalizeBuildTasksForResume(existingCheckpoint.tasks.map((task) => ({
+    const normalizedResumeTasks = normalizeBuildTasksForResume(existingCheckpoint.tasks.map((task) => ({
       ...task,
       // "in_progress"/"review" are transient mid-wave states. If the run stopped
       // while a task was being implemented or awaiting review, re-queue it as
@@ -5541,6 +5542,18 @@ export async function runBuildDiscussion(
           ? "planned"
           : task.status,
     })));
+    tasks = reopenBuildTasksForBlockedQualityGateCheckpoint(normalizedResumeTasks, {
+      status: existingCheckpoint.status,
+      stopReason: existingCheckpoint.stopReason,
+      recoveryLog: existingCheckpoint.recoveryLog,
+      stopMessage: existingCheckpoint.stopReport?.stopMessage,
+      problems: [
+        ...(existingCheckpoint.buildProblems ?? []),
+        ...(existingCheckpoint.stopReport?.problems ?? []),
+      ],
+      skillEvidence: existingCheckpoint.skillEvidence,
+      maxContextFiles: MAX_CONTEXT_FILES,
+    });
     architectNotes = existingCheckpoint.architectNotes;
     planVerifyCommand = acceptVerifyCommandForRunner(
       existingCheckpoint.verifyCommand,

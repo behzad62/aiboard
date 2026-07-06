@@ -247,6 +247,60 @@ export function reopenBuildTasksForQualityGate(
   });
 }
 
+export interface BuildQualityGateCheckpointProblemSignal {
+  code?: string;
+  message?: string;
+  details?: string;
+}
+
+export interface BuildQualityGateCheckpointReopenInput {
+  status?: string;
+  stopReason?: string | null;
+  recoveryLog?: string[];
+  stopMessage?: string | null;
+  problems?: BuildQualityGateCheckpointProblemSignal[];
+  skillEvidence?: SkillEvidence[];
+  maxContextFiles?: number;
+}
+
+function checkpointWasBlockedByQualityGate(
+  input: BuildQualityGateCheckpointReopenInput
+): boolean {
+  if (input.status !== "blocked" && input.stopReason !== "blocked") return false;
+  const text = [
+    input.stopMessage ?? "",
+    ...(input.recoveryLog ?? []),
+    ...(input.problems ?? []).map((problem) =>
+      [problem.code, problem.message, problem.details].filter(Boolean).join(" ")
+    ),
+  ].join("\n");
+  return /final Build quality gate|quality_gate_failed|browser_acceptance_missing/i.test(
+    text
+  );
+}
+
+export function reopenBuildTasksForBlockedQualityGateCheckpoint(
+  tasks: BuildTask[],
+  input: BuildQualityGateCheckpointReopenInput
+): BuildTask[] {
+  if (!checkpointWasBlockedByQualityGate(input)) {
+    return tasks.map((task) => ({ ...task }));
+  }
+
+  const browserProblem = (input.problems ?? []).find(
+    (problem) => problem.code === "browser_acceptance_missing"
+  );
+  const stopMessage = input.stopMessage ?? "";
+  return reopenBuildTasksForQualityGate(tasks, {
+    skillEvidence: input.skillEvidence,
+    browserAcceptanceMissing:
+      !!browserProblem || /real-browser acceptance|browser acceptance/i.test(stopMessage),
+    browserAcceptanceReason:
+      browserProblem?.details ?? browserProblem?.message ?? stopMessage,
+    maxContextFiles: input.maxContextFiles,
+  });
+}
+
 export interface ReviewTaskFilterResult {
   accepted: PlanAction["tasks"];
   skipped: Array<{
