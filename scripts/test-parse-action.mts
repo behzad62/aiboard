@@ -159,6 +159,14 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { answer?: string }).answer === "Reuse the settings store and keep changes scoped.",
   ],
   [
+    "architect guidance_answer parses optional promoted build memory",
+    '{"action":"guidance_answer","guidanceId":"G-T4-1","taskId":"T4","answer":"Reuse the settings store.","memory":"Across this build, reuse the settings store for provider defaults."}',
+    (a) =>
+      a?.action === "guidance_answer" &&
+      (a as { memory?: string }).memory ===
+        "Across this build, reuse the settings store for provider defaults.",
+  ],
+  [
     "architect guidance_answer rejects empty answer",
     '{"action":"guidance_answer","guidanceId":"G-T4-1","taskId":"T4","answer":"   "}',
     (a) => a === null,

@@ -140,6 +140,12 @@ check(
     architectGuidancePrompt.includes('"action":"guidance_answer"'),
   architectGuidancePrompt
 );
+check(
+  "Architect guidance prompt allows promoted build memory",
+  architectGuidancePrompt.includes('"memory":"optional convention') &&
+    architectGuidancePrompt.includes("affects conventions across the build"),
+  architectGuidancePrompt
+);
 
 const skillEvidencePrompt = buildWorkerTaskPrompt({
   request: "Fix a failing web app test.",

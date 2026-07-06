@@ -141,7 +141,7 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
   modelCallOverride: async (input) => {
     calls.push({
       label: input.label,
-      messages: input.messages,
+      messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
     if (input.label === "Architect is planning the project") {
@@ -281,7 +281,7 @@ const mixedHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
   modelCallOverride: async (input) => {
     mixedCalls.push({
       label: input.label,
-      messages: input.messages,
+      messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
     if (input.label === "Architect is planning the project") {
@@ -437,7 +437,7 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
   modelCallOverride: async (input) => {
     asyncCalls.push({
       label: input.label,
-      messages: input.messages,
+      messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
     if (input.label === "Architect is planning the project") {
@@ -627,6 +627,359 @@ check(
     asyncCompleted === "completed" &&
     asyncEvents.some((event) => event.type === "final_answer"),
   { asyncFile, asyncCompleted, labels: asyncLabels }
+);
+
+const promotedDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-promoted-memory",
+  topic: "Build dependent notes that reuse a shared store convention.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(promotedDiscussion);
+
+const promotedCalls: ModelOverrideCall[] = [];
+const promotedConvention =
+  "Across this build, reuse the existing client store for store/cache decisions.";
+const promotedHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    promotedCalls.push({
+      label: input.label,
+      messages: input.messages.map((message) => ({ ...message })),
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is planning the project") {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T1",
+              title: "Create source convention note",
+              instructions:
+                "Create src/source-convention.txt after asking for store guidance.",
+              contextFiles: [],
+              outputPaths: ["src/source-convention.txt"],
+              expectedOutputs: "A note with the selected store convention.",
+              dependsOn: [],
+              difficulty: 1,
+            },
+            {
+              id: "T2",
+              title: "Create dependent convention note",
+              instructions:
+                "Create src/dependent-convention.txt using any shared Architect convention.",
+              contextFiles: [],
+              outputPaths: ["src/dependent-convention.txt"],
+              expectedOutputs: "A dependent note applying the shared convention.",
+              dependsOn: ["T1"],
+              difficulty: 1,
+            },
+          ],
+          notes: "Use existing client-side storage conventions.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker working on T1: Create source convention note") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_request",
+          mode: "blocking",
+          question: "Should later store tasks use the existing client store?",
+          reason: "This affects the rest of the build.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect answering guidance G-T1-1 for T1") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_answer",
+          guidanceId: "G-T1-1",
+          taskId: "T1",
+          answer: "Use the existing client store for this task.",
+          memory: promotedConvention,
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T1: Create source convention note") {
+      return [
+        "Implemented.",
+        "```txt path=src/source-convention.txt",
+        "Use the existing client store for this task.",
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [{ taskId: "T1", verdict: "approve", fixInstructions: "" }],
+          newTasks: [],
+          done: false,
+          notes: "T1 approved; T2 remains.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Test Worker working on T2: Create dependent convention note"
+    ) {
+      return [
+        "Implemented.",
+        "```txt path=src/dependent-convention.txt",
+        promotedConvention,
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 2" ||
+      input.label === "Test Architect is reviewing wave 2"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [{ taskId: "T2", verdict: "approve", fixInstructions: "" }],
+          newTasks: [],
+          done: true,
+          notes: "Approved after shared convention.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed with promoted guidance memory.";
+    }
+    throw new Error(`Unexpected promoted model call label: ${input.label}`);
+  },
+};
+
+await runBuildDiscussion(
+  promotedDiscussion,
+  [architect, worker],
+  () => {},
+  promotedHooks
+);
+
+const promotedT2Call = promotedCalls.find(
+  (call) => call.label === "Test Worker working on T2: Create dependent convention note"
+);
+const promotedT2Prompt =
+  promotedT2Call?.messages.map((message) => message.content).join("\n\n") ?? "";
+const promotedMemory = storeApi
+  .exportStore()
+  .buildMemories.find(
+    (memory) =>
+      memory.discussionId === promotedDiscussion.id &&
+      memory.kind === "decision" &&
+      memory.summary.includes(promotedConvention)
+  );
+check(
+  "promoted guidance memory is injected into later worker prompt",
+  promotedT2Prompt.includes(promotedConvention),
+  promotedT2Prompt
+);
+check(
+  "promoted guidance memory is persisted as a build decision",
+  !!promotedMemory,
+  storeApi.exportStore().buildMemories.filter(
+    (memory) => memory.discussionId === promotedDiscussion.id
+  )
+);
+
+const badAsyncDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-async-bad-answer",
+  topic: "Build an async guidance note despite one malformed Architect answer.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(badAsyncDiscussion);
+
+const badAsyncCalls: ModelOverrideCall[] = [];
+let badAsyncGuidanceAttempts = 0;
+let badAsyncWorkerAttempts = 0;
+let badAsyncError: unknown = null;
+const badAsyncWorkerLabel =
+  "Test Worker working on T3: Create resilient async note";
+const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    badAsyncCalls.push({
+      label: input.label,
+      messages: input.messages.map((message) => ({ ...message })),
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is planning the project") {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T3",
+              title: "Create resilient async note",
+              instructions:
+                "Create src/resilient-async-note.txt after async guidance if it arrives.",
+              contextFiles: [],
+              outputPaths: ["src/resilient-async-note.txt"],
+              expectedOutputs:
+                "A note that completes after a retried guidance answer.",
+              dependsOn: [],
+              difficulty: 1,
+            },
+          ],
+          notes: "Retry malformed async guidance answers without aborting the build.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === badAsyncWorkerLabel) {
+      badAsyncWorkerAttempts += 1;
+      if (badAsyncWorkerAttempts === 1) {
+        return [
+          "```json",
+          JSON.stringify({
+            action: "guidance_request",
+            mode: "async",
+            question: "Should I use the resilient async note path?",
+            reason: "I can draft now but want confirmation for the fix pass.",
+          }),
+          "```",
+        ].join("\n");
+      }
+      return [
+        "Implemented after retried guidance.",
+        "```txt path=src/resilient-async-note.txt",
+        "Use src/resilient-async-note.txt after the retried guidance answer.",
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T3: Create resilient async note") {
+      return [
+        "Implemented draft.",
+        "```txt path=src/resilient-async-note.txt",
+        "draft before async answer",
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect answering guidance G-T3-1 for T3") {
+      badAsyncGuidanceAttempts += 1;
+      if (badAsyncGuidanceAttempts === 1) {
+        return "I cannot answer this as JSON yet.";
+      }
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_answer",
+          guidanceId: "G-T3-1",
+          taskId: "T3",
+          answer:
+            "Use src/resilient-async-note.txt after the retried guidance answer.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T3",
+              verdict: "fix",
+              specVerdict: "fix",
+              qualityVerdict: "approve",
+              specIssues: "Needs async guidance answer.",
+              fixInstructions: "Apply the async guidance answer.",
+            },
+          ],
+          newTasks: [],
+          done: false,
+          notes: "Fix T3.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 2" ||
+      input.label === "Test Architect is reviewing wave 2"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T3",
+              verdict: "approve",
+              specVerdict: "approve",
+              qualityVerdict: "approve",
+              fixInstructions: "",
+            },
+          ],
+          newTasks: [],
+          done: true,
+          notes: "Approved after guidance answer retry.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed after retrying malformed guidance answer.";
+    }
+    throw new Error(`Unexpected bad async model call label: ${input.label}`);
+  },
+};
+
+try {
+  await runBuildDiscussion(
+    badAsyncDiscussion,
+    [architect, worker],
+    () => {},
+    badAsyncHooks
+  );
+} catch (err) {
+  badAsyncError = err;
+}
+
+const badAsyncCompleted = storeApi.getDiscussionById(badAsyncDiscussion.id)?.status;
+check(
+  "malformed async guidance answer requeues task instead of aborting build",
+  badAsyncError == null &&
+    badAsyncGuidanceAttempts === 2 &&
+    badAsyncWorkerAttempts === 2 &&
+    badAsyncCompleted === "completed",
+  {
+    error: badAsyncError instanceof Error ? badAsyncError.message : badAsyncError,
+    labels: badAsyncCalls.map((call) => call.label),
+    badAsyncGuidanceAttempts,
+    badAsyncWorkerAttempts,
+    badAsyncCompleted,
+  }
 );
 
 if (failed === 0) {

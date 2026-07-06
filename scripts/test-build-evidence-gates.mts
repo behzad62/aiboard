@@ -4,6 +4,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
+  splitEvidenceOnlyReviewIssues,
   shouldReviewEvidenceOnlyTask,
 } from "../lib/orchestrator/build-evidence-gates";
 import { createSkillEvidence } from "../lib/skills/evidence";
@@ -168,6 +169,64 @@ check(
   "explicit trust-boundary evidence satisfies security gate",
   completeSecurityEvidence[0]?.missingEvidence.length === 0,
   completeSecurityEvidence
+);
+
+const verificationOnlyWorkerOutput = [
+  "## T9 Verification Complete - Final Report",
+  "",
+  "This task is a **verification-only task** with no file modifications required.",
+  "",
+  "### Skill Evidence",
+  "",
+  "- **superpowers:strict-test-driven-development:** Exemption - T9 is verification-only, not implementation.",
+  "- **superpowers:systematic-debugging:** Exemption - no bugs identified requiring fixes.",
+  "- **agent:security-and-hardening:** Trust boundary reviewed and unsafe case considered: user-controlled ammo input is sanitized.",
+  "- **aiboard:browser-acceptance:** browser_navigate `http://127.0.0.1:8765/`; browser_snapshot confirmed expected content visible; browser_console_messages returned no console errors; no stuck loading, no error banner, no blank screen, no blocking overlay observed.",
+].join("\n");
+const verificationOnlyEvidence = createSkillEvidence({
+  taskId: "T9",
+  actor: "worker",
+  allowVerificationOnlyExemptions: true,
+  activeSkillIds: [
+    "superpowers:strict-test-driven-development",
+    "superpowers:systematic-debugging",
+    "agent:security-and-hardening",
+    "aiboard:browser-acceptance",
+  ],
+  workerOutput: verificationOnlyWorkerOutput,
+});
+check(
+  "markdown skill heading evidence is parsed",
+  verificationOnlyEvidence.every((record) => record.reportedEvidence.length > 0),
+  verificationOnlyEvidence
+);
+check(
+  "verification-only exemptions satisfy implementation/debugging evidence gates",
+  !hasBlockingSkillEvidence(verificationOnlyEvidence, "T9"),
+  verificationOnlyEvidence
+);
+check(
+  "verification-only task with heading evidence reaches no-file review",
+  shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: [],
+    evidence: verificationOnlyEvidence,
+    taskId: "T9",
+    workerOutput: verificationOnlyWorkerOutput,
+  }),
+);
+
+const splitReviewIssues = splitEvidenceOnlyReviewIssues([
+  "TOOL CALL REJECTED: your JSON tool action looks incomplete.",
+  "Patch to src/game.js skipped — the file doesn't exist.",
+]);
+check(
+  "evidence-only review keeps protocol warnings separate from write blockers",
+  splitReviewIssues.warnings.length === 1 &&
+    splitReviewIssues.blocking.length === 1 &&
+    splitReviewIssues.blocking[0]?.includes("Patch to src/game.js"),
+  splitReviewIssues
 );
 
 process.exit(failed === 0 ? 0 : 1);

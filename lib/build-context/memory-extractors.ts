@@ -149,6 +149,48 @@ export function extractReviewMemories(
   return memories;
 }
 
+export function extractGuidanceMemories(
+  input: ExtractorBaseInput & {
+    guidanceId: string;
+    taskId: string;
+    question: string;
+    answer: string;
+    memory?: string;
+    paths?: string[];
+  }
+): BuildMemoryRecord[] {
+  const memory = input.memory?.trim();
+  if (!memory) return [];
+  return [
+    buildMemoryRecord({
+      projectKey: input.projectKey,
+      discussionId: input.discussionId,
+      kind: "decision",
+      summary: memory,
+      detail: compactOneLine(
+        [
+          `Guidance ${input.guidanceId} for ${input.taskId}.`,
+          `Question: ${input.question}`,
+          `Answer: ${input.answer}`,
+        ].join(" "),
+        1_200
+      ),
+      paths: input.paths,
+      taskIds: [input.taskId],
+      evidence: [
+        {
+          kind: "guidance",
+          ref: `${input.discussionId ?? "discussion"}#${input.guidanceId}`,
+          excerpt: evidenceExcerpt(
+            `${input.question} ${input.answer} ${memory}`
+          ),
+        },
+      ],
+      createdAt: input.createdAt,
+    }),
+  ];
+}
+
 export interface CommandMemoryResult {
   command: string;
   exitCode: number;

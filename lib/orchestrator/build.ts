@@ -306,6 +306,7 @@ export interface GuidanceAnswerAction {
   guidanceId: string;
   taskId: string;
   answer: string;
+  memory?: string;
 }
 
 export interface PlanAction {
@@ -609,6 +610,9 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         taskId: stringSchema("Task id for a guidance answer."),
         question: stringSchema("Worker guidance question."),
         answer: stringSchema("Architect guidance answer."),
+        memory: stringSchema(
+          "Optional promoted build convention when the answer applies beyond this task."
+        ),
         query: stringSchema("Search query."),
         symbol: stringSchema("Symbol name for code_intel trace_symbol."),
         server: stringSchema("MCP server name."),
@@ -2491,7 +2495,15 @@ function normalizeGuidanceAnswerAction(
   const taskId = typeof raw.taskId === "string" ? raw.taskId.trim() : "";
   const answer = typeof raw.answer === "string" ? raw.answer.trim() : "";
   if (!guidanceId || !taskId || !answer) return null;
-  return { action: "guidance_answer", guidanceId, taskId, answer };
+  const memoryRaw = (raw as { memory?: unknown }).memory;
+  const memory = typeof memoryRaw === "string" ? memoryRaw.trim() : "";
+  return {
+    action: "guidance_answer",
+    guidanceId,
+    taskId,
+    answer,
+    ...(memory ? { memory } : {}),
+  };
 }
 
 /**
@@ -3842,6 +3854,7 @@ export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
   return [
     "You are the Build Architect answering a worker's task-local guidance request.",
     "Answer the worker's exact question. Keep the answer advisory and scoped to this task.",
+    'If the answer affects conventions across the build, include a short optional "memory" field with that reusable convention. Omit "memory" for task-only answers.',
     "Do not change outputPaths, dependsOn, file ownership, or write permissions. If the task contract is wrong, say what follow-up planning or review should do, but do not rewrite the contract in this answer.",
     "",
     "Overall project request:",
@@ -3868,7 +3881,7 @@ export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
     input.guidance.reason ? `Reason:\n${input.guidance.reason}` : "",
     "",
     "Return ONLY one fenced json block:",
-    `{"action":"guidance_answer","guidanceId":"${input.guidance.id}","taskId":"${input.task.id}","answer":"concise advisory answer for the worker"}`,
+    `{"action":"guidance_answer","guidanceId":"${input.guidance.id}","taskId":"${input.task.id}","answer":"concise advisory answer for the worker","memory":"optional convention to reuse when this affects conventions across the build"}`,
   ]
     .filter(Boolean)
     .join("\n");

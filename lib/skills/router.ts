@@ -296,7 +296,14 @@ export function selectSkills(input: SkillActivationInput): SkillActivation {
     always: ALWAYS_SKILLS,
     index: compactSkillIndexIds(),
     overlays,
-    evidenceRequired: evidenceFor(overlays),
+    evidenceRequired: [
+      ...evidenceFor(overlays),
+      ...(input.phase === "worker" && docsOnlyTask(input)
+        ? [
+            "agent:test-driven-development: TDD exemption - docs-only task; verify documentation content instead.",
+          ]
+        : []),
+    ],
     warnings: resolved.warnings,
   };
 }

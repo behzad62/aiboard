@@ -69,6 +69,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   shouldReviewEvidenceOnlyTask,
+  splitEvidenceOnlyReviewIssues,
 } from "@/lib/orchestrator/build-evidence-gates";
 import {
   filterBuildMcpToolsForPrompt,
@@ -312,6 +313,7 @@ import {
 import {
   commandProblemsToMemoryResults,
   extractCommandMemoriesForExecution,
+  extractGuidanceMemories,
   extractProblemMemories,
   extractReviewMemories,
   extractSkillViolationMemories,
@@ -5322,6 +5324,7 @@ export async function runBuildDiscussion(
 
   // ── 1) Plan (the Architect inspects files in a real conversation, then plans) ─
   let architectNotes = "";
+  const promotedGuidanceNotes: string[] = [];
   let extraFileContext = "";
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
@@ -5400,10 +5403,33 @@ export async function runBuildDiscussion(
     record.status = "answered";
     record.answer = answer.answer;
     record.answeredAtWave = wave;
+    const promotedMemory = answer.memory?.trim();
+    if (promotedMemory) {
+      const note = `Guidance ${record.id} for ${task.id}: ${truncate(promotedMemory, 700)}`;
+      promotedGuidanceNotes.push(note);
+      architectNotes = [architectNotes, note].filter(Boolean).join("\n");
+      persistBuildMemories(
+        extractGuidanceMemories({
+          projectKey: buildMemoryProjectKey,
+          discussionId: discussion.id,
+          guidanceId: record.id,
+          taskId: task.id,
+          question: record.question,
+          answer: answer.answer,
+          memory: promotedMemory,
+          paths: [
+            ...(task.contextFiles ?? []),
+            ...(task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)),
+          ],
+        })
+      );
+    }
     emit({
       type: "diagnostic",
       phase: "round_preparing",
-      message: `Architect answered guidance ${record.id} for ${task.id}`,
+      message: promotedMemory
+        ? `Architect answered guidance ${record.id} for ${task.id} and promoted it to build memory`
+        : `Architect answered guidance ${record.id} for ${task.id}`,
     });
   };
 
@@ -6131,8 +6157,6 @@ export async function runBuildDiscussion(
         cycle,
       });
 
-      await answerPendingGuidanceForTask(task, cycle);
-
       const contextChunks: string[] = [];
       for (const path of task.contextFiles) {
         const content = await readFile(path);
@@ -6189,6 +6213,8 @@ export async function runBuildDiscussion(
       const patchedFiles: string[] = [];
       const toolIssues: string[] = [];
       try {
+        await answerPendingGuidanceForTask(task, cycle);
+
         let workerMessages: ChatMessage[] = [
           {
             role: "system",
@@ -6839,11 +6865,16 @@ export async function runBuildDiscussion(
         const files = [...new Set([...patchedFiles, ...artifactResult.written])];
         const issues = [...toolIssues, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
+        const declaredOutputPaths = task.outputPaths?.length
+          ? task.outputPaths
+          : outputPathsForTask(task);
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
           actor: worker.displayName,
           activeSkillIds: workerSkills.overlays,
           workerOutput: output,
+          allowVerificationOnlyExemptions:
+            files.length === 0 && declaredOutputPaths.length === 0,
         });
         if (skillEvidence.length > 0) {
           skillEvidenceRecords.push(...skillEvidence);
@@ -6890,9 +6921,6 @@ export async function runBuildDiscussion(
         }
         // The model DID respond — a no-files result is a quality failure
         // (bad output), distinct from a provider denial.
-        const declaredOutputPaths = task.outputPaths?.length
-          ? task.outputPaths
-          : outputPathsForTask(task);
         const reviewFiles = evidenceOnlyRetryFiles({
           emittedFiles: files,
           priorFiles: task.contextFiles,
@@ -6928,9 +6956,22 @@ export async function runBuildDiscussion(
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
+        const reviewIssues = evidenceOnlyNoFileReview
+          ? splitEvidenceOnlyReviewIssues(issues)
+          : { blocking: issues, warnings: [] };
         const issueNotes =
           issues.length > 0
             ? `\nWRITE ISSUES — these changes did NOT land; act on them in your review:\n${issues.map((s) => `- ${s}`).join("\n")}`
+            : "";
+        const filteredIssueNotes =
+          evidenceOnlyNoFileReview && reviewIssues.blocking.length !== issues.length
+            ? reviewIssues.blocking.length > 0
+              ? `\nWRITE ISSUES - these changes did NOT land; act on them in your review:\n${reviewIssues.blocking.map((s) => `- ${s}`).join("\n")}`
+              : ""
+            : issueNotes;
+        const warningNotes =
+          reviewIssues.warnings.length > 0
+            ? `\nRECOVERED TOOL WARNINGS - these happened before the final evidence-only response and did not skip a file write:\n${reviewIssues.warnings.map((s) => `- ${s}`).join("\n")}`
             : "";
         const skillNotes = formatSkillEvidenceDigest(skillEvidence);
         executed.push({
@@ -6945,7 +6986,8 @@ export async function runBuildDiscussion(
                 : "\n\nEvidence-only task: no files were emitted or expected; reviewing the worker's command evidence and notes."
               : "") +
             (skillNotes ? `\n\n${skillNotes}` : "") +
-            issueNotes,
+            filteredIssueNotes +
+            warningNotes,
           changes: waveChangeSummaries.get(task.id) ?? [],
         });
         emit({
@@ -7413,7 +7455,13 @@ export async function runBuildDiscussion(
       extraFileContext += `\nYOUR PREVIOUS FIXES THAT DID NOT LAND:\n${fixIssues.map((s) => `- ${s}`).join("\n")}`;
     }
 
-    if (action.notes?.trim()) architectNotes = action.notes;
+    if (action.notes?.trim()) {
+      const reviewNotes = action.notes.trim();
+      architectNotes = [
+        reviewNotes,
+        ...promotedGuidanceNotes.filter((note) => !reviewNotes.includes(note)),
+      ].join("\n");
+    }
 
     const reviewedTaskIds = new Set<string>();
     const sendTaskBackForFix = (

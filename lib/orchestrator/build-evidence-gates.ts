@@ -99,3 +99,25 @@ export function shouldReviewEvidenceOnlyTask(input: {
     text
   );
 }
+
+function isWriteLandingIssue(issue: string): boolean {
+  return /\b(WRITE REJECTED|CONFLICT:|Patch to|patch op\(s\)|Append to|Rewrite of|Edit to|edit\(s\)|Output was cut off mid-block|suspicious rewrite|did NOT match)\b/i.test(
+    issue
+  );
+}
+
+export function splitEvidenceOnlyReviewIssues(issues: string[]): {
+  blocking: string[];
+  warnings: string[];
+} {
+  const blocking: string[] = [];
+  const warnings: string[] = [];
+  for (const issue of issues) {
+    if (isWriteLandingIssue(issue)) {
+      blocking.push(issue);
+    } else {
+      warnings.push(issue);
+    }
+  }
+  return { blocking, warnings };
+}

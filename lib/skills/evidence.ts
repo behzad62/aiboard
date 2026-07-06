@@ -2,23 +2,76 @@ import { getSkillCards } from "./registry";
 import type { SkillEvidence } from "./types";
 
 function evidenceLines(text: string): string[] {
-  const match = /skill evidence\s*:([\s\S]*)/i.exec(text);
-  if (!match) return [];
-  return match[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^[-*]\s*/, ""))
+  const lines = text.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => {
+    const normalized = line
+      .trim()
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/\*\*/g, "")
+      .trim();
+    return /^skill evidence\s*:?\s*$/i.test(normalized) || /^skill evidence\s*:/i.test(normalized);
+  });
+  if (startIndex < 0) return [];
+
+  const startLine = lines[startIndex]
+    .trim()
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+  const sameLine = /^skill evidence\s*:\s*(.+)$/i.exec(startLine)?.[1];
+  const rawEvidence = sameLine ? [sameLine, ...lines.slice(startIndex + 1)] : lines.slice(startIndex + 1);
+
+  return rawEvidence
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^[-*]\s*/, "")
+        .replace(/^\d+\.\s*/, "")
+        .replace(/\*\*/g, "")
+        .trim()
+    )
     .filter(Boolean)
     .filter((line) => !line.startsWith("```"))
     .slice(0, 8);
 }
 
-function missingForSkill(skillId: string, required: string[], reported: string[]): string[] {
+function hasExplicitExemption(joined: string): boolean {
+  return /\b(exemption|exempt|not applicable|n\/a|not needed)\b/.test(joined);
+}
+
+function hasVerificationOnlyTddExemption(joined: string): boolean {
+  return (
+    hasExplicitExemption(joined) &&
+    /\b(verification[- ]only|no file modifications?|no file changes?|no code changes?|no implementation|not implementation)\b/.test(
+      joined
+    )
+  );
+}
+
+function hasVerificationOnlyDebuggingExemption(joined: string): boolean {
+  return (
+    hasExplicitExemption(joined) &&
+    /\b(verification[- ]only|no bugs? identified|no bugs?|no fixes? required|no debugging required|no implementation|not implementation)\b/.test(
+      joined
+    )
+  );
+}
+
+function missingForSkill(
+  skillId: string,
+  required: string[],
+  reported: string[],
+  allowVerificationOnlyExemptions: boolean
+): string[] {
   if (reported.length === 0) return required;
   const joined = reported.join("\n").toLowerCase();
   if (
     skillId === "agent:test-driven-development" ||
     skillId === "superpowers:strict-test-driven-development"
   ) {
+    if (allowVerificationOnlyExemptions && hasVerificationOnlyTddExemption(joined)) {
+      return [];
+    }
     const missing: string[] = [];
     if (!/\bred\b|fail|failed|failing/.test(joined)) {
       missing.push("RED test/check failure before implementation");
@@ -35,6 +88,9 @@ function missingForSkill(skillId: string, required: string[], reported: string[]
     return missing;
   }
   if (skillId === "superpowers:systematic-debugging") {
+    if (allowVerificationOnlyExemptions && hasVerificationOnlyDebuggingExemption(joined)) {
+      return [];
+    }
     const missing: string[] = [];
     if (!/root cause|repro|reproduce|hypothesis|trace/.test(joined)) {
       missing.push("Root cause or reproduction identified before the fix");
@@ -82,13 +138,19 @@ export function createSkillEvidence(input: {
   actor: string;
   activeSkillIds: string[];
   workerOutput: string;
+  allowVerificationOnlyExemptions?: boolean;
 }): SkillEvidence[] {
   const reported = evidenceLines(input.workerOutput);
   return getSkillCards(input.activeSkillIds)
     .filter((skill) => (skill.evidenceRequirements ?? []).length > 0)
     .map((skill) => {
       const required = skill.evidenceRequirements ?? [];
-      const missingEvidence = missingForSkill(skill.id, required, reported);
+      const missingEvidence = missingForSkill(
+        skill.id,
+        required,
+        reported,
+        input.allowVerificationOnlyExemptions ?? false
+      );
       return {
         taskId: input.taskId,
         skillId: skill.id,

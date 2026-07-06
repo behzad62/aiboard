@@ -15,7 +15,8 @@ export type BuildMemoryEvidenceKind =
   | "command"
   | "review"
   | "user_note"
-  | "skill";
+  | "skill"
+  | "guidance";
 
 export interface BuildMemoryEvidenceRef {
   kind: BuildMemoryEvidenceKind;
