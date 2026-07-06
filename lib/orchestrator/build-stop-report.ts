@@ -102,28 +102,20 @@ function pickPrimaryCause(
   commandProblems: BuildCommandProblem[],
   problems: BuildProblem[]
 ): BuildProblem | null {
-  const failedCommands = sortNewestCommands(commandProblems).filter(
-    (command) => command.exitCode !== 0 || command.denied
-  );
-  if (failedCommands.length > 0) {
-    return commandProblemToBuildProblem(failedCommands[0]);
-  }
-
-  const ranked = sortNewestProblems(problems).sort((a, b) => {
+  const failedCommandProblems = sortNewestCommands(commandProblems)
+    .filter((command) => command.exitCode !== 0 || command.denied)
+    .map(commandProblemToBuildProblem);
+  const ranked = [...sortNewestProblems(problems), ...failedCommandProblems].sort((a, b) => {
     const causeRank = (problem: BuildProblem) => {
       if (
         problem.code === "verification_repeated" ||
-        problem.code === "verification_failed"
+        problem.code === "verification_failed" ||
+        problem.code === "quality_gate_failed" ||
+        problem.code === "browser_acceptance_missing"
       ) {
         return 5;
       }
-      if (
-        problem.code === "quality_gate_failed" ||
-        problem.code === "browser_acceptance_missing" ||
-        problem.code === "command_failed"
-      ) {
-        return 4;
-      }
+      if (problem.code === "command_failed") return 4;
       if (problem.code === "repeated_no_progress") return 1;
       return 2;
     };

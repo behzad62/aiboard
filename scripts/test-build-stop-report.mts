@@ -156,6 +156,55 @@ check(
   formatBuildStopReportMarkdown(missingCommandReport)
 );
 
+const qualityGateReport = createBuildStopReport({
+  discussionId: "d4",
+  topic: "Create a static web game.",
+  status: "blocked",
+  stopReason: "blocked",
+  stopMessage:
+    "Build blocked by final quality gate: Required skill evidence is missing for T1.",
+  wave: 3,
+  verifyCommand: "node --check src/game.js",
+  tasks: [{ id: "T1", title: "Implement game", status: "done" }],
+  problems: [
+    {
+      id: "p5",
+      createdAt: "2026-07-06T14:06:36.000Z",
+      code: "quality_gate_failed",
+      severity: "blocked",
+      source: "engine",
+      message: "Required skill evidence is missing for T1.",
+      details:
+        "- T1 superpowers:strict-test-driven-development: GREEN test/check pass after implementation",
+      wave: 3,
+    },
+  ],
+  commandProblems: [
+    {
+      command: "dotnet build",
+      exitCode: -1,
+      durationMs: 0,
+      outputPreview:
+        "Checkpoint verifyCommand ignored: `dotnet build` does not match this project tree.",
+      createdAt: "2026-07-06T14:01:00.000Z",
+      denied: true,
+    },
+  ],
+  failureFingerprints: {
+    "dotnet build|MSB1003": 5,
+  },
+  recoveryLog: ["Stopped as blocked by final quality gate after wave 3."],
+  createdAt: "2026-07-06T14:06:36.732Z",
+});
+
+check(
+  "final quality gate outranks stale failed command as primary cause",
+  qualityGateReport.primaryCause?.code === "quality_gate_failed" &&
+    qualityGateReport.summary.includes("Required skill evidence is missing for T1") &&
+    !qualityGateReport.summary.includes("dotnet build"),
+  qualityGateReport
+);
+
 const truncatedCommandReport = createBuildStopReport({
   discussionId: "d3",
   topic: "Fix tests.",
