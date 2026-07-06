@@ -161,61 +161,84 @@ check(
 );
 check("resume keeps dependent planned tasks intact", resumed.find((task) => task.id === "T3")?.status === "planned", resumed);
 
-__resetBenchmarkStoreForTests();
-__setAdapterForTests(memoryAdapter);
-
-const invalidGuidanceBundle: BenchmarkReportBundleV2 = {
-  version: 2,
-  exportedAt: "2026-06-21T00:00:00.000Z",
-  suites: [],
-  runs: [],
-  cases: [],
-  attempts: [],
-  metricValues: [],
-  artifacts: [],
-  failures: [],
-  traces: [],
-  caseV2: [],
-  attemptsV2: [],
-  verifierResults: [],
-  runEvents: [],
-  toolCallTraces: [],
-  teamCompositions: [],
-  harnessCertifications: [],
-  sourceEvidence: {
-    gameMatches: [],
-    buildCheckpoints: [
-      {
-        ...checkpoint,
-        tasks: [
-          {
-            ...checkpoint.tasks[0],
-            guidance: [
-              {
-                ...checkpoint.tasks[0].guidance![0],
-                requestedAtWave: "2",
-              },
-            ],
-          },
-        ],
-      } as never,
-    ],
-    buildStats: [],
-  },
-};
-
-let invalidGuidanceRejected = false;
-let invalidGuidanceMessage = "";
-try {
-  await importBenchmarkReportBundleV2(invalidGuidanceBundle);
-} catch (err) {
-  invalidGuidanceRejected = true;
-  invalidGuidanceMessage = err instanceof Error ? err.message : String(err);
+function benchmarkBundleWithGuidance(guidance: unknown): BenchmarkReportBundleV2 {
+  return {
+    version: 2,
+    exportedAt: "2026-06-21T00:00:00.000Z",
+    suites: [],
+    runs: [],
+    cases: [],
+    attempts: [],
+    metricValues: [],
+    artifacts: [],
+    failures: [],
+    traces: [],
+    caseV2: [],
+    attemptsV2: [],
+    verifierResults: [],
+    runEvents: [],
+    toolCallTraces: [],
+    teamCompositions: [],
+    harnessCertifications: [],
+    sourceEvidence: {
+      gameMatches: [],
+      buildCheckpoints: [
+        {
+          ...checkpoint,
+          tasks: [
+            {
+              ...checkpoint.tasks[0],
+              guidance: [guidance],
+            },
+          ],
+        } as never,
+      ],
+      buildStats: [],
+    },
+  };
 }
-check(
+
+async function expectGuidanceImportRejects(
+  name: string,
+  guidance: unknown
+): Promise<void> {
+  __resetBenchmarkStoreForTests();
+  __setAdapterForTests(memoryAdapter);
+  let rejected = false;
+  let message = "";
+  try {
+    await importBenchmarkReportBundleV2(benchmarkBundleWithGuidance(guidance));
+  } catch (err) {
+    rejected = true;
+    message = err instanceof Error ? err.message : String(err);
+  }
+  check(
+    name,
+    rejected && /Invalid sourceEvidence\.buildCheckpoints/i.test(message),
+    message || "bundle imported"
+  );
+}
+
+await expectGuidanceImportRejects(
   "benchmark import rejects malformed task-local guidance",
-  invalidGuidanceRejected && /Invalid sourceEvidence\.buildCheckpoints/i.test(invalidGuidanceMessage),
-  invalidGuidanceMessage || "bundle imported"
+  {
+    ...checkpoint.tasks[0].guidance![0],
+    requestedAtWave: "2",
+  }
+);
+await expectGuidanceImportRejects(
+  "benchmark import rejects answered task-local guidance without answer",
+  {
+    ...checkpoint.tasks[0].guidance![0],
+    answer: undefined,
+  }
+);
+await expectGuidanceImportRejects(
+  "benchmark import rejects answered task-local guidance with blank answer",
+  {
+    ...checkpoint.tasks[0].guidance![0],
+    answer: "   ",
+  }
 );
 __setAdapterForTests(null);
 

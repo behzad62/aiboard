@@ -1556,14 +1556,21 @@ function isBuildUsageModelTotal(value: unknown): boolean {
 
 function isBuildTaskGuidanceRecord(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
+  const status = value.status;
+  const hasValidOptionalAnswer =
+    value.answer === undefined || typeof value.answer === "string";
+  const hasRequiredAnsweredAnswer =
+    status !== "answered" ||
+    (typeof value.answer === "string" && value.answer.trim().length > 0);
   return (
     typeof value.id === "string" &&
     typeof value.taskId === "string" &&
     (value.mode === "blocking" || value.mode === "async") &&
     typeof value.question === "string" &&
     (value.reason === undefined || typeof value.reason === "string") &&
-    (value.status === "pending" || value.status === "answered") &&
-    (value.answer === undefined || typeof value.answer === "string") &&
+    (status === "pending" || status === "answered") &&
+    hasValidOptionalAnswer &&
+    hasRequiredAnsweredAnswer &&
     (value.requestedBy === undefined ||
       typeof value.requestedBy === "string") &&
     typeof value.requestedAtWave === "number" &&
