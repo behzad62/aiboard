@@ -1214,20 +1214,28 @@ export function mergeNativeToolActionContent(input: {
 }
 
 export function detectVerifyCommand(files: string[]): string {
-  const has = (re: RegExp) => files.some((f) => re.test(f));
-  if (has(/(^|\/)go\.mod$/)) return "go build ./...";
-  if (has(/(^|\/)Cargo\.toml$/)) return "cargo check";
-  if (has(/\.csproj$/) || has(/\.fsproj$/) || has(/\.sln$/)) return "dotnet build";
-  if (has(/(^|\/)pom\.xml$/)) return "mvn -q -DskipTests compile";
-  if (has(/(^|\/)mix\.exs$/)) return "mix compile";
+  const hasRoot = (re: RegExp) =>
+    normalizedProjectFiles(files).some((file) => !file.includes("/") && re.test(file));
+  if (hasRoot(/^go\.mod$/)) return "go build ./...";
+  if (hasRoot(/^cargo\.toml$/)) return "cargo check";
+  if (hasRoot(/\.(?:csproj|fsproj|sln)$/)) return "dotnet build";
+  if (hasRoot(/^pom\.xml$/)) return "mvn -q -DskipTests compile";
+  if (hasRoot(/^mix\.exs$/)) return "mix compile";
   // C/C++: configure into a scratch dir, then build (&& works in cmd and sh).
-  if (has(/(^|\/)CMakeLists\.txt$/))
+  if (hasRoot(/^cmakelists\.txt$/))
     return "cmake -S . -B .verify-build && cmake --build .verify-build";
-  if (has(/(^|\/)Makefile$/)) return "make";
-  if (has(/(^|\/)tsconfig\.json$/)) return "npx --yes tsc --noEmit";
+  if (hasRoot(/^makefile$/)) return "make";
+  if (hasRoot(/^tsconfig\.json$/)) return "npx --yes tsc --noEmit";
   // Python: stdlib byte-compile catches syntax errors; no deps assumed.
-  if (has(/\.py$/)) return "python -m compileall -q .";
+  if (hasRoot(/\.py$/)) return "python -m compileall -q .";
   return "";
+}
+
+export function resolveRunnerProjectTree(input: {
+  browserTree: string[];
+  runnerTree: string[] | null | undefined;
+}): string[] {
+  return [...new Set(input.runnerTree ?? input.browserTree)];
 }
 
 /** A compact worker-performance line for the prompt scoreboard. */
@@ -1332,6 +1340,12 @@ function hasProjectFile(files: string[], pattern: RegExp): boolean {
   return normalizedProjectFiles(files).some((file) => pattern.test(file));
 }
 
+function hasRootProjectFile(files: string[], pattern: RegExp): boolean {
+  return normalizedProjectFiles(files).some(
+    (file) => !file.includes("/") && pattern.test(file)
+  );
+}
+
 function verificationSuggestionForProject(files: string[]): string {
   const detected = detectVerifyCommand(files);
   if (detected) return `Use \`${detected}\` or another verifier for the detected stack.`;
@@ -1351,60 +1365,71 @@ function commandMentions(command: string, pattern: RegExp): boolean {
   return pattern.test(command.toLowerCase().replace(/\s+/g, " "));
 }
 
+function commandMentionsProjectPath(command: string, pattern: RegExp): boolean {
+  return pattern.test(command.toLowerCase().replace(/\\/g, "/"));
+}
+
 function stackMismatchReason(command: string, files: string[]): string | null {
   const reject = (tool: string, required: string): string =>
     `${tool} does not match this project tree; ${required} was not found. ${verificationSuggestionForProject(files)}`;
 
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)dotnet\s+build\b/) &&
-    !hasProjectFile(files, /\.(?:csproj|fsproj|sln)$/)
+    !hasRootProjectFile(files, /\.(?:csproj|fsproj|sln)$/) &&
+    !commandMentionsProjectPath(command, /\.(?:csproj|fsproj|sln)\b/)
   ) {
-    return reject("`dotnet build`", "no .sln, .csproj, or .fsproj file");
+    return reject("`dotnet build`", "no root .sln, .csproj, or .fsproj file");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)cargo\s+(?:check|build|test)\b/) &&
-    !hasProjectFile(files, /(^|\/)cargo\.toml$/)
+    !hasRootProjectFile(files, /^cargo\.toml$/) &&
+    !commandMentionsProjectPath(command, /cargo\.toml\b/)
   ) {
-    return reject("`cargo`", "Cargo.toml");
+    return reject("`cargo`", "root Cargo.toml");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)go\s+(?:build|test)\b/) &&
     !(
-      hasProjectFile(files, /(^|\/)go\.mod$/) ||
-      hasProjectFile(files, /\.go$/)
+      hasRootProjectFile(files, /^go\.mod$/) ||
+      hasRootProjectFile(files, /\.go$/)
     )
   ) {
-    return reject("`go build`", "go.mod or a .go file");
+    return reject("`go build`", "root go.mod or a root .go file");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)mvn\b/) &&
-    !hasProjectFile(files, /(^|\/)pom\.xml$/)
+    !hasRootProjectFile(files, /^pom\.xml$/) &&
+    !commandMentionsProjectPath(command, /pom\.xml\b/)
   ) {
-    return reject("`mvn`", "pom.xml");
+    return reject("`mvn`", "root pom.xml");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)mix\s+(?:compile|test)\b/) &&
-    !hasProjectFile(files, /(^|\/)mix\.exs$/)
+    !hasRootProjectFile(files, /^mix\.exs$/) &&
+    !commandMentionsProjectPath(command, /mix\.exs\b/)
   ) {
-    return reject("`mix`", "mix.exs");
+    return reject("`mix`", "root mix.exs");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)cmake\b/) &&
-    !hasProjectFile(files, /(^|\/)cmakelists\.txt$/)
+    !hasRootProjectFile(files, /^cmakelists\.txt$/) &&
+    !commandMentionsProjectPath(command, /cmakelists\.txt\b/)
   ) {
-    return reject("`cmake`", "CMakeLists.txt");
+    return reject("`cmake`", "root CMakeLists.txt");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)make\b/) &&
-    !hasProjectFile(files, /(^|\/)makefile$/)
+    !hasRootProjectFile(files, /^makefile$/) &&
+    !commandMentionsProjectPath(command, /makefile\b/)
   ) {
-    return reject("`make`", "Makefile");
+    return reject("`make`", "root Makefile");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)(?:npx\s+(?:--yes\s+)?tsc|tsc)\b/) &&
-    !hasProjectFile(files, /(^|\/)tsconfig\.json$/)
+    !hasRootProjectFile(files, /^tsconfig\.json$/) &&
+    !commandMentionsProjectPath(command, /tsconfig\.json\b/)
   ) {
-    return reject("`tsc`", "tsconfig.json");
+    return reject("`tsc`", "root tsconfig.json");
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)(?:python|python3|py(?:\s+-3)?)\s+-m\s+compileall\b/) &&
@@ -1414,9 +1439,10 @@ function stackMismatchReason(command: string, files: string[]): string | null {
   }
   if (
     commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)npm\s+(?:test|run\s+(?:build|check|lint|test))\b/) &&
-    !hasProjectFile(files, /(^|\/)package\.json$/)
+    !hasRootProjectFile(files, /^package\.json$/) &&
+    !commandMentionsProjectPath(command, /package\.json\b/)
   ) {
-    return reject("`npm`", "package.json");
+    return reject("`npm`", "root package.json");
   }
   return null;
 }

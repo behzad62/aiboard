@@ -97,11 +97,27 @@ check("reject non-http fetch", a7, null);
 import {
   classifyVerifyCommandForProject,
   detectVerifyCommand,
+  resolveRunnerProjectTree,
 } from "../lib/orchestrator/build";
 
-check("detect dotnet", detectVerifyCommand(["src/App.csproj", "Program.cs"]), "dotnet build");
+check("detect dotnet", detectVerifyCommand(["App.csproj", "Program.cs"]), "dotnet build");
+check(
+  "nested dotnet project does not imply root dotnet build",
+  detectVerifyCommand(["index.html", "src/main.js", "samples/App.csproj"]),
+  ""
+);
 check("detect go", detectVerifyCommand(["go.mod", "main.go"]), "go build ./...");
+check(
+  "nested go module does not imply root go build",
+  detectVerifyCommand(["index.html", "src/main.js", "samples/go.mod"]),
+  ""
+);
 check("detect cargo", detectVerifyCommand(["Cargo.toml", "src/main.rs"]), "cargo check");
+check(
+  "nested cargo manifest does not imply root cargo check",
+  detectVerifyCommand(["index.html", "src/main.js", "samples/Cargo.toml"]),
+  ""
+);
 check("detect maven", detectVerifyCommand(["pom.xml", "src/Main.java"]), "mvn -q -DskipTests compile");
 check("detect tsc", detectVerifyCommand(["tsconfig.json", "src/index.ts"]), "npx --yes tsc --noEmit");
 check("compiled wins over tsc", detectVerifyCommand(["tsconfig.json", "api.csproj"]), "dotnet build");
@@ -110,10 +126,25 @@ check("detect make", detectVerifyCommand(["Makefile", "src/main.c"]), "make");
 check("cmake wins over make", detectVerifyCommand(["CMakeLists.txt", "Makefile"]), "cmake -S . -B .verify-build && cmake --build .verify-build");
 check("detect mix", detectVerifyCommand(["mix.exs", "lib/app.ex"]), "mix compile");
 check("detect python", detectVerifyCommand(["main.py", "utils.py"]), "python -m compileall -q .");
+check(
+  "nested python file does not imply root python compileall",
+  detectVerifyCommand(["index.html", "src/main.js", "tools/check.py"]),
+  ""
+);
 check("tsc wins over python", detectVerifyCommand(["tsconfig.json", "scripts/tool.py"]), "npx --yes tsc --noEmit");
 check("php -> none (per-file lint)", detectVerifyCommand(["composer.json", "src/index.php"]), "");
 check("bare package.json -> none", detectVerifyCommand(["package.json", "index.js"]), "");
 check("plain files -> none", detectVerifyCommand(["index.html", "style.css"]), "");
+const runnerScopedStaticTree = resolveRunnerProjectTree({
+  browserTree: ["Parent.csproj", "sibling/index.html"],
+  runnerTree: ["index.html", "src/main.js"],
+});
+check("runner tree replaces browser parent tree", runnerScopedStaticTree, ["index.html", "src/main.js"]);
+check(
+  "runner-scoped verifier ignores parent manifests",
+  detectVerifyCommand(runnerScopedStaticTree),
+  ""
+);
 
 const staticWebDotnet = classifyVerifyCommandForProject(
   "dotnet build",
@@ -124,8 +155,33 @@ check("reject dotnet verifier for static web app", staticWebDotnet.allowed, fals
 check("dotnet rejection names missing project file", /csproj|sln/i.test(staticWebDotnet.reason ?? ""), true);
 check(
   "allow dotnet verifier when project file exists",
-  classifyVerifyCommandForProject("dotnet build", ["src/App.csproj"], "win32").allowed,
+  classifyVerifyCommandForProject("dotnet build", ["App.csproj"], "win32").allowed,
   true
+);
+check(
+  "reject root dotnet verifier when only nested project file exists",
+  classifyVerifyCommandForProject("dotnet build", ["index.html", "samples/App.csproj"], "win32").allowed,
+  false
+);
+check(
+  "reject root cargo verifier when only nested manifest exists",
+  classifyVerifyCommandForProject("cargo check", ["index.html", "samples/Cargo.toml"], "win32").allowed,
+  false
+);
+check(
+  "reject root go verifier when only nested module exists",
+  classifyVerifyCommandForProject("go build ./...", ["index.html", "samples/go.mod"], "win32").allowed,
+  false
+);
+check(
+  "reject root tsc verifier when only nested tsconfig exists",
+  classifyVerifyCommandForProject("npx --yes tsc --noEmit", ["index.html", "samples/tsconfig.json"], "win32").allowed,
+  false
+);
+check(
+  "reject root npm verifier when only nested package manifest exists",
+  classifyVerifyCommandForProject("npm run build", ["index.html", "samples/package.json"], "win32").allowed,
+  false
 );
 check(
   "preserve Windows POSIX verifier rejection",

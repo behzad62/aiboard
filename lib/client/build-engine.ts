@@ -188,6 +188,7 @@ import {
   buildReviewFixTaskUpdate,
   buildReviewGateFixInstructions,
   renderTaskGuidanceForWorker,
+  resolveRunnerProjectTree,
   recordToolCall,
   runBudgetStatus,
   filterNovelReviewTasks,
@@ -1514,13 +1515,15 @@ export async function runBuildDiscussion(
             "GitHub workflow requested — typed repo actions can create branches, issues, milestones, commits, pushes, and draft PRs without extra in-app approval prompts; review/merge remains the human gate on GitHub.",
         });
       }
-      // The runner sees the REAL folder — use it for the tree so the
-      // Architect is never blind to files it (or the user) put on disk,
-      // even when no File System Access grant is active. Old runners
-      // without /ls return null; the FSA tree then stands.
+      // The runner sees the active command folder. When it can report a tree,
+      // make that tree authoritative so a browser-picked parent folder cannot
+      // leak sibling project manifests into verifier detection.
       const runnerTree = await listFilesViaRunner(config);
       if (runnerTree) {
-        diskTree = [...new Set([...diskTree, ...runnerTree])];
+        diskTree = resolveRunnerProjectTree({
+          browserTree: diskTree,
+          runnerTree,
+        });
         diskGranted = true;
       }
       // Sync files restored from previous passes (currently only in virtualFs)
