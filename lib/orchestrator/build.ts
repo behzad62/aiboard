@@ -1110,7 +1110,11 @@ export function buildNativeBuildToolDefinitions(
 }
 
 function parseNativeToolArguments(call: NativeToolCall): Record<string, unknown> {
-  if (call.arguments && typeof call.arguments === "object") {
+  if (
+    call.arguments &&
+    typeof call.arguments === "object" &&
+    Object.keys(call.arguments).length > 0
+  ) {
     return call.arguments;
   }
   if (!call.argumentsJson?.trim()) return {};

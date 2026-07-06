@@ -95,6 +95,20 @@ check(
   actionText
 );
 
+const deltaArgumentsActionText = nativeToolCallsToActionText([
+  {
+    id: "call_delta",
+    name: "read",
+    arguments: {},
+    argumentsJson: "{\"paths\":[\"index.html\"]}",
+  },
+]);
+check(
+  "native tool calls prefer streamed argument JSON over empty initial input",
+  deltaArgumentsActionText === "{\"action\":\"read\",\"paths\":[\"index.html\"]}",
+  deltaArgumentsActionText
+);
+
 const mergedAfterProse = mergeNativeToolActionContent({
   content: "I'll inspect the file first.",
   nativeActionContent: "",

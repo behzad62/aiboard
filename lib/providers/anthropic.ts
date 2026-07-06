@@ -365,11 +365,15 @@ export async function* streamAnthropicChat(
             input?: Record<string, unknown>;
           };
           if (!params.structuredOutput && block.type === "tool_use") {
+            const initialInput =
+              block.input && Object.keys(block.input).length > 0
+                ? block.input
+                : undefined;
             pendingToolCalls.set(event.index, {
               id: block.id,
               name: block.name ?? "",
-              arguments: block.input,
-              argumentsJson: block.input ? JSON.stringify(block.input) : "",
+              arguments: initialInput,
+              argumentsJson: initialInput ? JSON.stringify(initialInput) : "",
             });
           }
         }
