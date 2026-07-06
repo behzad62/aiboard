@@ -185,4 +185,27 @@ check(
   chatGpt54Mini
 );
 
+const nvidiaGlm52 = resolveModelContextProfile("z-ai/glm-5.2", "nvidia");
+check(
+  "NVIDIA GLM-5.2 profile uses documented long-context Build budget",
+  nvidiaGlm52.contextWindowTokens === 1_000_000 &&
+    nvidiaGlm52.maxOutputTokens === 16_384 &&
+    nvidiaGlm52.buildOutputReserveTokens === 16_384 &&
+    nvidiaGlm52.effectiveBuildInputCeilingTokens === 983_616 &&
+    nvidiaGlm52.longContextQuality === "excellent" &&
+    nvidiaGlm52.source === "registry",
+  nvidiaGlm52
+);
+
+const unknownNvidia = resolveModelContextProfile("new-nim-model", "nvidia");
+check(
+  "unknown NVIDIA NIM model resolves to NVIDIA provider default profile",
+  unknownNvidia.contextWindowTokens === 128_000 &&
+    unknownNvidia.maxOutputTokens === 16_384 &&
+    unknownNvidia.buildOutputReserveTokens === 16_384 &&
+    unknownNvidia.longContextQuality === "good" &&
+    unknownNvidia.source === "provider-default",
+  unknownNvidia
+);
+
 process.exit(failed === 0 ? 0 : 1);

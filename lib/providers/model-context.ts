@@ -105,6 +105,14 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
     promptCaching: true,
     recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
+  nvidia: {
+    contextWindowTokens: 128_000,
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "good",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
+  },
   google: {
     contextWindowTokens: 1_048_576,
     maxOutputTokens: 65_536,
@@ -347,6 +355,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     longContextQuality: "excellent",
     promptCaching: true,
     recommendedBuildRoles: ["worker", "reviewer"],
+  },
+  "nvidia:z-ai/glm-5.2": {
+    contextWindowTokens: 1_000_000,
+    maxOutputTokens: 16_384,
+    buildOutputReserveTokens: 16_384,
+    longContextQuality: "excellent",
+    promptCaching: false,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "openrouter:moonshotai/kimi-k2.7-code": {
     contextWindowTokens: 262_144,

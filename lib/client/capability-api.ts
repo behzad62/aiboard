@@ -33,9 +33,11 @@ import { getProviderKey, getUserSettings, updateUserSettings } from "./store";
 import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
+  NVIDIA_PROVIDER_ID,
   getCustomModelByFullId,
   getProvider,
   listFoundryModelInfos,
+  listNvidiaModelInfos,
   streamCustomChat,
 } from "./providers";
 
@@ -116,10 +118,13 @@ function resolveProbeTarget(fullModelId: string): ProbeTarget {
   }
 
   const provider = getProvider(providerId);
-  const modelInfo =
+  const gatewayModelInfo =
     providerId === FOUNDRY_PROVIDER_ID
       ? listFoundryModelInfos().find((m) => m.id === model)
-      : provider?.listModels().find((m) => m.id === model);
+      : providerId === NVIDIA_PROVIDER_ID
+        ? listNvidiaModelInfos().find((m) => m.id === model)
+        : undefined;
+  const modelInfo = gatewayModelInfo ?? provider?.listModels().find((m) => m.id === model);
   if (!provider || !modelInfo) throw new Error(`Model ${fullModelId} not found`);
   return { providerId, modelId: model, fullModelId, modelInfo };
 }
@@ -252,6 +257,7 @@ async function runProbeCall(input: {
     provider.streamChat({
       apiKey: key.apiKey,
       baseURL: key.baseURL ?? undefined,
+      runnerToken: key.runnerToken ?? undefined,
       model: target.modelId,
       messages: input.messages,
       attachments: input.attachments ?? [],
