@@ -68,11 +68,13 @@ import {
   buildSkillEvidenceFixInstructions,
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
   splitEvidenceOnlyReviewIssues,
 } from "@/lib/orchestrator/build-evidence-gates";
 import {
   filterBuildMcpToolsForPrompt,
+  shouldRetryPlaywrightNavigateAfterClosedTarget,
   validateBuildMcpToolAction,
 } from "@/lib/orchestrator/build-tool-safety";
 import {
@@ -1918,12 +1920,39 @@ export async function runBuildDiscussion(
     const startedAt = Date.now();
     const traceStartedAt = new Date().toISOString();
     try {
-      const result = await callMcpTool(
+      let result = await callMcpTool(
         runner,
         action.server,
         action.tool,
         action.args ?? {}
       );
+      if (
+        result.isError &&
+        shouldRetryPlaywrightNavigateAfterClosedTarget(action, result.text)
+      ) {
+        emit({
+          type: "diagnostic",
+          phase: "model_streaming",
+          modelId: actor.modelId,
+          modelName: actor.displayName,
+          providerId,
+          message:
+            "Retrying Playwright browser_navigate after the MCP reported a closed page/context.",
+        });
+        const firstError = result.text.trim();
+        const retry = await callMcpTool(
+          runner,
+          action.server,
+          action.tool,
+          action.args ?? {}
+        );
+        result = {
+          ...retry,
+          text: retry.isError
+            ? `${firstError}\n\nRetry after closed page/context also failed:\n${retry.text}`
+            : `Recovered after retrying browser_navigate because the first Playwright target was closed.\n\n${retry.text}`,
+        };
+      }
       if (!result.isError && action.server.toLowerCase().includes("playwright")) {
         const toolName = action.tool.toLowerCase();
         if (toolName === "browser_navigate") {
@@ -6929,8 +6958,11 @@ export async function runBuildDiscussion(
           actor: worker.displayName,
           activeSkillIds: workerSkills.overlays,
           workerOutput: output,
-          allowVerificationOnlyExemptions:
-            files.length === 0 && declaredOutputPaths.length === 0,
+          allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
+            emittedFiles: files,
+            declaredOutputPaths,
+            taskInstructions: task.instructions,
+          }),
         });
         if (skillEvidence.length > 0) {
           skillEvidenceRecords.push(...skillEvidence);

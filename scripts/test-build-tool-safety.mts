@@ -1,6 +1,7 @@
 /** Build MCP tool safety checks (run: npx tsx scripts/test-build-tool-safety.mts) */
 import {
   filterBuildMcpToolsForPrompt,
+  shouldRetryPlaywrightNavigateAfterClosedTarget,
   validateBuildMcpToolAction,
 } from "../lib/orchestrator/build-tool-safety";
 
@@ -48,6 +49,48 @@ const goodNavigate = validateBuildMcpToolAction({
 });
 
 check("valid Playwright navigate is allowed", goodNavigate.allowed === true, goodNavigate);
+
+check(
+  "closed Playwright navigate target is retryable",
+  shouldRetryPlaywrightNavigateAfterClosedTarget(
+    {
+      action: "tool",
+      server: "playwright",
+      tool: "browser_navigate",
+      args: { url: "http://127.0.0.1:3000" },
+      reason: "open app",
+    },
+    "### Error\nError: browserBackend.callTool: Target page, context or browser has been closed"
+  ),
+);
+
+check(
+  "non-navigation Playwright errors are not retryable",
+  !shouldRetryPlaywrightNavigateAfterClosedTarget(
+    {
+      action: "tool",
+      server: "playwright",
+      tool: "browser_evaluate",
+      args: { function: "() => document.title" },
+      reason: "read title",
+    },
+    "### Error\nError: Target page, context or browser has been closed"
+  ),
+);
+
+check(
+  "ordinary navigation failures are not masked by closed-target retry",
+  !shouldRetryPlaywrightNavigateAfterClosedTarget(
+    {
+      action: "tool",
+      server: "playwright",
+      tool: "browser_navigate",
+      args: { url: "http://127.0.0.1:39999" },
+      reason: "open app",
+    },
+    "### Error\nnet::ERR_CONNECTION_REFUSED"
+  ),
+);
 
 const blankNavigate = validateBuildMcpToolAction({
   action: "tool",

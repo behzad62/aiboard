@@ -100,6 +100,16 @@ export function shouldReviewEvidenceOnlyTask(input: {
   );
 }
 
+export function shouldAllowEvidenceOnlySkillExemptions(input: {
+  emittedFiles: string[];
+  declaredOutputPaths: string[];
+  taskInstructions?: string;
+}): boolean {
+  if (input.emittedFiles.length > 0) return false;
+  if (input.declaredOutputPaths.length === 0) return true;
+  return /FIX \(from final Build quality gate\):/i.test(input.taskInstructions ?? "");
+}
+
 function isWriteLandingIssue(issue: string): boolean {
   return /\b(WRITE REJECTED|CONFLICT:|Patch to|patch op\(s\)|Append to|Rewrite of|Edit to|edit\(s\)|Output was cut off mid-block|suspicious rewrite|did NOT match)\b/i.test(
     issue

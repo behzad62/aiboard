@@ -5,6 +5,7 @@ import {
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
   splitEvidenceOnlyReviewIssues,
+  shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
 } from "../lib/orchestrator/build-evidence-gates";
 import { createSkillEvidence } from "../lib/skills/evidence";
@@ -214,6 +215,37 @@ check(
     evidence: verificationOnlyEvidence,
     taskId: "T9",
     workerOutput: verificationOnlyWorkerOutput,
+  }),
+);
+
+const finalGateStaticArtifactEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "claude-opus-4-5",
+  activeSkillIds: [
+    "superpowers:strict-test-driven-development",
+    "superpowers:systematic-debugging",
+    "agent:security-and-hardening",
+  ],
+  workerOutput: [
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: EXEMPT - Task creates static HTML/CSS/documentation files without testable behavior logic. Verification via browser acceptance confirms the shell loads correctly with all required elements.",
+    "- superpowers:systematic-debugging: EXEMPT - No bug or failure present; verification confirms existing files are complete and working.",
+    "- agent:security-and-hardening: Trust boundary reviewed - The static app uses only local modules and no network calls. Unsafe case considered: user input is validated before affecting game state.",
+  ].join("\n"),
+  allowVerificationOnlyExemptions: true,
+});
+check(
+  "static artifact exemptions satisfy final-gate evidence remediation",
+  !hasBlockingSkillEvidence(finalGateStaticArtifactEvidence, "T1"),
+  finalGateStaticArtifactEvidence
+);
+check(
+  "final quality gate remediation allows evidence-only skill exemptions despite output paths",
+  shouldAllowEvidenceOnlySkillExemptions({
+    emittedFiles: [],
+    declaredOutputPaths: ["index.html", "README.md", ".gitignore"],
+    taskInstructions:
+      "Create the static shell.\n\nFIX (from final Build quality gate): provide missing evidence and browser acceptance.",
   }),
 );
 

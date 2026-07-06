@@ -56,6 +56,19 @@ export function filterBuildMcpToolsForPrompt<T extends BuildMcpPromptServer>(
   };
 }
 
+export function shouldRetryPlaywrightNavigateAfterClosedTarget(
+  action: ToolAction,
+  outputText: string
+): boolean {
+  const server = action.server.toLowerCase();
+  const tool = action.tool.toLowerCase();
+  return (
+    (server.includes("playwright") || tool.startsWith("browser_")) &&
+    tool === "browser_navigate" &&
+    /\btarget page, context or browser has been closed\b/i.test(outputText)
+  );
+}
+
 function functionText(args: Record<string, unknown> | undefined): string {
   const fn = args?.function;
   return typeof fn === "string" ? fn : "";
