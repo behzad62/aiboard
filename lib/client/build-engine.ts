@@ -6011,8 +6011,9 @@ export async function runBuildDiscussion(
               // digest); instead tell the worker the shot was captured.
               let toolResultText = toolResult.text;
               if (toolResult.image && !benchmark) {
-                const subtype = toolResult.image.mimeType.split("/")[1] ?? "png";
-                const ext = subtype === "jpeg" ? "jpeg" : subtype === "png" ? "png" : subtype;
+                const ext = toolResult.image.mimeType.split("/")[1] || "png";
+                // Re-captures move to the Map tail so slice(-4) keeps the most RECENTLY captured tasks.
+                waveScreenshots.delete(task.id);
                 waveScreenshots.set(task.id, {
                   id: uuidv4(),
                   filename: `${task.id}-acceptance.${ext}`,
