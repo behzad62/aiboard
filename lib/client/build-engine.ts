@@ -6510,56 +6510,80 @@ export async function runBuildDiscussion(
             onUsage: attributeUsage,
           });
           workerMessages.push({ role: "assistant", content: output });
+          const inspected = inspectStrictToolActionBatchOutput(output);
+          const hasGuidanceRequest = inspected.actions.some(
+            (action) => action.action === "guidance_request"
+          );
+          const split =
+            (task.splitDepth ?? 0) === 0 ? parseWorkerSplitAction(output) : null;
+          if (hasGuidanceRequest && split) {
+            badToolCalls += 1;
+            const feedback =
+              "GUIDANCE REQUEST REJECTED: guidance_request must be emitted by itself, with no other actions. Reply with one blocking/async guidance_request only, or continue with safe tool actions/final output.";
+            toolIssues.push(feedback);
+            workerMessages.push({ role: "user", content: feedback });
+            emit({
+              type: "diagnostic",
+              phase: "model_failed",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} combined a guidance_request with split_task for ${task.id}`,
+            });
+            if (badToolCalls >= budgets.badToolCalls) {
+              toolIssues.push(
+                `Too many invalid guidance requests (${badToolCalls}); task stopped to avoid wasting more turns.`
+              );
+              break;
+            }
+            continue;
+          }
           // Escape hatch: a worker may split an oversized task ONCE per lineage.
           // Children run in the next batch of the same wave; the parent is marked
           // done and never reaches review, so its scoreboard is left untouched.
-          if ((task.splitDepth ?? 0) === 0) {
-            const split = parseWorkerSplitAction(output);
-            if (split) {
-              const applied = applyTaskSplit(tasks, task.id, split, MAX_CONTEXT_FILES);
-              if (applied.ok && applied.childIds) {
-                architectNotes = [
-                  architectNotes,
-                  `${task.id} was split by ${worker.displayName} into ${applied.childIds.join(", ")}: ${truncate(split.reason, 300)}`,
-                ]
-                  .filter(Boolean)
-                  .join("\n");
-                emit({
-                  type: "task_status",
-                  taskId: task.id,
-                  title: task.title,
-                  status: "done",
-                  worker: worker.displayName,
-                  cycle,
-                });
-                for (const childId of applied.childIds) {
-                  const child = tasks.find((t) => t.id === childId);
-                  if (child) {
-                    emit({
-                      type: "task_status",
-                      taskId: child.id,
-                      title: child.title,
-                      status: "planned",
-                      cycle,
-                    });
-                  }
-                }
-                emit({
-                  type: "diagnostic",
-                  phase: "round_preparing",
-                  message: `${worker.displayName} split ${task.id} into ${applied.childIds.length} subtasks (${applied.childIds.join(", ")})`,
-                });
-                return;
-              }
-              workerMessages.push({
-                role: "user",
-                content: `SPLIT REJECTED: ${applied.reason}. Either fix the split (2-4 subtasks, disjoint outputPaths within your task's declared files) or complete the task normally.`,
+          if (split) {
+            const applied = applyTaskSplit(tasks, task.id, split, MAX_CONTEXT_FILES);
+            if (applied.ok && applied.childIds) {
+              architectNotes = [
+                architectNotes,
+                `${task.id} was split by ${worker.displayName} into ${applied.childIds.join(", ")}: ${truncate(split.reason, 300)}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+              emit({
+                type: "task_status",
+                taskId: task.id,
+                title: task.title,
+                status: "done",
+                worker: worker.displayName,
+                cycle,
               });
-              // Deliberate asymmetry: SPLIT REJECTED feedback is actionable and split-specific (unlike opaque malformed JSON), so it is NOT charged against the tighter badToolCalls budget; the tool-turn cap still bounds the worst case.
-              continue;
+              for (const childId of applied.childIds) {
+                const child = tasks.find((t) => t.id === childId);
+                if (child) {
+                  emit({
+                    type: "task_status",
+                    taskId: child.id,
+                    title: child.title,
+                    status: "planned",
+                    cycle,
+                  });
+                }
+              }
+              emit({
+                type: "diagnostic",
+                phase: "round_preparing",
+                message: `${worker.displayName} split ${task.id} into ${applied.childIds.length} subtasks (${applied.childIds.join(", ")})`,
+              });
+              return;
             }
+            workerMessages.push({
+              role: "user",
+              content: `SPLIT REJECTED: ${applied.reason}. Either fix the split (2-4 subtasks, disjoint outputPaths within your task's declared files) or complete the task normally.`,
+            });
+            // Deliberate asymmetry: SPLIT REJECTED feedback is actionable and split-specific (unlike opaque malformed JSON), so it is NOT charged against the tighter badToolCalls budget; the tool-turn cap still bounds the worst case.
+            continue;
           }
-          const inspected = inspectStrictToolActionBatchOutput(output);
           if (inspected.actions.length === 0) {
             if (inspected.feedback && !inspected.valid) {
               badToolCalls += 1;

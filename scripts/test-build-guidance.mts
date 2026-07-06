@@ -264,6 +264,160 @@ check(
   workerCalls.map((call) => call.label)
 );
 
+const mixedDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-mixed-split",
+  topic: "Build two notes without splitting after mixed guidance.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(mixedDiscussion);
+
+const mixedCalls: ModelOverrideCall[] = [];
+const mixedEvents: OrchestratorEvent[] = [];
+const mixedHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    mixedCalls.push({
+      label: input.label,
+      messages: input.messages,
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is planning the project") {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T1",
+              title: "Create two store notes",
+              instructions:
+                "Create src/note-a.txt and src/note-b.txt using the existing store pattern.",
+              contextFiles: [],
+              outputPaths: ["src/note-a.txt", "src/note-b.txt"],
+              expectedOutputs: "Two notes explaining the existing store pattern.",
+              dependsOn: [],
+              difficulty: 2,
+            },
+          ],
+          notes: "Do not split after a mixed guidance request.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker working on T1: Create two store notes") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_request",
+          mode: "blocking",
+          question: "Should I split this before choosing the store pattern?",
+          reason: "The task owns two files.",
+        }),
+        "```",
+        "```json",
+        JSON.stringify({
+          action: "split_task",
+          reason: "Split the two files into separate notes.",
+          subtasks: [
+            {
+              title: "Create first note",
+              instructions: "Create src/note-a.txt.",
+              outputPaths: ["src/note-a.txt"],
+              difficulty: 1,
+            },
+            {
+              title: "Create second note",
+              instructions: "Create src/note-b.txt.",
+              outputPaths: ["src/note-b.txt"],
+              difficulty: 1,
+            },
+          ],
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T1: Create two store notes") {
+      const prompt = input.messages.map((message) => message.content).join("\n\n");
+      if (!prompt.includes("GUIDANCE REQUEST REJECTED")) {
+        throw new Error("Mixed guidance/split response was not rejected before continuation.");
+      }
+      return [
+        "Implemented after rejection.",
+        "```txt path=src/note-a.txt",
+        "Use the existing client store.",
+        "```",
+        "```txt path=src/note-b.txt",
+        "Do not create a separate cache.",
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [{ taskId: "T1", verdict: "approve", fixInstructions: "" }],
+          newTasks: [],
+          done: true,
+          notes: "Approved.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed after rejecting mixed guidance.";
+    }
+    throw new Error(`Unexpected mixed model call label: ${input.label}`);
+  },
+};
+
+await runBuildDiscussion(
+  mixedDiscussion,
+  [architect, worker],
+  (event) => {
+    mixedEvents.push(event);
+  },
+  mixedHooks
+);
+
+const mixedGuidanceCalls = mixedCalls.filter((call) =>
+  call.label.startsWith("Architect answering guidance")
+);
+const mixedSplitEvents = mixedEvents.filter(
+  (event) =>
+    event.type === "task_status" &&
+    (event.taskId === "T1.1" || event.taskId === "T1.2")
+);
+const mixedContinuationCall = mixedCalls.find(
+  (call) => call.label === "Test Worker continuing T1: Create two store notes"
+);
+const mixedContinuationPrompt =
+  mixedContinuationCall?.messages.map((message) => message.content).join("\n\n") ??
+  "";
+
+check(
+  "mixed guidance_request and split_task is rejected without Architect guidance",
+  mixedGuidanceCalls.length === 0 &&
+    mixedContinuationPrompt.includes("GUIDANCE REQUEST REJECTED"),
+  {
+    labels: mixedCalls.map((call) => call.label),
+    continuationPrompt: mixedContinuationPrompt,
+  }
+);
+check(
+  "mixed guidance_request and split_task does not apply split children",
+  mixedSplitEvents.length === 0,
+  mixedSplitEvents
+);
+
 if (failed === 0) {
   console.log("PASS");
 } else {
