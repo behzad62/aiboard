@@ -3832,6 +3832,48 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     .join("\n");
 }
 
+export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
+  request: string;
+  treeText: string;
+  task: BuildTask;
+  architectNotes: string;
+  guidance: BuildTaskGuidance;
+}): string {
+  return [
+    "You are the Build Architect answering a worker's task-local guidance request.",
+    "Answer the worker's exact question. Keep the answer advisory and scoped to this task.",
+    "Do not change outputPaths, dependsOn, file ownership, or write permissions. If the task contract is wrong, say what follow-up planning or review should do, but do not rewrite the contract in this answer.",
+    "",
+    "Overall project request:",
+    input.request,
+    "",
+    treeSection(input.treeText),
+    buildPhaseSpecSection(input.task.phaseSpec),
+    input.architectNotes?.trim()
+      ? `Architect notes:\n${input.architectNotes.trim()}`
+      : "",
+    "",
+    `Task ${input.task.id}: ${input.task.title}`,
+    input.task.instructions,
+    input.task.outputPaths?.length
+      ? `Task outputPaths: ${input.task.outputPaths.join(", ")}`
+      : "Task outputPaths: none declared.",
+    input.task.expectedOutputs
+      ? `Expected outputs: ${input.task.expectedOutputs}`
+      : "",
+    "",
+    `Guidance ${input.guidance.id}`,
+    "Worker question:",
+    input.guidance.question,
+    input.guidance.reason ? `Reason:\n${input.guidance.reason}` : "",
+    "",
+    "Return ONLY one fenced json block:",
+    `{"action":"guidance_answer","guidanceId":"${input.guidance.id}","taskId":"${input.task.id}","answer":"concise advisory answer for the worker"}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** Marker appended when the wave diff patch is cut to fit the pack budget. */
 const REVIEW_DIFF_TRUNCATION_MARKER =
   "\n...[diff truncated - use read_range for the rest]";

@@ -1,5 +1,6 @@
 /** Build prompt regression checks (run: npx tsx scripts/test-build-prompts.mts) */
 import {
+  buildArchitectGuidancePrompt,
   buildWorkerToolInstructions,
   buildWorkerTaskPrompt,
   buildArchitectReviewPrompt,
@@ -116,6 +117,24 @@ check(
     prompt.includes("Guidance G-T3-2 is still waiting for Architect response") &&
     prompt.includes("Continue only if the task is safe without it."),
   prompt
+);
+
+const architectGuidancePrompt = buildArchitectGuidancePrompt({
+  request: "Build a strict TypeScript CSV library and CLI.",
+  treeText: "tests/run-tests.ts\nsrc/query.ts",
+  task: fixingTask,
+  architectNotes: "Use strict TypeScript.",
+  guidance: fixingTask.guidance?.[0]!,
+});
+
+check(
+  "Architect guidance prompt asks for advisory task-scoped answer",
+  architectGuidancePrompt.includes("Answer the worker's exact question") &&
+    architectGuidancePrompt.includes("Do not change outputPaths") &&
+    architectGuidancePrompt.includes("Guidance G-T3-1") &&
+    architectGuidancePrompt.includes("Should I rewrite the query parser or patch the strict failure?") &&
+    architectGuidancePrompt.includes('"action":"guidance_answer"'),
+  architectGuidancePrompt
 );
 
 const skillEvidencePrompt = buildWorkerTaskPrompt({

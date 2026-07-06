@@ -138,6 +138,7 @@ import {
   buildNativeBuildToolDefinitions,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
+  buildArchitectGuidancePrompt,
   buildIncompleteTaskFailure,
   buildOutstandingTasksDigest,
   buildReviewDiffPackContent,
@@ -177,6 +178,7 @@ import {
   buildRepoWorkflowSummary,
   buildReviewFixTaskUpdate,
   buildReviewGateFixInstructions,
+  renderTaskGuidanceForWorker,
   recordToolCall,
   runBudgetStatus,
   filterNovelReviewTasks,
@@ -190,10 +192,13 @@ import {
   type ArchitectAction,
   type BuildPhaseSpec,
   type BuildTask,
+  type BuildTaskGuidance,
   type CodeIntelAction,
   type ContextRetrieveAction,
   type FetchAction,
   type FileChangeOperation,
+  type GuidanceAnswerAction,
+  type GuidanceRequestAction,
   type PlanAction,
   type RepoBranchCreateAction,
   type RepoCommitAction,
@@ -5320,6 +5325,99 @@ export async function runBuildDiscussion(
   let extraFileContext = "";
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
+
+  const nextGuidanceId = (task: BuildTask): string =>
+    `G-${task.id}-${(task.guidance?.length ?? 0) + 1}`;
+
+  const addGuidanceRequest = (
+    task: BuildTask,
+    action: GuidanceRequestAction,
+    worker: SelectedModel,
+    wave: number
+  ): BuildTaskGuidance => {
+    const record: BuildTaskGuidance = {
+      id: nextGuidanceId(task),
+      taskId: task.id,
+      mode: action.mode,
+      question: action.question,
+      ...(action.reason ? { reason: action.reason } : {}),
+      status: "pending",
+      requestedBy: worker.displayName,
+      requestedAtWave: wave,
+    };
+    task.guidance = [...(task.guidance ?? []), record];
+    return record;
+  };
+
+  const answerGuidanceRequest = async (
+    task: BuildTask,
+    record: BuildTaskGuidance,
+    wave: number
+  ): Promise<void> => {
+    const text = await streamConversation(
+      architect,
+      [
+        { role: "system", content: ARCHITECT_SYSTEM_ROLE },
+        {
+          role: "user",
+          content: buildArchitectGuidancePrompt({
+            request: discussion.topic,
+            treeText: treeText(),
+            task,
+            architectNotes,
+            guidance: record,
+          }),
+        },
+      ],
+      {
+        maxTokens: architectMaxTokens(architect),
+        label: `Architect answering guidance ${record.id} for ${task.id}`,
+        structuredOutput: architectActionResponseFormat,
+        validateStructuredOutput: (content) => {
+          const parsed = parseArchitectAction(content);
+          return parsed?.action === "guidance_answer"
+            ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
+            : {
+                ok: false,
+                message:
+                  "Architect guidance response must be a guidance_answer action.",
+              };
+        },
+      }
+    );
+    const parsed = parseArchitectAction(text);
+    if (!parsed || parsed.action !== "guidance_answer") {
+      throw new Error(
+        `Architect did not answer guidance ${record.id} for ${task.id}.`
+      );
+    }
+    const answer: GuidanceAnswerAction = parsed;
+    if (answer.guidanceId !== record.id || answer.taskId !== task.id) {
+      throw new Error(
+        `Architect guidance answer mismatch: expected ${record.id}/${task.id}, got ${answer.guidanceId}/${answer.taskId}.`
+      );
+    }
+    record.status = "answered";
+    record.answer = answer.answer;
+    record.answeredAtWave = wave;
+    emit({
+      type: "diagnostic",
+      phase: "round_preparing",
+      message: `Architect answered guidance ${record.id} for ${task.id}`,
+    });
+  };
+
+  const answerPendingGuidanceForTask = async (
+    task: BuildTask,
+    wave: number
+  ): Promise<void> => {
+    for (const record of task.guidance ?? []) {
+      if (record.status === "pending") {
+        await answerGuidanceRequest(task, record, wave);
+      }
+    }
+  };
+
   const synthesizePhaseSpec = (objective?: string): BuildPhaseSpec => ({
     id: "P0",
     objective:
@@ -6033,6 +6131,8 @@ export async function runBuildDiscussion(
         cycle,
       });
 
+      await answerPendingGuidanceForTask(task, cycle);
+
       const contextChunks: string[] = [];
       for (const path of task.contextFiles) {
         const content = await readFile(path);
@@ -6118,6 +6218,7 @@ export async function runBuildDiscussion(
         const replayCache = createToolReplayCache();
         let badToolCalls = 0;
         let skippedOnlyToolBatches = 0;
+        let blockingGuidanceAsked = false;
 
         // Dispatch a batch of worker tool actions in one turn: safe reads run
         // together; writes (patch/append) apply in order; MCP stays approval-gated;
@@ -6522,6 +6623,87 @@ export async function runBuildDiscussion(
               providerId: parseModelId(worker.modelId).providerId,
               message: `${worker.displayName} tool-call warning for ${task.id}: ${inspected.feedback}`,
             });
+          }
+
+          const guidanceRequests = inspected.actions.filter(
+            (action): action is GuidanceRequestAction =>
+              action.action === "guidance_request"
+          );
+          if (guidanceRequests.length > 0) {
+            if (inspected.actions.length > 1 || guidanceRequests.length > 1) {
+              badToolCalls += 1;
+              const feedback =
+                "GUIDANCE REQUEST REJECTED: guidance_request must be emitted by itself, with no other actions. Reply with one blocking/async guidance_request only, or continue with safe tool actions/final output.";
+              toolIssues.push(feedback);
+              workerMessages.push({ role: "user", content: feedback });
+              emit({
+                type: "diagnostic",
+                phase: "model_failed",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                message: `${worker.displayName} combined a guidance_request with other actions for ${task.id}`,
+              });
+              if (badToolCalls >= budgets.badToolCalls) {
+                toolIssues.push(
+                  `Too many invalid guidance requests (${badToolCalls}); task stopped to avoid wasting more turns.`
+                );
+                break;
+              }
+              continue;
+            }
+            const guidanceAction = guidanceRequests[0];
+            if (guidanceAction.mode === "blocking" && blockingGuidanceAsked) {
+              badToolCalls += 1;
+              const feedback =
+                "GUIDANCE REQUEST REJECTED: one blocking guidance question was already asked during this task attempt. Continue with the Architect guidance already provided or produce final output.";
+              toolIssues.push(feedback);
+              workerMessages.push({ role: "user", content: feedback });
+              emit({
+                type: "diagnostic",
+                phase: "model_failed",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                message: `${worker.displayName} asked a second blocking guidance question for ${task.id}`,
+              });
+              if (badToolCalls >= budgets.badToolCalls) {
+                toolIssues.push(
+                  `Too many invalid guidance requests (${badToolCalls}); task stopped to avoid wasting more turns.`
+                );
+                break;
+              }
+              continue;
+            }
+
+            const guidanceRecord = addGuidanceRequest(
+              task,
+              guidanceAction,
+              worker,
+              cycle
+            );
+            emit({
+              type: "diagnostic",
+              phase: "round_preparing",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} requested ${guidanceAction.mode} Architect guidance ${guidanceRecord.id} for ${task.id}`,
+            });
+            if (guidanceAction.mode === "blocking") {
+              blockingGuidanceAsked = true;
+              await answerGuidanceRequest(task, guidanceRecord, cycle);
+              workerMessages.push({
+                role: "user",
+                content: renderTaskGuidanceForWorker([guidanceRecord]),
+              });
+              continue;
+            }
+            workerMessages.push({
+              role: "user",
+              content: `Guidance ${guidanceRecord.id} was queued for the next same-task iteration. Continue only if the task is safe without the answer.`,
+            });
+            continue;
           }
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
