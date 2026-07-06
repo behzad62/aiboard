@@ -63,10 +63,32 @@ const verificationTask = buildVerificationFailureTask({
 });
 check(
   "verification failure creates a scoped fix task for the failing file",
-  verificationTask?.outputPaths?.join(",") === "tests/frontend-contract.test.js" &&
+  verificationTask?.id === "T4" &&
+    verificationTask.outputPaths?.join(",") === "tests/frontend-contract.test.js" &&
     verificationTask.contextFiles.join(",") === "tests/frontend-contract.test.js" &&
     /npm run check && npm test/.test(verificationTask.instructions),
   verificationTask
+);
+
+const verificationTaskWithGaps = buildVerificationFailureTask({
+  tasks: [
+    docsTask,
+    {
+      ...docsTask,
+      id: "T13",
+      title: "Previous final verification",
+      outputPaths: ["README.md"],
+      status: "done",
+    },
+  ],
+  verifyCommand: "npm run check",
+  verifyFeedback: verificationOutput,
+  knownFiles,
+});
+check(
+  "verification failure task uses the next numeric id after resumed task history",
+  verificationTaskWithGaps?.id === "T14",
+  verificationTaskWithGaps
 );
 
 const existingOwner: BuildTask = {

@@ -168,17 +168,17 @@ const twoChildSplit = (
   const result = applyTaskSplit(tasks, "T5", twoChildSplit(["src/a.ts"], ["src/b.ts"]), MAX_CONTEXT_FILES);
 
   check("happy: result ok", result.ok === true, result);
-  check("happy: childIds T5.1/T5.2", JSON.stringify(result.childIds) === JSON.stringify(["T5.1", "T5.2"]), result.childIds);
+  check("happy: childIds T7/T8", JSON.stringify(result.childIds) === JSON.stringify(["T7", "T8"]), result.childIds);
   check("happy: parent SAME object reference", tasks.find((t) => t.id === "T5") === parentRef);
   check("happy: parent status done", parentRef.status === "done", parentRef.status);
-  check("happy: parent title suffixed", parentRef.title === "Big task (split into T5.1, T5.2)", parentRef.title);
+  check("happy: parent title suffixed", parentRef.title === "Big task (split into T7, T8)", parentRef.title);
   check("happy: parent workerIndex/assignTo cleared", parentRef.workerIndex === undefined && parentRef.assignTo === undefined, parentRef);
   check("happy: array grew by 2", tasks.length === beforeLen + 2, tasks.length);
 
   const parentIdx = tasks.findIndex((t) => t.id === "T5");
   const c1 = tasks[parentIdx + 1];
   const c2 = tasks[parentIdx + 2];
-  check("happy: children at parentIdx+1/+2", c1.id === "T5.1" && c2.id === "T5.2", [c1.id, c2.id]);
+  check("happy: children at parentIdx+1/+2", c1.id === "T7" && c2.id === "T8", [c1.id, c2.id]);
   check("happy: child1 outputPaths", JSON.stringify(c1.outputPaths) === JSON.stringify(["src/a.ts"]), c1.outputPaths);
   check("happy: child2 outputPaths", JSON.stringify(c2.outputPaths) === JSON.stringify(["src/b.ts"]), c2.outputPaths);
   check("happy: children splitDepth 1", c1.splitDepth === 1 && c2.splitDepth === 1, [c1.splitDepth, c2.splitDepth]);
@@ -186,9 +186,9 @@ const twoChildSplit = (
   check("happy: children include parent contextFile README.md", c1.contextFiles.includes("README.md") && c2.contextFiles.includes("README.md"), [c1.contextFiles, c2.contextFiles]);
   check("happy: children inherit difficulty 4", c1.difficulty === 4 && c2.difficulty === 4, [c1.difficulty, c2.difficulty]);
 
-  // Dependent rewrite: T6 dependsOn ["T5"] -> ["T5.1","T5.2"], same object.
+  // Dependent rewrite: T6 dependsOn ["T5"] -> ["T7","T8"], same object.
   check("happy: T6 SAME object reference", tasks.find((t) => t.id === "T6") === t6Ref);
-  check("happy: T6 dependsOn rewritten to both child ids", JSON.stringify(t6Ref.dependsOn) === JSON.stringify(["T5.1", "T5.2"]), t6Ref.dependsOn);
+  check("happy: T6 dependsOn rewritten to both child ids", JSON.stringify(t6Ref.dependsOn) === JSON.stringify(["T7", "T8"]), t6Ref.dependsOn);
 }
 
 // Scope violation: a child claims src/c.ts (outside parent's declared files).
@@ -247,10 +247,11 @@ const twoChildSplit = (
   const c1 = tasks[parentIdx + 1];
   const c2 = tasks[parentIdx + 2];
   check("ordinal: child1 has no deps (forward ref dropped)", c1.dependsOn === undefined || c1.dependsOn.length === 0, c1.dependsOn);
-  check("ordinal: child2 dependsOn = [first child id]", JSON.stringify(c2.dependsOn) === JSON.stringify(["T5.1"]), c2.dependsOn);
+  check("ordinal: child2 dependsOn = [first child id]", JSON.stringify(c2.dependsOn) === JSON.stringify(["T7"]), c2.dependsOn);
 }
 
-// Id collision: a pre-existing "T5.1" task -> suffixed child ids, no duplicate ids.
+// Id collision/gap: pre-existing non-numeric split ids never get reused, and children
+// still use the next plain numeric task ids.
 {
   const tasks = makeTasks();
   tasks.push({
@@ -263,8 +264,8 @@ const twoChildSplit = (
   });
   const result = applyTaskSplit(tasks, "T5", twoChildSplit(["src/a.ts"], ["src/b.ts"]), MAX_CONTEXT_FILES);
   check("collision: ok", result.ok === true, result);
-  check("collision: first child id suffixed to T5.1b", result.childIds?.[0] === "T5.1b", result.childIds);
-  check("collision: second child id T5.2", result.childIds?.[1] === "T5.2", result.childIds);
+  check("collision: first child id is T7", result.childIds?.[0] === "T7", result.childIds);
+  check("collision: second child id is T8", result.childIds?.[1] === "T8", result.childIds);
   const ids = tasks.map((t) => t.id);
   check("collision: no duplicate ids in array", new Set(ids).size === ids.length, ids);
 }

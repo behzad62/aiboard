@@ -432,7 +432,7 @@ const mixedGuidanceCalls = mixedCalls.filter((call) =>
 const mixedSplitEvents = mixedEvents.filter(
   (event) =>
     event.type === "task_status" &&
-    (event.taskId === "T1.1" || event.taskId === "T1.2")
+    (event.title === "Create first note" || event.title === "Create second note")
 );
 const mixedContinuationCall = mixedCalls.find(
   (call) => call.label === "Test Worker continuing T1: Create two store notes"
@@ -469,7 +469,7 @@ storeApi.insertDiscussion(asyncDiscussion);
 
 const asyncCalls: ModelOverrideCall[] = [];
 const asyncEvents: OrchestratorEvent[] = [];
-const asyncWorkerLabel = "Test Worker working on T2: Create async note";
+const asyncWorkerLabel = "Test Worker working on T1: Create async note";
 let asyncWorkerInvocations = 0;
 const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
   modelCallOverride: async (input) => {
@@ -526,7 +526,7 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker continuing T2: Create async note") {
+    if (input.label === "Test Worker continuing T1: Create async note") {
       return [
         "Implemented with likely path.",
         "```txt path=src/async-note.txt",
@@ -534,13 +534,13 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Architect answering guidance G-T2-1 for T2") {
+    if (input.label === "Architect answering guidance G-T1-1 for T1") {
       return [
         "```json",
         JSON.stringify({
           action: "guidance_answer",
-          guidanceId: "G-T2-1",
-          taskId: "T2",
+          guidanceId: "G-T1-1",
+          taskId: "T1",
           answer: "Preserve src/async-note.txt and update only its content.",
         }),
         "```",
@@ -557,7 +557,7 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           action: "review",
           results: [
             {
-              taskId: "T2",
+              taskId: "T1",
               verdict: "fix",
               specVerdict: "fix",
               qualityVerdict: "approve",
@@ -568,7 +568,7 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           ],
           newTasks: [],
           done: false,
-          notes: "Fix T2.",
+          notes: "Fix T1.",
         }),
         "```",
       ].join("\n");
@@ -584,7 +584,7 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           action: "review",
           results: [
             {
-              taskId: "T2",
+              taskId: "T1",
               verdict: "approve",
               specVerdict: "approve",
               qualityVerdict: "approve",
@@ -616,7 +616,7 @@ await runBuildDiscussion(
 
 const asyncLabels = asyncCalls.map((call) => call.label);
 const asyncContinuationIndex = asyncLabels.indexOf(
-  "Test Worker continuing T2: Create async note"
+  "Test Worker continuing T1: Create async note"
 );
 const asyncReviewFixIndex = asyncLabels.findIndex(
   (label) =>
@@ -624,7 +624,7 @@ const asyncReviewFixIndex = asyncLabels.findIndex(
     label === "Test Architect is reviewing wave 1"
 );
 const asyncGuidanceAnswerIndex = asyncLabels.indexOf(
-  "Architect answering guidance G-T2-1 for T2"
+  "Architect answering guidance G-T1-1 for T1"
 );
 const asyncFixingWorkerIndex = asyncLabels.findIndex(
   (label, index) => label === asyncWorkerLabel && index > asyncGuidanceAnswerIndex
@@ -654,7 +654,7 @@ check(
 check(
   "async guidance answer is injected into the later same-task fix prompt",
   asyncFixingPrompt.includes("ARCHITECT GUIDANCE FOR THIS TASK") &&
-    asyncFixingPrompt.includes("Guidance G-T2-1") &&
+    asyncFixingPrompt.includes("Guidance G-T1-1") &&
     asyncFixingPrompt.includes("Should I preserve the existing file name?") &&
     asyncFixingPrompt.includes(
       "Preserve src/async-note.txt and update only its content."
@@ -862,7 +862,7 @@ let badAsyncGuidanceAttempts = 0;
 let badAsyncWorkerAttempts = 0;
 let badAsyncError: unknown = null;
 const badAsyncWorkerLabel =
-  "Test Worker working on T3: Create resilient async note";
+  "Test Worker working on T1: Create resilient async note";
 const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
   modelCallOverride: async (input) => {
     badAsyncCalls.push({
@@ -919,7 +919,7 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker continuing T3: Create resilient async note") {
+    if (input.label === "Test Worker continuing T1: Create resilient async note") {
       return [
         "Implemented draft.",
         "```txt path=src/resilient-async-note.txt",
@@ -927,7 +927,7 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Architect answering guidance G-T3-1 for T3") {
+    if (input.label === "Architect answering guidance G-T1-1 for T1") {
       badAsyncGuidanceAttempts += 1;
       if (badAsyncGuidanceAttempts === 1) {
         return "I cannot answer this as JSON yet.";
@@ -936,8 +936,8 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```json",
         JSON.stringify({
           action: "guidance_answer",
-          guidanceId: "G-T3-1",
-          taskId: "T3",
+          guidanceId: "G-T1-1",
+          taskId: "T1",
           answer:
             "Use src/resilient-async-note.txt after the retried guidance answer.",
         }),
@@ -955,7 +955,7 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           action: "review",
           results: [
             {
-              taskId: "T3",
+              taskId: "T1",
               verdict: "fix",
               specVerdict: "fix",
               qualityVerdict: "approve",
@@ -965,7 +965,7 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           ],
           newTasks: [],
           done: false,
-          notes: "Fix T3.",
+          notes: "Fix T1.",
         }),
         "```",
       ].join("\n");
@@ -981,7 +981,7 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           action: "review",
           results: [
             {
-              taskId: "T3",
+              taskId: "T1",
               verdict: "approve",
               specVerdict: "approve",
               qualityVerdict: "approve",
@@ -1079,7 +1079,7 @@ const budgetGuidanceHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]>
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker working on T4: Create no-run recovery note") {
+    if (input.label === "Test Worker working on T1: Create no-run recovery note") {
       return [
         "```json",
         JSON.stringify({
@@ -1090,21 +1090,21 @@ const budgetGuidanceHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]>
         "```",
       ].join("\n");
     }
-    if (input.label === "Architect answering guidance G-T4-1 for T4") {
+    if (input.label === "Architect answering guidance G-T1-1 for T1") {
       budgetGuidanceArchitectAnswers += 1;
       return [
         "```json",
         JSON.stringify({
           action: "guidance_answer",
-          guidanceId: "G-T4-1",
-          taskId: "T4",
+          guidanceId: "G-T1-1",
+          taskId: "T1",
           answer:
             "Proceed without command verification. Create the requested note and explicitly mention that command tools were unavailable.",
         }),
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker continuing T4: Create no-run recovery note") {
+    if (input.label === "Test Worker continuing T1: Create no-run recovery note") {
       budgetGuidanceWorkerContinuations += 1;
       return [
         "Implemented after budget-blocked guidance.",
@@ -1124,7 +1124,7 @@ const budgetGuidanceHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]>
           action: "review",
           results: [
             {
-              taskId: "T4",
+              taskId: "T1",
               verdict: "approve",
               specVerdict: "approve",
               qualityVerdict: "approve",
@@ -1161,7 +1161,7 @@ const budgetGuidanceCompleted = storeApi.getDiscussionById(
 )?.status;
 const budgetGuidanceAnswerPrompt =
   budgetGuidanceCalls
-    .find((call) => call.label === "Architect answering guidance G-T4-1 for T4")
+    .find((call) => call.label === "Architect answering guidance G-T1-1 for T1")
     ?.messages.map((message) => message.content)
     .join("\n\n") ?? "";
 check(
@@ -1234,7 +1234,7 @@ const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker working on T6: Verify static app") {
+    if (input.label === "Test Worker working on T1: Verify static app") {
       return [
         "```json",
         JSON.stringify({
@@ -1245,22 +1245,22 @@ const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
-    if (input.label === "Architect answering guidance G-T6-1 for T6") {
+    if (input.label === "Architect answering guidance G-T1-1 for T1") {
       return [
         "```json",
         JSON.stringify({
           action: "guidance_answer",
-          guidanceId: "G-T6-1",
-          taskId: "T6",
+          guidanceId: "G-T1-1",
+          taskId: "T1",
           answer:
             "Do not request more tools. Submit a scoped verification-gap report with evidence already obtained and checks still required.",
         }),
         "```",
       ].join("\n");
     }
-    if (input.label === "Test Worker continuing T6: Verify static app") {
+    if (input.label === "Test Worker continuing T1: Verify static app") {
       return [
-        "Final Verification Gap Report for T6",
+        "Final Verification Gap Report for T1",
         "",
         "Verification Status: INCOMPLETE / BLOCKED",
         "",
@@ -1279,7 +1279,7 @@ const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "Review/planning should create follow-up verification work with fresh runner budget.",
       ].join("\n");
     }
-    if (input.label === "Test Worker finalizing T6: Verify static app") {
+    if (input.label === "Test Worker finalizing T1: Verify static app") {
       throw new Error("Gap report should have stopped the worker tool loop before finalizing.");
     }
     if (
@@ -1288,7 +1288,7 @@ const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
     ) {
       gapReportReviewCalls += 1;
       const reviewPrompt = input.messages.map((message) => message.content).join("\n\n");
-      if (!reviewPrompt.includes("Final Verification Gap Report for T6")) {
+      if (!reviewPrompt.includes("Final Verification Gap Report for T1")) {
         throw new Error("Review prompt did not include the verification-gap report.");
       }
       return [
@@ -1298,7 +1298,7 @@ const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
           action: "review",
           results: [
             {
-              taskId: "T6",
+              taskId: "T1",
               verdict: "approve",
               specVerdict: "approve",
               qualityVerdict: "approve",
@@ -1336,7 +1336,7 @@ check(
   gapReportError == null &&
     gapReportReviewCalls === 1 &&
     gapReportCompleted === "completed" &&
-    !gapReportCalls.some((call) => call.label === "Test Worker finalizing T6: Verify static app"),
+    !gapReportCalls.some((call) => call.label === "Test Worker finalizing T1: Verify static app"),
   {
     error:
       gapReportError instanceof Error ? gapReportError.message : gapReportError,

@@ -191,6 +191,7 @@ import {
   resolveRunnerProjectTree,
   recordToolCall,
   runBudgetStatus,
+  allocateIncrementalTaskIds,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
   shouldApplyReviewResultToTask,
@@ -5932,7 +5933,20 @@ export async function runBuildDiscussion(
         : "";
     activePhaseSpec =
       planAction.phaseSpec ?? activeSpec ?? synthesizePhaseSpec(architectNotes);
-    tasks = planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE).map(toTask);
+    const allocatedPlanTasks = allocateIncrementalTaskIds(
+      [],
+      planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE)
+    );
+    if (allocatedPlanTasks.remapped.length > 0) {
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `Normalized Architect plan task ids: ${allocatedPlanTasks.remapped
+          .map((item) => `${item.from} -> ${item.to}`)
+          .join(", ")}.`,
+      });
+    }
+    tasks = allocatedPlanTasks.tasks.map(toTask);
     // The Architect may scaffold files alongside the plan JSON.
     const { issues } = await writeEmittedFiles(planResult.text);
     if (issues.length > 0) {
@@ -7842,21 +7856,31 @@ export async function runBuildDiscussion(
       message: `Worker scoreboard after wave ${cycle}:\n${scoreboardText()}`,
     });
 
-    const novelTasks = filterNovelReviewTasks(
+    const filteredReviewTasks = filterNovelReviewTasks(
       tasks,
       (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
     );
+    const novelTasks = allocateIncrementalTaskIds(tasks, filteredReviewTasks.accepted);
     if (action.phaseSpec) {
       activePhaseSpec = action.phaseSpec;
     }
-    for (const skipped of novelTasks.skipped) {
+    for (const skipped of filteredReviewTasks.skipped) {
       emit({
         type: "diagnostic",
         phase: "judging",
-        message: `Skipped duplicate new task "${skipped.id}" from review — ${skipped.id} already exists (${skipped.existingStatus}: ${skipped.title}). Use a new id for replacement work or mark the existing task as fix.`,
+        message: `Skipped overlapping new task "${skipped.id}" from review - an unfinished task already owns the same output path (${skipped.existingStatus}: ${skipped.title}). Mark the existing task as fix or choose non-overlapping output paths.`,
       });
     }
-    for (const raw of novelTasks.accepted) {
+    if (novelTasks.remapped.length > 0) {
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `Assigned incremental ids to review-created tasks: ${novelTasks.remapped
+          .map((item) => `${item.from} -> ${item.to}`)
+          .join(", ")}.`,
+      });
+    }
+    for (const raw of novelTasks.tasks) {
       const task = toTask(raw, tasks.length);
       tasks.push(task);
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
@@ -7943,7 +7967,7 @@ export async function runBuildDiscussion(
     const waveProgressed = hasMeaningfulBuildProgress({
       filesWritten: executed.reduce((sum, item) => sum + item.files.length, 0),
       tasksAdvanced:
-        action.results.length + novelTasks.accepted.length + (verificationFixTask ? 1 : 0),
+        action.results.length + novelTasks.tasks.length + (verificationFixTask ? 1 : 0),
       failureChanged:
         verifyCommandChangedThisWave ||
         recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),

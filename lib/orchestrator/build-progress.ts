@@ -5,7 +5,10 @@
  * build only gives up after repeated recovery attempts truly stall.
  */
 
-import type { BuildTask } from "./build";
+import {
+  nextIncrementalBuildTaskId,
+  type BuildTask,
+} from "./build";
 
 export interface BuildProgressSignals {
   filesWritten: number;
@@ -90,15 +93,6 @@ function taskOwnsPath(task: BuildTask, path: string): boolean {
   );
 }
 
-function nextVerificationTaskId(tasks: BuildTask[]): string {
-  const existing = new Set(tasks.map((task) => task.id));
-  for (let i = 1; i <= tasks.length + 10; i += 1) {
-    const id = `TV${i}`;
-    if (!existing.has(id)) return id;
-  }
-  return `TV${Date.now().toString(36)}`;
-}
-
 function truncateForTask(text: string, max = 1400): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated]`;
 }
@@ -120,7 +114,7 @@ export function buildVerificationFailureTask(input: {
   );
   if (hasIncompleteOwner) return null;
 
-  const id = nextVerificationTaskId(input.tasks);
+  const id = nextIncrementalBuildTaskId(input.tasks);
   const pathList = paths.join(", ");
   return {
     id,

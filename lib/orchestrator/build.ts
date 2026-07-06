@@ -323,16 +323,102 @@ export interface ReviewTaskFilterResult {
   }>;
 }
 
+const TASK_ID_NUMBER_RE = /^T(\d+)(?:\D.*)?$/i;
+
+function buildTaskIdKey(id: string | undefined): string {
+  return id?.trim().toLowerCase() ?? "";
+}
+
+function numericTaskIdPart(id: string | undefined): number | null {
+  const match = id?.trim().match(TASK_ID_NUMBER_RE);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export function nextIncrementalBuildTaskNumber(
+  tasks: Array<Pick<BuildTask, "id">>
+): number {
+  let max = 0;
+  for (const task of tasks) {
+    const value = numericTaskIdPart(task.id);
+    if (value != null && value > max) max = value;
+  }
+  return max + 1;
+}
+
+export function nextIncrementalBuildTaskId(
+  tasks: Array<Pick<BuildTask, "id">>
+): string {
+  return `T${nextIncrementalBuildTaskNumber(tasks)}`;
+}
+
+export interface IncrementalTaskIdAllocation {
+  tasks: PlanAction["tasks"];
+  remapped: Array<{
+    from: string;
+    to: string;
+    title: string;
+  }>;
+  nextNumber: number;
+}
+
+export function allocateIncrementalTaskIds(
+  existingTasks: Array<Pick<BuildTask, "id">>,
+  candidates: PlanAction["tasks"]
+): IncrementalTaskIdAllocation {
+  const existingIds = new Set(
+    existingTasks.map((task) => buildTaskIdKey(task.id)).filter(Boolean)
+  );
+  const idRemap = new Map<string, string>();
+  const remapped: IncrementalTaskIdAllocation["remapped"] = [];
+  const allocated: PlanAction["tasks"] = [];
+  let nextNumber = nextIncrementalBuildTaskNumber(existingTasks);
+
+  for (const candidate of candidates) {
+    let nextId = `T${nextNumber}`;
+    while (existingIds.has(buildTaskIdKey(nextId))) {
+      nextNumber += 1;
+      nextId = `T${nextNumber}`;
+    }
+    nextNumber += 1;
+    existingIds.add(buildTaskIdKey(nextId));
+
+    const originalId = candidate.id?.trim();
+    if (originalId && originalId !== nextId) {
+      remapped.push({ from: originalId, to: nextId, title: candidate.title });
+    }
+    const originalKey = buildTaskIdKey(originalId);
+    if (originalKey && !idRemap.has(originalKey) && !existingIds.has(originalKey)) {
+      idRemap.set(originalKey, nextId);
+    }
+    allocated.push({ ...candidate, id: nextId });
+  }
+
+  const tasks = allocated.map((task) => {
+    if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) {
+      return task;
+    }
+    const dependsOn: string[] = [];
+    for (const rawDep of task.dependsOn) {
+      if (typeof rawDep !== "string") continue;
+      const dep = rawDep.trim();
+      if (!dep) continue;
+      const depKey = buildTaskIdKey(dep);
+      const target = idRemap.get(depKey) ?? dep;
+      if (target === task.id || dependsOn.includes(target)) continue;
+      dependsOn.push(target);
+    }
+    return { ...task, dependsOn };
+  });
+
+  return { tasks, remapped, nextNumber };
+}
+
 export function filterNovelReviewTasks(
   existingTasks: Pick<BuildTask, "id" | "title" | "status" | "outputPaths">[],
   candidates: PlanAction["tasks"]
 ): ReviewTaskFilterResult {
-  const existing = new Map(
-    existingTasks.map((task) => [
-      task.id.trim().toLowerCase(),
-      { title: task.title, status: task.status },
-    ])
-  );
   const existingByOutputPath = new Map<
     string,
     { title: string; status: BuildTaskStatus }
@@ -353,36 +439,20 @@ export function filterNovelReviewTasks(
   const skipped: ReviewTaskFilterResult["skipped"] = [];
   for (const candidate of candidates) {
     const id = candidate.id?.trim();
-    const key = id?.toLowerCase();
-    const prior = key ? existing.get(key) : undefined;
-    if (id && prior) {
-      skipped.push({
-        id,
-        title: prior.title,
-        existingStatus: prior.status,
-      });
-      continue;
-    }
     const duplicateOutput = (candidate.outputPaths ?? [])
       .map((path) => path.trim().replace(/\\/g, "/").toLowerCase())
       .filter(Boolean)
       .map((path) => existingByOutputPath.get(path))
       .find((match): match is { title: string; status: BuildTaskStatus } => !!match);
-    if (id && duplicateOutput) {
+    if (duplicateOutput) {
       skipped.push({
-        id,
+        id: id || "(unassigned)",
         title: duplicateOutput.title,
         existingStatus: duplicateOutput.status,
       });
       continue;
     }
     accepted.push(candidate);
-    if (id && key) {
-      existing.set(key, {
-        title: candidate.title,
-        status: "planned",
-      });
-    }
     for (const outputPath of candidate.outputPaths ?? []) {
       const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
       if (normalized) {
@@ -735,7 +805,7 @@ export function buildReviewGateFixInstructions(result: ReviewResult): string {
 const buildTaskActionSchema = (): JsonSchemaObject => ({
   type: "object",
   properties: {
-    id: stringSchema("Stable task id, when available."),
+    id: stringSchema("Optional model-local task id. The engine assigns the final incremental T<number> id."),
     title: stringSchema("Short task title."),
     instructions: stringSchema("Concrete implementation instructions."),
     implementationContract: stringSchema(
@@ -1951,26 +2021,24 @@ export function applyTaskSplit(
     }
   }
 
-  // Compute child ids up front (needed to resolve dependsOn), resolving any
-  // collision with an existing task id by suffixing "b", "c", …
-  const existingIds = new Set(tasks.map((task) => task.id));
+  // Compute child ids up front (needed to resolve dependsOn). Split children
+  // are normal tasks and must continue the global T<number> sequence.
+  const existingIds = new Set(tasks.map((task) => buildTaskIdKey(task.id)));
   const childIds: string[] = [];
+  let nextNumber = nextIncrementalBuildTaskNumber(tasks);
   for (let i = 0; i < split.subtasks.length; i++) {
-    let candidate = `${parentId}.${i + 1}`;
-    if (existingIds.has(candidate)) {
-      let suffixCode = "b".charCodeAt(0);
-      // collisions past 'z' fall through to later ASCII chars; unreachable in practice.
-      while (existingIds.has(`${candidate}${String.fromCharCode(suffixCode)}`)) {
-        suffixCode += 1;
-      }
-      candidate = `${candidate}${String.fromCharCode(suffixCode)}`;
+    let candidate = `T${nextNumber}`;
+    while (existingIds.has(buildTaskIdKey(candidate))) {
+      nextNumber += 1;
+      candidate = `T${nextNumber}`;
     }
-    existingIds.add(candidate);
+    nextNumber += 1;
+    existingIds.add(buildTaskIdKey(candidate));
     childIds.push(candidate);
   }
 
   // Build the child tasks. dependsOn accepts either an ordinal ("1".."N") or a
-  // would-be child id, and only edges pointing at a LOWER-numbered sibling are
+  // resolved child id, and only edges pointing at a LOWER-numbered sibling are
   // kept; anything else is silently dropped (not an error).
   const children: BuildTask[] = split.subtasks.map((subtask, i) => {
     const deps: string[] = [];
@@ -4199,6 +4267,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     "```json",
     `{"action":"build_plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"implementationPlan":"brief Architect-owned implementation sequence and integration strategy","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","implementationContract":"binding design details for this worker: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
     "```",
+    `Task ids are advisory; the engine assigns the final incremental T<number> ids before workers start. Keep dependsOn internally consistent within your JSON plan.`,
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions; put binding design details in each task's implementationContract.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
@@ -4573,6 +4642,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     "```json",
     `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
+    `Task ids in newTasks are advisory only; the engine assigns the next incremental T<number> ids and preserves existing task ids across refresh/resume. Use dependsOn only for existing task ids or other new-task ids you defined in the same JSON.`,
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
     "Spec-compliance review checks whether the landed work satisfies the Architect spec, current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,

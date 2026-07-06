@@ -1,5 +1,6 @@
 /** Build task scheduling checks (run: npx tsx scripts/test-build-task-scheduling.mts) */
 import {
+  allocateIncrementalTaskIds,
   buildReviewFixTaskUpdate,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
@@ -55,9 +56,71 @@ const filtered = filterNovelReviewTasks(existing, [
   },
 ]);
 
-check("duplicate review task ids are skipped", filtered.accepted.length === 1, filtered);
-check("duplicate skip reports existing id", filtered.skipped[0]?.id === "T3", filtered);
-check("novel review task is retained", filtered.accepted[0]?.id === "T7", filtered);
+check("duplicate review task ids are retained for renumbering", filtered.accepted.length === 2, filtered);
+check("duplicate review task ids are not reported as stale", filtered.skipped.length === 0, filtered);
+
+const allocated = allocateIncrementalTaskIds(existing, filtered.accepted);
+check(
+  "review-created task ids are reassigned after the highest existing task id",
+  JSON.stringify(allocated.tasks.map((task) => task.id)) === JSON.stringify(["T9", "T10"]),
+  allocated
+);
+check(
+  "review task id remaps are reported",
+  allocated.remapped.some((item) => item.from === "T3" && item.to === "T9") &&
+    allocated.remapped.some((item) => item.from === "T7" && item.to === "T10"),
+  allocated.remapped
+);
+
+const resumedCollision = allocateIncrementalTaskIds(
+  [
+    ...existing,
+    {
+      id: "T13",
+      title: "Clean final static verification and browser acceptance",
+      instructions: "Verify only.",
+      contextFiles: [],
+      status: "done",
+    },
+  ],
+  [
+    {
+      id: "T13",
+      title: "Upgrade arena presentation to voxel-style 3D",
+      instructions: "Replace the flat paintball graphics with a voxel-style 3D arena.",
+      outputPaths: ["src/game.js"],
+      dependsOn: ["T13"],
+    },
+  ]
+);
+check(
+  "resumed review task id collision becomes the next incremental id",
+  resumedCollision.tasks[0]?.id === "T14",
+  resumedCollision
+);
+check(
+  "dependencies on existing colliding ids stay pointed at the existing task",
+  JSON.stringify(resumedCollision.tasks[0]?.dependsOn) === JSON.stringify(["T13"]),
+  resumedCollision.tasks[0]
+);
+
+const initialPlan = allocateIncrementalTaskIds(
+  [],
+  [
+    { id: "T5", title: "First", instructions: "Do first." },
+    { id: "T9", title: "Second", instructions: "Do second.", dependsOn: ["T5"] },
+  ]
+);
+check(
+  "initial plan task ids are normalized to T1..Tn",
+  JSON.stringify(initialPlan.tasks.map((task) => task.id)) === JSON.stringify(["T1", "T2"]),
+  initialPlan
+);
+check(
+  "initial plan dependencies are remapped to normalized ids",
+  JSON.stringify(initialPlan.tasks[1]?.dependsOn) === JSON.stringify(["T1"]),
+  initialPlan.tasks[1]
+);
 
 const staleDuplicate = filterNovelReviewTasks(existing, [
   {
