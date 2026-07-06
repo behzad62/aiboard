@@ -275,7 +275,7 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
         messages: [{ role: "user", content: "Call echo_tool." }],
         nativeTools,
         hostedBuildTools: true,
-        webSearch: false,
+        webSearch: true,
         attachments: [],
         stream: true,
       }),
@@ -294,11 +294,18 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
             tool !== null &&
             (tool as { name?: string }).name === "echo_tool"
         ) &&
+        upstreamTools.some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            (tool as { type?: string }).type === "web_search"
+        ) &&
         !upstreamTools.some(
           (tool) =>
             typeof tool === "object" &&
             tool !== null &&
-            (tool as { type?: string }).type === "local_shell"
+            ((tool as { type?: string }).type === "local_shell" ||
+              (tool as { type?: string }).type === "web_search_preview")
         ) &&
         upstreamBody?.tool_choice === "auto" &&
         upstreamBody?.parallel_tool_calls === true,
