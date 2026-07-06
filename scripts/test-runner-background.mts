@@ -11,6 +11,8 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 };
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "aiboard-runner-bg-"));
+const project = path.join(tmp, "AIPaintball");
+fs.mkdirSync(project);
 const port = 19000 + Math.floor(Math.random() * 1000);
 const token = "test-token";
 const runner = spawn(
@@ -81,6 +83,15 @@ async function removeTempDir(): Promise<void> {
 try {
   await waitForRunner();
 
+  const rootResponse = await fetch(`${baseUrl}/api/fs/root`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ path: "AIPaintball" }),
+  });
+  const rootData = await rootResponse.json();
+  check("runner accepts active child project folder", rootResponse.ok, rootData);
+  check("runner reports active project folder", rootData.activeDir === project, rootData);
+
   const startedAt = Date.now();
   const res = await fetch(`${baseUrl}/run`, {
     method: "POST",
@@ -95,17 +106,19 @@ try {
   check("background run returns promptly", elapsedMs < 6_000, { elapsedMs, data });
   check("background run is marked background", data.background === true, data);
   check("background run reports success", data.exitCode === 0, data);
+  check("background run reports active cwd", data.cwd === project, data);
 
   const finite = await fetch(`${baseUrl}/run`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      command: `${nodeCommand} -e "console.log('ok')"`,
+      command: `${nodeCommand} -e "console.log(process.cwd())"`,
     }),
   });
   const finiteData = await finite.json();
   check("finite run remains foreground", finiteData.background !== true, finiteData);
-  check("finite run captures stdout", String(finiteData.stdout).trim() === "ok", finiteData);
+  check("finite run captures active cwd stdout", String(finiteData.stdout).trim() === project, finiteData);
+  check("finite run reports active cwd", finiteData.cwd === project, finiteData);
 } catch (err) {
   check("runner background integration", false, err instanceof Error ? err.message : String(err));
 } finally {

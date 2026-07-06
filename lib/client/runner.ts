@@ -16,6 +16,7 @@ export interface CommandResult {
   durationMs: number;
   truncated: boolean;
   background?: boolean;
+  cwd?: string;
 }
 
 export const DEFAULT_RUNNER_URL = "http://127.0.0.1:8787";
@@ -33,7 +34,15 @@ export function headers(token: string): HeadersInit {
 
 export async function checkRunner(
   config: RunnerConfig
-): Promise<{ ok: boolean; dir?: string; platform?: string; version?: number; error?: string }> {
+): Promise<{
+  ok: boolean;
+  dir?: string;
+  root?: string;
+  activeDir?: string;
+  platform?: string;
+  version?: number;
+  error?: string;
+}> {
   try {
     const res = await fetch(`${config.url.replace(/\/$/, "")}/health`, {
       headers: headers(config.token),
@@ -43,6 +52,8 @@ export async function checkRunner(
     return {
       ok: true,
       dir: data.dir,
+      root: typeof data.root === "string" ? data.root : undefined,
+      activeDir: typeof data.activeDir === "string" ? data.activeDir : undefined,
       platform: typeof data.platform === "string" ? data.platform : undefined,
       version: typeof data.version === "number" ? data.version : undefined,
     };

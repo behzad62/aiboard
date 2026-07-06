@@ -547,12 +547,15 @@ function truncate(text: string, max: number): string {
  * the runner's reported platform. Returns "" for unknown/absent platforms (old
  * runners that don't report one) so no misleading hint is shown.
  */
-function shellHintForPlatform(platform?: string): string {
+function shellHintForPlatform(platform?: string, activeDir?: string): string {
+  const cwdHint = activeDir
+    ? ` Runner active project folder: ${activeDir}. Commands already start in this folder; do not cd to its parent unless explicitly required.`
+    : "";
   if (platform === "win32") {
-    return 'SHELL: commands run on Windows via cmd.exe. Do not assume Unix tools like grep, sed, test -f, cat, or ls. Use Windows commands (dir, type, findstr) or cross-platform `node -e "..."` scripts. To start a static server, use `py -3 -m http.server 8000` or `python -m http.server 8000`, and for browser navigation prefer `http://127.0.0.1:<port>` rather than localhost.';
+    return `SHELL: commands run on Windows via cmd.exe.${cwdHint} Do not assume Unix tools like grep, sed, test -f, cat, or ls. Use Windows commands (dir, type, findstr) or cross-platform \`node -e "..."\` scripts. To start a static server, use \`py -3 -m http.server 8000\` or \`python -m http.server 8000\`, and for browser navigation prefer \`http://127.0.0.1:<port>\` rather than localhost.`;
   }
   if (platform === "darwin" || platform === "linux") {
-    return "SHELL: commands run in a POSIX shell (sh). Standard Unix tools (sed/awk/grep/ls/cat) are available.";
+    return `SHELL: commands run in a POSIX shell (sh).${cwdHint} Standard Unix tools (sed/awk/grep/ls/cat) are available.`;
   }
   return "";
 }
@@ -1205,6 +1208,7 @@ export async function runBuildDiscussion(
   // the platform is unknown (old runner) — no hint then.
   let shellHint = "";
   let runnerPlatform = "";
+  let runnerActiveDir = "";
   let allowAllCommands = discussion.runnerAccess === "full";
   const shouldRequestRepoMutationApproval = () =>
     !benchmarkApprovalsBypassed() && !githubWorkflow;
@@ -1464,7 +1468,8 @@ export async function runBuildDiscussion(
       runnerDirName = health.dir ?? null;
       refreshBuildMemoryProjectKey();
       runnerPlatform = health.platform ?? "";
-      shellHint = shellHintForPlatform(health.platform);
+      runnerActiveDir = health.activeDir ?? "";
+      shellHint = shellHintForPlatform(health.platform, runnerActiveDir);
       emit({
         type: "diagnostic",
         phase: "initializing",
