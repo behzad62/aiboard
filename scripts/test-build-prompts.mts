@@ -120,6 +120,8 @@ const workerTools = buildWorkerToolInstructions({
     "playwright.browser_navigate args: url: string\nplaywright.browser_snapshot args: none",
   mcpCallsLeft: 2,
   localServerUrls: ["http://localhost:3001"],
+  shellHint:
+    "SHELL: commands run on Windows via cmd.exe - use `py -3 -m http.server 8000`; prefer http://127.0.0.1:<port> for browser navigation.",
 });
 check(
   "worker tool instructions advertise MCP tools",
@@ -162,6 +164,13 @@ check(
   /project-root commands only/i.test(workerTools) &&
     /no cd, pipes, redirects/i.test(workerTools) &&
     /no installs/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions include runner shell guidance",
+  /Windows via cmd\.exe/i.test(workerTools) &&
+    /py -3 -m http\.server 8000/i.test(workerTools) &&
+    /127\.0\.0\.1:<port>/i.test(workerTools),
   workerTools
 );
 check(

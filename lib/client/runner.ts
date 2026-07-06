@@ -19,6 +19,7 @@ export interface CommandResult {
 }
 
 export const DEFAULT_RUNNER_URL = "http://127.0.0.1:8787";
+export const DEFAULT_RUN_COMMAND_REQUEST_TIMEOUT_MS = 5 * 60 * 1000 + 15_000;
 export const SAFE_MCP_RUNNER_VERSION = 10;
 
 export function supportsSafeMcpBridge(version: number | undefined): boolean {
@@ -378,20 +379,49 @@ export async function fetchViaRunner(
   };
 }
 
+export interface RunCommandOptions {
+  timeoutMs?: number;
+}
+
+function normalizeTimeoutMs(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
 export async function runCommand(
   config: RunnerConfig,
-  command: string
+  command: string,
+  options?: RunCommandOptions
 ): Promise<CommandResult> {
-  const res = await fetch(`${config.url.replace(/\/$/, "")}/run`, {
-    method: "POST",
-    headers: headers(config.token),
-    body: JSON.stringify({ command }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error ?? `Runner error (HTTP ${res.status})`);
+  const timeoutMs = normalizeTimeoutMs(
+    options?.timeoutMs,
+    DEFAULT_RUN_COMMAND_REQUEST_TIMEOUT_MS
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/run`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({ command }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error ?? `Runner error (HTTP ${res.status})`);
+    }
+    return (await res.json()) as CommandResult;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Runner command timed out after ${(timeoutMs / 1000).toFixed(1)}s. The command may still be running in the local runner; stop it from the runner terminal if needed.`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as CommandResult;
 }
 
 /**

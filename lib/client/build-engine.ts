@@ -549,10 +549,10 @@ function truncate(text: string, max: number): string {
  */
 function shellHintForPlatform(platform?: string): string {
   if (platform === "win32") {
-    return 'SHELL: commands run on Windows via cmd.exe — Unix tools (sed/awk/grep/ls/cat) are NOT available; use `node -e "..."` for file inspection and Windows equivalents (type, dir, findstr) otherwise.';
+    return 'SHELL: commands run on Windows via cmd.exe. Do not assume Unix tools like grep, sed, test -f, cat, or ls. Use Windows commands (dir, type, findstr) or cross-platform `node -e "..."` scripts. To start a static server, use `py -3 -m http.server 8000` or `python -m http.server 8000`, and for browser navigation prefer `http://127.0.0.1:<port>` rather than localhost.';
   }
   if (platform === "darwin" || platform === "linux") {
-    return "SHELL: commands run in a POSIX shell (sh) — standard Unix tools (sed/awk/grep/ls/cat) are available.";
+    return "SHELL: commands run in a POSIX shell (sh). Standard Unix tools (sed/awk/grep/ls/cat) are available.";
   }
   return "";
 }
@@ -5987,6 +5987,7 @@ export async function runBuildDiscussion(
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         localServerUrls,
+        shellHint,
         allowSplit,
       });
 

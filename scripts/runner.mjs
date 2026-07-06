@@ -72,7 +72,7 @@ import {
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
-const VERSION = 11;
+const VERSION = 12;
 // PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
 // panel. Running the UNBUILT source leaves it as the marker; we detect that via the
 // split PANEL_BUILD_MARKER (kept non-contiguous so the build's marker replacement
@@ -81,7 +81,16 @@ const PANEL_HTML = "__RUNNER_PANEL_HTML__";
 const PANEL_BUILD_MARKER = "__RUNNER_" + "PANEL_HTML__";
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const MAX_MCP_RESULT_BYTES = MAX_OUTPUT_BYTES;
-const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const COMMAND_TIMEOUT_MS = readPositiveIntegerEnv(
+  "AIBOARD_RUNNER_COMMAND_TIMEOUT_MS",
+  5 * 60 * 1000,
+  { min: 1_000, max: 60 * 60 * 1000 }
+);
+const COMMAND_KILL_GRACE_MS = readPositiveIntegerEnv(
+  "AIBOARD_RUNNER_KILL_GRACE_MS",
+  2_000,
+  { min: 100, max: 30_000 }
+);
 const BACKGROUND_STARTUP_MS = 2_000;
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
@@ -105,6 +114,15 @@ const SKIP_DIRS = new Set([
 ]);
 
 const backgroundProcesses = new Map();
+
+function readPositiveIntegerEnv(name, fallback, bounds = {}) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  const value = Math.floor(parsed);
+  return Math.min(Math.max(value, bounds.min ?? 1), bounds.max ?? Number.MAX_SAFE_INTEGER);
+}
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -707,6 +725,35 @@ function parseBackgroundCommand(command) {
   };
 }
 
+function killProcessTree(child) {
+  if (process.platform === "win32" && child.pid) {
+    const result = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (!result.error && result.status === 0) return;
+  }
+
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
+    const sigkillTimer = setTimeout(() => {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    }, Math.min(COMMAND_KILL_GRACE_MS, 2_000));
+    sigkillTimer.unref?.();
+    return;
+  }
+
+  child.kill("SIGKILL");
+}
+
 function startBackgroundCommand(command) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -797,11 +844,15 @@ function runCommand(command) {
       cwd: projectDir,
       env: process.env,
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
     let truncated = false;
+    let timedOut = false;
+    let settled = false;
+    let killGraceTimer;
     const cap = (current, chunk) => {
       const capped = appendTextToUtf8ByteCap(current, chunk, MAX_OUTPUT_BYTES);
       if (capped.truncated) truncated = true;
@@ -810,32 +861,45 @@ function runCommand(command) {
     child.stdout.on("data", (c) => (stdout = cap(stdout, c)));
     child.stderr.on("data", (c) => (stderr = cap(stderr, c)));
 
+    const timeoutMessage = () =>
+      `Command timed out after ${(COMMAND_TIMEOUT_MS / 1000).toFixed(1)}s and was terminated.`;
+    const finish = (exitCode, finalStdout, finalStderr) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killGraceTimer) clearTimeout(killGraceTimer);
+      const stderrWithTimeout = timedOut
+        ? [finalStderr.trim(), timeoutMessage()].filter(Boolean).join("\n")
+        : finalStderr;
+      const finalized = finalizeCommandOutput(
+        finalStdout,
+        stderrWithTimeout,
+        truncated || timedOut
+      );
+      resolve({
+        exitCode: timedOut ? -1 : exitCode,
+        stdout: finalized.stdout,
+        stderr: finalized.stderr,
+        durationMs: Date.now() - startedAt,
+        truncated: finalized.truncated,
+      });
+    };
+
     const timer = setTimeout(() => {
+      timedOut = true;
       truncated = true;
-      child.kill("SIGKILL");
+      killProcessTree(child);
+      killGraceTimer = setTimeout(() => {
+        finish(-1, stdout, stderr);
+      }, COMMAND_KILL_GRACE_MS);
+      killGraceTimer.unref?.();
     }, COMMAND_TIMEOUT_MS);
 
     child.on("close", (code) => {
-      clearTimeout(timer);
-      const finalized = finalizeCommandOutput(stdout, stderr, truncated);
-      resolve({
-        exitCode: code ?? -1,
-        stdout: finalized.stdout,
-        stderr: finalized.stderr,
-        durationMs: Date.now() - startedAt,
-        truncated: finalized.truncated,
-      });
+      finish(code ?? -1, stdout, stderr);
     });
     child.on("error", (err) => {
-      clearTimeout(timer);
-      const finalized = finalizeCommandOutput("", String(err), truncated);
-      resolve({
-        exitCode: -1,
-        stdout: finalized.stdout,
-        stderr: finalized.stderr,
-        durationMs: Date.now() - startedAt,
-        truncated: finalized.truncated,
-      });
+      finish(-1, "", String(err));
     });
   });
 }

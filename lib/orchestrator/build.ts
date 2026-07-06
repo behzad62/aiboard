@@ -3178,6 +3178,7 @@ export function buildWorkerToolInstructions(budget: {
   mcpToolsDoc?: string;
   mcpCallsLeft?: number;
   localServerUrls?: string[];
+  shellHint?: string;
   allowSplit?: boolean;
 }): string {
   const localServers = [...new Set(budget.localServerUrls ?? [])].filter(Boolean);
@@ -3193,7 +3194,10 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
     budget.runs && budget.runs > 0
-      ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs, file writes, or long-running dev servers.`
+      ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs or file writes. Long-lived dev servers/watchers are allowed only for browser acceptance and must be background commands with one trailing & after a host-valid command.`
+      : "",
+    budget.shellHint?.trim()
+      ? `- Runner shell environment: ${budget.shellHint.trim()} Use commands valid for this host shell. For background dev servers/watchers, append one trailing & only after a command that is valid for that shell.`
       : "",
     budget.fetches && budget.fetches > 0
       ? `- Fetch a PUBLIC docs/API-reference URL through the user's runner: {"action":"fetch","url":"https://example.com/docs","reason":"why"} (${budget.fetches} left). Known URLs only — this is not a search engine; local/private addresses are refused. The user may deny a fetch — respect that and continue.`
