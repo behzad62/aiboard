@@ -70,7 +70,7 @@ export interface ChatParams {
   webSearch?: boolean;
   /** Provider-native function/tool definitions available for this call. */
   nativeTools?: NativeToolDefinition[];
-  /** Provider-native Build tools gated by the user's full-access runner choice. */
+  /** Provider-hosted Build tools for providers that still support them. */
   hostedBuildTools?: boolean;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;

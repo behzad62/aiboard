@@ -24,19 +24,6 @@ type OpenAIResponseInputMessage = {
       >;
 };
 
-function shellCommandPartsToString(parts: unknown): string {
-  if (typeof parts === "string") return parts;
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .map((part) => String(part))
-    .map((part) =>
-      /^[A-Za-z0-9_./:=@+-]+$/.test(part)
-        ? part
-        : JSON.stringify(part)
-    )
-    .join(" ");
-}
-
 /** Codex models reject v1/chat/completions and must use v1/responses. */
 function usesResponsesApi(model: string): boolean {
   return (
@@ -258,31 +245,6 @@ async function* streamOpenAIResponses(
           current.name = item.name ?? current.name;
           if (item.arguments != null) current.argumentsJson = item.arguments;
           pendingToolCalls.set(id, current);
-        } else if (
-          params.hostedBuildTools &&
-          item?.type === "local_shell_call" &&
-          item.action?.type === "exec"
-        ) {
-          const command = shellCommandPartsToString(item.action.command);
-          if (command) {
-            const id =
-              item.call_id ??
-              item.id ??
-              rawEvent.item_id ??
-              String(rawEvent.output_index ?? pendingToolCalls.size);
-            pendingToolCalls.set(id, {
-              id,
-              name: "run",
-              arguments: {
-                command,
-                reason: "OpenAI local_shell native tool call",
-              },
-              argumentsJson: JSON.stringify({
-                command,
-                reason: "OpenAI local_shell native tool call",
-              }),
-            });
-          }
         }
       } else if (
         rawEvent.type === "response.function_call_arguments.delta" &&
@@ -378,10 +340,8 @@ export function openAIResponsesNativeToolField(
 export function openAIResponsesHostedBuildToolsField(
   enabled?: boolean
 ): Record<string, unknown> {
-  if (!enabled) return {};
-  return {
-    tools: [{ type: "local_shell" }],
-  };
+  void enabled;
+  return {};
 }
 
 export const openaiProvider: AIProvider = {

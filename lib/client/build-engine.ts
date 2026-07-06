@@ -531,6 +531,12 @@ function supportsProviderNativeBuildTools(providerId: string): boolean {
   return PROVIDER_NATIVE_BUILD_TOOL_IDS.has(providerId);
 }
 
+const PROVIDER_HOSTED_BUILD_TOOL_IDS = new Set(["google"]);
+
+function supportsProviderHostedBuildTools(providerId: string): boolean {
+  return PROVIDER_HOSTED_BUILD_TOOL_IDS.has(providerId);
+}
+
 const MANIFEST_CANDIDATES = [
   "README.md",
   "package.json",
@@ -3645,7 +3651,11 @@ export async function runBuildDiscussion(
       opts.nativeTools?.length && supportsProviderNativeBuildTools(providerId)
         ? opts.nativeTools
         : undefined;
-    const hostedBuildTools = !!runner && allowAllCommands && !benchmark;
+    const hostedBuildTools =
+      !!runner &&
+      allowAllCommands &&
+      !benchmark &&
+      supportsProviderHostedBuildTools(providerId);
     const structuredOutput = nativeTools ? undefined : opts.structuredOutput;
     const traceStartedAt = new Date().toISOString();
     const traceStartMs = Date.now();

@@ -77,7 +77,6 @@ function buildAccountRunnerRequestBody(
     reasoningEffort: params.reasoningEffort,
     structuredOutput: params.structuredOutput,
     nativeTools: params.nativeTools,
-    hostedBuildTools: params.hostedBuildTools,
     webSearch: params.webSearch,
     attachments: params.attachments ?? [],
     stream: true,

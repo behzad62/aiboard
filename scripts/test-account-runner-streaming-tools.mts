@@ -126,9 +126,9 @@ async function testBrowserProviderStreaming(): Promise<void> {
     attachments: [],
   });
   check(
-    "account provider forwards native tool fields to the runner",
+    "account provider forwards native tools without deprecated hosted shell flag",
     Array.isArray(requestBody?.nativeTools) &&
-      requestBody?.hostedBuildTools === true &&
+      requestBody?.hostedBuildTools === undefined &&
       requestBody?.webSearch === true &&
       requestBody?.stream === true,
     requestBody
@@ -285,7 +285,7 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
     const upstreamTools = upstreamBody?.tools as unknown[] | undefined;
 
     check(
-      "local account runner forwards OpenAI Responses tools upstream",
+      "local account runner omits unsupported local_shell while forwarding tools upstream",
       response.headers.get("content-type")?.includes("text/event-stream") === true &&
         Array.isArray(upstreamTools) &&
         upstreamTools.some(
@@ -294,7 +294,7 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
             tool !== null &&
             (tool as { name?: string }).name === "echo_tool"
         ) &&
-        upstreamTools.some(
+        !upstreamTools.some(
           (tool) =>
             typeof tool === "object" &&
             tool !== null &&

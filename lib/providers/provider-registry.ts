@@ -180,7 +180,7 @@ export const PROVIDER_DEFINITIONS = {
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
-        "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and native Build tool calls are forwarded through the runner. Max-token caps are intentionally omitted because the ChatGPT Codex account backend rejects max_output_tokens.",
+        "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, and function tool calls are forwarded through the runner. Provider-hosted local shell tools are not sent because the ChatGPT Codex account backend no longer supports them. Max-token caps are intentionally omitted because that backend rejects max_output_tokens.",
       promptCachingLabel: "Account-provider dependent",
       promptCachingNote:
         "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",

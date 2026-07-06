@@ -196,12 +196,9 @@ check(
 );
 
 check(
-  "OpenAI local shell Build tools are gated",
+  "OpenAI hosted Build tools omit unsupported local_shell",
   JSON.stringify(openAIResponsesHostedBuildToolsField(false)) === "{}" &&
-    JSON.stringify(openAIResponsesHostedBuildToolsField(true)) ===
-      JSON.stringify({
-        tools: [{ type: "local_shell" }],
-      }),
+    JSON.stringify(openAIResponsesHostedBuildToolsField(true)) === "{}",
   openAIResponsesHostedBuildToolsField(true)
 );
 
