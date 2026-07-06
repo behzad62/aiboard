@@ -156,9 +156,16 @@ check(
   null
 );
 check(
-  "NVIDIA DeepSeek NIM models fail closed for native Build tools until verified",
-  !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-flash") &&
-    !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-pro"),
+  "NVIDIA DeepSeek Pro exposes verified native Build tools",
+  providerSupportsNativeBuildToolsFeature(
+    "nvidia",
+    "deepseek-ai/deepseek-v4-pro"
+  ),
+  null
+);
+check(
+  "NVIDIA DeepSeek Flash fails closed for native Build tools until verified",
+  !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-flash"),
   null
 );
 check(

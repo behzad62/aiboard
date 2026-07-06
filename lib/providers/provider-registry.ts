@@ -119,6 +119,7 @@ const OPENROUTER_MODELS_WITH_FUNCTION_TOOLS = [
 const NVIDIA_MODELS_WITH_FUNCTION_TOOLS = [
   "z-ai/glm-5.2",
   "minimaxai/minimax-m3",
+  "deepseek-ai/deepseek-v4-pro",
   "nvidia/nemotron-3-ultra-550b-a55b",
 ] as const;
 
