@@ -35,6 +35,15 @@ for (const provider of providers) {
   );
 }
 
+check(
+  "NVIDIA provider is registered for user-defined NIM models",
+  providerIds.has("nvidia") &&
+    providers.some(
+      (provider) => provider.id === "nvidia" && provider.listModels().length === 0
+    ),
+  { providerIds: [...providerIds], providers: providers.map((provider) => provider.id) }
+);
+
 for (const providerId of ["chatgpt", "github-copilot"]) {
   const provider = providers.find((candidate) => candidate.id === providerId);
   const catalogIds = MODEL_CATALOG.filter((model) => model.providerId === providerId)
@@ -113,6 +122,11 @@ check(
   null
 );
 check(
+  "NVIDIA NIM provider supports max-token request caps",
+  providerSupportsMaxTokensFeature("nvidia", "z-ai/glm-5.2"),
+  null
+);
+check(
   "OpenAI Codex keeps native function-tool support",
   providerSupportsNativeBuildToolsFeature("openai", "gpt-5.3-codex"),
   null
@@ -125,6 +139,31 @@ check(
 check(
   "OpenRouter catalog models with verified tools expose native Build tools",
   providerSupportsNativeBuildToolsFeature("openrouter", "qwen/qwen3.7-max"),
+  null
+);
+check(
+  "NVIDIA GLM NIM model exposes native Build tools",
+  providerSupportsNativeBuildToolsFeature("nvidia", "z-ai/glm-5.2"),
+  null
+);
+check(
+  "NVIDIA MiniMax and Nemotron NIM models expose verified native Build tools",
+  providerSupportsNativeBuildToolsFeature("nvidia", "minimaxai/minimax-m3") &&
+    providerSupportsNativeBuildToolsFeature(
+      "nvidia",
+      "nvidia/nemotron-3-ultra-550b-a55b"
+    ),
+  null
+);
+check(
+  "NVIDIA DeepSeek NIM models fail closed for native Build tools until verified",
+  !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-flash") &&
+    !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-pro"),
+  null
+);
+check(
+  "Unverified NVIDIA NIM models fail closed for native Build tools",
+  !providerSupportsNativeBuildToolsFeature("nvidia", "unknown/model"),
   null
 );
 check(

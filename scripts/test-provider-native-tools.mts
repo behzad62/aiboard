@@ -196,6 +196,13 @@ check(
   openAICompatibleNativeToolField("openrouter", sampleTools)
 );
 
+check(
+  "NVIDIA NIM uses the same OpenAI-compatible native tool field",
+  JSON.stringify(openAICompatibleNativeToolField("nvidia", sampleTools)) ===
+    JSON.stringify(openAIChatField),
+  openAICompatibleNativeToolField("nvidia", sampleTools)
+);
+
 const anthropicField = anthropicNativeToolField(sampleTools);
 check(
   "Anthropic native tools use input_schema and auto tool choice",

@@ -143,7 +143,7 @@ export function openAICompatibleNativeToolField(
 ): Record<string, unknown> {
   if (
     !tools?.length ||
-    !["openai", "openrouter", "custom"].includes(providerId)
+    !["openai", "openrouter", "custom", "nvidia"].includes(providerId)
   ) {
     return {};
   }

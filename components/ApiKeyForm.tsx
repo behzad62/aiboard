@@ -28,6 +28,7 @@ interface ProviderConfig {
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
+  runnerTokenHint?: string | null;
   modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
@@ -61,6 +62,7 @@ interface ApiKeyFormProps {
 export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps) {
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState(provider.baseURL ?? "");
+  const [runnerToken, setRunnerToken] = useState("");
   const [modelIdsText, setModelIdsText] = useState((provider.modelIds ?? []).join("\n"));
   const [defaultModel, setDefaultModel] = useState(provider.defaultModel ?? provider.models[0]?.id ?? "");
   const [enabled, setEnabled] = useState(provider.enabled);
@@ -72,6 +74,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [deviceLoginPrompt, setDeviceLoginPrompt] = useState<DeviceLoginPrompt | null>(null);
   const providerDefinition = getProviderDefinition(provider.providerId);
   const baseUrlField = providerDefinition?.baseURLField;
+  const runnerTokenField = providerDefinition?.runnerTokenField;
   const modelIdsField = providerDefinition?.modelIdsField;
   const accountRunner = providerDefinition?.accountRunner;
 
@@ -87,6 +90,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setDefaultModel(provider.defaultModel ?? provider.models[0]?.id ?? "");
     setEnabled(provider.enabled);
     setBaseURL(provider.baseURL ?? "");
+    setRunnerToken("");
     setModelIdsText((provider.modelIds ?? []).join("\n"));
   }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL, provider.modelIds]);
 
@@ -103,6 +107,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       if (modelIdsField && parsedModelIds.length === 0) {
         throw new Error("Add at least one model id");
       }
+      if (runnerTokenField && !runnerToken.trim() && !provider.runnerTokenHint) {
+        throw new Error(
+          providerDefinition?.runnerTokenRequiredMessage ??
+            "This provider needs the local runner token"
+        );
+      }
       const nextDefault =
         modelIdsField && !parsedModelIds.includes(defaultModel)
           ? parsedModelIds[0]
@@ -111,11 +121,15 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
         baseURL: baseUrlField ? baseURL : undefined,
+        runnerToken: runnerTokenField
+          ? runnerToken.trim() || undefined
+          : undefined,
         models: modelIdsField ? parsedModelIds : undefined,
         defaultModel: nextDefault,
         enabled,
       });
       setApiKey("");
+      setRunnerToken("");
       setMessage("Saved successfully");
       await onSaved();
     } catch (err) {
@@ -133,6 +147,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
         baseURL: baseUrlField ? baseURL : undefined,
+        runnerToken: runnerTokenField
+          ? runnerToken.trim() || undefined
+          : undefined,
         modelId: defaultModel,
       });
       setMessage(
@@ -228,6 +245,13 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       );
       return;
     }
+    if (runnerTokenField && !provider.runnerTokenHint) {
+      setMessage(
+        providerDefinition?.runnerTokenRequiredMessage ??
+          "Save the local runner token before enabling this provider"
+      );
+      return;
+    }
 
     const previousEnabled = enabled;
     setEnabled(checked);
@@ -272,6 +296,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     ? providerDefinition?.savedCredentialPlaceholder ??
       "Leave blank to keep existing key"
     : providerDefinition?.credentialPlaceholder ?? "Enter API key";
+  const runnerTokenPlaceholder = provider.runnerTokenHint
+    ? "Leave blank to keep existing local runner token"
+    : runnerTokenField?.placeholder ?? "Paste local runner token";
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
@@ -280,6 +307,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <h3 className="font-semibold">{provider.name}</h3>
           {provider.hasKey && provider.keyHint && (
             <p className="text-xs text-muted-foreground">Saved key: {provider.keyHint}</p>
+          )}
+          {provider.runnerTokenHint && (
+            <p className="text-xs text-muted-foreground">
+              Saved runner token: {provider.runnerTokenHint}
+            </p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -328,6 +360,22 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           </p>
         )}
       </div>
+
+      {runnerTokenField && (
+        <div className="space-y-2">
+          <Label htmlFor={`runner-token-${provider.providerId}`}>
+            {runnerTokenField.label}
+          </Label>
+          <Input
+            id={`runner-token-${provider.providerId}`}
+            type="password"
+            placeholder={runnerTokenPlaceholder}
+            value={runnerToken}
+            onChange={(e) => setRunnerToken(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">{runnerTokenField.hint}</p>
+        </div>
+      )}
 
       {accountRunner && (
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">

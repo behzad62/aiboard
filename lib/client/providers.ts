@@ -8,6 +8,7 @@ import OpenAI from "openai";
 import type {
   AIProvider,
   ChatParams,
+  ModelCapabilities,
   ModelInfo,
   StreamChunk,
 } from "@/lib/providers/base";
@@ -23,6 +24,7 @@ import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
 import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
+import { nvidiaProvider } from "@/lib/providers/nvidia";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
@@ -38,6 +40,7 @@ export const CUSTOM_PROVIDER_ID = "custom";
 export const FOUNDRY_PROVIDER_ID = "foundry";
 export const CHATGPT_PROVIDER_ID = "chatgpt";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+export const NVIDIA_PROVIDER_ID = "nvidia";
 
 const TEXT_ONLY = {
   image: false,
@@ -54,6 +57,15 @@ const FOUNDRY_CAPABILITIES = {
   video: false,
 } as const;
 
+const NVIDIA_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
+  "minimaxai/minimax-m3": {
+    image: true,
+    document: false,
+    audio: false,
+    video: false,
+  },
+};
+
 const providers: Record<ProviderId, AIProvider> = {
   openai: openaiProvider,
   anthropic: anthropicProvider,
@@ -62,6 +74,7 @@ const providers: Record<ProviderId, AIProvider> = {
   openrouter: openrouterProvider,
   chatgpt: chatgptProvider,
   "github-copilot": githubCopilotProvider,
+  nvidia: nvidiaProvider,
 };
 
 export function getProvider(id: string): AIProvider | undefined {
@@ -128,12 +141,40 @@ export function listFoundryModelInfos(): ModelInfo[] {
     }));
 }
 
+/** User-defined NVIDIA NIM model ids (from the provider key). */
+export function normalizeNvidiaModelId(id: string): string {
+  const trimmed = id.trim();
+  const parsed = parseModelId(trimmed);
+  return parsed.providerId === NVIDIA_PROVIDER_ID ? parsed.model : trimmed;
+}
+
+function nvidiaCapabilitiesForModel(modelId: string) {
+  return {
+    ...(NVIDIA_MODEL_CAPABILITIES[modelId] ?? TEXT_ONLY),
+  };
+}
+
+export function listNvidiaModelInfos(): ModelInfo[] {
+  const ids = getProviderKey(NVIDIA_PROVIDER_ID)?.models ?? [];
+  return ids
+    .map(normalizeNvidiaModelId)
+    .filter((id) => id.length > 0)
+    .map((id) => ({
+      id,
+      name: id,
+      providerId: NVIDIA_PROVIDER_ID,
+      description: "NVIDIA NIM model",
+      capabilities: nvidiaCapabilitiesForModel(id),
+    }));
+}
+
 export function getAllModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   return withContextProfiles(
     [
       ...getAllProviders().flatMap((p) => p.listModels()),
       ...listFoundryModelInfos(),
+      ...listNvidiaModelInfos(),
       ...listCustomModelInfos(),
     ],
     overrides
@@ -152,6 +193,11 @@ export function getProviderBaseURL(providerId: string): string | undefined {
   return getProviderKey(providerId)?.baseURL ?? undefined;
 }
 
+/** Local provider-runner token saved separately from provider API keys. */
+export function getProviderRunnerToken(providerId: string): string | undefined {
+  return getProviderKey(providerId)?.runnerToken ?? undefined;
+}
+
 export function getEnabledModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   const keyed = getAllProviders()
@@ -163,8 +209,11 @@ export function getEnabledModels(): ModelInfo[] {
   const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
     ? listFoundryModelInfos()
     : [];
+  const nvidia = keyed.includes(NVIDIA_PROVIDER_ID)
+    ? listNvidiaModelInfos()
+    : [];
   return withContextProfiles(
-    [...builtin, ...foundry, ...listCustomModelInfos()],
+    [...builtin, ...foundry, ...nvidia, ...listCustomModelInfos()],
     overrides
   );
 }
@@ -185,6 +234,7 @@ export function resolveModelName(fullId: string): string {
   }
   // Foundry model ids are user-defined (not in the catalog) — show the id.
   if (providerId === FOUNDRY_PROVIDER_ID) return model;
+  if (providerId === NVIDIA_PROVIDER_ID) return model;
   const providerModel = getProvider(providerId)
     ?.listModels()
     .find((m) => m.id === model);
@@ -199,6 +249,7 @@ export function resolveModelName(fullId: string): string {
 export function resolveModelCapabilities(fullId: string) {
   const { providerId, model } = parseModelId(fullId);
   if (providerId === FOUNDRY_PROVIDER_ID) return { ...FOUNDRY_CAPABILITIES };
+  if (providerId === NVIDIA_PROVIDER_ID) return nvidiaCapabilitiesForModel(model);
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
   }

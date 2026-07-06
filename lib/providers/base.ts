@@ -76,6 +76,8 @@ export interface ChatParams {
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */
   baseURL?: string;
+  /** Local provider-runner token, when separate from the provider API key. */
+  runnerToken?: string;
   /** Build-mode context metadata resolved from the static registry + overrides. */
   contextProfile?: ModelContextProfile;
 }

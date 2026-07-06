@@ -36,9 +36,11 @@ import {
 import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
+  NVIDIA_PROVIDER_ID,
   getAllProviders,
   getProvider,
   listFoundryModelInfos,
+  listNvidiaModelInfos,
 } from "./providers";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ export interface ProviderConfig {
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
+  runnerTokenHint?: string | null;
   /** User-defined model ids (gateway providers like Foundry). */
   modelIds?: string[];
   defaultModel?: string | null;
@@ -77,14 +80,17 @@ export function loadProviders(): {
     return {
       providerId: p.id,
       name: p.name,
-      // Foundry models are user-defined (deployment-specific), not catalog.
+      // Gateway provider models are user-defined (deployment/account-specific).
       models:
         p.id === FOUNDRY_PROVIDER_ID
           ? listFoundryModelInfos().map(withContext)
+          : p.id === NVIDIA_PROVIDER_ID
+            ? listNvidiaModelInfos().map(withContext)
           : p.listModels().map(withContext),
       hasKey: !!saved,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
+      runnerTokenHint: saved?.runnerTokenHint ?? null,
       modelIds: saved?.models ?? [],
       defaultModel: saved?.defaultModel,
       enabled: saved?.enabled ?? false,
@@ -99,6 +105,7 @@ export function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;
   baseURL?: string;
+  runnerToken?: string;
   models?: string[];
   defaultModel?: string;
   enabled?: boolean;
@@ -106,6 +113,7 @@ export function saveProviderKey(input: {
   const existing = getProviderKey(input.providerId);
   const now = new Date().toISOString();
   const baseURL = input.baseURL?.trim();
+  const runnerToken = input.runnerToken?.trim();
   const models = input.models
     ?.map((m) => m.trim())
     .filter((m) => m.length > 0);
@@ -120,6 +128,14 @@ export function saveProviderKey(input: {
           }
         : {}),
       ...(input.baseURL !== undefined ? { baseURL: baseURL || null } : {}),
+      ...(input.runnerToken
+        ? {
+            runnerToken,
+            runnerTokenHint: runnerToken ? maskApiKey(runnerToken) : null,
+            lastValidationSucceeded: null,
+            lastValidatedAt: null,
+          }
+        : {}),
       ...(input.models !== undefined ? { models: models ?? [] } : {}),
       defaultModel: input.defaultModel ?? existing.defaultModel,
       enabled: input.enabled ?? existing.enabled,
@@ -130,6 +146,8 @@ export function saveProviderKey(input: {
       providerId: input.providerId,
       apiKey: input.apiKey,
       baseURL: baseURL || null,
+      runnerToken: runnerToken || null,
+      runnerTokenHint: runnerToken ? maskApiKey(runnerToken) : null,
       models: models ?? [],
       defaultModel: input.defaultModel ?? null,
       enabled: input.enabled ?? true,
@@ -223,6 +241,7 @@ export async function validateProvider(input: {
   providerId: string;
   apiKey?: string;
   baseURL?: string;
+  runnerToken?: string;
   modelId?: string;
 }): Promise<ModelTestResult & { modelId?: string }> {
   const provider = getProvider(input.providerId);
@@ -233,6 +252,8 @@ export async function validateProvider(input: {
   const apiKey = input.apiKey ?? saved?.apiKey ?? null;
   if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
   const baseURL = input.baseURL?.trim() || saved?.baseURL || undefined;
+  const runnerToken =
+    input.runnerToken?.trim() || saved?.runnerToken || undefined;
 
   const modelId =
     input.modelId ??
@@ -240,6 +261,8 @@ export async function validateProvider(input: {
     provider.listModels()[0]?.id ??
     (input.providerId === FOUNDRY_PROVIDER_ID
       ? listFoundryModelInfos()[0]?.id
+      : input.providerId === NVIDIA_PROVIDER_ID
+        ? listNvidiaModelInfos()[0]?.id
       : undefined);
   if (!modelId)
     return {
@@ -248,13 +271,16 @@ export async function validateProvider(input: {
       error:
         input.providerId === FOUNDRY_PROVIDER_ID
           ? "Add at least one model id (e.g. claude-opus-4-5) and save first"
-          : "No model available",
+          : input.providerId === NVIDIA_PROVIDER_ID
+            ? "Add at least one NVIDIA model id (e.g. z-ai/glm-5.2) and save first"
+            : "No model available",
     };
 
   const result = await runModelTest((prompt, attachments) =>
     provider.streamChat({
       apiKey,
       baseURL,
+      runnerToken,
       model: modelId,
       messages: [
         { role: "system", content: TEST_SYSTEM },

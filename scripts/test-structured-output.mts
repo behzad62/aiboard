@@ -148,6 +148,15 @@ check(
   openAIField
 );
 
+const nvidiaField = openAICompatibleStructuredOutputField("nvidia", format);
+check(
+  "NVIDIA NIM chat completions receives response_format json_schema",
+  nvidiaField.response_format?.type === "json_schema" &&
+    nvidiaField.response_format.json_schema.name === "architect_action" &&
+    !("provider" in nvidiaField),
+  nvidiaField
+);
+
 check(
   "OpenRouter structured-output calls omit stream_options so require_parameters can route",
   Object.keys(openAICompatibleStreamOptionsField("openrouter", format)).length === 0,

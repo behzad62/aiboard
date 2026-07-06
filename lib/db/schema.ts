@@ -266,6 +266,9 @@ export interface ProviderKey {
   apiKey?: string;
   /** Endpoint override for gateway providers (e.g. Azure AI Foundry). */
   baseURL?: string | null;
+  /** Local provider-runner token for providers that use a CORS proxy. */
+  runnerToken?: string | null;
+  runnerTokenHint?: string | null;
   /**
    * User-defined model ids for gateway providers whose available models depend
    * on the user's own deployment (Azure AI Foundry). Empty/absent for providers

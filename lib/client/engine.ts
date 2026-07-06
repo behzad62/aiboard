@@ -26,6 +26,7 @@ import {
   getDecryptedApiKey,
   getProvider,
   getProviderBaseURL,
+  getProviderRunnerToken,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   streamCustomChat,
@@ -338,6 +339,7 @@ export async function collectStreamWithUsage(
       for await (const chunk of provider.streamChat({
         apiKey,
         baseURL: getProviderBaseURL(providerId),
+        runnerToken: getProviderRunnerToken(providerId),
         model,
         messages: providerMessages,
         attachments: modelAttachments,

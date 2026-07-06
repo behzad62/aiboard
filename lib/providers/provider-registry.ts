@@ -6,6 +6,7 @@ export const PROVIDER_IDS = [
   "openrouter",
   "chatgpt",
   "github-copilot",
+  "nvidia",
 ] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -44,6 +45,8 @@ export interface ProviderDefinition {
   missingCredentialMessage?: string;
   baseURLField?: ProviderSetupField;
   baseURLRequiredMessage?: string;
+  runnerTokenField?: ProviderSetupField;
+  runnerTokenRequiredMessage?: string;
   modelIdsField?: ProviderSetupField;
   accountRunner?: AccountRunnerProviderSetup;
   nativeWebSearch: boolean | ((modelId: string) => boolean);
@@ -111,6 +114,14 @@ const OPENROUTER_MODELS_WITH_FUNCTION_TOOLS = [
   "moonshotai/kimi-k2.7-code",
 ] as const;
 
+// NVIDIA model ids are user-defined in Settings, so fail closed for unknown ids
+// instead of assuming every NIM chat endpoint accepts tools.
+const NVIDIA_MODELS_WITH_FUNCTION_TOOLS = [
+  "z-ai/glm-5.2",
+  "minimaxai/minimax-m3",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+] as const;
+
 function listedModel(list: readonly string[]): (modelId: string) => boolean {
   const set = new Set(list.map(normalizedModelId));
   return (modelId: string) => set.has(normalizedModelId(modelId));
@@ -165,6 +176,11 @@ const MODEL_TOOL_SUPPORT: Partial<
   "github-copilot": {
     nativeWebSearch: false,
     nativeBuildTools: false,
+    hostedBuildTools: false,
+  },
+  nvidia: {
+    nativeWebSearch: false,
+    nativeBuildTools: listedModel(NVIDIA_MODELS_WITH_FUNCTION_TOOLS),
     hostedBuildTools: false,
   },
   custom: {
@@ -348,6 +364,47 @@ export const PROVIDER_DEFINITIONS = {
         "Caching and rate limits are controlled by GitHub Copilot, not by AI Board.",
       concurrencyNote:
         "Copilot model access depends on the signed-in account and may be throttled or limited by GitHub account policy.",
+    },
+  },
+  nvidia: {
+    id: "nvidia",
+    name: "NVIDIA NIM",
+    modelSource: "user-defined",
+    credentialLabel: "NVIDIA API key",
+    credentialPlaceholder: "nvapi-...",
+    savedCredentialPlaceholder: "Leave blank to keep existing NVIDIA API key",
+    missingCredentialMessage:
+      "Save the NVIDIA API key, local provider runner URL/token, and at least one model id before enabling this provider",
+    baseURLField: {
+      label: "Local provider runner URL",
+      placeholder: "http://127.0.0.1:1455",
+      hint: "Run account-provider-runner.mjs locally, then paste its printed URL here. NVIDIA requests are proxied through the runner because the browser cannot call the NVIDIA API directly.",
+    },
+    baseURLRequiredMessage: "This provider needs the local provider runner URL",
+    runnerTokenField: {
+      label: "Local runner token",
+      placeholder: "Paste the current token printed by the account runner",
+      hint: "This authorizes calls to your local runner only. It is separate from the NVIDIA API key.",
+    },
+    runnerTokenRequiredMessage: "This provider needs the local runner token",
+    modelIdsField: {
+      label: "NVIDIA model ids (one per line)",
+      placeholder:
+        "z-ai/glm-5.2\nminimaxai/minimax-m3\ndeepseek-ai/deepseek-v4-flash\ndeepseek-ai/deepseek-v4-pro\nnvidia/nemotron-3-ultra-550b-a55b",
+      hint: "Enter OpenAI-compatible NVIDIA NIM model ids from build.nvidia.com/models. Mistral models are intentionally omitted from this preset.",
+    },
+    nativeWebSearch: false,
+    reasoningEffort: false,
+    maxTokens: true,
+    runtimeBehavior: {
+      temperatureLabel: "Temperature is sent",
+      temperatureNote:
+        "The effort-level temperature is forwarded through the local provider runner to NVIDIA's OpenAI-compatible chat-completions endpoint.",
+      promptCachingLabel: "Provider-dependent",
+      promptCachingNote:
+        "Prompt caching, rate limits, and context behavior are controlled by NVIDIA NIM for the selected model.",
+      concurrencyNote:
+        "The app sends NVIDIA requests through the local provider runner to avoid browser CORS limits; NVIDIA account and endpoint limits still apply.",
     },
   },
 } satisfies Record<ProviderId, ProviderDefinition>;

@@ -20,6 +20,7 @@ interface AccountRunnerProviderOptions {
   name: string;
   runnerPath: string;
   models: ModelInfo[];
+  credentialMode?: "runner-token" | "provider-api-key-with-runner-token";
 }
 
 interface AccountRunnerResponse {
@@ -67,9 +68,11 @@ function unsupportedAttachmentReason(params: ChatParams): string | undefined {
 
 function buildAccountRunnerRequestBody(
   params: ChatParams,
-  supportsMaxTokens: boolean
+  supportsMaxTokens: boolean,
+  includeProviderApiKey = false
 ): Record<string, unknown> {
   return {
+    ...(includeProviderApiKey ? { apiKey: params.apiKey } : {}),
     model: params.model,
     messages: params.messages,
     ...(supportsMaxTokens ? { maxTokens: params.maxTokens } : {}),
@@ -147,6 +150,7 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
 export function createAccountRunnerProvider(
   options: AccountRunnerProviderOptions
 ): AIProvider {
+  const credentialMode = options.credentialMode ?? "runner-token";
   return {
     id: options.id,
     name: options.name,
@@ -156,8 +160,9 @@ export function createAccountRunnerProvider(
     },
 
     async validateApiKey(apiKey: string) {
-      // The key is the local runner token, not a provider API key. Full validation
-      // needs the runner base URL, so Settings uses streamChat via validateProvider.
+      // In runner-token mode the key is the local runner token; in provider-key
+      // mode this checks the upstream API key only. Full validation still needs
+      // the runner base URL/token, so Settings uses streamChat via validateProvider.
       return apiKey.trim().length > 0;
     },
 
@@ -170,10 +175,24 @@ export function createAccountRunnerProvider(
         };
         return;
       }
-      if (!params.apiKey.trim()) {
+      const runnerToken =
+        credentialMode === "provider-api-key-with-runner-token"
+          ? params.runnerToken?.trim()
+          : params.apiKey.trim();
+      if (!runnerToken) {
         yield {
           type: "error",
           error: `${options.name} needs the account-provider runner token`,
+        };
+        return;
+      }
+      if (
+        credentialMode === "provider-api-key-with-runner-token" &&
+        !params.apiKey.trim()
+      ) {
+        yield {
+          type: "error",
+          error: `${options.name} needs a provider API key`,
         };
         return;
       }
@@ -197,10 +216,14 @@ export function createAccountRunnerProvider(
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-runner-token": params.apiKey,
+              "x-runner-token": runnerToken,
             },
             body: JSON.stringify(
-              buildAccountRunnerRequestBody(params, supportsMaxTokens)
+              buildAccountRunnerRequestBody(
+                params,
+                supportsMaxTokens,
+                credentialMode === "provider-api-key-with-runner-token"
+              )
             ),
           }
         );
