@@ -166,6 +166,7 @@ import {
   isTaskWritePathAllowed,
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
+  reopenBuildTasksForQualityGate,
   outputPathsForTask,
   applyTaskSplit,
   parseWorkerSplitAction,
@@ -7978,6 +7979,16 @@ export async function runBuildDiscussion(
       recoveryLog.push(
         `Stopped as blocked by final quality gate after wave ${wavesRun}.`
       );
+      const browserAcceptanceBlocker = qualityGate.blockers.find(
+        (blocker) => blocker.code === "browser_acceptance_missing"
+      );
+      tasks = reopenBuildTasksForQualityGate(tasks, {
+        skillEvidence: skillEvidenceRecords,
+        browserAcceptanceMissing: !!browserAcceptanceBlocker,
+        browserAcceptanceReason:
+          browserAcceptanceBlocker?.details ?? browserAcceptanceBlocker?.message,
+        maxContextFiles: MAX_CONTEXT_FILES,
+      });
       const report = createStopReport({
         status: "blocked",
         stopReason: "blocked",

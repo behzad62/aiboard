@@ -25,6 +25,11 @@ import {
   CONTEXT_RETRIEVE_DEFAULT_TOKENS,
   isContextBlobRef,
 } from "@/lib/build-context/context-store";
+import {
+  buildSkillEvidenceFixInstructions,
+  getBlockingSkillEvidence,
+} from "./build-evidence-gates";
+import type { SkillEvidence } from "@/lib/skills/types";
 
 export type BuildTaskStatus =
   | "planned"
@@ -143,6 +148,102 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
     }
 
     return { ...task };
+  });
+}
+
+export interface BuildQualityGateReopenInput {
+  skillEvidence?: SkillEvidence[];
+  browserAcceptanceMissing?: boolean;
+  browserAcceptanceReason?: string;
+  maxContextFiles?: number;
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => !!value?.trim()))];
+}
+
+function isLikelyUiTask(task: BuildTask): boolean {
+  const text = [
+    task.title,
+    task.instructions,
+    ...(task.outputPaths ?? []),
+    ...task.contextFiles,
+  ]
+    .join("\n")
+    .toLowerCase();
+  return /\b(web|browser|ui|frontend|front-end|page|app|game|renderer|canvas)\b/.test(text) ||
+    /(^|\/)(app|pages|components|public|src)\/|\.((tsx|jsx|css|scss|html))$/i.test(text);
+}
+
+function browserAcceptanceFixInstructions(reason?: string): string {
+  return [
+    "Real-browser acceptance is missing for this web/UI build.",
+    reason?.trim() ? reason.trim() : "",
+    "Start or reuse the active local server URL, navigate with the browser MCP, exercise the main workflow, and verify the settled UI.",
+    "Report the URL, action performed, expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay, and console result.",
+    "Only change files if browser acceptance reveals a defect.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function reopenBuildTasksForQualityGate(
+  tasks: BuildTask[],
+  input: BuildQualityGateReopenInput
+): BuildTask[] {
+  const blockingEvidence = getBlockingSkillEvidence(input.skillEvidence ?? []);
+  const targetIds = new Set(
+    blockingEvidence
+      .map((record) => record.taskId)
+      .filter((taskId): taskId is string => !!taskId?.trim())
+  );
+
+  if (input.browserAcceptanceMissing && targetIds.size === 0) {
+    const doneTasks = tasks.filter((task) => task.status === "done");
+    const browserTask =
+      [...doneTasks].reverse().find(isLikelyUiTask) ??
+      doneTasks.at(-1) ??
+      tasks.at(-1);
+    if (browserTask) targetIds.add(browserTask.id);
+  }
+
+  if (targetIds.size === 0) return tasks.map((task) => ({ ...task }));
+
+  const maxContextFiles = input.maxContextFiles ?? 12;
+  return tasks.map((task) => {
+    if (!targetIds.has(task.id)) return { ...task };
+
+    const skillInstructions = buildSkillEvidenceFixInstructions(
+      blockingEvidence,
+      task.id
+    );
+    const fixInstructions = [
+      skillInstructions,
+      input.browserAcceptanceMissing
+        ? browserAcceptanceFixInstructions(input.browserAcceptanceReason)
+        : "",
+    ]
+      .filter((part) => part.trim())
+      .join("\n\n");
+    const note = fixInstructions
+      ? `FIX (from final Build quality gate):\n${fixInstructions}`
+      : "FIX (from final Build quality gate): address the blocked completion gate.";
+    const instructions = task.instructions.includes("FIX (from final Build quality gate):")
+      ? task.instructions
+      : `${task.instructions}\n\n${note}`;
+
+    return {
+      ...task,
+      status: "fixing",
+      workerIndex: undefined,
+      assignTo: undefined,
+      retryAfterMs: undefined,
+      contextFiles: uniqueStrings([
+        ...task.contextFiles,
+        ...(task.outputPaths ?? []),
+      ]).slice(0, maxContextFiles),
+      instructions,
+    };
   });
 }
 

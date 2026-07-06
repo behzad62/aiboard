@@ -6,7 +6,10 @@ import {
   importBenchmarkReportBundleV2,
 } from "../lib/benchmark/store";
 import type { BenchmarkReportBundleV2 } from "../lib/benchmark/types";
-import { normalizeBuildTasksForResume } from "../lib/orchestrator/build";
+import {
+  normalizeBuildTasksForResume,
+  reopenBuildTasksForQualityGate,
+} from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -160,6 +163,68 @@ check(
   resumedFailed
 );
 check("resume keeps dependent planned tasks intact", resumed.find((task) => task.id === "T3")?.status === "planned", resumed);
+
+const qualityGateReopened = reopenBuildTasksForQualityGate(
+  [
+    {
+      id: "T1",
+      title: "Build web app",
+      instructions: "Create the browser game.",
+      contextFiles: [],
+      outputPaths: ["index.html", "src/main.js"],
+      status: "done",
+      workerIndex: 0,
+      assignTo: "claude-opus-4-5",
+      retryAfterMs: 9999999999999,
+    },
+    {
+      id: "T2",
+      title: "Write docs",
+      instructions: "Document usage.",
+      contextFiles: ["README.md"],
+      outputPaths: ["README.md"],
+      status: "done",
+    },
+  ],
+  {
+    skillEvidence: [
+      {
+        taskId: "T1",
+        skillId: "superpowers:strict-test-driven-development",
+        actor: "worker-a",
+        required: ["GREEN"],
+        reportedEvidence: [],
+        missingEvidence: ["GREEN test/check pass after implementation"],
+        violations: [],
+      },
+    ],
+    browserAcceptanceMissing: true,
+    browserAcceptanceReason:
+      "A web app or UI-affecting build cannot be marked done because no real-browser acceptance evidence was recorded.",
+  }
+);
+const reopenedT1 = qualityGateReopened.find((task) => task.id === "T1");
+const untouchedT2 = qualityGateReopened.find((task) => task.id === "T2");
+check("quality gate resume reopens blocker task", reopenedT1?.status === "fixing", qualityGateReopened);
+check("quality gate resume clears stale task routing", reopenedT1?.workerIndex === undefined && reopenedT1?.assignTo === undefined && reopenedT1?.retryAfterMs === undefined, reopenedT1);
+check(
+  "quality gate resume carries output paths as context",
+  reopenedT1?.contextFiles.includes("index.html") && reopenedT1?.contextFiles.includes("src/main.js"),
+  reopenedT1
+);
+check(
+  "quality gate resume explains missing skill evidence",
+  /Required skill evidence is missing/i.test(reopenedT1?.instructions ?? "") &&
+    /GREEN test\/check pass/i.test(reopenedT1?.instructions ?? ""),
+  reopenedT1?.instructions
+);
+check(
+  "quality gate resume requests browser acceptance",
+  /real-browser acceptance/i.test(reopenedT1?.instructions ?? "") &&
+    /no visible stuck loading/i.test(reopenedT1?.instructions ?? ""),
+  reopenedT1?.instructions
+);
+check("quality gate resume leaves unrelated done tasks alone", untouchedT2?.status === "done", qualityGateReopened);
 
 function benchmarkBundleWithGuidance(guidance: unknown): BenchmarkReportBundleV2 {
   return {
