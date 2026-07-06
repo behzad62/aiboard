@@ -32,6 +32,26 @@ check(
   shellAlias
 );
 
+const repoInit = inspectStrictToolActionOutput(
+  '{"action":"repo_init","branch":"main","reason":"user asked for a local repo"}'
+);
+check(
+  "repo_init tool action is accepted",
+  repoInit.valid &&
+    repoInit.action?.action === "repo_init" &&
+    repoInit.action.branch === "main",
+  repoInit
+);
+
+const badRepoInit = inspectStrictToolActionOutput(
+  '{"action":"repo_init","branch":"bad branch with spaces"}'
+);
+check(
+  "repo_init rejects malformed branch names",
+  !badRepoInit.valid && badRepoInit.action === null,
+  badRepoInit
+);
+
 const chatty = inspectStrictToolActionOutput(
   'Let me patch that.\n{"action":"patch","path":"src/cli.ts","ops":[{"search":"old","replace":"new"}]}'
 );

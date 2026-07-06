@@ -28,22 +28,39 @@ const structuredOutput: StructuredOutputFormat = {
   },
 };
 
-for (const providerId of ["openai", "anthropic", "google", "openrouter", "chatgpt"]) {
+const searchableModels: Array<{ providerId: string; model: string }> = [
+  { providerId: "openai", model: "gpt-5.5" },
+  { providerId: "anthropic", model: "claude-opus-4-8" },
+  { providerId: "google", model: "gemini-3.5-flash" },
+  { providerId: "openrouter", model: "qwen/qwen3.7-max" },
+  { providerId: "chatgpt", model: "gpt-5.4" },
+];
+
+for (const { providerId, model } of searchableModels) {
   check(
-    `${providerId} discussion calls enable provider-native web search`,
+    `${providerId}:${model} discussion calls enable provider-native web search`,
     shouldEnableProviderNativeWebSearch({
       providerId,
-      model: providerId === "google" ? "gemini-3.5-flash" : "model",
+      model,
     }),
-    providerId
+    { providerId, model }
   );
 }
 
-for (const providerId of ["custom", "foundry", "github-copilot"]) {
+const nonSearchableModels: Array<{ providerId: string; model: string }> = [
+  { providerId: "custom", model: "model" },
+  { providerId: "foundry", model: "claude-opus-4-8" },
+  { providerId: "github-copilot", model: "gpt-5.4" },
+  { providerId: "openai", model: "gpt-5.3-codex" },
+  { providerId: "chatgpt", model: "gpt-5.3-codex-spark" },
+  { providerId: "openrouter", model: "nex-agi/nex-n2-pro:free" },
+];
+
+for (const { providerId, model } of nonSearchableModels) {
   check(
-    `${providerId} does not claim provider-native web search`,
-    !shouldEnableProviderNativeWebSearch({ providerId, model: "model" }),
-    providerId
+    `${providerId}:${model} does not claim provider-native web search`,
+    !shouldEnableProviderNativeWebSearch({ providerId, model }),
+    { providerId, model }
   );
 }
 
@@ -137,10 +154,17 @@ check(
 );
 
 check(
-  "older Gemini models use googleSearchRetrieval grounding",
+  "Gemini 2.5 models use current googleSearch grounding",
   JSON.stringify(googleWebSearchTools("gemini-2.5-flash", true)) ===
-    JSON.stringify([{ googleSearchRetrieval: {} }]),
+    JSON.stringify([{ googleSearch: {} }]),
   googleWebSearchTools("gemini-2.5-flash", true)
+);
+
+check(
+  "older Gemini 2.0 models use googleSearchRetrieval grounding",
+  JSON.stringify(googleWebSearchTools("gemini-2.0-flash", true)) ===
+    JSON.stringify([{ googleSearchRetrieval: {} }]),
+  googleWebSearchTools("gemini-2.0-flash", true)
 );
 
 if (failures === 0) {

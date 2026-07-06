@@ -4,6 +4,7 @@ import {
   createMilestoneViaRunner,
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
+  initRepoViaRunner,
   listIssuesViaRunner,
 } from "../lib/client/repo-runner";
 import {
@@ -159,6 +160,34 @@ async function main() {
     calls[0]?.init?.body
   );
 
+  mockFetch(200, {
+    ok: true,
+    initialized: true,
+    alreadyRepo: false,
+    branch: "main",
+  });
+  const init = await initRepoViaRunner(config, { branch: "main" });
+  check("init: returns non-null", init !== null, init);
+  check("init: initialized parsed", init?.initialized === true, init);
+  check("init: alreadyRepo parsed", init?.alreadyRepo === false, init);
+  check("init: branch parsed", init?.branch === "main", init);
+  check(
+    "init: hit /repo/init with single slash",
+    calls[0]?.url === "http://127.0.0.1:8787/repo/init",
+    calls[0]?.url
+  );
+  check("init: POST method", calls[0]?.init?.method === "POST", calls[0]?.init);
+  check(
+    "init: sent x-runner-token header",
+    headerValue(calls[0]?.init, "x-runner-token") === "secret-token",
+    calls[0]?.init
+  );
+  check(
+    "init: sent branch in body",
+    JSON.parse(String(calls[0]?.init?.body)).branch === "main",
+    calls[0]?.init?.body
+  );
+
   // 3. GitHub planning wrappers parse payloads and post expected bodies.
   mockFetch(200, {
     ok: true,
@@ -226,6 +255,8 @@ async function main() {
   check("status: 404 → null", (await getRepoStatusViaRunner(config)) === null);
   mockFetch(404, { error: "Not found" });
   check("diff: 404 → null", (await getRepoDiffViaRunner(config)) === null);
+  mockFetch(404, { error: "Not found" });
+  check("init: 404 → null", (await initRepoViaRunner(config, { branch: "main" })) === null);
 
   // 4. Network failure → null for both wrappers.
   globalThis.fetch = (async () => {
@@ -233,6 +264,7 @@ async function main() {
   }) as typeof fetch;
   check("status: network error → null", (await getRepoStatusViaRunner(config)) === null);
   check("diff: network error → null", (await getRepoDiffViaRunner(config)) === null);
+  check("init: network error → null", (await initRepoViaRunner(config, { branch: "main" })) === null);
 
   // 5. /repo/diff 400 validation error → throw with runner's message.
   mockFetch(400, { error: "Unsafe path: ../../etc/passwd" });
@@ -246,6 +278,18 @@ async function main() {
   }
   check("diff: 400 throws", threw, message);
   check("diff: 400 surfaces runner error message", message.includes("Unsafe path"), message);
+
+  mockFetch(400, { error: "Invalid branch name" });
+  threw = false;
+  message = "";
+  try {
+    await initRepoViaRunner(config, { branch: "bad branch" });
+  } catch (err) {
+    threw = true;
+    message = err instanceof Error ? err.message : String(err);
+  }
+  check("init: 400 throws", threw, message);
+  check("init: 400 surfaces runner error message", message.includes("Invalid branch"), message);
 
   restoreFetch();
   console.log(failed === 0 ? "\nAll repo-runner-client checks passed." : `\n${failed} check(s) failed.`);

@@ -508,6 +508,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "append",
             "repo_status",
             "repo_diff",
+            "repo_init",
             "repo_branch_create",
             "repo_commit",
             "repo_issue_list",
@@ -670,6 +671,7 @@ const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
   append: "Create or append a bounded content chunk to a project file.",
   repo_status: "Inspect the Git working tree status through the runner.",
   repo_diff: "Inspect a bounded Git diff through the runner.",
+  repo_init: "Initialize a Git repository in the runner folder.",
   repo_branch_create: "Create and optionally check out a Git branch through the runner.",
   repo_commit: "Stage and commit changes through the runner after approval.",
   repo_issue_list: "List open GitHub issues through the runner.",
@@ -696,6 +698,7 @@ const ARCHITECT_PLAN_NATIVE_ACTIONS = [
   "append",
   "repo_status",
   "repo_diff",
+  "repo_init",
   "repo_branch_create",
   "repo_commit",
   "repo_issue_list",
@@ -721,6 +724,7 @@ const ARCHITECT_REVIEW_NATIVE_ACTIONS = [
   "append",
   "repo_status",
   "repo_diff",
+  "repo_init",
   "repo_branch_create",
   "repo_commit",
   "repo_issue_list",
@@ -898,6 +902,54 @@ export function classifyRunCommand(command: string): RunCommandSafety {
   return { allowed: true };
 }
 
+const WINDOWS_UNAVAILABLE_VERIFY_COMMANDS = [
+  "test",
+  "[",
+  "grep",
+  "sed",
+  "awk",
+  "cat",
+  "ls",
+  "find",
+] as const;
+
+function findWindowsUnavailableVerifyCommand(command: string): string | null {
+  const parts = command
+    .split(/(?:&&|\|\||[;|])/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    const first = /^([^\s]+)/.exec(part)?.[1]?.toLowerCase();
+    if (
+      first &&
+      WINDOWS_UNAVAILABLE_VERIFY_COMMANDS.some((candidate) => candidate === first)
+    ) {
+      return first;
+    }
+  }
+  return null;
+}
+
+export function classifyVerifyCommand(
+  command: string,
+  platform?: string
+): RunCommandSafety {
+  const base = classifyRunCommand(command);
+  if (!base.allowed) return base;
+  if (platform === "win32") {
+    const unavailable = findWindowsUnavailableVerifyCommand(command);
+    if (unavailable) {
+      return {
+        allowed: false,
+        reason:
+          `POSIX command "${unavailable}" is not available in the Windows cmd.exe runner. ` +
+          'Use a cross-platform verifier such as `node -e "const fs=require(\'fs\'); if (!fs.existsSync(\'index.html\')) process.exit(1)"`, `npm test`, or `npm run build`.',
+      };
+    }
+  }
+  return { allowed: true };
+}
+
 export function isGitHubWorkflowCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!/^(?:gh|git)(?:\s|$)/i.test(trimmed)) return false;
@@ -1037,6 +1089,13 @@ export interface RepoDiffAction {
   reason?: string;
 }
 
+/** Initialize a Git repository in the runner folder (mutating). */
+export interface RepoInitAction {
+  action: "repo_init";
+  branch?: string;
+  reason?: string;
+}
+
 /** Create (and optionally check out) a Git branch via the runner (mutating). */
 export interface RepoBranchCreateAction {
   action: "repo_branch_create";
@@ -1171,6 +1230,7 @@ export type ArchitectAction =
   | SplitTaskAction
   | RepoStatusAction
   | RepoDiffAction
+  | RepoInitAction
   | RepoBranchCreateAction
   | RepoCommitAction
   | RepoIssueListAction
@@ -2074,6 +2134,19 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof diff.reason === "string" ? diff.reason : undefined,
         };
       }
+      if (parsed.action === "repo_init") {
+        const init = parsed as RepoInitAction;
+        const branch =
+          typeof init.branch === "string" && init.branch.trim()
+            ? init.branch.trim()
+            : undefined;
+        if (branch !== undefined && !isValidGitRefName(branch)) return null;
+        return {
+          action: "repo_init",
+          branch,
+          reason: typeof init.reason === "string" ? init.reason : undefined,
+        };
+      }
       if (parsed.action === "repo_branch_create") {
         const branch = parsed as RepoBranchCreateAction;
         // Reject malformed branch creation outright (mutating action).
@@ -2331,6 +2404,7 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "skill_request" ||
     action.action === "repo_status" ||
     action.action === "repo_diff" ||
+    action.action === "repo_init" ||
     action.action === "repo_branch_create" ||
     action.action === "repo_commit" ||
     action.action === "repo_issue_list" ||
@@ -2486,7 +2560,7 @@ export function inspectStrictToolActionBatchOutput(
 function looksLikeIncompleteToolAction(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  if (!/"action"\s*:\s*"(?:read|read_range|context_retrieve|code_intel|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
+  if (!/"action"\s*:\s*"(?:read|read_range|context_retrieve|code_intel|search|patch|append|run|shell|tool|fetch|skill_request|repo_status|repo_diff|repo_init|repo_branch_create|repo_commit|repo_issue_list|repo_milestone_create|repo_issue_create|repo_issue_read|repo_push|repo_pr_create)"/i.test(trimmed)) {
     return false;
   }
   return /\{\s*"action"\s*:/i.test(trimmed) || /```(?:json|jsonc)?\s*\n\s*\{/i.test(trimmed);
@@ -2706,6 +2780,8 @@ export function exactToolKey(action: ArchitectAction): string | null {
         .map((id) => id.trim().toLowerCase())
         .sort()
         .join("|")}`;
+    case "repo_init":
+      return `repo_init:${(action.branch ?? "main").trim()}`;
     case "repo_branch_create":
       // Branch creation is idempotent-by-name: re-requesting the same branch is
       // redundant. Git branch names are CASE-SENSITIVE, so do NOT lowercase —
@@ -3229,9 +3305,10 @@ function repoToolDoc(
     ? "This MUTATES external GitHub state. Because this is an explicit GitHub workflow, this typed action can run without an extra in-app approval prompt; PR review/merge is the human gate."
     : "This MUTATES external state, so it needs the user's approval; the user may deny it — respect that and continue.";
   const lines = [
-    "TOOL — repo (Git): the runner folder is a Git repository. Use these TYPED actions for repo operations instead of running raw `git`/`gh` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
-    '- Status: {"action":"repo_status","reason":"why"} — current branch, dirty file counts, and ahead/behind. Non-mutating; re-query freely after writes.',
-    '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating.',
+    "TOOL — repo (Git): the runner folder exposes typed Git operations. Use these TYPED actions instead of raw `git`/`gh` commands. Emit exactly one JSON action per turn and wait for the result before the next.",
+    '- Status: {"action":"repo_status","reason":"why"} — reports whether the runner folder is a Git repo, plus current branch, dirty file counts, and ahead/behind when it is. Non-mutating; re-query freely after writes.',
+    `- Initialize repo: {"action":"repo_init","branch":"main","reason":"why"} — runs git init in the runner folder when it is not already a repo. Branch is optional and defaults to "main". ${repoMutationNote} Use this when the user asks to create a local Git repo.`,
+    '- Diff: {"action":"repo_diff","paths":["optional/scope"],"staged":false,"stat":false,"reason":"why"} — a bounded diff; "stat" gives a summary, "staged" diffs the index. Non-mutating. Available after the folder is a Git repo.',
     `- Create branch: {"action":"repo_branch_create","name":"feature/topic","base":"main","checkout":true,"reason":"why"} — creates (and by default checks out) a branch. Branch names allow letters, digits, ".", "_", "/", "-" only. ${repoMutationNote}`,
     `- Commit: {"action":"repo_commit","message":"feat: add X","paths":["optional/scope"],"reason":"why"} — stages and commits. Omit "paths" to commit everything pending, or list relative paths to commit only those. The message must be 1–${REPO_COMMIT_MESSAGE_MAX} chars. ${repoMutationNote} ONLY available after a safe feature branch exists. Do NOT run \`git commit\`/\`git add\` as a raw command — use this typed action.`,
   ];
@@ -3349,7 +3426,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     "Before listing worker tasks, define a compact current phase spec. This is the contract for the current wave only: objective, acceptance criteria, code-quality criteria, verification expectations, and constraints workers/reviewers must follow.",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. Omit only when nothing meaningful can run."}`,
+    `{"action":"plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
     "```",
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,

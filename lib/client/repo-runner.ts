@@ -290,6 +290,45 @@ export interface RepoBranchCreateResult {
   checkedOut: boolean;
 }
 
+export interface RepoInitResult {
+  initialized: boolean;
+  alreadyRepo: boolean;
+  branch: string | null;
+}
+
+/**
+ * Initialize a Git repository via the runner. Mixed wrapper:
+ * - HTTP 404 (old runner) or network failure -> `null` (workflow unavailable);
+ * - HTTP 400 validation error -> throw with the runner's message.
+ */
+export async function initRepoViaRunner(
+  config: RunnerConfig,
+  input?: { branch?: string }
+): Promise<RepoInitResult | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.url.replace(/\/$/, "")}/repo/init`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify({
+        branch: input?.branch,
+      }),
+    });
+  } catch {
+    return null;
+  }
+  if (res.status === 404) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error ?? `Runner repo init failed (HTTP ${res.status})`);
+  }
+  return {
+    initialized: !!data.initialized,
+    alreadyRepo: !!data.alreadyRepo,
+    branch: asString(data.branch),
+  };
+}
+
 /**
  * Create (and optionally check out) a Git branch via the runner. Mixed wrapper,
  * same shape as `getRepoDiffViaRunner`:

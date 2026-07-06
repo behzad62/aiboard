@@ -1,5 +1,5 @@
 /** Build command safety checks (run: npx tsx scripts/test-run-command-safety.mts) */
-import { classifyRunCommand } from "../lib/orchestrator/build";
+import { classifyRunCommand, classifyVerifyCommand } from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -37,5 +37,33 @@ for (const command of rejected) {
   const result = classifyRunCommand(command);
   check(`rejects ${command}`, !result.allowed && !!result.reason, result);
 }
+
+const windowsRejectedVerify = [
+  "test -f index.html",
+  "npm test && test -f out/index.html",
+  "grep -R TODO src",
+];
+
+for (const command of windowsRejectedVerify) {
+  const result = classifyVerifyCommand(command, "win32");
+  check(
+    `rejects Windows-incompatible verifier ${command}`,
+    !result.allowed && !!result.reason,
+    result
+  );
+}
+
+const crossPlatformVerifier =
+  "node -e \"const fs=require('fs'); if (!fs.existsSync('index.html')) process.exit(1)\"";
+check(
+  "allows cross-platform Node verifier on Windows",
+  classifyVerifyCommand(crossPlatformVerifier, "win32").allowed,
+  classifyVerifyCommand(crossPlatformVerifier, "win32")
+);
+check(
+  "keeps POSIX verifier available on POSIX runners",
+  classifyVerifyCommand("test -f index.html", "linux").allowed,
+  classifyVerifyCommand("test -f index.html", "linux")
+);
 
 process.exit(failed === 0 ? 0 : 1);

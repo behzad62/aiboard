@@ -30,7 +30,6 @@ import type {
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
-  CUSTOM_PROVIDER_ID,
   resolveClientModelContextProfile,
   resolveModelName,
 } from "./providers";
@@ -148,6 +147,7 @@ import {
   formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
   classifyRunCommand,
+  classifyVerifyCommand,
   decideBuildTaskFailure,
   detectVerifyCommand,
   extractLocalServerUrls,
@@ -197,6 +197,7 @@ import {
   type RepoBranchCreateAction,
   type RepoCommitAction,
   type RepoDiffAction,
+  type RepoInitAction,
   type RepoIssueCreateAction,
   type RepoIssueListAction,
   type RepoMilestoneCreateAction,
@@ -209,6 +210,10 @@ import {
   type ToolAction,
 } from "@/lib/orchestrator/build";
 import {
+  providerSupportsHostedBuildToolsFeature,
+  providerSupportsNativeBuildToolsFeature,
+} from "@/lib/providers/provider-registry";
+import {
   getProjectHandle,
   listProjectTree,
   queryProjectPermission,
@@ -218,6 +223,7 @@ import {
 import {
   getRepoStatusViaRunner,
   getRepoDiffViaRunner,
+  initRepoViaRunner,
   createBranchViaRunner,
   commitViaRunner,
   createIssueViaRunner,
@@ -385,6 +391,7 @@ export function shouldBlockBuildBenchmarkAction(
   }
   if (
     [
+      "repo_init",
       "repo_branch_create",
       "repo_commit",
       "repo_milestone_create",
@@ -516,25 +523,6 @@ function buildBuildAttachmentManifest(attachments: AttachmentPayload[]): string 
 
 function joinBuildContextSections(...sections: Array<string | undefined>): string {
   return sections.map((section) => section?.trim() ?? "").filter(Boolean).join("\n\n");
-}
-
-const PROVIDER_NATIVE_BUILD_TOOL_IDS = new Set([
-  "openai",
-  "anthropic",
-  "foundry",
-  "google",
-  "openrouter",
-  CUSTOM_PROVIDER_ID,
-]);
-
-function supportsProviderNativeBuildTools(providerId: string): boolean {
-  return PROVIDER_NATIVE_BUILD_TOOL_IDS.has(providerId);
-}
-
-const PROVIDER_HOSTED_BUILD_TOOL_IDS = new Set(["google"]);
-
-function supportsProviderHostedBuildTools(providerId: string): boolean {
-  return PROVIDER_HOSTED_BUILD_TOOL_IDS.has(providerId);
 }
 
 const MANIFEST_CANDIDATES = [
@@ -1216,6 +1204,7 @@ export async function runBuildDiscussion(
   // emitting Unix-only commands (sed/awk/grep) on a Windows runner. Empty when
   // the platform is unknown (old runner) — no hint then.
   let shellHint = "";
+  let runnerPlatform = "";
   let allowAllCommands = discussion.runnerAccess === "full";
   const shouldRequestRepoMutationApproval = () =>
     !benchmarkApprovalsBypassed() && !githubWorkflow;
@@ -1243,6 +1232,10 @@ export async function runBuildDiscussion(
   // (NRW-006+: commit/push/PR) gate their actions on this flag; ordinary file
   // writes are NEVER blocked by it.
   let repoCommitWorkflowEnabled = false;
+  // If this build initialized the runner folder itself, allow the first local
+  // commit on the requested initial branch instead of forcing a generated
+  // feature branch immediately after `git init`.
+  let repoInitializedByBuild = false;
   // Commits landed via the user-approved repo_commit workflow (NRW-006), and the
   // feature branch they were made on. Surfaced in the final build summary so the
   // user sees branch + commit hash(es) without digging through the transcript.
@@ -1470,6 +1463,7 @@ export async function runBuildDiscussion(
       runner = config;
       runnerDirName = health.dir ?? null;
       refreshBuildMemoryProjectKey();
+      runnerPlatform = health.platform ?? "";
       shellHint = shellHintForPlatform(health.platform);
       emit({
         type: "diagnostic",
@@ -2219,11 +2213,11 @@ export async function runBuildDiscussion(
   // actions prompt in ordinary Ask mode, but auto-run for an explicit GitHub
   // workflow so PR review/merge is the human gate.
   const repoUnavailable = (): string =>
-    "Repo workflow is unavailable: no local runner is connected to a Git repository. Continue without it.";
+    "Repo workflow is unavailable: no local runner is connected, or the runner is too old for typed repo endpoints. Continue without it.";
 
   /** Re-query repo status, push it to the UI, and return a compact summary. */
   const executeRepoStatus = async (): Promise<string> => {
-    if (!runner || !repoIsGit) return repoUnavailable();
+    if (!runner) return repoUnavailable();
     let status: RepoStatus | null;
     try {
       status = await getRepoStatusViaRunner(runner);
@@ -2233,7 +2227,11 @@ export async function runBuildDiscussion(
     if (!status) return repoUnavailable();
     repoIsGit = status.isRepo;
     emit({ type: "repo_status", status: toRepoStatusEvent(status) });
-    if (!status.isRepo) return repoUnavailable();
+    if (!status.isRepo) {
+      return status.gitAvailable
+        ? "Repo status — the runner folder is not currently a Git repository. Use repo_init if the user asked for a local repo."
+        : "Repo status — git is not installed or not on PATH, so the runner cannot initialize or inspect a repository.";
+    }
     const dirty =
       status.staged.length +
       status.unstaged.length +
@@ -2288,6 +2286,77 @@ export async function runBuildDiscussion(
       `${kind}diff${scope}${diff.truncated ? " (truncated)" : ""}:`,
       body || "(no changes)",
     ].join("\n");
+  };
+
+  /**
+   * Initialize the runner folder as a Git repository. MUTATING — requires user
+   * approval unless runner access is "full" or this is an explicit GitHub
+   * workflow. Never uses runCommand/executeRun.
+   */
+  const executeRepoInit = async (action: RepoInitAction): Promise<string> => {
+    if (!runner) return repoUnavailable();
+    const branch = action.branch?.trim() || "main";
+    const label = `git init: ${branch}`;
+    if (shouldRequestRepoMutationApproval()) {
+      const decision = hooks?.requestCommandApproval
+        ? await hooks.requestCommandApproval(label, action.reason)
+        : "deny";
+      if (decision === "allow-all") allowAllCommands = true;
+      if (decision === "deny") {
+        emit({
+          type: "command_run",
+          command: label,
+          exitCode: -1,
+          durationMs: 0,
+          outputPreview: "Denied by the user",
+          denied: true,
+        });
+        return `The user DENIED initializing a Git repository on branch "${branch}". Continue without repo workflow.`;
+      }
+    }
+
+    let result: Awaited<ReturnType<typeof initRepoViaRunner>>;
+    try {
+      result = await initRepoViaRunner(runner, { branch });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "runner error";
+      emit({
+        type: "command_run",
+        command: label,
+        exitCode: -1,
+        durationMs: 0,
+        outputPreview: message,
+      });
+      return `Repo initialization failed: ${message}. Continue.`;
+    }
+    if (!result) return repoUnavailable();
+    repoIsGit = true;
+    repoCommitWorkflowEnabled = true;
+    repoInitializedByBuild = repoInitializedByBuild || result.initialized;
+    repoActiveBranch = result.branch ?? branch;
+    emit({
+      type: "command_run",
+      command: label,
+      exitCode: 0,
+      durationMs: 0,
+      outputPreview: result.alreadyRepo
+        ? `Already a Git repository${result.branch ? ` on ${result.branch}` : ""}`
+        : `Initialized Git repository on ${repoActiveBranch ?? branch}`,
+    });
+    try {
+      const status = await getRepoStatusViaRunner(runner);
+      if (status) {
+        repoIsGit = status.isRepo;
+        repoCommitWorkflowEnabled = status.isRepo;
+        if (status.currentBranch) repoActiveBranch = status.currentBranch;
+        emit({ type: "repo_status", status: toRepoStatusEvent(status) });
+      }
+    } catch {
+      // best-effort refresh
+    }
+    return result.alreadyRepo
+      ? `Runner folder is already a Git repository${result.branch ? ` on branch "${result.branch}"` : ""}.`
+      : `Initialized a Git repository in the runner folder on branch "${repoActiveBranch ?? branch}". You may use repo_commit after file changes are ready.`;
   };
 
   /**
@@ -2941,7 +3010,7 @@ export async function runBuildDiscussion(
         failed: true,
       };
     }
-    const safety = classifyRunCommand(command);
+    const safety = classifyVerifyCommand(command, runnerPlatform);
     if (!safety.allowed) {
       const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
       emitBuildCheckCommandRun({
@@ -3047,6 +3116,33 @@ export async function runBuildDiscussion(
           detectedVerifyCommand,
           benchmark
         );
+        const retrySafety = classifyVerifyCommand(
+          detectedVerifyCommand,
+          runnerPlatform
+        );
+        if (!retrySafety.allowed) {
+          const message = `Detected verifier retry rejected: ${retrySafety.reason}`;
+          emitBuildCheckCommandRun({
+            command: detectedVerifyCommand,
+            exitCode: -1,
+            durationMs: 0,
+            outputPreview: message,
+            denied: true,
+          });
+          emitBenchmarkEvent({
+            type: "verifier_completed",
+            phase: "verifier",
+            message,
+            detailsJson: JSON.stringify({
+              command: detectedVerifyCommand,
+              passed: false,
+            }),
+          });
+          return {
+            feedback: `AUTOMATED BUILD CHECK - \`${detectedVerifyCommand}\` was rejected before execution. ${message}`,
+            failed: true,
+          };
+        }
         if (!retryBenchmarkCommand.allowed) {
           const message =
             retryBenchmarkCommand.reason ??
@@ -3140,6 +3236,30 @@ export async function runBuildDiscussion(
         failed: true,
       };
     }
+  };
+
+  const acceptVerifyCommandForRunner = (
+    command: string,
+    source: string
+  ): string => {
+    const trimmed = command.trim();
+    if (!trimmed) return "";
+    const safety = classifyVerifyCommand(trimmed, runnerPlatform);
+    if (safety.allowed) return trimmed;
+    const message = `${source} ignored: ${safety.reason}`;
+    emit({
+      type: "diagnostic",
+      phase: "round_preparing",
+      message,
+    });
+    recordCommandProblem({
+      command: trimmed,
+      exitCode: -1,
+      durationMs: 0,
+      outputPreview: message,
+      denied: true,
+    });
+    return "";
   };
 
   const treeText = (): string => {
@@ -3648,14 +3768,15 @@ export async function runBuildDiscussion(
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
     const nativeTools =
-      opts.nativeTools?.length && supportsProviderNativeBuildTools(providerId)
+      opts.nativeTools?.length &&
+      providerSupportsNativeBuildToolsFeature(providerId, rawModel)
         ? opts.nativeTools
         : undefined;
     const hostedBuildTools =
       !!runner &&
       allowAllCommands &&
       !benchmark &&
-      supportsProviderHostedBuildTools(providerId);
+      providerSupportsHostedBuildToolsFeature(providerId, rawModel);
     const structuredOutput = nativeTools ? undefined : opts.structuredOutput;
     const traceStartedAt = new Date().toISOString();
     const traceStartMs = Date.now();
@@ -4795,6 +4916,9 @@ export async function runBuildDiscussion(
     if (action.action === "repo_diff") {
       return { result: await executeRepoDiff(action), exhausted: false };
     }
+    if (action.action === "repo_init") {
+      return { result: await executeRepoInit(action), exhausted: false };
+    }
     if (action.action === "repo_branch_create") {
       return { result: await executeRepoBranchCreate(action), exhausted: false };
     }
@@ -5234,7 +5358,10 @@ export async function runBuildDiscussion(
           : task.status,
     })));
     architectNotes = existingCheckpoint.architectNotes;
-    planVerifyCommand = existingCheckpoint.verifyCommand;
+    planVerifyCommand = acceptVerifyCommandForRunner(
+      existingCheckpoint.verifyCommand,
+      "Checkpoint verifyCommand"
+    );
     activePhaseSpec =
       existingCheckpoint.phaseSpec ??
       tasks.find((task) => task.phaseSpec)?.phaseSpec ??
@@ -5323,7 +5450,7 @@ export async function runBuildDiscussion(
         readHopsLeft: 2,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
-        repoWorkflow: !!runner && repoIsGit,
+        repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
@@ -5490,7 +5617,10 @@ export async function runBuildDiscussion(
     architectNotes = planAction.notes ?? "";
     planVerifyCommand =
       typeof planAction.verifyCommand === "string"
-        ? planAction.verifyCommand.trim()
+        ? acceptVerifyCommandForRunner(
+            planAction.verifyCommand,
+            "Architect verifyCommand"
+          )
         : "";
     activePhaseSpec =
       planAction.phaseSpec ?? synthesizePhaseSpec(architectNotes);
@@ -5519,7 +5649,11 @@ export async function runBuildDiscussion(
   // without implementing code, then finish cleanly.
   if (buildSettings.runPolicy === "plan_only") {
     const planOnlyVerifyCommand = runner
-      ? planVerifyCommand || detectVerifyCommand([...diskTree, ...virtualFs.keys()])
+      ? planVerifyCommand ||
+        acceptVerifyCommandForRunner(
+          detectVerifyCommand([...diskTree, ...virtualFs.keys()]),
+          "Detected verifyCommand"
+        )
       : "";
     const summary = [
       "Plan-only Build run completed.",
@@ -5577,7 +5711,10 @@ export async function runBuildDiscussion(
   // compiler in ANY language, not only by model review. The
   // Architect's declared command wins; otherwise we detect from the manifests.
   const detectedVerifyCommand = runner
-    ? detectVerifyCommand([...diskTree, ...virtualFs.keys()])
+    ? acceptVerifyCommandForRunner(
+        detectVerifyCommand([...diskTree, ...virtualFs.keys()]),
+        "Detected verifyCommand"
+      )
     : "";
   const verifyCommand = runner ? (planVerifyCommand || detectedVerifyCommand) : "";
   if (verifyCommand) {
@@ -5602,7 +5739,16 @@ export async function runBuildDiscussion(
       repoIsGit = status.isRepo;
       emit({ type: "repo_status", status: toRepoStatusEvent(status) });
     }
-    const decision = status
+    if (repoInitializedByBuild && status?.isRepo) {
+      repoCommitWorkflowEnabled = true;
+      repoActiveBranch = status.currentBranch ?? repoActiveBranch;
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: `Commit workflow enabled on newly initialized repository${repoActiveBranch ? ` branch "${repoActiveBranch}"` : ""}.`,
+      });
+    } else {
+      const decision = status
       ? classifyRepoBranchSafety({
           isRepo: status.isRepo,
           currentBranch: status.currentBranch,
@@ -5700,6 +5846,7 @@ export async function runBuildDiscussion(
       // Already on a safe feature branch with no conflicts.
       repoCommitWorkflowEnabled = true;
       repoActiveBranch = status?.currentBranch ?? null;
+    }
     }
   }
 
@@ -6965,7 +7112,7 @@ export async function runBuildDiscussion(
         rangeReadsLeft: 6,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
-        repoWorkflow: !!runner && repoIsGit,
+        repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
         searchesLeft: SEARCHES_PER_PHASE,
@@ -7651,10 +7798,13 @@ export async function runBuildDiscussion(
   const ghNote = `${milestoneNote}${createdIssueNote}${
     repoPushedBranch ? `, pushed ${repoPushedBranch}` : ""
   }${repoPrUrl ? `, PR ${repoPrUrl}` : ""}`;
+  const repoWorkflowLabel = repoInitializedByBuild
+    ? `initialized repository${repoActiveBranch ? ` branch "${repoActiveBranch}"` : ""}`
+    : `safe feature branch${repoActiveBranch ? ` "${repoActiveBranch}"` : ""}`;
   const repoWorkflowNote =
     runner && repoIsGit
       ? repoCommitWorkflowEnabled
-        ? ` — commit & PR workflow was enabled (safe feature branch${repoActiveBranch ? ` "${repoActiveBranch}"` : ""})${commitNote}${ghNote}`
+        ? ` — commit & PR workflow was enabled (${repoWorkflowLabel})${commitNote}${ghNote}`
         : ` — commit & PR workflow stayed disabled (no safe feature branch)${ghNote}`
       : "";
   emit({

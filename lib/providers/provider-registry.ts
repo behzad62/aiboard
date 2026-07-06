@@ -52,7 +52,127 @@ export interface ProviderDefinition {
   runtimeBehavior: ModelRuntimeBehavior;
 }
 
+type ModelToolFeature =
+  | "nativeWebSearch"
+  | "nativeBuildTools"
+  | "hostedBuildTools";
+
+type ModelToolRule = boolean | readonly string[] | ((modelId: string) => boolean);
+
 const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/account-provider-runner.mjs";
+
+function normalizedModelId(modelId = ""): string {
+  return modelId.trim().toLowerCase();
+}
+
+function gptFamilyVersion(modelId: string): { major: number; minor: number } | null {
+  const match = /^gpt-(\d+)(?:\.(\d+))?/i.exec(modelId.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: match[2] ? Number(match[2]) : 0,
+  };
+}
+
+function gptAtLeast(modelId: string, major: number, minor = 0): boolean {
+  const version = gptFamilyVersion(modelId);
+  if (!version) return false;
+  return (
+    version.major > major ||
+    (version.major === major && version.minor >= minor)
+  );
+}
+
+function isCodexLine(modelId: string): boolean {
+  return /\bcodex\b/i.test(modelId);
+}
+
+function isClaudeLike(modelId: string): boolean {
+  return /^claude-/i.test(modelId.trim());
+}
+
+function isGemini25OrNewer(modelId: string): boolean {
+  const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec(modelId.trim());
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = match[2] ? Number(match[2]) : 0;
+  return major > 2 || (major === 2 && minor >= 5);
+}
+
+// Verified 2026-07-06 from OpenRouter's Models API `supported_parameters`.
+// Models missing from that API are fail-closed until we can verify them.
+const OPENROUTER_MODELS_WITH_FUNCTION_TOOLS = [
+  "qwen/qwen3.7-max",
+  "qwen/qwen3.7-plus",
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-v4-flash",
+  "minimax/minimax-m3",
+  "z-ai/glm-5.2",
+  "moonshotai/kimi-k2.7-code",
+] as const;
+
+function listedModel(list: readonly string[]): (modelId: string) => boolean {
+  const set = new Set(list.map(normalizedModelId));
+  return (modelId: string) => set.has(normalizedModelId(modelId));
+}
+
+/**
+ * Model-level tool support, intentionally separate from the provider transport
+ * metadata below. Provider-wide support only means "the SDK path knows how to
+ * send the tool"; these rules decide whether this specific model should receive
+ * that tool at all.
+ */
+const MODEL_TOOL_SUPPORT: Partial<
+  Record<ProviderId | "custom", Partial<Record<ModelToolFeature, ModelToolRule>>>
+> = {
+  openai: {
+    // OpenAI docs show hosted web search on current GPT-5.4+ / GPT-5.5 models.
+    // Codex 5.3 is kept off: the account-backed Spark sibling rejected
+    // web_search_preview in the stopped build, and Codex-specific docs do not
+    // advertise web search for that line.
+    nativeWebSearch: (modelId) => gptAtLeast(modelId, 5, 4) && !isCodexLine(modelId),
+    nativeBuildTools: (modelId) => gptAtLeast(modelId, 5, 1),
+  },
+  anthropic: {
+    // Claude docs describe client tools broadly for current Claude models, and
+    // the basic web_search_20250305 server tool remains the one this app sends.
+    nativeWebSearch: isClaudeLike,
+    nativeBuildTools: isClaudeLike,
+  },
+  foundry: {
+    // Foundry model ids are user-defined Anthropic deployments. Client tools
+    // work on current Claude deployments; hosted web search remains disabled
+    // because Foundry availability varies by deployment/provider.
+    nativeBuildTools: isClaudeLike,
+    nativeWebSearch: false,
+  },
+  google: {
+    nativeWebSearch: isGemini25OrNewer,
+    nativeBuildTools: isGemini25OrNewer,
+    hostedBuildTools: isGemini25OrNewer,
+  },
+  openrouter: {
+    nativeWebSearch: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
+    nativeBuildTools: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
+  },
+  chatgpt: {
+    nativeWebSearch: (modelId) => gptAtLeast(modelId, 5, 4) && !isCodexLine(modelId),
+    nativeBuildTools: false,
+    hostedBuildTools: false,
+  },
+  "github-copilot": {
+    nativeWebSearch: false,
+    nativeBuildTools: false,
+    hostedBuildTools: false,
+  },
+  custom: {
+    // User-defined OpenAI-compatible models keep the previous behavior; the
+    // model owner controls whether their endpoint accepts function tools.
+    nativeBuildTools: true,
+    nativeWebSearch: false,
+    hostedBuildTools: false,
+  },
+};
 
 export const PROVIDER_DEFINITIONS = {
   openai: {
@@ -240,12 +360,30 @@ export function providerUsesCatalogModels(providerId: string): boolean {
   return getProviderDefinition(providerId)?.modelSource === "catalog";
 }
 
+function evaluateModelToolRule(rule: ModelToolRule | undefined, modelId: string): boolean {
+  if (typeof rule === "function") return rule(modelId);
+  if (Array.isArray(rule)) {
+    const model = normalizedModelId(modelId);
+    return rule.some((candidate) => normalizedModelId(candidate) === model);
+  }
+  return rule === true;
+}
+
+function modelSupportsToolFeature(
+  providerId: string,
+  modelId: string,
+  feature: ModelToolFeature
+): boolean {
+  const support =
+    MODEL_TOOL_SUPPORT[providerId as ProviderId | "custom"]?.[feature];
+  return evaluateModelToolRule(support, modelId);
+}
+
 export function providerSupportsNativeWebSearchFeature(
   providerId: string,
   modelId = ""
 ): boolean {
-  const support = getProviderDefinition(providerId)?.nativeWebSearch;
-  return typeof support === "function" ? support(modelId) : support === true;
+  return modelSupportsToolFeature(providerId, modelId, "nativeWebSearch");
 }
 
 export function providerSupportsReasoningEffortFeature(
@@ -262,4 +400,18 @@ export function providerSupportsMaxTokensFeature(
 ): boolean {
   const support = getProviderDefinition(providerId)?.maxTokens;
   return typeof support === "function" ? support(modelId) : support === true;
+}
+
+export function providerSupportsNativeBuildToolsFeature(
+  providerId: string,
+  modelId = ""
+): boolean {
+  return modelSupportsToolFeature(providerId, modelId, "nativeBuildTools");
+}
+
+export function providerSupportsHostedBuildToolsFeature(
+  providerId: string,
+  modelId = ""
+): boolean {
+  return modelSupportsToolFeature(providerId, modelId, "hostedBuildTools");
 }

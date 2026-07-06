@@ -2,7 +2,11 @@
 import { getAllProviders } from "../lib/client/providers";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { PROVIDER_IDS } from "../lib/providers/constants";
-import { providerSupportsMaxTokensFeature } from "../lib/providers/provider-registry";
+import {
+  providerSupportsHostedBuildToolsFeature,
+  providerSupportsMaxTokensFeature,
+  providerSupportsNativeBuildToolsFeature,
+} from "../lib/providers/provider-registry";
 import {
   openAIReasoningEffort,
   providerSupportsReasoning,
@@ -83,6 +87,14 @@ check(
   null
 );
 check(
+  "ChatGPT Codex Spark does not claim provider-native web search",
+  !shouldEnableProviderNativeWebSearch({
+    providerId: "chatgpt",
+    model: "gpt-5.3-codex-spark",
+  }),
+  null
+);
+check(
   "GitHub Copilot account runner does not claim provider-native web search",
   !shouldEnableProviderNativeWebSearch({
     providerId: "github-copilot",
@@ -98,6 +110,36 @@ check(
 check(
   "GitHub Copilot account runner keeps max-token request support",
   providerSupportsMaxTokensFeature("github-copilot", "gpt-5.4"),
+  null
+);
+check(
+  "OpenAI Codex keeps native function-tool support",
+  providerSupportsNativeBuildToolsFeature("openai", "gpt-5.3-codex"),
+  null
+);
+check(
+  "ChatGPT account runner does not expose native Build tools",
+  !providerSupportsNativeBuildToolsFeature("chatgpt", "gpt-5.4"),
+  null
+);
+check(
+  "OpenRouter catalog models with verified tools expose native Build tools",
+  providerSupportsNativeBuildToolsFeature("openrouter", "qwen/qwen3.7-max"),
+  null
+);
+check(
+  "Unverified OpenRouter catalog models fail closed for native Build tools",
+  !providerSupportsNativeBuildToolsFeature("openrouter", "nex-agi/nex-n2-pro:free"),
+  null
+);
+check(
+  "Gemini models expose provider-hosted Build tools",
+  providerSupportsHostedBuildToolsFeature("google", "gemini-3.5-flash"),
+  null
+);
+check(
+  "Non-Gemini models do not expose provider-hosted Build tools",
+  !providerSupportsHostedBuildToolsFeature("openai", "gpt-5.5"),
   null
 );
 

@@ -64,7 +64,7 @@ export function googleWebSearchTools(
   enabled?: boolean
 ): Tool[] | undefined {
   if (!enabled) return undefined;
-  if (model.startsWith("gemini-2.")) {
+  if (model.startsWith("gemini-2.0") || model.startsWith("gemini-1.")) {
     return [{ googleSearchRetrieval: {} }];
   }
   return [{ googleSearch: {} } as unknown as Tool];

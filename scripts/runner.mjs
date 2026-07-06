@@ -1247,6 +1247,61 @@ function isValidGitRefName(name) {
 }
 
 /**
+ * Initialize the project folder as a Git repository. Explicit argv only.
+ * Returns { initialized, alreadyRepo, branch }.
+ */
+function initRepo({ branch }) {
+  const requestedBranch =
+    typeof branch === "string" && branch.trim() ? branch.trim() : "main";
+  if (!isValidGitRefName(requestedBranch)) {
+    throw new Error(
+      `Invalid initial branch name "${requestedBranch}": use only letters, digits, ".", "_", "/", "-"; no leading "-", no "..", "//", "@{", backslash, whitespace, or trailing "/".`
+    );
+  }
+
+  const existing = runGit(["rev-parse", "--show-toplevel"]);
+  if (existing.exitCode === -1) throw new Error("git is not installed or not on PATH.");
+  if (existing.exitCode === 0) {
+    const current = runGit(["branch", "--show-current"]);
+    return {
+      initialized: false,
+      alreadyRepo: true,
+      branch:
+        current.exitCode === 0 && current.stdout.trim()
+          ? current.stdout.trim()
+          : null,
+    };
+  }
+
+  let init = runGit(["init", "-b", requestedBranch]);
+  if (init.exitCode !== 0) {
+    // Older Git versions do not support `git init -b`. Fall back safely.
+    init = runGit(["init"]);
+    if (init.exitCode !== 0) {
+      throw new Error(init.stderr.trim() || init.stdout.trim() || "git init failed.");
+    }
+    const rename = runGit(["branch", "-M", requestedBranch]);
+    if (rename.exitCode !== 0) {
+      throw new Error(
+        rename.stderr.trim() ||
+          rename.stdout.trim() ||
+          `git branch -M ${requestedBranch} failed.`
+      );
+    }
+  }
+
+  const current = runGit(["branch", "--show-current"]);
+  return {
+    initialized: true,
+    alreadyRepo: false,
+    branch:
+      current.exitCode === 0 && current.stdout.trim()
+        ? current.stdout.trim()
+        : requestedBranch,
+  };
+}
+
+/**
  * Create (and optionally check out) a Git branch via explicit argv. Throws on a
  * validation failure (caller maps to HTTP 400). Returns
  * { branch, previousBranch, checkedOut }.
@@ -2652,6 +2707,28 @@ const server = http.createServer(async (req, res) => {
       const message = err instanceof Error ? err.message : "Repo status failed";
       console.log(`[repo/status:error] ${new Date().toLocaleTimeString()}  ${message}`);
       json(res, 500, { error: message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/repo/init") {
+    let body;
+    try {
+      body = JSON.parse((await readBody(req)) || "{}");
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    try {
+      const result = initRepo({ branch: body?.branch });
+      console.log(
+        `[repo/init] ${new Date().toLocaleTimeString()}  ${result.alreadyRepo ? "already repo" : "initialized"} branch=${result.branch ?? "-"}`
+      );
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Repo init failed";
+      console.log(`[repo/init:error] ${new Date().toLocaleTimeString()}  ${message}`);
+      json(res, 400, { error: message });
     }
     return;
   }

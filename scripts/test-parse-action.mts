@@ -161,6 +161,19 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
     (a) => a?.action === "repo_status",
   ],
   [
+    "repo_init action",
+    '{"action":"repo_init","branch":"main","reason":"create a local git repo"}',
+    (a) =>
+      a?.action === "repo_init" &&
+      (a as { branch?: string }).branch === "main" &&
+      isBuildToolAction(a),
+  ],
+  [
+    "repo_init rejects malformed branch",
+    '{"action":"repo_init","branch":"bad branch"}',
+    (a) => a === null,
+  ],
+  [
     "repo_diff action with options",
     '{"action":"repo_diff","paths":["src/a.ts"],"staged":true,"stat":true,"reason":"see staged changes"}',
     (a) =>
@@ -565,6 +578,11 @@ const repoDocChecks: Array<[string, boolean]> = [
   [
     "plan prompt documents repo_status when repoWorkflow is on",
     repoPlanPrompt.includes('"action":"repo_status"'),
+  ],
+  [
+    "plan prompt documents repo_init when repoWorkflow is on",
+    repoPlanPrompt.includes('"action":"repo_init"') &&
+      /create a local Git repo/i.test(repoPlanPrompt),
   ],
   [
     "plan prompt documents repo_branch_create when repoWorkflow is on",

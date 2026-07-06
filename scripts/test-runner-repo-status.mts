@@ -98,6 +98,33 @@ try {
     check("non-repo: gitAvailable true", data.gitAvailable === true, data);
     check("non-repo: isRepo false (not an error)", data.isRepo === false && !data.error, data);
     check("non-repo: root null", data.root === null, data);
+
+    const initialized = await post(runner.port, runner.token, "/repo/init", {
+      branch: "main",
+    });
+    check("repo-init: HTTP 200", initialized.res.status === 200, initialized.data);
+    check("repo-init: initialized true", initialized.data.initialized === true, initialized.data);
+    check("repo-init: alreadyRepo false", initialized.data.alreadyRepo === false, initialized.data);
+    check("repo-init: branch main", initialized.data.branch === "main", initialized.data);
+    check(
+      "repo-init: folder is now inside a work tree",
+      git(dir, ["rev-parse", "--is-inside-work-tree"]).trim() === "true"
+    );
+
+    const afterInit = await get(runner.port, runner.token, "/repo/status");
+    check("repo-init status: isRepo true", afterInit.data.isRepo === true, afterInit.data);
+    check("repo-init status: currentBranch main", afterInit.data.currentBranch === "main", afterInit.data);
+
+    const idempotent = await post(runner.port, runner.token, "/repo/init", {
+      branch: "main",
+    });
+    check("repo-init: existing repo HTTP 200", idempotent.res.status === 200, idempotent.data);
+    check("repo-init: existing repo reports alreadyRepo", idempotent.data.alreadyRepo === true, idempotent.data);
+
+    const badBranch = await post(runner.port, runner.token, "/repo/init", {
+      branch: "bad branch",
+    });
+    check("repo-init: rejects bad branch (HTTP 400)", badBranch.res.status === 400 && !!badBranch.data.error, badBranch.data);
     runner.child.kill();
   }
 
