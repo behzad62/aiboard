@@ -450,9 +450,112 @@ async function testLocalRunnerStreamsCompletedOutputText(): Promise<void> {
   }
 }
 
+async function testLocalRunnerStreamsMessageOutputItemText(): Promise<void> {
+  const completedText = "Final answer from message item.";
+  const { server: upstream, url: upstreamUrl } = await withServer(async (req, res) => {
+    await readJsonBody(req);
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    res.write(
+      sseEvent({
+        type: "response.output_item.done",
+        item: {
+          id: "msg_1",
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: completedText,
+              annotations: [],
+            },
+          ],
+        },
+      })
+    );
+    res.write(sseEvent({ type: "response.completed" }));
+    res.end();
+  });
+
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "aiboard-account-runner-message-item-"));
+  const authFile = path.join(tmp, "auth.json");
+  const token = "test-token";
+  const runnerPort = 18000 + Math.floor(Math.random() * 10000);
+  const runnerUrl = `http://127.0.0.1:${runnerPort}`;
+  let child: ChildProcessWithoutNullStreams | null = null;
+
+  try {
+    await writeFile(
+      authFile,
+      JSON.stringify({
+        chatgpt: {
+          type: "oauth",
+          refresh: "unused",
+          access: "fake-access",
+          expires: Date.now() + 3_600_000,
+          accountId: "acct-test",
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+    child = spawn(
+      process.execPath,
+      [
+        "lib/account-provider-runner.mjs",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(runnerPort),
+        "--token",
+        token,
+        "--auth-file",
+        authFile,
+        "--chatgpt-codex-endpoint",
+        upstreamUrl,
+      ],
+      { cwd: process.cwd() }
+    );
+    await waitForRunnerReady(child, runnerUrl, token);
+
+    const response = await fetch(`${runnerUrl}/providers/chatgpt/chat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-runner-token": token,
+      },
+      body: JSON.stringify({
+        model: "gpt-5.3-codex-spark",
+        messages: [{ role: "user", content: "Return text." }],
+        attachments: [],
+        stream: true,
+      }),
+    });
+    const text = await response.text();
+    const events = parseNormalizedSse(text);
+
+    check(
+      "local account runner streams message output item text as token content",
+      events.some((event) => event.type === "token" && event.content === completedText),
+      events
+    );
+  } finally {
+    child?.kill();
+    upstream.close();
+    await Promise.allSettled([
+      once(upstream, "close"),
+      child ? once(child, "exit") : Promise.resolve(),
+    ]);
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
 await testBrowserProviderStreaming();
 await testLocalRunnerForwardsNativeTools();
 await testLocalRunnerStreamsCompletedOutputText();
+await testLocalRunnerStreamsMessageOutputItemText();
 
 if (failures === 0) {
   console.log("PASS");
