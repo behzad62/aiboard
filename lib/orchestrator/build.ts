@@ -773,6 +773,7 @@ const WORKER_NATIVE_ACTIONS = [
   "read",
   "read_range",
   "context_retrieve",
+  "guidance_request",
   "search",
   "patch",
   "append",

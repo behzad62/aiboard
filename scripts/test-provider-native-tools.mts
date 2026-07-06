@@ -56,6 +56,22 @@ check(
   names(workerTools)
 );
 
+check(
+  "worker native tools include guidance_request",
+  names(workerTools).includes("guidance_request"),
+  names(workerTools)
+);
+
+check(
+  "architect native tools do not include guidance_request",
+  !names(architectPlanTools).includes("guidance_request") &&
+    !names(architectReviewTools).includes("guidance_request"),
+  {
+    architectPlanTools: names(architectPlanTools),
+    architectReviewTools: names(architectReviewTools),
+  }
+);
+
 const readTool = workerTools.find((tool) => tool.name === "read");
 check(
   "native tool parameter schemas do not require an action discriminator",
