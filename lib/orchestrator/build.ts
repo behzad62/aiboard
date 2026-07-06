@@ -43,6 +43,19 @@ export interface BuildPhaseSpec {
   constraints?: string[];
 }
 
+export interface BuildTaskGuidance {
+  id: string;
+  taskId: string;
+  mode: "blocking" | "async";
+  question: string;
+  reason?: string;
+  status: "pending" | "answered";
+  answer?: string;
+  requestedBy?: string;
+  requestedAtWave: number;
+  answeredAtWave?: number;
+}
+
 export interface BuildTask {
   id: string;
   title: string;
@@ -74,6 +87,7 @@ export interface BuildTask {
   failCount?: number;
   /** Epoch milliseconds before this task may be retried after transient failure. */
   retryAfterMs?: number;
+  guidance?: BuildTaskGuidance[];
   /** 1 = created by a worker split; such tasks may not split again. */
   splitDepth?: number;
 }
@@ -278,6 +292,20 @@ export interface ContextRetrieveAction {
   maxTokens?: number;
   offsetChars?: number;
   reason?: string;
+}
+
+export interface GuidanceRequestAction {
+  action: "guidance_request";
+  mode: "blocking" | "async";
+  question: string;
+  reason?: string;
+}
+
+export interface GuidanceAnswerAction {
+  action: "guidance_answer";
+  guidanceId: string;
+  taskId: string;
+  answer: string;
 }
 
 export interface PlanAction {
@@ -496,6 +524,8 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "read",
             "read_range",
             "context_retrieve",
+            "guidance_request",
+            "guidance_answer",
             "code_intel",
             "plan",
             "review",
@@ -518,7 +548,7 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "repo_push",
             "repo_pr_create",
           ],
-          // split_task is worker-only (see WORKER_NATIVE_ACTIONS); intentionally NOT an architect action despite the shared subtasks property below.
+          // split_task and guidance_request are worker-only; guidance_answer is for the focused Architect guidance prompt. Shared fields live here because the parser uses one protocol schema.
           description: "Architect action discriminator.",
         },
         paths: stringArraySchema("Paths for read or repo_commit actions."),
@@ -569,6 +599,10 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         done: { type: "boolean" },
         command: stringSchema("Shell command to run."),
         reason: stringSchema("Short reason for the requested action."),
+        guidanceId: stringSchema("Guidance request id being answered."),
+        taskId: stringSchema("Task id for a guidance answer."),
+        question: stringSchema("Worker guidance question."),
+        answer: stringSchema("Architect guidance answer."),
         query: stringSchema("Search query."),
         symbol: stringSchema("Symbol name for code_intel trace_symbol."),
         server: stringSchema("MCP server name."),
@@ -587,8 +621,8 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         },
         mode: {
           type: "string",
-          enum: ["compact", "full"],
-          description: "Requested skill overlay detail.",
+          enum: ["compact", "full", "blocking", "async"],
+          description: "Requested skill overlay detail or guidance request mode.",
         },
         ops: {
           type: "array",
@@ -752,6 +786,8 @@ const NATIVE_BUILD_TOOL_REQUIRED: Record<string, string[]> = {
   read: ["paths"],
   read_range: ["path", "startLine", "lineCount"],
   context_retrieve: ["ref"],
+  guidance_request: ["question"],
+  guidance_answer: ["guidanceId", "taskId", "answer"],
   code_intel: ["op"],
   plan: ["tasks"],
   review: ["results", "done"],
@@ -1217,6 +1253,8 @@ export type ArchitectAction =
   | ReadAction
   | ReadRangeAction
   | ContextRetrieveAction
+  | GuidanceRequestAction
+  | GuidanceAnswerAction
   | PlanAction
   | ReviewAction
   | RunAction
@@ -1943,6 +1981,12 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           reason: typeof action.reason === "string" ? action.reason : undefined,
         };
       }
+      if (parsed.action === "guidance_request") {
+        return normalizeGuidanceRequestAction(parsed);
+      }
+      if (parsed.action === "guidance_answer") {
+        return normalizeGuidanceAnswerAction(parsed);
+      }
       if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
         const plan = parsed as PlanAction;
         return {
@@ -2292,6 +2336,40 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
     // not a valid action candidate
   }
   return null;
+}
+
+function normalizeGuidanceRequestAction(
+  parsed: unknown
+): GuidanceRequestAction | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const raw = parsed as { mode?: unknown; question?: unknown; reason?: unknown };
+  const question = typeof raw.question === "string" ? raw.question.trim() : "";
+  if (!question) return null;
+  const mode = raw.mode === "async" ? "async" : "blocking";
+  const reason = typeof raw.reason === "string" ? raw.reason.trim() : "";
+  return {
+    action: "guidance_request",
+    mode,
+    question,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function normalizeGuidanceAnswerAction(
+  parsed: unknown
+): GuidanceAnswerAction | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const raw = parsed as {
+    guidanceId?: unknown;
+    taskId?: unknown;
+    answer?: unknown;
+  };
+  const guidanceId =
+    typeof raw.guidanceId === "string" ? raw.guidanceId.trim() : "";
+  const taskId = typeof raw.taskId === "string" ? raw.taskId.trim() : "";
+  const answer = typeof raw.answer === "string" ? raw.answer.trim() : "";
+  if (!guidanceId || !taskId || !answer) return null;
+  return { action: "guidance_answer", guidanceId, taskId, answer };
 }
 
 /**

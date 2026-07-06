@@ -122,6 +122,41 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { reset: boolean }).reset === true,
   ],
   [
+    "worker guidance_request parses blocking mode",
+    '{"action":"guidance_request","mode":"blocking","question":"Should I reuse the settings store?","reason":"The task touches provider defaults."}',
+    (a) =>
+      a?.action === "guidance_request" &&
+      (a as { mode?: string }).mode === "blocking" &&
+      (a as { question?: string }).question === "Should I reuse the settings store?" &&
+      (a as { reason?: string }).reason === "The task touches provider defaults.",
+  ],
+  [
+    "worker guidance_request defaults missing mode to blocking",
+    '{"action":"guidance_request","question":"Which existing helper should I use?"}',
+    (a) =>
+      a?.action === "guidance_request" &&
+      (a as { mode?: string }).mode === "blocking",
+  ],
+  [
+    "worker guidance_request rejects empty question",
+    '{"action":"guidance_request","mode":"async","question":"   "}',
+    (a) => a === null,
+  ],
+  [
+    "architect guidance_answer parses advisory answer",
+    '{"action":"guidance_answer","guidanceId":"G-T4-1","taskId":"T4","answer":"Reuse the settings store and keep changes scoped."}',
+    (a) =>
+      a?.action === "guidance_answer" &&
+      (a as { guidanceId?: string }).guidanceId === "G-T4-1" &&
+      (a as { taskId?: string }).taskId === "T4" &&
+      (a as { answer?: string }).answer === "Reuse the settings store and keep changes scoped.",
+  ],
+  [
+    "architect guidance_answer rejects empty answer",
+    '{"action":"guidance_answer","guidanceId":"G-T4-1","taskId":"T4","answer":"   "}',
+    (a) => a === null,
+  ],
+  [
     "skill_request action",
     '{"action":"skill_request","ids":["agent:security-and-hardening"],"reason":"runner path validation","target":"reviewer","mode":"compact"}',
     (a) =>
