@@ -179,7 +179,11 @@ export function scheduleBuildToolActions(
 export function skippedOnlyToolBatchRecoveryInstruction(input: {
   servedCount: number;
   skippedCount: number;
+  terminalSkippedCount?: number;
 }): string {
+  if ((input.terminalSkippedCount ?? 0) > 0) {
+    return "\n\nA requested tool could not run because the required tool budget or runner resource is unavailable. Stop using tools now and provide the final task output from the context already available.";
+  }
   if (input.servedCount !== 0 || input.skippedCount <= 0) return "";
   return "\n\nNo requested tools were run. If the skipped actions were duplicate, unsupported, or out of budget, stop using tools now and provide the final task output from the context already available.";
 }

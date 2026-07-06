@@ -68,6 +68,7 @@ import {
   buildSkillEvidenceFixInstructions,
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  isWorkerOutputBlockedByToolBudget,
   shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
   splitEvidenceOnlyReviewIssues,
@@ -6401,6 +6402,7 @@ export async function runBuildDiscussion(
         let badToolCalls = 0;
         let skippedOnlyToolBatches = 0;
         let blockingGuidanceAsked = false;
+        let terminalToolGuidanceAsked = false;
 
         // Dispatch a batch of worker tool actions in one turn: safe reads run
         // together; writes (patch/append) apply in order; MCP stays approval-gated;
@@ -6414,6 +6416,8 @@ export async function runBuildDiscussion(
           message: string;
           servedCount: number;
           skippedCount: number;
+          terminalSkippedCount: number;
+          terminalSkippedReasons: string[];
         }> => {
           const schedule = scheduleBuildToolActions(actions, {
             allowSafeRunQueue: false,
@@ -6428,6 +6432,11 @@ export async function runBuildDiscussion(
             label: item.label,
             reason: item.reason,
           }));
+          const terminalSkippedReasons: string[] = [];
+          const terminalSkip = (label: string, reason: string): void => {
+            skipped.push({ label, reason });
+            terminalSkippedReasons.push(`${label}: ${reason}`);
+          };
           for (const item of schedule.served) {
             const action = item.action;
             if (!isWorkerBuildToolAction(action)) {
@@ -6460,7 +6469,7 @@ export async function runBuildDiscussion(
             }
             if (action.action === "tool") {
               if (mcpCallsLeftThisPhase() <= 0) {
-                skipped.push({ label: item.label, reason: "no MCP tool call budget left in this phase" });
+                terminalSkip(item.label, "no MCP tool call budget left in this phase");
                 continue;
               }
               const toolResult = await executeTool(action, worker);
@@ -6514,21 +6523,15 @@ export async function runBuildDiscussion(
                 });
               };
               if (!runner) {
-                serveRunResult(
-                  "No local runner is available for command runs. Continue using the provided context and produce the smallest useful final output."
-                );
+                terminalSkip(item.label, "no local runner is available for command runs");
                 continue;
               }
               if (budgets.runs <= 0) {
-                serveRunResult(
-                  "No worker command runs left for this task. Stop requesting run tools and produce your final task output using the evidence already gathered."
-                );
+                terminalSkip(item.label, "no worker command runs left for this task");
                 continue;
               }
               if (!canExecuteRunAction(action.command)) {
-                serveRunResult(
-                  "No command runs left in this phase. Stop requesting run tools and produce your final task output using the evidence already gathered."
-                );
+                terminalSkip(item.label, "no command runs left in this phase");
                 continue;
               }
               budgets.runs -= 1;
@@ -6551,14 +6554,11 @@ export async function runBuildDiscussion(
                 continue;
               }
               if (budgets.fetches <= 0) {
-                skipped.push({ label: item.label, reason: "no fetch budget left in this task" });
+                terminalSkip(item.label, "no fetch budget left in this task");
                 continue;
               }
               if (fetchesLeftThisPhase() <= 0) {
-                served.push({
-                  label: item.label,
-                  result: "No web fetches left in this phase. Produce your final task output using what you already have.",
-                });
+                terminalSkip(item.label, "no web fetches left in this phase");
                 continue;
               }
               budgets.fetches -= 1;
@@ -6645,7 +6645,7 @@ export async function runBuildDiscussion(
               served.push({ label: item.label, result: result.summary });
               continue;
             }
-            skipped.push({ label: item.label, reason: `no ${action.action} budget left in this task` });
+            terminalSkip(item.label, `no ${action.action} budget left in this task`);
           }
           emit({
             type: "tool_batch",
@@ -6658,6 +6658,8 @@ export async function runBuildDiscussion(
             message: packToolBatchResult({ served, skipped, maxChars: TOOL_BATCH_RESULT_CHARS }),
             servedCount: served.length,
             skippedCount: skipped.length,
+            terminalSkippedCount: terminalSkippedReasons.length,
+            terminalSkippedReasons,
           };
         };
 
@@ -6914,9 +6916,60 @@ export async function runBuildDiscussion(
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
           const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
+          const batchFeedback = `${warning}${batch.message}${skippedOnlyRecovery}`;
+          if (batch.terminalSkippedCount > 0) {
+            toolIssues.push(
+              ...batch.terminalSkippedReasons.map(
+                (reason) => `TOOL BUDGET BLOCKED: ${reason}`
+              )
+            );
+            if (!terminalToolGuidanceAsked) {
+              terminalToolGuidanceAsked = true;
+              const guidanceRecord = addGuidanceRequest(
+                task,
+                {
+                  action: "guidance_request",
+                  mode: "blocking",
+                  question: [
+                    "The worker requested a tool that could not run because the required tool budget or runner resource is unavailable.",
+                    "Unavailable request(s):",
+                    ...batch.terminalSkippedReasons.map((reason) => `- ${reason}`),
+                    "How should the worker proceed without that unavailable tool?",
+                    "You may instruct the worker to continue from available context, produce scoped files with explicit verification gaps, or stop so review/planning can create follow-up work.",
+                  ].join("\n"),
+                  reason: truncate(
+                    `Terminal tool result:\n${batch.message}`,
+                    1_200
+                  ),
+                },
+                worker,
+                cycle
+              );
+              blockingGuidanceAsked = true;
+              emit({
+                type: "diagnostic",
+                phase: "round_preparing",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                message: `${worker.displayName} hit terminal tool exhaustion for ${task.id}; requesting blocking Architect guidance ${guidanceRecord.id}`,
+              });
+              await answerGuidanceRequest(task, guidanceRecord, cycle);
+              workerMessages.push({
+                role: "user",
+                content: [
+                  batchFeedback,
+                  renderTaskGuidanceForWorker([guidanceRecord]),
+                  "The unavailable tool did not run. Do not request that same unavailable tool again in this task attempt. Continue from available context and the Architect guidance, then emit final files/patches or a scoped verification-gap report.",
+                ].join("\n\n"),
+              });
+              continue;
+            }
+            break;
+          }
           workerMessages.push({
             role: "user",
-            content: `${warning}${batch.message}${skippedOnlyRecovery}`,
+            content: batchFeedback,
           });
           if (batch.servedCount > 0 && batch.skippedCount > 0) {
             recordBuildProblem({
@@ -7024,6 +7077,10 @@ export async function runBuildDiscussion(
         const declaredOutputPaths = task.outputPaths?.length
           ? task.outputPaths
           : outputPathsForTask(task);
+        const toolBudgetBlockedNoFiles =
+          files.length === 0 &&
+          (toolIssues.some((issue) => issue.startsWith("TOOL BUDGET BLOCKED:")) ||
+            isWorkerOutputBlockedByToolBudget(output));
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
           actor: worker.displayName,
@@ -7086,6 +7143,7 @@ export async function runBuildDiscussion(
           evidence: skillEvidence,
           taskId: task.id,
           maxFiles: MAX_CONTEXT_FILES,
+          workerOutput: output,
         });
         const evidenceOnlyNoFileReview = shouldReviewEvidenceOnlyTask({
           emittedFiles: files,
@@ -7095,15 +7153,23 @@ export async function runBuildDiscussion(
           taskId: task.id,
           workerOutput: output,
         });
-        if (reviewFiles.length === 0 && !evidenceOnlyNoFileReview) {
+        if (
+          toolBudgetBlockedNoFiles ||
+          (reviewFiles.length === 0 && !evidenceOnlyNoFileReview)
+        ) {
           failTask(
             task,
             stat,
             worker,
-            issues.length > 0
+            toolBudgetBlockedNoFiles
+              ? `could not complete because tool budget was exhausted (${truncate(
+                  toolIssues.join("; ") || output,
+                  300
+                )})`
+              : issues.length > 0
               ? `produced no usable files (${truncate(issues.join("; "), 300)})`
               : "returned no files",
-            "bad"
+            toolBudgetBlockedNoFiles ? "unavailable" : "bad"
           );
           return;
         }

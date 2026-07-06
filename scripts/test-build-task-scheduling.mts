@@ -29,6 +29,14 @@ const existing: BuildTask[] = [
     status: "planned",
     assignTo: "Gemini 3.5 Flash",
   },
+  {
+    id: "T8",
+    title: "Fix ammo limit",
+    instructions: "Fix setAmmoLimit",
+    contextFiles: ["src/game.js"],
+    outputPaths: ["src/game.js"],
+    status: "fixing",
+  },
 ];
 
 const filtered = filterNovelReviewTasks(existing, [
@@ -49,6 +57,23 @@ const filtered = filterNovelReviewTasks(existing, [
 check("duplicate review task ids are skipped", filtered.accepted.length === 1, filtered);
 check("duplicate skip reports existing id", filtered.skipped[0]?.id === "T3", filtered);
 check("novel review task is retained", filtered.accepted[0]?.id === "T7", filtered);
+
+const staleDuplicate = filterNovelReviewTasks(existing, [
+  {
+    id: "T12",
+    title: "Fix ammo limit API and complete final browser acceptance",
+    instructions: "Repeat the ammo-limit fix.",
+    contextFiles: ["src/game.js"],
+    outputPaths: ["src/game.js"],
+  },
+]);
+check(
+  "review-created task with overlapping unfinished output paths is skipped",
+  staleDuplicate.accepted.length === 0 &&
+    staleDuplicate.skipped[0]?.id === "T12" &&
+    staleDuplicate.skipped[0]?.title === "Fix ammo limit",
+  staleDuplicate
+);
 
 const counts = new Map<number, number>([
   [0, 2],

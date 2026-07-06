@@ -89,6 +89,16 @@ check(
   "partially served tool batches do not force final output",
   skippedOnlyToolBatchRecoveryInstruction({ servedCount: 1, skippedCount: 1 }) === "",
 );
+check(
+  "terminal skipped tool batches force final output even when other actions served",
+  /stop using tools now/i.test(
+    skippedOnlyToolBatchRecoveryInstruction({
+      servedCount: 1,
+      skippedCount: 1,
+      terminalSkippedCount: 1,
+    })
+  ),
+);
 
 const replayCache = createToolReplayCache();
 const rangeAction = {

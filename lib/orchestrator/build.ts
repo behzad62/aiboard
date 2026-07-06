@@ -324,7 +324,7 @@ export interface ReviewTaskFilterResult {
 }
 
 export function filterNovelReviewTasks(
-  existingTasks: Pick<BuildTask, "id" | "title" | "status">[],
+  existingTasks: Pick<BuildTask, "id" | "title" | "status" | "outputPaths">[],
   candidates: PlanAction["tasks"]
 ): ReviewTaskFilterResult {
   const existing = new Map(
@@ -333,6 +333,22 @@ export function filterNovelReviewTasks(
       { title: task.title, status: task.status },
     ])
   );
+  const existingByOutputPath = new Map<
+    string,
+    { title: string; status: BuildTaskStatus }
+  >();
+  for (const task of existingTasks) {
+    if (task.status === "done") continue;
+    for (const outputPath of task.outputPaths ?? []) {
+      const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
+      if (normalized) {
+        existingByOutputPath.set(normalized, {
+          title: task.title,
+          status: task.status,
+        });
+      }
+    }
+  }
   const accepted: PlanAction["tasks"] = [];
   const skipped: ReviewTaskFilterResult["skipped"] = [];
   for (const candidate of candidates) {
@@ -347,12 +363,34 @@ export function filterNovelReviewTasks(
       });
       continue;
     }
+    const duplicateOutput = (candidate.outputPaths ?? [])
+      .map((path) => path.trim().replace(/\\/g, "/").toLowerCase())
+      .filter(Boolean)
+      .map((path) => existingByOutputPath.get(path))
+      .find((match): match is { title: string; status: BuildTaskStatus } => !!match);
+    if (id && duplicateOutput) {
+      skipped.push({
+        id,
+        title: duplicateOutput.title,
+        existingStatus: duplicateOutput.status,
+      });
+      continue;
+    }
     accepted.push(candidate);
     if (id && key) {
       existing.set(key, {
         title: candidate.title,
         status: "planned",
       });
+    }
+    for (const outputPath of candidate.outputPaths ?? []) {
+      const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
+      if (normalized) {
+        existingByOutputPath.set(normalized, {
+          title: candidate.title,
+          status: "planned",
+        });
+      }
     }
   }
   return { accepted, skipped };
@@ -1209,8 +1247,8 @@ export interface RunCommandSafety {
 // USD/time budget window governs spend. They must exceed the sum of realistic
 // per-task run budgets so a wave never starves — a wave of 8 hardest-tier tasks
 // can legitimately need ~48 runs (6 each), so the per-phase pool sits above that.
-export const RUNS_PER_PHASE = 24;
-export const TOTAL_RUNS = 120;
+export const RUNS_PER_PHASE = 36;
+export const TOTAL_RUNS = 180;
 
 export function classifyRunCommand(command: string): RunCommandSafety {
   const trimmed = command.trim();

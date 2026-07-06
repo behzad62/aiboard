@@ -4,6 +4,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
+  isWorkerOutputBlockedByToolBudget,
   splitEvidenceOnlyReviewIssues,
   shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
@@ -137,6 +138,40 @@ check(
     taskId: "T1",
     workerOutput: "Done.",
   }),
+);
+
+const toolBudgetBlockedOutput = [
+  "Verification is not complete.",
+  "",
+  "Blocked:",
+  "- I could not run the remaining required checks because the runner reported: `No worker command runs left for this task. Stop requesting run tools...`",
+  "- Therefore I could not complete browser acceptance.",
+].join("\n");
+check(
+  "worker output blocked by command budget is detected",
+  isWorkerOutputBlockedByToolBudget(toolBudgetBlockedOutput),
+  toolBudgetBlockedOutput
+);
+check(
+  "budget-blocked output is not evidence-only reviewable",
+  !shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: [],
+    evidence: [completeTdd],
+    taskId: "T1",
+    workerOutput: toolBudgetBlockedOutput,
+  }),
+);
+check(
+  "budget-blocked evidence-only retry does not carry prior files to review",
+  evidenceOnlyRetryFiles({
+    emittedFiles: [],
+    priorFiles: ["src/game.js"],
+    evidence: [completeTdd],
+    taskId: "T1",
+    workerOutput: toolBudgetBlockedOutput,
+  }).length === 0,
 );
 
 const incompleteSecurityEvidence = createSkillEvidence({

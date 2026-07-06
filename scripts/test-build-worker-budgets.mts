@@ -16,21 +16,21 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 {
   const b = createBuildWorkerBudget({ difficulty: 3, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
   check("difficulty 3: reads 4", b.reads === 4, b);
-  check("difficulty 3: runs 2", b.runs === 2, b);
+  check("difficulty 3: runs 3", b.runs === 3, b);
   check("difficulty 3: toolTurns 24", b.toolTurns === 24, b);
 }
 
-// Default difficulty (omitted) -> BASE tier; runsLeft 24 does not cap runs at 2.
+// Default difficulty (omitted) -> BASE tier; runsLeft 36 does not cap runs at 3.
 {
-  const b = createBuildWorkerBudget({ runsLeft: 24, fetchesLeft: PHASE_POOL });
-  check("default difficulty + runsLeft 24: toolTurns 24 && runs 2", b.toolTurns === 24 && b.runs === 2, b);
+  const b = createBuildWorkerBudget({ runsLeft: 36, fetchesLeft: PHASE_POOL });
+  check("default difficulty + runsLeft 36: toolTurns 24 && runs 3", b.toolTurns === 24 && b.runs === 3, b);
 }
 
 // difficulty 4 -> HARD tier
 {
   const b = createBuildWorkerBudget({ difficulty: 4, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
   check("difficulty 4: reads 6", b.reads === 6, b);
-  check("difficulty 4: runs 4", b.runs === 4, b);
+  check("difficulty 4: runs 6", b.runs === 6, b);
   check("difficulty 4: toolTurns 32", b.toolTurns === 32, b);
 }
 
@@ -38,11 +38,11 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 {
   const b = createBuildWorkerBudget({ difficulty: 5, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
   check("difficulty 5: reads 8", b.reads === 8, b);
-  check("difficulty 5: runs 6", b.runs === 6, b);
+  check("difficulty 5: runs 9", b.runs === 9, b);
   check("difficulty 5: toolTurns 40", b.toolTurns === 40, b);
 }
 
-// TDD floor: difficulty 2 + TDD skill -> runs floored to 3 (BASE tier would be 2)
+// TDD floor: difficulty 2 + TDD skill -> runs remains at the base 3-run budget.
 {
   const b = createBuildWorkerBudget({
     difficulty: 2,
@@ -50,7 +50,7 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
     runsLeft: PHASE_POOL,
     fetchesLeft: PHASE_POOL,
   });
-  check("difficulty 2 + TDD: runs 3 (TDD floor)", b.runs === 3, b);
+  check("difficulty 2 + TDD: runs 3", b.runs === 3, b);
 }
 
 // Phase pool still caps runs even with strict TDD + hardest tier
@@ -68,14 +68,14 @@ const PHASE_POOL = 1000; // large enough that the phase pool never caps runs in 
 {
   const b = createBuildWorkerBudget({ difficulty: 3, failCount: 1, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
   check("difficulty 3 + failCount 1: toolTurns 32", b.toolTurns === 32, b);
-  check("difficulty 3 + failCount 1: runs 4", b.runs === 4, b);
+  check("difficulty 3 + failCount 1: runs 6", b.runs === 6, b);
 }
 
 // Second fix round (failCount 2): difficulty 3 escalates to effective 5 -> HARDEST tier
 {
   const b = createBuildWorkerBudget({ difficulty: 3, failCount: 2, runsLeft: PHASE_POOL, fetchesLeft: PHASE_POOL });
   check("difficulty 3 + failCount 2: toolTurns 40", b.toolTurns === 40, b);
-  check("difficulty 3 + failCount 2: runs 6", b.runs === 6, b);
+  check("difficulty 3 + failCount 2: runs 9", b.runs === 9, b);
 }
 
 // Escalation never exceeds hardest tier

@@ -30,6 +30,38 @@ type ModelOverrideCall = {
   maxTokens: number;
 };
 
+function buildSpecResponse(objective: string): string {
+  return [
+    "Spec.",
+    "```json",
+    JSON.stringify({
+      action: "spec",
+      spec: {
+        id: "S1",
+        objective,
+        requirements: [objective],
+        nonGoals: [],
+        acceptanceCriteria: ["The requested file output is produced."],
+        qualityCriteria: ["The output remains scoped to the assigned task."],
+        verification: [],
+        constraints: ["Use test fixtures only."],
+        implementationDecisions: [],
+        risks: [],
+      },
+      notes: "Test fixture spec.",
+      verifyCommand: "",
+    }),
+    "```",
+  ].join("\n");
+}
+
+function isPlanningLabel(label: string): boolean {
+  return (
+    label === "Architect is planning the project" ||
+    label === "Architect is planning the implementation from the spec"
+  );
+}
+
 function installIndexedDbStub(): void {
   const values = new Map<string, unknown>();
   const db = {
@@ -144,7 +176,10 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(discussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
       return [
         "Plan.",
         "```json",
@@ -284,7 +319,10 @@ const mixedHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(mixedDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
       return [
         "Plan.",
         "```json",
@@ -440,7 +478,10 @@ const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(asyncDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
       return [
         "Plan.",
         "```json",
@@ -650,7 +691,10 @@ const promotedHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(promotedDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
       return [
         "Plan.",
         "```json",
@@ -826,7 +870,10 @@ const badAsyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       messages: input.messages.map((message) => ({ ...message })),
       maxTokens: input.maxTokens,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(badAsyncDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
       return [
         "Plan.",
         "```json",
@@ -979,6 +1026,162 @@ check(
     badAsyncGuidanceAttempts,
     badAsyncWorkerAttempts,
     badAsyncCompleted,
+  }
+);
+
+const budgetGuidanceDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-budget-blocked",
+  topic: "Build a note even when command tools are unavailable.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(budgetGuidanceDiscussion);
+
+const budgetGuidanceCalls: ModelOverrideCall[] = [];
+let budgetGuidanceArchitectAnswers = 0;
+let budgetGuidanceWorkerContinuations = 0;
+let budgetGuidanceError: unknown = null;
+const budgetGuidanceHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    budgetGuidanceCalls.push({
+      label: input.label,
+      messages: input.messages.map((message) => ({ ...message })),
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(budgetGuidanceDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T4",
+              title: "Create no-run recovery note",
+              instructions:
+                "Create src/no-run-recovery.txt. If command tools are unavailable, ask the Architect how to proceed.",
+              contextFiles: [],
+              outputPaths: ["src/no-run-recovery.txt"],
+              expectedOutputs:
+                "A note created after budget-blocked command recovery.",
+              dependsOn: [],
+              difficulty: 1,
+            },
+          ],
+          notes: "Recover from unavailable command tools through Architect guidance.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker working on T4: Create no-run recovery note") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "run",
+          command: "node --version",
+          reason: "check command availability before writing the note",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect answering guidance G-T4-1 for T4") {
+      budgetGuidanceArchitectAnswers += 1;
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_answer",
+          guidanceId: "G-T4-1",
+          taskId: "T4",
+          answer:
+            "Proceed without command verification. Create the requested note and explicitly mention that command tools were unavailable.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T4: Create no-run recovery note") {
+      budgetGuidanceWorkerContinuations += 1;
+      return [
+        "Implemented after budget-blocked guidance.",
+        "```txt path=src/no-run-recovery.txt",
+        "Command tools were unavailable, so this note was created from Architect recovery guidance.",
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T4",
+              verdict: "approve",
+              specVerdict: "approve",
+              qualityVerdict: "approve",
+              fixInstructions: "",
+            },
+          ],
+          newTasks: [],
+          done: true,
+          notes: "Approved after budget recovery guidance.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed after budget-blocked command recovery.";
+    }
+    throw new Error(`Unexpected budget guidance model call label: ${input.label}`);
+  },
+};
+
+try {
+  await runBuildDiscussion(
+    budgetGuidanceDiscussion,
+    [architect, worker],
+    () => {},
+    budgetGuidanceHooks
+  );
+} catch (err) {
+  budgetGuidanceError = err;
+}
+
+const budgetGuidanceCompleted = storeApi.getDiscussionById(
+  budgetGuidanceDiscussion.id
+)?.status;
+const budgetGuidanceAnswerPrompt =
+  budgetGuidanceCalls
+    .find((call) => call.label === "Architect answering guidance G-T4-1 for T4")
+    ?.messages.map((message) => message.content)
+    .join("\n\n") ?? "";
+check(
+  "command-tool budget block escalates to blocking Architect guidance before worker retry",
+  budgetGuidanceError == null &&
+    budgetGuidanceArchitectAnswers === 1 &&
+    budgetGuidanceWorkerContinuations === 1 &&
+    budgetGuidanceCompleted === "completed" &&
+    /node --version/.test(budgetGuidanceAnswerPrompt) &&
+    /unavailable|budget|runner/i.test(budgetGuidanceAnswerPrompt),
+  {
+    error:
+      budgetGuidanceError instanceof Error
+        ? budgetGuidanceError.message
+        : budgetGuidanceError,
+    labels: budgetGuidanceCalls.map((call) => call.label),
+    budgetGuidanceArchitectAnswers,
+    budgetGuidanceWorkerContinuations,
+    budgetGuidanceCompleted,
+    budgetGuidanceAnswerPrompt,
   }
 );
 
