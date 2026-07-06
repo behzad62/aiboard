@@ -394,6 +394,16 @@ export interface RunCommandOptions {
   timeoutMs?: number;
 }
 
+export interface RunnerBackgroundProcess {
+  pid: number;
+  command: string;
+}
+
+export interface RunnerBackgroundStopResult {
+  stopped: number;
+  processes: RunnerBackgroundProcess[];
+}
+
 function normalizeTimeoutMs(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -432,6 +442,57 @@ export async function runCommand(
     throw err;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function normalizeBackgroundProcesses(value: unknown): RunnerBackgroundProcess[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const pid = (item as { pid?: unknown }).pid;
+      const command = (item as { command?: unknown }).command;
+      if (typeof pid !== "number" || !Number.isFinite(pid) || typeof command !== "string") {
+        return null;
+      }
+      return { pid, command };
+    })
+    .filter((item): item is RunnerBackgroundProcess => item != null);
+}
+
+export async function listRunnerBackgroundProcesses(
+  config: RunnerConfig
+): Promise<RunnerBackgroundProcess[] | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/background-processes`, {
+      headers: headers(config.token),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return normalizeBackgroundProcesses(data.processes);
+  } catch {
+    return null;
+  }
+}
+
+export async function stopRunnerBackgroundProcesses(
+  config: RunnerConfig,
+  pids?: number[]
+): Promise<RunnerBackgroundStopResult | null> {
+  try {
+    const res = await fetch(`${config.url.replace(/\/$/, "")}/background-processes/stop`, {
+      method: "POST",
+      headers: headers(config.token),
+      body: JSON.stringify(pids ? { pids } : {}),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      stopped: typeof data.stopped === "number" ? data.stopped : 0,
+      processes: normalizeBackgroundProcesses(data.processes),
+    };
+  } catch {
+    return null;
   }
 }
 

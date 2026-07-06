@@ -255,8 +255,10 @@ import {
   patchFileViaRunner,
   readFileRangeViaRunner,
   readFileViaRunner,
+  listRunnerBackgroundProcesses,
   runCommand,
   searchViaRunner,
+  stopRunnerBackgroundProcesses,
   stripAnsi,
   supportsSafeMcpBridge,
   writeFileViaRunner,
@@ -560,7 +562,7 @@ function shellHintForPlatform(platform?: string, activeDir?: string): string {
     ? ` Runner active project folder: ${activeDir}. Commands already start in this folder; do not cd to its parent unless explicitly required.`
     : "";
   if (platform === "win32") {
-    return `SHELL: commands run on Windows via cmd.exe.${cwdHint} Do not assume Unix tools like grep, sed, test -f, cat, or ls. Use Windows commands (dir, type, findstr) or cross-platform \`node -e "..."\` scripts. To start a static server, use \`py -3 -m http.server 8000\` or \`python -m http.server 8000\`, and for browser navigation prefer \`http://127.0.0.1:<port>\` rather than localhost.`;
+    return `SHELL: commands run on Windows via cmd.exe.${cwdHint} Do not assume Unix tools like grep, sed, test -f, cat, or ls. Use Windows commands (dir, type, findstr) or cross-platform \`node -e "..."\` scripts. To start a static server, use \`py -3 -m http.server 8000\` or \`python -m http.server 8000\`, and for browser navigation prefer \`http://127.0.0.1:<port>\` rather than localhost. Reuse active local server URLs; do not open replacement ports unless the current server is demonstrably unusable.`;
   }
   if (platform === "darwin" || platform === "linux") {
     return `SHELL: commands run in a POSIX shell (sh).${cwdHint} Standard Unix tools (sed/awk/grep/ls/cat) are available.`;
@@ -746,6 +748,9 @@ export async function runBuildDiscussion(
     report?: BuildStopReport,
     toolReviewReport?: BuildToolReviewReport | null
   ): void => {
+    void stopBuildBackgroundProcesses(
+      reason === "completed" ? "after Build completed" : "after Build stopped"
+    );
     const now = new Date().toISOString();
     updateDiscussion(discussion.id, {
       status: reason === "completed" ? "completed" : "stopped",
@@ -1234,6 +1239,8 @@ export async function runBuildDiscussion(
     total: TOTAL_CODE_INTEL_CALLS,
   });
   let localServerUrls: string[] = [];
+  let runnerBackgroundBaseline = new Set<number>();
+  let backgroundCleanupNoticeEmitted = false;
   // Whether the runner folder is a Git repo, captured once when the runner
   // connects. Gates the post-wave diff refresh (no point diffing a non-repo).
   let repoIsGit = false;
@@ -1478,6 +1485,10 @@ export async function runBuildDiscussion(
       runnerPlatform = health.platform ?? "";
       runnerActiveDir = health.activeDir ?? "";
       shellHint = shellHintForPlatform(health.platform, runnerActiveDir);
+      const existingBackground = await listRunnerBackgroundProcesses(config);
+      runnerBackgroundBaseline = new Set(
+        (existingBackground ?? []).map((process) => process.pid)
+      );
       emit({
         type: "diagnostic",
         phase: "initializing",
@@ -1728,6 +1739,34 @@ export async function runBuildDiscussion(
       phase: "model_streaming",
       message: `Detected local server URL(s) for browser tools: ${next.join(", ")}`,
     });
+  };
+
+  const isBackgroundRunCommand = (command: string): boolean => {
+    const trimmed = command.trim();
+    return trimmed.endsWith("&") && !trimmed.endsWith("&&");
+  };
+
+  const stopBuildBackgroundProcesses = async (reason: string): Promise<void> => {
+    if (!runner) return;
+    const processes = await listRunnerBackgroundProcesses(runner);
+    if (!processes || processes.length === 0) return;
+    const buildPids = processes
+      .map((process) => process.pid)
+      .filter((pid) => !runnerBackgroundBaseline.has(pid));
+    if (buildPids.length === 0) return;
+    const result = await stopRunnerBackgroundProcesses(runner, buildPids);
+    if (!result || result.stopped <= 0) return;
+    if (reason === "before starting a new background command") {
+      localServerUrls = [];
+    }
+    if (!backgroundCleanupNoticeEmitted || reason !== "before starting a new background command") {
+      backgroundCleanupNoticeEmitted = true;
+      emit({
+        type: "diagnostic",
+        phase: "model_streaming",
+        message: `Stopped ${result.stopped} Build-started background process(es) ${reason}.`,
+      });
+    }
   };
 
   /** Execute one MCP tool call (same approval flow as commands). */
@@ -2068,6 +2107,9 @@ export async function runBuildDiscussion(
       message: `Running command: ${command}`,
     });
     try {
+      if (isBackgroundRunCommand(command)) {
+        await stopBuildBackgroundProcesses("before starting a new background command");
+      }
       const result = await runCommand(runner, command);
       emit({
         type: "command_run",
@@ -8077,6 +8119,7 @@ export async function runBuildDiscussion(
   if (finalQualityGateSummary) {
     finalAnswer = `${finalAnswer}\n\n${finalQualityGateSummary}`;
   }
+  await stopBuildBackgroundProcesses("after Build completed");
   insertFinalResult({
     discussionId: discussion.id,
     answer: finalAnswer,

@@ -3409,7 +3409,7 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
     budget.runs && budget.runs > 0
-      ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs or file writes. Long-lived dev servers/watchers are allowed only for browser acceptance and must be background commands with one trailing & after a host-valid command.`
+      ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs or file writes. Long-lived dev servers/watchers are allowed only for browser acceptance and must be background commands with one trailing & after a host-valid command. Reuse active local server URLs before starting another server; do not move to a new port unless the current server is demonstrably unusable.`
       : "",
     budget.shellHint?.trim()
       ? `- Runner shell environment: ${budget.shellHint.trim()} Use commands valid for this host shell. For background dev servers/watchers, append one trailing & only after a command that is valid for that shell.`
@@ -3439,7 +3439,7 @@ export function buildWorkerToolInstructions(budget: {
       ? "REAL-BROWSER ACCEPTANCE: for web apps, use the active local server URL for real-browser acceptance. Exercise the main workflow and verify the post-action settled state: expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay, and no console errors."
       : "",
     localServers.length > 0
-      ? `Active local server URL${localServers.length === 1 ? "" : "s"} for browser MCP navigation: ${localServers.join(", ")}. Use these exact URL(s) instead of guessing localhost ports.`
+      ? `Active local server URL${localServers.length === 1 ? "" : "s"} for browser MCP navigation: ${localServers.join(", ")}. Use these exact URL(s) instead of guessing localhost ports; do not start another server unless these fail after a fresh navigation/snapshot attempt.`
       : "",
     budget.allowSplit
       ? [

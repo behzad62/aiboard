@@ -212,6 +212,12 @@ check(
   workerTools
 );
 check(
+  "worker tool instructions tell workers to reuse active servers before new ports",
+  /Reuse active local server URLs/i.test(workerTools) &&
+    /do not start another server/i.test(workerTools),
+  workerTools
+);
+check(
   "worker tool policy allows MCP tool actions",
   isWorkerBuildToolAction({
     action: "tool",

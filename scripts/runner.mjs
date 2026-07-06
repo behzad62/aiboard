@@ -822,7 +822,7 @@ function startBackgroundCommand(command) {
         exitCode: 0,
         stdout: [
           `Started background command (pid ${pid}).`,
-          "The runner will keep it alive until the runner exits.",
+          "The runner will keep it alive until it is stopped or the runner exits.",
           stdout.trim() ? `Startup stdout:\n${stdout.trim()}` : "",
         ]
           .filter(Boolean)
@@ -2063,7 +2063,23 @@ for (const spec of mcpSpecs) {
 }
 
 function killBackgroundProcesses() {
+  stopBackgroundProcesses();
+}
+
+function listBackgroundProcesses() {
+  return [...backgroundProcesses.entries()].map(([pid, proc]) => ({
+    pid,
+    command: proc.command,
+  }));
+}
+
+function stopBackgroundProcesses(pids) {
+  const allowed = Array.isArray(pids)
+    ? new Set(pids.map((pid) => Number(pid)).filter((pid) => Number.isInteger(pid) && pid > 0))
+    : null;
+  let stopped = 0;
   for (const [pid, proc] of backgroundProcesses) {
+    if (allowed && !allowed.has(pid)) continue;
     try {
       if (process.platform === "win32") {
         spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
@@ -2077,11 +2093,13 @@ function killBackgroundProcesses() {
           proc.child.kill();
         }
       }
+      stopped += 1;
     } catch {
       // already gone
     }
     backgroundProcesses.delete(pid);
   }
+  return stopped;
 }
 
 process.on("SIGINT", () => {
@@ -2763,6 +2781,33 @@ const server = http.createServer(async (req, res) => {
       `      exit ${result.exitCode} in ${(result.durationMs / 1000).toFixed(1)}s${result.truncated ? " (output truncated)" : ""}`
     );
     json(res, 200, result);
+    return;
+  }
+
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/background-processes" || url.pathname === "/api/background-processes")
+  ) {
+    json(res, 200, { ok: true, processes: listBackgroundProcesses() });
+    return;
+  }
+
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/background-processes/stop" ||
+      url.pathname === "/api/background-processes/stop")
+  ) {
+    let body = {};
+    try {
+      const raw = await readBody(req);
+      body = raw.trim() ? JSON.parse(raw) : {};
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+    const stopped = stopBackgroundProcesses(Array.isArray(body?.pids) ? body.pids : undefined);
+    console.log(`[background/stop] ${new Date().toLocaleTimeString()}  stopped=${stopped}`);
+    json(res, 200, { ok: true, stopped, processes: listBackgroundProcesses() });
     return;
   }
 
