@@ -7570,6 +7570,7 @@ export async function runBuildDiscussion(
         shellHint,
         skillContext: reviewSkillContext,
         skillEvidenceText: "",
+        spec: activeSpec,
         phaseSpec: reviewPhaseSpec,
         assembledContext: reviewAssembledContext,
         hasDiffDigest: hasReviewDiffDigest,

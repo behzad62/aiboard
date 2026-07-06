@@ -4434,6 +4434,8 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   memoryBrief?: string;
   /** Durable worker skill evidence and gaps captured by the engine. */
   skillEvidenceText?: string;
+  /** Full Architect-owned build spec that review verdicts must preserve. */
+  spec?: BuildSpec;
   /** Current phase contract that review verdicts must check against. */
   phaseSpec?: BuildPhaseSpec;
   /** Whether a "Wave diff" pack (the actual landed git diff) is in the assembled
@@ -4452,6 +4454,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     input.request,
     "",
     treeSection(input.treeText),
+    buildSpecSection(input.spec),
     buildPhaseSpecSection(input.phaseSpec),
     hasAssembledContext ? assembledContext : "",
     !hasAssembledContext && input.fileContext?.trim()
@@ -4476,7 +4479,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     input.hasDiffDigest
       ? 'A "Wave diff" pack in the assembled context is the PRIMARY evidence for this review — judge the landed changes from the diff first; use read/read_range only for surrounding context the diff does not show.'
       : "",
-    "Review each task's output from the current phase spec, task instructions, task implementation contract, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    "Review each task's output from the Architect spec, current phase spec, task instructions, task implementation contract, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
     input.screenshotTaskIds && input.screenshotTaskIds.length > 0
@@ -4498,10 +4501,10 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     'If the automated verifier itself is wrong for this stack, replace the automated verifier by adding `verifyCommand` to your review JSON. Use a real non-mutating command that matches the files, or `""` only when no meaningful automated verifier exists. Do not replace a failing valid verifier just to hide real implementation failures.',
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
-    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles.`,
-    "Spec-compliance review checks whether the landed work satisfies the current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
+    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
+    "Spec-compliance review checks whether the landed work satisfies the Architect spec, current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()
       ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'

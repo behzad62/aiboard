@@ -61,6 +61,14 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { tasks: Array<{ implementationContract?: string }> }).tasks[0]?.implementationContract ===
         "Add SpecAction and BuildPlanAction without removing legacy plan support.",
   ],
+  [
+    "review action preserves new-task implementation contracts",
+    '{"action":"review","results":[],"newTasks":[{"id":"T9","title":"Follow-up","instructions":"Wire the saved settings","implementationContract":"Use the existing settings API and do not add routes.","contextFiles":["lib/client/settings-api.ts"],"outputPaths":["app/settings/page.tsx"],"difficulty":2}],"done":false}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { newTasks?: Array<{ implementationContract?: string }> }).newTasks?.[0]
+        ?.implementationContract === "Use the existing settings API and do not add routes.",
+  ],
   ["unlabelled fence", '```\n{"action":"run","command":"npm test"}\n```', (a) => a?.action === "run"],
   ["shell alias parses as run", '{"action":"shell","command":"npm test"}', (a) => a?.action === "run" && (a as { command: string }).command === "npm test"],
   ["shell cmd alias parses as run", '{"action":"shell","cmd":"node -e \\"console.log(1)\\""}', (a) => a?.action === "run" && (a as { command: string }).command.includes("console.log")],
@@ -628,6 +636,15 @@ const phaseReviewPrompt = buildArchitectReviewPrompt({
   executedText: "T1 changed lib/orchestrator/build.ts",
   maxNewTasks: 3,
   cyclesLeft: 1,
+  spec: {
+    id: "S1",
+    objective: "Ship phase review gates",
+    requirements: ["Workers receive architect-owned implementation contracts"],
+    acceptanceCriteria: ["Both review gates are enforced"],
+    qualityCriteria: ["Review parsing stays backward-compatible"],
+    verification: ["npx tsx scripts/test-parse-action.mts"],
+    implementationDecisions: ["Keep implementation contracts visible during review"],
+  },
   phaseSpec: parsedPhaseSpec,
 } as Parameters<typeof buildArchitectReviewPrompt>[0] & {
   phaseSpec: typeof parsedPhaseSpec;
@@ -669,6 +686,16 @@ const phasePromptChecks: Array<[string, boolean]> = [
     "review prompt treats implementation contracts as review evidence",
     phaseReviewPrompt.includes("implementation contract") ||
       phaseReviewPrompt.includes("implementationContract"),
+  ],
+  [
+    "review prompt includes Architect spec",
+    phaseReviewPrompt.includes("Architect spec") &&
+      phaseReviewPrompt.includes("Keep implementation contracts visible during review"),
+  ],
+  [
+    "review prompt requires new-task implementation contracts",
+    /"newTasks":\[\{[^\n]+implementationContract/.test(phaseReviewPrompt) &&
+      phaseReviewPrompt.includes("Every new task must include an implementationContract"),
   ],
 ];
 
