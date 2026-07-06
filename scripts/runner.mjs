@@ -72,7 +72,7 @@ import {
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
 
-const VERSION = 10;
+const VERSION = 11;
 // PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
 // panel. Running the UNBUILT source leaves it as the marker; we detect that via the
 // split PANEL_BUILD_MARKER (kept non-contiguous so the build's marker replacement
@@ -188,6 +188,10 @@ if (!args.includes("--no-default-mcp")) {
   mcpByName.set("sequential-thinking", {
     name: "sequential-thinking",
     command: "npx -y @modelcontextprotocol/server-sequential-thinking",
+  });
+  mcpByName.set("agentmemory", {
+    name: "agentmemory",
+    command: "npx -y @agentmemory/mcp",
   });
 }
 

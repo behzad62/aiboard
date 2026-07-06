@@ -16,7 +16,7 @@ node runner.mjs path/to/folder --host 0.0.0.0 --token &lt;a long random secret&g
   <li><code>--port &lt;n&gt;</code> — listen on a specific port (default 8787).</li>
   <li><code>--token &lt;secret&gt;</code> — use a fixed token instead of a random one.</li>
   <li><code>--mcp "&lt;name&gt;=&lt;command&gt;"</code> — bridge a stdio MCP server (repeatable). You can also add these live in the control panel.</li>
-  <li><code>--no-default-mcp</code> — start with no default MCP servers (Playwright / Context7 / Sequential Thinking).</li>
+  <li><code>--no-default-mcp</code> — start with no default MCP servers (Playwright / Context7 / Sequential Thinking / AgentMemory).</li>
   <li><code>--context7</code> — shortcut to bridge Context7 docs (optional <code>--context7-key &lt;key&gt;</code>).</li>
   <li><code>--searxng --searxng-url &lt;url&gt;</code> — bridge web search via your SearXNG instance.</li>
   <li><code>--codegraph</code> — initialize CodeGraph for the active project if needed, then bridge it as the <code>codegraph</code> MCP server.</li>
@@ -50,8 +50,8 @@ node runner.mjs path/to/project --mcp "codegraph=codegraph serve --mcp"</code></
 <p>If setup fails, confirm <code>codegraph --version</code> works in your terminal and that the active runner folder is the actual project folder.</p>
 
 <h2>MCP servers</h2>
-<p>The runner starts with a few zero-config servers enabled by <strong>default</strong>: <strong>Playwright</strong> (drive a real browser), <strong>Context7</strong> (up-to-date library docs), and <strong>Sequential&nbsp;Thinking</strong> (structured step-by-step reasoning). Disable or remove any you don't want from the panel, or start with none using <code>--no-default-mcp</code>. The first start downloads them via <code>npx</code>, so the panel shows them as <em>starting</em> for a moment before they go <em>ready</em>.</p>
-<p>An MCP server bridges external tools to the AI team — a real browser via Playwright, current library docs via Context7, CodeGraph code intelligence, web search via SearXNG, or anything that speaks stdio MCP. Add one in the panel with a <em>name</em> and the <em>command</em> that launches it, e.g. <code>npx @playwright/mcp@latest</code>. Adding an MCP server runs an arbitrary command, so only add ones you trust.</p>
+<p>The runner starts with a few curated servers enabled by <strong>default</strong>: <strong>Playwright</strong> (drive a real browser), <strong>Context7</strong> (up-to-date library docs), <strong>Sequential&nbsp;Thinking</strong> (structured step-by-step reasoning), and <strong>AgentMemory</strong> (memory tools through the local agentmemory MCP shim). Disable or remove any you don't want from the panel, or start with none using <code>--no-default-mcp</code>. The first start downloads them via <code>npx</code>, so the panel shows them as <em>starting</em> for a moment before they go <em>ready</em>.</p>
+<p>An MCP server bridges external tools to the AI team — a real browser via Playwright, current library docs via Context7, AgentMemory recall/save tools, CodeGraph code intelligence, web search via SearXNG, or anything that speaks stdio MCP. Add one in the panel with a <em>name</em> and the <em>command</em> that launches it, e.g. <code>npx @playwright/mcp@latest</code>. Adding an MCP server runs an arbitrary command, so only add ones you trust.</p>
 <p>Built-in shortcuts save you common commands: <code>--context7</code> bridges Context7 docs (optional <code>--context7-key &lt;key&gt;</code> or <code>CONTEXT7_API_KEY</code> for higher rate limits), <code>--searxng --searxng-url &lt;url&gt;</code> bridges web search through your SearXNG instance, and <code>--codegraph</code> initializes and bridges CodeGraph code intelligence. The first time a server launches via <code>npx</code>, it pauses briefly while the package downloads.</p>
 
 <h2>Remote access (advanced)</h2>
