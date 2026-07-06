@@ -181,6 +181,16 @@ check(
   const prompt = buildPlanCritiquePrompt({
     request: "Build a widget app",
     treeText: "src/\n  index.ts",
+    spec: {
+      id: "S1",
+      objective: "ship the widget",
+      requirements: ["widget renders and saves user preferences"],
+      nonGoals: ["no server routes"],
+      acceptanceCriteria: ["widget renders"],
+      qualityCriteria: ["typed"],
+      verification: ["tsc --noEmit"],
+      implementationDecisions: ["reuse the existing client store"],
+    },
     phaseSpec: {
       id: "P1",
       objective: "ship the widget",
@@ -210,12 +220,29 @@ check(
     "missing verifyCommand"
   );
   check(
+    "critique prompt mentions implementationContract attack point",
+    prompt.includes("implementationContract"),
+    "missing implementationContract"
+  );
+  check(
     "critique prompt mentions overlapping outputPaths",
     prompt.includes("outputPaths"),
     "missing outputPaths"
   );
   check("critique prompt lists worker names", prompt.includes("Alpha") && prompt.includes("Beta"));
   check("critique prompt embeds the request", prompt.includes("Build a widget app"));
+  check(
+    "critique prompt embeds the Architect spec",
+    prompt.includes("widget renders and saves user preferences") &&
+      prompt.includes("reuse the existing client store") &&
+      prompt.includes("no server routes"),
+    "missing Architect spec"
+  );
+  check(
+    "critique prompt asks whether tasks cover the Architect spec",
+    /Architect spec/i.test(prompt) && /spec/i.test(prompt) && /tasks/i.test(prompt),
+    "missing spec coverage instruction"
+  );
 }
 
 // Optional fields omitted must not crash and must still produce the schema line.
@@ -243,18 +270,38 @@ check(
   const prompt = buildPlanRevisionPrompt({
     request: "Build a widget app",
     treeText: "src/",
+    spec: {
+      id: "S1",
+      objective: "ship the widget",
+      requirements: ["widget renders and saves user preferences"],
+      acceptanceCriteria: ["widget renders"],
+      qualityCriteria: ["typed"],
+      verification: ["tsc --noEmit"],
+      implementationDecisions: ["reuse the existing client store"],
+    },
     originalPlanJson,
     critiqueDigest,
     maxTasks: 6,
   });
   check("revision prompt embeds the original plan JSON", prompt.includes(originalPlanJson));
   check("revision prompt embeds the critique digest", prompt.includes(critiqueDigest));
+  check(
+    "revision prompt embeds the Architect spec",
+    prompt.includes("widget renders and saves user preferences") &&
+      prompt.includes("reuse the existing client store"),
+    "missing Architect spec"
+  );
   check("revision prompt states the maxTasks number", prompt.includes("6"), "missing maxTasks 6");
   check("revision prompt embeds the request", prompt.includes("Build a widget app"));
   check(
-    "revision prompt asks for a plan action",
-    prompt.includes('action "plan"') || prompt.includes('"action":"plan"'),
-    "missing plan-emission instruction"
+    "revision prompt asks for a build_plan action",
+    prompt.includes('action "build_plan"') || prompt.includes('"action":"build_plan"'),
+    "missing build_plan-emission instruction"
+  );
+  check(
+    "revision prompt requires implementation contracts",
+    prompt.includes("implementationContract"),
+    "missing implementationContract requirement"
   );
 }
 

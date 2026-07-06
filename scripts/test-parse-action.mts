@@ -1,10 +1,12 @@
 /** Quick regression check for parseArchitectAction (run: npx tsx scripts/test-parse-action.mts) */
 import {
+  buildArchitectSpecPrompt,
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
   buildWorkerTaskPrompt,
   buildReviewGateFixInstructions,
   buildOutstandingTasksDigest,
+  isArchitectTerminalActionForExpected,
   isBuildTaskDependencySatisfied,
   isReviewResultApproved,
   isBuildToolAction,
@@ -40,6 +42,25 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
   ["round4: json action after code blocks", round4, (a) => a?.action === "review" && (a as { done: boolean }).done === true],
   ["bare json, no fence", '{"action":"read","paths":["a.ts"]}', (a) => a?.action === "read"],
   ["json with chatty prose around", 'Sure!\n```json\n{"action":"plan","tasks":[{"title":"t","instructions":"i"}]}\n```\nDone.', (a) => a?.action === "plan"],
+  [
+    "spec action preserves detailed architect-owned requirements",
+    '{"action":"spec","spec":{"id":"S1","objective":"Ship a provider settings editor","requirements":["Users can save provider defaults"],"nonGoals":["Do not add server routes"],"acceptanceCriteria":["Defaults persist after reload"],"qualityCriteria":["Reuse the client store boundary"],"verification":["npm run lint"],"constraints":["Fully client-side"]},"notes":"Use existing settings APIs.","verifyCommand":"npm run lint"}',
+    (a) =>
+      a?.action === "spec" &&
+      (a as { spec?: { requirements?: string[]; nonGoals?: string[] } }).spec?.requirements?.[0] ===
+        "Users can save provider defaults" &&
+      (a as { spec?: { nonGoals?: string[] } }).spec?.nonGoals?.[0] === "Do not add server routes" &&
+      (a as { verifyCommand?: string }).verifyCommand === "npm run lint",
+  ],
+  [
+    "build_plan action preserves implementation contracts for workers",
+    '{"action":"build_plan","spec":{"id":"S1","objective":"Ship review gates","requirements":["Parse the new plan protocol"],"acceptanceCriteria":["Workers receive architect-owned contracts"],"qualityCriteria":["Parser remains backward-compatible"],"verification":["npx tsx scripts/test-parse-action.mts"]},"phaseSpec":{"id":"P1","objective":"Wire build planning","acceptanceCriteria":["Task contracts are visible"],"qualityCriteria":["No hidden worker design decisions"],"verification":["npx tsx scripts/test-parse-action.mts"]},"implementationPlan":"Use a separate spec step, then emit worker tasks with contracts.","tasks":[{"id":"T1","title":"Parser","instructions":"Update parser","implementationContract":"Add SpecAction and BuildPlanAction without removing legacy plan support.","contextFiles":["lib/orchestrator/build.ts"],"outputPaths":["lib/orchestrator/build.ts"],"difficulty":3}],"notes":"Keep legacy plan parsing."}',
+    (a) =>
+      a?.action === "build_plan" &&
+      (a as { implementationPlan?: string }).implementationPlan?.includes("separate spec step") === true &&
+      (a as { tasks: Array<{ implementationContract?: string }> }).tasks[0]?.implementationContract ===
+        "Add SpecAction and BuildPlanAction without removing legacy plan support.",
+  ],
   ["unlabelled fence", '```\n{"action":"run","command":"npm test"}\n```', (a) => a?.action === "run"],
   ["shell alias parses as run", '{"action":"shell","command":"npm test"}', (a) => a?.action === "run" && (a as { command: string }).command === "npm test"],
   ["shell cmd alias parses as run", '{"action":"shell","cmd":"node -e \\"console.log(1)\\""}', (a) => a?.action === "run" && (a as { command: string }).command.includes("console.log")],
@@ -327,6 +348,29 @@ for (const [name, input, check] of cases) {
 
 const reviewGateChecks: Array<[string, boolean]> = [
   [
+    "terminal matcher accepts exact spec action",
+    isArchitectTerminalActionForExpected(
+      parseArchitectAction(
+        '{"action":"spec","spec":{"objective":"x","requirements":["r"],"acceptanceCriteria":["a"],"qualityCriteria":["q"],"verification":["v"]}}'
+      ),
+      "spec"
+    ),
+  ],
+  [
+    "terminal matcher accepts legacy plan as build_plan fallback",
+    isArchitectTerminalActionForExpected(
+      parseArchitectAction('{"action":"plan","tasks":[{"title":"t","instructions":"i"}]}'),
+      "build_plan"
+    ),
+  ],
+  [
+    "terminal matcher does not accept legacy plan for spec",
+    !isArchitectTerminalActionForExpected(
+      parseArchitectAction('{"action":"plan","tasks":[{"title":"t","instructions":"i"}]}'),
+      "spec"
+    ),
+  ],
+  [
     "review gate helper approves only when both gates approve",
     isReviewResultApproved({
       taskId: "T1",
@@ -541,11 +585,20 @@ const parsedTaskWithPhaseSpec = {
   id: "T1",
   title: "Wire review gates",
   instructions: "Update Build mode review handling.",
+  implementationContract:
+    "Preserve legacy plan parsing, add spec/build_plan parsing, and pass the contract to workers.",
   contextFiles: [],
   outputPaths: ["lib/orchestrator/build.ts"],
   status: "planned" as const,
   phaseSpec: parsedPhaseSpec,
 };
+const specPlanPrompt = buildArchitectSpecPrompt({
+  request: "build review gates",
+  treeText: "lib/orchestrator/build.ts",
+  fileContext: "",
+  workerNames: ["W1"],
+  readHopsLeft: 0,
+});
 const phasePlanPrompt = buildArchitectPlanPrompt({
   request: "build review gates",
   treeText: "lib/orchestrator/build.ts",
@@ -553,6 +606,14 @@ const phasePlanPrompt = buildArchitectPlanPrompt({
   maxTasks: 3,
   workerNames: ["W1"],
   readHopsLeft: 0,
+  spec: {
+    id: "S1",
+    objective: "Ship phase review gates",
+    requirements: ["Workers receive architect-owned implementation contracts"],
+    acceptanceCriteria: ["Both review gates are enforced"],
+    qualityCriteria: ["Review parsing stays backward-compatible"],
+    verification: ["npx tsx scripts/test-parse-action.mts"],
+  },
 });
 const phaseWorkerPrompt = buildWorkerTaskPrompt({
   request: "build review gates",
@@ -574,14 +635,27 @@ const phaseReviewPrompt = buildArchitectReviewPrompt({
 
 const phasePromptChecks: Array<[string, boolean]> = [
   [
-    "plan prompt requires phaseSpec",
-    phasePlanPrompt.includes('"phaseSpec"') &&
-      phasePlanPrompt.includes("current phase"),
+    "spec prompt requires detailed spec without worker tasks",
+    specPlanPrompt.includes('"action":"spec"') &&
+      specPlanPrompt.includes("requirements") &&
+      specPlanPrompt.includes("nonGoals") &&
+      !specPlanPrompt.includes('"tasks"'),
+  ],
+  [
+    "build plan prompt requires build_plan tasks and implementation contracts",
+    phasePlanPrompt.includes('"action":"build_plan"') &&
+      phasePlanPrompt.includes('"phaseSpec"') &&
+      phasePlanPrompt.includes("implementationContract"),
   ],
   [
     "worker prompt includes current phase spec",
     phaseWorkerPrompt.includes("Current phase spec") &&
       phaseWorkerPrompt.includes("Both review gates are enforced"),
+  ],
+  [
+    "worker prompt includes architect implementation contract",
+    phaseWorkerPrompt.includes("Implementation contract from Architect") &&
+      phaseWorkerPrompt.includes("Preserve legacy plan parsing"),
   ],
   [
     "review prompt requests spec verdict",
@@ -590,6 +664,11 @@ const phasePromptChecks: Array<[string, boolean]> = [
   [
     "review prompt requests quality verdict",
     phaseReviewPrompt.includes("qualityVerdict"),
+  ],
+  [
+    "review prompt treats implementation contracts as review evidence",
+    phaseReviewPrompt.includes("implementation contract") ||
+      phaseReviewPrompt.includes("implementationContract"),
   ],
 ];
 

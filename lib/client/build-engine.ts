@@ -137,6 +137,7 @@ import {
 } from "@/lib/build-context";
 import {
   buildArchitectPlanPrompt,
+  buildArchitectSpecPrompt,
   buildArchitectActionResponseFormat,
   buildNativeBuildToolDefinitions,
   buildArchitectReviewPrompt,
@@ -161,6 +162,7 @@ import {
   hasCompleteBuildToolAction,
   inspectStrictToolActionBatchOutput,
   isBuildTaskDependencySatisfied,
+  isArchitectTerminalActionForExpected,
   isReviewResultApproved,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
@@ -194,8 +196,11 @@ import {
   FORCED_PLAN_INSTRUCTION,
   FORCED_REVIEW_INSTRUCTION,
   STRICT_RETRY_INSTRUCTION,
+  type ArchitectTerminalAction,
   type ArchitectAction,
+  type BuildPlanningAction,
   type BuildPhaseSpec,
+  type BuildSpec,
   type BuildTask,
   type BuildTaskGuidance,
   type CodeIntelAction,
@@ -204,7 +209,7 @@ import {
   type FileChangeOperation,
   type GuidanceAnswerAction,
   type GuidanceRequestAction,
-  type PlanAction,
+  type SpecAction,
   type RepoBranchCreateAction,
   type RepoCommitAction,
   type RepoDiffAction,
@@ -5157,6 +5162,7 @@ export async function runBuildDiscussion(
 
   const runArchitectInspectionLoop = async (args: {
     terminal: "plan" | "review";
+    expectedAction?: ArchitectTerminalAction;
     label: string;
     initialUser: string;
     initialAttachments?: AttachmentPayload[];
@@ -5167,6 +5173,7 @@ export async function runBuildDiscussion(
     appendContext: (text: string) => void;
   }): Promise<{ action: ArchitectAction; text: string; forced: boolean }> => {
     const { terminal } = args;
+    const expectedAction = args.expectedAction ?? terminal;
     const actor = args.actor ?? architect;
     const actorLabel = args.actorLabel ?? "Architect";
     let messages: ChatMessage[] = [
@@ -5176,7 +5183,13 @@ export async function runBuildDiscussion(
     const tracker = createToolCallTracker();
     const budgets = { ...args.budgets };
     const forcedInstruction =
-      terminal === "review" ? FORCED_REVIEW_INSTRUCTION : FORCED_PLAN_INSTRUCTION;
+      terminal === "review"
+        ? FORCED_REVIEW_INSTRUCTION
+        : expectedAction === "spec"
+          ? 'STOP USING TOOLS. You have used your inspection budget for specification. Any further read/search/command requests will be IGNORED.\nUsing only what you already have, produce your spec now as exactly ONE fenced ```json block with action "spec".'
+          : expectedAction === "build_plan"
+            ? 'STOP USING TOOLS. You have used your inspection budget for build planning. Any further read/search/command requests will be IGNORED.\nUsing only what you already have and the Architect spec, produce your build plan now as exactly ONE fenced ```json block with action "build_plan".'
+            : FORCED_PLAN_INSTRUCTION;
     const decisionPhase = terminal === "review" ? "judging" : "round_preparing";
     const HARD_TURN_CAP = 40;
     const DUP_LIMIT = 3;
@@ -5243,7 +5256,7 @@ export async function runBuildDiscussion(
       messages.push({ role: "assistant", content: text });
 
       const parsed = parseArchitectAction(text);
-      if (parsed && parsed.action === terminal) {
+      if (isArchitectTerminalActionForExpected(parsed, expectedAction)) {
         return { action: parsed, text, forced };
       }
       if (forced) {
@@ -5267,7 +5280,7 @@ export async function runBuildDiscussion(
         await writeEmittedFiles(text); // never lose files emitted in a bad turn
         if (forced && terminal === "plan") {
           throw new Error(
-            "The Architect did not produce a parseable plan after being forced to."
+            `The Architect did not produce a parseable ${expectedAction} after being forced to.`
           );
         }
         const fb = strict.feedback ?? STRICT_RETRY_INSTRUCTION;
@@ -5277,7 +5290,7 @@ export async function runBuildDiscussion(
         );
         messages.push({
           role: "user",
-          content: `${fb}\nReply with one or more valid JSON tool actions, or produce your ${terminal} JSON now.`,
+          content: `${fb}\nReply with one or more valid JSON tool actions, or produce your ${expectedAction} JSON now.`,
         });
         if (badTurns >= BAD_LIMIT) forceNow("too many malformed responses");
         continue;
@@ -5333,7 +5346,7 @@ export async function runBuildDiscussion(
         continue;
       }
       badTurns = 0;
-      const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${terminal} JSON as soon as you have what you need.)`;
+      const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${expectedAction} JSON as soon as you have what you need.)`;
       messages.push({
         role: "user",
         content: `${warning}${batch.result}${budgetNote}`,
@@ -5359,16 +5372,21 @@ export async function runBuildDiscussion(
     );
   };
 
+  let activeSpec: BuildSpec | undefined;
   let activePhaseSpec: BuildPhaseSpec | undefined;
 
   const toTask = (
-    raw: PlanAction["tasks"][number],
+    raw: BuildPlanningAction["tasks"][number],
     index: number
   ): BuildTask => ({
     id: raw.id?.trim() || `T${index + 1}`,
     title: raw.title || `Task ${index + 1}`,
     instructions: raw.instructions || raw.title || "",
     phaseSpec: activePhaseSpec,
+    implementationContract:
+      typeof raw.implementationContract === "string" && raw.implementationContract.trim()
+        ? raw.implementationContract.trim()
+        : undefined,
     contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
     outputPaths: outputPathsForTask(raw),
     expectedOutputs: raw.expectedOutputs,
@@ -5645,7 +5663,7 @@ export async function runBuildDiscussion(
       planSkills.evidenceRequired
     );
     const planSkillContext = renderSkillContext(planSkills);
-    const planAttachments = claimRawBuildAttachmentsForArchitect();
+    const specAttachments = claimRawBuildAttachmentsForArchitect();
     codeIntelBudget.resetPhase();
     const planningCodeIntelPacks = await planCodeIntelPacks();
     const planAssembledContext = buildContextManager.buildPlanContext({
@@ -5665,14 +5683,14 @@ export async function runBuildDiscussion(
       label: "Architect planning",
       model: architect,
     });
-    const planResult = await runArchitectInspectionLoop({
+    const specResult = await runArchitectInspectionLoop({
       terminal: "plan",
-      label: "Architect is planning the project",
-      initialUser: buildArchitectPlanPrompt({
+      expectedAction: "spec",
+      label: "Architect is writing the build spec",
+      initialUser: buildArchitectSpecPrompt({
         request: discussion.topic,
         treeText: treeText(),
         fileContext: "",
-        maxTasks: BUILD_TASKS_PER_WAVE,
         workerNames: workers.map((w) => w.displayName),
         readHopsLeft: 2,
         runsLeft: runsLeftThisPhase(),
@@ -5694,14 +5712,54 @@ export async function runBuildDiscussion(
         skillContext: planSkillContext,
         assembledContext: planAssembledContext,
       }),
-      initialAttachments: planAttachments,
+      initialAttachments: specAttachments,
       // read_range isn't offered during planning, so reads + searches only.
       budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
       appendContext: (text) => {
         extraFileContext += text;
       },
     });
-    const planAction = planResult.action as PlanAction;
+    const specAction = specResult.action as SpecAction;
+    activeSpec = specAction.spec;
+    const specVerifyCommand = specAction.verifyCommand ?? "";
+
+    const planResult = await runArchitectInspectionLoop({
+      terminal: "plan",
+      expectedAction: "build_plan",
+      label: "Architect is planning the implementation from the spec",
+      initialUser: buildArchitectPlanPrompt({
+        request: discussion.topic,
+        treeText: treeText(),
+        fileContext: "",
+        maxTasks: BUILD_TASKS_PER_WAVE,
+        workerNames: workers.map((w) => w.displayName),
+        spec: activeSpec,
+        readHopsLeft: 1,
+        runsLeft: runsLeftThisPhase(),
+        githubWorkflow: githubWorkflow && !!runner,
+        repoWorkflow: !!runner,
+        githubCli: githubCli ?? undefined,
+        githubLabels: repoLabels,
+        searchesLeft: SEARCHES_PER_PHASE,
+        codeIntelStatus: codeIntelStatusForPrompt(),
+        codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
+        mcpToolsDoc,
+        mcpCallsLeft: mcpCallsLeftThisPhase(),
+        userNotes: "",
+        memoryBrief: "",
+        scoreboard: "",
+        previousSummary: "",
+        fetchesLeft: fetchesLeftThisPhase(),
+        shellHint,
+        skillContext: planSkillContext,
+        assembledContext: planAssembledContext,
+      }),
+      budgets: { reads: 1, rangeReads: 0, searches: SEARCHES_PER_PHASE },
+      appendContext: (text) => {
+        extraFileContext += text;
+      },
+    });
+    const planAction = planResult.action as BuildPlanningAction;
 
     // ── Plan critique gate ─────────────────────────────────────────────────
     // Before wave 1, a second model attacks the plan. Wrong decomposition is
@@ -5740,6 +5798,7 @@ export async function runBuildDiscussion(
               content: buildPlanCritiquePrompt({
                 request: discussion.topic,
                 treeText: treeText(),
+                spec: activeSpec,
                 phaseSpec: planAction.phaseSpec,
                 tasksJson,
                 notes: planAction.notes,
@@ -5771,6 +5830,7 @@ export async function runBuildDiscussion(
                 content: buildPlanRevisionPrompt({
                   request: discussion.topic,
                   treeText: treeText(),
+                  spec: activeSpec,
                   originalPlanJson: tasksJson,
                   critiqueDigest,
                   maxTasks: BUILD_TASKS_PER_WAVE,
@@ -5786,7 +5846,7 @@ export async function runBuildDiscussion(
           const revised = parseArchitectAction(revisionText);
           if (
             revised &&
-            revised.action === "plan" &&
+            (revised.action === "plan" || revised.action === "build_plan") &&
             Array.isArray(revised.tasks) &&
             revised.tasks.length > 0
           ) {
@@ -5841,20 +5901,31 @@ export async function runBuildDiscussion(
       }
     }
 
-    architectNotes = planAction.notes ?? "";
+    if (planAction.action === "build_plan" && planAction.spec) {
+      activeSpec = planAction.spec;
+    }
+    architectNotes = [
+      specAction.notes,
+      planAction.action === "build_plan" && planAction.implementationPlan
+        ? `Implementation plan: ${truncate(planAction.implementationPlan, 1_000)}`
+        : "",
+      planAction.notes,
+    ]
+      .filter(Boolean)
+      .join("\n");
     const plannedOutputPaths = planAction.tasks.flatMap((task) =>
       outputPathsForTask(task)
     );
     planVerifyCommand =
-      typeof planAction.verifyCommand === "string"
+      typeof (planAction.verifyCommand || specVerifyCommand) === "string"
         ? acceptVerifyCommandForRunner(
-            planAction.verifyCommand,
+            planAction.verifyCommand || specVerifyCommand,
             "Architect verifyCommand",
             plannedOutputPaths
           )
         : "";
     activePhaseSpec =
-      planAction.phaseSpec ?? synthesizePhaseSpec(architectNotes);
+      planAction.phaseSpec ?? activeSpec ?? synthesizePhaseSpec(architectNotes);
     tasks = planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE).map(toTask);
     // The Architect may scaffold files alongside the plan JSON.
     const { issues } = await writeEmittedFiles(planResult.text);

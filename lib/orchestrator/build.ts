@@ -48,6 +48,17 @@ export interface BuildPhaseSpec {
   constraints?: string[];
 }
 
+export interface BuildSpec extends BuildPhaseSpec {
+  /** User-visible requirements owned by the Architect before task planning. */
+  requirements: string[];
+  /** Explicitly excluded scope so workers do not invent adjacent work. */
+  nonGoals?: string[];
+  /** Architect-owned implementation direction that should not be delegated. */
+  implementationDecisions?: string[];
+  /** Known risks or edge cases the build plan must cover or preserve. */
+  risks?: string[];
+}
+
 export interface BuildTaskGuidance {
   id: string;
   taskId: string;
@@ -67,6 +78,8 @@ export interface BuildTask {
   instructions: string;
   /** Current wave/phase contract this task must satisfy. */
   phaseSpec?: BuildPhaseSpec;
+  /** Exact implementation contract from the Architect; workers should not redesign this. */
+  implementationContract?: string;
   /** Existing files the worker needs to see to do the task. */
   contextFiles: string[];
   /** Exact files this task is allowed/expected to create or modify. */
@@ -464,6 +477,13 @@ export interface GuidanceAnswerAction {
   memory?: string;
 }
 
+export interface SpecAction {
+  action: "spec";
+  spec: BuildSpec;
+  notes?: string;
+  verifyCommand?: string;
+}
+
 export interface PlanAction {
   action: "plan";
   /** Compact contract for the current build wave. */
@@ -472,6 +492,11 @@ export interface PlanAction {
     id?: string;
     title: string;
     instructions: string;
+    /**
+     * Binding implementation details chosen by the Architect so cheaper workers
+     * execute a narrow slice instead of inventing architecture.
+     */
+    implementationContract?: string;
     contextFiles?: string[];
     outputPaths?: string[];
     expectedOutputs?: string;
@@ -493,6 +518,22 @@ export interface PlanAction {
    */
   verifyCommand?: string;
 }
+
+export interface BuildPlanAction {
+  action: "build_plan";
+  /** The Architect spec this task graph implements. */
+  spec?: BuildSpec;
+  /** Compact contract for this implementation wave. */
+  phaseSpec?: BuildPhaseSpec;
+  /** Human-readable implementation sequence and integration strategy. */
+  implementationPlan?: string;
+  tasks: PlanAction["tasks"];
+  notes?: string;
+  verifyCommand?: string;
+}
+
+export type BuildPlanningAction = PlanAction | BuildPlanAction;
+export type ArchitectTerminalAction = "spec" | "build_plan" | "plan" | "review";
 
 export type ReviewGateVerdict = "approve" | "fix";
 
@@ -558,6 +599,30 @@ export function normalizeBuildPhaseSpec(value: unknown): BuildPhaseSpec | undefi
     verification: stringArrayFromUnknown(raw.verification),
     ...(stringArrayFromUnknown(raw.constraints).length
       ? { constraints: stringArrayFromUnknown(raw.constraints) }
+      : {}),
+  };
+}
+
+export function normalizeBuildSpec(value: unknown): BuildSpec | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const phaseSpec = normalizeBuildPhaseSpec(raw);
+  if (!phaseSpec) return undefined;
+  const requirements = stringArrayFromUnknown(raw.requirements);
+  if (requirements.length === 0) return undefined;
+  const id = stringFromUnknown(raw.id) ?? "S1";
+  return {
+    ...phaseSpec,
+    id,
+    requirements,
+    ...(stringArrayFromUnknown(raw.nonGoals).length
+      ? { nonGoals: stringArrayFromUnknown(raw.nonGoals) }
+      : {}),
+    ...(stringArrayFromUnknown(raw.implementationDecisions).length
+      ? { implementationDecisions: stringArrayFromUnknown(raw.implementationDecisions) }
+      : {}),
+    ...(stringArrayFromUnknown(raw.risks).length
+      ? { risks: stringArrayFromUnknown(raw.risks) }
       : {}),
   };
 }
@@ -629,6 +694,9 @@ const buildTaskActionSchema = (): JsonSchemaObject => ({
     id: stringSchema("Stable task id, when available."),
     title: stringSchema("Short task title."),
     instructions: stringSchema("Concrete implementation instructions."),
+    implementationContract: stringSchema(
+      "Binding Architect-owned implementation contract: APIs, file boundaries, state shape, edge cases, and verification evidence the worker must follow."
+    ),
     contextFiles: stringArraySchema("Files the worker should inspect."),
     outputPaths: stringArraySchema("Files this task may create or modify."),
     expectedOutputs: stringSchema("Expected completion signal."),
@@ -657,6 +725,27 @@ const buildPhaseSpecSchema = (): JsonSchemaObject => ({
   additionalProperties: false,
 });
 
+const buildSpecSchema = (): JsonSchemaObject => ({
+  type: "object",
+  properties: {
+    ...buildPhaseSpecSchema().properties,
+    requirements: stringArraySchema("Concrete requirements the implementation must satisfy."),
+    nonGoals: stringArraySchema("Explicitly excluded scope."),
+    implementationDecisions: stringArraySchema(
+      "Architect-owned design decisions that must be preserved by the build plan."
+    ),
+    risks: stringArraySchema("Known risks and edge cases the plan must cover or call out."),
+  },
+  required: [
+    "objective",
+    "requirements",
+    "acceptanceCriteria",
+    "qualityCriteria",
+    "verification",
+  ],
+  additionalProperties: false,
+});
+
 /**
  * Bounds for a worker `split_task` decomposition (see {@link SplitTaskAction}).
  * Declared here (ahead of the schema and tool descriptions that interpolate
@@ -674,6 +763,7 @@ const SPLIT_MAX_SUBTASKS = 4;
 export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
   const taskSchema = buildTaskActionSchema();
   const phaseSpecSchema = buildPhaseSpecSchema();
+  const specSchema = buildSpecSchema();
   return {
     name: "architect_action",
     strict: false,
@@ -689,6 +779,8 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             "guidance_request",
             "guidance_answer",
             "code_intel",
+            "spec",
+            "build_plan",
             "plan",
             "review",
             "run",
@@ -736,8 +828,12 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
         },
         startLine: { type: "number" },
         lineCount: { type: "number" },
+        spec: specSchema,
         phaseSpec: phaseSpecSchema,
         tasks: { type: "array", items: taskSchema },
+        implementationPlan: stringSchema(
+          "Architect-owned implementation sequence and integration strategy."
+        ),
         notes: stringSchema("Brief persistent Architect notes."),
         verifyCommand: stringSchema("Optional mechanical verification command."),
         results: {
@@ -859,6 +955,8 @@ const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
   read_range: "Read a bounded line range from one project file.",
   context_retrieve: "Retrieve exact text from a previously compacted context blob.",
   code_intel: "Run read-only structural code intelligence.",
+  spec: "Return the Architect-owned requirements and quality specification.",
+  build_plan: "Return the Architect implementation plan from an approved spec.",
   plan: "Return the Architect implementation plan.",
   review: "Return the Architect review verdict for completed worker tasks.",
   run: "Run a bounded project check command through the AI Board runner.",
@@ -888,6 +986,8 @@ const ARCHITECT_PLAN_NATIVE_ACTIONS = [
   "read_range",
   "context_retrieve",
   "code_intel",
+  "spec",
+  "build_plan",
   "plan",
   "run",
   "search",
@@ -956,6 +1056,8 @@ const NATIVE_BUILD_TOOL_REQUIRED: Record<string, string[]> = {
   guidance_request: ["question"],
   guidance_answer: ["guidanceId", "taskId", "answer"],
   code_intel: ["op"],
+  spec: ["spec"],
+  build_plan: ["tasks"],
   plan: ["tasks"],
   review: ["results", "done"],
   run: ["command"],
@@ -1531,7 +1633,9 @@ export type ArchitectAction =
   | ContextRetrieveAction
   | GuidanceRequestAction
   | GuidanceAnswerAction
+  | SpecAction
   | PlanAction
+  | BuildPlanAction
   | ReviewAction
   | RunAction
   | SearchAction
@@ -1793,6 +1897,7 @@ export function applyTaskSplit(
       title: subtask.title,
       instructions: subtask.instructions,
       phaseSpec: parent.phaseSpec,
+      implementationContract: parent.implementationContract,
       contextFiles: [
         ...new Set([...parent.contextFiles, ...(subtask.contextFiles ?? [])]),
       ].slice(0, maxContextFiles),
@@ -1958,7 +2063,7 @@ export function summarizeFileChange(input: FileChangeInput): string {
 }
 
 export interface WaveReviewDigestTask {
-  task: Pick<BuildTask, "id" | "title">;
+  task: Pick<BuildTask, "id" | "title" | "implementationContract">;
   workerName: string;
   files: string[];
   notes?: string;
@@ -1975,6 +2080,9 @@ export function buildWaveReviewDigest(items: WaveReviewDigestTask[]): string {
           : "- No landed file-change summary was recorded.";
       return [
         `### ${item.task.id}: ${item.task.title} (worker: ${item.workerName})`,
+        item.task.implementationContract?.trim()
+          ? `Implementation contract: ${item.task.implementationContract.trim()}`
+          : "",
         `Files touched: ${item.files.length > 0 ? item.files.join(", ") : "none"}`,
         `Worker notes: ${item.notes?.trim() ? item.notes.trim() : "none"}`,
         "Landed change summaries:",
@@ -2263,10 +2371,54 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
       if (parsed.action === "guidance_answer") {
         return normalizeGuidanceAnswerAction(parsed);
       }
-      if (parsed.action === "plan" && Array.isArray((parsed as PlanAction).tasks)) {
+      if (parsed.action === "spec") {
+        const spec = normalizeBuildSpec((parsed as { spec?: unknown }).spec);
+        if (!spec) return null;
+        const verifyCommand = stringFromUnknown(
+          (parsed as { verifyCommand?: unknown }).verifyCommand
+        );
+        const notes = stringFromUnknown((parsed as { notes?: unknown }).notes);
+        return {
+          action: "spec",
+          spec,
+          ...(notes ? { notes } : {}),
+          ...(verifyCommand ? { verifyCommand } : {}),
+        };
+      }
+      if (
+        (parsed.action === "plan" || parsed.action === "build_plan") &&
+        Array.isArray((parsed as BuildPlanningAction).tasks)
+      ) {
+        const tasks = (parsed as BuildPlanningAction).tasks.map((task) => ({
+          ...task,
+          ...(stringFromUnknown(
+            (task as { implementationContract?: unknown }).implementationContract
+          )
+            ? {
+                implementationContract: stringFromUnknown(
+                  (task as { implementationContract?: unknown }).implementationContract
+                ),
+              }
+            : {}),
+        }));
+        if (parsed.action === "build_plan") {
+          const plan = parsed as BuildPlanAction;
+          return {
+            ...plan,
+            tasks,
+            spec: normalizeBuildSpec((parsed as { spec?: unknown }).spec),
+            phaseSpec: normalizeBuildPhaseSpec(
+              (parsed as { phaseSpec?: unknown }).phaseSpec
+            ),
+            implementationPlan: stringFromUnknown(
+              (parsed as { implementationPlan?: unknown }).implementationPlan
+            ),
+          };
+        }
         const plan = parsed as PlanAction;
         return {
           ...plan,
+          tasks,
           phaseSpec: normalizeBuildPhaseSpec(
             (parsed as { phaseSpec?: unknown }).phaseSpec
           ),
@@ -2952,6 +3104,16 @@ export function parseArchitectAction(text: string): ArchitectAction | null {
   return null;
 }
 
+export function isArchitectTerminalActionForExpected(
+  action: ArchitectAction | null,
+  expected: ArchitectTerminalAction
+): action is ArchitectAction {
+  if (!action) return false;
+  if (action.action === expected) return true;
+  // Compatibility: old planner outputs are still valid implementation plans.
+  return expected === "build_plan" && action.action === "plan";
+}
+
 // ── Plan critique gate ────────────────────────────────────────────────────────
 //
 // Before wave 1, a second model attacks the Architect's plan. Wrong
@@ -3609,6 +3771,30 @@ export function buildWorkerToolInstructions(budget: {
     .join("\n");
 }
 
+export function buildSpecSection(spec?: BuildSpec): string {
+  if (!spec) return "";
+  return [
+    `Architect spec (${spec.id}):`,
+    `Objective: ${spec.objective}`,
+    "Requirements:",
+    bulletList(spec.requirements),
+    spec.nonGoals?.length ? `Non-goals:\n${bulletList(spec.nonGoals)}` : "",
+    "Acceptance criteria:",
+    bulletList(spec.acceptanceCriteria),
+    "Code-quality criteria:",
+    bulletList(spec.qualityCriteria),
+    "Verification expectations:",
+    bulletList(spec.verification),
+    spec.constraints?.length ? `Constraints:\n${bulletList(spec.constraints)}` : "",
+    spec.implementationDecisions?.length
+      ? `Architect implementation decisions:\n${bulletList(spec.implementationDecisions)}`
+      : "",
+    spec.risks?.length ? `Risks and edge cases:\n${bulletList(spec.risks)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function renderTaskGuidanceForWorker(
   guidance?: BuildTaskGuidance[]
 ): string {
@@ -3772,12 +3958,83 @@ function runToolDoc(
     .join("\n");
 }
 
+export function buildArchitectSpecPrompt(input: BuildPromptContextInput & {
+  request: string;
+  treeText: string;
+  fileContext: string;
+  workerNames: string[];
+  readHopsLeft: number;
+  runsLeft?: number;
+  searchesLeft?: number;
+  codeIntelStatus?: string;
+  codeIntelCallsLeft?: number;
+  fetchesLeft?: number;
+  mcpToolsDoc?: string;
+  mcpCallsLeft?: number;
+  userNotes?: string;
+  scoreboard?: string;
+  shellHint?: string;
+  githubWorkflow?: boolean;
+  repoWorkflow?: boolean;
+  githubCli?: { available: boolean; authenticated: boolean };
+  githubLabels?: string[];
+  previousSummary?: string;
+  memoryBrief?: string;
+  skillContext?: string;
+}): string {
+  const assembledContext = renderAssembledContext(input.assembledContext);
+  const hasAssembledContext = assembledContext.trim().length > 0;
+  const readOption = input.readHopsLeft > 0
+    ? `If you need to inspect existing files before writing the spec, respond with only JSON tool actions - e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). Otherwise, write the spec now.`
+    : "Write the spec now - no more file reads are available.";
+
+  return [
+    ARCHITECT_ROLE,
+    "",
+    "Project request from the user:",
+    input.request,
+    "",
+    treeSection(input.treeText),
+    hasAssembledContext ? assembledContext : "",
+    !hasAssembledContext && input.previousSummary?.trim()
+      ? `\nThis is a FOLLOW-UP pass: a previous build already delivered the project summarized below. Everything delivered is still a requirement - preserve it. Specify ONLY the delta unless the notes/request require repair.\nPrevious hand-off summary:\n${input.previousSummary}`
+      : "",
+    !hasAssembledContext ? input.fileContext : "",
+    !hasAssembledContext ? userNotesSection(input.userNotes) : "",
+    !hasAssembledContext ? input.memoryBrief : "",
+    "",
+    `Your workers later in the build: ${input.workerNames.join(", ")}.`,
+    !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
+    input.skillContext,
+    "",
+    readOption,
+    skillRequestDoc(),
+    contextRetrieveToolDoc(),
+    codeIntelToolDoc(input.codeIntelStatus, input.codeIntelCallsLeft),
+    searchToolDoc(input.searchesLeft),
+    runToolDoc(input.runsLeft, input.shellHint, input.githubWorkflow, input.repoWorkflow, input.githubLabels),
+    fetchToolDoc(input.fetchesLeft),
+    repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
+    mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
+    "",
+    "Before implementation planning, write an Architect-owned spec. This is where the strongest model makes the high-leverage choices: requirements, non-goals, acceptance criteria, code-quality bar, verification plan, constraints, implementation decisions, and known risks.",
+    "Do not assign worker work here. Do not leave architecture, APIs, state shape, file boundaries, or verification strategy for cheaper workers to infer later.",
+    "Respond with a short rationale followed by ONE fenced json block:",
+    "```json",
+    `{"action":"spec","spec":{"id":"S1","objective":"overall objective","requirements":["user-visible requirement or required file outcome"],"nonGoals":["explicitly excluded scope"],"acceptanceCriteria":["observable behavior or file outcome required before the build can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations"],"verification":["non-mutating command or browser/manual evidence expected"],"constraints":["repo/user constraints to preserve"],"implementationDecisions":["architectural/API/state/file-boundary decision workers must follow"],"risks":["edge case, integration risk, or ambiguity to cover"]},"notes":"durable conventions for planning/review","verifyCommand":"preferred non-mutating compile/type/lint/test command, or omit when none is meaningful"}`,
+    "```",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;
   fileContext: string;
   maxTasks: number;
   workerNames: string[];
+  spec?: BuildSpec;
   readHopsLeft: number;
   runsLeft?: number;
   searchesLeft?: number;
@@ -3817,6 +4074,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     input.request,
     "",
     treeSection(input.treeText),
+    buildSpecSection(input.spec),
     hasAssembledContext ? assembledContext : "",
     !hasAssembledContext && input.previousSummary?.trim()
       ? `\nThis is a FOLLOW-UP pass: a previous build already delivered the project summarized below. Everything delivered is still a requirement — preserve it. Plan ONLY the delta (changes the notes/request ask for), editing existing files where possible instead of rebuilding.\nPrevious hand-off summary:\n${input.previousSummary}`
@@ -3839,13 +4097,15 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
-    "Before listing worker tasks, define a compact current phase spec. This is the contract for the current wave only: objective, acceptance criteria, code-quality criteria, verification expectations, and constraints workers/reviewers must follow.",
+    input.spec
+      ? "Build the implementation plan FROM THE ARCHITECT SPEC above. Do not weaken, reinterpret, or leave the listed design decisions to workers. If the spec is insufficient, fill in the missing detail in phaseSpec, notes, or each task's implementationContract instead of making workers infer it."
+      : "Before listing worker tasks, define a compact current phase spec. This is the contract for the current wave only: objective, acceptance criteria, code-quality criteria, verification expectations, and constraints workers/reviewers must follow.",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
+    `{"action":"build_plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"implementationPlan":"brief Architect-owned implementation sequence and integration strategy","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","implementationContract":"binding design details for this worker: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
     "```",
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
-    `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions.`,
+    `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions; put binding design details in each task's implementationContract.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
     `List in every task's "outputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
@@ -3863,6 +4123,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
 export function buildPlanCritiquePrompt(input: {
   request: string;
   treeText: string;
+  spec?: BuildSpec;
   phaseSpec?: BuildPhaseSpec;
   tasksJson: string;
   notes?: string;
@@ -3876,6 +4137,7 @@ export function buildPlanCritiquePrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    buildSpecSection(input.spec),
     buildPhaseSpecSection(input.phaseSpec),
     input.notes?.trim() ? `Architect notes for the workers:\n${input.notes.trim()}` : "",
     input.verifyCommand?.trim()
@@ -3887,12 +4149,14 @@ export function buildPlanCritiquePrompt(input: {
     input.tasksJson,
     "",
     "Attack the plan on these points, in order:",
-    "1. Missing work: anything the request needs that no task covers.",
+    "1. Missing work: anything the request or Architect spec needs that no task covers.",
     '2. Wrong or missing dependsOn edges: a task that consumes another task\'s files MUST depend on it. Workers cannot see each other\'s in-progress output.',
     "3. Overlapping outputPaths between tasks that are supposed to be independent (they will clobber each other or be serialized, defeating the split).",
     "4. Tasks too large to complete well in one model response — these should have been pre-split into smaller tasks.",
     "5. contextFiles a worker will obviously need to do its task but was not given.",
-    "6. An unrealistic or missing verifyCommand for this stack (must be a real, non-mutating compile/check command).",
+    "6. Missing or vague implementationContract fields that leave APIs, file boundaries, state shape, edge cases, or verification evidence for cheap workers to invent.",
+    "7. Any task, dependency, contract, or verifier choice that conflicts with the Architect spec's requirements, non-goals, implementation decisions, constraints, or risks.",
+    "8. An unrealistic or missing verifyCommand for this stack (must be a real, non-mutating compile/check command).",
     "",
     "Reply with a short rationale then ONE fenced json block:",
     "```json",
@@ -3912,6 +4176,7 @@ export function buildPlanCritiquePrompt(input: {
 export function buildPlanRevisionPrompt(input: {
   request: string;
   treeText: string;
+  spec?: BuildSpec;
   originalPlanJson: string;
   critiqueDigest: string;
   maxTasks: number;
@@ -3926,6 +4191,7 @@ export function buildPlanRevisionPrompt(input: {
     input.request,
     "",
     treeSection(input.treeText),
+    buildSpecSection(input.spec),
     "",
     "Your original plan:",
     input.originalPlanJson,
@@ -3933,7 +4199,7 @@ export function buildPlanRevisionPrompt(input: {
     "Review findings:",
     input.critiqueDigest,
     "",
-    `End with ONE fenced json block matching the plan schema (action "plan" with phaseSpec, tasks[], notes, verifyCommand). At most ${input.maxTasks} tasks.`,
+    `End with ONE fenced json block matching the build-plan schema (action "build_plan" with phaseSpec, implementationPlan, tasks[], notes, verifyCommand). At most ${input.maxTasks} tasks. Every task must include an implementationContract.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -3970,6 +4236,9 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     "",
     `YOUR TASK — ${input.task.id}: ${input.task.title}`,
     input.task.instructions,
+    input.task.implementationContract?.trim()
+      ? `Implementation contract from Architect:\n${input.task.implementationContract.trim()}`
+      : "",
     input.task.outputPaths?.length
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
@@ -4182,7 +4451,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     input.hasDiffDigest
       ? 'A "Wave diff" pack in the assembled context is the PRIMARY evidence for this review — judge the landed changes from the diff first; use read/read_range only for surrounding context the diff does not show.'
       : "",
-    "Review each task's output from the current phase spec, task instructions, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
+    "Review each task's output from the current phase spec, task instructions, task implementation contract, landed-change digest, automated build checks, and targeted reads/searches when needed. You can fix small problems YOURSELF before your decision — your changes overwrite the workers'. For bigger problems, send the task back with precise fix instructions.",
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
     input.screenshotTaskIds && input.screenshotTaskIds.length > 0
@@ -4207,7 +4476,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles.`,
-    "Spec-compliance review checks whether the landed work satisfies the current phase spec and task contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
+    "Spec-compliance review checks whether the landed work satisfies the current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()
       ? 'The user\'s notes above are requirements: turn any that aren\'t covered yet into fix instructions or new tasks, and do NOT set "done": true while one remains unaddressed.'
