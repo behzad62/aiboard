@@ -23,6 +23,28 @@ const fixingTask: BuildTask = {
   contextFiles: ["tests/run-tests.ts", "src/query.ts"],
   outputPaths: ["tests/run-tests.ts", "src/query.ts"],
   expectedOutputs: "targeted fixes to tests/run-tests.ts and src/query.ts",
+  guidance: [
+    {
+      id: "G-T3-1",
+      taskId: "T3",
+      mode: "blocking",
+      question: "Should I rewrite the query parser or patch the strict failure?",
+      reason: "The task is scoped to two files.",
+      status: "answered",
+      answer: "Patch the strict failure only. Do not rewrite the parser.",
+      requestedBy: "Worker A",
+      requestedAtWave: 1,
+      answeredAtWave: 1,
+    },
+    {
+      id: "G-T3-2",
+      taskId: "T3",
+      mode: "async",
+      question: "Should docs be updated too?",
+      status: "pending",
+      requestedAtWave: 1,
+    },
+  ],
   status: "fixing",
 };
 
@@ -78,6 +100,23 @@ check(
     /console errors/i.test(prompt),
   prompt
 );
+check(
+  "worker prompt includes answered Architect guidance section",
+  prompt.includes("ARCHITECT GUIDANCE FOR THIS TASK") &&
+    prompt.includes("Guidance G-T3-1") &&
+    prompt.includes("Worker question:") &&
+    prompt.includes("Should I rewrite the query parser or patch the strict failure?") &&
+    prompt.includes("Architect answer:") &&
+    prompt.includes("Patch the strict failure only. Do not rewrite the parser."),
+  prompt
+);
+check(
+  "worker prompt separates pending Architect guidance requests",
+  prompt.includes("PENDING GUIDANCE REQUESTS") &&
+    prompt.includes("Guidance G-T3-2 is still waiting for Architect response") &&
+    prompt.includes("Continue only if the task is safe without it."),
+  prompt
+);
 
 const skillEvidencePrompt = buildWorkerTaskPrompt({
   request: "Fix a failing web app test.",
@@ -131,6 +170,13 @@ check(
   workerTools
 );
 check(
+  "worker tool instructions advertise blocking and async guidance requests",
+  workerTools.includes('"action":"guidance_request"') &&
+    /mode":"blocking"/.test(workerTools) &&
+    /mode "async"/.test(workerTools),
+  workerTools
+);
+check(
   "worker tool instructions include active local server URL",
   workerTools.includes("http://localhost:3001") &&
     /browser MCP navigation/i.test(workerTools),
@@ -157,6 +203,23 @@ check(
     action: "run",
     command: "npm test",
     reason: "verify the reproduced failure",
+  }),
+);
+check(
+  "worker tool policy allows guidance_request actions",
+  isWorkerBuildToolAction({
+    action: "guidance_request",
+    mode: "blocking",
+    question: "Which helper should I use?",
+  }),
+);
+check(
+  "worker tool policy rejects guidance_answer actions",
+  !isWorkerBuildToolAction({
+    action: "guidance_answer",
+    guidanceId: "G-T3-1",
+    taskId: "T3",
+    answer: "Use the existing helper.",
   }),
 );
 check(

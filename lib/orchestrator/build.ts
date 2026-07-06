@@ -707,6 +707,7 @@ const NATIVE_BUILD_TOOL_DESCRIPTIONS: Record<string, string> = {
   tool: "Call an MCP tool exposed through the local runner.",
   fetch: "Fetch a known public http(s) URL through the local runner.",
   skill_request: "Request an AI Board skill overlay for a future Build turn.",
+  guidance_request: "Ask the Architect a task-local advisory question.",
   patch: "Apply exact SEARCH/REPLACE operations to one existing file.",
   append: "Create or append a bounded content chunk to a project file.",
   repo_status: "Inspect the Git working tree status through the runner.",
@@ -2593,6 +2594,8 @@ export function isBuildToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "context_retrieve" ||
+    action.action === "guidance_request" ||
+    action.action === "guidance_answer" ||
     action.action === "code_intel" ||
     action.action === "search" ||
     action.action === "patch" ||
@@ -2620,6 +2623,7 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "context_retrieve" ||
+    action.action === "guidance_request" ||
     action.action === "search" ||
     action.action === "patch" ||
     action.action === "append" ||
@@ -3402,6 +3406,7 @@ export function buildWorkerToolInstructions(budget: {
       ? `- Fetch a PUBLIC docs/API-reference URL through the user's runner: {"action":"fetch","url":"https://example.com/docs","reason":"why"} (${budget.fetches} left). Known URLs only — this is not a search engine; local/private addresses are refused. The user may deny a fetch — respect that and continue.`
       : "",
     `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text from that character offset up to the cap; use read/read_range for current source files.`,
+    '- Ask the Architect for task-local guidance: {"action":"guidance_request","mode":"blocking","question":"specific question","reason":"why Architect guidance is needed"} or mode "async". Use blocking when you cannot safely proceed without the answer. Use async when you can continue and want the answer on a later same-task iteration. Emit guidance_request by itself, with no other actions or prose.',
     budget.patches > 0
       ? `- Patch an existing file exactly: {"action":"patch","path":"src/file.ts","ops":[{"search":"copy exact current text","replace":"replacement text"}],"reason":"why"} (${budget.patches} left).`
       : "",
@@ -3435,6 +3440,47 @@ export function buildWorkerToolInstructions(budget: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export function renderTaskGuidanceForWorker(
+  guidance?: BuildTaskGuidance[]
+): string {
+  const records = guidance ?? [];
+  const answered = records.filter(
+    (item) => item.status === "answered" && item.answer?.trim()
+  );
+  const pending = records.filter((item) => item.status === "pending");
+  const sections: string[] = [];
+  if (answered.length > 0) {
+    sections.push(
+      [
+        "ARCHITECT GUIDANCE FOR THIS TASK",
+        ...answered.flatMap((item) => [
+          "",
+          `Guidance ${item.id}`,
+          "Worker question:",
+          item.question,
+          item.reason ? `Reason:\n${item.reason}` : "",
+          "Architect answer:",
+          item.answer ?? "",
+        ]),
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  }
+  if (pending.length > 0) {
+    sections.push(
+      [
+        "PENDING GUIDANCE REQUESTS",
+        ...pending.map(
+          (item) =>
+            `Guidance ${item.id} is still waiting for Architect response.\nWorker question: ${item.question}\nContinue only if the task is safe without it.`
+        ),
+      ].join("\n\n")
+    );
+  }
+  return sections.join("\n\n");
 }
 
 function fetchToolDoc(fetchesLeft?: number): string {
@@ -3761,6 +3807,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
       : "",
     input.task.expectedOutputs ? `Expected outputs: ${input.task.expectedOutputs}` : "",
+    renderTaskGuidanceForWorker(input.task.guidance),
     !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
     input.skillContext?.trim()
