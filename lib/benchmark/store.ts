@@ -1554,6 +1554,28 @@ function isBuildUsageModelTotal(value: unknown): boolean {
   );
 }
 
+function isBuildTaskGuidanceRecord(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.taskId === "string" &&
+    (value.mode === "blocking" || value.mode === "async") &&
+    typeof value.question === "string" &&
+    (value.reason === undefined || typeof value.reason === "string") &&
+    (value.status === "pending" || value.status === "answered") &&
+    (value.answer === undefined || typeof value.answer === "string") &&
+    (value.requestedBy === undefined ||
+      typeof value.requestedBy === "string") &&
+    typeof value.requestedAtWave === "number" &&
+    (value.answeredAtWave === undefined ||
+      typeof value.answeredAtWave === "number")
+  );
+}
+
+function isBuildTaskGuidanceArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isBuildTaskGuidanceRecord);
+}
+
 function isBuildCheckpointTask(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
   return (
@@ -1571,7 +1593,8 @@ function isBuildCheckpointTask(value: unknown): boolean {
     (value.failCount === undefined || typeof value.failCount === "number") &&
     (value.retryAfterMs === undefined ||
       typeof value.retryAfterMs === "number") &&
-    (value.difficulty === undefined || typeof value.difficulty === "number")
+    (value.difficulty === undefined || typeof value.difficulty === "number") &&
+    (value.guidance === undefined || isBuildTaskGuidanceArray(value.guidance))
   );
 }
 

@@ -1,11 +1,28 @@
 /** Build checkpoint shape checks (run: npx tsx scripts/test-build-checkpoint.mts) */
 import type { BuildCheckpoint } from "../lib/db/schema";
+import {
+  __resetBenchmarkStoreForTests,
+  __setAdapterForTests,
+  importBenchmarkReportBundleV2,
+} from "../lib/benchmark/store";
+import type { BenchmarkReportBundleV2 } from "../lib/benchmark/types";
 import { normalizeBuildTasksForResume } from "../lib/orchestrator/build";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
   if (!ok) failed++;
+};
+
+const memoryAdapter = {
+  kind: "indexeddb" as const,
+  load: async () => null,
+  save: async () => {},
+  listBenchmarkRunIds: async () => [],
+  loadBenchmarkRun: async () => null,
+  saveBenchmarkRun: async () => {},
+  deleteBenchmarkRun: async () => {},
+  label: () => "test memory",
 };
 
 const checkpoint: BuildCheckpoint = {
@@ -23,6 +40,19 @@ const checkpoint: BuildCheckpoint = {
       contextFiles: [],
       outputPaths: ["lib/db/schema.ts"],
       status: "done",
+      guidance: [
+        {
+          id: "G-T1-1",
+          taskId: "T1",
+          mode: "async",
+          question: "Should this become a convention?",
+          status: "answered",
+          answer: "Keep it task-scoped.",
+          requestedBy: "Worker A",
+          requestedAtWave: 2,
+          answeredAtWave: 3,
+        },
+      ],
     },
   ],
   architectNotes: "Continue with UI.",
@@ -70,6 +100,12 @@ check("checkpoint stores budget stop reason", checkpoint.stopReason === "budget"
 check("checkpoint stores skill mode", checkpoint.skillMode === "strict", checkpoint);
 check("checkpoint stores skill evidence", checkpoint.skillEvidence?.length === 1, checkpoint);
 check("checkpoint stores skill events", checkpoint.skillEvents?.length === 1, checkpoint);
+check(
+  "checkpoint stores task-local guidance",
+  checkpoint.tasks[0].guidance?.[0]?.id === "G-T1-1" &&
+    checkpoint.tasks[0].guidance?.[0]?.answer === "Keep it task-scoped.",
+  checkpoint.tasks[0].guidance
+);
 
 const resumed = normalizeBuildTasksForResume([
   {
@@ -89,6 +125,18 @@ const resumed = normalizeBuildTasksForResume([
     workerIndex: 1,
     assignTo: "claude-opus-4-5",
     retryAfterMs: 9999999999999,
+    guidance: [
+      {
+        id: "G-T2-1",
+        taskId: "T2",
+        mode: "blocking",
+        question: "Which file owns the behavior?",
+        status: "answered",
+        answer: "Use src/game.ts.",
+        requestedAtWave: 1,
+        answeredAtWave: 1,
+      },
+    ],
   },
   {
     id: "T3",
@@ -106,6 +154,69 @@ check("resume preserves failed task history", resumedFailed?.failCount === 3, re
 check("resume clears stale worker pin", resumedFailed?.workerIndex === undefined, resumedFailed);
 check("resume clears stale worker preference", resumedFailed?.assignTo === undefined, resumedFailed);
 check("resume clears stale retry delay", resumedFailed?.retryAfterMs === undefined, resumedFailed);
+check(
+  "resume preserves task-local guidance",
+  resumedFailed?.guidance?.[0]?.answer === "Use src/game.ts.",
+  resumedFailed
+);
 check("resume keeps dependent planned tasks intact", resumed.find((task) => task.id === "T3")?.status === "planned", resumed);
+
+__resetBenchmarkStoreForTests();
+__setAdapterForTests(memoryAdapter);
+
+const invalidGuidanceBundle: BenchmarkReportBundleV2 = {
+  version: 2,
+  exportedAt: "2026-06-21T00:00:00.000Z",
+  suites: [],
+  runs: [],
+  cases: [],
+  attempts: [],
+  metricValues: [],
+  artifacts: [],
+  failures: [],
+  traces: [],
+  caseV2: [],
+  attemptsV2: [],
+  verifierResults: [],
+  runEvents: [],
+  toolCallTraces: [],
+  teamCompositions: [],
+  harnessCertifications: [],
+  sourceEvidence: {
+    gameMatches: [],
+    buildCheckpoints: [
+      {
+        ...checkpoint,
+        tasks: [
+          {
+            ...checkpoint.tasks[0],
+            guidance: [
+              {
+                ...checkpoint.tasks[0].guidance![0],
+                requestedAtWave: "2",
+              },
+            ],
+          },
+        ],
+      } as never,
+    ],
+    buildStats: [],
+  },
+};
+
+let invalidGuidanceRejected = false;
+let invalidGuidanceMessage = "";
+try {
+  await importBenchmarkReportBundleV2(invalidGuidanceBundle);
+} catch (err) {
+  invalidGuidanceRejected = true;
+  invalidGuidanceMessage = err instanceof Error ? err.message : String(err);
+}
+check(
+  "benchmark import rejects malformed task-local guidance",
+  invalidGuidanceRejected && /Invalid sourceEvidence\.buildCheckpoints/i.test(invalidGuidanceMessage),
+  invalidGuidanceMessage || "bundle imported"
+);
+__setAdapterForTests(null);
 
 process.exit(failed === 0 ? 0 : 1);

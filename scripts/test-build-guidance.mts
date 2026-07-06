@@ -418,6 +418,217 @@ check(
   mixedSplitEvents
 );
 
+const asyncDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-async-fix",
+  topic: "Build an async guidance note and fix it after review.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(asyncDiscussion);
+
+const asyncCalls: ModelOverrideCall[] = [];
+const asyncEvents: OrchestratorEvent[] = [];
+const asyncWorkerLabel = "Test Worker working on T2: Create async note";
+let asyncWorkerInvocations = 0;
+const asyncHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    asyncCalls.push({
+      label: input.label,
+      messages: input.messages,
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is planning the project") {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T2",
+              title: "Create async note",
+              instructions:
+                "Create src/async-note.txt with the guidance-sensitive note.",
+              contextFiles: [],
+              outputPaths: ["src/async-note.txt"],
+              expectedOutputs: "A note that follows the Architect's later guidance.",
+              dependsOn: [],
+              difficulty: 1,
+            },
+          ],
+          notes: "Use async guidance only after the task needs a later fix.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === asyncWorkerLabel) {
+      asyncWorkerInvocations += 1;
+      if (asyncWorkerInvocations === 1) {
+        return [
+          "```json",
+          JSON.stringify({
+            action: "guidance_request",
+            mode: "async",
+            question: "Should I preserve the existing file name?",
+            reason:
+              "I can continue with the likely path but want confirmation if this returns.",
+          }),
+          "```",
+        ].join("\n");
+      }
+      return [
+        "```txt path=src/async-note.txt",
+        "Preserve src/async-note.txt and update only its content.",
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T2: Create async note") {
+      return [
+        "Implemented with likely path.",
+        "```txt path=src/async-note.txt",
+        "draft async guidance path",
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect answering guidance G-T2-1 for T2") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_answer",
+          guidanceId: "G-T2-1",
+          taskId: "T2",
+          answer: "Preserve src/async-note.txt and update only its content.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T2",
+              verdict: "fix",
+              specVerdict: "fix",
+              qualityVerdict: "approve",
+              specIssues: "Needs confirmed filename guidance.",
+              fixInstructions:
+                "Apply the Architect guidance answer and update the file content.",
+            },
+          ],
+          newTasks: [],
+          done: false,
+          notes: "Fix T2.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (
+      input.label === "Architect is reviewing wave 2" ||
+      input.label === "Test Architect is reviewing wave 2"
+    ) {
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T2",
+              verdict: "approve",
+              specVerdict: "approve",
+              qualityVerdict: "approve",
+              fixInstructions: "",
+            },
+          ],
+          newTasks: [],
+          done: true,
+          notes: "Approved after async guidance.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed after async guidance was applied.";
+    }
+    throw new Error(`Unexpected async model call label: ${input.label}`);
+  },
+};
+
+await runBuildDiscussion(
+  asyncDiscussion,
+  [architect, worker],
+  (event) => {
+    asyncEvents.push(event);
+  },
+  asyncHooks
+);
+
+const asyncLabels = asyncCalls.map((call) => call.label);
+const asyncContinuationIndex = asyncLabels.indexOf(
+  "Test Worker continuing T2: Create async note"
+);
+const asyncReviewFixIndex = asyncLabels.findIndex(
+  (label) =>
+    label === "Architect is reviewing wave 1" ||
+    label === "Test Architect is reviewing wave 1"
+);
+const asyncGuidanceAnswerIndex = asyncLabels.indexOf(
+  "Architect answering guidance G-T2-1 for T2"
+);
+const asyncFixingWorkerIndex = asyncLabels.findIndex(
+  (label, index) => label === asyncWorkerLabel && index > asyncGuidanceAnswerIndex
+);
+const asyncFixingPrompt =
+  asyncFixingWorkerIndex >= 0
+    ? asyncCalls[asyncFixingWorkerIndex].messages
+        .map((message) => message.content)
+        .join("\n\n")
+    : "";
+const asyncFile = storeApi
+  .exportStore()
+  .buildFiles.find(
+    (file) =>
+      file.discussionId === asyncDiscussion.id &&
+      file.path === "src/async-note.txt"
+  );
+const asyncCompleted = storeApi.getDiscussionById(asyncDiscussion.id)?.status;
+
+check(
+  "async guidance is answered only after same-task continuation and review fix",
+  asyncContinuationIndex >= 0 &&
+    asyncReviewFixIndex > asyncContinuationIndex &&
+    asyncGuidanceAnswerIndex > asyncReviewFixIndex,
+  asyncLabels
+);
+check(
+  "async guidance answer is injected into the later same-task fix prompt",
+  asyncFixingPrompt.includes("ARCHITECT GUIDANCE FOR THIS TASK") &&
+    asyncFixingPrompt.includes("Guidance G-T2-1") &&
+    asyncFixingPrompt.includes("Should I preserve the existing file name?") &&
+    asyncFixingPrompt.includes(
+      "Preserve src/async-note.txt and update only its content."
+    ),
+  asyncFixingPrompt
+);
+check(
+  "async guidance fix writes updated content and completes",
+  asyncFile?.content ===
+    "Preserve src/async-note.txt and update only its content." &&
+    asyncCompleted === "completed" &&
+    asyncEvents.some((event) => event.type === "final_answer"),
+  { asyncFile, asyncCompleted, labels: asyncLabels }
+);
+
 if (failed === 0) {
   console.log("PASS");
 } else {

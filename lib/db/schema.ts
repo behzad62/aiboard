@@ -181,6 +181,19 @@ export interface BuildStopReport {
   recoveryLog: string[];
 }
 
+export interface BuildTaskGuidanceRecord {
+  id: string;
+  taskId: string;
+  mode: "blocking" | "async";
+  question: string;
+  reason?: string;
+  status: "pending" | "answered";
+  answer?: string;
+  requestedBy?: string;
+  requestedAtWave: number;
+  answeredAtWave?: number;
+}
+
 export interface BuildCheckpointTask {
   id: string;
   title: string;
@@ -196,6 +209,7 @@ export interface BuildCheckpointTask {
   failCount?: number;
   retryAfterMs?: number;
   difficulty?: number;
+  guidance?: BuildTaskGuidanceRecord[];
 }
 
 export interface BuildCheckpoint {
