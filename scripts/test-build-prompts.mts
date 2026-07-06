@@ -48,6 +48,10 @@ const fixingTask: BuildTask = {
   ],
   status: "fixing",
 };
+const answeredGuidance = fixingTask.guidance?.[0];
+if (!answeredGuidance) {
+  throw new Error("Expected fixingTask to include answered guidance");
+}
 
 const prompt = buildWorkerTaskPrompt({
   request: "Build a strict TypeScript CSV library and CLI.",
@@ -124,7 +128,7 @@ const architectGuidancePrompt = buildArchitectGuidancePrompt({
   treeText: "tests/run-tests.ts\nsrc/query.ts",
   task: fixingTask,
   architectNotes: "Use strict TypeScript.",
-  guidance: fixingTask.guidance?.[0]!,
+  guidance: answeredGuidance,
 });
 
 check(
