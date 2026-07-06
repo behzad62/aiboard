@@ -251,6 +251,13 @@ check(
   reviewPrompt
 );
 check(
+  "architect review prompt lets reviewers revise the verifier",
+  /verifyCommand/i.test(reviewPrompt) &&
+    /replace the automated verifier/i.test(reviewPrompt) &&
+    /wrong for this stack/i.test(reviewPrompt),
+  reviewPrompt
+);
+check(
   "review prompt omits the diff-first line when hasDiffDigest is absent",
   !/PRIMARY evidence for this review/i.test(reviewPrompt),
   reviewPrompt

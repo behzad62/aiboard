@@ -68,6 +68,7 @@ import {
   buildSkillEvidenceFixInstructions,
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  shouldReviewEvidenceOnlyTask,
 } from "@/lib/orchestrator/build-evidence-gates";
 import {
   filterBuildMcpToolsForPrompt,
@@ -147,7 +148,7 @@ import {
   formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
   classifyRunCommand,
-  classifyVerifyCommand,
+  classifyVerifyCommandForProject,
   decideBuildTaskFailure,
   detectVerifyCommand,
   extractLocalServerUrls,
@@ -3015,7 +3016,11 @@ export async function runBuildDiscussion(
         failed: true,
       };
     }
-    const safety = classifyVerifyCommand(command, runnerPlatform);
+    const safety = classifyVerifyCommandForProject(
+      command,
+      [...diskTree, ...virtualFs.keys()],
+      runnerPlatform
+    );
     if (!safety.allowed) {
       const message = `Automated build check rejected: ${safety.reason} Verification commands must not edit files; use patch/append/edit output for file changes.`;
       emitBuildCheckCommandRun({
@@ -3121,8 +3126,9 @@ export async function runBuildDiscussion(
           detectedVerifyCommand,
           benchmark
         );
-        const retrySafety = classifyVerifyCommand(
+        const retrySafety = classifyVerifyCommandForProject(
           detectedVerifyCommand,
+          [...diskTree, ...virtualFs.keys()],
           runnerPlatform
         );
         if (!retrySafety.allowed) {
@@ -3245,11 +3251,17 @@ export async function runBuildDiscussion(
 
   const acceptVerifyCommandForRunner = (
     command: string,
-    source: string
+    source: string,
+    candidateFiles: string[] = []
   ): string => {
     const trimmed = command.trim();
     if (!trimmed) return "";
-    const safety = classifyVerifyCommand(trimmed, runnerPlatform);
+    const projectFiles = [...diskTree, ...virtualFs.keys(), ...candidateFiles];
+    const safety = classifyVerifyCommandForProject(
+      trimmed,
+      projectFiles,
+      runnerPlatform
+    );
     if (safety.allowed) return trimmed;
     const message = `${source} ignored: ${safety.reason}`;
     emit({
@@ -5365,7 +5377,8 @@ export async function runBuildDiscussion(
     architectNotes = existingCheckpoint.architectNotes;
     planVerifyCommand = acceptVerifyCommandForRunner(
       existingCheckpoint.verifyCommand,
-      "Checkpoint verifyCommand"
+      "Checkpoint verifyCommand",
+      tasks.flatMap((task) => task.outputPaths ?? [])
     );
     activePhaseSpec =
       existingCheckpoint.phaseSpec ??
@@ -5620,11 +5633,15 @@ export async function runBuildDiscussion(
     }
 
     architectNotes = planAction.notes ?? "";
+    const plannedOutputPaths = planAction.tasks.flatMap((task) =>
+      outputPathsForTask(task)
+    );
     planVerifyCommand =
       typeof planAction.verifyCommand === "string"
         ? acceptVerifyCommandForRunner(
             planAction.verifyCommand,
-            "Architect verifyCommand"
+            "Architect verifyCommand",
+            plannedOutputPaths
           )
         : "";
     activePhaseSpec =
@@ -5721,7 +5738,7 @@ export async function runBuildDiscussion(
         "Detected verifyCommand"
       )
     : "";
-  const verifyCommand = runner ? (planVerifyCommand || detectedVerifyCommand) : "";
+  let verifyCommand = runner ? (planVerifyCommand || detectedVerifyCommand) : "";
   if (verifyCommand) {
     emit({
       type: "diagnostic",
@@ -6667,6 +6684,9 @@ export async function runBuildDiscussion(
         }
         // The model DID respond — a no-files result is a quality failure
         // (bad output), distinct from a provider denial.
+        const declaredOutputPaths = task.outputPaths?.length
+          ? task.outputPaths
+          : outputPathsForTask(task);
         const reviewFiles = evidenceOnlyRetryFiles({
           emittedFiles: files,
           priorFiles: task.contextFiles,
@@ -6674,7 +6694,15 @@ export async function runBuildDiscussion(
           taskId: task.id,
           maxFiles: MAX_CONTEXT_FILES,
         });
-        if (reviewFiles.length === 0) {
+        const evidenceOnlyNoFileReview = shouldReviewEvidenceOnlyTask({
+          emittedFiles: files,
+          priorFiles: task.contextFiles,
+          declaredOutputPaths,
+          evidence: skillEvidence,
+          taskId: task.id,
+          workerOutput: output,
+        });
+        if (reviewFiles.length === 0 && !evidenceOnlyNoFileReview) {
           failTask(
             task,
             stat,
@@ -6706,7 +6734,9 @@ export async function runBuildDiscussion(
           notes:
             truncate(prose, 1_500) +
             (files.length === 0
-              ? `\n\nEvidence-only retry: no new files were emitted; reviewing previously landed file(s): ${reviewFiles.join(", ")}.`
+              ? reviewFiles.length > 0
+                ? `\n\nEvidence-only retry: no new files were emitted; reviewing previously landed file(s): ${reviewFiles.join(", ")}.`
+                : "\n\nEvidence-only task: no files were emitted or expected; reviewing the worker's command evidence and notes."
               : "") +
             (skillNotes ? `\n\n${skillNotes}` : "") +
             issueNotes,
@@ -7318,7 +7348,49 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
     }
 
-    const verificationFixTask = shouldRecordAutomatedBuildCheckFailure(verifyResult)
+    let verifyCommandChangedThisWave = false;
+    if (typeof action.verifyCommand === "string") {
+      const requestedVerifyCommand = action.verifyCommand.trim();
+      if (!requestedVerifyCommand) {
+        if (verifyCommand) {
+          emit({
+            type: "diagnostic",
+            phase: "judging",
+            message: `${reviewActor.displayName} disabled the automated build check for future waves.`,
+          });
+        }
+        verifyCommand = "";
+        verifyCommandChangedThisWave = true;
+      } else {
+        const acceptedVerifyCommand = acceptVerifyCommandForRunner(
+          requestedVerifyCommand,
+          "Review verifyCommand",
+          tasks.flatMap((task) => task.outputPaths ?? [])
+        );
+        if (acceptedVerifyCommand) {
+          if (
+            acceptedVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()
+          ) {
+            emit({
+              type: "diagnostic",
+              phase: "judging",
+              message: `${reviewActor.displayName} changed the automated build check to \`${acceptedVerifyCommand}\`.`,
+            });
+            verifyCommandChangedThisWave = true;
+          }
+          verifyCommand = acceptedVerifyCommand;
+        }
+      }
+      if (verifyCommandChangedThisWave && activePhaseSpec) {
+        activePhaseSpec = {
+          ...activePhaseSpec,
+          verification: verifyCommand ? [verifyCommand] : [],
+        };
+      }
+    }
+
+    const verificationFixTask =
+      !verifyCommandChangedThisWave && shouldRecordAutomatedBuildCheckFailure(verifyResult)
       ? buildVerificationFailureTask({
           tasks,
           verifyCommand,
@@ -7358,7 +7430,9 @@ export async function runBuildDiscussion(
       filesWritten: executed.reduce((sum, item) => sum + item.files.length, 0),
       tasksAdvanced:
         action.results.length + novelTasks.accepted.length + (verificationFixTask ? 1 : 0),
-      failureChanged: recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),
+      failureChanged:
+        verifyCommandChangedThisWave ||
+        recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),
       repoAdvanced: !!repoActiveBranch || repoCommits.length > 0 || !!repoPrUrl,
     });
     noProgressWaves = waveProgressed ? 0 : noProgressWaves + 1;

@@ -4,6 +4,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
+  shouldReviewEvidenceOnlyTask,
 } from "../lib/orchestrator/build-evidence-gates";
 import { createSkillEvidence } from "../lib/skills/evidence";
 import type { SkillEvidence } from "../lib/skills/types";
@@ -96,6 +97,44 @@ check(
   "missing evidence-only retry does not carry prior files",
   blockedEvidenceOnlyFiles.length === 0,
   blockedEvidenceOnlyFiles
+);
+
+check(
+  "no-file verification task with substantive evidence is reviewable",
+  shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: [],
+    evidence: [completeTdd],
+    taskId: "T1",
+    workerOutput:
+      "Task complete. git status returned a clean working tree and git log confirmed the initial commit.",
+  }),
+);
+
+check(
+  "file-producing task without emitted files is not evidence-only reviewable",
+  !shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: ["index.html"],
+    evidence: [completeTdd],
+    taskId: "T1",
+    workerOutput:
+      "Task complete. I implemented the page and verified it manually.",
+  }),
+);
+
+check(
+  "empty no-file response is not evidence-only reviewable",
+  !shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: [],
+    evidence: [],
+    taskId: "T1",
+    workerOutput: "Done.",
+  }),
 );
 
 const incompleteSecurityEvidence = createSkillEvidence({

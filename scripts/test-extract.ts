@@ -94,7 +94,10 @@ const a7 = parseArchitectAction('{"action":"fetch","url":"file:///etc/passwd"}')
 check("reject non-http fetch", a7, null);
 
 // ── Language-agnostic verify-command detection ────────────────────────────────
-import { detectVerifyCommand } from "../lib/orchestrator/build";
+import {
+  classifyVerifyCommandForProject,
+  detectVerifyCommand,
+} from "../lib/orchestrator/build";
 
 check("detect dotnet", detectVerifyCommand(["src/App.csproj", "Program.cs"]), "dotnet build");
 check("detect go", detectVerifyCommand(["go.mod", "main.go"]), "go build ./...");
@@ -111,5 +114,44 @@ check("tsc wins over python", detectVerifyCommand(["tsconfig.json", "scripts/too
 check("php -> none (per-file lint)", detectVerifyCommand(["composer.json", "src/index.php"]), "");
 check("bare package.json -> none", detectVerifyCommand(["package.json", "index.js"]), "");
 check("plain files -> none", detectVerifyCommand(["index.html", "style.css"]), "");
+
+const staticWebDotnet = classifyVerifyCommandForProject(
+  "dotnet build",
+  ["index.html", "src/main.js", "src/styles.css"],
+  "win32"
+);
+check("reject dotnet verifier for static web app", staticWebDotnet.allowed, false);
+check("dotnet rejection names missing project file", /csproj|sln/i.test(staticWebDotnet.reason ?? ""), true);
+check(
+  "allow dotnet verifier when project file exists",
+  classifyVerifyCommandForProject("dotnet build", ["src/App.csproj"], "win32").allowed,
+  true
+);
+check(
+  "preserve Windows POSIX verifier rejection",
+  /POSIX command "test"/.test(
+    classifyVerifyCommandForProject("test -f index.html", ["index.html"], "win32").reason ?? ""
+  ),
+  true
+);
+check(
+  "allow static web node existence verifier",
+  classifyVerifyCommandForProject(
+    'node -e "const fs=require(\'fs\'); if (!fs.existsSync(\'index.html\')) process.exit(1)"',
+    ["index.html", "src/main.js"],
+    "win32"
+  ).allowed,
+  true
+);
+check(
+  "allow npm verifier when package manifest is planned or present",
+  classifyVerifyCommandForProject("npm run build", ["package.json", "src/main.js"], "win32").allowed,
+  true
+);
+check(
+  "reject npm verifier without package manifest",
+  classifyVerifyCommandForProject("npm run build", ["index.html", "src/main.js"], "win32").allowed,
+  false
+);
 
 process.exit(failures === 0 ? 0 : 1);

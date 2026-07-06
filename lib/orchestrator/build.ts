@@ -357,6 +357,12 @@ export interface ReviewAction {
   newTasks?: PlanAction["tasks"];
   /** Optional next phase spec for newly planned follow-up tasks. */
   phaseSpec?: BuildPhaseSpec;
+  /**
+   * Optional replacement for the automated verifier. Use when review evidence
+   * shows the current verifier is wrong for the stack, or "" when no meaningful
+   * non-mutating verifier exists for the current project.
+   */
+  verifyCommand?: string;
   done: boolean;
   notes?: string;
 }
@@ -984,6 +990,115 @@ export function classifyVerifyCommand(
       };
     }
   }
+  return { allowed: true };
+}
+
+function normalizedProjectFiles(files: string[]): string[] {
+  return files.map((file) => file.replace(/\\/g, "/").toLowerCase());
+}
+
+function hasProjectFile(files: string[], pattern: RegExp): boolean {
+  return normalizedProjectFiles(files).some((file) => pattern.test(file));
+}
+
+function verificationSuggestionForProject(files: string[]): string {
+  const detected = detectVerifyCommand(files);
+  if (detected) return `Use \`${detected}\` or another verifier for the detected stack.`;
+  if (hasProjectFile(files, /(^|\/)package\.json$/)) {
+    return "Use an existing npm script such as `npm test` or `npm run build`.";
+  }
+  if (
+    hasProjectFile(files, /(^|\/)index\.html$/) ||
+    hasProjectFile(files, /\.(?:js|mjs|cjs|css|html)$/)
+  ) {
+    return 'For a static web app, use a `node -e` file/syntax check or omit `verifyCommand` when no meaningful build exists.';
+  }
+  return "Use a verifier that matches files actually present in the project, or omit `verifyCommand` when no meaningful build exists.";
+}
+
+function commandMentions(command: string, pattern: RegExp): boolean {
+  return pattern.test(command.toLowerCase().replace(/\s+/g, " "));
+}
+
+function stackMismatchReason(command: string, files: string[]): string | null {
+  const reject = (tool: string, required: string): string =>
+    `${tool} does not match this project tree; ${required} was not found. ${verificationSuggestionForProject(files)}`;
+
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)dotnet\s+build\b/) &&
+    !hasProjectFile(files, /\.(?:csproj|fsproj|sln)$/)
+  ) {
+    return reject("`dotnet build`", "no .sln, .csproj, or .fsproj file");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)cargo\s+(?:check|build|test)\b/) &&
+    !hasProjectFile(files, /(^|\/)cargo\.toml$/)
+  ) {
+    return reject("`cargo`", "Cargo.toml");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)go\s+(?:build|test)\b/) &&
+    !(
+      hasProjectFile(files, /(^|\/)go\.mod$/) ||
+      hasProjectFile(files, /\.go$/)
+    )
+  ) {
+    return reject("`go build`", "go.mod or a .go file");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)mvn\b/) &&
+    !hasProjectFile(files, /(^|\/)pom\.xml$/)
+  ) {
+    return reject("`mvn`", "pom.xml");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)mix\s+(?:compile|test)\b/) &&
+    !hasProjectFile(files, /(^|\/)mix\.exs$/)
+  ) {
+    return reject("`mix`", "mix.exs");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)cmake\b/) &&
+    !hasProjectFile(files, /(^|\/)cmakelists\.txt$/)
+  ) {
+    return reject("`cmake`", "CMakeLists.txt");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)make\b/) &&
+    !hasProjectFile(files, /(^|\/)makefile$/)
+  ) {
+    return reject("`make`", "Makefile");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)(?:npx\s+(?:--yes\s+)?tsc|tsc)\b/) &&
+    !hasProjectFile(files, /(^|\/)tsconfig\.json$/)
+  ) {
+    return reject("`tsc`", "tsconfig.json");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)(?:python|python3|py(?:\s+-3)?)\s+-m\s+compileall\b/) &&
+    !hasProjectFile(files, /\.py$/)
+  ) {
+    return reject("`python -m compileall`", "a .py file");
+  }
+  if (
+    commandMentions(command, /(?:^|(?:&&|\|\||[;|])\s*)npm\s+(?:test|run\s+(?:build|check|lint|test))\b/) &&
+    !hasProjectFile(files, /(^|\/)package\.json$/)
+  ) {
+    return reject("`npm`", "package.json");
+  }
+  return null;
+}
+
+export function classifyVerifyCommandForProject(
+  command: string,
+  files: string[],
+  platform?: string
+): RunCommandSafety {
+  const base = classifyVerifyCommand(command, platform);
+  if (!base.allowed) return base;
+  const mismatch = stackMismatchReason(command, files);
+  if (mismatch) return { allowed: false, reason: mismatch };
   return { allowed: true };
 }
 
@@ -1999,6 +2114,10 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
       }
       if (parsed.action === "review") {
         const review = parsed as ReviewAction & { results?: unknown[] };
+        const verifyCommand =
+          typeof (parsed as { verifyCommand?: unknown }).verifyCommand === "string"
+            ? (parsed as { verifyCommand: string }).verifyCommand.trim()
+            : undefined;
         return {
           ...review,
           results: Array.isArray(review.results)
@@ -2009,6 +2128,7 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           phaseSpec: normalizeBuildPhaseSpec(
             (parsed as { phaseSpec?: unknown }).phaseSpec
           ),
+          ...(verifyCommand !== undefined ? { verifyCommand } : {}),
           done: !!review.done,
         };
       }
@@ -3824,9 +3944,10 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     repoToolDoc(input.repoWorkflow, input.githubCli, input.githubWorkflow),
     mcpToolDoc(input.mcpToolsDoc, input.mcpCallsLeft),
     "",
+    'If the automated verifier itself is wrong for this stack, replace the automated verifier by adding `verifyCommand` to your review JSON. Use a real non-mutating command that matches the files, or `""` only when no meaningful automated verifier exists. Do not replace a failing valid verifier just to hide real implementation failures.',
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles.`,
     "Spec-compliance review checks whether the landed work satisfies the current phase spec and task contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",

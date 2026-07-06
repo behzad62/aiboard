@@ -66,6 +66,13 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
         ?.qualityIssues === "Missing test",
   ],
   [
+    "review action preserves replacement verifyCommand",
+    '{"action":"review","results":[{"taskId":"T1","specVerdict":"fix","qualityVerdict":"approve","specIssues":"Wrong verifier"}],"verifyCommand":"node --check src/main.js","done":false}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { verifyCommand?: string }).verifyCommand === "node --check src/main.js",
+  ],
+  [
     "legacy approve review maps to both gates approved",
     '{"action":"review","results":[{"taskId":"T1","verdict":"approve"}],"done":true}',
     (a) =>

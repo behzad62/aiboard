@@ -79,3 +79,23 @@ export function evidenceOnlyRetryFiles(input: {
   if (hasBlockingSkillEvidence(input.evidence, input.taskId)) return [];
   return [...new Set(input.priorFiles)].slice(0, input.maxFiles ?? input.priorFiles.length);
 }
+
+export function shouldReviewEvidenceOnlyTask(input: {
+  emittedFiles: string[];
+  priorFiles: string[];
+  declaredOutputPaths: string[];
+  evidence: SkillEvidence[];
+  taskId: string;
+  workerOutput: string;
+}): boolean {
+  if (input.emittedFiles.length > 0) return true;
+  if (input.priorFiles.length > 0) return false;
+  if (input.declaredOutputPaths.length > 0) return false;
+  if (hasBlockingSkillEvidence(input.evidence, input.taskId)) return false;
+
+  const text = input.workerOutput.trim();
+  if (text.length < 40) return false;
+  return /\b(verified|verification|confirmed|complete|passed|clean|commit|status|no action required)\b/i.test(
+    text
+  );
+}
