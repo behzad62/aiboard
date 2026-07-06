@@ -396,6 +396,12 @@ export function filterNovelReviewTasks(
   return { accepted, skipped };
 }
 
+export function shouldApplyReviewResultToTask(
+  task: Pick<BuildTask, "status"> | null | undefined
+): boolean {
+  return task?.status === "review";
+}
+
 export interface BalancedWorkerSelectionInput {
   activeWorkerIndexes: number[];
   assignmentCounts: Map<number, number>;
@@ -1244,11 +1250,11 @@ export interface RunCommandSafety {
 }
 
 // Shared run-command pools are runaway-loop stops, NOT cost controls: the
-// USD/time budget window governs spend. They must exceed the sum of realistic
-// per-task run budgets so a wave never starves — a wave of 8 hardest-tier tasks
-// can legitimately need ~48 runs (6 each), so the per-phase pool sits above that.
-export const RUNS_PER_PHASE = 36;
-export const TOTAL_RUNS = 180;
+// USD/time budget window governs spend. Per-worker run budgets can sum above
+// the phase pool; the scheduler caps workers by the shared remaining pool and
+// escalates back to the Architect when normal runs are exhausted.
+export const RUNS_PER_PHASE = 120;
+export const TOTAL_RUNS = 500;
 
 export function classifyRunCommand(command: string): RunCommandSafety {
   const trimmed = command.trim();

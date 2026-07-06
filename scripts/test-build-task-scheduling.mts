@@ -3,6 +3,7 @@ import {
   buildReviewFixTaskUpdate,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
+  shouldApplyReviewResultToTask,
   type BuildTask,
 } from "../lib/orchestrator/build";
 
@@ -128,5 +129,14 @@ check(
   fixUpdate
 );
 check("review fix appends instructions", /Compile and fix imports/.test(fixUpdate.instructions), fixUpdate);
+
+check(
+  "review verdicts only mutate tasks currently awaiting review",
+  shouldApplyReviewResultToTask({ status: "review" }) &&
+    !shouldApplyReviewResultToTask({ status: "planned" }) &&
+    !shouldApplyReviewResultToTask({ status: "fixing" }) &&
+    !shouldApplyReviewResultToTask({ status: "done" }) &&
+    !shouldApplyReviewResultToTask({ status: "failed" }),
+);
 
 process.exit(failed === 0 ? 0 : 1);

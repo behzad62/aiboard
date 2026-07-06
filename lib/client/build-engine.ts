@@ -191,6 +191,7 @@ import {
   runBudgetStatus,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
+  shouldApplyReviewResultToTask,
   shouldRecordToolCallResult,
   summarizeFileChange,
   DUPLICATE_TOOL_CALL_FEEDBACK,
@@ -7653,11 +7654,15 @@ export async function runBuildDiscussion(
     });
     const action = reviewResult.action as ReviewAction;
     const text = reviewResult.text;
+    const applicableReviewResults = action.results.filter((result) => {
+      const task = tasks.find((item) => item.id === result.taskId);
+      return shouldApplyReviewResultToTask(task);
+    });
     persistBuildMemories(
       extractReviewMemories({
         projectKey: buildMemoryProjectKey,
         discussionId: discussion.id,
-        results: action.results.map((result) => {
+        results: applicableReviewResults.map((result) => {
           const task = tasks.find((item) => item.id === result.taskId);
           const prior = executed.find((item) => item.task.id === result.taskId);
           return {
@@ -7726,7 +7731,17 @@ export async function runBuildDiscussion(
 
     for (const result of action.results) {
       const task = tasks.find((t) => t.id === result.taskId);
-      if (!task || task.status === "done") continue;
+      if (!task) continue;
+      if (!shouldApplyReviewResultToTask(task)) {
+        if (task.status !== "done") {
+          emit({
+            type: "diagnostic",
+            phase: "judging",
+            message: `Ignored stale review verdict for ${task.id} because it is ${task.status}, not awaiting review in this wave.`,
+          });
+        }
+        continue;
+      }
       reviewedTaskIds.add(task.id);
       // Credit/debit the worker that produced this task's output.
       const verdictStat =
