@@ -69,8 +69,8 @@ export interface BuildTask {
   /** Architect's 1-5 difficulty rating (5 = hardest). Weights the global
    * model score so a hard-task approval counts more than a trivial one. */
   difficulty?: number;
-  /** Failed attempts so far — the engine requeues a failed task once before
-   * giving up on it. */
+  /** Failed attempts so far — the engine requeues with an escalated budget
+   * tier per failure until BUILD_TASK_MAX_FAILURES, then marks it failed. */
   failCount?: number;
   /** Epoch milliseconds before this task may be retried after transient failure. */
   retryAfterMs?: number;
