@@ -68,6 +68,7 @@ import {
   buildSkillEvidenceFixInstructions,
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
   shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
@@ -6201,6 +6202,7 @@ export async function runBuildDiscussion(
       notes: string;
       changes: string[];
     }> = [];
+    const scopedVerificationGapTaskIds = new Set<string>();
 
     // Latest screenshot per task this wave (e.g. a Playwright browser_take_screenshot),
     // for the reviewer to judge visual acceptance. WAVE-scoped (like `executed`),
@@ -7041,13 +7043,19 @@ export async function runBuildDiscussion(
           continue;
         }
 
+        const declaredOutputPaths = task.outputPaths?.length
+          ? task.outputPaths
+          : outputPathsForTask(task);
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
+          const scopedVerificationGapReport =
+            declaredOutputPaths.length === 0 && isScopedVerificationGapReport(output);
           if (
             patchedFiles.length > 0 ||
             preview.files.length > 0 ||
             preview.edits.length > 0 ||
             preview.truncatedPaths.length > 0 ||
+            scopedVerificationGapReport ||
             toolIssues.length === 0
           ) {
             break;
@@ -7075,11 +7083,11 @@ export async function runBuildDiscussion(
         const files = [...new Set([...patchedFiles, ...artifactResult.written])];
         const issues = [...toolIssues, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
-        const declaredOutputPaths = task.outputPaths?.length
-          ? task.outputPaths
-          : outputPathsForTask(task);
+        const scopedVerificationGapReport =
+          declaredOutputPaths.length === 0 && isScopedVerificationGapReport(output);
         const toolBudgetBlockedNoFiles =
           files.length === 0 &&
+          !scopedVerificationGapReport &&
           (toolIssues.some((issue) => issue.startsWith("TOOL BUDGET BLOCKED:")) ||
             isWorkerOutputBlockedByToolBudget(output));
         const skillEvidence = createSkillEvidence({
@@ -7141,6 +7149,7 @@ export async function runBuildDiscussion(
         const reviewFiles = evidenceOnlyRetryFiles({
           emittedFiles: files,
           priorFiles: task.contextFiles,
+          declaredOutputPaths,
           evidence: skillEvidence,
           taskId: task.id,
           maxFiles: MAX_CONTEXT_FILES,
@@ -7179,6 +7188,9 @@ export async function runBuildDiscussion(
         stat.responseChars += output.length;
         task.retryAfterMs = undefined;
         task.status = "review";
+        if (scopedVerificationGapReport) {
+          scopedVerificationGapTaskIds.add(task.id);
+        }
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
@@ -7747,7 +7759,9 @@ export async function runBuildDiscussion(
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (isReviewResultApproved(result)) {
-        const evidenceFix = buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        const evidenceFix = scopedVerificationGapTaskIds.has(task.id)
+          ? ""
+          : buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
         if (evidenceFix) {
           sendTaskBackForFix(
             task,
@@ -7784,7 +7798,9 @@ export async function runBuildDiscussion(
     // was explicit and no deterministic gate found a problem.
     for (const { task } of executed) {
       if (task.status === "review") {
-        const evidenceFix = buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        const evidenceFix = scopedVerificationGapTaskIds.has(task.id)
+          ? ""
+          : buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
         if (evidenceFix) {
           sendTaskBackForFix(
             task,

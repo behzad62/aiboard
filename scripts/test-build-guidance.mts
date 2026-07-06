@@ -1185,6 +1185,167 @@ check(
   }
 );
 
+const gapReportDiscussion: Discussion = {
+  ...discussion,
+  id: "disc-build-guidance-gap-report",
+  topic: "Verify a static app and report any verification gaps.",
+  status: "running",
+  currentRound: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+storeApi.insertDiscussion(gapReportDiscussion);
+
+const gapReportCalls: ModelOverrideCall[] = [];
+let gapReportReviewCalls = 0;
+let gapReportError: unknown = null;
+const gapReportHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
+  modelCallOverride: async (input) => {
+    gapReportCalls.push({
+      label: input.label,
+      messages: input.messages.map((message) => ({ ...message })),
+      maxTokens: input.maxTokens,
+    });
+    if (input.label === "Architect is writing the build spec") {
+      return buildSpecResponse(gapReportDiscussion.topic);
+    }
+    if (isPlanningLabel(input.label)) {
+      return [
+        "Plan.",
+        "```json",
+        JSON.stringify({
+          action: "plan",
+          tasks: [
+            {
+              id: "T6",
+              title: "Verify static app",
+              instructions:
+                "Run syntax, smoke, and browser acceptance checks. If runner tools are unavailable, return a precise verification-gap report for Architect review.",
+              contextFiles: ["src/game.js"],
+              outputPaths: [],
+              expectedOutputs:
+                "A verification report listing completed evidence and remaining checks.",
+              dependsOn: [],
+              difficulty: 3,
+            },
+          ],
+          notes: "Verification-only task; no files should be written.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker working on T6: Verify static app") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "run",
+          command: "node --check src/game.js",
+          reason: "verify game.js syntax",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect answering guidance G-T6-1 for T6") {
+      return [
+        "```json",
+        JSON.stringify({
+          action: "guidance_answer",
+          guidanceId: "G-T6-1",
+          taskId: "T6",
+          answer:
+            "Do not request more tools. Submit a scoped verification-gap report with evidence already obtained and checks still required.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker continuing T6: Verify static app") {
+      return [
+        "Final Verification Gap Report for T6",
+        "",
+        "Verification Status: INCOMPLETE / BLOCKED",
+        "",
+        "Evidence Already Obtained",
+        "- The runner was unavailable, so no fresh syntax result was obtained.",
+        "",
+        "Commands That Could Not Run (Budget Exhausted)",
+        "- node --check src/game.js",
+        "",
+        "Final Acceptance Still Required",
+        "- Syntax checks for JS files",
+        "- Runtime smoke test",
+        "- Browser acceptance with browser_navigate, browser_snapshot, and browser_console_messages",
+        "",
+        "Recommendation",
+        "Review/planning should create follow-up verification work with fresh runner budget.",
+      ].join("\n");
+    }
+    if (input.label === "Test Worker finalizing T6: Verify static app") {
+      throw new Error("Gap report should have stopped the worker tool loop before finalizing.");
+    }
+    if (
+      input.label === "Architect is reviewing wave 1" ||
+      input.label === "Test Architect is reviewing wave 1"
+    ) {
+      gapReportReviewCalls += 1;
+      const reviewPrompt = input.messages.map((message) => message.content).join("\n\n");
+      if (!reviewPrompt.includes("Final Verification Gap Report for T6")) {
+        throw new Error("Review prompt did not include the verification-gap report.");
+      }
+      return [
+        "Review.",
+        "```json",
+        JSON.stringify({
+          action: "review",
+          results: [
+            {
+              taskId: "T6",
+              verdict: "approve",
+              specVerdict: "approve",
+              qualityVerdict: "approve",
+              fixInstructions: "",
+            },
+          ],
+          newTasks: [],
+          done: true,
+          notes: "Gap report reviewed.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is writing the build summary") {
+      return "Build completed after reviewing the verification-gap report.";
+    }
+    throw new Error(`Unexpected gap-report model call label: ${input.label}`);
+  },
+};
+
+try {
+  await runBuildDiscussion(
+    gapReportDiscussion,
+    [architect, worker],
+    () => {},
+    gapReportHooks
+  );
+} catch (err) {
+  gapReportError = err;
+}
+
+const gapReportCompleted = storeApi.getDiscussionById(gapReportDiscussion.id)?.status;
+check(
+  "scoped verification-gap report goes to Architect review without another worker tool turn",
+  gapReportError == null &&
+    gapReportReviewCalls === 1 &&
+    gapReportCompleted === "completed" &&
+    !gapReportCalls.some((call) => call.label === "Test Worker finalizing T6: Verify static app"),
+  {
+    error:
+      gapReportError instanceof Error ? gapReportError.message : gapReportError,
+    labels: gapReportCalls.map((call) => call.label),
+    gapReportReviewCalls,
+    gapReportCompleted,
+  }
+);
+
 if (failed === 0) {
   console.log("PASS");
 } else {

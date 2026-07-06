@@ -69,12 +69,20 @@ export function buildSkillEvidenceFixInstructions(
 export function evidenceOnlyRetryFiles(input: {
   emittedFiles: string[];
   priorFiles: string[];
+  declaredOutputPaths?: string[];
   evidence: SkillEvidence[];
   taskId: string;
   maxFiles?: number;
   workerOutput?: string;
 }): string[] {
   if (input.emittedFiles.length > 0) return [...new Set(input.emittedFiles)];
+  if (
+    (input.declaredOutputPaths?.length ?? 0) === 0 &&
+    input.priorFiles.length > 0 &&
+    isScopedVerificationGapReport(input.workerOutput ?? "")
+  ) {
+    return [...new Set(input.priorFiles)].slice(0, input.maxFiles ?? input.priorFiles.length);
+  }
   if (isWorkerOutputBlockedByToolBudget(input.workerOutput ?? "")) return [];
   if (input.priorFiles.length === 0) return [];
   if (input.evidence.length === 0) return [];
@@ -96,6 +104,30 @@ export function isWorkerOutputBlockedByToolBudget(workerOutput: string): boolean
   );
 }
 
+export function isScopedVerificationGapReport(workerOutput: string): boolean {
+  const text = workerOutput.trim().toLowerCase();
+  if (text.length < 120) return false;
+  const isVerificationReport =
+    /\bverification\b/.test(text) &&
+    /\b(gap|incomplete|blocked|not complete|still required|could not run|unable to run)\b/.test(
+      text
+    );
+  if (!isVerificationReport) return false;
+  const hasActionableSections =
+    /evidence already obtained/.test(text) ||
+    /commands? that could not run/.test(text) ||
+    /final acceptance still required/.test(text) ||
+    /acceptance still required/.test(text) ||
+    /recommendation/.test(text);
+  const namesRemainingChecks =
+    /syntax checks?/.test(text) ||
+    /smoke test/.test(text) ||
+    /browser acceptance/.test(text) ||
+    /browser_navigate/.test(text) ||
+    /browser_console_messages/.test(text);
+  return hasActionableSections && namesRemainingChecks;
+}
+
 export function shouldReviewEvidenceOnlyTask(input: {
   emittedFiles: string[];
   priorFiles: string[];
@@ -105,6 +137,12 @@ export function shouldReviewEvidenceOnlyTask(input: {
   workerOutput: string;
 }): boolean {
   if (input.emittedFiles.length > 0) return true;
+  if (
+    input.declaredOutputPaths.length === 0 &&
+    isScopedVerificationGapReport(input.workerOutput)
+  ) {
+    return true;
+  }
   if (input.priorFiles.length > 0) return false;
   if (input.declaredOutputPaths.length > 0) return false;
   if (hasBlockingSkillEvidence(input.evidence, input.taskId)) return false;

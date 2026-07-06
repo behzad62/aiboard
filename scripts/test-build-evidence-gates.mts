@@ -4,6 +4,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
+  isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
   splitEvidenceOnlyReviewIssues,
   shouldAllowEvidenceOnlySkillExemptions,
@@ -172,6 +173,61 @@ check(
     taskId: "T1",
     workerOutput: toolBudgetBlockedOutput,
   }).length === 0,
+);
+
+const scopedVerificationGapOutput = [
+  "Final Verification Gap Report for T6",
+  "",
+  "Verification Status: INCOMPLETE / BLOCKED",
+  "",
+  "Evidence Already Obtained",
+  "- git status --short completed and showed generated files are present.",
+  "",
+  "Commands That Could Not Run (Budget Exhausted)",
+  "- node --check src/game.js",
+  "- node --check src/main.js",
+  "",
+  "Final Acceptance Still Required",
+  "- Syntax checks for all JS files",
+  "- Runtime smoke test for createGame({ammoLimit:75})",
+  "- Browser acceptance with browser_navigate, browser_snapshot, and browser_console_messages",
+  "",
+  "Recommendation",
+  "Review/planning should create follow-up verification work with fresh runner budget.",
+].join("\n");
+const scopedGapEvidence = createSkillEvidence({
+  taskId: "T6",
+  actor: "worker",
+  activeSkillIds: ["aiboard:browser-acceptance"],
+  workerOutput: scopedVerificationGapOutput,
+});
+check(
+  "scoped verification gap report is detected",
+  isScopedVerificationGapReport(scopedVerificationGapOutput),
+  scopedVerificationGapOutput
+);
+check(
+  "budget-blocked scoped verification gap can enter no-file review",
+  shouldReviewEvidenceOnlyTask({
+    emittedFiles: [],
+    priorFiles: [],
+    declaredOutputPaths: [],
+    evidence: scopedGapEvidence,
+    taskId: "T6",
+    workerOutput: scopedVerificationGapOutput,
+  }),
+  scopedGapEvidence
+);
+check(
+  "scoped verification gap carries prior context files to review",
+  evidenceOnlyRetryFiles({
+    emittedFiles: [],
+    priorFiles: ["src/game.js"],
+    declaredOutputPaths: [],
+    evidence: scopedGapEvidence,
+    taskId: "T6",
+    workerOutput: scopedVerificationGapOutput,
+  }).join(",") === "src/game.js",
 );
 
 const incompleteSecurityEvidence = createSkillEvidence({
