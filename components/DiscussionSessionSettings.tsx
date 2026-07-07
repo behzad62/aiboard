@@ -43,6 +43,10 @@ import {
   participatingModelRequirementMessage,
 } from "@/lib/client/api";
 import {
+  participantRequiredInputTypesForMode,
+  selectParticipantModelIdsByInputSupport,
+} from "@/lib/client/build-capabilities";
+import {
   DEFAULT_BUILD_BUDGET_USD,
   DEFAULT_BUILD_RUN_POLICY,
   DEFAULT_BUILD_SKILL_MODE,
@@ -141,12 +145,24 @@ export function DiscussionSessionSettings({
     () => new Map(enabledModels.map((m) => [m.fullId, m.capabilities])),
     [enabledModels]
   );
-  const compatibleSelected = selectedModels.filter((id) =>
-    supportsInputTypes(capabilitiesById.get(id), requiredInputTypes)
+  const participantRequiredInputTypes = participantRequiredInputTypesForMode(
+    discussion.mode,
+    requiredInputTypes
   );
+  const compatibleSelected = selectParticipantModelIdsByInputSupport({
+    mode: discussion.mode,
+    selectedModelIds: selectedModels,
+    capabilitiesById,
+    requiredInputTypes,
+  });
   const compatibleJudgeOptions = enabledModels.filter((model) =>
     supportsInputTypes(model.capabilities, requiredInputTypes)
   );
+  const compatibleJudgeModelId = compatibleJudgeOptions.some(
+    (model) => model.fullId === judgeModelId
+  )
+    ? judgeModelId
+    : compatibleJudgeOptions[0]?.fullId ?? "";
   const modelsForSelector = enabledModels.map((m) => ({
     id: m.id,
     name: m.name,
@@ -185,7 +201,7 @@ export function DiscussionSessionSettings({
     const saved = onSave({
       effort,
       modelIds: compatibleSelected,
-      judgeModelId: judgeModelId || compatibleSelected[0] || null,
+      judgeModelId: compatibleJudgeModelId || compatibleSelected[0] || null,
       verbosity,
       styleNote,
       reasoningEffort,
@@ -279,7 +295,7 @@ export function DiscussionSessionSettings({
             models={modelsForSelector}
             selected={selectedModels}
             onChange={setSelectedModels}
-            requiredInputTypes={requiredInputTypes}
+            requiredInputTypes={participantRequiredInputTypes}
           />
 
           {discussion.mode === "build" && buildContextRows.length > 0 && (

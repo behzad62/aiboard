@@ -20,7 +20,10 @@ import type {
   Verbosity,
 } from "@/lib/db/schema";
 import type { AttachmentPayload } from "@/lib/attachments/types";
-import { modelSupportsInputTypes } from "@/lib/providers/capabilities";
+import {
+  getModelCapabilities,
+  modelSupportsInputTypes,
+} from "@/lib/providers/capabilities";
 import type {
   ChatMessage,
   NativeToolDefinition,
@@ -31,6 +34,7 @@ import type {
 import { parseModelId } from "@/lib/providers/base";
 import {
   resolveClientModelContextProfile,
+  resolveModelCapabilities,
   resolveModelName,
 } from "./providers";
 import {
@@ -838,6 +842,12 @@ export async function runBuildDiscussion(
   );
   const workers = workerIds.map(resolveSelectedModelForId);
   if (workers.length === 0) workers.push(architect); // solo build
+  const workerCapabilities = workers.map((worker) => ({
+    name: worker.displayName,
+    capabilities:
+      resolveModelCapabilities(worker.modelId) ??
+      getModelCapabilities(worker.modelId),
+  }));
   const buildContextManager = new BuildContextManager();
   const modelContextProfile = (model: SelectedModel) =>
     model.contextProfile ?? resolveClientModelContextProfile(model.modelId);
@@ -5813,6 +5823,7 @@ export async function runBuildDiscussion(
         treeText: treeText(),
         fileContext: "",
         workerNames: workers.map((w) => w.displayName),
+        workerCapabilities,
         readHopsLeft: ARCHITECT_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
@@ -5858,6 +5869,7 @@ export async function runBuildDiscussion(
         fileContext: "",
         maxTasks: BUILD_TASKS_PER_WAVE,
         workerNames: workers.map((w) => w.displayName),
+        workerCapabilities,
         spec: activeSpec,
         readHopsLeft: ARCHITECT_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
@@ -5933,6 +5945,7 @@ export async function runBuildDiscussion(
                 notes: planAction.notes,
                 verifyCommand: planAction.verifyCommand,
                 workerNames: workers.map((w) => w.displayName),
+                workerCapabilities,
               }),
             },
           ],
@@ -7844,6 +7857,7 @@ export async function runBuildDiscussion(
         userNotes: "",
         memoryBrief: "",
         scoreboard: "",
+        workerCapabilities,
         fetchesLeft: fetchesLeftThisPhase(),
         shellHint,
         skillContext: reviewSkillContext,

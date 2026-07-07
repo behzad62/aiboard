@@ -1,6 +1,9 @@
 import type { SelectedModel } from "@/lib/providers/base";
 import type { DiscussionMode } from "@/lib/db/schema";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
+import type { CapabilityInputType } from "@/lib/attachments/types";
+import type { ModelCapabilities } from "@/lib/providers/base";
+import { supportsInputTypes } from "@/lib/providers/capabilities";
 
 export interface BuildCapabilityDecision {
   workers: SelectedModel[];
@@ -13,6 +16,13 @@ export interface BuildModelIdCapabilityDecision {
 }
 
 export type CapabilityProfileMap = Record<string, ModelCapabilityProbeProfile> | undefined;
+
+export interface ParticipantInputSupportInput {
+  mode: DiscussionMode;
+  selectedModelIds: string[];
+  capabilitiesById: ReadonlyMap<string, ModelCapabilities | undefined>;
+  requiredInputTypes: CapabilityInputType[];
+}
 
 type BuildActionProtocolStatus = "passed" | "not_passed" | "untested";
 
@@ -69,6 +79,26 @@ export function selectBuildModelIdsByCapabilities(
   }
 
   return { modelIds, diagnostics };
+}
+
+export function participantRequiredInputTypesForMode(
+  mode: DiscussionMode,
+  requiredInputTypes: CapabilityInputType[]
+): CapabilityInputType[] {
+  return mode === "build" ? [] : requiredInputTypes;
+}
+
+export function selectParticipantModelIdsByInputSupport(
+  input: ParticipantInputSupportInput
+): string[] {
+  const required = participantRequiredInputTypesForMode(
+    input.mode,
+    input.requiredInputTypes
+  );
+  if (required.length === 0) return input.selectedModelIds;
+  return input.selectedModelIds.filter((id) =>
+    supportsInputTypes(input.capabilitiesById.get(id), required)
+  );
 }
 
 export function selectedModelIdsForMode(

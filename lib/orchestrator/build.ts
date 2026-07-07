@@ -10,10 +10,12 @@
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";
 import type {
   JsonSchemaObject,
+  ModelCapabilities,
   NativeToolCall,
   NativeToolDefinition,
   StructuredOutputFormat,
 } from "../providers/base";
+import type { CapabilityInputType } from "../attachments/types";
 import {
   renderAssembledContext,
   type BuildPromptContextInput,
@@ -1468,6 +1470,43 @@ export function scoreboardSection(scoreboard?: string): string {
   return scoreboard?.trim()
     ? `Worker performance so far (the engine tracks this automatically from your approve/fix verdicts, failures, and output speed relative to the other workers — higher score = more reliable). Use assignTo sparingly as a worker preference only when a task truly needs that model; otherwise omit it so the engine balances work across the selected workers. Benched workers won't be given tasks:\n${scoreboard}`
     : "";
+}
+
+export interface BuildWorkerCapabilitySummary {
+  name: string;
+  capabilities?: ModelCapabilities | null;
+}
+
+function supportedCapabilityLabels(
+  capabilities: ModelCapabilities | null | undefined
+): string {
+  if (!capabilities) return "capabilities unknown";
+  const labels: Record<CapabilityInputType, string> = {
+    image: "image input",
+    document: "document input",
+    audio: "audio input",
+    video: "video input",
+  };
+  const supported = (Object.keys(labels) as CapabilityInputType[]).filter(
+    (type) => capabilities[type]
+  );
+  return supported.length > 0
+    ? supported.map((type) => labels[type]).join(", ")
+    : "text only; no image input, document input, audio input, or video input";
+}
+
+export function workerCapabilityRosterSection(
+  workers?: BuildWorkerCapabilitySummary[]
+): string {
+  if (!workers || workers.length === 0) return "";
+  const lines = workers.map(
+    (worker) => `- ${worker.name}: ${supportedCapabilityLabels(worker.capabilities)}`
+  );
+  return [
+    "Worker input capabilities:",
+    ...lines,
+    "Routing rule: assign raw image, document, audio, or video inspection tasks to a worker that supports the needed input type. If no worker supports the needed raw input, inspect the media yourself as Architect and pass concise text findings/evidence in the task instructions and implementationContract for a text-only worker.",
+  ].join("\n");
 }
 
 /** Run a shell command in the project folder via the user's local runner. */
@@ -4286,6 +4325,7 @@ export function buildArchitectSpecPrompt(input: BuildPromptContextInput & {
   treeText: string;
   fileContext: string;
   workerNames: string[];
+  workerCapabilities?: BuildWorkerCapabilitySummary[];
   readHopsLeft: number;
   runsLeft?: number;
   searchesLeft?: number;
@@ -4327,6 +4367,7 @@ export function buildArchitectSpecPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? input.memoryBrief : "",
     "",
     `Your workers later in the build: ${input.workerNames.join(", ")}.`,
+    workerCapabilityRosterSection(input.workerCapabilities),
     !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
     input.skillContext,
     "",
@@ -4357,6 +4398,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
   fileContext: string;
   maxTasks: number;
   workerNames: string[];
+  workerCapabilities?: BuildWorkerCapabilitySummary[];
   spec?: BuildSpec;
   readHopsLeft: number;
   runsLeft?: number;
@@ -4407,6 +4449,7 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? input.memoryBrief : "",
     "",
     `Your workers: ${input.workerNames.join(", ")}.`,
+    workerCapabilityRosterSection(input.workerCapabilities),
     !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
     input.skillContext,
     "",
@@ -4453,6 +4496,7 @@ export function buildPlanCritiquePrompt(input: {
   notes?: string;
   verifyCommand?: string;
   workerNames: string[];
+  workerCapabilities?: BuildWorkerCapabilitySummary[];
 }): string {
   return [
     "You are a principal engineer reviewing another architect's task plan BEFORE any work starts. Attack the decomposition, not the style. Workers are AI models that each get ONE task and see nothing else.",
@@ -4468,6 +4512,7 @@ export function buildPlanCritiquePrompt(input: {
       ? `Architect's verifyCommand: ${input.verifyCommand.trim()}`
       : "",
     `The workers who will implement this plan: ${input.workerNames.join(", ")}.`,
+    workerCapabilityRosterSection(input.workerCapabilities),
     "",
     "The plan's tasks (JSON):",
     input.tasksJson,
@@ -4718,6 +4763,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
   fetchesLeft?: number;
   userNotes?: string;
   scoreboard?: string;
+  workerCapabilities?: BuildWorkerCapabilitySummary[];
   /** One-line note about the runner's shell/OS (e.g. Windows cmd.exe). */
   shellHint?: string;
   githubWorkflow?: boolean;
@@ -4773,6 +4819,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
       : "",
     "",
     !hasAssembledContext ? scoreboardSection(input.scoreboard) : "",
+    workerCapabilityRosterSection(input.workerCapabilities),
     !hasAssembledContext ? input.memoryBrief : "",
     input.skillContext,
     input.hasDiffDigest

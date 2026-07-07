@@ -1,9 +1,12 @@
 /** Build capability routing checks (run: npx tsx scripts/test-build-capability-routing.mts) */
 import {
+  selectParticipantModelIdsByInputSupport,
   selectBuildModelIdsByCapabilities,
   selectedModelIdsForMode,
 } from "../lib/client/build-capabilities";
+import type { CapabilityInputType } from "../lib/attachments/types";
 import type { DiscussionMode } from "../lib/db/schema";
+import type { ModelCapabilities } from "../lib/providers/base";
 import type { ModelCapabilityProbeProfile } from "../lib/providers/capability-probes";
 
 let failed = 0;
@@ -43,6 +46,44 @@ function profile(
 }
 
 const selected = ["openai:worker-pass", "openai:worker-fail", "openai:worker-untested"];
+const imageRequired: CapabilityInputType[] = ["image"];
+const textOnlyCaps: ModelCapabilities = {
+  image: false,
+  document: false,
+  audio: false,
+  video: false,
+};
+const visionCaps: ModelCapabilities = {
+  image: true,
+  document: false,
+  audio: false,
+  video: false,
+};
+const capabilityMap = new Map<string, ModelCapabilities>([
+  ["openai:text-only-worker", textOnlyCaps],
+  ["openai:vision-worker", visionCaps],
+]);
+
+check(
+  "build participant selection keeps text-only workers when image attachments exist",
+  selectParticipantModelIdsByInputSupport({
+    mode: "build",
+    selectedModelIds: ["openai:text-only-worker", "openai:vision-worker"],
+    capabilitiesById: capabilityMap,
+    requiredInputTypes: imageRequired,
+  }).join(",") === "openai:text-only-worker,openai:vision-worker"
+);
+
+check(
+  "non-build participant selection still filters models missing image support",
+  selectParticipantModelIdsByInputSupport({
+    mode: "panel",
+    selectedModelIds: ["openai:text-only-worker", "openai:vision-worker"],
+    capabilitiesById: capabilityMap,
+    requiredInputTypes: imageRequired,
+  }).join(",") === "openai:vision-worker"
+);
+
 const decision = selectBuildModelIdsByCapabilities(selected, {
   "openai:worker-pass": profile("openai:worker-pass", "pass"),
   "openai:worker-fail": profile("openai:worker-fail", "fail"),

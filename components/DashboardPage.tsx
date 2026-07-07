@@ -66,6 +66,8 @@ import {
 import { getCapabilityProfiles } from "@/lib/client/capability-api";
 import {
   selectBuildModelIdsByCapabilities,
+  participantRequiredInputTypesForMode,
+  selectParticipantModelIdsByInputSupport,
   selectedModelIdsForMode,
 } from "@/lib/client/build-capabilities";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
@@ -186,9 +188,12 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setSelectedModels((prev) =>
-      prev.filter((id) =>
-        supportsInputTypes(capabilitiesById.get(id), requiredInputTypes)
-      )
+      selectParticipantModelIdsByInputSupport({
+        mode,
+        selectedModelIds: prev,
+        capabilitiesById,
+        requiredInputTypes,
+      })
     );
     const judgeOptions = (data?.enabledModels ?? [])
       .filter((model) =>
@@ -200,11 +205,18 @@ export default function DashboardPage() {
         ? prev
         : judgeOptions[0] ?? ""
     );
-  }, [data?.enabledModels, capabilitiesById, requiredInputTypes]);
+  }, [data?.enabledModels, capabilitiesById, mode, requiredInputTypes]);
 
-  const compatibleSelected = selectedModels.filter((id) =>
-    supportsInputTypes(capabilitiesById.get(id), requiredInputTypes)
+  const participantRequiredInputTypes = participantRequiredInputTypesForMode(
+    mode,
+    requiredInputTypes
   );
+  const compatibleSelected = selectParticipantModelIdsByInputSupport({
+    mode,
+    selectedModelIds: selectedModels,
+    capabilitiesById,
+    requiredInputTypes,
+  });
   const buildCapabilityDecision = useMemo(
     () =>
       mode === "build"
@@ -438,7 +450,7 @@ export default function DashboardPage() {
               models={modelsForSelector}
               selected={visibleSelectedModels}
               onChange={setSelectedModels}
-              requiredInputTypes={requiredInputTypes}
+              requiredInputTypes={participantRequiredInputTypes}
             />
 
             {mode === "build" && buildCapabilityDecision.diagnostics.length > 0 && (

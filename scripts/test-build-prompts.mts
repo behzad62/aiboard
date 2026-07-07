@@ -1,9 +1,11 @@
 /** Build prompt regression checks (run: npx tsx scripts/test-build-prompts.mts) */
 import {
+  buildArchitectPlanPrompt,
   buildArchitectGuidancePrompt,
   buildWorkerToolInstructions,
   buildWorkerTaskPrompt,
   buildArchitectReviewPrompt,
+  workerCapabilityRosterSection,
   extractLocalServerUrls,
   isWorkerBuildToolAction,
   scoreboardSection,
@@ -206,6 +208,79 @@ check(
   scoreboard
 );
 
+const workerCapabilityRoster = workerCapabilityRosterSection([
+  {
+    name: "Text Worker",
+    capabilities: {
+      image: false,
+      document: false,
+      audio: false,
+      video: false,
+    },
+  },
+  {
+    name: "Vision Worker",
+    capabilities: {
+      image: true,
+      document: false,
+      audio: false,
+      video: false,
+    },
+  },
+]);
+check(
+  "worker capability roster names image-capable and text-only workers",
+  workerCapabilityRoster.includes("Text Worker") &&
+    /no image input/i.test(workerCapabilityRoster) &&
+    workerCapabilityRoster.includes("Vision Worker") &&
+    /image input/i.test(workerCapabilityRoster),
+  workerCapabilityRoster
+);
+check(
+  "worker capability roster tells Architect to translate vision when no worker can inspect images",
+  /assign .*raw image/i.test(workerCapabilityRoster) &&
+    /inspect .*yourself/i.test(workerCapabilityRoster) &&
+    /text findings/i.test(workerCapabilityRoster),
+  workerCapabilityRoster
+);
+
+const planPromptWithWorkerCapabilities = buildArchitectPlanPrompt({
+  request: "Build a UI from the attached screenshot.",
+  treeText: "src/App.tsx",
+  fileContext: "",
+  maxTasks: 2,
+  workerNames: ["Text Worker", "Vision Worker"],
+  workerCapabilities: [
+    {
+      name: "Text Worker",
+      capabilities: {
+        image: false,
+        document: false,
+        audio: false,
+        video: false,
+      },
+    },
+    {
+      name: "Vision Worker",
+      capabilities: {
+        image: true,
+        document: false,
+        audio: false,
+        video: false,
+      },
+    },
+  ],
+  readHopsLeft: 0,
+});
+check(
+  "Architect plan prompt includes worker media capability routing context",
+  planPromptWithWorkerCapabilities.includes("Worker input capabilities") &&
+    planPromptWithWorkerCapabilities.includes("Text Worker") &&
+    planPromptWithWorkerCapabilities.includes("Vision Worker") &&
+    /raw image/i.test(planPromptWithWorkerCapabilities),
+  planPromptWithWorkerCapabilities
+);
+
 const workerTools = buildWorkerToolInstructions({
   reads: 1,
   rangeReads: 1,
@@ -361,6 +436,17 @@ const reviewPrompt = buildArchitectReviewPrompt({
   maxNewTasks: 2,
   cyclesLeft: 1,
   workerNames: ["Worker A"],
+  workerCapabilities: [
+    {
+      name: "Worker A",
+      capabilities: {
+        image: false,
+        document: false,
+        audio: false,
+        video: false,
+      },
+    },
+  ],
   fileContext: "",
   readHopsLeft: 0,
   rangeReadsLeft: 0,
@@ -405,6 +491,14 @@ check(
 check(
   "review prompt omits the screenshot line when no screenshotTaskIds are attached",
   !/Screenshot\(s\) of the running app are ATTACHED/i.test(reviewPrompt),
+  reviewPrompt
+);
+check(
+  "review prompt includes worker media capability routing for follow-up tasks",
+  /Worker input capabilities/i.test(reviewPrompt) &&
+    /Worker A/i.test(reviewPrompt) &&
+    /no image input/i.test(reviewPrompt) &&
+    /newTasks/i.test(reviewPrompt),
   reviewPrompt
 );
 
