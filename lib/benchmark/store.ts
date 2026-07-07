@@ -1600,6 +1600,8 @@ function isBuildCheckpointTask(value: unknown): boolean {
     (value.failCount === undefined || typeof value.failCount === "number") &&
     (value.retryAfterMs === undefined ||
       typeof value.retryAfterMs === "number") &&
+    (value.avoidWorkerIndexes === undefined ||
+      isNumberArray(value.avoidWorkerIndexes)) &&
     (value.difficulty === undefined || typeof value.difficulty === "number") &&
     (value.guidance === undefined || isBuildTaskGuidanceArray(value.guidance))
   );

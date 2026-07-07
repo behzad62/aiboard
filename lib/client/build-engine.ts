@@ -191,6 +191,7 @@ import {
   buildPlanRevisionPrompt,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
+  buildReviewFixProblem,
   buildReviewFixTaskUpdate,
   buildReviewGateFixInstructions,
   renderTaskGuidanceForWorker,
@@ -6337,6 +6338,11 @@ export async function runBuildDiscussion(
       task.failCount = decision.failCount;
       task.status = decision.status;
       if (task.status === "fixing") {
+        if (kind === "bad") {
+          task.avoidWorkerIndexes = [
+            ...new Set([...(task.avoidWorkerIndexes ?? []), stat.index]),
+          ];
+        }
         task.workerIndex = undefined;
         task.assignTo = undefined;
         task.retryAfterMs = decision.retryDelayMs
@@ -7542,6 +7548,7 @@ export async function runBuildDiscussion(
           assignCursor,
           pinnedIndex: pinned,
           requestedIndex: requestedActive,
+          avoidWorkerIndexes: task.avoidWorkerIndexes,
         });
         assignCursor = selected.assignCursor;
         task.workerIndex = selected.index;
@@ -7879,6 +7886,7 @@ export async function runBuildDiscussion(
         st.fixes += 1;
         st.wFixes += difficultyWeight(task);
       }
+      const priorWorkerIndex = task.workerIndex;
       const prior = executed.find((e) => e.task.id === task.id);
       Object.assign(
         task,
@@ -7886,7 +7894,8 @@ export async function runBuildDiscussion(
           task,
           fixInstructions,
           prior?.files ?? [],
-          MAX_CONTEXT_FILES
+          MAX_CONTEXT_FILES,
+          { avoidWorkerIndex: priorWorkerIndex }
         )
       );
       if (problemMessage) {
@@ -7937,12 +7946,32 @@ export async function runBuildDiscussion(
           verdictStat.wApprovals += difficultyWeight(task);
         }
         task.status = "done";
+        task.avoidWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       } else {
         if (verdictStat) {
           verdictStat.fixes += 1;
           verdictStat.wFixes += difficultyWeight(task);
         }
+        const reviewProblem = buildReviewFixProblem({
+          taskId: task.id,
+          taskTitle: task.title,
+          reviewerName: reviewActor.displayName,
+          result,
+        });
+        recordBuildProblem({
+          code: reviewProblem.code,
+          severity: "error",
+          source: reviewActor.modelId === architect.modelId ? "architect" : "reviewer",
+          modelId: reviewActor.modelId,
+          modelName: reviewActor.displayName,
+          providerId: parseModelId(reviewActor.modelId).providerId,
+          taskId: task.id,
+          wave: cycle,
+          message: reviewProblem.message,
+          details: reviewProblem.details,
+        });
+        const priorWorkerIndex = task.workerIndex;
         const prior = executed.find((e) => e.task.id === task.id);
         Object.assign(
           task,
@@ -7950,7 +7979,8 @@ export async function runBuildDiscussion(
             task,
             buildReviewGateFixInstructions(result),
             prior?.files ?? [],
-            MAX_CONTEXT_FILES
+            MAX_CONTEXT_FILES,
+            { avoidWorkerIndex: priorWorkerIndex }
           )
         );
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
@@ -7989,6 +8019,7 @@ export async function runBuildDiscussion(
           st.wApprovals += difficultyWeight(task);
         }
         task.status = "done";
+        task.avoidWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
       }
     }
@@ -8264,20 +8295,21 @@ export async function runBuildDiscussion(
       message,
     });
     const report = createStopReport({
-      status: "failed",
-      stopReason: "incomplete",
+      status: "blocked",
+      stopReason: "blocked",
       message,
       wave: wavesRun,
       tasks,
       verifyCommand,
     });
     const toolReviewReport = createToolReviewReport({
-      status: "failed",
+      status: "blocked",
       wave: wavesRun,
     });
     // Preserve the work so the user can resume from the current task graph.
     saveCheckpoint({
       status: "blocked",
+      stopReason: "blocked",
       wave: wavesRun,
       tasks,
       architectNotes,
@@ -8286,19 +8318,12 @@ export async function runBuildDiscussion(
       toolReviewReport,
     });
     emit({
-      type: "build_stopped",
-      reason: "blocked",
-      message,
-      usage: usageWindow,
-      report,
-      toolReviewReport,
-    });
-    emit({
       type: "diagnostic",
       phase: "model_failed",
       message,
     });
-    throw new Error(message);
+    markStopped("blocked", message, report, toolReviewReport);
+    return;
   }
 
   let finalQualityGateSummary = "";

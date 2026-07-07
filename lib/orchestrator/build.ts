@@ -105,6 +105,8 @@ export interface BuildTask {
   failCount?: number;
   /** Epoch milliseconds before this task may be retried after transient failure. */
   retryAfterMs?: number;
+  /** Worker indexes that should be avoided for the next retry when alternatives exist. */
+  avoidWorkerIndexes?: number[];
   guidance?: BuildTaskGuidance[];
   /** 1 = created by a worker split; such tasks may not split again. */
   splitDepth?: number;
@@ -147,6 +149,8 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
       return {
         ...task,
         status: "planned",
+        workerIndex: undefined,
+        retryAfterMs: undefined,
       };
     }
 
@@ -478,6 +482,7 @@ export interface BalancedWorkerSelectionInput {
   assignCursor: number;
   pinnedIndex?: number | null;
   requestedIndex?: number | null;
+  avoidWorkerIndexes?: number[];
 }
 
 export interface BalancedWorkerSelectionResult {
@@ -509,8 +514,12 @@ export function selectBalancedWorkerIndex(
     return assign(input.pinnedIndex, input.assignCursor, true, false);
   }
 
+  const avoidSet = new Set(input.avoidWorkerIndexes ?? []);
+  const preferredActive = active.filter((index) => !avoidSet.has(index));
+  const assignable = preferredActive.length > 0 ? preferredActive : active;
+  const assignableSet = new Set(assignable);
   const minAssigned = Math.min(
-    ...active.map((index) => input.assignmentCounts.get(index) ?? 0)
+    ...assignable.map((index) => input.assignmentCounts.get(index) ?? 0)
   );
   const requestedCount =
     input.requestedIndex != null
@@ -518,37 +527,81 @@ export function selectBalancedWorkerIndex(
       : Number.POSITIVE_INFINITY;
   if (
     input.requestedIndex != null &&
-    activeSet.has(input.requestedIndex) &&
+    assignableSet.has(input.requestedIndex) &&
     requestedCount <= minAssigned
   ) {
     return assign(input.requestedIndex, input.assignCursor, false, true);
   }
 
-  const eligible = active.filter(
+  const eligible = assignable.filter(
     (index) => (input.assignmentCounts.get(index) ?? 0) === minAssigned
   );
-  const chosen = eligible[input.assignCursor % eligible.length] ?? active[0];
+  const chosen = eligible[input.assignCursor % eligible.length] ?? assignable[0];
   return assign(chosen, input.assignCursor + 1, false, false);
+}
+
+function uniqueWorkerIndexes(values: Array<number | undefined | null>): number[] {
+  return [
+    ...new Set(
+      values.filter(
+        (value): value is number =>
+          typeof value === "number" &&
+          Number.isInteger(value) &&
+          value >= 0
+      )
+    ),
+  ];
 }
 
 export function buildReviewFixTaskUpdate(
   task: BuildTask,
   fixInstructions: string | undefined,
   priorFiles: string[],
-  maxContextFiles: number
+  maxContextFiles: number,
+  options?: { avoidWorkerIndex?: number | null }
 ): BuildTask {
   const contextFiles = [
     ...new Set([...task.contextFiles, ...priorFiles]),
   ].slice(0, maxContextFiles);
+  const avoidWorkerIndexes = uniqueWorkerIndexes([
+    ...(task.avoidWorkerIndexes ?? []),
+    options?.avoidWorkerIndex,
+  ]);
   return {
     ...task,
     status: "fixing",
     workerIndex: undefined,
     assignTo: undefined,
+    retryAfterMs: undefined,
+    avoidWorkerIndexes: avoidWorkerIndexes.length > 0 ? avoidWorkerIndexes : undefined,
     contextFiles,
     instructions: `${task.instructions}\n\nFIX (from the Architect's review): ${
       fixInstructions ?? "address the review feedback"
     }`,
+  };
+}
+
+export interface BuildReviewFixProblem {
+  code: "review_fix_required";
+  message: string;
+  details: string;
+}
+
+export function buildReviewFixProblem(input: {
+  taskId: string;
+  taskTitle: string;
+  reviewerName: string;
+  result: ReviewResult;
+}): BuildReviewFixProblem {
+  const fixInstructions = buildReviewGateFixInstructions(input.result);
+  const verdicts = [
+    `spec=${input.result.specVerdict}`,
+    `quality=${input.result.qualityVerdict}`,
+  ].join(", ");
+  return {
+    code: "review_fix_required",
+    message: `${input.reviewerName} requested fixes for ${input.taskId} (${input.taskTitle}); ${verdicts}.`,
+    details: fixInstructions || "Review returned a fix verdict without detailed instructions.",
   };
 }
 
@@ -3726,6 +3779,7 @@ export function buildPhaseSpecSection(phaseSpec?: BuildPhaseSpec): string {
 const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
   "For web apps or UI-affecting tasks, browser acceptance is required when a local server and browser/MCP tools are available.",
   "Exercise the main user workflow in a real browser after starting the app: load the page, perform the primary form/click/navigation actions, and inspect the post-action settled state.",
+  "Report a structured acceptance record with these exact fields when they apply: canvasPresent, webglContext, labelCount, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors.",
   "Verify expected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If you cannot run browser acceptance, say exactly what was not verified and do not claim it passed.",
 ].join(" ");
 
@@ -3735,7 +3789,7 @@ const WORKER_SKILL_EVIDENCE_INSTRUCTION = [
   "- agent:test-driven-development: RED test/check failure before implementation: <command or check and failing result>; GREEN test/check pass after implementation: <command or check and passing result>.",
   "- superpowers:systematic-debugging: Root cause or reproduction identified before the fix: <root cause, reproduction, hypothesis, or trace>; Fix verified against the reproduced failure: <command, test, or browser result>.",
   "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: <untrusted input, secret, file path, shell, network, or storage boundary and the unsafe case considered>.",
-  "- aiboard:browser-acceptance: browser_navigate <exact local URL>; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
+  "- aiboard:browser-acceptance: browser_navigate <exact local URL>; structured fields canvasPresent, webglContext, labelCount, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
   "Only include lines for active/applicable skills or explicit exemption reasons.",
 ].join("\n");
 

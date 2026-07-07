@@ -42,7 +42,10 @@ check(
 );
 check(
   "docs-only fixing task has no blocking code/security evidence requirements",
-  activation.evidenceRequired.length === 0,
+  activation.evidenceRequired.every((item) => /exemption|docs-only/i.test(item)) &&
+    !activation.evidenceRequired.some((item) =>
+      /RED test|GREEN test|Root cause|Trust boundary/i.test(item)
+    ),
   activation.evidenceRequired
 );
 

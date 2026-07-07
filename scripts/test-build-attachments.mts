@@ -160,12 +160,32 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       maxTokens: input.maxTokens,
       attachments: (input as { attachments?: AttachmentPayload[] }).attachments,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return [
+        "Spec.",
+        "```json",
+        JSON.stringify({
+          action: "spec",
+          spec: {
+            id: "S1",
+            objective: "Create a fallback project.",
+            requirements: ["Create src/fallback.txt."],
+            acceptanceCriteria: ["src/fallback.txt exists."],
+            qualityCriteria: ["Keep the implementation scoped to the requested file."],
+            verification: ["Review generated file contents."],
+          },
+          notes: "Use default budgets.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is planning the implementation from the spec") {
       return [
         "Plan.",
         "```json",
         JSON.stringify({
-          action: "plan",
+          action: "build_plan",
+          implementationPlan: "Create the fallback text file from the approved spec.",
           tasks: [
             {
               id: "T1",
@@ -220,8 +240,8 @@ await runBuildDiscussion(discussion, [architect, worker], (event) => {
   events.push(event);
 }, hooks);
 
-const planningCall = calls.find((call) => call.label === "Architect is planning the project");
-const nonPlanningCalls = calls.filter((call) => call.label !== "Architect is planning the project");
+const planningCall = calls.find((call) => call.label === "Architect is writing the build spec");
+const nonPlanningCalls = calls.filter((call) => call.label !== "Architect is writing the build spec");
 const workerCall = calls.find((call) => call.label.startsWith("Test Worker working on T1"));
 const reviewCall = calls.find(
   (call) =>
@@ -302,12 +322,32 @@ const fallbackHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
       maxTokens: input.maxTokens,
       attachments: (input as { attachments?: AttachmentPayload[] }).attachments,
     });
-    if (input.label === "Architect is planning the project") {
+    if (input.label === "Architect is writing the build spec") {
+      return [
+        "Spec.",
+        "```json",
+        JSON.stringify({
+          action: "spec",
+          spec: {
+            id: "S1",
+            objective: "Create a small project from the attached requirements.",
+            requirements: ["Include the visible imported requirement."],
+            acceptanceCriteria: ["src/requirement.txt contains the imported requirement."],
+            qualityCriteria: ["Keep the implementation scoped to the requested file."],
+            verification: ["Review generated file contents."],
+          },
+          notes: "Use the provided attachment only during planning.",
+        }),
+        "```",
+      ].join("\n");
+    }
+    if (input.label === "Architect is planning the implementation from the spec") {
       return [
         "Plan.",
         "```json",
         JSON.stringify({
-          action: "plan",
+          action: "build_plan",
+          implementationPlan: "Create the required text file from the approved spec.",
           tasks: [
             {
               id: "T1",
@@ -366,7 +406,7 @@ check(
   "Build model calls without explicit profiles keep Build minimum budgets",
   fallbackCalls.some(
     (call) =>
-      call.label === "Architect is planning the project" &&
+      call.label === "Architect is writing the build spec" &&
       call.maxTokens === 16_384
   ) &&
     fallbackCalls.some(

@@ -44,6 +44,7 @@ const checkpoint: BuildCheckpoint = {
       contextFiles: [],
       outputPaths: ["lib/db/schema.ts"],
       status: "done",
+      avoidWorkerIndexes: [1, 2],
       guidance: [
         {
           id: "G-T1-1",
@@ -105,10 +106,44 @@ check("checkpoint stores skill mode", checkpoint.skillMode === "strict", checkpo
 check("checkpoint stores skill evidence", checkpoint.skillEvidence?.length === 1, checkpoint);
 check("checkpoint stores skill events", checkpoint.skillEvents?.length === 1, checkpoint);
 check(
+  "checkpoint stores avoided worker indexes for retry routing",
+  checkpoint.tasks[0].avoidWorkerIndexes?.join(",") === "1,2",
+  checkpoint.tasks[0]
+);
+check(
   "checkpoint stores task-local guidance",
   checkpoint.tasks[0].guidance?.[0]?.id === "G-T1-1" &&
     checkpoint.tasks[0].guidance?.[0]?.answer === "Keep it task-scoped.",
   checkpoint.tasks[0].guidance
+);
+
+const resumedTransient = normalizeBuildTasksForResume([
+  {
+    id: "T-transient",
+    title: "Resume transient task",
+    instructions: "Continue the interrupted work.",
+    contextFiles: [],
+    status: "in_progress",
+    workerIndex: 1,
+    retryAfterMs: 12345,
+    avoidWorkerIndexes: [1],
+  },
+])[0];
+check("resume requeues transient task as planned", resumedTransient.status === "planned", resumedTransient);
+check(
+  "resume clears stale transient worker pin",
+  resumedTransient.workerIndex === undefined,
+  resumedTransient
+);
+check(
+  "resume clears stale transient retry delay",
+  resumedTransient.retryAfterMs === undefined,
+  resumedTransient
+);
+check(
+  "resume preserves transient retry avoidance",
+  resumedTransient.avoidWorkerIndexes?.join(",") === "1",
+  resumedTransient
 );
 
 const resumed = normalizeBuildTasksForResume([
@@ -355,6 +390,43 @@ await expectGuidanceImportRejects(
     ...checkpoint.tasks[0].guidance![0],
     answer: "   ",
   }
+);
+async function expectAvoidWorkerImportRejects(
+  name: string,
+  avoidWorkerIndexes: unknown
+): Promise<void> {
+  __resetBenchmarkStoreForTests();
+  __setAdapterForTests(memoryAdapter);
+  let rejected = false;
+  let message = "";
+  try {
+    const bundle = benchmarkBundleWithGuidance(checkpoint.tasks[0].guidance![0]);
+    bundle.sourceEvidence!.buildCheckpoints = [
+      {
+        ...checkpoint,
+        tasks: [
+          {
+            ...checkpoint.tasks[0],
+            avoidWorkerIndexes,
+          },
+        ],
+      } as never,
+    ];
+    await importBenchmarkReportBundleV2(bundle);
+  } catch (err) {
+    rejected = true;
+    message = err instanceof Error ? err.message : String(err);
+  }
+  check(
+    name,
+    rejected && /Invalid sourceEvidence\.buildCheckpoints/i.test(message),
+    message || "bundle imported"
+  );
+}
+
+await expectAvoidWorkerImportRejects(
+  "benchmark import rejects malformed avoided worker indexes",
+  [1, "2"]
 );
 __setAdapterForTests(null);
 

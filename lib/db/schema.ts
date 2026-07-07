@@ -67,6 +67,7 @@ export type BuildProblemSeverity = "info" | "warning" | "error" | "blocked";
 export type BuildProblemSource =
   | "engine"
   | "architect"
+  | "reviewer"
   | "worker"
   | "file_writer"
   | "runner"
@@ -93,6 +94,7 @@ export type BuildProblemCode =
   | "repeated_no_progress"
   | "incomplete_tasks"
   | "quality_gate_failed"
+  | "review_fix_required"
   | "plan_critique_unresolved";
 
 export interface BuildProblem {
@@ -209,6 +211,7 @@ export interface BuildCheckpointTask {
   workerIndex?: number;
   failCount?: number;
   retryAfterMs?: number;
+  avoidWorkerIndexes?: number[];
   difficulty?: number;
   guidance?: BuildTaskGuidanceRecord[];
 }

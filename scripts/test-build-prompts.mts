@@ -105,6 +105,23 @@ check(
     /console errors/i.test(prompt),
   prompt
 );
+const browserEvidenceFields = [
+  "canvasPresent",
+  "webglContext",
+  "labelCount",
+  "pixelChangedAfterRun",
+  "startPauseWorked",
+  "resetWorked",
+  "newArenaChanged",
+  "speedChanged",
+  "ammoApplied",
+  "consoleErrors",
+];
+check(
+  "worker prompt gives a structured browser acceptance evidence schema",
+  browserEvidenceFields.every((field) => prompt.includes(field)),
+  prompt
+);
 check(
   "worker prompt includes answered Architect guidance section",
   prompt.includes("ARCHITECT GUIDANCE FOR THIS TASK") &&
@@ -346,6 +363,11 @@ check(
   /browser acceptance/i.test(reviewPrompt) &&
     /do NOT set "done": true/i.test(reviewPrompt) &&
     /visible stuck loading/i.test(reviewPrompt),
+  reviewPrompt
+);
+check(
+  "architect review prompt names structured browser acceptance fields",
+  browserEvidenceFields.every((field) => reviewPrompt.includes(field)),
   reviewPrompt
 );
 check(
