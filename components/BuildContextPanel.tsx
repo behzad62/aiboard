@@ -6,9 +6,11 @@ import {
   ChevronDown,
   Cpu,
   Database,
+  FileCode2,
   FileWarning,
   Gauge,
   Link2,
+  Terminal,
 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -33,12 +35,17 @@ export type BuildCodeIntelStatusView = Extract<
   OrchestratorEvent,
   { type: "code_intel_status" }
 >;
+export type BuildBudgetView = Extract<
+  OrchestratorEvent,
+  { type: "build_budget" }
+>;
 
 export interface BuildContextPanelState {
   assemblies: BuildContextAssemblyView[];
   blobs: BuildContextBlobView[];
   memory: BuildMemoryEventView;
   codeIntel: BuildCodeIntelStatusView | null;
+  budget: BuildBudgetView | null;
 }
 
 export interface VisibleDroppedContextPack {
@@ -72,6 +79,7 @@ export const EMPTY_BUILD_CONTEXT_PANEL_STATE: BuildContextPanelState = {
     warnings: [],
   },
   codeIntel: null,
+  budget: null,
 };
 
 export function reduceBuildContextPanelState(
@@ -106,6 +114,8 @@ export function reduceBuildContextPanelState(
         },
       };
     }
+    case "build_budget":
+      return { ...state, budget: event };
     default:
       return state;
   }
@@ -165,6 +175,127 @@ function formatBytes(chars: number): string {
   if (chars >= 1_000_000) return `${(chars / 1_000_000).toFixed(1)} MB`;
   if (chars >= 1_000) return `${(chars / 1_000).toFixed(1)} KB`;
   return `${chars} B`;
+}
+
+function formatBudgetValue(value: number | undefined): string {
+  return value == null ? "n/a" : String(value);
+}
+
+function formatBudgetRatio(value: number | undefined, limit: number | undefined): string {
+  if (value == null) return "n/a";
+  return limit == null ? String(value) : `${value}/${limit}`;
+}
+
+export const formatBuildBudgetRatioForTest = formatBudgetRatio;
+
+function BudgetCell({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border bg-muted/20 px-2 py-1.5">
+      <p className="truncate text-[0.65rem] font-medium uppercase text-muted-foreground">
+        {label}
+      </p>
+      <p className="truncate text-sm font-semibold">{value}</p>
+      {detail && <p className="truncate text-[0.65rem] text-muted-foreground">{detail}</p>}
+    </div>
+  );
+}
+
+function BuildBudgetStrip({ budget }: { budget: BuildBudgetView }) {
+  return (
+    <div className="border-t px-4 py-3">
+      <div className="mb-3 grid gap-2">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+            <Gauge className="h-3.5 w-3.5" />
+            Live budgets
+          </p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {budget.label}
+            {budget.cycle == null ? "" : ` - wave ${budget.cycle}`}
+          </p>
+        </div>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline">{budget.phase}</Badge>
+          <Badge variant={budget.shell.toolAvailable ? "success" : "destructive"}>
+            shell {budget.shell.toolAvailable ? "available" : "blocked"}
+          </Badge>
+          {budget.taskId && <Badge variant="outline">{budget.taskId}</Badge>}
+          {budget.worker && <Badge variant="secondary">{budget.worker}</Badge>}
+        </span>
+      </div>
+      <div className="grid gap-3">
+        <div className="min-w-0">
+          <p className="mb-1 flex items-center gap-1.5 text-[0.65rem] font-medium uppercase text-muted-foreground">
+            <Terminal className="h-3 w-3" />
+            Shell runs
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <BudgetCell
+              label="Task"
+              value={formatBudgetValue(budget.shell.taskRunsLeft)}
+              detail="worker"
+            />
+            <BudgetCell
+              label="Phase"
+              value={`${budget.shell.phaseRunsLeft}/${budget.shell.phaseRunsLimit}`}
+            />
+            <BudgetCell
+              label="Run"
+              value={`${budget.shell.totalRunsLeft}/${budget.shell.totalRunsLimit}`}
+            />
+          </div>
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1 flex items-center gap-1.5 text-[0.65rem] font-medium uppercase text-muted-foreground">
+            <FileCode2 className="h-3 w-3" />
+            File operations
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+            <BudgetCell
+              label="Reads"
+              value={formatBudgetRatio(budget.files.readsLeft, budget.files.readsLimit)}
+            />
+            <BudgetCell
+              label="Ranges"
+              value={formatBudgetRatio(budget.files.rangeReadsLeft, budget.files.rangeReadsLimit)}
+            />
+            <BudgetCell
+              label="Searches"
+              value={formatBudgetRatio(budget.files.searchesLeft, budget.files.searchesLimit)}
+            />
+            <BudgetCell
+              label="Patches"
+              value={formatBudgetRatio(budget.files.patchesLeft, budget.files.patchesLimit)}
+            />
+            <BudgetCell
+              label="Appends"
+              value={formatBudgetRatio(budget.files.appendsLeft, budget.files.appendsLimit)}
+            />
+            <BudgetCell
+              label="Fetches"
+              value={formatBudgetRatio(budget.files.fetchesLeft, budget.files.fetchesLimit)}
+              detail={
+                budget.files.phaseFetchesLeft == null
+                  ? undefined
+                  : `${formatBudgetRatio(
+                      budget.files.phaseFetchesLeft,
+                      budget.files.phaseFetchesLimit
+                    )} phase`
+              }
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function statusVariant(
@@ -237,7 +368,8 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
     state.assemblies.length > 0 ||
     state.blobs.length > 0 ||
     memoryCount(state.memory) > 0 ||
-    state.codeIntel != null;
+    state.codeIntel != null ||
+    state.budget != null;
 
   if (!hasData) return null;
 
@@ -280,6 +412,8 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
           )}
         </span>
       </div>
+
+      {state.budget && <BuildBudgetStrip budget={state.budget} />}
 
       {open && (
         <div className="grid gap-4 border-t px-4 py-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">

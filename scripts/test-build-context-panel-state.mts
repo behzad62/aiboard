@@ -5,6 +5,7 @@ import {
   getVisibleBuildContextDroppedPacks,
   getVisibleBuildContextRetrieveRefs,
   hasBuildMemoryEntryRefs,
+  formatBuildBudgetRatioForTest,
   reduceBuildContextPanelState,
 } from "../components/BuildContextPanel";
 import type { OrchestratorEvent } from "../lib/orchestrator/engine";
@@ -132,5 +133,48 @@ state = reduceBuildContextPanelState(state, {
 
 assert.equal(state.codeIntel?.architectureDigestIncluded, true);
 assert.equal(state.codeIntel?.changeImpactDigestIncluded, true);
+
+state = reduceBuildContextPanelState(state, {
+  type: "build_budget",
+  phase: "worker",
+  label: "Test Worker T4",
+  taskId: "T4",
+  worker: "Test Worker",
+  cycle: 2,
+  shell: {
+    taskRunsLeft: 7,
+    phaseRunsLeft: 93,
+    phaseRunsLimit: 120,
+    totalRunsLeft: 473,
+    totalRunsLimit: 500,
+    toolAvailable: true,
+  },
+  files: {
+    readsLeft: 19,
+    readsLimit: 20,
+    rangeReadsLeft: 28,
+    rangeReadsLimit: 30,
+    searchesLeft: 17,
+    searchesLimit: 20,
+    patchesLeft: 30,
+    patchesLimit: 30,
+    appendsLeft: 40,
+    appendsLimit: 40,
+    fetchesLeft: 3,
+    fetchesLimit: 4,
+    phaseFetchesLeft: 7,
+    phaseFetchesLimit: 18,
+  },
+});
+
+assert.equal(state.budget?.taskId, "T4");
+assert.equal(state.budget?.shell.phaseRunsLeft, 93);
+assert.equal(state.budget?.files.rangeReadsLeft, 28);
+assert.equal(state.budget?.files.rangeReadsLimit, 30);
+assert.equal(state.budget?.files.fetchesLimit, 4);
+assert.equal(state.budget?.files.phaseFetchesLimit, 18);
+assert.equal(formatBuildBudgetRatioForTest(28, 30), "28/30");
+assert.equal(formatBuildBudgetRatioForTest(undefined, 30), "n/a");
+assert.equal(formatBuildBudgetRatioForTest(3, undefined), "3");
 
 console.log("PASS build context panel state");

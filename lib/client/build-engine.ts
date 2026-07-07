@@ -47,6 +47,7 @@ import {
 import {
   createBuildWorkerBudget,
   workerBudgetToolInstructionInput,
+  type BuildWorkerBudget,
   type BuildWorkerToolInstructionBudget,
 } from "@/lib/orchestrator/build-worker-budgets";
 import {
@@ -191,6 +192,8 @@ import {
   resolveRunnerProjectTree,
   recordToolCall,
   runBudgetStatus,
+  RUNS_PER_PHASE,
+  TOTAL_RUNS,
   allocateIncrementalTaskIds,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
@@ -343,6 +346,7 @@ type ContextAssembledEvent = Extract<OrchestratorEvent, { type: "context_assembl
 type MemoryEvent = Extract<OrchestratorEvent, { type: "memory_event" }>;
 type ContextBlobEvent = Extract<OrchestratorEvent, { type: "context_blob" }>;
 type CodeIntelStatusEvent = Extract<OrchestratorEvent, { type: "code_intel_status" }>;
+type BuildBudgetEvent = Extract<OrchestratorEvent, { type: "build_budget" }>;
 type StructuredTraceValidation =
   | { ok: true; parsedResponseJson?: string }
   | { ok: false; message: string };
@@ -500,10 +504,10 @@ const SEARCHES_PER_PHASE = 4;
 // MCP pools are runaway-loop stops like RUNS_PER_PHASE (see build.ts), not cost controls — the USD/time budget window governs spend; sized to outlast a wave's realistic browser-acceptance usage.
 const MCP_CALLS_PER_PHASE = 24;
 const TOTAL_MCP_CALLS = 96;
-const CODE_INTEL_CALLS_PER_PHASE = 3;
-const TOTAL_CODE_INTEL_CALLS = 10;
+const CODE_INTEL_CALLS_PER_PHASE = 4;
+const TOTAL_CODE_INTEL_CALLS = 12;
 // Fetch pools are runaway-loop stops (like the MCP/run pools), not cost controls; the USD/time budget window governs spend. Architect AND workers now draw from this one shared pool, so it is sized to outlast a wave's realistic docs-lookup usage.
-const FETCHES_PER_PHASE = 8;
+const FETCHES_PER_PHASE = 18;
 const TOTAL_FETCHES = 24;
 const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 
@@ -1705,6 +1709,55 @@ export async function runBuildDiscussion(
 
   const fetchesLeftThisPhase = (): number =>
     runner ? Math.min(FETCHES_PER_PHASE, TOTAL_FETCHES - totalFetches) : 0;
+
+  const emitBuildBudget = (input: {
+    phase: BuildBudgetEvent["phase"];
+    label: string;
+    taskId?: string;
+    worker?: string;
+    cycle?: number;
+    workerBudget?: BuildWorkerBudget;
+    workerBudgetLimit?: BuildWorkerBudget;
+    inspectionBudgets?: InspectionBudgets;
+    inspectionBudgetLimit?: InspectionBudgets;
+  }): void => {
+    const runBudget = currentRunBudget();
+    const phaseFetchesLeft = fetchesLeftThisPhase();
+    const fileBudget = input.workerBudget ?? input.inspectionBudgets;
+    const fileLimit = input.workerBudgetLimit ?? input.inspectionBudgetLimit;
+    emit({
+      type: "build_budget",
+      phase: input.phase,
+      label: input.label,
+      taskId: input.taskId,
+      worker: input.worker,
+      cycle: input.cycle,
+      shell: {
+        taskRunsLeft: input.workerBudget?.runs,
+        phaseRunsLeft: runBudget.normalRunsLeft,
+        phaseRunsLimit: RUNS_PER_PHASE,
+        totalRunsLeft: runBudget.totalNormalRunsLeft,
+        totalRunsLimit: TOTAL_RUNS,
+        toolAvailable: runBudget.toolAvailable,
+      },
+      files: {
+        readsLeft: fileBudget?.reads,
+        readsLimit: fileLimit?.reads,
+        rangeReadsLeft: fileBudget?.rangeReads,
+        rangeReadsLimit: fileLimit?.rangeReads,
+        searchesLeft: fileBudget?.searches,
+        searchesLimit: fileLimit?.searches,
+        patchesLeft: input.workerBudget?.patches,
+        patchesLimit: input.workerBudgetLimit?.patches,
+        appendsLeft: input.workerBudget?.appends,
+        appendsLimit: input.workerBudgetLimit?.appends,
+        fetchesLeft: input.workerBudget?.fetches ?? phaseFetchesLeft,
+        fetchesLimit: input.workerBudgetLimit?.fetches ?? FETCHES_PER_PHASE,
+        phaseFetchesLeft,
+        phaseFetchesLimit: FETCHES_PER_PHASE,
+      },
+    });
+  };
 
   const mcpCallsLeftThisPhase = (): number =>
     runner && mcpToolsDoc
@@ -5197,6 +5250,16 @@ export async function runBuildDiscussion(
     ];
     const tracker = createToolCallTracker();
     const budgets = { ...args.budgets };
+    const budgetLimits = { ...budgets };
+    const emitInspectionBudget = (): void =>
+      emitBuildBudget({
+        phase: terminal,
+        label: args.label,
+        worker: actor.displayName,
+        inspectionBudgets: budgets,
+        inspectionBudgetLimit: budgetLimits,
+      });
+    emitInspectionBudget();
     const forcedInstruction =
       terminal === "review"
         ? FORCED_REVIEW_INSTRUCTION
@@ -5332,6 +5395,7 @@ export async function runBuildDiscussion(
         args.appendContext,
         tracker
       );
+      emitInspectionBudget();
       if (batch.servedCount > 0 && batch.skippedCount > 0) {
         recordBuildProblem({
           code: "tool_warning",
@@ -6376,6 +6440,19 @@ export async function runBuildDiscussion(
         fetchesLeft: fetchesLeftThisPhase(),
         failCount: task.failCount,
       });
+      const workerBudgetLabel = `${worker.displayName} ${task.id}: ${task.title}`;
+      const workerBudgetLimits = { ...budgets };
+      const emitWorkerBudget = (): void =>
+        emitBuildBudget({
+          phase: "worker",
+          label: workerBudgetLabel,
+          taskId: task.id,
+          worker: worker.displayName,
+          cycle,
+          workerBudget: budgets,
+          workerBudgetLimit: workerBudgetLimits,
+        });
+      emitWorkerBudget();
       const workerAssembledContext = buildContextManager.buildWorkerContext({
         modelContextProfile: modelContextProfile(worker),
         request: discussion.topic,
@@ -6943,6 +7020,7 @@ export async function runBuildDiscussion(
           }
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
+          emitWorkerBudget();
           const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
           const batchFeedback = `${warning}${batch.message}${skippedOnlyRecovery}`;
           if (batch.terminalSkippedCount > 0) {

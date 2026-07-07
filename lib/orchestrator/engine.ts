@@ -95,6 +95,38 @@ export type OrchestratorEvent =
       usage: BuildUsageWindow;
     }
   | {
+      type: "build_budget";
+      phase: "worker" | "review" | "plan" | "summary";
+      label: string;
+      taskId?: string;
+      worker?: string;
+      cycle?: number;
+      shell: {
+        taskRunsLeft?: number;
+        phaseRunsLeft: number;
+        phaseRunsLimit: number;
+        totalRunsLeft: number;
+        totalRunsLimit: number;
+        toolAvailable: boolean;
+      };
+      files: {
+        readsLeft?: number;
+        readsLimit?: number;
+        rangeReadsLeft?: number;
+        rangeReadsLimit?: number;
+        searchesLeft?: number;
+        searchesLimit?: number;
+        patchesLeft?: number;
+        patchesLimit?: number;
+        appendsLeft?: number;
+        appendsLimit?: number;
+        fetchesLeft?: number;
+        fetchesLimit?: number;
+        phaseFetchesLeft?: number;
+        phaseFetchesLimit?: number;
+      };
+    }
+  | {
       type: "context_assembled";
       role: "architect" | "worker" | "reviewer" | "summary";
       phase: "plan" | "worker" | "review" | "summary";

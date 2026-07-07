@@ -401,6 +401,7 @@ function DiscussionPageInner() {
         case "memory_event":
         case "context_blob":
         case "code_intel_status":
+        case "build_budget":
           setBuildContextState((prev) =>
             reduceBuildContextPanelState(prev, event)
           );
