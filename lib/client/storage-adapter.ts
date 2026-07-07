@@ -14,12 +14,33 @@ export interface StorageAdapter {
   /** Raw envelope JSON string, or null when nothing is stored yet. */
   load(): Promise<string | null>;
   save(blob: string): Promise<void>;
+  listDiscussionIds(): Promise<string[]>;
+  loadDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<string | null>;
+  saveDiscussionFile(
+    discussionId: string,
+    relativePath: string,
+    blob: string
+  ): Promise<void>;
+  deleteDiscussion(discussionId: string): Promise<void>;
   listBenchmarkRunIds(): Promise<string[]>;
   loadBenchmarkRun(runId: string): Promise<string | null>;
   saveBenchmarkRun(runId: string, blob: string): Promise<void>;
   deleteBenchmarkRun(runId: string): Promise<void>;
   label(): string;
 }
+
+export const DISCUSSION_FILE_PATHS = [
+  "discussion.json",
+  "messages.json",
+  "final-result.json",
+  "attachments.json",
+  "build/files.json",
+  "build/checkpoint.json",
+  "build/context-blobs.json",
+] as const;
 
 // ── Low-level IndexedDB kv (also used to persist the directory handle/config) ─
 
@@ -28,9 +49,14 @@ const STORE_KEY = "store";
 const HANDLE_KEY = "dirHandle";
 const CONFIG_KEY = "config";
 const BENCHMARK_RUN_IDS_KEY = "benchmarkRunIds";
+const DISCUSSION_IDS_KEY = "discussionIds";
 
 function benchmarkRunStoreKey(runId: string): string {
   return `benchmark:run:${runId}`;
+}
+
+function discussionFileStoreKey(discussionId: string, relativePath: string): string {
+  return `discussion:${discussionId}:${relativePath}`;
 }
 
 function benchmarkRunFileName(runId: string): string {
@@ -110,6 +136,37 @@ export class IndexedDBAdapter implements StorageAdapter {
   async save(blob: string): Promise<void> {
     await idbSet(STORE_KEY, blob);
   }
+  async listDiscussionIds(): Promise<string[]> {
+    return (await idbGet<string[]>(DISCUSSION_IDS_KEY)) ?? [];
+  }
+  async loadDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<string | null> {
+    return (
+      (await idbGet<string>(discussionFileStoreKey(discussionId, relativePath))) ??
+      null
+    );
+  }
+  async saveDiscussionFile(
+    discussionId: string,
+    relativePath: string,
+    blob: string
+  ): Promise<void> {
+    await idbSet(discussionFileStoreKey(discussionId, relativePath), blob);
+    const discussionIds = new Set(await this.listDiscussionIds());
+    discussionIds.add(discussionId);
+    await idbSet(DISCUSSION_IDS_KEY, Array.from(discussionIds).sort());
+  }
+  async deleteDiscussion(discussionId: string): Promise<void> {
+    for (const relativePath of DISCUSSION_FILE_PATHS) {
+      await idbDelete(discussionFileStoreKey(discussionId, relativePath));
+    }
+    const discussionIds = (await this.listDiscussionIds()).filter(
+      (id) => id !== discussionId
+    );
+    await idbSet(DISCUSSION_IDS_KEY, discussionIds);
+  }
   async listBenchmarkRunIds(): Promise<string[]> {
     return (await idbGet<string[]>(BENCHMARK_RUN_IDS_KEY)) ?? [];
   }
@@ -153,6 +210,82 @@ export class FileSystemAdapter implements StorageAdapter {
     const writable = await fileHandle.createWritable();
     await writable.write(blob);
     await writable.close();
+  }
+
+  async listDiscussionIds(): Promise<string[]> {
+    const discussionsDir = await this.getDiscussionsDir(false);
+    if (!discussionsDir) return [];
+    const entries = (
+      discussionsDir as unknown as {
+        entries(): AsyncIterable<[string, FileSystemHandle]>;
+      }
+    ).entries();
+    const discussionIds: string[] = [];
+    for await (const [name, handle] of entries) {
+      if (handle.kind !== "directory") continue;
+      try {
+        discussionIds.push(decodeURIComponent(name));
+      } catch {
+        discussionIds.push(name);
+      }
+    }
+    return discussionIds.sort();
+  }
+
+  async loadDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<string | null> {
+    const discussionDir = await this.getDiscussionDir(discussionId, false);
+    if (!discussionDir) return null;
+    try {
+      const resolved = await this.resolveRelativeFile(
+        discussionDir,
+        relativePath,
+        false
+      );
+      if (!resolved.dir) return null;
+      const fileHandle = await resolved.dir.getFileHandle(resolved.fileName);
+      const text = await (await fileHandle.getFile()).text();
+      return text.trim() ? text : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveDiscussionFile(
+    discussionId: string,
+    relativePath: string,
+    blob: string
+  ): Promise<void> {
+    const discussionDir = await this.getDiscussionDir(discussionId, true);
+    if (!discussionDir) throw new Error("Discussion directory is unavailable.");
+    const resolved = await this.resolveRelativeFile(
+      discussionDir,
+      relativePath,
+      true
+    );
+    if (!resolved.dir) throw new Error("Discussion file directory is unavailable.");
+    const fileHandle = await resolved.dir.getFileHandle(resolved.fileName, {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    await this.saveDiscussionIndex();
+  }
+
+  async deleteDiscussion(discussionId: string): Promise<void> {
+    const discussionsDir = await this.getDiscussionsDir(false);
+    if (!discussionsDir) return;
+    try {
+      await discussionsDir.removeEntry(encodeURIComponent(discussionId), {
+        recursive: true,
+      });
+    } catch {
+      // Folder already gone.
+    }
+    await this.saveDiscussionIndex();
   }
 
   async listBenchmarkRunIds(): Promise<string[]> {
@@ -218,6 +351,82 @@ export class FileSystemAdapter implements StorageAdapter {
     } catch {
       return null;
     }
+  }
+
+  private async getDiscussionsDir(
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle | null> {
+    try {
+      return await this.dir.getDirectoryHandle("discussions", { create });
+    } catch {
+      return null;
+    }
+  }
+
+  private async getDiscussionDir(
+    discussionId: string,
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle | null> {
+    const discussionsDir = await this.getDiscussionsDir(create);
+    if (!discussionsDir) return null;
+    try {
+      return await discussionsDir.getDirectoryHandle(encodeURIComponent(discussionId), {
+        create,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveRelativeFile(
+    root: FileSystemDirectoryHandle,
+    relativePath: string,
+    create: boolean
+  ): Promise<{ dir: FileSystemDirectoryHandle | null; fileName: string }> {
+    const segments = relativePath
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (
+      segments.length === 0 ||
+      segments.some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new Error(`Invalid discussion file path: ${relativePath}`);
+    }
+    let current = root;
+    for (const segment of segments.slice(0, -1)) {
+      try {
+        current = await current.getDirectoryHandle(segment, { create });
+      } catch {
+        return { dir: null, fileName: segments[segments.length - 1] };
+      }
+    }
+    return { dir: current, fileName: segments[segments.length - 1] };
+  }
+
+  private async saveDiscussionIndex(): Promise<void> {
+    const discussionsDir = await this.getDiscussionsDir(true);
+    if (!discussionsDir) return;
+    const discussionIds = await this.listDiscussionIds();
+    const fileHandle = await discussionsDir.getFileHandle("index.json", {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          discussions: discussionIds.map((id) => ({
+            id,
+            folder: encodeURIComponent(id),
+          })),
+        },
+        null,
+        2
+      )
+    );
+    await writable.close();
   }
 
   private async saveBenchmarkIndex(): Promise<void> {

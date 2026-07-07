@@ -51,6 +51,11 @@ import {
   type BuildWorkerToolInstructionBudget,
 } from "@/lib/orchestrator/build-worker-budgets";
 import {
+  ARCHITECT_RANGE_READS_PER_PHASE,
+  ARCHITECT_READS_PER_PHASE,
+  ARCHITECT_SEARCHES_PER_PHASE,
+} from "@/lib/orchestrator/build-architect-budgets";
+import {
   buildVerificationFailureTask,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
@@ -500,7 +505,6 @@ function assertNonEmptyBenchmarkModelContent(
   }
 }
 
-const SEARCHES_PER_PHASE = 4;
 // MCP pools are runaway-loop stops like RUNS_PER_PHASE (see build.ts), not cost controls — the USD/time budget window governs spend; sized to outlast a wave's realistic browser-acceptance usage.
 const MCP_CALLS_PER_PHASE = 24;
 const TOTAL_MCP_CALLS = 96;
@@ -5771,13 +5775,13 @@ export async function runBuildDiscussion(
         treeText: treeText(),
         fileContext: "",
         workerNames: workers.map((w) => w.displayName),
-        readHopsLeft: 2,
+        readHopsLeft: ARCHITECT_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
-        searchesLeft: SEARCHES_PER_PHASE,
+        searchesLeft: ARCHITECT_SEARCHES_PER_PHASE,
         codeIntelStatus: codeIntelStatusForPrompt(),
         codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
@@ -5793,7 +5797,11 @@ export async function runBuildDiscussion(
       }),
       initialAttachments: specAttachments,
       // read_range isn't offered during planning, so reads + searches only.
-      budgets: { reads: 2, rangeReads: 0, searches: SEARCHES_PER_PHASE },
+      budgets: {
+        reads: ARCHITECT_READS_PER_PHASE,
+        rangeReads: 0,
+        searches: ARCHITECT_SEARCHES_PER_PHASE,
+      },
       appendContext: (text) => {
         extraFileContext += text;
       },
@@ -5813,13 +5821,13 @@ export async function runBuildDiscussion(
         maxTasks: BUILD_TASKS_PER_WAVE,
         workerNames: workers.map((w) => w.displayName),
         spec: activeSpec,
-        readHopsLeft: 1,
+        readHopsLeft: ARCHITECT_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
-        searchesLeft: SEARCHES_PER_PHASE,
+        searchesLeft: ARCHITECT_SEARCHES_PER_PHASE,
         codeIntelStatus: codeIntelStatusForPrompt(),
         codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
@@ -5833,7 +5841,11 @@ export async function runBuildDiscussion(
         skillContext: planSkillContext,
         assembledContext: planAssembledContext,
       }),
-      budgets: { reads: 1, rangeReads: 0, searches: SEARCHES_PER_PHASE },
+      budgets: {
+        reads: ARCHITECT_READS_PER_PHASE,
+        rangeReads: 0,
+        searches: ARCHITECT_SEARCHES_PER_PHASE,
+      },
       appendContext: (text) => {
         extraFileContext += text;
       },
@@ -7733,14 +7745,14 @@ export async function runBuildDiscussion(
         outstandingTasks: "",
         maxNewTasks: BUILD_TASKS_PER_WAVE,
         cyclesLeft: Math.max(0, BUILD_MAX_WAVES - cycle),
-        readHopsLeft: 2,
-        rangeReadsLeft: 6,
+        readHopsLeft: ARCHITECT_READS_PER_PHASE,
+        rangeReadsLeft: ARCHITECT_RANGE_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
-        searchesLeft: SEARCHES_PER_PHASE,
+        searchesLeft: ARCHITECT_SEARCHES_PER_PHASE,
         codeIntelStatus: codeIntelStatusForPrompt(),
         codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
@@ -7762,7 +7774,11 @@ export async function runBuildDiscussion(
           screenshotAttachments.length > 0 ? screenshotTaskIds.slice(-4) : undefined,
       }),
       initialAttachments: [...reviewAttachments, ...screenshotAttachments],
-      budgets: { reads: 2, rangeReads: 6, searches: SEARCHES_PER_PHASE },
+      budgets: {
+        reads: ARCHITECT_READS_PER_PHASE,
+        rangeReads: ARCHITECT_RANGE_READS_PER_PHASE,
+        searches: ARCHITECT_SEARCHES_PER_PHASE,
+      },
       appendContext: (textChunk) => {
         extraFileContext += textChunk;
       },

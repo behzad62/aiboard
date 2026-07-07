@@ -173,8 +173,8 @@ assert.equal(state.budget?.files.rangeReadsLeft, 28);
 assert.equal(state.budget?.files.rangeReadsLimit, 30);
 assert.equal(state.budget?.files.fetchesLimit, 4);
 assert.equal(state.budget?.files.phaseFetchesLimit, 18);
-assert.equal(formatBuildBudgetRatioForTest(28, 30), "28/30");
+assert.equal(formatBuildBudgetRatioForTest(28, 30), "28 left / 30");
 assert.equal(formatBuildBudgetRatioForTest(undefined, 30), "n/a");
-assert.equal(formatBuildBudgetRatioForTest(3, undefined), "3");
+assert.equal(formatBuildBudgetRatioForTest(3, undefined), "3 left");
 
 console.log("PASS build context panel state");

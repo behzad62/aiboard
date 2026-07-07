@@ -41,6 +41,7 @@ import type {
 } from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
 import {
+  DISCUSSION_FILE_PATHS,
   createAdapter,
   getStorageConfig,
   setStorageConfig,
@@ -99,6 +100,41 @@ export interface ClientStore {
   benchmarkHarnessCertifications: HarnessCertificationResult[];
   /** Global per-model Build performance, accumulated across all builds. */
   modelStats: ModelBuildStat[];
+}
+
+type DiscussionOwnedKey =
+  | "messages"
+  | "finalResults"
+  | "attachments"
+  | "buildFiles"
+  | "buildCheckpoints"
+  | "contextBlobs";
+
+type PersistedMainStore = Omit<ClientStore, DiscussionOwnedKey> & {
+  storageSchemaVersion: 2;
+  discussionStorage: {
+    version: 1;
+    migratedAt?: string;
+  };
+  messages: [];
+  finalResults: [];
+  attachments: AttachmentRecord[];
+  buildFiles: [];
+  buildCheckpoints: [];
+  contextBlobs: [];
+};
+
+interface DiscussionStorageBundle {
+  version: 1;
+  discussionId: string;
+  discussion: Discussion;
+  messages: Message[];
+  finalResult: FinalResult | null;
+  attachments: AttachmentRecord[];
+  buildFiles: BuildFileRecord[];
+  buildCheckpoint: BuildCheckpoint | null;
+  contextBlobs: ContextBlob[];
+  updatedAt: string;
 }
 
 const DEFAULT_STORE: ClientStore = {
@@ -198,8 +234,86 @@ function stripBenchmarkStoreFields(data: Partial<ClientStore>): Partial<ClientSt
   return stripped;
 }
 
-function clientStoreForMainPersistence(data: ClientStore): ClientStore {
-  return { ...structuredClone(data), ...emptyBenchmarkStoreFields() };
+const DISCUSSION_OWNED_STORE_KEYS = [
+  "messages",
+  "finalResults",
+  "attachments",
+  "buildFiles",
+  "buildCheckpoints",
+  "contextBlobs",
+] as const;
+
+function hasDiscussionOwnedStoreFields(data: Partial<ClientStore>): boolean {
+  return DISCUSSION_OWNED_STORE_KEYS.some((key) => {
+    const value = data[key];
+    return Array.isArray(value) && value.length > 0;
+  });
+}
+
+function referencedAttachmentIds(data: ClientStore): Set<string> {
+  const ids = new Set<string>();
+  for (const discussion of data.discussions) {
+    for (const id of parseJsonStringArray(discussion.attachmentIds)) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function clientStoreForMainPersistence(data: ClientStore): PersistedMainStore {
+  const referencedIds = referencedAttachmentIds(data);
+  const mainStore: PersistedMainStore = {
+    ...structuredClone(data),
+    ...emptyBenchmarkStoreFields(),
+    storageSchemaVersion: 2 as const,
+    discussionStorage: {
+      version: 1 as const,
+    },
+    messages: [],
+    finalResults: [],
+    attachments: data.attachments.filter((attachment) => !referencedIds.has(attachment.id)),
+    buildFiles: [],
+    buildCheckpoints: [],
+    contextBlobs: [],
+  };
+  return mainStore;
+}
+
+function parseJsonStringArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function discussionBundleForPersistence(
+  data: ClientStore,
+  discussion: Discussion
+): DiscussionStorageBundle {
+  const attachmentIds = new Set(parseJsonStringArray(discussion.attachmentIds));
+  return {
+    version: 1,
+    discussionId: discussion.id,
+    discussion: structuredClone(discussion),
+    messages: data.messages.filter((message) => message.discussionId === discussion.id),
+    finalResult:
+      data.finalResults.find((result) => result.discussionId === discussion.id) ?? null,
+    attachments: data.attachments.filter((attachment) => attachmentIds.has(attachment.id)),
+    buildFiles: data.buildFiles.filter((file) => file.discussionId === discussion.id),
+    buildCheckpoint:
+      (data.buildCheckpoints ?? []).find(
+        (checkpoint) => checkpoint.discussionId === discussion.id
+      ) ?? null,
+    contextBlobs: (data.contextBlobs ?? []).filter(
+      (blob) => blob.discussionId === discussion.id
+    ),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function hasBenchmarkStoreFields(data: Partial<ClientStore>): boolean {
@@ -276,6 +390,7 @@ let initPromise: Promise<{ needsPassphrase: boolean }> | null = null;
 let initGeneration = 0;
 const readyListeners = new Set<() => void>();
 let benchmarkRunBlobStorageForTests: Map<string, string> | null = null;
+const pendingDeletedDiscussionIds = new Set<string>();
 
 /**
  * Run-file ids already merged into `memory`. Populated during init and by
@@ -327,10 +442,8 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
 
   if (raw === null) {
     const benchmarkData = await loadBenchmarkStoreFields();
-    commitLoadedStore(
-      generation,
-      mergeBenchmarkStoreFields(hydrateStore(), benchmarkData)
-    );
+    const loaded = await loadDiscussionStoreFields(hydrateStore());
+    commitLoadedStore(generation, mergeBenchmarkStoreFields(loaded, benchmarkData));
     return { needsPassphrase: false };
   }
 
@@ -338,15 +451,16 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   if (!env) {
     const persisted = JSON.parse(raw) as Partial<ClientStore>;
     const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
+    const hadLegacyDiscussionData = hasDiscussionOwnedStoreFields(persisted);
     const benchmarkData = await loadBenchmarkStoreFields();
+    const loaded = await loadDiscussionStoreFields(
+      hydrateStore(stripBenchmarkStoreFields(persisted))
+    );
     commitLoadedStore(
       generation,
-      mergeBenchmarkStoreFields(
-        hydrateStore(stripBenchmarkStoreFields(persisted)),
-        benchmarkData
-      )
+      mergeBenchmarkStoreFields(loaded, benchmarkData)
     );
-    if (hadLegacyBenchmarkData) schedulePersist();
+    if (hadLegacyBenchmarkData || hadLegacyDiscussionData) schedulePersist();
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
@@ -355,15 +469,16 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   const json = await unwrap(env);
   const persisted = JSON.parse(json) as Partial<ClientStore>;
   const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
+  const hadLegacyDiscussionData = hasDiscussionOwnedStoreFields(persisted);
   const benchmarkData = await loadBenchmarkStoreFields();
+  const loaded = await loadDiscussionStoreFields(
+    hydrateStore(stripBenchmarkStoreFields(persisted))
+  );
   commitLoadedStore(
     generation,
-    mergeBenchmarkStoreFields(
-      hydrateStore(stripBenchmarkStoreFields(persisted)),
-      benchmarkData
-    )
+    mergeBenchmarkStoreFields(loaded, benchmarkData)
   );
-  if (hadLegacyBenchmarkData) schedulePersist();
+  if (hadLegacyBenchmarkData || hadLegacyDiscussionData) schedulePersist();
   return { needsPassphrase: false };
 }
 
@@ -371,6 +486,129 @@ function commitLoadedStore(generation: number, loaded: ClientStore): void {
   if (generation !== initGeneration || memory) return;
   memory = loaded;
   notifyReady();
+}
+
+async function loadDiscussionStoreFields(base: ClientStore): Promise<ClientStore> {
+  if (!adapter) return base;
+  const loaded = structuredClone(base);
+  const ids = new Set(base.discussions.map((discussion) => discussion.id));
+  for (const id of await adapter.listDiscussionIds()) ids.add(id);
+
+  for (const id of ids) {
+    const bundle = await loadDiscussionBundle(id);
+    if (!bundle) continue;
+    mergeDiscussionBundle(loaded, bundle);
+  }
+  return loaded;
+}
+
+async function loadDiscussionBundle(
+  discussionId: string
+): Promise<DiscussionStorageBundle | null> {
+  if (!adapter) return null;
+  const currentAdapter = adapter;
+  try {
+    const [
+      discussionRaw,
+      messagesRaw,
+      finalRaw,
+      attachmentsRaw,
+      buildFilesRaw,
+      checkpointRaw,
+      contextBlobsRaw,
+    ] = await Promise.all(
+      DISCUSSION_FILE_PATHS.map((relativePath) =>
+        currentAdapter.loadDiscussionFile(discussionId, relativePath)
+      )
+    );
+    if (
+      !discussionRaw &&
+      !messagesRaw &&
+      !finalRaw &&
+      !attachmentsRaw &&
+      !buildFilesRaw &&
+      !checkpointRaw &&
+      !contextBlobsRaw
+    ) {
+      return null;
+    }
+    const discussionRecord = discussionRaw
+      ? (JSON.parse(discussionRaw) as { discussion?: Discussion } | Discussion)
+      : null;
+    const discussion =
+      discussionRecord && "discussion" in discussionRecord
+        ? discussionRecord.discussion
+        : (discussionRecord as Discussion | null);
+    if (!discussion) {
+      console.warn(`Discussion "${discussionId}" has storage files but no discussion.json.`);
+      return null;
+    }
+    return {
+      version: 1,
+      discussionId,
+      discussion,
+      messages: messagesRaw ? (JSON.parse(messagesRaw) as Message[]) : [],
+      finalResult: finalRaw ? (JSON.parse(finalRaw) as FinalResult | null) : null,
+      attachments: attachmentsRaw
+        ? (JSON.parse(attachmentsRaw) as AttachmentRecord[])
+        : [],
+      buildFiles: buildFilesRaw ? (JSON.parse(buildFilesRaw) as BuildFileRecord[]) : [],
+      buildCheckpoint: checkpointRaw
+        ? (JSON.parse(checkpointRaw) as BuildCheckpoint | null)
+        : null,
+      contextBlobs: contextBlobsRaw
+        ? (JSON.parse(contextBlobsRaw) as ContextBlob[])
+        : [],
+      updatedAt:
+        "updatedAt" in (discussionRecord ?? {})
+          ? String((discussionRecord as { updatedAt?: string }).updatedAt)
+          : new Date().toISOString(),
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`Discussion "${discussionId}" could not be read: ${reason}`);
+    return null;
+  }
+}
+
+function mergeDiscussionBundle(target: ClientStore, bundle: DiscussionStorageBundle): void {
+  upsertArrayByKey(target.discussions, bundle.discussion, (item) => item.id);
+  target.messages = mergeById(target.messages, bundle.messages);
+  target.finalResults = [
+    ...target.finalResults.filter((item) => item.discussionId !== bundle.discussionId),
+    ...(bundle.finalResult ? [bundle.finalResult] : []),
+  ];
+  target.attachments = mergeById(target.attachments, bundle.attachments);
+  target.buildFiles = mergeBuildFiles(target.buildFiles, bundle.buildFiles);
+  target.buildCheckpoints = [
+    ...(target.buildCheckpoints ?? []).filter(
+      (item) => item.discussionId !== bundle.discussionId
+    ),
+    ...(bundle.buildCheckpoint ? [bundle.buildCheckpoint] : []),
+  ];
+  target.contextBlobs = mergeById(target.contextBlobs ?? [], bundle.contextBlobs);
+}
+
+function upsertArrayByKey<T>(
+  records: T[],
+  record: T,
+  keyFor: (record: T) => string
+): void {
+  const key = keyFor(record);
+  const existing = records.findIndex((item) => keyFor(item) === key);
+  if (existing >= 0) records[existing] = record;
+  else records.push(record);
+}
+
+function mergeBuildFiles(
+  left: BuildFileRecord[],
+  right: BuildFileRecord[]
+): BuildFileRecord[] {
+  const records = new Map(
+    left.map((item) => [`${item.discussionId}:${item.path}`, item])
+  );
+  for (const item of right) records.set(`${item.discussionId}:${item.path}`, item);
+  return Array.from(records.values());
 }
 
 async function loadBenchmarkStoreFields(): Promise<BenchmarkStoreFields> {
@@ -614,12 +852,85 @@ export async function flush(): Promise<void> {
   }
   // Compute the envelope from the current memory snapshot BEFORE queueing the
   // write, so each serialized save persists the latest state (last-write-wins).
+  const deletedDiscussionIds = Array.from(pendingDeletedDiscussionIds);
+  pendingDeletedDiscussionIds.clear();
+  for (const discussionId of deletedDiscussionIds) {
+    await serializeAdapterWrite(() => currentAdapter.deleteDiscussion(discussionId));
+  }
+  for (const discussion of memory.discussions) {
+    const bundle = discussionBundleForPersistence(memory, discussion);
+    await persistDiscussionBundle(currentAdapter, bundle);
+  }
   const env = await wrap(
     JSON.stringify(clientStoreForMainPersistence(memory)),
     config.encryptionEnabled
   );
   await serializeAdapterWrite(() => currentAdapter.save(JSON.stringify(env)));
   persistDirty = false;
+}
+
+async function persistDiscussionBundle(
+  currentAdapter: StorageAdapter,
+  bundle: DiscussionStorageBundle
+): Promise<void> {
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "discussion.json",
+      JSON.stringify(
+        {
+          version: bundle.version,
+          discussionId: bundle.discussionId,
+          discussion: bundle.discussion,
+          updatedAt: bundle.updatedAt,
+        },
+        null,
+        2
+      )
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "messages.json",
+      JSON.stringify(bundle.messages, null, 2)
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "final-result.json",
+      JSON.stringify(bundle.finalResult, null, 2)
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "attachments.json",
+      JSON.stringify(bundle.attachments, null, 2)
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "build/files.json",
+      JSON.stringify(bundle.buildFiles, null, 2)
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "build/checkpoint.json",
+      JSON.stringify(bundle.buildCheckpoint, null, 2)
+    )
+  );
+  await serializeAdapterWrite(() =>
+    currentAdapter.saveDiscussionFile(
+      bundle.discussionId,
+      "build/context-blobs.json",
+      JSON.stringify(bundle.contextBlobs, null, 2)
+    )
+  );
 }
 
 // ── Reads (synchronous against memory) ────────────────────────────────────────
@@ -807,6 +1118,8 @@ export function updateDiscussion(id: string, patch: Partial<Discussion>): void {
 }
 export function deleteDiscussion(id: string): void {
   const s = store();
+  const discussion = s.discussions.find((d) => d.id === id);
+  const removedAttachmentIds = new Set(parseJsonStringArray(discussion?.attachmentIds));
   s.discussions = s.discussions.filter((d) => d.id !== id);
   s.messages = s.messages.filter((m) => m.discussionId !== id);
   s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
@@ -820,6 +1133,13 @@ export function deleteDiscussion(id: string): void {
   s.buildMemories = (s.buildMemories ?? []).filter(
     (memory) => memory.discussionId !== id
   );
+  const stillReferencedAttachmentIds = referencedAttachmentIds(s);
+  s.attachments = s.attachments.filter(
+    (attachment) =>
+      !removedAttachmentIds.has(attachment.id) ||
+      stillReferencedAttachmentIds.has(attachment.id)
+  );
+  pendingDeletedDiscussionIds.add(id);
   schedulePersist();
 }
 /**
@@ -1331,6 +1651,7 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   adapter = null;
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
+  pendingDeletedDiscussionIds.clear();
   mergedBenchmarkRunIds.clear();
   corruptBenchmarkRunIds.clear();
   notifyReady();
@@ -1348,8 +1669,36 @@ export function __clearClientStoreForTests(): void {
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
   benchmarkRunBlobStorageForTests = null;
+  pendingDeletedDiscussionIds.clear();
   mergedBenchmarkRunIds.clear();
   corruptBenchmarkRunIds.clear();
+}
+
+export async function __loadClientStoreFromAdapterForTests(
+  next: StorageAdapter
+): Promise<{ needsPassphrase: boolean }> {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDirty = false;
+  initGeneration++;
+  memory = null;
+  adapter = next;
+  initPromise = null;
+  config = { kind: next.kind, encryptionEnabled: false };
+  pendingDeletedDiscussionIds.clear();
+  const raw = await next.load();
+  const persisted = raw
+    ? parseEnvelope(raw)
+      ? JSON.parse(await unwrap(parseEnvelope(raw)!))
+      : JSON.parse(raw)
+    : {};
+  memory = await loadDiscussionStoreFields(
+    hydrateStore(stripBenchmarkStoreFields(persisted))
+  );
+  notifyReady();
+  return { needsPassphrase: false };
 }
 
 export async function __setClientStorePassphraseForTests(

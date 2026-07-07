@@ -178,12 +178,12 @@ function formatBytes(chars: number): string {
 }
 
 function formatBudgetValue(value: number | undefined): string {
-  return value == null ? "n/a" : String(value);
+  return value == null ? "n/a" : `${value} left`;
 }
 
 function formatBudgetRatio(value: number | undefined, limit: number | undefined): string {
   if (value == null) return "n/a";
-  return limit == null ? String(value) : `${value}/${limit}`;
+  return limit == null ? `${value} left` : `${value} left / ${limit}`;
 }
 
 export const formatBuildBudgetRatioForTest = formatBudgetRatio;
@@ -215,7 +215,7 @@ function BuildBudgetStrip({ budget }: { budget: BuildBudgetView }) {
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
             <Gauge className="h-3.5 w-3.5" />
-            Live budgets
+            Budgets remaining
           </p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {budget.label}
@@ -235,20 +235,20 @@ function BuildBudgetStrip({ budget }: { budget: BuildBudgetView }) {
         <div className="min-w-0">
           <p className="mb-1 flex items-center gap-1.5 text-[0.65rem] font-medium uppercase text-muted-foreground">
             <Terminal className="h-3 w-3" />
-            Shell runs
+            Shell runs left
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <BudgetCell
-              label="Task"
+              label="Task budget"
               value={formatBudgetValue(budget.shell.taskRunsLeft)}
               detail="worker"
             />
             <BudgetCell
-              label="Phase"
+              label="Phase budget"
               value={`${budget.shell.phaseRunsLeft}/${budget.shell.phaseRunsLimit}`}
             />
             <BudgetCell
-              label="Run"
+              label="Run budget"
               value={`${budget.shell.totalRunsLeft}/${budget.shell.totalRunsLimit}`}
             />
           </div>
@@ -256,7 +256,7 @@ function BuildBudgetStrip({ budget }: { budget: BuildBudgetView }) {
         <div className="min-w-0">
           <p className="mb-1 flex items-center gap-1.5 text-[0.65rem] font-medium uppercase text-muted-foreground">
             <FileCode2 className="h-3 w-3" />
-            File operations
+            File operations left
           </p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
             <BudgetCell

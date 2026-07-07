@@ -456,12 +456,12 @@ export default function SettingsPage() {
                 <strong className="text-foreground">
                   API keys never leave your device
                 </strong>{" "}
-                except inside requests to their own provider. To encrypt the
-                whole store at rest — keys included — set a passphrase on the
-                Storage tab (PBKDF2-derived AES-256-GCM via Web Crypto; only
-                you know the passphrase, and there is no recovery if you lose
-                it). Recommended if your store lives in a shared or
-                cloud-synced folder.
+                except inside requests to their own provider. If you enable
+                passphrase encryption, the main store file that contains
+                settings and provider keys is encrypted with PBKDF2-derived
+                AES-256-GCM. Discussion folders stay as readable local JSON so
+                you can inspect and delete them directly from your storage
+                folder.
               </p>
               <p>
                 <strong className="text-foreground">

@@ -263,15 +263,17 @@ export function StorageSettings({
             Passphrase encryption
           </CardTitle>
           <CardDescription>
-            Encrypts the whole store (including API keys) with a passphrase.
-            Recommended when using a shared or cloud-synced folder.
+            Encrypts the main store file (including API keys) with a passphrase.
+            Discussion folders stay as readable local JSON so you can inspect,
+            remove, or back them up directly.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {config?.encryptionEnabled ? (
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
-                Encryption is on. The store is unreadable without your passphrase.
+                Encryption is on for the main store. Discussion folders remain
+                readable local JSON files.
               </p>
               <Button variant="outline" onClick={disableEncryption} disabled={busy}>
                 Turn off encryption
