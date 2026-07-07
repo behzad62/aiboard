@@ -89,6 +89,7 @@ import {
   evaluateBuildQualityGate,
   formatBuildQualityGateSummary,
   shouldRequireBrowserAcceptance,
+  shouldRequireRequestFulfillment,
   type BuildQualityGateRepoStatus,
   type BuildQualityRequiredCheck,
 } from "@/lib/orchestrator/build-quality-gates";
@@ -189,6 +190,7 @@ import {
   buildPlanCritiqueDigest,
   buildPlanCritiquePrompt,
   buildPlanRevisionPrompt,
+  buildEngineVerifiedOutputSummary,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
   buildReviewFixProblem,
@@ -234,6 +236,7 @@ import {
   type RepoIssueReadAction,
   type RepoPushAction,
   type RepoPrCreateAction,
+  type RequestFulfillmentReview,
   type ReviewAction,
   type SkillRequestAction,
   type ToolCallResultStatus,
@@ -1256,6 +1259,38 @@ export async function runBuildDiscussion(
   let playwrightNavigated = false;
   let browserAcceptanceObserved = false;
   let browserAcceptanceEvidence: string | null = null;
+  let requestFulfillmentObserved = false;
+  let requestFulfillmentEvidence: string | null = null;
+  const positiveFulfillmentField = (field: string, text: string): boolean =>
+    new RegExp(
+      `\\b${field}\\b\\s*[:=]\\s*["']?(true|yes|pass(?:ed)?|ok)["']?\\b`,
+      "i"
+    ).test(text);
+  const requestFulfillmentSatisfied = (
+    review: RequestFulfillmentReview | undefined
+  ): boolean =>
+    !!review?.reviewed &&
+    !!review.satisfied &&
+    (review.gaps?.filter((gap) => gap.trim()).length ?? 0) === 0;
+  const hasPositiveRequestFulfillmentEvidence = (text: string): boolean => {
+    if (!text.trim()) return false;
+    const reviewed = positiveFulfillmentField("reviewed", text);
+    const satisfied =
+      positiveFulfillmentField("satisfied", text) ||
+      positiveFulfillmentField("requestSatisfied", text) ||
+      positiveFulfillmentField("userRequestSatisfied", text);
+    return /\brequestFulfillment\b/i.test(text) && reviewed && satisfied;
+  };
+  const recordRequestFulfillmentEvidence = (
+    review: RequestFulfillmentReview | undefined,
+    fallbackText: string,
+    evidence: string
+  ): void => {
+    requestFulfillmentObserved =
+      requestFulfillmentSatisfied(review) ||
+      hasPositiveRequestFulfillmentEvidence(fallbackText);
+    requestFulfillmentEvidence = requestFulfillmentObserved ? evidence : null;
+  };
   let codeIntelProvider: CodeIntelProvider | null = null;
   const codeIntelBudget = createCodeIntelPhaseBudget({
     perPhase: CODE_INTEL_CALLS_PER_PHASE,
@@ -7604,7 +7639,6 @@ export async function runBuildDiscussion(
         changes,
       }))
     );
-
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
     const verifyResult = await runVerify(verifyCommand);
@@ -7835,6 +7869,11 @@ export async function runBuildDiscussion(
     });
     const action = reviewResult.action as ReviewAction;
     const text = reviewResult.text;
+    recordRequestFulfillmentEvidence(
+      action.requestFulfillment,
+      text,
+      `${reviewActor.displayName} request-fulfillment review in wave ${cycle}`
+    );
     const applicableReviewResults = action.results.filter((result) => {
       const task = tasks.find((item) => item.id === result.taskId);
       return shouldApplyReviewResultToTask(task);
@@ -8349,6 +8388,11 @@ export async function runBuildDiscussion(
       treeText: treeText(),
       changedFiles: [...buildChangedFiles],
     });
+    const requestFulfillmentRequired = shouldRequireRequestFulfillment({
+      request: discussion.topic,
+      treeText: treeText(),
+      changedFiles: [...buildChangedFiles],
+    });
     const qualityGate = evaluateBuildQualityGate({
       githubWorkflow,
       expectedPr: prExpected,
@@ -8367,6 +8411,13 @@ export async function runBuildDiscussion(
           ? `Observed via ${browserAcceptanceEvidence ?? "browser MCP tool"} after browser navigation.`
           : "This appears to be a web app or UI-affecting build; Build mode must record a real-browser acceptance pass before completion.",
       },
+      requestFulfillment: {
+        required: requestFulfillmentRequired,
+        observed: requestFulfillmentObserved,
+        reason: requestFulfillmentObserved
+          ? `Observed via ${requestFulfillmentEvidence ?? "Architect review"}.`
+          : "Build mode must record explicit requestFulfillment evidence that the landed output was compared against and satisfies the original user request before completion.",
+      },
     });
     finalQualityGateSummary = formatBuildQualityGateSummary(qualityGate);
 
@@ -8376,6 +8427,8 @@ export async function runBuildDiscussion(
           code:
             blocker.code === "browser_acceptance_missing"
               ? "browser_acceptance_missing"
+              : blocker.code === "request_fulfillment_missing"
+              ? "request_fulfillment_missing"
               : "quality_gate_failed",
           severity: "blocked",
           source: "engine",
@@ -8393,11 +8446,18 @@ export async function runBuildDiscussion(
       const browserAcceptanceBlocker = qualityGate.blockers.find(
         (blocker) => blocker.code === "browser_acceptance_missing"
       );
+      const requestFulfillmentBlocker = qualityGate.blockers.find(
+        (blocker) => blocker.code === "request_fulfillment_missing"
+      );
       tasks = reopenBuildTasksForQualityGate(tasks, {
         skillEvidence: skillEvidenceRecords,
         browserAcceptanceMissing: !!browserAcceptanceBlocker,
         browserAcceptanceReason:
           browserAcceptanceBlocker?.details ?? browserAcceptanceBlocker?.message,
+        requestFulfillmentMissing: !!requestFulfillmentBlocker,
+        requestFulfillmentReason:
+          requestFulfillmentBlocker?.details ??
+          requestFulfillmentBlocker?.message,
         maxContextFiles: MAX_CONTEXT_FILES,
       });
       const report = createStopReport({
@@ -8523,7 +8583,13 @@ export async function runBuildDiscussion(
   // any user-approved commits, the imported issue, the pushed branch, the PR URL,
   // and the verification result ALWAYS appear in the build summary, regardless of
   // what the Architect chose to write (NRW-006/008). Pure helper keeps it bounded.
-  let finalAnswer = answer;
+  const engineOutputSummary = buildEngineVerifiedOutputSummary({
+    filesChanged: [...writtenThisRun],
+    producedFileCount: virtualFs.size,
+  });
+  let finalAnswer = engineOutputSummary
+    ? `${engineOutputSummary}\n\n${answer}`
+    : answer;
   if (runner && repoIsGit) {
     const block = buildRepoWorkflowSummary({
       branch: repoActiveBranch,
@@ -8536,7 +8602,7 @@ export async function runBuildDiscussion(
       verification: repoVerification,
       expectedPr: prExpected,
     });
-    if (block) finalAnswer = `${answer}\n${block}`;
+    if (block) finalAnswer = `${finalAnswer}\n${block}`;
   }
   if (finalQualityGateSummary) {
     finalAnswer = `${finalAnswer}\n\n${finalQualityGateSummary}`;

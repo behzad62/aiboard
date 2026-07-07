@@ -109,6 +109,10 @@ const browserEvidenceFields = [
   "canvasPresent",
   "webglContext",
   "labelCount",
+  "screenshotTaken",
+  "visualQualityReviewed",
+  "visibleOutputMatchesRequest",
+  "requestedVisualCriteriaMet",
   "pixelChangedAfterRun",
   "startPauseWorked",
   "resetWorked",
@@ -130,6 +134,13 @@ check(
     prompt.includes("Should I rewrite the query parser or patch the strict failure?") &&
     prompt.includes("Architect answer:") &&
     prompt.includes("Patch the strict failure only. Do not rewrite the parser."),
+  prompt
+);
+check(
+  "worker prompt treats visual matching as conditional browser evidence",
+  /visibleOutputMatchesRequest/i.test(prompt) &&
+    /requestedVisualCriteriaMet/i.test(prompt) &&
+    /visual, layout, media, animation, or interactive output/i.test(prompt),
   prompt
 );
 check(
@@ -183,6 +194,7 @@ check(
     /Fix verified against the reproduced failure/i.test(skillEvidencePrompt) &&
     /Trust boundary reviewed and unsafe case considered/i.test(skillEvidencePrompt) &&
     /browser_navigate/i.test(skillEvidencePrompt) &&
+    /visibleOutputMatchesRequest/i.test(skillEvidencePrompt) &&
     /browser_console_messages/i.test(skillEvidencePrompt),
   skillEvidencePrompt
 );
@@ -366,6 +378,14 @@ check(
   reviewPrompt
 );
 check(
+  "architect review prompt requires request-fulfillment evidence for all builds",
+  /requestFulfillment/i.test(reviewPrompt) &&
+    /original user request/i.test(reviewPrompt) &&
+    /landed output/i.test(reviewPrompt) &&
+    /do NOT set "done": true/i.test(reviewPrompt),
+  reviewPrompt
+);
+check(
   "architect review prompt names structured browser acceptance fields",
   browserEvidenceFields.every((field) => reviewPrompt.includes(field)),
   reviewPrompt
@@ -407,7 +427,9 @@ const reviewPromptWithShots = buildArchitectReviewPrompt({
 check(
   "review prompt names attached screenshots and asks for visual acceptance when screenshotTaskIds present",
   /Screenshot\(s\) of the running app are ATTACHED for: T1, T2/i.test(reviewPromptWithShots) &&
-    /judge visual acceptance from them/i.test(reviewPromptWithShots),
+    /judge visual acceptance from them/i.test(reviewPromptWithShots) &&
+    /requested appearance\/behavior/i.test(reviewPromptWithShots) &&
+    /do not set "done": true/i.test(reviewPromptWithShots),
   reviewPromptWithShots
 );
 const reviewPromptWithDiff = buildArchitectReviewPrompt({

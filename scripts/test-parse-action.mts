@@ -102,6 +102,18 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
       (a as { verifyCommand?: string }).verifyCommand === "node --check src/main.js",
   ],
   [
+    "review action preserves request fulfillment evidence",
+    '{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"approve"}],"requestFulfillment":{"reviewed":true,"satisfied":true,"summary":"Request satisfied","evidence":["src/index.ts","npm test"],"gaps":[]},"done":true}',
+    (a) =>
+      a?.action === "review" &&
+      (a as { requestFulfillment?: { reviewed?: boolean; satisfied?: boolean; evidence?: string[] } })
+        .requestFulfillment?.reviewed === true &&
+      (a as { requestFulfillment?: { reviewed?: boolean; satisfied?: boolean; evidence?: string[] } })
+        .requestFulfillment?.satisfied === true &&
+      (a as { requestFulfillment?: { reviewed?: boolean; satisfied?: boolean; evidence?: string[] } })
+        .requestFulfillment?.evidence?.includes("npm test") === true,
+  ],
+  [
     "legacy approve review maps to both gates approved",
     '{"action":"review","results":[{"taskId":"T1","verdict":"approve"}],"done":true}',
     (a) =>

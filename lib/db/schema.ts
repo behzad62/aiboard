@@ -91,6 +91,7 @@ export type BuildProblemCode =
   | "no_output"
   | "skill_evidence_missing"
   | "browser_acceptance_missing"
+  | "request_fulfillment_missing"
   | "repeated_no_progress"
   | "incomplete_tasks"
   | "quality_gate_failed"

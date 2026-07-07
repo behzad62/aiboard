@@ -262,6 +262,42 @@ check(
 );
 check("quality gate resume leaves unrelated done tasks alone", untouchedT2?.status === "done", qualityGateReopened);
 
+const requestGateReopened = reopenBuildTasksForQualityGate(
+  [
+    {
+      id: "T1",
+      title: "Build CSV CLI",
+      instructions: "Build the parser and command-line interface.",
+      contextFiles: ["src/index.ts"],
+      outputPaths: ["src/index.ts", "src/cli.ts"],
+      status: "done",
+      workerIndex: 0,
+    },
+    {
+      id: "T2",
+      title: "Write docs",
+      instructions: "Document usage.",
+      contextFiles: ["README.md"],
+      outputPaths: ["README.md"],
+      status: "done",
+    },
+  ],
+  {
+    requestFulfillmentMissing: true,
+    requestFulfillmentReason:
+      "Review did not explicitly compare the landed output against the original user request.",
+  }
+);
+const reopenedRequest = requestGateReopened.find((task) => task.id === "T1");
+check("request-fulfillment gate reopens a likely implementation task", reopenedRequest?.status === "fixing", requestGateReopened);
+check(
+  "request-fulfillment gate asks for user-request comparison",
+  /request fulfillment/i.test(reopenedRequest?.instructions ?? "") &&
+    /original user request/i.test(reopenedRequest?.instructions ?? "") &&
+    /requestFulfillment/i.test(reopenedRequest?.instructions ?? ""),
+  reopenedRequest?.instructions
+);
+
 const legacyCheckpointResume = reopenBuildTasksForBlockedQualityGateCheckpoint(
   normalizeBuildTasksForResume([
     {

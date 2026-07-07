@@ -40,6 +40,7 @@ export interface BuildQualityGateItem {
     | "check_failed"
     | "skill_evidence_missing"
     | "browser_acceptance_missing"
+    | "request_fulfillment_missing"
     | "issues_close_on_merge";
   message: string;
   details?: string;
@@ -55,6 +56,11 @@ export interface BuildQualityGateInput {
   issueNumbers?: number[];
   skillEvidence?: SkillEvidence[];
   browserAcceptance?: {
+    required: boolean;
+    observed: boolean;
+    reason?: string;
+  };
+  requestFulfillment?: {
     required: boolean;
     observed: boolean;
     reason?: string;
@@ -102,6 +108,16 @@ export function shouldRequireBrowserAcceptance(input: {
     return changedFilesAffectUi;
   }
   return /(^|\n)(app\/page\.(tsx|jsx|ts|js)|pages\/|public\/index\.html|public\/app\.js|src\/app\/|src\/main\.(tsx|jsx|ts|js)|src\/app\.(tsx|jsx|ts|js)|vite\.config\.|next\.config\.)/i.test(tree);
+}
+
+export function shouldRequireRequestFulfillment(input: {
+  request: string;
+  treeText?: string;
+  changedFiles?: string[];
+}): boolean {
+  void input.treeText;
+  void input.changedFiles;
+  return input.request.trim().length > 0;
 }
 
 function uniqueSortedIssues(issueNumbers: number[] | undefined): number[] {
@@ -246,6 +262,17 @@ export function evaluateBuildQualityGate(
       details:
         input.browserAcceptance.reason ??
         "Start the app, navigate to the local server in a browser, exercise the main workflow, and verify the settled UI has no visible stuck loading, error state, blank screen, blocking overlay, or console errors.",
+    });
+  }
+
+  if (input.requestFulfillment?.required && !input.requestFulfillment.observed) {
+    blockers.push({
+      code: "request_fulfillment_missing",
+      message:
+        "Build cannot be marked done because no explicit evidence shows the landed output was compared against the original user request.",
+      details:
+        input.requestFulfillment.reason ??
+        "Review the original user request, the Architect spec, the landed files, and verification evidence. Report requestFulfillment.reviewed=true and requestFulfillment.satisfied=true only when the delivered result satisfies the request; list any gaps otherwise.",
     });
   }
 

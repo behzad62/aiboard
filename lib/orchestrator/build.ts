@@ -172,6 +172,8 @@ export interface BuildQualityGateReopenInput {
   skillEvidence?: SkillEvidence[];
   browserAcceptanceMissing?: boolean;
   browserAcceptanceReason?: string;
+  requestFulfillmentMissing?: boolean;
+  requestFulfillmentReason?: string;
   maxContextFiles?: number;
 }
 
@@ -192,6 +194,19 @@ function isLikelyUiTask(task: BuildTask): boolean {
     /(^|\/)(app|pages|components|public|src)\/|\.((tsx|jsx|css|scss|html))$/i.test(text);
 }
 
+function isLikelyDocumentationTask(task: BuildTask): boolean {
+  const text = [
+    task.title,
+    task.instructions,
+    ...(task.outputPaths ?? []),
+    ...task.contextFiles,
+  ]
+    .join("\n")
+    .toLowerCase();
+  return /\b(readme|docs?|documentation|usage guide|changelog)\b/.test(text) ||
+    /(^|\/)(docs?\/|readme(\.|$)|changelog(\.|$))|\.md$/i.test(text);
+}
+
 function browserAcceptanceFixInstructions(reason?: string): string {
   return [
     "Real-browser acceptance is missing for this web/UI build.",
@@ -199,6 +214,19 @@ function browserAcceptanceFixInstructions(reason?: string): string {
     "Start or reuse the active local server URL, navigate with the browser MCP, exercise the main workflow, and verify the settled UI.",
     "Report the URL, action performed, expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay, and console result.",
     "Only change files if browser acceptance reveals a defect.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function requestFulfillmentFixInstructions(reason?: string): string {
+  return [
+    "Request fulfillment evidence is missing for this build.",
+    reason?.trim() ? reason.trim() : "",
+    "Compare the landed output against the original user request, Architect spec, current phase spec, task contracts, changed files, and verification evidence.",
+    "Report structured requestFulfillment evidence with reviewed=true, satisfied=true only if the delivered result satisfies the request, a concise summary, evidence, and any gaps.",
+    "If the request includes a browser, UI, visual, CLI, API, documentation, repo workflow, or other observable behavior, verify the relevant surface before claiming it is satisfied.",
+    "Only change files if the comparison reveals an unmet requirement.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -215,13 +243,20 @@ export function reopenBuildTasksForQualityGate(
       .filter((taskId): taskId is string => !!taskId?.trim())
   );
 
-  if (input.browserAcceptanceMissing && targetIds.size === 0) {
+  if (
+    (input.browserAcceptanceMissing || input.requestFulfillmentMissing) &&
+    targetIds.size === 0
+  ) {
     const doneTasks = tasks.filter((task) => task.status === "done");
-    const browserTask =
-      [...doneTasks].reverse().find(isLikelyUiTask) ??
-      doneTasks.at(-1) ??
-      tasks.at(-1);
-    if (browserTask) targetIds.add(browserTask.id);
+    const targetTask = input.browserAcceptanceMissing
+      ? [...doneTasks].reverse().find(isLikelyUiTask) ??
+        [...doneTasks].reverse().find((task) => !isLikelyDocumentationTask(task)) ??
+        doneTasks.at(-1) ??
+        tasks.at(-1)
+      : [...doneTasks].reverse().find((task) => !isLikelyDocumentationTask(task)) ??
+        doneTasks.at(-1) ??
+        tasks.at(-1);
+    if (targetTask) targetIds.add(targetTask.id);
   }
 
   if (targetIds.size === 0) return tasks.map((task) => ({ ...task }));
@@ -238,6 +273,9 @@ export function reopenBuildTasksForQualityGate(
       skillInstructions,
       input.browserAcceptanceMissing
         ? browserAcceptanceFixInstructions(input.browserAcceptanceReason)
+        : "",
+      input.requestFulfillmentMissing
+        ? requestFulfillmentFixInstructions(input.requestFulfillmentReason)
         : "",
     ]
       .filter((part) => part.trim())
@@ -291,7 +329,7 @@ function checkpointWasBlockedByQualityGate(
       [problem.code, problem.message, problem.details].filter(Boolean).join(" ")
     ),
   ].join("\n");
-  return /final Build quality gate|quality_gate_failed|browser_acceptance_missing/i.test(
+  return /final Build quality gate|quality_gate_failed|browser_acceptance_missing|request_fulfillment_missing|request fulfillment|requestFulfillment/i.test(
     text
   );
 }
@@ -307,6 +345,9 @@ export function reopenBuildTasksForBlockedQualityGateCheckpoint(
   const browserProblem = (input.problems ?? []).find(
     (problem) => problem.code === "browser_acceptance_missing"
   );
+  const requestFulfillmentProblem = (input.problems ?? []).find(
+    (problem) => problem.code === "request_fulfillment_missing"
+  );
   const stopMessage = input.stopMessage ?? "";
   return reopenBuildTasksForQualityGate(tasks, {
     skillEvidence: input.skillEvidence,
@@ -314,6 +355,13 @@ export function reopenBuildTasksForBlockedQualityGateCheckpoint(
       !!browserProblem || /real-browser acceptance|browser acceptance/i.test(stopMessage),
     browserAcceptanceReason:
       browserProblem?.details ?? browserProblem?.message ?? stopMessage,
+    requestFulfillmentMissing:
+      !!requestFulfillmentProblem ||
+      /request fulfillment|requestFulfillment/i.test(stopMessage),
+    requestFulfillmentReason:
+      requestFulfillmentProblem?.details ??
+      requestFulfillmentProblem?.message ??
+      stopMessage,
     maxContextFiles: input.maxContextFiles,
   });
 }
@@ -715,6 +763,14 @@ export interface ReviewResult {
   fixInstructions?: string;
 }
 
+export interface RequestFulfillmentReview {
+  reviewed: boolean;
+  satisfied: boolean;
+  summary?: string;
+  evidence?: string[];
+  gaps?: string[];
+}
+
 export interface ReviewAction {
   action: "review";
   results: ReviewResult[];
@@ -727,6 +783,8 @@ export interface ReviewAction {
    * non-mutating verifier exists for the current project.
    */
   verifyCommand?: string;
+  /** Explicit review that the landed output still satisfies the user's request. */
+  requestFulfillment?: RequestFulfillmentReview;
   done: boolean;
   notes?: string;
 }
@@ -750,6 +808,24 @@ function stringArrayFromUnknown(value: unknown): string[] {
 
 function stringFromUnknown(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeRequestFulfillmentReview(
+  value: unknown
+): RequestFulfillmentReview | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  return {
+    reviewed: raw.reviewed === true,
+    satisfied: raw.satisfied === true,
+    ...(stringFromUnknown(raw.summary) ? { summary: stringFromUnknown(raw.summary) } : {}),
+    ...(stringArrayFromUnknown(raw.evidence).length
+      ? { evidence: stringArrayFromUnknown(raw.evidence) }
+      : {}),
+    ...(stringArrayFromUnknown(raw.gaps).length
+      ? { gaps: stringArrayFromUnknown(raw.gaps) }
+      : {}),
+  };
 }
 
 export function normalizeBuildPhaseSpec(value: unknown): BuildPhaseSpec | undefined {
@@ -1019,6 +1095,32 @@ export function buildArchitectActionResponseFormat(): StructuredOutputFormat {
             required: ["taskId"],
             additionalProperties: false,
           },
+        },
+        requestFulfillment: {
+          type: "object",
+          description:
+            "Explicit comparison of landed output against the original user request.",
+          properties: {
+            reviewed: {
+              type: "boolean",
+              description:
+                "True only when the reviewer compared the landed output to the original user request and active spec.",
+            },
+            satisfied: {
+              type: "boolean",
+              description:
+                "True only when the delivered result satisfies the user request with no known blocking gaps.",
+            },
+            summary: stringSchema("Concise fulfillment conclusion."),
+            evidence: stringArraySchema(
+              "Concrete files, checks, browser observations, CLI/API behavior, docs, or repo workflow evidence reviewed."
+            ),
+            gaps: stringArraySchema(
+              "Unmet user requirements or missing evidence; empty when satisfied is true."
+            ),
+          },
+          required: ["reviewed", "satisfied"],
+          additionalProperties: false,
         },
         newTasks: { type: "array", items: taskSchema },
         done: { type: "boolean" },
@@ -2656,6 +2758,9 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           phaseSpec: normalizeBuildPhaseSpec(
             (parsed as { phaseSpec?: unknown }).phaseSpec
           ),
+          requestFulfillment: normalizeRequestFulfillmentReview(
+            (parsed as { requestFulfillment?: unknown }).requestFulfillment
+          ),
           ...(verifyCommand !== undefined ? { verifyCommand } : {}),
           done: !!review.done,
         };
@@ -3674,7 +3779,7 @@ export const DUPLICATE_TOOL_CALL_FEEDBACK =
 export const FORCED_REVIEW_INSTRUCTION = [
   "STOP USING TOOLS. You have used your inspection budget for this review (or repeated the same lookups). Any further read/search/command requests will be IGNORED.",
   "Using ONLY the file contents, change digests, and tool results already in this conversation, produce your final review now as exactly ONE fenced ```json block matching the review schema.",
-  "For every reviewed task, return both `specVerdict` and `qualityVerdict`. If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, misses the current phase spec, has code-quality problems, or is a web app without browser acceptance evidence, set the relevant gate to `fix` with concrete instructions. Approve only tasks whose spec and quality gates are demonstrably complete.",
+  "For every reviewed task, return both `specVerdict` and `qualityVerdict`. If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, misses the current phase spec, has code-quality problems, or is a web app without browser acceptance evidence, set the relevant gate to `fix` with concrete instructions. Also return requestFulfillment and do NOT set done=true unless requestFulfillment.reviewed=true and requestFulfillment.satisfied=true. Approve only tasks whose spec and quality gates are demonstrably complete.",
 ].join("\n");
 
 export const FORCED_PLAN_INSTRUCTION = [
@@ -3779,7 +3884,8 @@ export function buildPhaseSpecSection(phaseSpec?: BuildPhaseSpec): string {
 const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
   "For web apps or UI-affecting tasks, browser acceptance is required when a local server and browser/MCP tools are available.",
   "Exercise the main user workflow in a real browser after starting the app: load the page, perform the primary form/click/navigation actions, and inspect the post-action settled state.",
-  "Report a structured acceptance record with these exact fields when they apply: canvasPresent, webglContext, labelCount, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors.",
+  "Report a structured acceptance record with these exact fields when they apply: canvasPresent, webglContext, labelCount, screenshotTaken, visualQualityReviewed, visibleOutputMatchesRequest, requestedVisualCriteriaMet, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors.",
+  "For requests with visual, layout, media, animation, or interactive output, visibleOutputMatchesRequest must judge the screenshot or settled UI against the user-requested appearance and behavior.",
   "Verify expected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If you cannot run browser acceptance, say exactly what was not verified and do not claim it passed.",
 ].join(" ");
 
@@ -3789,7 +3895,7 @@ const WORKER_SKILL_EVIDENCE_INSTRUCTION = [
   "- agent:test-driven-development: RED test/check failure before implementation: <command or check and failing result>; GREEN test/check pass after implementation: <command or check and passing result>.",
   "- superpowers:systematic-debugging: Root cause or reproduction identified before the fix: <root cause, reproduction, hypothesis, or trace>; Fix verified against the reproduced failure: <command, test, or browser result>.",
   "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: <untrusted input, secret, file path, shell, network, or storage boundary and the unsafe case considered>.",
-  "- aiboard:browser-acceptance: browser_navigate <exact local URL>; structured fields canvasPresent, webglContext, labelCount, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
+  "- aiboard:browser-acceptance: browser_navigate <exact local URL>; structured fields canvasPresent, webglContext, labelCount, screenshotTaken, visualQualityReviewed, visibleOutputMatchesRequest, requestedVisualCriteriaMet, pixelChangedAfterRun, startPauseWorked, resetWorked, newArenaChanged, speedChanged, ammoApplied, consoleErrors; browser_snapshot/browser_evaluate expected content visible, no visible stuck loading, no error banner, no blank screen, no blocking overlay; browser_console_messages returned no console errors.",
   "Only include lines for active/applicable skills or explicit exemption reasons.",
 ].join("\n");
 
@@ -3881,7 +3987,7 @@ function playwrightWorkerToolDoc(
     '- Use browser_evaluate only for DOM/page-state checks after browser_navigate; never put require, child_process, process, fs, npm, shell commands, or project file reads in browser_evaluate.',
     '- After the main workflow settles, capture ONE screenshot for the reviewer with exactly: {"action":"tool","server":"playwright","tool":"browser_take_screenshot","args":{},"reason":"visual acceptance evidence"}',
     '- Do not emit bare calls such as {"action":"browser_snapshot"}. Do not use "arguments" instead of "args". Do not put MCP actions in arrays. Do not concatenate multiple JSON objects without waiting for tool results when the next action depends on the prior result.',
-    "- Browser acceptance evidence must name the URL, the action performed, the visible settled result, stuck-loading/error/blank/overlay absence, and console result.",
+    "- Browser acceptance evidence must name the URL, the action performed, the visible settled result, stuck-loading/error/blank/overlay absence, console result, and for visual, layout, media, animation, or interactive output the screenshot-reviewed visibleOutputMatchesRequest and requestedVisualCriteriaMet fields.",
   ].join("\n");
 }
 
@@ -4676,8 +4782,9 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     EDIT_BLOCK_INSTRUCTION,
     `${WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION} Browser acceptance is a completion gate for web apps: do NOT set "done": true without evidence that the main workflow was exercised in a browser and finished with no visible stuck loading, visible error state, blank screen, blocking overlay, or console errors.`,
     input.screenshotTaskIds && input.screenshotTaskIds.length > 0
-      ? `Screenshot(s) of the running app are ATTACHED for: ${input.screenshotTaskIds.join(", ")} — judge visual acceptance from them (layout, obvious breakage, error states, blank screens), in addition to the textual evidence.`
+      ? `Screenshot(s) of the running app are ATTACHED for: ${input.screenshotTaskIds.join(", ")} — judge visual acceptance from them (requested appearance/behavior, layout, obvious breakage, error states, blank screens), in addition to the textual evidence. For any request with visual or interactive output, do not set "done": true unless the screenshot visibly matches the requested result; if the evidence is weak, placeholder-like, or ambiguous, return a fix or create a follow-up task.`
       : "",
+    'Request fulfillment is a completion gate for EVERY build: compare the original user request, Architect spec, current phase spec, landed output, and verification evidence. Return `requestFulfillment` with reviewed=true only after doing that comparison. Set satisfied=true only when the landed output satisfies the request with no blocking gaps. Do NOT set "done": true unless requestFulfillment.reviewed=true and requestFulfillment.satisfied=true.',
     skillRequestDoc(),
     contextRetrieveToolDoc(),
     input.readHopsLeft && input.readHopsLeft > 0
@@ -4694,7 +4801,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     'If the automated verifier itself is wrong for this stack, replace the automated verifier by adding `verifyCommand` to your review JSON. Use a real non-mutating command that matches the files, or `""` only when no meaningful automated verifier exists. Do not replace a failing valid verifier just to hide real implementation failures.',
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"requestFulfillment":{"reviewed":true,"satisfied":false,"summary":"Compared landed output to the original user request; gaps remain.","evidence":["files, checks, browser/CLI/API/docs/repo evidence reviewed"],"gaps":["blocking unmet requirement or missing evidence"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
     `Task ids in newTasks are advisory only; the engine assigns the next incremental T<number> ids and preserves existing task ids across refresh/resume. Use dependsOn only for existing task ids or other new-task ids you defined in the same JSON.`,
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
@@ -4810,6 +4917,38 @@ export function prCreateRefusalReason(input: {
   );
 }
 
+function compactInlineCodeList(values: string[], cap = 20): string {
+  if (values.length === 0) return "none recorded";
+  const shown = values.slice(0, cap).map((value) => `\`${value}\``).join(", ");
+  return values.length > cap ? `${shown}, +${values.length - cap} more` : shown;
+}
+
+export function buildEngineVerifiedOutputSummary(input: {
+  filesChanged?: string[];
+  producedFileCount?: number | null;
+}): string {
+  const filesChanged = [
+    ...new Set(
+      (input.filesChanged ?? [])
+        .map((file) => file.trim())
+        .filter(Boolean)
+    ),
+  ].sort();
+  const lines = [
+    "## Engine-verified outputs",
+    "",
+    "This section is generated by Build and overrides contradictory prose below.",
+    `- Files created or modified this run: ${compactInlineCodeList(filesChanged)}`,
+  ];
+  if (
+    typeof input.producedFileCount === "number" &&
+    Number.isFinite(input.producedFileCount)
+  ) {
+    lines.push(`- Build artifact file count: ${Math.max(0, Math.trunc(input.producedFileCount))}`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Build the deterministic `## Repository workflow` summary block appended to the
  * Architect's final answer (NRW-006/008). Pure + bounded so the engine and the
@@ -4861,7 +5000,7 @@ export function buildRepoWorkflowSummary(input: {
       lines.push(`- …(+${commits.length - 20} more commit(s))`);
     }
   } else if (input.branch) {
-    lines.push("- No commits were made this run.");
+    lines.push("- No commit action was recorded by Build this run.");
   }
   if (input.milestoneTitle?.trim()) {
     lines.push(`- Milestone: ${input.milestoneTitle.trim()}`);

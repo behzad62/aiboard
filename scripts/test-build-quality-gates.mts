@@ -3,6 +3,7 @@ import {
   evaluateBuildQualityGate,
   formatBuildQualityGateSummary,
   shouldRequireBrowserAcceptance,
+  shouldRequireRequestFulfillment,
 } from "../lib/orchestrator/build-quality-gates";
 
 let failed = 0;
@@ -164,6 +165,57 @@ const presentBrowserAcceptance = evaluateBuildQualityGate({
 
 check("observed browser acceptance allows web app completion", presentBrowserAcceptance.status === "ready", presentBrowserAcceptance);
 
+const missingRequestFulfillment = evaluateBuildQualityGate({
+  githubWorkflow: false,
+  expectedPr: false,
+  repoStatus: null,
+  repoPrUrl: null,
+  repoPushedBranch: null,
+  requiredChecks: [
+    { name: "Tests", command: "npm test", status: "passed" },
+  ],
+  browserAcceptance: {
+    required: true,
+    observed: true,
+    reason: "browser snapshot after main flow",
+  },
+  requestFulfillment: {
+    required: true,
+    observed: false,
+    reason: "review did not explicitly compare the landed output against the original user request",
+  },
+});
+
+check(
+  "missing request fulfillment blocks completion even when browser acceptance ran",
+  missingRequestFulfillment.status === "blocked" &&
+    missingRequestFulfillment.blockers.some((b) => b.code === "request_fulfillment_missing"),
+  missingRequestFulfillment
+);
+
+const presentRequestFulfillment = evaluateBuildQualityGate({
+  githubWorkflow: false,
+  expectedPr: false,
+  repoStatus: null,
+  repoPrUrl: null,
+  repoPushedBranch: null,
+  requiredChecks: [
+    { name: "Tests", command: "npm test", status: "passed" },
+  ],
+  browserAcceptance: {
+    required: true,
+    observed: true,
+    reason: "browser snapshot after main flow",
+  },
+  requestFulfillment: {
+    required: true,
+    observed: true,
+    reason: "reviewer compared the delivered files and behavior against the user request",
+  },
+});
+
+check("observed request fulfillment allows completion", presentRequestFulfillment.status === "ready", presentRequestFulfillment);
+
 const noRunner = evaluateBuildQualityGate({
   githubWorkflow: true,
   expectedPr: true,
@@ -214,6 +266,31 @@ check(
     request: "Fix the current CodeSketch verification failure only.",
     treeText: "server/server.js\npublic/index.html\npublic/app.js",
     changedFiles: ["public/app.js"],
+  }),
+);
+check(
+  "any concrete build request requires request-fulfillment review",
+  shouldRequireRequestFulfillment({
+    request: "Change the web game to 3D voxel graphics with an isometric camera.",
+    treeText: "index.html\nsrc/main.js\nsrc/renderer.js\nsrc/game.js",
+    changedFiles: ["src/renderer.js", "src/styles.css"],
+  }),
+);
+check(
+  "non-visual CLI requests still require request-fulfillment review",
+  shouldRequireRequestFulfillment({
+    request: "Build a strict TypeScript CSV library and CLI.",
+    treeText: "src/index.ts\ntests/run-tests.ts",
+    changedFiles: ["src/index.ts"],
+  }),
+);
+check(
+  "test-only verification fixes still require request-fulfillment review",
+  shouldRequireRequestFulfillment({
+    request:
+      "Fix the current web app verification failure only. Do not implement unrelated graphics features.",
+    treeText: "index.html\nsrc/main.js\nsrc/renderer.js\ntests/frontend-contract.test.js",
+    changedFiles: ["tests/frontend-contract.test.js"],
   }),
 );
 

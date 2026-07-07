@@ -9,6 +9,7 @@ import {
   buildArchitectPlanPrompt,
   buildArchitectReviewPrompt,
   buildArchitectSummaryPrompt,
+  buildEngineVerifiedOutputSummary,
   buildRepoWorkflowSummary,
   isSafeFirstToolAction,
   parseArchitectAction,
@@ -358,8 +359,10 @@ check("summary lists the verification line", fullSummary.includes("- Verificatio
 check("summary is empty when nothing happened", buildRepoWorkflowSummary({}) === "");
 const branchOnly = buildRepoWorkflowSummary({ branch: "codex/x", commits: [] });
 check(
-  "summary on a branch with no commits says so",
-  branchOnly.includes("- Branch: `codex/x`") && branchOnly.includes("- No commits were made this run.")
+  "summary on a branch with no recorded commit avoids claiming no commits exist",
+  branchOnly.includes("- Branch: `codex/x`") &&
+    branchOnly.includes("- No commit action was recorded by Build this run.") &&
+    !branchOnly.includes("- No commits were made this run.")
 );
 const issueOnly = buildRepoWorkflowSummary({ issueNumber: 9 });
 check(
@@ -406,6 +409,24 @@ check(
 check(
   "non-GitHub summary prompt omits the GitHub-outcomes guard",
   !/GITHUB OUTCOMES/.test(buildArchitectSummaryPrompt({ request: "x", treeText: "a", historyText: "h" }))
+);
+
+const outputSummary = buildEngineVerifiedOutputSummary({
+  filesChanged: ["src/renderer.js", "index.html"],
+  producedFileCount: 5,
+});
+check(
+  "engine-verified output summary lists changed files and artifact count",
+  outputSummary.includes("## Engine-verified outputs") &&
+    outputSummary.includes("- Files created or modified this run: `index.html`, `src/renderer.js`") &&
+    outputSummary.includes("- Build artifact file count: 5"),
+  outputSummary
+);
+check(
+  "engine-verified output summary warns it overrides contradictory prose",
+  /overrides contradictory prose/i.test(outputSummary) &&
+    !/No files were created or modified/i.test(outputSummary),
+  outputSummary
 );
 
 // ── 9. Label awareness in the Architect prompt ──────────────────────────────
