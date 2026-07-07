@@ -125,6 +125,38 @@ check(
   overlappingReplay?.includes("line 520 result"),
   overlappingReplay
 );
+
+const spanningCache = createToolReplayCache();
+const numberedLines = (start: number, end: number): string =>
+  Array.from({ length: end - start + 1 }, (_, index) => `line ${start + index}`).join("\n");
+spanningCache.remember(
+  { action: "read_range", path: "src/game.js", startLine: 400, lineCount: 200 },
+  `--- src/game.js lines 400-599 of 1000 (partial range) ---\n${numberedLines(400, 599)}`,
+  { startLine: 400, endLine: 599 }
+);
+spanningCache.remember(
+  { action: "read_range", path: "src/game.js", startLine: 600, lineCount: 200 },
+  `--- src/game.js lines 600-799 of 1000 (partial range) ---\n${numberedLines(600, 799)}`,
+  { startLine: 600, endLine: 799 }
+);
+const spanningReplay = spanningCache.replay({
+  action: "read_range",
+  path: "src/game.js",
+  startLine: 550,
+  lineCount: 200,
+});
+check(
+  "read_range spanning multiple cached ranges can be replayed",
+  spanningReplay?.includes("REPLAYED") === true &&
+    spanningReplay.includes("lines 550-749") &&
+    spanningReplay.includes("line 550") &&
+    spanningReplay.includes("line 599") &&
+    spanningReplay.includes("line 600") &&
+    spanningReplay.includes("line 749") &&
+    !spanningReplay.includes("line 549") &&
+    !spanningReplay.includes("line 750"),
+  spanningReplay
+);
 const searchAction = { action: "search" as const, query: "drawConnectors" };
 replayCache.remember(searchAction, "search hit public/app.js:520");
 check(

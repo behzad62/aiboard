@@ -32,6 +32,8 @@ interface ReplayRangeEntry {
   startLine: number;
   endLine: number;
   result: string;
+  totalLines?: number;
+  lines?: string[];
 }
 
 export function classifyBuildToolActionForScheduling(
@@ -213,6 +215,96 @@ function rangeCoverage(
   return (coveredEnd - coveredStart + 1) / requestedLines;
 }
 
+function combinedRangeCoverage(
+  delivered: Array<Pick<ReplayRangeEntry, "startLine" | "endLine">>,
+  requested: Pick<ReplayRangeEntry, "startLine" | "endLine">
+): number {
+  const requestedLines = requested.endLine - requested.startLine + 1;
+  if (requestedLines <= 0) return 1;
+  const covered = new Set<number>();
+  for (const range of delivered) {
+    const coveredStart = Math.max(range.startLine, requested.startLine);
+    const coveredEnd = Math.min(range.endLine, requested.endLine);
+    for (let line = coveredStart; line <= coveredEnd; line++) {
+      covered.add(line);
+    }
+  }
+  return covered.size / requestedLines;
+}
+
+function parseRangeResultLines(
+  result: string,
+  startLine: number,
+  endLine: number
+): { totalLines?: number; lines?: string[] } {
+  const [header = "", ...bodyLines] = result.split("\n");
+  const headerMatch = /lines (\d+)-(\d+) of (\d+)/.exec(header);
+  if (!headerMatch) return {};
+
+  const headerStart = Number(headerMatch[1]);
+  const headerEnd = Number(headerMatch[2]);
+  const totalLines = Number(headerMatch[3]);
+  const expectedLines = endLine - startLine + 1;
+  if (
+    headerStart !== startLine ||
+    headerEnd !== endLine ||
+    expectedLines < 0 ||
+    bodyLines.length !== expectedLines
+  ) {
+    return { totalLines };
+  }
+  return { totalLines, lines: bodyLines };
+}
+
+function buildSyntheticRangeReplay(input: {
+  path: string;
+  requested: { startLine: number; endLine: number };
+  ranges: ReplayRangeEntry[];
+}): string | null {
+  const usable = input.ranges
+    .filter(
+      (range): range is ReplayRangeEntry & { lines: string[] } =>
+        range.path === input.path && Array.isArray(range.lines) && range.lines.length > 0
+    )
+    .sort((a, b) => a.startLine - b.startLine);
+  if (usable.length === 0) return null;
+  if (combinedRangeCoverage(usable, input.requested) < 0.9) return null;
+
+  const totalLines =
+    usable.find((range) => Number.isFinite(range.totalLines))?.totalLines ??
+    input.requested.endLine;
+  const out: string[] = [];
+  let gapStart: number | null = null;
+
+  const flushGap = (endLine: number): void => {
+    if (gapStart == null) return;
+    out.push(
+      `[cached replay gap: lines ${gapStart}-${endLine} were not available]`
+    );
+    gapStart = null;
+  };
+
+  for (let line = input.requested.startLine; line <= input.requested.endLine; line++) {
+    const entry = usable.find(
+      (range) => line >= range.startLine && line <= range.endLine
+    );
+    if (!entry) {
+      if (gapStart == null) gapStart = line;
+      continue;
+    }
+    flushGap(line - 1);
+    out.push(entry.lines[line - entry.startLine]);
+  }
+  flushGap(input.requested.endLine);
+  if (out.length === 0) return null;
+
+  return [
+    "REPLAYED COVERED READ_RANGE - this requested range was already covered by earlier read_range results and is repeated here without spending tool budget.",
+    `--- ${input.path} lines ${input.requested.startLine}-${input.requested.endLine} of ${totalLines} (replayed from cached reads) ---`,
+    out.join("\n"),
+  ].join("\n");
+}
+
 function replayableExactKey(action: ArchitectAction): string | null {
   if (
     action.action !== "read" &&
@@ -246,11 +338,14 @@ export function createToolReplayCache(): {
         const startLine = deliveredRange?.startLine ?? requested.startLine;
         const endLine = deliveredRange?.endLine ?? requested.endLine;
         if (endLine >= startLine) {
+          const parsed = parseRangeResultLines(result, startLine, endLine);
           ranges.push({
             path: requested.path,
             startLine,
             endLine,
             result,
+            totalLines: parsed.totalLines,
+            lines: parsed.lines,
           });
         }
         return;
@@ -266,7 +361,12 @@ export function createToolReplayCache(): {
             candidate.path === requested.path &&
             rangeCoverage(candidate, requested) >= 0.9
         );
-        return entry ? `${replayPrefix}${entry.result}` : null;
+        if (entry) return `${replayPrefix}${entry.result}`;
+        return buildSyntheticRangeReplay({
+          path: requested.path,
+          requested,
+          ranges,
+        });
       }
       const key = replayableExactKey(action);
       if (!key) return null;
