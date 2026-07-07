@@ -16,6 +16,7 @@ export interface BuildStopReportInput {
   branch?: string | null;
   prUrl?: string | null;
   verifyCommand?: string;
+  currentRunStartedAt?: string;
   tasks: Array<
     Pick<BuildCheckpointTask, "id" | "title" | "status" | "failCount">
   >;
@@ -43,6 +44,19 @@ function sortNewestCommands(
   return [...commandProblems].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt)
   );
+}
+
+function filterCurrentRunItems<T extends { createdAt: string }>(
+  items: T[],
+  currentRunStartedAt: string | undefined
+): T[] {
+  if (!currentRunStartedAt) return items;
+  const started = Date.parse(currentRunStartedAt);
+  if (!Number.isFinite(started)) return items;
+  return items.filter((item) => {
+    const created = Date.parse(item.createdAt);
+    return Number.isFinite(created) && created >= started;
+  });
 }
 
 function commandProblemToBuildProblem(
@@ -217,10 +231,21 @@ function buildNextAction(primary: BuildProblem | null, fallback: string): string
 
 export function createBuildStopReport(input: BuildStopReportInput): BuildStopReport {
   const createdAt = input.createdAt ?? new Date().toISOString();
-  const problems = sortNewestProblems(input.problems).slice(0, 12);
-  const commandProblems = enrichCommandProblems(input.commandProblems, problems).slice(0, 8);
-  const primary = pickPrimaryCause(
+  const currentRunProblems = filterCurrentRunItems(
+    input.problems,
+    input.currentRunStartedAt
+  );
+  const currentRunCommandProblems = filterCurrentRunItems(
     input.commandProblems,
+    input.currentRunStartedAt
+  );
+  const problems = sortNewestProblems(currentRunProblems).slice(0, 12);
+  const commandProblems = enrichCommandProblems(
+    currentRunCommandProblems,
+    problems
+  ).slice(0, 8);
+  const primary = pickPrimaryCause(
+    currentRunCommandProblems,
     problems,
     input.verifyCommand
   );

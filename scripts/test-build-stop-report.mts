@@ -253,6 +253,56 @@ check(
   staleVerifierReport
 );
 
+const resumedRunReport = createBuildStopReport({
+  discussionId: "d7",
+  topic: "Resume paintball build.",
+  status: "failed",
+  stopReason: "incomplete",
+  stopMessage: "Build incomplete: 2 required tasks did not finish.",
+  wave: 50,
+  verifyCommand:
+    "git status --short && node --check src/game.js && node --check src/renderer.js",
+  currentRunStartedAt: "2026-07-07T09:30:00.000Z",
+  tasks: [
+    { id: "T1", title: "Build paintball app", status: "done" },
+    { id: "T6", title: "Final verification", status: "failed", failCount: 7 },
+  ],
+  problems: [
+    {
+      id: "p6",
+      createdAt: "2026-07-07T09:58:00.000Z",
+      code: "incomplete_tasks",
+      severity: "blocked",
+      source: "engine",
+      message: "Build incomplete: 2 required tasks did not finish.",
+      wave: 50,
+    },
+  ],
+  commandProblems: [
+    {
+      command:
+        "git status --short && node --check src/game.js && node --check src/renderer.js",
+      exitCode: 1,
+      durationMs: 300,
+      outputPreview: "?? AIPaintball/\n?? AITest2/\n?? runner.mjs",
+      createdAt: "2026-07-07T08:10:00.000Z",
+    },
+  ],
+  failureFingerprints: {
+    "git status --short|AIPaintball": 6,
+  },
+  recoveryLog: [],
+  createdAt: "2026-07-07T09:58:32.684Z",
+});
+
+check(
+  "resumed stop report ignores inherited command failures from previous runs",
+  resumedRunReport.primaryCause?.code === "incomplete_tasks" &&
+    resumedRunReport.commandProblems.length === 0 &&
+    !resumedRunReport.summary.includes("git status --short"),
+  resumedRunReport
+);
+
 const truncatedCommandReport = createBuildStopReport({
   discussionId: "d3",
   topic: "Fix tests.",

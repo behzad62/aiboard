@@ -1297,6 +1297,7 @@ export async function runBuildDiscussion(
   // and recovery notes carry across the stop; the resume restoration below reads
   // the same record. Failure fingerprints surviving a resume let a blocker that
   // persists across stops still be caught.
+  const currentRunStartedAt = new Date().toISOString();
   const existingCheckpoint = getBuildCheckpoint(discussion.id);
   let failureFingerprints: Record<string, number> =
     existingCheckpoint?.failureFingerprints ?? {};
@@ -1374,6 +1375,7 @@ export async function runBuildDiscussion(
       branch: repoActiveBranch,
       prUrl: repoPrUrl,
       verifyCommand: input.verifyCommand,
+      currentRunStartedAt,
       tasks: input.tasks,
       problems: buildProblems,
       commandProblems,
