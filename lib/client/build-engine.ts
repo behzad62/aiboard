@@ -6487,6 +6487,8 @@ export async function runBuildDiscussion(
       const startedAt = Date.now();
       let output = "";
       const patchedFiles: string[] = [];
+      const preToolArtifactFiles: string[] = [];
+      const preToolArtifactOutputs = new Set<string>();
       const toolIssues: string[] = [];
       try {
         await answerPendingGuidanceForTask(task, cycle);
@@ -7033,10 +7035,45 @@ export async function runBuildDiscussion(
             continue;
           }
 
+          let preToolWriteNote = "";
+          const preToolPreview = extractArtifacts(output);
+          if (
+            preToolPreview.files.length > 0 ||
+            preToolPreview.edits.length > 0 ||
+            preToolPreview.truncatedPaths.length > 0
+          ) {
+            const preToolArtifactResult = await writeEmittedFiles(output, task.id);
+            preToolArtifactOutputs.add(output);
+            preToolArtifactFiles.push(...preToolArtifactResult.written);
+            toolIssues.push(...preToolArtifactResult.issues);
+            if (preToolArtifactResult.issues.length > 0) {
+              const feedback = [
+                "FILE OUTPUT DID NOT LAND CLEANLY. Do not run verification or browser tools yet.",
+                ...preToolArtifactResult.issues.map((issue) => `- ${issue}`),
+                "Fix the file output first. If the file is large, use SEARCH/REPLACE edit blocks for existing files or append chunks with reset=true for a full replacement.",
+              ].join("\n");
+              workerMessages.push({ role: "user", content: feedback });
+              emit({
+                type: "diagnostic",
+                phase: "model_failed",
+                modelId: worker.modelId,
+                modelName: worker.displayName,
+                providerId: parseModelId(worker.modelId).providerId,
+                message: `${worker.displayName} emitted file output for ${task.id}, but it did not land cleanly before tool execution`,
+              });
+              continue;
+            }
+            if (preToolArtifactResult.written.length > 0) {
+              preToolWriteNote = `FILE OUTPUT LANDED before tools: ${[
+                ...new Set(preToolArtifactResult.written),
+              ].join(", ")}\n\n`;
+            }
+          }
+
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
           emitWorkerBudget();
           const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
-          const batchFeedback = `${warning}${batch.message}${skippedOnlyRecovery}`;
+          const batchFeedback = `${preToolWriteNote}${warning}${batch.message}${skippedOnlyRecovery}`;
           if (batch.terminalSkippedCount > 0) {
             toolIssues.push(
               ...batch.terminalSkippedReasons.map(
@@ -7196,8 +7233,12 @@ export async function runBuildDiscussion(
           workerMessages.push({ role: "assistant", content: output });
         }
 
-        const artifactResult = await writeEmittedFiles(output, task.id);
-        const files = [...new Set([...patchedFiles, ...artifactResult.written])];
+        const artifactResult = preToolArtifactOutputs.has(output)
+          ? { written: [], issues: [] }
+          : await writeEmittedFiles(output, task.id);
+        const files = [
+          ...new Set([...patchedFiles, ...preToolArtifactFiles, ...artifactResult.written]),
+        ];
         const issues = [...toolIssues, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
         const scopedVerificationGapReport =

@@ -62,6 +62,16 @@ check("truncated edit flagged", t8.truncatedPaths, ["src/e.ts"]);
 // 9. Well-formed output reports no truncation.
 check("no truncation on clean output", t2.truncatedPaths, []);
 
+// 10. Workers sometimes emit a file block and immediately ask for a
+// verification/browser tool in the same turn. The file block is still
+// extractable and must be written before the tool checks disk state.
+const t10 = extractArtifacts(
+  `Here is the file:\n${FENCE}js path=src/renderer.js\nexport const renderer = true;\n${FENCE}\n\n{"action":"run","command":"node --check src/main.js","reason":"verify"}`
+);
+check("mixed file+tool output extracts file", t10.files.map((f) => f.path), [
+  "src/renderer.js",
+]);
+
 // ── Architect action parsing (build protocol) ────────────────────────────────
 import { parseArchitectAction } from "../lib/orchestrator/build";
 
@@ -154,6 +164,13 @@ check(
   "runner command refresh does not merge stale parent tree",
   buildEngineSource.includes("browserTree: diskTree") &&
     !buildEngineSource.includes("diskTree = [...new Set([...diskTree, ...refreshed])]"),
+  true
+);
+check(
+  "worker tool turns preserve emitted files before dispatching tools",
+  buildEngineSource.includes("preToolArtifactResult") &&
+    buildEngineSource.indexOf("preToolArtifactResult") <
+      buildEngineSource.indexOf("const batch = await dispatchWorkerToolBatch(inspected.actions, actor)"),
   true
 );
 
