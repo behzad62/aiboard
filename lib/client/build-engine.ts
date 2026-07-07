@@ -2196,7 +2196,12 @@ export async function runBuildDiscussion(
       });
       // Commands can create files (scaffolders, installs) — refresh the tree.
       const refreshed = await listFilesViaRunner(runner);
-      if (refreshed) diskTree = [...new Set([...diskTree, ...refreshed])];
+      if (refreshed) {
+        diskTree = resolveRunnerProjectTree({
+          browserTree: diskTree,
+          runnerTree: refreshed,
+        });
+      }
       return formatCommandResult(command, result);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Runner request failed";
@@ -3065,6 +3070,7 @@ export async function runBuildDiscussion(
         exitCode: event.exitCode,
         durationMs: event.durationMs,
         outputPreview: event.outputPreview,
+        cwd: event.cwd,
         denied: event.denied,
         background: event.background,
       });
@@ -3162,6 +3168,7 @@ export async function runBuildDiscussion(
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        cwd: result.cwd,
         background: result.background,
         outputPreview: formatBuildCheckCommandPreview({
           stdout: resultStdout,
@@ -3279,6 +3286,7 @@ export async function runBuildDiscussion(
           command: detectedVerifyCommand,
           exitCode: finalResult.exitCode,
           durationMs: finalResult.durationMs,
+          cwd: finalResult.cwd,
           background: finalResult.background,
           outputPreview: formatBuildCheckCommandPreview({
             stdout: retryStdout,

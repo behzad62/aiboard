@@ -49,6 +49,9 @@ function commandProblemToBuildProblem(
   command: BuildCommandProblem
 ): BuildProblem {
   const denied = command.denied || command.exitCode === -1;
+  const details = [command.cwd ? `cwd: ${command.cwd}` : "", command.outputPreview]
+    .filter(Boolean)
+    .join("\n");
   return {
     id: `command:${command.createdAt}:${command.command}`,
     createdAt: command.createdAt,
@@ -59,7 +62,7 @@ function commandProblemToBuildProblem(
     message: denied
       ? `Command was denied: ${command.command}`
       : `Command failed with exit ${command.exitCode}: ${command.command}`,
-    details: command.outputPreview,
+    details,
   };
 }
 
@@ -98,14 +101,48 @@ function enrichCommandProblems(
   return commands;
 }
 
+function normalizeCommand(command: string | undefined): string {
+  return (command ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isStaleProjectVerifierProblem(
+  problem: BuildProblem,
+  verifyCommand: string | undefined
+): boolean {
+  const activeCommand = normalizeCommand(verifyCommand);
+  const action = normalizeCommand(problem.action);
+  if (!activeCommand || !action || action === activeCommand) return false;
+  if (
+    problem.code !== "verification_failed" &&
+    problem.code !== "verification_repeated" &&
+    problem.code !== "tool_denied"
+  ) {
+    return false;
+  }
+  const details = `${problem.message}\n${problem.details ?? ""}`;
+  if (/^dotnet build\b/.test(action)) {
+    return /MSB1003|does not contain a project or solution|does not match this project tree|verifyCommand ignored/i.test(
+      details
+    );
+  }
+  return false;
+}
+
 function pickPrimaryCause(
   commandProblems: BuildCommandProblem[],
-  problems: BuildProblem[]
+  problems: BuildProblem[],
+  verifyCommand?: string
 ): BuildProblem | null {
   const failedCommandProblems = sortNewestCommands(commandProblems)
     .filter((command) => command.exitCode !== 0 || command.denied)
     .map(commandProblemToBuildProblem);
-  const ranked = [...sortNewestProblems(problems), ...failedCommandProblems].sort((a, b) => {
+  const candidates = [...sortNewestProblems(problems), ...failedCommandProblems];
+  const nonStaleCandidates = candidates.filter(
+    (problem) => !isStaleProjectVerifierProblem(problem, verifyCommand)
+  );
+  const rankedCandidates =
+    nonStaleCandidates.length > 0 ? nonStaleCandidates : candidates;
+  const ranked = rankedCandidates.sort((a, b) => {
     const causeRank = (problem: BuildProblem) => {
       if (
         problem.code === "verification_repeated" ||
@@ -119,6 +156,8 @@ function pickPrimaryCause(
       if (problem.code === "repeated_no_progress") return 1;
       return 2;
     };
+    const activeVerifyRank = (problem: BuildProblem) =>
+      normalizeCommand(problem.action) === normalizeCommand(verifyCommand) ? 2 : 0;
     const severityRank = (severity: BuildProblem["severity"]) =>
       severity === "blocked"
         ? 4
@@ -129,6 +168,7 @@ function pickPrimaryCause(
             : 1;
     return (
       causeRank(b) - causeRank(a) ||
+      activeVerifyRank(b) - activeVerifyRank(a) ||
       severityRank(b.severity) - severityRank(a.severity) ||
       b.createdAt.localeCompare(a.createdAt)
     );
@@ -179,7 +219,11 @@ export function createBuildStopReport(input: BuildStopReportInput): BuildStopRep
   const createdAt = input.createdAt ?? new Date().toISOString();
   const problems = sortNewestProblems(input.problems).slice(0, 12);
   const commandProblems = enrichCommandProblems(input.commandProblems, problems).slice(0, 8);
-  const primary = pickPrimaryCause(input.commandProblems, problems);
+  const primary = pickPrimaryCause(
+    input.commandProblems,
+    problems,
+    input.verifyCommand
+  );
   const incompleteTasks = input.tasks
     .filter((task) => task.status !== "done")
     .map((task) => ({
@@ -254,7 +298,9 @@ export function formatBuildStopReportMarkdown(report: BuildStopReport): string {
       (command) =>
         `- \`${command.command}\` -> exit ${command.exitCode} (${(
           command.durationMs / 1000
-        ).toFixed(1)}s)\n${fence(command.outputPreview)}`
+        ).toFixed(1)}s)${
+          command.cwd ? `\ncwd: \`${command.cwd}\`` : ""
+        }\n${fence(command.outputPreview)}`
     )
     .join("\n");
 

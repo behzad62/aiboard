@@ -1,4 +1,5 @@
 /** Build stop report checks (run: npx tsx scripts/test-build-stop-report.mts) */
+import { readFileSync } from "node:fs";
 import {
   createBuildStopReport,
   formatBuildStopReportMarkdown,
@@ -205,6 +206,53 @@ check(
   qualityGateReport
 );
 
+const staleVerifierReport = createBuildStopReport({
+  discussionId: "d5",
+  topic: "Create a static paintball web app.",
+  status: "failed",
+  stopReason: "incomplete",
+  stopMessage: "Build incomplete: final verification failed.",
+  wave: 50,
+  verifyCommand: "node --check src/game.js && node --check src/renderer.js",
+  tasks: [
+    { id: "T1", title: "Build paintball app", status: "done" },
+    { id: "T6", title: "Final verification", status: "failed", failCount: 6 },
+  ],
+  problems: [],
+  commandProblems: [
+    {
+      command: "node --check src/game.js && node --check src/renderer.js",
+      exitCode: 1,
+      durationMs: 220,
+      outputPreview: "SyntaxError: Unexpected token",
+      createdAt: "2026-07-07T08:08:00.000Z",
+    },
+    {
+      command: "dotnet build",
+      exitCode: 1,
+      durationMs: 400,
+      outputPreview:
+        "MSBUILD : error MSB1003: Specify a project or solution file.",
+      createdAt: "2026-07-07T08:10:00.000Z",
+    },
+  ],
+  failureFingerprints: {
+    "dotnet build|MSB1003": 6,
+    "node --check src/game.js && node --check src/renderer.js|SyntaxError": 1,
+  },
+  recoveryLog: [],
+  createdAt: "2026-07-07T08:10:33.544Z",
+});
+
+check(
+  "active verify command outranks stale command failures in stop report",
+  staleVerifierReport.primaryCause?.action ===
+    "node --check src/game.js && node --check src/renderer.js" &&
+    !staleVerifierReport.summary.includes("dotnet build") &&
+    staleVerifierReport.nextAction.includes("node --check"),
+  staleVerifierReport
+);
+
 const truncatedCommandReport = createBuildStopReport({
   discussionId: "d3",
   topic: "Fix tests.",
@@ -237,6 +285,54 @@ check(
   /output was capped/i.test(truncatedCommandReport.nextAction) &&
     /rerun a narrower command/i.test(truncatedCommandReport.nextAction),
   truncatedCommandReport.nextAction
+);
+
+const commandCwdReport = createBuildStopReport({
+  discussionId: "d6",
+  topic: "Check runner folder.",
+  status: "failed",
+  stopReason: "incomplete",
+  stopMessage: "Command failed.",
+  wave: 1,
+  verifyCommand: "node --check src/main.js",
+  tasks: [{ id: "T1", title: "Verify folder", status: "failed", failCount: 1 }],
+  problems: [],
+  commandProblems: [
+    {
+      command: "git status --short",
+      exitCode: 1,
+      durationMs: 120,
+      outputPreview: "?? sibling-project/",
+      createdAt: "2026-07-07T08:11:00.000Z",
+      cwd: "C:\\Users\\b_a_s\\source\\repos",
+    },
+  ],
+  failureFingerprints: {},
+  recoveryLog: [],
+  createdAt: "2026-07-07T08:11:30.000Z",
+});
+
+check(
+  "stop report markdown includes failed command cwd when runner provided it",
+  formatBuildStopReportMarkdown(commandCwdReport).includes(
+    "cwd: `C:\\Users\\b_a_s\\source\\repos`"
+  ),
+  formatBuildStopReportMarkdown(commandCwdReport)
+);
+
+const panelSource = readFileSync(
+  new URL("../components/BuildStopReportPanel.tsx", import.meta.url),
+  "utf8"
+);
+check(
+  "stop report panel exposes a real download action",
+  panelSource.includes("Download report") && panelSource.includes("downloadMarkdown("),
+  panelSource
+);
+check(
+  "benchmark-store action is not labeled like a file save",
+  panelSource.includes("Save to benchmarks") && !panelSource.includes("Save case"),
+  panelSource
 );
 
 process.exit(failed === 0 ? 0 : 1);

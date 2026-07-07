@@ -231,6 +231,7 @@ export type OrchestratorEvent =
       exitCode: number;
       durationMs: number;
       outputPreview: string;
+      cwd?: string;
       denied?: boolean;
       background?: boolean;
     }

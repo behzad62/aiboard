@@ -1,4 +1,5 @@
 /* Quick extractor regression checks (run: npx tsx scripts/test-extract.ts) */
+import { readFileSync } from "node:fs";
 import { extractArtifacts } from "../lib/artifacts/extract";
 
 const FENCE = "```";
@@ -144,6 +145,16 @@ check(
   "runner-scoped verifier ignores parent manifests",
   detectVerifyCommand(runnerScopedStaticTree),
   ""
+);
+const buildEngineSource = readFileSync(
+  new URL("../lib/client/build-engine.ts", import.meta.url),
+  "utf8"
+);
+check(
+  "runner command refresh does not merge stale parent tree",
+  buildEngineSource.includes("browserTree: diskTree") &&
+    !buildEngineSource.includes("diskTree = [...new Set([...diskTree, ...refreshed])]"),
+  true
 );
 
 const staticWebDotnet = classifyVerifyCommandForProject(

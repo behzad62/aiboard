@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Check,
   ClipboardCopy,
+  Download,
   ListTodo,
   Save,
   Terminal,
@@ -18,6 +19,7 @@ import {
   saveBenchmarkArtifact,
   saveBenchmarkCase,
 } from "@/lib/benchmark/store";
+import { downloadMarkdown, fileSlug } from "@/lib/ui/download";
 
 interface BuildStopReportPanelProps {
   report: BuildStopReport;
@@ -53,6 +55,14 @@ export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
     window.setTimeout(() => setSavedCase(false), 1800);
   };
 
+  const downloadReport = () => {
+    const createdAt = report.createdAt.slice(0, 10);
+    downloadMarkdown(
+      `build-stop-report-${createdAt}-${fileSlug(report.topic, 36)}.md`,
+      markdown
+    );
+  };
+
   return (
     <section className="rounded-lg border border-amber-300 bg-amber-50/80 text-amber-950 shadow-sm dark:border-amber-900 dark:bg-amber-950/25 dark:text-amber-50">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-amber-200 px-4 py-3 dark:border-amber-900">
@@ -74,6 +84,15 @@ export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
           <Button
             size="sm"
             variant="outline"
+            onClick={downloadReport}
+            className="shrink-0"
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Download report
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={saveAsBenchmarkCase}
             className="shrink-0"
           >
@@ -82,7 +101,7 @@ export function BuildStopReportPanel({ report }: BuildStopReportPanelProps) {
             ) : (
               <Save className="mr-2 h-4 w-4" />
             )}
-            {savedCase ? "Saved" : "Save case"}
+            {savedCase ? "Saved" : "Save to benchmarks"}
           </Button>
           <Button size="sm" variant="outline" onClick={copyReport} className="shrink-0">
             {copied ? (

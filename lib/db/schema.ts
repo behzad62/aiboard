@@ -117,6 +117,7 @@ export interface BuildCommandProblem {
   exitCode: number;
   durationMs: number;
   outputPreview: string;
+  cwd?: string;
   denied?: boolean;
   background?: boolean;
   createdAt: string;
