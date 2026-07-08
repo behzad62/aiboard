@@ -4,6 +4,7 @@ import {
   getVisibleBuildContextAssemblies,
   getVisibleBuildContextDroppedPacks,
   getVisibleBuildContextRetrieveRefs,
+  getBuildContextPanelSummaryForTest,
   hasBuildMemoryEntryRefs,
   formatBuildBudgetRatioForTest,
   reduceBuildContextPanelState,
@@ -176,5 +177,41 @@ assert.equal(state.budget?.files.phaseFetchesLimit, 18);
 assert.equal(formatBuildBudgetRatioForTest(28, 30), "28 left / 30");
 assert.equal(formatBuildBudgetRatioForTest(undefined, 30), "n/a");
 assert.equal(formatBuildBudgetRatioForTest(3, undefined), "3 left");
+
+state = reduceBuildContextPanelState(state, {
+  type: "build_budget",
+  phase: "review",
+  label: "Review wave 3",
+  cycle: 3,
+  shell: {
+    phaseRunsLeft: 88,
+    phaseRunsLimit: 120,
+    totalRunsLeft: 468,
+    totalRunsLimit: 500,
+    toolAvailable: false,
+  },
+  files: {
+    readsLeft: 5,
+    readsLimit: 10,
+    rangeReadsLeft: 6,
+    rangeReadsLimit: 10,
+    searchesLeft: 7,
+    searchesLimit: 10,
+    fetchesLeft: 2,
+    fetchesLimit: 4,
+    phaseFetchesLeft: 6,
+    phaseFetchesLimit: 18,
+  },
+});
+
+const compactSummary = getBuildContextPanelSummaryForTest(state);
+assert.equal(compactSummary.latestBudgetLabel, "Review wave 3 - wave 3");
+assert.equal(compactSummary.shellAvailable, false);
+assert.equal(compactSummary.contextCount, 40);
+assert.equal(compactSummary.visibleContextCount, 8);
+assert.equal(compactSummary.retrieveRefCount, 12);
+assert.equal(compactSummary.memoryCount, 3);
+assert.equal(compactSummary.droppedPackCount, 12);
+assert.equal(compactSummary.hasCodeIntel, true);
 
 console.log("PASS build context panel state");

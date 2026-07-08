@@ -156,12 +156,17 @@ export function BuildTaskBoard({
       )}
 
       {commands.length > 0 && (
-        <div className="mt-4">
-          <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
-            <Terminal className="h-4 w-4 text-primary" />
-            Commands run ({commands.length})
-          </p>
-          <ul className="space-y-1.5">
+        <details className="mt-4 rounded-lg border bg-muted/10">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium marker:hidden">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Terminal className="h-4 w-4 shrink-0 text-primary" />
+              <span className="truncate">Commands run ({commands.length})</span>
+            </span>
+            <Badge variant="secondary" className="shrink-0">
+              collapsed
+            </Badge>
+          </summary>
+          <ul className="space-y-1.5 border-t px-3 py-2">
             {commands.map((cmd, i) => (
               <li key={i} className="rounded border bg-muted/20 p-2">
                 <div className="flex items-center justify-between gap-2 font-mono text-xs">
@@ -193,7 +198,7 @@ export function BuildTaskBoard({
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
     </section>
   );

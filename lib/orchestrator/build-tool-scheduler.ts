@@ -418,7 +418,7 @@ function replayableExactKey(action: ArchitectAction): string | null {
   return exactToolKey(action);
 }
 
-export function createToolReplayCache(): {
+export interface ToolReplayCache {
   remember: (
     action: ArchitectAction,
     result: string,
@@ -426,7 +426,21 @@ export function createToolReplayCache(): {
   ) => void;
   replay: (action: ArchitectAction) => string | null;
   summary: (maxEntries?: number) => string[];
-} {
+}
+
+export interface ReplayedDuplicateToolAction {
+  served: {
+    label: string;
+    result: string;
+    preserveFullResult?: boolean;
+  } | null;
+  skipped: {
+    label: string;
+    reason: string;
+  } | null;
+}
+
+export function createToolReplayCache(): ToolReplayCache {
   const exact = new Map<string, string>();
   const ranges: ReplayRangeEntry[] = [];
   const memory: string[] = [];
@@ -490,6 +504,31 @@ export function createToolReplayCache(): {
     },
     summary(maxEntries = 20) {
       return memory.slice(-Math.max(1, Math.floor(maxEntries)));
+    },
+  };
+}
+
+export function replayDuplicateToolAction(input: {
+  action: ArchitectAction;
+  label: string;
+  replayCache: ToolReplayCache;
+}): ReplayedDuplicateToolAction {
+  const replayed = input.replayCache.replay(input.action);
+  if (replayed) {
+    return {
+      served: {
+        label: `${input.label} (replayed)`,
+        result: replayed,
+        preserveFullResult: input.action.action === "context_retrieve",
+      },
+      skipped: null,
+    };
+  }
+  return {
+    served: null,
+    skipped: {
+      label: input.label,
+      reason: "duplicate tool request (already delivered)",
     },
   };
 }

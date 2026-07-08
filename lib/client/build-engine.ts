@@ -75,6 +75,7 @@ import {
   createReadRangeLoopGuard,
   createToolReplayCache,
   packToolBatchResult,
+  replayDuplicateToolAction,
   scheduleBuildToolActions,
   skippedOnlyToolBatchRecoveryInstruction,
 } from "@/lib/orchestrator/build-tool-scheduler";
@@ -5309,6 +5310,7 @@ export async function runBuildDiscussion(
     budgets: InspectionBudgets,
     appendContext: (text: string) => void,
     tracker: ReturnType<typeof createToolCallTracker>,
+    replayCache: ReturnType<typeof createToolReplayCache>,
     actorLabel = "Architect"
   ): Promise<{
     result: string;
@@ -5332,10 +5334,16 @@ export async function runBuildDiscussion(
     let exhausted = false;
     for (const item of schedule.served) {
       if (isRedundantToolCall(tracker, item.action)) {
-        skipped.push({
+        const replayed = replayDuplicateToolAction({
+          action: item.action,
           label: item.label,
-          reason: "duplicate tool request (already delivered)",
+          replayCache,
         });
+        if (replayed.served) {
+          served.push(replayed.served);
+        } else if (replayed.skipped) {
+          skipped.push(replayed.skipped);
+        }
         continue;
       }
       const dispatched = await dispatchArchitectTool(
@@ -5360,6 +5368,11 @@ export async function runBuildDiscussion(
       else if (
         shouldRecordToolCallResult(item.action, dispatched.toolStatus ?? "ok")
       ) {
+        replayCache.remember(
+          item.action,
+          dispatched.result,
+          dispatched.deliveredRange
+        );
         recordToolCall(tracker, item.action, dispatched.deliveredRange);
       }
     }
@@ -5406,6 +5419,7 @@ export async function runBuildDiscussion(
       { role: "user", content: args.initialUser },
     ];
     const tracker = createToolCallTracker();
+    const replayCache = createToolReplayCache();
     const budgets = { ...args.budgets };
     const budgetLimits = { ...budgets };
     const emitInspectionBudget = (): void =>
@@ -5552,6 +5566,7 @@ export async function runBuildDiscussion(
         budgets,
         args.appendContext,
         tracker,
+        replayCache,
         actorLabel
       );
       emitInspectionBudget();

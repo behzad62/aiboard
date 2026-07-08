@@ -20,10 +20,6 @@ import {
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
   reduceBuildContextPanelState,
 } from "@/components/BuildContextPanel";
-import {
-  BuildSkillsPanel,
-  type BuildSkillEventView,
-} from "@/components/BuildSkillsPanel";
 import { BuildStopReportPanel } from "@/components/BuildStopReportPanel";
 import { BuildToolReviewPanel } from "@/components/BuildToolReviewPanel";
 import { BuildTranscriptPanel } from "@/components/BuildTranscriptPanel";
@@ -64,6 +60,7 @@ import type {
   Discussion,
 } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
+import type { BuildSkillEvent } from "@/lib/skills/types";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModelPricing } from "@/lib/providers/pricing";
 import { getModeLabel } from "@/lib/orchestrator/config";
@@ -206,7 +203,7 @@ function DiscussionPageInner() {
   const [buildContextState, setBuildContextState] = useState(
     EMPTY_BUILD_CONTEXT_PANEL_STATE
   );
-  const [buildSkillEvents, setBuildSkillEvents] = useState<BuildSkillEventView[]>([]);
+  const [, setBuildSkillEvents] = useState<BuildSkillEvent[]>([]);
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [buildStopReport, setBuildStopReport] =
     useState<BuildStopReport | null>(null);
@@ -1347,10 +1344,6 @@ function DiscussionPageInner() {
 
       {discussion.mode === "build" && (
         <BuildContextPanel state={buildContextState} />
-      )}
-
-      {discussion.mode === "build" && (
-        <BuildSkillsPanel events={buildSkillEvents} />
       )}
 
       {discussion.mode === "build" &&

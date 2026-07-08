@@ -12,7 +12,7 @@ import {
   Link2,
   Terminal,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
@@ -322,6 +322,32 @@ function memoryCount(memory: BuildMemoryEventView): number {
   );
 }
 
+function budgetLabel(budget: BuildBudgetView): string {
+  return `${budget.label}${budget.cycle == null ? "" : ` - wave ${budget.cycle}`}`;
+}
+
+export function getBuildContextPanelSummaryForTest(state: BuildContextPanelState): {
+  latestBudgetLabel: string | null;
+  shellAvailable: boolean | null;
+  contextCount: number;
+  visibleContextCount: number;
+  retrieveRefCount: number;
+  memoryCount: number;
+  droppedPackCount: number;
+  hasCodeIntel: boolean;
+} {
+  return {
+    latestBudgetLabel: state.budget ? budgetLabel(state.budget) : null,
+    shellAvailable: state.budget?.shell.toolAvailable ?? null,
+    contextCount: state.assemblies.length,
+    visibleContextCount: getVisibleBuildContextAssemblies(state).length,
+    retrieveRefCount: getVisibleBuildContextRetrieveRefs(state).length,
+    memoryCount: memoryCount(state.memory),
+    droppedPackCount: getVisibleBuildContextDroppedPacks(state).length,
+    hasCodeIntel: state.codeIntel != null,
+  };
+}
+
 export function hasBuildMemoryEntryRefs(
   item: BuildMemoryEventView["activeDecisions"][number]
 ): boolean {
@@ -357,6 +383,66 @@ function MemoryList({
   );
 }
 
+function BuildMemoryPanel({ memory }: { memory: BuildMemoryEventView }) {
+  return (
+    <div>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+        <Brain className="h-3.5 w-3.5" />
+        Memory
+      </p>
+      {memoryCount(memory) > 0 ? (
+        <div className="space-y-3">
+          <MemoryList title="Decisions" items={memory.activeDecisions} />
+          <MemoryList title="Failed approaches" items={memory.failedApproaches} />
+          <MemoryList title="Fragile files" items={memory.fragileFiles} />
+          {memory.warnings.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="mb-1 flex items-center gap-1 font-medium">
+                <FileWarning className="h-3.5 w-3.5" />
+                Warnings
+              </p>
+              {memory.warnings.slice(0, 3).map((warning) => (
+                <p key={warning} className="line-clamp-2">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          No active Build memory warnings yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CompactDetails({
+  title,
+  count,
+  icon,
+  children,
+}: {
+  title: string;
+  count?: number;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <details className="rounded-md border bg-muted/10">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-medium uppercase text-muted-foreground marker:hidden">
+        <span className="flex min-w-0 items-center gap-1.5">
+          {icon}
+          <span className="truncate">{title}</span>
+        </span>
+        {count != null && <Badge variant="secondary">{count}</Badge>}
+      </summary>
+      <div className="border-t px-3 py-2">{children}</div>
+    </details>
+  );
+}
+
 export function BuildContextPanel({ state }: { state: BuildContextPanelState }) {
   const [open, setOpen] = useState(true);
   const latest = state.assemblies[0];
@@ -364,6 +450,7 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
   const visibleDroppedPacks = getVisibleBuildContextDroppedPacks(state);
   const visibleRetrieveRefs = getVisibleBuildContextRetrieveRefs(state);
   const hasRetrieveRefs = visibleRetrieveRefs.length > 0;
+  const summary = getBuildContextPanelSummaryForTest(state);
   const hasData =
     state.assemblies.length > 0 ||
     state.blobs.length > 0 ||
@@ -386,7 +473,9 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold">Build context</span>
             <span className="block truncate text-xs text-muted-foreground">
-              {latest
+              {state.budget
+                ? `Budget: ${budgetLabel(state.budget)}`
+                : latest
                 ? `${latest.modelName}: ~${formatTokens(latest.estimatedInputTokens)} / ${formatTokens(latest.totalInputBudgetTokens)} input tokens`
                 : "Context, memory, refs, and code intelligence"}
             </span>
@@ -416,22 +505,38 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
       {state.budget && <BuildBudgetStrip budget={state.budget} />}
 
       {open && (
-        <div className="grid gap-4 border-t px-4 py-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-          <div className="space-y-4">
-            <div>
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                <Cpu className="h-3.5 w-3.5" />
-                Context
-              </p>
-              {latest ? (
+        <div className="grid gap-4 border-t px-4 py-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <BuildMemoryPanel memory={state.memory} />
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="mr-1 font-medium uppercase">Compact activity</span>
+              <Badge variant="outline">{summary.contextCount} contexts</Badge>
+              <Badge variant="outline">{summary.retrieveRefCount} refs</Badge>
+              {summary.droppedPackCount > 0 && (
+                <Badge variant="warning">{summary.droppedPackCount} dropped</Badge>
+              )}
+              {state.codeIntel && (
+                <Badge variant={statusVariant(state.codeIntel.status)}>
+                  {state.codeIntel.status.replaceAll("_", " ")}
+                </Badge>
+              )}
+            </div>
+
+            {latest ? (
+              <CompactDetails
+                title="Recent contexts"
+                count={visibleAssemblies.length}
+                icon={<Cpu className="h-3.5 w-3.5" />}
+              >
                 <ul className="space-y-1">
                   {visibleAssemblies.map((assembly) => (
                     <li
                       key={`${assembly.phase}-${assembly.label}-${assembly.modelId}`}
-                      className="rounded-md border bg-muted/20 p-2"
+                      className="rounded-md border bg-muted/20 px-2 py-1.5"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="min-w-0 truncate text-sm font-medium">
+                        <p className="min-w-0 truncate text-xs font-medium">
                           {assembly.label}
                         </p>
                         <span className="flex shrink-0 items-center gap-1.5">
@@ -441,64 +546,23 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
                           </Badge>
                         </span>
                       </div>
-                      <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                        <span>Model: {assembly.modelName}</span>
-                        <span>
-                          Context size: {formatTokens(assembly.modelContextWindowTokens)}
-                        </span>
-                        <span>
-                          Input used: ~{formatTokens(assembly.estimatedInputTokens)} /{" "}
-                          {formatTokens(assembly.totalInputBudgetTokens)}
-                        </span>
-                        <span>
-                          Packs: {assembly.selectedPackCount} selected,{" "}
-                          {assembly.omittedPackCount} dropped
-                        </span>
-                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {assembly.modelName} - ~{formatTokens(assembly.estimatedInputTokens)} /{" "}
+                        {formatTokens(assembly.totalInputBudgetTokens)} input tokens;{" "}
+                        {assembly.selectedPackCount} packs selected
+                      </p>
                     </li>
                   ))}
                 </ul>
-              ) : (
-                <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                  Context assemblies appear when Build starts planning.
-                </p>
-              )}
-            </div>
-
-            {visibleDroppedPacks.length > 0 ? (
-              <div>
-                <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Dropped packs
-                </p>
-                <ul className="space-y-1">
-                  {visibleDroppedPacks.map((pack) => (
-                    <li
-                      key={`${pack.assemblyLabel}-${pack.id}`}
-                      className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-xs"
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate">{pack.title}</span>
-                        <span className="block truncate text-muted-foreground">
-                          {pack.assemblyLabel} - {pack.modelName}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-right text-muted-foreground">
-                        {pack.reason}
-                        <br />~{formatTokens(pack.estimatedTokens)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              </CompactDetails>
             ) : null}
 
             {hasRetrieveRefs && (
-              <div>
-                <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                  <Link2 className="h-3.5 w-3.5" />
-                  Retrieve refs
-                </p>
+              <CompactDetails
+                title="Retrieve refs"
+                count={visibleRetrieveRefs.length}
+                icon={<Link2 className="h-3.5 w-3.5" />}
+              >
                 <ul className="grid gap-1 sm:grid-cols-2">
                   {visibleRetrieveRefs.map((ref) => (
                     <li
@@ -519,47 +583,42 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
                     </li>
                   ))}
                 </ul>
-              </div>
+              </CompactDetails>
             )}
-          </div>
 
-          <div className="space-y-4">
-            <div>
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                <Brain className="h-3.5 w-3.5" />
-                Memory
-              </p>
-              {memoryCount(state.memory) > 0 ? (
-                <div className="space-y-3">
-                  <MemoryList title="Decisions" items={state.memory.activeDecisions} />
-                  <MemoryList title="Failed approaches" items={state.memory.failedApproaches} />
-                  <MemoryList title="Fragile files" items={state.memory.fragileFiles} />
-                  {state.memory.warnings.length > 0 && (
-                    <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-                      <p className="mb-1 flex items-center gap-1 font-medium">
-                        <FileWarning className="h-3.5 w-3.5" />
-                        Warnings
-                      </p>
-                      {state.memory.warnings.slice(0, 3).map((warning) => (
-                        <p key={warning} className="line-clamp-2">
-                          {warning}
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                  No active Build memory warnings yet.
-                </p>
-              )}
-            </div>
+            {visibleDroppedPacks.length > 0 && (
+              <CompactDetails
+                title="Dropped packs"
+                count={visibleDroppedPacks.length}
+                icon={<AlertTriangle className="h-3.5 w-3.5" />}
+              >
+                <ul className="space-y-1">
+                  {visibleDroppedPacks.map((pack) => (
+                    <li
+                      key={`${pack.assemblyLabel}-${pack.id}`}
+                      className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-xs"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate">{pack.title}</span>
+                        <span className="block truncate text-muted-foreground">
+                          {pack.assemblyLabel} - {pack.modelName}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right text-muted-foreground">
+                        {pack.reason}
+                        <br />~{formatTokens(pack.estimatedTokens)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </CompactDetails>
+            )}
 
-            <div>
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                <Database className="h-3.5 w-3.5" />
-                Code intelligence
-              </p>
+            <CompactDetails
+              title="Code intelligence"
+              count={state.codeIntel ? 1 : 0}
+              icon={<Database className="h-3.5 w-3.5" />}
+            >
               {state.codeIntel ? (
                 <div className="rounded-md border bg-muted/20 p-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -588,7 +647,7 @@ export function BuildContextPanel({ state }: { state: BuildContextPanelState }) 
                   Code intelligence status appears after runner setup.
                 </p>
               )}
-            </div>
+            </CompactDetails>
           </div>
         </div>
       )}

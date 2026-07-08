@@ -4,6 +4,7 @@ import {
   isSafeQueuedRunCommand,
   packToolBatchResult,
   createToolReplayCache,
+  replayDuplicateToolAction,
   scheduleBuildToolActions,
   skippedOnlyToolBatchRecoveryInstruction,
 } from "../lib/orchestrator/build-tool-scheduler";
@@ -124,6 +125,29 @@ check(
   "overlapping read_range duplicate can be replayed from cache",
   overlappingReplay?.includes("line 520 result"),
   overlappingReplay
+);
+const replayedDuplicate = replayDuplicateToolAction({
+  action: rangeAction,
+  label: "read_range public/app.js:520",
+  replayCache,
+});
+check(
+  "duplicate read_range action is served from replay cache instead of skipped",
+  replayedDuplicate.served?.label === "read_range public/app.js:520 (replayed)" &&
+    replayedDuplicate.served.result.includes("line 520 result") &&
+    replayedDuplicate.skipped === null,
+  replayedDuplicate
+);
+const skippedDuplicate = replayDuplicateToolAction({
+  action: { action: "read_range", path: "missing.js", startLine: 1, lineCount: 20 },
+  label: "read_range missing.js:1",
+  replayCache,
+});
+check(
+  "duplicate action without replay remains skipped",
+  skippedDuplicate.served === null &&
+    skippedDuplicate.skipped?.reason === "duplicate tool request (already delivered)",
+  skippedDuplicate
 );
 
 const spanningCache = createToolReplayCache();
