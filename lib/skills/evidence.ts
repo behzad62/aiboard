@@ -57,13 +57,26 @@ function hasVerificationOnlyDebuggingExemption(joined: string): boolean {
   );
 }
 
+function isEvidenceOnlyOptionalSkill(skillId: string): boolean {
+  return (
+    skillId === "agent:test-driven-development" ||
+    skillId === "superpowers:strict-test-driven-development" ||
+    skillId === "superpowers:systematic-debugging" ||
+    skillId === "agent:security-and-hardening"
+  );
+}
+
 function missingForSkill(
   skillId: string,
   required: string[],
   reported: string[],
   allowVerificationOnlyExemptions: boolean
 ): string[] {
-  if (reported.length === 0) return required;
+  if (reported.length === 0) {
+    return allowVerificationOnlyExemptions && isEvidenceOnlyOptionalSkill(skillId)
+      ? []
+      : required;
+  }
   const joined = reported.join("\n").toLowerCase();
   if (
     skillId === "agent:test-driven-development" ||

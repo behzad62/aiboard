@@ -159,9 +159,23 @@ export function shouldAllowEvidenceOnlySkillExemptions(input: {
   emittedFiles: string[];
   declaredOutputPaths: string[];
   taskInstructions?: string;
+  taskKind?: "modify" | "audit" | "verify" | "repo";
+  completionMode?: "files" | "evidence" | "either";
+  verificationPolicy?: "architect" | "tool" | "external" | "none";
 }): boolean {
   if (input.emittedFiles.length > 0) return false;
   if (input.declaredOutputPaths.length === 0) return true;
+  const acceptsEvidence =
+    input.completionMode === "evidence" || input.completionMode === "either";
+  if (
+    acceptsEvidence &&
+    (input.taskKind === "audit" ||
+      input.taskKind === "verify" ||
+      input.verificationPolicy === "architect" ||
+      input.verificationPolicy === "none")
+  ) {
+    return true;
+  }
   return /FIX \(from (?:final Build quality gate|skill evidence gate)\):/i.test(
     input.taskInstructions ?? ""
   );

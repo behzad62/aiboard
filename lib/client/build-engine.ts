@@ -7617,6 +7617,9 @@ export async function runBuildDiscussion(
             emittedFiles: files,
             declaredOutputPaths,
             taskInstructions: task.instructions,
+            taskKind: taskContract.kind,
+            completionMode: taskContract.completionMode,
+            verificationPolicy: taskContract.verificationPolicy,
           }),
         });
         if (skillEvidence.length > 0) {
@@ -7718,6 +7721,17 @@ export async function runBuildDiscussion(
             toolBudgetBlockedNoFiles ? "unavailable" : "bad"
           );
           return;
+        }
+        if (files.length === 0 && canReviewWorkerOutput) {
+          reviewEvidenceLedger = appendBuildEvidenceLedgerEntry(
+            reviewEvidenceLedger,
+            {
+              at: new Date().toISOString(),
+              actor: worker.displayName,
+              label: `${task.id} evidence-only worker output`,
+              summary: stripAnsi(prose || output),
+            }
+          );
         }
         stat.responses += 1;
         stat.responseMs += Date.now() - startedAt;

@@ -349,6 +349,45 @@ check(
   }),
 );
 
+const auditAllowedPathWorkerOutput = [
+  "Baseline already present. No file changes were needed or made.",
+  "",
+  "Evidence:",
+  "- index.html is already a static browser shell with a gameCanvas.",
+  "- src/renderer.js already imports three.module.js and creates a WebGLRenderer.",
+  "- src/main.js already wires createRenderer into the browser app loop.",
+].join("\n");
+const auditAllowedPathEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: [
+    "superpowers:strict-test-driven-development",
+    "agent:security-and-hardening",
+  ],
+  workerOutput: auditAllowedPathWorkerOutput,
+  allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
+    emittedFiles: [],
+    declaredOutputPaths: [
+      "index.html",
+      "src/main.js",
+      "src/game.js",
+      "src/renderer.js",
+      "src/styles.css",
+      "README.md",
+    ],
+    taskInstructions:
+      "Inspect the current repo. If the Three.js/WebGL baseline is already present, do not rewrite it; preserve the baseline and record concrete evidence.",
+    taskKind: "audit",
+    completionMode: "either",
+    verificationPolicy: "architect",
+  }),
+});
+check(
+  "audit/either no-change task with allowed outputPaths can use evidence-only skill exemptions",
+  !hasBlockingSkillEvidence(auditAllowedPathEvidence, "T1"),
+  auditAllowedPathEvidence
+);
+
 const splitReviewIssues = splitEvidenceOnlyReviewIssues([
   "TOOL CALL REJECTED: your JSON tool action looks incomplete.",
   "Patch to src/game.js skipped — the file doesn't exist.",
