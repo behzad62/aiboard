@@ -22,6 +22,7 @@ import {
   getFireworksAIModels,
   getFireworksModelApiKey,
   getFireworksModelBaseURL,
+  getFireworksModelRunnerToken,
   requestFireworksAiAction,
   type FireworksAIModelOption,
 } from "@/lib/games/fireworks/ai";
@@ -161,6 +162,7 @@ export function FireworksGameClient({
                 reasoningEffort: aiConfig.reasoningEffort,
                 apiKey: configuredModel.apiKey,
                 baseURL: getFireworksModelBaseURL(aiConfig.modelId),
+                runnerToken: getFireworksModelRunnerToken(aiConfig.modelId),
                 signal: abortController.signal,
               })
             : {

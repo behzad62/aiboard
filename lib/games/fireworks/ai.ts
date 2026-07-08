@@ -16,6 +16,7 @@ import {
   getEnabledModels,
   getProvider,
   getProviderBaseURL,
+  getProviderRunnerToken,
   streamCustomChat,
 } from "@/lib/client/providers";
 import {
@@ -260,6 +261,15 @@ export function getFireworksModelBaseURL(modelId: string): string | undefined {
   return getProviderBaseURL(providerId);
 }
 
+export function getFireworksModelRunnerToken(
+  modelId: string
+): string | undefined {
+  const { providerId } = parseModelId(modelId);
+  const customModel = getCustomModelByFullId(modelId);
+  if (customModel) return undefined;
+  return getProviderRunnerToken(providerId);
+}
+
 export async function requestFireworksAiAction(params: {
   state: FireworksGameState;
   playerId: string;
@@ -267,6 +277,7 @@ export async function requestFireworksAiAction(params: {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }): Promise<FireworksAiActionResult> {
   const startedAt = Date.now();
@@ -279,6 +290,7 @@ export async function requestFireworksAiAction(params: {
         modelId: params.modelId,
         apiKey: params.apiKey,
         baseURL: params.baseURL,
+        runnerToken: params.runnerToken,
         reasoningEffort: params.reasoningEffort,
         messages: [
           { role: "system", content: system },
@@ -413,6 +425,7 @@ async function* streamFireworksResponse(params: {
   modelId: string;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   reasoningEffort: ReasoningEffort;
   messages: ChatParams["messages"];
   signal?: AbortSignal;
@@ -442,6 +455,7 @@ async function* streamFireworksResponse(params: {
     temperature: 0.2,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     structuredOutput: buildFireworksActionSchema(),
   });
 }

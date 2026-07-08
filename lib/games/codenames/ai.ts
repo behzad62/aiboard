@@ -14,6 +14,7 @@ import {
   getEnabledModels,
   getProvider,
   getProviderBaseURL,
+  getProviderRunnerToken,
   streamCustomChat,
 } from "@/lib/client/providers";
 import { estimateModelCallUsage } from "@/lib/client/token-usage";
@@ -473,6 +474,15 @@ export function getCodenamesModelBaseURL(modelId: string): string | undefined {
   return getProviderBaseURL(providerId);
 }
 
+export function getCodenamesModelRunnerToken(
+  modelId: string
+): string | undefined {
+  const { providerId } = parseModelId(modelId);
+  const customModel = getCustomModelByFullId(modelId);
+  if (customModel) return undefined;
+  return getProviderRunnerToken(providerId);
+}
+
 export async function requestCodenamesSpymasterMove(params: {
   state: CodenamesGameState;
   team: CodenamesTeam;
@@ -480,6 +490,7 @@ export async function requestCodenamesSpymasterMove(params: {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }): Promise<CodenamesSpymasterMoveResult> {
   const { system, user } = buildCodenamesSpymasterPrompt(params.state, params.team);
@@ -487,6 +498,7 @@ export async function requestCodenamesSpymasterMove(params: {
     modelId: params.modelId,
     apiKey: params.apiKey,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     reasoningEffort: params.reasoningEffort,
     messages: [
       { role: "system", content: system },
@@ -517,6 +529,7 @@ export async function requestCodenamesGuesserMove(params: {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }): Promise<CodenamesGuesserMoveResult> {
   const { system, user } = buildCodenamesGuesserPrompt(params.state, params.team);
@@ -524,6 +537,7 @@ export async function requestCodenamesGuesserMove(params: {
     modelId: params.modelId,
     apiKey: params.apiKey,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     reasoningEffort: params.reasoningEffort,
     messages: [
       { role: "system", content: system },
@@ -587,6 +601,7 @@ async function requestCodenamesJson<TParsed>(params: {
   modelId: string;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   reasoningEffort: ReasoningEffort;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   structuredOutput: StructuredOutputFormat;
@@ -650,6 +665,7 @@ async function requestCodenamesJson<TParsed>(params: {
         customModel,
         apiKey: params.apiKey,
         baseURL: params.baseURL,
+        runnerToken: params.runnerToken,
         messages,
         reasoningEffort: params.reasoningEffort,
         structuredOutput: params.structuredOutput,
@@ -716,6 +732,7 @@ async function streamCodenamesResponseText(params: {
   customModel: ReturnType<typeof getCustomModelByFullId>;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -762,6 +779,7 @@ function standardProviderStream(params: {
   model: string;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -776,6 +794,7 @@ function standardProviderStream(params: {
     temperature: 0.3,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     structuredOutput: params.structuredOutput,
   });
 }

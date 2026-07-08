@@ -24,6 +24,7 @@ import {
   getCodenamesAIModels,
   getCodenamesModelApiKey,
   getCodenamesModelBaseURL,
+  getCodenamesModelRunnerToken,
   requestCodenamesGuesserMove,
   requestCodenamesSpymasterMove,
   type CodenamesAIDiagnosticAttempt,
@@ -706,6 +707,7 @@ export function CodenamesGameClient({
       try {
         const apiKey = getCodenamesModelApiKey(config.modelId) ?? "";
         const baseURL = getCodenamesModelBaseURL(config.modelId);
+        const runnerToken = getCodenamesModelRunnerToken(config.modelId);
 
         if (seat.role === "spymaster") {
           const result = await requestCodenamesSpymasterMove({
@@ -715,6 +717,7 @@ export function CodenamesGameClient({
             reasoningEffort: config.reasoningEffort,
             apiKey,
             baseURL,
+            runnerToken,
             signal: abortController.signal,
           });
           if (!isCurrentAIRequest()) return;
@@ -766,6 +769,7 @@ export function CodenamesGameClient({
           reasoningEffort: config.reasoningEffort,
           apiKey,
           baseURL,
+          runnerToken,
           signal: abortController.signal,
         });
         if (!isCurrentAIRequest()) return;

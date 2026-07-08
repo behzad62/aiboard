@@ -12,6 +12,7 @@ import {
   chooseFallbackBattleshipTarget,
   getBattleshipModelApiKey,
   getBattleshipModelBaseURL,
+  getBattleshipModelRunnerToken,
   isRecoverableBattleshipAIError,
   requestBattleshipAIMove,
   requestBattleshipAIPlacement,
@@ -64,6 +65,7 @@ interface BattleshipBenchmarkModelConfig {
   reasoning: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
 }
 
 function generateId(): string {
@@ -88,6 +90,7 @@ function playerConfig(
     reasoning,
     apiKey,
     baseURL: getBattleshipModelBaseURL(modelId),
+    runnerToken: getBattleshipModelRunnerToken(modelId),
   };
 }
 
@@ -124,6 +127,7 @@ async function resolveBoard({
     reasoningEffort: config.reasoning,
     apiKey: config.apiKey,
     baseURL: config.baseURL,
+    runnerToken: config.runnerToken,
     signal,
   });
   if ("ships" in placement) {
@@ -230,6 +234,7 @@ export async function runBattleshipAIBenchmark(
       reasoningEffort: config.reasoning,
       apiKey: config.apiKey,
       baseURL: config.baseURL,
+      runnerToken: config.runnerToken,
       signal: params.signal,
     });
     totalAiResponseMs += Date.now() - responseStartedAt;

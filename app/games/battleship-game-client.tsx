@@ -34,6 +34,7 @@ import {
   getBattleshipAIModels,
   getBattleshipModelApiKey,
   getBattleshipModelBaseURL,
+  getBattleshipModelRunnerToken,
   isRecoverableBattleshipAIError,
   requestBattleshipAIPlacement,
   requestBattleshipAIMove,
@@ -534,6 +535,9 @@ export function BattleshipGameClient({
       try {
         const apiKey = getBattleshipModelApiKey(currentAIConfig.modelId) ?? "";
         const baseURL = getBattleshipModelBaseURL(currentAIConfig.modelId);
+        const runnerToken = getBattleshipModelRunnerToken(
+          currentAIConfig.modelId
+        );
         const result = await requestBattleshipAIMove({
           state: requestState,
           player: currentTurn,
@@ -541,6 +545,7 @@ export function BattleshipGameClient({
           reasoningEffort: currentAIConfig.reasoningEffort,
           apiKey,
           baseURL,
+          runnerToken,
           signal: abortController.signal,
         });
 
@@ -702,6 +707,7 @@ export function BattleshipGameClient({
             reasoningEffort: config.reasoningEffort,
             apiKey: getBattleshipModelApiKey(config.modelId) ?? "",
             baseURL: getBattleshipModelBaseURL(config.modelId),
+            runnerToken: getBattleshipModelRunnerToken(config.modelId),
             signal: abortController.signal,
           });
 

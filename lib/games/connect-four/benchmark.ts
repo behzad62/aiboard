@@ -3,6 +3,7 @@ import {
   chooseFallbackConnectFourColumn,
   getConnectFourModelApiKey,
   getConnectFourModelBaseURL,
+  getConnectFourModelRunnerToken,
   requestConnectFourAIMove,
 } from "@/lib/games/connect-four/ai";
 import {
@@ -26,6 +27,7 @@ interface ConnectFourBenchmarkModelConfig {
   reasoning: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
 }
 
 export interface ConnectFourBenchmarkProgress {
@@ -150,6 +152,7 @@ function validatePlayerConfig(
     reasoning,
     apiKey,
     baseURL: getConnectFourModelBaseURL(modelId),
+    runnerToken: getConnectFourModelRunnerToken(modelId),
   };
 }
 
@@ -247,6 +250,7 @@ export async function runConnectFourAIBenchmark(
       reasoningEffort: currentConfig.reasoning,
       apiKey: currentConfig.apiKey,
       baseURL: currentConfig.baseURL,
+      runnerToken: currentConfig.runnerToken,
       signal: params.signal,
     });
     totalAiResponseMs += Date.now() - responseStartedAt;

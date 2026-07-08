@@ -18,6 +18,7 @@ import {
   getAvailableConnectFourModels,
   getConnectFourModelApiKey,
   getConnectFourModelBaseURL,
+  getConnectFourModelRunnerToken,
   requestConnectFourAIMove,
   type ConnectFourAIDiagnosticAttempt,
 } from "@/lib/games/connect-four/ai";
@@ -559,12 +560,14 @@ export function ConnectFourGameClient({
       try {
         const apiKey = getConnectFourModelApiKey(config.modelId) ?? "";
         const baseURL = getConnectFourModelBaseURL(config.modelId);
+        const runnerToken = getConnectFourModelRunnerToken(config.modelId);
         const result = await requestConnectFourAIMove({
           state: requestState,
           modelId: config.modelId,
           reasoningEffort: config.reasoningEffort,
           apiKey,
           baseURL,
+          runnerToken,
           signal: abortController.signal,
         });
 

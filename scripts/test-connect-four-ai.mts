@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import {
   buildConnectFourCorrectionPrompt,
   CONNECT_FOUR_AI_MAX_TOKENS,
@@ -6,6 +7,7 @@ import {
   chooseFallbackConnectFourColumn,
   collectConnectFourStreamTextForTests,
   formatLegalColumnList,
+  getConnectFourModelRunnerToken,
   getConnectFourRetryDelayMs,
   parseConnectFourAIResponse,
 } from "../lib/games/connect-four/ai";
@@ -14,8 +16,17 @@ import {
   dropDisc,
 } from "../lib/games/connect-four/engine";
 import type { ConnectFourGameState } from "../lib/games/connect-four/types";
+import type { saveProviderKey } from "../lib/client/settings-api";
+import type { __resetClientStoreForTests } from "../lib/client/store";
 
 let failures = 0;
+const require = createRequire(import.meta.url);
+const { saveProviderKey } = require("../lib/client/settings-api") as {
+  saveProviderKey: typeof saveProviderKey;
+};
+const { __resetClientStoreForTests } = require("../lib/client/store") as {
+  __resetClientStoreForTests: typeof __resetClientStoreForTests;
+};
 
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
@@ -142,6 +153,22 @@ check(
     column: chooseFallbackConnectFourColumn(mustBlock),
     board: mustBlock.board,
   }
+);
+
+__resetClientStoreForTests();
+saveProviderKey({
+  providerId: "nvidia",
+  apiKey: "nvapi-connect-four-test",
+  runnerToken: "connect-four-runner-token",
+  baseURL: "http://127.0.0.1:1455",
+  models: ["minimaxai/minimax-m3"],
+  enabled: true,
+});
+check(
+  "Connect Four resolves separate NVIDIA runner token from settings",
+  getConnectFourModelRunnerToken("nvidia:minimaxai/minimax-m3") ===
+    "connect-four-runner-token",
+  getConnectFourModelRunnerToken("nvidia:minimaxai/minimax-m3")
 );
 
 const abortController = new AbortController();

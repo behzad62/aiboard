@@ -18,6 +18,7 @@ import {
   getEnabledModels,
   getProvider,
   getProviderBaseURL,
+  getProviderRunnerToken,
   streamCustomChat,
 } from "@/lib/client/providers";
 import { estimateModelCallUsage } from "@/lib/client/token-usage";
@@ -63,6 +64,7 @@ export interface RequestBattleshipAIMoveParams {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }
 
@@ -415,6 +417,15 @@ export function getBattleshipModelBaseURL(
   return getProviderBaseURL(providerId);
 }
 
+export function getBattleshipModelRunnerToken(
+  modelId: string
+): string | undefined {
+  const { providerId } = parseModelId(modelId);
+  const customModel = getCustomModelByFullId(modelId);
+  if (customModel) return undefined;
+  return getProviderRunnerToken(providerId);
+}
+
 function correctionPrompt(
   reason: "parse" | "illegal",
   legalTargets: string[],
@@ -432,6 +443,7 @@ async function streamBattleshipResponseText(params: {
   customModel: ReturnType<typeof getCustomModelByFullId>;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -479,6 +491,7 @@ function standardProviderStream(params: {
   model: string;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -493,6 +506,7 @@ function standardProviderStream(params: {
     temperature: 0.3,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     structuredOutput: params.structuredOutput,
   });
 }
@@ -565,6 +579,7 @@ export async function requestBattleshipAIMove(
         customModel,
         apiKey: params.apiKey,
         baseURL: params.baseURL,
+        runnerToken: params.runnerToken,
         messages,
         reasoningEffort: params.reasoningEffort,
         structuredOutput,
@@ -670,6 +685,7 @@ export async function requestBattleshipAIPlacement(params: {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }): Promise<BattleshipAIPlacementResult> {
   const { providerId, model } = parseModelId(params.modelId);
@@ -729,6 +745,7 @@ export async function requestBattleshipAIPlacement(params: {
         customModel,
         apiKey: params.apiKey,
         baseURL: params.baseURL,
+        runnerToken: params.runnerToken,
         messages,
         reasoningEffort: params.reasoningEffort,
         structuredOutput: buildBattleshipPlacementResponseFormat(),

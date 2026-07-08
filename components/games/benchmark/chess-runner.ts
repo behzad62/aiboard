@@ -3,6 +3,7 @@ import { createInitialState, makeMove, toFEN } from "@/lib/games/chess/engine";
 import {
   getModelApiKey,
   getModelBaseURL,
+  getModelRunnerToken,
   requestAIMove,
 } from "@/lib/games/chess/ai";
 import { saveMatchRecord } from "@/lib/games/stats";
@@ -78,6 +79,7 @@ export async function runSingleChessBenchmarkGame({
     try {
       const apiKey = await getModelApiKey(currentModelId);
       const baseURL = getModelBaseURL(currentModelId);
+      const runnerToken = getModelRunnerToken(currentModelId);
 
       if (!apiKey) {
         console.error(`No API key for model: ${currentModelId}`);
@@ -91,6 +93,7 @@ export async function runSingleChessBenchmarkGame({
         reasoningEffort: currentReasoning,
         apiKey,
         baseURL,
+        runnerToken,
       });
 
       const moveElapsed = Date.now() - moveStartTime;

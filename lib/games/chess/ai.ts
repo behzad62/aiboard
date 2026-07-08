@@ -20,6 +20,7 @@ import {
   streamCustomChat,
   getDecryptedApiKey,
   getProviderBaseURL,
+  getProviderRunnerToken,
   getEnabledModels,
 } from "@/lib/client/providers";
 import {
@@ -49,6 +50,7 @@ export interface AIPlayerConfig {
   reasoningEffort: ReasoningEffort;
   apiKey?: string;
   baseURL?: string;
+  runnerToken?: string;
 }
 
 const MAX_AI_MOVE_RETRIES = 3;
@@ -402,6 +404,7 @@ interface RequestAIMoveParams {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }
 
@@ -433,7 +436,15 @@ type AIMoveResult = AIMoveSuccess | AIMoveError;
 export async function requestAIMove(
   params: RequestAIMoveParams
 ): Promise<AIMoveResult> {
-  const { state, modelId, reasoningEffort, apiKey, baseURL, signal } = params;
+  const {
+    state,
+    modelId,
+    reasoningEffort,
+    apiKey,
+    baseURL,
+    runnerToken,
+    signal,
+  } = params;
 
   if (signal?.aborted) {
     return { error: "AI request aborted" };
@@ -543,6 +554,7 @@ export async function requestAIMove(
           temperature: 0.3,
           reasoningEffort,
           baseURL,
+          runnerToken,
           structuredOutput,
         });
 
@@ -741,4 +753,15 @@ export function getModelBaseURL(modelId: string): string | undefined {
 
   // Use provider base URL
   return getProviderBaseURL(providerId);
+}
+
+export function getModelRunnerToken(modelId: string): string | undefined {
+  const { providerId } = parseModelId(modelId);
+
+  const customModel = getCustomModelByFullId(modelId);
+  if (customModel) {
+    return undefined;
+  }
+
+  return getProviderRunnerToken(providerId);
 }

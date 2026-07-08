@@ -12,6 +12,7 @@ import {
 import {
   getCodenamesModelApiKey,
   getCodenamesModelBaseURL,
+  getCodenamesModelRunnerToken,
   requestCodenamesGuesserMove,
   requestCodenamesSpymasterMove,
 } from "./ai";
@@ -64,6 +65,7 @@ interface CodenamesBenchmarkModelConfig {
   reasoning: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
 }
 
 function generateId(): string {
@@ -87,6 +89,7 @@ function teamConfig(
     reasoning,
     apiKey,
     baseURL: getCodenamesModelBaseURL(modelId),
+    runnerToken: getCodenamesModelRunnerToken(modelId),
   };
 }
 
@@ -223,6 +226,7 @@ export async function runCodenamesAIBenchmark(
       reasoningEffort: config.reasoning,
       apiKey: config.apiKey,
       baseURL: config.baseURL,
+      runnerToken: config.runnerToken,
       signal: params.signal,
     });
     totalAiResponseMs += Date.now() - clueStartedAt;
@@ -257,6 +261,7 @@ export async function runCodenamesAIBenchmark(
       reasoningEffort: config.reasoning,
       apiKey: config.apiKey,
       baseURL: config.baseURL,
+      runnerToken: config.runnerToken,
       signal: params.signal,
     });
     totalAiResponseMs += Date.now() - guessStartedAt;

@@ -43,6 +43,7 @@ import {
   getAvailableModels,
   getModelApiKey,
   getModelBaseURL,
+  getModelRunnerToken,
 } from "@/lib/games/chess/ai";
 import { ensureReady } from "@/lib/client/api";
 import {
@@ -1136,6 +1137,7 @@ export function ChessGameClient({
         const config = getAIConfig(currentTurn);
         const apiKey = getModelApiKey(config.modelId) ?? "";
         const baseURL = getModelBaseURL(config.modelId);
+        const runnerToken = getModelRunnerToken(config.modelId);
 
         // Add delay for AI vs AI to make it watchable
         if (gameMode === "aivai") {
@@ -1150,6 +1152,7 @@ export function ChessGameClient({
           reasoningEffort: config.reasoningEffort,
           apiKey,
           baseURL,
+          runnerToken,
           signal: abortController.signal,
         });
 

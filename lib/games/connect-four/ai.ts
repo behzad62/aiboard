@@ -17,6 +17,7 @@ import {
   getEnabledModels,
   getProvider,
   getProviderBaseURL,
+  getProviderRunnerToken,
   streamCustomChat,
 } from "@/lib/client/providers";
 import {
@@ -44,6 +45,7 @@ export interface RequestConnectFourAIMoveParams {
   reasoningEffort: ReasoningEffort;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   signal?: AbortSignal;
 }
 
@@ -294,7 +296,15 @@ export function buildConnectFourMoveResponseFormat(): StructuredOutputFormat {
 export async function requestConnectFourAIMove(
   params: RequestConnectFourAIMoveParams
 ): Promise<ConnectFourAIMoveResult> {
-  const { state, modelId, reasoningEffort, apiKey, baseURL, signal } = params;
+  const {
+    state,
+    modelId,
+    reasoningEffort,
+    apiKey,
+    baseURL,
+    runnerToken,
+    signal,
+  } = params;
 
   if (signal?.aborted) {
     return { error: "AI request aborted" };
@@ -365,6 +375,7 @@ export async function requestConnectFourAIMove(
         customModel,
         apiKey,
         baseURL,
+        runnerToken,
         messages,
         reasoningEffort,
         structuredOutput,
@@ -524,6 +535,18 @@ export function getConnectFourModelBaseURL(
   return getProviderBaseURL(providerId);
 }
 
+export function getConnectFourModelRunnerToken(
+  modelId: string
+): string | undefined {
+  const { providerId } = parseModelId(modelId);
+  const customModel = getCustomModelByFullId(modelId);
+  if (customModel) {
+    return undefined;
+  }
+
+  return getProviderRunnerToken(providerId);
+}
+
 function getNextConnectFourPlayer(
   player: ConnectFourPlayer
 ): ConnectFourPlayer {
@@ -564,6 +587,7 @@ async function streamConnectFourResponseText(params: {
   customModel: ReturnType<typeof getCustomModelByFullId>;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -609,6 +633,7 @@ function getStandardProviderStream(params: {
   model: string;
   apiKey: string;
   baseURL?: string;
+  runnerToken?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   reasoningEffort: ReasoningEffort;
   structuredOutput: StructuredOutputFormat;
@@ -626,6 +651,7 @@ function getStandardProviderStream(params: {
     temperature: 0.3,
     reasoningEffort: params.reasoningEffort,
     baseURL: params.baseURL,
+    runnerToken: params.runnerToken,
     structuredOutput: params.structuredOutput,
   });
 }
