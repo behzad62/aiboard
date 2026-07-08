@@ -124,6 +124,23 @@ export interface BuildTaskFailureDecision {
   retryDelayMs?: number;
 }
 
+export function shouldRequestWorkerFinalOutput(input: {
+  hasLandedFiles: boolean;
+  hasPreviewArtifacts: boolean;
+  hasScopedVerificationGapReport: boolean;
+  expectsFileOutput: boolean;
+  toolIssueCount: number;
+}): boolean {
+  if (
+    input.hasLandedFiles ||
+    input.hasPreviewArtifacts ||
+    input.hasScopedVerificationGapReport
+  ) {
+    return false;
+  }
+  return input.expectsFileOutput || input.toolIssueCount > 0;
+}
+
 export function decideBuildTaskFailure(
   task: Pick<BuildTask, "failCount">,
   kind: "bad" | "unavailable",

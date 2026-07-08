@@ -185,6 +185,7 @@ import {
   normalizeBuildTasksForResume,
   reopenBuildTasksForBlockedQualityGateCheckpoint,
   reopenBuildTasksForQualityGate,
+  shouldRequestWorkerFinalOutput,
   outputPathsForTask,
   applyTaskSplit,
   parseWorkerSplitAction,
@@ -7258,18 +7259,26 @@ export async function runBuildDiscussion(
           const preview = extractArtifacts(output);
           const scopedVerificationGapReport =
             declaredOutputPaths.length === 0 && isScopedVerificationGapReport(output);
-          if (
-            patchedFiles.length > 0 ||
+          const hasPreviewArtifacts =
             preview.files.length > 0 ||
             preview.edits.length > 0 ||
-            preview.truncatedPaths.length > 0 ||
-            scopedVerificationGapReport ||
-            toolIssues.length === 0
-          ) {
+            preview.truncatedPaths.length > 0;
+          const requestFinalOutput = shouldRequestWorkerFinalOutput({
+            hasLandedFiles: patchedFiles.length > 0,
+            hasPreviewArtifacts,
+            hasScopedVerificationGapReport: scopedVerificationGapReport,
+            expectsFileOutput: declaredOutputPaths.length > 0,
+            toolIssueCount: toolIssues.length,
+          });
+          if (!requestFinalOutput) {
             break;
           }
           const instruction =
             "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. If creating a new file, emit a fenced file block with path=...";
+          const finalOutputReason =
+            toolIssues.length > 0
+              ? "hit repeated tool issues"
+              : "ended tool/context gathering without file output";
           workerMessages.push({ role: "user", content: instruction });
           emit({
             type: "diagnostic",
@@ -7277,7 +7286,7 @@ export async function runBuildDiscussion(
             modelId: worker.modelId,
             modelName: worker.displayName,
             providerId: parseModelId(worker.modelId).providerId,
-            message: `${worker.displayName} hit repeated tool issues for ${task.id}; requesting final file output without more tools`,
+            message: `${worker.displayName} ${finalOutputReason} for ${task.id}; requesting final file output without more tools`,
           });
           output = await streamConversation(worker, workerMessages, {
             maxTokens: workerMaxTokens(worker),

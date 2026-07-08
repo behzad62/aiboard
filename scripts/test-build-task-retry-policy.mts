@@ -4,6 +4,7 @@ import {
   buildReviewFixTaskUpdate,
   decideBuildTaskFailure,
   selectBalancedWorkerIndex,
+  shouldRequestWorkerFinalOutput,
   type BuildTask,
 } from "../lib/orchestrator/build";
 
@@ -80,5 +81,46 @@ const reviewProblem = buildReviewFixProblem({
 });
 check("review fix problem has a durable problem code", reviewProblem.code === "review_fix_required", reviewProblem);
 check("review fix problem preserves browser evidence details", /Browser evidence/i.test(reviewProblem.details), reviewProblem);
+
+check(
+  "worker with expected file output gets final-output prompt even after clean tool reads",
+  shouldRequestWorkerFinalOutput({
+    hasLandedFiles: false,
+    hasPreviewArtifacts: false,
+    hasScopedVerificationGapReport: false,
+    expectsFileOutput: true,
+    toolIssueCount: 0,
+  }) === true
+);
+check(
+  "worker with landed files does not need final-output prompt",
+  shouldRequestWorkerFinalOutput({
+    hasLandedFiles: true,
+    hasPreviewArtifacts: false,
+    hasScopedVerificationGapReport: false,
+    expectsFileOutput: true,
+    toolIssueCount: 0,
+  }) === false
+);
+check(
+  "evidence-only worker without tool issues is not forced to emit files",
+  shouldRequestWorkerFinalOutput({
+    hasLandedFiles: false,
+    hasPreviewArtifacts: false,
+    hasScopedVerificationGapReport: false,
+    expectsFileOutput: false,
+    toolIssueCount: 0,
+  }) === false
+);
+check(
+  "tool issues still trigger final-output recovery",
+  shouldRequestWorkerFinalOutput({
+    hasLandedFiles: false,
+    hasPreviewArtifacts: false,
+    hasScopedVerificationGapReport: false,
+    expectsFileOutput: false,
+    toolIssueCount: 1,
+  }) === true
+);
 
 process.exit(failed === 0 ? 0 : 1);
