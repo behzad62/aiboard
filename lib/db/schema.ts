@@ -14,6 +14,7 @@ import type {
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
+import type { BuildEvidenceLedgerEntry } from "@/lib/orchestrator/build-progress";
 export type {
   ContextBlob,
   ContextBlobKind,
@@ -239,6 +240,7 @@ export interface BuildCheckpoint {
   commandProblems?: BuildCommandProblem[];
   stopReport?: BuildStopReport | null;
   toolReviewReport?: BuildToolReviewReport | null;
+  evidenceLedger?: BuildEvidenceLedgerEntry[];
   usageWindow: BuildUsageWindow;
   skillMode?: BuildSkillMode;
   skillEvidence?: SkillEvidence[];
