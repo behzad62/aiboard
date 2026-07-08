@@ -559,10 +559,117 @@ async function testLocalRunnerStreamsMessageOutputItemText(): Promise<void> {
   }
 }
 
+async function testLocalRunnerSurvivesUpstreamStreamError(): Promise<void> {
+  const { server: upstream, url: upstreamUrl } = await withServer(async (req, res) => {
+    await readJsonBody(req);
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    res.write(sseEvent({ type: "response.output_text.delta", delta: "partial " }));
+    setTimeout(() => {
+      res.destroy(new Error("simulated upstream stream failure"));
+    }, 20);
+  });
+
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "aiboard-account-runner-stream-error-"));
+  const authFile = path.join(tmp, "auth.json");
+  const token = "test-token";
+  const runnerPort = 18000 + Math.floor(Math.random() * 10000);
+  const runnerUrl = `http://127.0.0.1:${runnerPort}`;
+  let child: ChildProcessWithoutNullStreams | null = null;
+  let runnerOutput = "";
+
+  try {
+    await writeFile(
+      authFile,
+      JSON.stringify({
+        chatgpt: {
+          type: "oauth",
+          refresh: "unused",
+          access: "fake-access",
+          expires: Date.now() + 3_600_000,
+          accountId: "acct-test",
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+    child = spawn(
+      process.execPath,
+      [
+        "lib/account-provider-runner.mjs",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(runnerPort),
+        "--token",
+        token,
+        "--auth-file",
+        authFile,
+        "--chatgpt-codex-endpoint",
+        upstreamUrl,
+      ],
+      { cwd: process.cwd() }
+    );
+    child.stdout.on("data", (chunk) => {
+      runnerOutput += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      runnerOutput += String(chunk);
+    });
+    await waitForRunnerReady(child, runnerUrl, token);
+
+    let text = "";
+    let fetchError: string | null = null;
+    try {
+      const response = await fetch(`${runnerUrl}/providers/chatgpt/chat`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-runner-token": token,
+        },
+        body: JSON.stringify({
+          model: "gpt-5.4-mini",
+          messages: [{ role: "user", content: "Stream until upstream fails." }],
+          attachments: [],
+          stream: true,
+        }),
+      });
+      text = await response.text();
+    } catch (err) {
+      fetchError = err instanceof Error ? err.message : String(err);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const events = fetchError ? [] : parseNormalizedSse(text);
+
+    check(
+      "local account runner reports mid-stream upstream failures as SSE errors",
+      !fetchError &&
+        events.some((event) => event.type === "token" && event.content === "partial ") &&
+        events.some((event) => event.type === "error"),
+      { fetchError, text, events }
+    );
+    check(
+      "local account runner stays alive after mid-stream upstream failure",
+      child.exitCode === null && !/ERR_HTTP_HEADERS_SENT/.test(runnerOutput),
+      { exitCode: child.exitCode, runnerOutput }
+    );
+  } finally {
+    child?.kill();
+    upstream.close();
+    await Promise.allSettled([
+      once(upstream, "close"),
+      child ? once(child, "exit") : Promise.resolve(),
+    ]);
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
 await testBrowserProviderStreaming();
 await testLocalRunnerForwardsNativeTools();
 await testLocalRunnerStreamsCompletedOutputText();
 await testLocalRunnerStreamsMessageOutputItemText();
+await testLocalRunnerSurvivesUpstreamStreamError();
 
 if (failures === 0) {
   console.log("PASS");
