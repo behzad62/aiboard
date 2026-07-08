@@ -42,7 +42,7 @@ function hasExplicitExemption(joined: string): boolean {
 function hasVerificationOnlyTddExemption(joined: string): boolean {
   return (
     hasExplicitExemption(joined) &&
-    /\b(verification[- ]only|audit[- ]only|audit task|no behavior changes?|no file modifications?|no file changes?|no (?:production[- ]?)?code changes?|no implementation|not implementation|no testable behavior|without testable behavior|no executable behavior|without executable behavior|static (?:html|css|markup|documentation|docs|artifacts?))\b/.test(
+    /\b(verification[- ]only|audit[- ]only|audit task|no[- ]change audit|no behavior changes?|no file modifications?|no file changes?|no source changes?|no (?:production[- ]?)?code changes?|no (?:production[- ]?)?code (?:was )?(?:added|modified|added or modified)|no implementation|not implementation|no testable behavior|without testable behavior|no executable behavior|without executable behavior|static (?:html|css|markup|documentation|docs|artifacts?))\b/.test(
       joined
     )
   );

@@ -301,7 +301,7 @@ export function canWorkerOutputAdvanceToReview(input: {
   const blockingEvidence = input.evidence?.length
     ? getBlockingSkillEvidence(input.evidence, task.id)
     : [];
-  if (blockingEvidence.length > 0) {
+  if (taskRequiresToolVerification(task) && blockingEvidence.length > 0) {
     return {
       ...base,
       ok: false,

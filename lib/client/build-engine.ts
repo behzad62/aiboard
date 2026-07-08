@@ -7675,6 +7675,7 @@ export async function runBuildDiscussion(
           taskId: task.id,
           maxFiles: MAX_CONTEXT_FILES,
           workerOutput: output,
+          ignoreBlockingSkillEvidence: !taskRequiresToolVerification(taskContract),
         });
         const evidenceOnlyNoFileReview = shouldReviewEvidenceOnlyTask({
           emittedFiles: files,
@@ -7683,8 +7684,14 @@ export async function runBuildDiscussion(
           evidence: skillEvidence,
           taskId: task.id,
           workerOutput: output,
+          ignoreBlockingSkillEvidence: !taskRequiresToolVerification(taskContract),
         });
-        const reviewIssuesForDecision = evidenceOnlyNoFileReview
+        const evidenceCapableNoFileOutput =
+          files.length === 0 &&
+          !toolBudgetBlockedNoFiles &&
+          (taskContract.completionMode === "evidence" ||
+            taskContract.completionMode === "either");
+        const reviewIssuesForDecision = evidenceCapableNoFileOutput
           ? splitEvidenceOnlyReviewIssues(issues)
           : { blocking: issues, warnings: [] };
         const contractReviewDecision = canWorkerOutputAdvanceToReview({

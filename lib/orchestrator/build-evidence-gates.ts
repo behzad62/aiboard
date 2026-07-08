@@ -74,6 +74,7 @@ export function evidenceOnlyRetryFiles(input: {
   taskId: string;
   maxFiles?: number;
   workerOutput?: string;
+  ignoreBlockingSkillEvidence?: boolean;
 }): string[] {
   if (input.emittedFiles.length > 0) return [...new Set(input.emittedFiles)];
   if (
@@ -86,7 +87,9 @@ export function evidenceOnlyRetryFiles(input: {
   if (isWorkerOutputBlockedByToolBudget(input.workerOutput ?? "")) return [];
   if (input.priorFiles.length === 0) return [];
   if (input.evidence.length === 0) return [];
-  if (hasBlockingSkillEvidence(input.evidence, input.taskId)) return [];
+  if (!input.ignoreBlockingSkillEvidence && hasBlockingSkillEvidence(input.evidence, input.taskId)) {
+    return [];
+  }
   return [...new Set(input.priorFiles)].slice(0, input.maxFiles ?? input.priorFiles.length);
 }
 
@@ -135,6 +138,7 @@ export function shouldReviewEvidenceOnlyTask(input: {
   evidence: SkillEvidence[];
   taskId: string;
   workerOutput: string;
+  ignoreBlockingSkillEvidence?: boolean;
 }): boolean {
   if (input.emittedFiles.length > 0) return true;
   if (
@@ -145,7 +149,9 @@ export function shouldReviewEvidenceOnlyTask(input: {
   }
   if (input.priorFiles.length > 0) return false;
   if (input.declaredOutputPaths.length > 0) return false;
-  if (hasBlockingSkillEvidence(input.evidence, input.taskId)) return false;
+  if (!input.ignoreBlockingSkillEvidence && hasBlockingSkillEvidence(input.evidence, input.taskId)) {
+    return false;
+  }
 
   const text = input.workerOutput.trim();
   if (text.length < 40) return false;

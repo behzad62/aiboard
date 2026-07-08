@@ -406,6 +406,24 @@ check(
   auditPartialTddEvidence
 );
 
+const noChangeAuditTddEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Baseline already present; no rewrite was needed.",
+    "",
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: Exemption — this task completed as a no-change audit; the required 3D voxel Three.js/WebGL baseline was already present, so no production code was added or modified.",
+  ].join("\n"),
+  allowVerificationOnlyExemptions: true,
+});
+check(
+  "no-change audit TDD exemption does not require GREEN/refactor evidence",
+  !hasBlockingSkillEvidence(noChangeAuditTddEvidence, "T1"),
+  noChangeAuditTddEvidence
+);
+
 const auditPartialBrowserEvidence = createSkillEvidence({
   taskId: "T1",
   actor: "worker",

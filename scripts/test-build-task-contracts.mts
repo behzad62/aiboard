@@ -6,6 +6,7 @@ import {
   validateBuildPlanForDispatch,
   type BuildTask,
 } from "../lib/orchestrator/build";
+import type { SkillEvidence } from "../lib/skills/types";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -88,6 +89,55 @@ const architectDecision = canWorkerOutputAdvanceToReview({
 check("explicit either/architect task can advance with evidence instead of files", architectDecision.ok, architectDecision);
 check("Architect verification policy does not force tool verification", !taskRequiresToolVerification(architectVerifiedMutation), architectVerifiedMutation);
 check("tool verification policy still requires tool verification", taskRequiresToolVerification(mutationTask), mutationTask);
+
+const missingStyleEvidence: SkillEvidence[] = [
+  {
+    taskId: "T1",
+    skillId: "superpowers:strict-test-driven-development",
+    actor: "worker",
+    required: ["RED failure observed for the expected reason"],
+    reportedEvidence: ["Exemption wording was informal but the audit evidence is substantive."],
+    missingEvidence: ["RED test/check failure before implementation"],
+    violations: [
+      "Missing required evidence for superpowers:strict-test-driven-development: RED test/check failure before implementation",
+    ],
+  },
+];
+const architectMissingSkillEvidenceDecision = canWorkerOutputAdvanceToReview({
+  task: architectVerifiedMutation,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: ["src/game.js"],
+  workerOutput:
+    "Baseline status: already present. Evidence: current source and browser runtime confirm the requested baseline; no source changes were needed.",
+  evidence: missingStyleEvidence,
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check(
+  "Architect verification treats parsed skill gaps as review evidence, not pre-review failure",
+  architectMissingSkillEvidenceDecision.ok &&
+    architectMissingSkillEvidenceDecision.reason === "evidence",
+  architectMissingSkillEvidenceDecision
+);
+
+const toolMissingSkillEvidenceDecision = canWorkerOutputAdvanceToReview({
+  task: mutationTask,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: ["src/game.js"],
+  workerOutput:
+    "Verified enough context to proceed, but no files were changed and required skill evidence is incomplete.",
+  evidence: missingStyleEvidence,
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check(
+  "tool verification still hard-blocks missing parsed skill evidence",
+  !toolMissingSkillEvidenceDecision.ok &&
+    toolMissingSkillEvidenceDecision.failureDetail === "required evidence is missing",
+  toolMissingSkillEvidenceDecision
+);
 
 const blockingPlan = validateBuildPlanForDispatch([
   baseTask({
