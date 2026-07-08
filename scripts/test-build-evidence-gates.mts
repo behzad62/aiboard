@@ -388,6 +388,24 @@ check(
   auditAllowedPathEvidence
 );
 
+const auditPartialTddEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Baseline already present. No file changes were needed.",
+    "",
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: Exemption reason: audit-only task; no production-code change was required because the 3D voxel baseline is already present.",
+  ].join("\n"),
+  allowVerificationOnlyExemptions: true,
+});
+check(
+  "audit-only TDD exemption does not require strict refactor evidence",
+  !hasBlockingSkillEvidence(auditPartialTddEvidence, "T1"),
+  auditPartialTddEvidence
+);
+
 const splitReviewIssues = splitEvidenceOnlyReviewIssues([
   "TOOL CALL REJECTED: your JSON tool action looks incomplete.",
   "Patch to src/game.js skipped — the file doesn't exist.",
