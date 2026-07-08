@@ -20,6 +20,10 @@ export interface BuildPromptBudget {
   modelInputCeilingTokens?: number;
 }
 
+export const MIN_WORKER_TOOL_CONVERSATION_CHARS = 80_000;
+export const MAX_WORKER_TOOL_CONVERSATION_CHARS = 1_200_000;
+export const TOOL_CONVERSATION_TOKEN_TO_CHAR_RATIO = 3.2;
+
 export interface CreateBuildPromptBudgetOptions {
   role: BuildPromptRole;
   tier?: ContextTier;
@@ -29,6 +33,22 @@ export interface CreateBuildPromptBudgetOptions {
     | "buildOutputReserveTokens"
     | "effectiveBuildInputCeilingTokens"
   >;
+}
+
+export function buildWorkerToolConversationCharLimit(input: {
+  totalInputTokens: number;
+}): number {
+  const tokens =
+    typeof input.totalInputTokens === "number" &&
+    Number.isFinite(input.totalInputTokens)
+      ? Math.max(0, Math.floor(input.totalInputTokens))
+      : 0;
+  if (tokens === 0) return 0;
+  const chars = Math.floor(tokens * TOOL_CONVERSATION_TOKEN_TO_CHAR_RATIO);
+  return Math.max(
+    MIN_WORKER_TOOL_CONVERSATION_CHARS,
+    Math.min(MAX_WORKER_TOOL_CONVERSATION_CHARS, chars)
+  );
 }
 
 interface RoleAllocation {

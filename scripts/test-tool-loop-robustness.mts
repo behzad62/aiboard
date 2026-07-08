@@ -11,6 +11,7 @@ import {
 } from "../lib/orchestrator/build";
 import {
   createReadRangeLoopGuard,
+  createToolReplayCache,
   packToolBatchResult,
   scheduleBuildToolActions,
 } from "../lib/orchestrator/build-tool-scheduler";
@@ -186,6 +187,50 @@ check(
     normalPacked.includes("[truncated: output cap reached]") &&
       !normalPacked.includes("y".repeat(700)),
     normalPacked
+  );
+}
+
+{
+  const cache = createToolReplayCache();
+  const searchAction: ArchitectAction = {
+    action: "search",
+    query: "function createWindowWallMesh",
+  };
+  const readAction = range("src/renderer.js", 758, 120);
+  cache.remember(searchAction, 'Search results for "function createWindowWallMesh":\nsrc/renderer.js:758:function createWindowWallMesh');
+  cache.remember(
+    readAction,
+    "--- src/renderer.js lines 758-877 of 1100 (partial range) ---\nfunction createWindowWallMesh() {}",
+    { startLine: 758, endLine: 877 }
+  );
+
+  check(
+    "replay cache summarizes already-inspected search and read_range context",
+    cache
+      .summary()
+      .some((line) => line.includes("search function createWindowWallMesh")) &&
+      cache
+        .summary()
+        .some((line) => line.includes("read_range src/renderer.js:758-877")),
+    cache.summary()
+  );
+  check(
+    "duplicate read_range replays cached context instead of becoming an empty skip",
+    cache.replay(readAction)?.includes("REPLAYED DUPLICATE TOOL RESULT") === true,
+    cache.replay(readAction)
+  );
+
+  const packedWithMemory = packToolBatchResult({
+    served: [],
+    skipped: [{ label: "read_range src/renderer.js:758", reason: "duplicate tool request" }],
+    memory: cache.summary(),
+    maxChars: 800,
+  });
+  check(
+    "tool batch result carries inspected-context memory even when nothing is served",
+    packedWithMemory.includes("Already available in this task") &&
+      packedWithMemory.includes("read_range src/renderer.js:758-877"),
+    packedWithMemory
   );
 }
 

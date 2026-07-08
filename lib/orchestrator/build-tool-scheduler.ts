@@ -425,11 +425,19 @@ export function createToolReplayCache(): {
     deliveredRange?: { startLine: number; endLine: number }
   ) => void;
   replay: (action: ArchitectAction) => string | null;
+  summary: (maxEntries?: number) => string[];
 } {
   const exact = new Map<string, string>();
   const ranges: ReplayRangeEntry[] = [];
+  const memory: string[] = [];
+  const memoryKeys = new Set<string>();
   const replayPrefix =
     "REPLAYED DUPLICATE TOOL RESULT - this result was already delivered earlier in the task and is repeated here without spending tool budget.\n";
+  const rememberMemory = (key: string, label: string): void => {
+    if (memoryKeys.has(key)) return;
+    memoryKeys.add(key);
+    memory.push(label);
+  };
 
   return {
     remember(action, result, deliveredRange) {
@@ -447,11 +455,18 @@ export function createToolReplayCache(): {
             totalLines: parsed.totalLines,
             lines: parsed.lines,
           });
+          rememberMemory(
+            `read_range:${requested.path}:${startLine}-${endLine}`,
+            `read_range ${requested.path}:${startLine}-${endLine}`
+          );
         }
         return;
       }
       const key = replayableExactKey(action);
-      if (key) exact.set(key, result);
+      if (key) {
+        exact.set(key, result);
+        rememberMemory(key, toolMemoryLabel(action));
+      }
     },
     replay(action) {
       if (action.action === "read_range") {
@@ -473,12 +488,35 @@ export function createToolReplayCache(): {
       const result = exact.get(key);
       return result ? `${replayPrefix}${result}` : null;
     },
+    summary(maxEntries = 20) {
+      return memory.slice(-Math.max(1, Math.floor(maxEntries)));
+    },
   };
+}
+
+function toolMemoryLabel(action: ArchitectAction): string {
+  switch (action.action) {
+    case "read":
+      return `read ${action.paths.join(", ")}`;
+    case "search":
+      return `search ${action.query}`;
+    case "context_retrieve":
+      return `context_retrieve ${action.ref}@${action.offsetChars ?? 0}`;
+    case "code_intel":
+      return `code_intel ${action.op}${
+        action.query ? ` ${action.query}` : action.symbol ? ` ${action.symbol}` : ""
+      }`;
+    case "fetch":
+      return `fetch ${action.url}`;
+    default:
+      return exactToolKey(action) ?? action.action;
+  }
 }
 
 export function packToolBatchResult(input: {
   served: Array<{ label: string; result: string; preserveFullResult?: boolean }>;
   skipped: Array<{ label: string; reason: string }>;
+  memory?: string[];
   maxChars: number;
 }): string {
   const lines: string[] = ["TOOL BATCH RESULT", ""];
@@ -486,6 +524,14 @@ export function packToolBatchResult(input: {
   lines.push(...(input.served.length ? input.served.map((item) => `- ${item.label}`) : ["- none"]));
   lines.push("", "Skipped:");
   lines.push(...(input.skipped.length ? input.skipped.map((item) => `- ${item.label}: ${item.reason}`) : ["- none"]));
+  const memory = (input.memory ?? []).map((item) => item.trim()).filter(Boolean);
+  if (memory.length > 0) {
+    lines.push(
+      "",
+      "Already available in this task (do not re-request these; use the cached context above/below or ask for a different target):"
+    );
+    lines.push(...memory.map((item) => `- ${item}`));
+  }
   lines.push("", "Results:");
   let remaining = input.maxChars - lines.join("\n").length;
   for (const item of input.served) {
