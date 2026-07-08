@@ -188,6 +188,20 @@ check(
   replayCache.replay(searchAction)?.includes("search hit"),
   replayCache.replay(searchAction)
 );
+const runAction = { action: "run" as const, command: "node --check src/game.js" };
+replayCache.remember(runAction, "exit 0\nSYNTAX_OK");
+const replayedRunDuplicate = replayDuplicateToolAction({
+  action: runAction,
+  label: "run node --check src/game.js",
+  replayCache,
+});
+check(
+  "duplicate run action is served from replay cache instead of skipped",
+  replayedRunDuplicate.served?.label === "run node --check src/game.js (replayed)" &&
+    replayedRunDuplicate.served.result.includes("SYNTAX_OK") &&
+    replayedRunDuplicate.skipped === null,
+  replayedRunDuplicate
+);
 
 check("fetch action is batch safe",
   classifyBuildToolActionForScheduling({ action: "fetch", url: "https://x.dev/docs", reason: "docs" }) === "batch_read");

@@ -84,6 +84,7 @@ import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-revie
 import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  isEvidenceArtifactWritePath,
   isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
   shouldAllowEvidenceOnlySkillExemptions,
@@ -4385,19 +4386,38 @@ export async function runBuildDiscussion(
     path: string
   ): string | null => {
     if (isTaskWritePathAllowed(task, path)) return null;
+    const contract = normalizeBuildTaskContract(task);
+    const advisory =
+      (contract.completionMode === "evidence" || contract.completionMode === "either") &&
+      isEvidenceArtifactWritePath(path);
     const allowed = outputPathsForTask(task);
     const fallback = allowed.length > 0 ? allowed : task.contextFiles;
     const issue = `WRITE REJECTED: ${task.id} attempted to write ${path}, but this task may only write ${fallback.length > 0 ? fallback.join(", ") : "its declared output files"}. Evidence and browser-acceptance notes belong in the worker response, not in ad hoc result files.`;
     recordBuildProblem({
       code: "write_scope_rejected",
-      severity: "error",
+      severity: advisory ? "warning" : "error",
       source: "file_writer",
       taskId: task.id,
       path,
       message: issue,
     });
-    emit({ type: "diagnostic", phase: "model_failed", message: issue });
+    emit({
+      type: "diagnostic",
+      phase: advisory ? "round_preparing" : "model_failed",
+      message: issue,
+    });
     return issue;
+  };
+
+  const splitWorkerReviewIssuesForTask = (
+    task: BuildTask,
+    issues: string[]
+  ): { blocking: string[]; warnings: string[] } => {
+    const contract = normalizeBuildTaskContract(task);
+    if (contract.completionMode === "evidence" || contract.completionMode === "either") {
+      return splitEvidenceOnlyReviewIssues(issues);
+    }
+    return { blocking: issues, warnings: [] };
   };
 
   const applyPatchAction = async (
@@ -6802,6 +6822,7 @@ export async function runBuildDiscussion(
       let output = "";
       const patchedFiles: string[] = [];
       const preToolArtifactFiles: string[] = [];
+      const preToolArtifactWarnings: string[] = [];
       const preToolArtifactOutputs = new Set<string>();
       const toolIssues: string[] = [];
       try {
@@ -7411,11 +7432,17 @@ export async function runBuildDiscussion(
             const preToolArtifactResult = await writeEmittedFiles(output, task.id);
             preToolArtifactOutputs.add(output);
             preToolArtifactFiles.push(...preToolArtifactResult.written);
-            toolIssues.push(...preToolArtifactResult.issues);
-            if (preToolArtifactResult.issues.length > 0) {
+            const preToolIssues = splitWorkerReviewIssuesForTask(
+              task,
+              preToolArtifactResult.issues
+            );
+            toolIssues.push(...preToolIssues.blocking);
+            preToolArtifactWarnings.push(...preToolIssues.warnings);
+            if (preToolIssues.blocking.length > 0) {
               const feedback = [
                 "FILE OUTPUT DID NOT LAND CLEANLY. Do not run verification or browser tools yet.",
-                ...preToolArtifactResult.issues.map((issue) => `- ${issue}`),
+                ...preToolIssues.blocking.map((issue) => `- ${issue}`),
+                ...preToolIssues.warnings.map((issue) => `- Advisory: ${issue}`),
                 "Fix the file output first. If the file is large, use SEARCH/REPLACE edit blocks for existing files or append chunks with reset=true for a full replacement.",
               ].join("\n");
               workerMessages.push({ role: "user", content: feedback });
@@ -7433,6 +7460,13 @@ export async function runBuildDiscussion(
               preToolWriteNote = `FILE OUTPUT LANDED before tools: ${[
                 ...new Set(preToolArtifactResult.written),
               ].join(", ")}\n\n`;
+            }
+            if (preToolIssues.warnings.length > 0) {
+              preToolWriteNote += [
+                "ADVISORY FILE OUTPUT NOTE: the following ad hoc evidence artifacts were not written; keep this evidence in the response instead.",
+                ...preToolIssues.warnings.map((issue) => `- ${issue}`),
+                "",
+              ].join("\n");
             }
           }
 
@@ -7614,7 +7648,7 @@ export async function runBuildDiscussion(
         const files = [
           ...new Set([...patchedFiles, ...preToolArtifactFiles, ...artifactResult.written]),
         ];
-        const issues = [...toolIssues, ...artifactResult.issues];
+        const issues = [...toolIssues, ...preToolArtifactWarnings, ...artifactResult.issues];
         const { prose } = extractArtifacts(output);
         const scopedVerificationGapReport =
           declaredOutputPaths.length === 0 && isScopedVerificationGapReport(output);

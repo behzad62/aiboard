@@ -484,4 +484,15 @@ check(
   splitReviewIssues
 );
 
+const advisoryEvidenceWriteIssues = splitEvidenceOnlyReviewIssues([
+  "WRITE REJECTED: T7 attempted to write diff/status/T7-verification-evidence.md, but this task may only write diff/status. Evidence and browser-acceptance notes belong in the worker response, not in ad hoc result files.",
+  "WRITE REJECTED: T8 attempted to write verify_posture.mjs, but this task may only write src/game.js, README.md. Evidence and browser-acceptance notes belong in the worker response, not in ad hoc result files.",
+]);
+check(
+  "evidence-only review treats ad hoc verification evidence files as warnings",
+  advisoryEvidenceWriteIssues.blocking.length === 0 &&
+    advisoryEvidenceWriteIssues.warnings.length === 2,
+  advisoryEvidenceWriteIssues
+);
+
 process.exit(failed === 0 ? 0 : 1);

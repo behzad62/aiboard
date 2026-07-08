@@ -411,6 +411,7 @@ function replayableExactKey(action: ArchitectAction): string | null {
     action.action !== "search" &&
     action.action !== "context_retrieve" &&
     action.action !== "code_intel" &&
+    action.action !== "run" &&
     action.action !== "fetch"
   ) {
     return null;

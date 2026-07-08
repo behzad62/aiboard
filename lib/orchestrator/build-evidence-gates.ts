@@ -189,9 +189,60 @@ export function shouldAllowEvidenceOnlySkillExemptions(input: {
 }
 
 function isWriteLandingIssue(issue: string): boolean {
+  if (isEvidenceArtifactWriteIssue(issue)) return false;
   return /\b(WRITE REJECTED|CONFLICT:|Patch to|patch op\(s\)|Append to|Rewrite of|Edit to|edit\(s\)|Output was cut off mid-block|suspicious rewrite|did NOT match)\b/i.test(
     issue
   );
+}
+
+function hasEvidenceArtifactName(path: string): boolean {
+  const base = path.split("/").pop() ?? path;
+  const stem = base.replace(/\.[^.]+$/, "");
+  const tokens = stem.split(/[^a-z0-9]+/i).filter(Boolean);
+  const evidenceTokens = new Set([
+    "acceptance",
+    "audit",
+    "browser",
+    "evidence",
+    "notes",
+    "report",
+    "review",
+    "status",
+    "summary",
+    "verification",
+    "verify",
+  ]);
+  return tokens.some((token) => evidenceTokens.has(token.toLowerCase()));
+}
+
+export function isEvidenceArtifactWritePath(path: string): boolean {
+  const normalized = path.trim().replace(/\\/g, "/").toLowerCase();
+  if (!normalized) return false;
+  if (normalized.startsWith("diff/status/")) return true;
+  if (!/\.(?:md|txt|json|mjs|js)$/.test(normalized)) return false;
+  if (!normalized.includes("/")) return hasEvidenceArtifactName(normalized);
+
+  const segments = normalized.split("/");
+  segments.pop();
+  const evidenceDirs = new Set([
+    "acceptance",
+    "audit",
+    "evidence",
+    "reports",
+    "review",
+    "status",
+    "summary",
+    "verification",
+  ]);
+  return (
+    segments.some((segment) => evidenceDirs.has(segment)) &&
+    hasEvidenceArtifactName(normalized)
+  );
+}
+
+export function isEvidenceArtifactWriteIssue(issue: string): boolean {
+  const match = /\bWRITE REJECTED:\s+\S+\s+attempted to write\s+([^,]+),/i.exec(issue);
+  return match ? isEvidenceArtifactWritePath(match[1] ?? "") : false;
 }
 
 export function splitEvidenceOnlyReviewIssues(issues: string[]): {
