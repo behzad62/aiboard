@@ -74,10 +74,31 @@ export interface BuildTaskGuidance {
   answeredAtWave?: number;
 }
 
+export type BuildTaskKind = "modify" | "audit" | "verify" | "repo";
+export type BuildTaskCompletionMode = "files" | "evidence" | "either";
+export type BuildTaskVerificationPolicy = "architect" | "tool" | "external" | "none";
+
 export interface BuildTask {
   id: string;
   title: string;
   instructions: string;
+  /**
+   * High-level task intent. The engine uses this to decide whether "no file
+   * changes needed" is a valid output or a failed implementation attempt.
+   */
+  kind?: BuildTaskKind;
+  /**
+   * What must be produced before this task can go to Architect review.
+   * Legacy tasks are normalized from outputPaths/title/instructions.
+   */
+  completionMode?: BuildTaskCompletionMode;
+  /**
+   * Who owns the final verification gate. The engine should enforce evidence,
+   * not force a command when the Architect chose Architect/manual review.
+   */
+  verificationPolicy?: BuildTaskVerificationPolicy;
+  /** Concrete evidence the worker/reviewer should provide when no files land. */
+  requiredEvidence?: string[];
   /** Current wave/phase contract this task must satisfy. */
   phaseSpec?: BuildPhaseSpec;
   /** Exact implementation contract from the Architect; workers should not redesign this. */
@@ -116,6 +137,239 @@ export interface BuildTask {
 
 export const BUILD_TASK_MAX_FAILURES = 3;
 export const BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS = [15_000, 45_000];
+
+const TASK_CONTRACT_VALUES = {
+  kind: new Set<BuildTaskKind>(["modify", "audit", "verify", "repo"]),
+  completionMode: new Set<BuildTaskCompletionMode>(["files", "evidence", "either"]),
+  verificationPolicy: new Set<BuildTaskVerificationPolicy>([
+    "architect",
+    "tool",
+    "external",
+    "none",
+  ]),
+};
+
+function cleanTaskKind(value: unknown): BuildTaskKind | undefined {
+  return typeof value === "string" && TASK_CONTRACT_VALUES.kind.has(value as BuildTaskKind)
+    ? (value as BuildTaskKind)
+    : undefined;
+}
+
+function cleanTaskCompletionMode(value: unknown): BuildTaskCompletionMode | undefined {
+  return typeof value === "string" &&
+    TASK_CONTRACT_VALUES.completionMode.has(value as BuildTaskCompletionMode)
+    ? (value as BuildTaskCompletionMode)
+    : undefined;
+}
+
+function cleanTaskVerificationPolicy(
+  value: unknown
+): BuildTaskVerificationPolicy | undefined {
+  return typeof value === "string" &&
+    TASK_CONTRACT_VALUES.verificationPolicy.has(value as BuildTaskVerificationPolicy)
+    ? (value as BuildTaskVerificationPolicy)
+    : undefined;
+}
+
+function taskContractText(task: Pick<BuildTask, "title" | "instructions" | "expectedOutputs" | "implementationContract">): string {
+  return [
+    task.title,
+    task.instructions,
+    task.implementationContract,
+    task.expectedOutputs,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function inferBuildTaskKind(task: Pick<BuildTask, "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths">): BuildTaskKind {
+  const text = taskContractText(task);
+  if (/\b(commit|branch|pull request|pr |github|repo_status|repo status|repository workflow)\b/.test(text)) {
+    return "repo";
+  }
+  if (/\b(verify|verification|test|check|audit|inspect|baseline|confirm|validate|status)\b/.test(text)) {
+    if (/\b(audit|inspect|baseline|assess|survey|inventory|no changes?|already present)\b/.test(text)) {
+      return "audit";
+    }
+    return "verify";
+  }
+  return outputPathsForTask(task).length > 0 ? "modify" : "audit";
+}
+
+function defaultCompletionModeForTask(
+  task: Pick<BuildTask, "kind" | "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths">
+): BuildTaskCompletionMode {
+  if (task.kind === "audit" || task.kind === "verify" || task.kind === "repo") {
+    return outputPathsForTask(task).length > 0 ? "either" : "evidence";
+  }
+  return outputPathsForTask(task).length > 0 ? "files" : "evidence";
+}
+
+function defaultVerificationPolicyForTask(
+  task: Pick<BuildTask, "kind" | "completionMode" | "outputPaths">
+): BuildTaskVerificationPolicy {
+  if (task.kind === "audit" || task.completionMode === "evidence") return "architect";
+  if (task.kind === "repo") return "external";
+  return outputPathsForTask(task).length > 0 ? "tool" : "architect";
+}
+
+export function normalizeBuildTaskContract<T extends BuildTask>(task: T): T {
+  const kind = cleanTaskKind(task.kind) ?? inferBuildTaskKind(task);
+  const completionMode =
+    cleanTaskCompletionMode(task.completionMode) ??
+    defaultCompletionModeForTask({ ...task, kind });
+  const verificationPolicy =
+    cleanTaskVerificationPolicy(task.verificationPolicy) ??
+    defaultVerificationPolicyForTask({ ...task, kind, completionMode });
+  const requiredEvidence = stringArrayFromUnknown(task.requiredEvidence);
+  return {
+    ...task,
+    kind,
+    completionMode,
+    verificationPolicy,
+    ...(requiredEvidence.length > 0 ? { requiredEvidence } : {}),
+  };
+}
+
+export function taskRequiresToolVerification(
+  task: Pick<BuildTask, "verificationPolicy">
+): boolean {
+  return task.verificationPolicy === "tool";
+}
+
+function hasSubstantiveEvidenceText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 40) return false;
+  return /\b(verified|verification|confirmed|complete|passed|clean|commit|status|no action required|already present|no changes? needed|satisfies|evidence)\b/i.test(
+    trimmed
+  );
+}
+
+export interface WorkerOutputReviewDecision {
+  ok: boolean;
+  reason: "files" | "evidence" | "blocked" | "missing_files" | "empty";
+  completionMode: BuildTaskCompletionMode;
+  verificationPolicy: BuildTaskVerificationPolicy;
+  expectsFileOutput: boolean;
+  failureDetail?: string;
+}
+
+export function canWorkerOutputAdvanceToReview(input: {
+  task: BuildTask;
+  emittedFiles: string[];
+  reviewFiles: string[];
+  declaredOutputPaths: string[];
+  workerOutput: string;
+  evidence?: SkillEvidence[];
+  hasBlockingWriteIssues: boolean;
+  toolBudgetBlocked: boolean;
+}): WorkerOutputReviewDecision {
+  const task = normalizeBuildTaskContract(input.task);
+  const declaredOutputPaths =
+    input.declaredOutputPaths.length > 0
+      ? input.declaredOutputPaths
+      : outputPathsForTask(task);
+  const expectsFileOutput =
+    task.completionMode === "files" ||
+    (task.completionMode === "either" && declaredOutputPaths.length > 0);
+  const base = {
+    completionMode: task.completionMode ?? "files",
+    verificationPolicy: task.verificationPolicy ?? "tool",
+    expectsFileOutput,
+  };
+
+  if (input.toolBudgetBlocked) {
+    return {
+      ...base,
+      ok: false,
+      reason: "blocked",
+      failureDetail: "could not complete because tool budget was exhausted",
+    };
+  }
+  if (input.emittedFiles.length > 0 || input.reviewFiles.length > 0) {
+    return { ...base, ok: true, reason: "files" };
+  }
+  if (input.hasBlockingWriteIssues && task.completionMode !== "evidence") {
+    return {
+      ...base,
+      ok: false,
+      reason: "missing_files",
+      failureDetail: "write issues prevented expected files from landing",
+    };
+  }
+  const blockingEvidence = input.evidence?.length
+    ? getBlockingSkillEvidence(input.evidence, task.id)
+    : [];
+  if (blockingEvidence.length > 0) {
+    return {
+      ...base,
+      ok: false,
+      reason: "blocked",
+      failureDetail: "required evidence is missing",
+    };
+  }
+  const evidenceAllowed =
+    task.completionMode === "evidence" || task.completionMode === "either";
+  if (evidenceAllowed && hasSubstantiveEvidenceText(input.workerOutput)) {
+    return { ...base, ok: true, reason: "evidence" };
+  }
+  if (expectsFileOutput) {
+    return {
+      ...base,
+      ok: false,
+      reason: "missing_files",
+      failureDetail: "returned no files",
+    };
+  }
+  return {
+    ...base,
+    ok: false,
+    reason: "empty",
+    failureDetail: "returned no substantive completion evidence",
+  };
+}
+
+function isLikelyBaselineAuditBlocker(task: BuildTask): boolean {
+  const normalized = normalizeBuildTaskContract(task);
+  if (normalized.kind !== "audit" && normalized.completionMode !== "evidence") {
+    return false;
+  }
+  if (outputPathsForTask(normalized).length > 0) return false;
+  const text = taskContractText(normalized);
+  return /\b(audit|inspect|baseline|survey|inventory|existing|current)\b/.test(text);
+}
+
+export interface BuildPlanDispatchValidation {
+  tasks: BuildTask[];
+  warnings: string[];
+}
+
+export function validateBuildPlanForDispatch(
+  tasks: BuildTask[]
+): BuildPlanDispatchValidation {
+  const normalized = tasks.map((task) => normalizeBuildTaskContract({ ...task }));
+  const auditBlockerIds = new Set(
+    normalized.filter(isLikelyBaselineAuditBlocker).map((task) => task.id)
+  );
+  const warnings: string[] = [];
+  if (auditBlockerIds.size === 0) return { tasks: normalized, warnings };
+
+  const nextTasks = normalized.map((task) => {
+    if (!task.dependsOn?.length) return task;
+    const stripped = task.dependsOn.filter((dep) => !auditBlockerIds.has(dep));
+    if (stripped.length !== task.dependsOn.length) {
+      warnings.push(
+        `Removed nonessential baseline/audit dependency from ${task.id}: ${task.dependsOn
+          .filter((dep) => auditBlockerIds.has(dep))
+          .join(", ")}.`
+      );
+      return { ...task, dependsOn: stripped };
+    }
+    return task;
+  });
+  return { tasks: nextTasks, warnings };
+}
 
 export interface BuildTaskFailureDecision {
   failCount: number;
@@ -729,6 +983,10 @@ export interface PlanAction {
     id?: string;
     title: string;
     instructions: string;
+    kind?: BuildTaskKind;
+    completionMode?: BuildTaskCompletionMode;
+    verificationPolicy?: BuildTaskVerificationPolicy;
+    requiredEvidence?: string[];
     /**
      * Binding implementation details chosen by the Architect so cheaper workers
      * execute a narrow slice instead of inventing architecture.
@@ -959,6 +1217,27 @@ const buildTaskActionSchema = (): JsonSchemaObject => ({
     id: stringSchema("Optional model-local task id. The engine assigns the final incremental T<number> id."),
     title: stringSchema("Short task title."),
     instructions: stringSchema("Concrete implementation instructions."),
+    kind: {
+      type: "string",
+      enum: ["modify", "audit", "verify", "repo"],
+      description:
+        "Task intent: modify writes files, audit inspects/reports current state, verify gathers acceptance evidence, repo performs repository workflow.",
+    },
+    completionMode: {
+      type: "string",
+      enum: ["files", "evidence", "either"],
+      description:
+        "Completion contract. files requires landed files; evidence allows no-file completion with substantive evidence; either accepts files or evidence.",
+    },
+    verificationPolicy: {
+      type: "string",
+      enum: ["architect", "tool", "external", "none"],
+      description:
+        "Verification owner. Use architect when Architect review is sufficient; tool only when a command/browser/tool result is required.",
+    },
+    requiredEvidence: stringArraySchema(
+      "Concrete evidence expected when no files land or when completionMode is evidence/either."
+    ),
     implementationContract: stringSchema(
       "Binding Architect-owned implementation contract: APIs, file boundaries, state shape, edge cases, and verification evidence the worker must follow."
     ),
@@ -2336,10 +2615,14 @@ export function applyTaskSplit(
         if (!deps.includes(childId)) deps.push(childId);
       }
     }
-    return {
+    return normalizeBuildTaskContract({
       id: childIds[i],
       title: subtask.title,
       instructions: subtask.instructions,
+      kind: parent.kind,
+      completionMode: parent.completionMode,
+      verificationPolicy: parent.verificationPolicy,
+      requiredEvidence: parent.requiredEvidence,
       phaseSpec: parent.phaseSpec,
       implementationContract: parent.implementationContract,
       contextFiles: [
@@ -2350,7 +2633,7 @@ export function applyTaskSplit(
       ...(deps.length > 0 ? { dependsOn: deps } : {}),
       difficulty: subtask.difficulty ?? parent.difficulty,
       splitDepth: 1,
-    };
+    });
   });
 
   // ---- Mutation only past this point (validation fully passed). ----
@@ -2767,6 +3050,25 @@ function cleanCodeIntelLimit(value: unknown): number | undefined {
   return Math.max(1, Math.min(10, Math.round(value)));
 }
 
+function normalizePlanningTaskAction(
+  task: BuildPlanningAction["tasks"][number]
+): BuildPlanningAction["tasks"][number] {
+  const raw = task as Record<string, unknown>;
+  const implementationContract = stringFromUnknown(raw.implementationContract);
+  const kind = cleanTaskKind(raw.kind);
+  const completionMode = cleanTaskCompletionMode(raw.completionMode);
+  const verificationPolicy = cleanTaskVerificationPolicy(raw.verificationPolicy);
+  const requiredEvidence = stringArrayFromUnknown(raw.requiredEvidence);
+  return {
+    ...task,
+    ...(implementationContract ? { implementationContract } : {}),
+    ...(kind ? { kind } : {}),
+    ...(completionMode ? { completionMode } : {}),
+    ...(verificationPolicy ? { verificationPolicy } : {}),
+    ...(requiredEvidence.length > 0 ? { requiredEvidence } : {}),
+  };
+}
+
 function parseActionCandidate(candidate: string): ArchitectAction | null {
   try {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
@@ -2848,18 +3150,9 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         (parsed.action === "plan" || parsed.action === "build_plan") &&
         Array.isArray((parsed as BuildPlanningAction).tasks)
       ) {
-        const tasks = (parsed as BuildPlanningAction).tasks.map((task) => ({
-          ...task,
-          ...(stringFromUnknown(
-            (task as { implementationContract?: unknown }).implementationContract
-          )
-            ? {
-                implementationContract: stringFromUnknown(
-                  (task as { implementationContract?: unknown }).implementationContract
-                ),
-              }
-            : {}),
-        }));
+        const tasks = (parsed as BuildPlanningAction).tasks.map(
+          normalizePlanningTaskAction
+        );
         if (parsed.action === "build_plan") {
           const plan = parsed as BuildPlanAction;
           return {
@@ -2899,6 +3192,9 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
           phaseSpec: normalizeBuildPhaseSpec(
             (parsed as { phaseSpec?: unknown }).phaseSpec
           ),
+          ...(Array.isArray(review.newTasks)
+            ? { newTasks: review.newTasks.map(normalizePlanningTaskAction) }
+            : {}),
           requestFulfillment: normalizeRequestFulfillmentReview(
             (parsed as { requestFulfillment?: unknown }).requestFulfillment
           ),
@@ -4608,6 +4904,8 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
     `Task ids are advisory; the engine assigns the final incremental T<number> ids before workers start. Keep dependsOn internally consistent within your JSON plan.`,
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions; put binding design details in each task's implementationContract.`,
+    `Task contract rule: use kind="modify" + completionMode="files" for tasks that must write files; kind="audit" or "verify" + completionMode="evidence" for no-change/current-state/acceptance-evidence tasks; completionMode="either" only when existing work may already satisfy the task. Do not force a file patch for an audit task.`,
+    `Verification rule: verificationPolicy="tool" only when a command/browser/tool result is required. Use verificationPolicy="architect" when Architect review of available evidence is enough; the system will not force a tool check for that task.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
     `List in every task's "outputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
@@ -4742,6 +5040,10 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     input.task.instructions,
     input.task.implementationContract?.trim()
       ? `Implementation contract from Architect:\n${input.task.implementationContract.trim()}`
+      : "",
+    `Task contract: kind=${input.task.kind ?? "auto"}, completionMode=${input.task.completionMode ?? "auto"}, verificationPolicy=${input.task.verificationPolicy ?? "auto"}.`,
+    input.task.requiredEvidence?.length
+      ? `Required evidence:\n${bulletList(input.task.requiredEvidence)}`
       : "",
     input.task.outputPaths?.length
       ? `Files you may create or modify for this task: ${input.task.outputPaths.join(", ")}`
@@ -4987,6 +5289,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     "```",
     `Task ids in newTasks are advisory only; the engine assigns the next incremental T<number> ids and preserves existing task ids across refresh/resume. Use dependsOn only for existing task ids or other new-task ids you defined in the same JSON.`,
     `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
+    `Every new task should also include kind, completionMode, verificationPolicy, and requiredEvidence when no-file or Architect-reviewed completion is acceptable.`,
     "Spec-compliance review checks whether the landed work satisfies the Architect spec, current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,
     input.userNotes?.trim()

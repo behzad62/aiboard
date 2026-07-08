@@ -1,0 +1,120 @@
+/** Build task contract checks (run: npx tsx scripts/test-build-task-contracts.mts) */
+import {
+  canWorkerOutputAdvanceToReview,
+  normalizeBuildTaskContract,
+  taskRequiresToolVerification,
+  validateBuildPlanForDispatch,
+  type BuildTask,
+} from "../lib/orchestrator/build";
+
+let failed = 0;
+const check = (name: string, ok: boolean, detail?: unknown) => {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+  if (!ok) failed++;
+};
+
+const baseTask = (overrides: Partial<BuildTask> = {}): BuildTask => ({
+  id: "T1",
+  title: "Task",
+  instructions: "Do the task.",
+  contextFiles: [],
+  status: "planned",
+  ...overrides,
+});
+
+const auditTask = normalizeBuildTaskContract(
+  baseTask({
+    title: "Audit current 3D baseline",
+    instructions:
+      "Inspect the existing browser game baseline and report whether walls, camera, and rendering are already present.",
+    outputPaths: [],
+  })
+);
+check("audit task defaults to audit kind", auditTask.kind === "audit", auditTask);
+check("audit task defaults to evidence completion", auditTask.completionMode === "evidence", auditTask);
+check("audit task defaults to Architect verification", auditTask.verificationPolicy === "architect", auditTask);
+
+const mutationTask = normalizeBuildTaskContract(
+  baseTask({
+    title: "Implement wall holes",
+    instructions: "Modify the wall generation logic.",
+    outputPaths: ["src/game.js"],
+  })
+);
+check("output-path task defaults to modify kind", mutationTask.kind === "modify", mutationTask);
+check("output-path task defaults to file completion", mutationTask.completionMode === "files", mutationTask);
+check("modify task defaults to tool verification", mutationTask.verificationPolicy === "tool", mutationTask);
+
+const evidenceDecision = canWorkerOutputAdvanceToReview({
+  task: auditTask,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: [],
+  workerOutput:
+    "Audit complete. Verified with grep/search and node --check evidence that the existing baseline is already present. No action required.",
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check("evidence-only audit can advance without files", evidenceDecision.ok, evidenceDecision);
+check("evidence-only audit decision is marked evidence", evidenceDecision.reason === "evidence", evidenceDecision);
+
+const noFileMutationDecision = canWorkerOutputAdvanceToReview({
+  task: mutationTask,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: ["src/game.js"],
+  workerOutput: "I inspected the file and it looks fine.",
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check("file mutation task cannot advance without files", !noFileMutationDecision.ok, noFileMutationDecision);
+
+const architectVerifiedMutation = normalizeBuildTaskContract({
+  ...mutationTask,
+  completionMode: "either",
+  verificationPolicy: "architect",
+  requiredEvidence: ["Architect review confirms existing implementation satisfies the request."],
+});
+const architectDecision = canWorkerOutputAdvanceToReview({
+  task: architectVerifiedMutation,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: ["src/game.js"],
+  workerOutput:
+    "No file changes needed. Architect review evidence: existing window_wall orientation already satisfies the request and node --check previously passed.",
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check("explicit either/architect task can advance with evidence instead of files", architectDecision.ok, architectDecision);
+check("Architect verification policy does not force tool verification", !taskRequiresToolVerification(architectVerifiedMutation), architectVerifiedMutation);
+check("tool verification policy still requires tool verification", taskRequiresToolVerification(mutationTask), mutationTask);
+
+const blockingPlan = validateBuildPlanForDispatch([
+  baseTask({
+    id: "T1",
+    title: "Audit existing baseline",
+    instructions: "Audit the existing 3D browser game baseline and verify it exists.",
+    outputPaths: [],
+    completionMode: "evidence",
+  }),
+  baseTask({
+    id: "T2",
+    title: "Turn wall holes along the arena",
+    instructions: "Change wall hole orientation around the arena map.",
+    outputPaths: ["src/game.js"],
+    dependsOn: ["T1"],
+  }),
+]);
+check("plan validator reports redundant audit blocker", blockingPlan.warnings.length > 0, blockingPlan);
+check(
+  "plan validator removes nonessential audit dependency from user-value task",
+  blockingPlan.tasks.find((task) => task.id === "T2")?.dependsOn?.length === 0,
+  blockingPlan
+);
+check(
+  "plan validator keeps audit task evidence-only",
+  blockingPlan.tasks.find((task) => task.id === "T1")?.completionMode === "evidence",
+  blockingPlan
+);
+
+process.exit(failed === 0 ? 0 : 1);
