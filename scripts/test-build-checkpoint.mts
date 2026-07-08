@@ -189,7 +189,7 @@ const resumed = normalizeBuildTasksForResume([
 
 const resumedFailed = resumed.find((task) => task.id === "T2");
 check("resume makes terminal failed tasks runnable", resumedFailed?.status === "fixing", resumed);
-check("resume preserves failed task history", resumedFailed?.failCount === 3, resumedFailed);
+check("resume resets failed task retry budget", (resumedFailed?.failCount ?? 0) === 0, resumedFailed);
 check("resume clears stale worker pin", resumedFailed?.workerIndex === undefined, resumedFailed);
 check("resume clears stale worker preference", resumedFailed?.assignTo === undefined, resumedFailed);
 check("resume clears stale retry delay", resumedFailed?.retryAfterMs === undefined, resumedFailed);

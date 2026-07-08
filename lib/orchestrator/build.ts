@@ -160,6 +160,9 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
       return {
         ...task,
         status: "fixing",
+        // Resume starts a new retry window; failure history is kept in
+        // buildProblems/recovery notes rather than this live retry counter.
+        failCount: undefined,
         workerIndex: undefined,
         assignTo: undefined,
         retryAfterMs: undefined,
