@@ -164,6 +164,7 @@ export function shouldAllowEvidenceOnlySkillExemptions(input: {
   verificationPolicy?: "architect" | "tool" | "external" | "none";
 }): boolean {
   if (input.emittedFiles.length > 0) return false;
+  if (input.verificationPolicy === "tool") return false;
   if (input.declaredOutputPaths.length === 0) return true;
   const acceptsEvidence =
     input.completionMode === "evidence" || input.completionMode === "either";

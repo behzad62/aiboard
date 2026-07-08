@@ -406,6 +406,54 @@ check(
   auditPartialTddEvidence
 );
 
+const auditPartialBrowserEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: [
+    "superpowers:strict-test-driven-development",
+    "agent:security-and-hardening",
+    "aiboard:browser-acceptance",
+  ],
+  workerOutput: [
+    "Baseline status: baseline already present. No files changed.",
+    "",
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: Exemption - T1 was an audit-only baseline gate; the baseline was already present, so no production code change was required and no RED/GREEN cycle was needed.",
+    "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: preserved the existing static browser delivery model.",
+    "- aiboard:browser-acceptance: browser_navigate http://127.0.0.1:8000; visible settled UI showed the expected app shell/HUD/labels with no blank screen or blocking overlay; structured acceptance fields reported above.",
+  ].join("\n"),
+  allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
+    emittedFiles: [],
+    declaredOutputPaths: [
+      "index.html",
+      "src/main.js",
+      "src/game.js",
+      "src/renderer.js",
+      "src/styles.css",
+      "README.md",
+    ],
+    taskKind: "audit",
+    completionMode: "either",
+    verificationPolicy: "architect",
+  }),
+});
+check(
+  "architect audit does not force full browser acceptance wording",
+  !hasBlockingSkillEvidence(auditPartialBrowserEvidence, "T1"),
+  auditPartialBrowserEvidence
+);
+
+check(
+  "tool verification no-file task does not allow evidence-only skill exemptions",
+  !shouldAllowEvidenceOnlySkillExemptions({
+    emittedFiles: [],
+    declaredOutputPaths: [],
+    taskKind: "verify",
+    completionMode: "either",
+    verificationPolicy: "tool",
+  })
+);
+
 const splitReviewIssues = splitEvidenceOnlyReviewIssues([
   "TOOL CALL REJECTED: your JSON tool action looks incomplete.",
   "Patch to src/game.js skipped — the file doesn't exist.",

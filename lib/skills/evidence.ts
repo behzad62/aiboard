@@ -59,6 +59,7 @@ function hasVerificationOnlyDebuggingExemption(joined: string): boolean {
 
 function isEvidenceOnlyOptionalSkill(skillId: string): boolean {
   return (
+    skillId === "aiboard:browser-acceptance" ||
     skillId === "agent:test-driven-development" ||
     skillId === "superpowers:strict-test-driven-development" ||
     skillId === "superpowers:systematic-debugging" ||
@@ -114,6 +115,7 @@ function missingForSkill(
     return missing;
   }
   if (skillId === "aiboard:browser-acceptance") {
+    if (allowVerificationOnlyExemptions) return [];
     const missing: string[] = [];
     if (!/browser_navigate/.test(joined) || !/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)/.test(joined)) {
       missing.push("Browser action evidence: exact app URL navigated with browser_navigate");
