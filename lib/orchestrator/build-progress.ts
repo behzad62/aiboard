@@ -52,6 +52,17 @@ export function hasMeaningfulBuildProgress(signals: BuildProgressSignals): boole
   );
 }
 
+export function countTaskStatusTransitions(
+  previousStatuses: Map<string, BuildTask["status"]>,
+  currentTasks: Array<Pick<BuildTask, "id" | "status">>
+): number {
+  return currentTasks.reduce((count, task) => {
+    const previous = previousStatuses.get(task.id);
+    if (!previous) return count + 1;
+    return previous === task.status ? count : count + 1;
+  }, 0);
+}
+
 export function shouldStopForNoProgress(input: {
   repeatedFailureCount: number;
   noProgressWaves: number;

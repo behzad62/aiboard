@@ -68,6 +68,19 @@ const multipleSafe = inspectStrictToolActionBatchOutput(
 check("multiple safe tool actions parse as a valid batch", multipleSafe.valid && multipleSafe.actions.length === 3, multipleSafe);
 check("batch parse includes scheduling feedback", /batch/i.test(multipleSafe.feedback ?? ""), multipleSafe);
 
+const malformedPartialBatch = inspectStrictToolActionBatchOutput(
+  '{"action":"search","query":"createWindowWallMesh"},{"'
+);
+check(
+  "partial multi-action JSON fragment is rejected as malformed",
+  malformedPartialBatch.actions.length === 0 &&
+    malformedPartialBatch.valid === false &&
+    /incomplete|truncated|malformed|valid JSON|cut off/i.test(
+      malformedPartialBatch.feedback ?? ""
+    ),
+  malformedPartialBatch
+);
+
 const readThenPatch = inspectStrictToolActionOutput(
   [
     '{"action":"read_range","path":"tests/run-tests.ts","startLine":220,"lineCount":140}',

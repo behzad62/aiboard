@@ -19,6 +19,7 @@ import type { AttachmentSummary } from "@/lib/attachments/types";
 import type { ModelInfo } from "@/lib/providers/base";
 import {
   clearDiscussionRun,
+  clearFinalResult,
   deleteDiscussion as storeDeleteDiscussion,
   getAttachments,
   getDiscussionById,
@@ -164,6 +165,9 @@ export function continueDiscussion(id: string): void {
   if (isDiscussionRunning(id)) return;
   const now = new Date().toISOString();
   const discussion = getDiscussionById(id);
+  if (discussion?.mode === "build") {
+    clearFinalResult(id);
+  }
   const checkpoint = getBuildCheckpoint(id);
   if (checkpoint?.tasks.length) {
     const stoppedWithRunningCheckpoint =

@@ -81,6 +81,9 @@ class OverlapDetectingAdapter implements StorageAdapter {
   async saveDiscussionFile(discussionId: string): Promise<void> {
     await this.guarded(`saveDiscussionFile:${discussionId}`);
   }
+  async deleteDiscussionFile(discussionId: string): Promise<void> {
+    await this.guarded(`deleteDiscussionFile:${discussionId}`);
+  }
   async deleteDiscussion(): Promise<void> {
     await this.guarded("deleteDiscussion");
   }

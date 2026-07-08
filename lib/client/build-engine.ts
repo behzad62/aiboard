@@ -61,6 +61,7 @@ import {
 } from "@/lib/orchestrator/build-architect-budgets";
 import {
   buildVerificationFailureTask,
+  countTaskStatusTransitions,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
   recordBuildFailure,
@@ -1333,6 +1334,16 @@ export async function runBuildDiscussion(
   // user sees branch + commit hash(es) without digging through the transcript.
   const repoCommits: Array<{ hash: string; subject: string }> = [];
   let repoActiveBranch: string | null = null;
+  let repoTargetRoot: string | null = null;
+  const rememberRepoTargetRoot = (status?: RepoStatus | null): void => {
+    if (status?.root) {
+      repoTargetRoot = status.root;
+      return;
+    }
+    if (!repoTargetRoot && runnerActiveDir) {
+      repoTargetRoot = runnerActiveDir;
+    }
+  };
   // GitHub workflow milestones (NRW-008), surfaced in the UI panel + final
   // summary: the imported issue number, the pushed branch, and the opened PR URL.
   let repoIssueNumber: number | null = null;
@@ -1559,6 +1570,7 @@ export async function runBuildDiscussion(
       refreshBuildMemoryProjectKey();
       runnerPlatform = health.platform ?? "";
       runnerActiveDir = health.activeDir ?? "";
+      repoTargetRoot = health.root ?? health.activeDir ?? null;
       shellHint = shellHintForPlatform(health.platform, runnerActiveDir);
       const existingBackground = await listRunnerBackgroundProcesses(config);
       runnerBackgroundBaseline = new Set(
@@ -1690,6 +1702,7 @@ export async function runBuildDiscussion(
       const repoStatus = await getRepoStatusViaRunner(config);
       if (repoStatus) {
         repoIsGit = repoStatus.isRepo;
+        rememberRepoTargetRoot(repoStatus);
         buildMemoryRunnerProjectRoot = repoStatus.root;
         buildMemoryRepoRemoteUrl =
           repoStatus.remotes.find((remote) => remote.name === "origin")?.url ??
@@ -1740,6 +1753,7 @@ export async function runBuildDiscussion(
       const repoStatus = await getRepoStatusViaRunner(runner);
       if (repoStatus) {
         repoIsGit = repoStatus.isRepo;
+        rememberRepoTargetRoot(repoStatus);
         emit({ type: "repo_status", status: toRepoStatusEvent(repoStatus) });
       }
       // `--stat` keeps the payload small; `toRepoDiffEvent` caps it further.
@@ -2439,6 +2453,7 @@ export async function runBuildDiscussion(
     }
     if (!status) return repoUnavailable();
     repoIsGit = status.isRepo;
+    rememberRepoTargetRoot(status);
     emit({ type: "repo_status", status: toRepoStatusEvent(status) });
     if (!status.isRepo) {
       return status.gitAvailable
@@ -2560,6 +2575,7 @@ export async function runBuildDiscussion(
       const status = await getRepoStatusViaRunner(runner);
       if (status) {
         repoIsGit = status.isRepo;
+        rememberRepoTargetRoot(status);
         repoCommitWorkflowEnabled = status.isRepo;
         if (status.currentBranch) repoActiveBranch = status.currentBranch;
         emit({ type: "repo_status", status: toRepoStatusEvent(status) });
@@ -2630,6 +2646,7 @@ export async function runBuildDiscussion(
       const status = await getRepoStatusViaRunner(runner);
       if (status) {
         repoIsGit = status.isRepo;
+        rememberRepoTargetRoot(status);
         repoCommitWorkflowEnabled = repoCommitWorkflowEnabledFromStatus(status);
         if (repoCommitWorkflowEnabled && status.currentBranch) {
           repoActiveBranch = status.currentBranch;
@@ -2674,6 +2691,7 @@ export async function runBuildDiscussion(
       preStatus = await getRepoStatusViaRunner(runner);
       if (preStatus) {
         repoIsGit = preStatus.isRepo;
+        rememberRepoTargetRoot(preStatus);
         emit({ type: "repo_status", status: toRepoStatusEvent(preStatus) });
       }
       const preDiff = await getRepoDiffViaRunner(runner, { stat: true });
@@ -2755,6 +2773,7 @@ export async function runBuildDiscussion(
       const status = await getRepoStatusViaRunner(runner);
       if (status) {
         repoIsGit = status.isRepo;
+        rememberRepoTargetRoot(status);
         if (status.currentBranch) repoActiveBranch = status.currentBranch;
         emit({ type: "repo_status", status: toRepoStatusEvent(status) });
       }
@@ -3085,6 +3104,7 @@ export async function runBuildDiscussion(
       status = await getRepoStatusViaRunner(runner);
       if (status) {
         repoIsGit = status.isRepo;
+        rememberRepoTargetRoot(status);
         emit({ type: "repo_status", status: toRepoStatusEvent(status) });
       }
     } catch {
@@ -5427,7 +5447,8 @@ export async function runBuildDiscussion(
         const fb = strict.feedback ?? STRICT_RETRY_INSTRUCTION;
         emitArchitectLoopDiag(
           "model_failed",
-          `Architect ${terminal} tool-call rejected: ${fb}`
+          `Architect ${terminal} tool-call rejected: ${fb}`,
+          truncate(text, 1_000)
         );
         messages.push({
           role: "user",
@@ -6242,6 +6263,7 @@ export async function runBuildDiscussion(
     const status = await getRepoStatusViaRunner(runner).catch(() => null);
     if (status) {
       repoIsGit = status.isRepo;
+      rememberRepoTargetRoot(status);
       emit({ type: "repo_status", status: toRepoStatusEvent(status) });
     }
     if (repoInitializedByBuild && status?.isRepo) {
@@ -6373,6 +6395,9 @@ export async function runBuildDiscussion(
 
   for (let cycle = 1; cycle <= BUILD_MAX_WAVES && !done; cycle++) {
     wavesRun = cycle;
+    const waveStartTaskStatuses = new Map(
+      tasks.map((task) => [task.id, task.status] as const)
+    );
     // Stop cleanly at the wave boundary if the active USD/time window is spent.
     if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
       return;
@@ -7071,6 +7096,7 @@ export async function runBuildDiscussion(
                 taskId: task.id,
                 wave: cycle,
                 message: `${worker.displayName} made an invalid tool call for ${task.id}: ${feedback}`,
+                details: truncate(output, 1_000),
               });
               emit({
                 type: "diagnostic",
@@ -8085,6 +8111,8 @@ export async function runBuildDiscussion(
       }
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
     };
+    const skillEvidenceGateFix = (fixInstructions: string): string =>
+      `FIX (from skill evidence gate):\n${fixInstructions}`;
 
     for (const result of action.results) {
       const task = tasks.find((t) => t.id === result.taskId);
@@ -8110,7 +8138,7 @@ export async function runBuildDiscussion(
         if (evidenceFix) {
           sendTaskBackForFix(
             task,
-            evidenceFix,
+            skillEvidenceGateFix(evidenceFix),
             `Architect approval for ${task.id} was blocked because required skill evidence is missing.`
           );
           continue;
@@ -8170,7 +8198,7 @@ export async function runBuildDiscussion(
         if (evidenceFix) {
           sendTaskBackForFix(
             task,
-            evidenceFix,
+            skillEvidenceGateFix(evidenceFix),
             `Review omitted ${task.id}, but required skill evidence is missing.`
           );
           continue;
@@ -8317,7 +8345,7 @@ export async function runBuildDiscussion(
     const waveProgressed = hasMeaningfulBuildProgress({
       filesWritten: executed.reduce((sum, item) => sum + item.files.length, 0),
       tasksAdvanced:
-        action.results.length + novelTasks.tasks.length + (verificationFixTask ? 1 : 0),
+        countTaskStatusTransitions(waveStartTaskStatuses, tasks),
       failureChanged:
         verifyCommandChangedThisWave ||
         recoveryLog.some((entry) => entry.includes(`wave ${cycle}`)),
@@ -8727,6 +8755,7 @@ export async function runBuildDiscussion(
     : answer;
   if (runner && repoIsGit) {
     const block = buildRepoWorkflowSummary({
+      targetRoot: repoTargetRoot,
       branch: repoActiveBranch,
       commits: repoCommits,
       issueNumber: repoIssueNumber,

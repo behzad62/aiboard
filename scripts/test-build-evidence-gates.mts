@@ -339,6 +339,15 @@ check(
       "Create the static shell.\n\nFIX (from final Build quality gate): provide missing evidence and browser acceptance.",
   }),
 );
+check(
+  "skill evidence remediation allows evidence-only skill exemptions despite output paths",
+  shouldAllowEvidenceOnlySkillExemptions({
+    emittedFiles: [],
+    declaredOutputPaths: ["src/renderer.js"],
+    taskInstructions:
+      "Render the visible window barrier.\n\nFIX (from skill evidence gate): provide missing Skill evidence and browser acceptance. If the implementation already landed, return evidence only.",
+  }),
+);
 
 const splitReviewIssues = splitEvidenceOnlyReviewIssues([
   "TOOL CALL REJECTED: your JSON tool action looks incomplete.",

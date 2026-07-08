@@ -336,6 +336,7 @@ check(
 
 // ── 7. Repository-workflow summary block (pure) ─────────────────────────────
 const fullSummary = buildRepoWorkflowSummary({
+  targetRoot: "C:\\Users\\b_a_s\\source\\repos\\AIPaintball",
   branch: "codex/fix-42-settings",
   commits: [{ hash: "abc1234", subject: "Fix settings storage regression" }],
   issueNumber: 42,
@@ -344,6 +345,10 @@ const fullSummary = buildRepoWorkflowSummary({
   verification: "npm run build passed",
 });
 check("summary has the heading", fullSummary.includes("## Repository workflow"));
+check(
+  "summary lists the runner target repository root",
+  fullSummary.includes("- Target repository: `C:\\Users\\b_a_s\\source\\repos\\AIPaintball`")
+);
 check("summary lists the branch", fullSummary.includes("- Branch: `codex/fix-42-settings`"));
 check(
   "summary lists the commit hash + subject",

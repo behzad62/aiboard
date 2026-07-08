@@ -206,6 +206,53 @@ check(
   qualityGateReport
 );
 
+const skillEvidenceReport = createBuildStopReport({
+  discussionId: "d8",
+  topic: "Use required implementation skills.",
+  status: "blocked",
+  stopReason: "time",
+  stopMessage: "Build stopped at the time limit.",
+  wave: 6,
+  verifyCommand: "node --check src/game.js",
+  tasks: [
+    { id: "T1", title: "Implement game", status: "done" },
+    { id: "T2", title: "Review skill evidence", status: "fixing", failCount: 1 },
+  ],
+  problems: [
+    {
+      id: "p8",
+      createdAt: "2026-07-08T09:00:00.000Z",
+      code: "repeated_no_progress",
+      severity: "blocked",
+      source: "engine",
+      message: "No progress between waves.",
+      wave: 6,
+    },
+    {
+      id: "p7",
+      createdAt: "2026-07-08T08:59:00.000Z",
+      code: "skill_evidence_missing",
+      severity: "blocked",
+      source: "engine",
+      message: "Required skill evidence is missing for T2.",
+      details:
+        "- T2 superpowers:test-driven-development: RED test/check before implementation",
+      wave: 6,
+    },
+  ],
+  commandProblems: [],
+  failureFingerprints: {},
+  recoveryLog: ["Stopped at the time limit with missing skill evidence."],
+  createdAt: "2026-07-08T09:01:00.000Z",
+});
+
+check(
+  "skill evidence problems outrank repeated no-progress in stop report",
+  skillEvidenceReport.primaryCause?.code === "skill_evidence_missing" &&
+    /skill evidence/i.test(skillEvidenceReport.nextAction),
+  skillEvidenceReport
+);
+
 const staleVerifierReport = createBuildStopReport({
   discussionId: "d5",
   topic: "Create a static paintball web app.",
