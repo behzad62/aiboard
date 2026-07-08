@@ -24,6 +24,7 @@ export interface StorageAdapter {
     relativePath: string,
     blob: string
   ): Promise<void>;
+  deleteDiscussionFile(discussionId: string, relativePath: string): Promise<void>;
   deleteDiscussion(discussionId: string): Promise<void>;
   listBenchmarkRunIds(): Promise<string[]>;
   loadBenchmarkRun(runId: string): Promise<string | null>;
@@ -158,6 +159,12 @@ export class IndexedDBAdapter implements StorageAdapter {
     discussionIds.add(discussionId);
     await idbSet(DISCUSSION_IDS_KEY, Array.from(discussionIds).sort());
   }
+  async deleteDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<void> {
+    await idbDelete(discussionFileStoreKey(discussionId, relativePath));
+  }
   async deleteDiscussion(discussionId: string): Promise<void> {
     for (const relativePath of DISCUSSION_FILE_PATHS) {
       await idbDelete(discussionFileStoreKey(discussionId, relativePath));
@@ -272,6 +279,26 @@ export class FileSystemAdapter implements StorageAdapter {
     const writable = await fileHandle.createWritable();
     await writable.write(blob);
     await writable.close();
+    await this.saveDiscussionIndex();
+  }
+
+  async deleteDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<void> {
+    const discussionDir = await this.getDiscussionDir(discussionId, false);
+    if (!discussionDir) return;
+    const resolved = await this.resolveRelativeFile(
+      discussionDir,
+      relativePath,
+      false
+    );
+    if (!resolved.dir) return;
+    try {
+      await resolved.dir.removeEntry(resolved.fileName);
+    } catch {
+      // File already gone.
+    }
     await this.saveDiscussionIndex();
   }
 

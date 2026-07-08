@@ -68,6 +68,13 @@ class MemorySplitAdapter implements StorageAdapter {
     this.discussionFiles.set(this.key(discussionId, relativePath), blob);
   }
 
+  async deleteDiscussionFile(
+    discussionId: string,
+    relativePath: string
+  ): Promise<void> {
+    this.discussionFiles.delete(this.key(discussionId, relativePath));
+  }
+
   async deleteDiscussion(discussionId: string): Promise<void> {
     for (const key of Array.from(this.discussionFiles.keys())) {
       if (key.startsWith(`${discussionId}/`)) this.discussionFiles.delete(key);

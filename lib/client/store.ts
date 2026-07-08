@@ -896,13 +896,19 @@ async function persistDiscussionBundle(
       JSON.stringify(bundle.messages, null, 2)
     )
   );
-  await serializeAdapterWrite(() =>
-    currentAdapter.saveDiscussionFile(
-      bundle.discussionId,
-      "final-result.json",
-      JSON.stringify(bundle.finalResult, null, 2)
-    )
-  );
+  if (bundle.finalResult) {
+    await serializeAdapterWrite(() =>
+      currentAdapter.saveDiscussionFile(
+        bundle.discussionId,
+        "final-result.json",
+        JSON.stringify(bundle.finalResult, null, 2)
+      )
+    );
+  } else {
+    await serializeAdapterWrite(() =>
+      currentAdapter.deleteDiscussionFile(bundle.discussionId, "final-result.json")
+    );
+  }
   await serializeAdapterWrite(() =>
     currentAdapter.saveDiscussionFile(
       bundle.discussionId,
@@ -1451,6 +1457,13 @@ export function clearDiscussionRun(id: string): void {
   );
   schedulePersist();
 }
+
+export function clearFinalResult(id: string): void {
+  const s = store();
+  s.finalResults = s.finalResults.filter((r) => r.discussionId !== id);
+  schedulePersist();
+}
+
 export function insertMessage(m: Message): void {
   store().messages.push(m);
   schedulePersist();

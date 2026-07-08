@@ -3503,7 +3503,17 @@ export interface StrictToolActionBatchInspection {
 export function inspectStrictToolActionBatchOutput(
   text: string
 ): StrictToolActionBatchInspection {
-  const actions = uniqueActionCandidatesInDocumentOrder(text)
+  const candidates = uniqueActionCandidatesInDocumentOrder(text);
+  if (hasIncompleteTrailingActionCandidate(text, candidates)) {
+    return {
+      valid: false,
+      actions: [],
+      feedback:
+        "TOOL CALL REJECTED: the JSON tool action batch looks incomplete or truncated. Reply again with complete valid JSON action object(s) only, or stop using tools and provide final file output.",
+    };
+  }
+
+  const actions = candidates
     .map((candidate) => parseActionCandidate(candidate))
     .filter(
       (action): action is ArchitectAction =>
@@ -3525,6 +3535,25 @@ export function inspectStrictToolActionBatchOutput(
         ? undefined
         : "TOOL CALL WARNING: tool calls should be JSON actions with no prose.";
   return { valid: true, actions, feedback };
+}
+
+function hasIncompleteTrailingActionCandidate(
+  text: string,
+  candidates: string[]
+): boolean {
+  if (candidates.length === 0) return false;
+  const lastEnd = candidates.reduce((maxEnd, candidate) => {
+    const start = text.lastIndexOf(candidate);
+    return start >= 0 ? Math.max(maxEnd, start + candidate.length) : maxEnd;
+  }, -1);
+  if (lastEnd < 0) return false;
+  const trailing = text.slice(lastEnd).trim();
+  if (!trailing) return false;
+
+  const normalized = trailing.replace(/^```(?:json|jsonc)?\s*/i, "").trim();
+  if (!/^(?:,|\[|;)?\s*\{/.test(normalized)) return false;
+  const objectStart = normalized.indexOf("{");
+  return objectStart >= 0 && balancedObjectAt(normalized, objectStart) == null;
 }
 
 function looksLikeIncompleteToolAction(text: string): boolean {
@@ -5095,6 +5124,7 @@ export function buildEngineVerifiedOutputSummary(input: {
  * states the resolved verify command's result when known.
  */
 export function buildRepoWorkflowSummary(input: {
+  targetRoot?: string | null;
   branch?: string | null;
   commits?: Array<{ hash: string; subject: string }>;
   issueNumber?: number | null;
@@ -5118,6 +5148,7 @@ export function buildRepoWorkflowSummary(input: {
     ),
   ];
   const hasAnything =
+    !!input.targetRoot?.trim() ||
     !!input.branch ||
     commits.length > 0 ||
     issueNumbers.length > 0 ||
@@ -5129,6 +5160,9 @@ export function buildRepoWorkflowSummary(input: {
   if (!hasAnything) return "";
 
   const lines = ["", "## Repository workflow", ""];
+  if (input.targetRoot?.trim()) {
+    lines.push(`- Target repository: \`${input.targetRoot.trim()}\``);
+  }
   if (input.branch) lines.push(`- Branch: \`${input.branch}\``);
   if (commits.length > 0) {
     for (const c of commits.slice(0, 20)) {

@@ -162,7 +162,9 @@ export function shouldAllowEvidenceOnlySkillExemptions(input: {
 }): boolean {
   if (input.emittedFiles.length > 0) return false;
   if (input.declaredOutputPaths.length === 0) return true;
-  return /FIX \(from final Build quality gate\):/i.test(input.taskInstructions ?? "");
+  return /FIX \(from (?:final Build quality gate|skill evidence gate)\):/i.test(
+    input.taskInstructions ?? ""
+  );
 }
 
 function isWriteLandingIssue(issue: string): boolean {

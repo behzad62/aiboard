@@ -1,6 +1,7 @@
 /** Build progress tracking checks (run: npx tsx scripts/test-build-progress.mts) */
 import {
   buildVerificationFailureTask,
+  countTaskStatusTransitions,
   extractVerificationFailurePaths,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
@@ -28,6 +29,20 @@ check("three same failures can stop", shouldStopForNoProgress({ repeatedFailureC
 check("four no-progress waves can stop", shouldStopForNoProgress({ repeatedFailureCount: 0, noProgressWaves: 4 }));
 check("file writes count as progress", hasMeaningfulBuildProgress({ filesWritten: 1, tasksAdvanced: 0, failureChanged: false, repoAdvanced: false }));
 check("changed failure counts as progress", hasMeaningfulBuildProgress({ filesWritten: 0, tasksAdvanced: 0, failureChanged: true, repoAdvanced: false }));
+check(
+  "net-same fixing task does not count as a status transition",
+  countTaskStatusTransitions(
+    new Map([["T2", "fixing"]]),
+    [{ id: "T2", status: "fixing" }]
+  ) === 0
+);
+check(
+  "fixing to done counts as a status transition",
+  countTaskStatusTransitions(
+    new Map([["T2", "fixing"]]),
+    [{ id: "T2", status: "done" }]
+  ) === 1
+);
 
 const verificationOutput = String.raw`
 stdout:

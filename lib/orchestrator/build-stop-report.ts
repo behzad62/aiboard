@@ -162,6 +162,7 @@ function pickPrimaryCause(
         problem.code === "verification_repeated" ||
         problem.code === "verification_failed" ||
         problem.code === "quality_gate_failed" ||
+        problem.code === "skill_evidence_missing" ||
         problem.code === "browser_acceptance_missing"
       ) {
         return 5;
@@ -222,6 +223,16 @@ function buildNextAction(primary: BuildProblem | null, fallback: string): string
   }
   if (primary.code === "repeated_no_progress") {
     return "Resume with a specific instruction that names the stuck task and failing command, or restart with a different Architect if it repeats.";
+  }
+  if (
+    primary.code === "skill_evidence_missing" ||
+    (primary.code === "quality_gate_failed" &&
+      /skill evidence/i.test(`${primary.message}\n${primary.details ?? ""}`))
+  ) {
+    return "Resume with a specific instruction to satisfy the missing skill evidence, or disable the relevant skill gate only if the requirement is no longer intended.";
+  }
+  if (primary.code === "quality_gate_failed") {
+    return "Resume with a specific instruction to satisfy the final Build quality gate, using the gate details in this report as the acceptance checklist.";
   }
   if (primary.code === "incomplete_tasks") {
     return "Resume so the unfinished tasks are dispatched again, or add a note naming the incomplete task that should be fixed next.";
