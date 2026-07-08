@@ -62,6 +62,20 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
         "Add SpecAction and BuildPlanAction without removing legacy plan support.",
   ],
   [
+    "build_plan action preserves task completion and verification contracts",
+    '{"action":"build_plan","phaseSpec":{"id":"P1","objective":"Audit baseline","acceptanceCriteria":["Baseline evidence reviewed"],"qualityCriteria":["No dummy patches"],"verification":["Architect review evidence"]},"tasks":[{"id":"T1","title":"Audit baseline","kind":"audit","completionMode":"evidence","verificationPolicy":"architect","requiredEvidence":["search/read evidence that current baseline exists"],"instructions":"Inspect current files and report evidence.","implementationContract":"No file changes are expected.","contextFiles":["src/game.js"],"outputPaths":[]}]}',
+    (a) =>
+      a?.action === "build_plan" &&
+      (a as { tasks: Array<{ kind?: string; completionMode?: string; verificationPolicy?: string; requiredEvidence?: string[] }> }).tasks[0]
+        ?.kind === "audit" &&
+      (a as { tasks: Array<{ kind?: string; completionMode?: string; verificationPolicy?: string; requiredEvidence?: string[] }> }).tasks[0]
+        ?.completionMode === "evidence" &&
+      (a as { tasks: Array<{ kind?: string; completionMode?: string; verificationPolicy?: string; requiredEvidence?: string[] }> }).tasks[0]
+        ?.verificationPolicy === "architect" &&
+      (a as { tasks: Array<{ requiredEvidence?: string[] }> }).tasks[0]?.requiredEvidence?.[0] ===
+        "search/read evidence that current baseline exists",
+  ],
+  [
     "review action preserves new-task implementation contracts",
     '{"action":"review","results":[],"newTasks":[{"id":"T9","title":"Follow-up","instructions":"Wire the saved settings","implementationContract":"Use the existing settings API and do not add routes.","contextFiles":["lib/client/settings-api.ts"],"outputPaths":["app/settings/page.tsx"],"difficulty":2}],"done":false}',
     (a) =>
@@ -676,6 +690,17 @@ const phasePromptChecks: Array<[string, boolean]> = [
     phasePlanPrompt.includes('"action":"build_plan"') &&
       phasePlanPrompt.includes('"phaseSpec"') &&
       phasePlanPrompt.includes("implementationContract"),
+  ],
+  [
+    "build plan prompt documents task completion and verification contracts",
+    phasePlanPrompt.includes("completionMode") &&
+      phasePlanPrompt.includes("verificationPolicy") &&
+      phasePlanPrompt.includes("Architect review"),
+  ],
+  [
+    "worker prompt shows task contract",
+    phaseWorkerPrompt.includes("Task contract:") &&
+      phaseWorkerPrompt.includes("completionMode"),
   ],
   [
     "worker prompt includes current phase spec",

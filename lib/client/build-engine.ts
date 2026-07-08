@@ -196,6 +196,7 @@ import {
   reopenBuildTasksForBlockedQualityGateCheckpoint,
   reopenBuildTasksForQualityGate,
   shouldRequestWorkerFinalOutput,
+  taskRequiresToolVerification,
   outputPathsForTask,
   applyTaskSplit,
   parseWorkerSplitAction,
@@ -211,8 +212,10 @@ import {
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
   buildReviewGateFixInstructions,
+  canWorkerOutputAdvanceToReview,
   renderTaskGuidanceForWorker,
   resolveRunnerProjectTree,
+  normalizeBuildTaskContract,
   recordToolCall,
   runBudgetStatus,
   RUNS_PER_PHASE,
@@ -220,6 +223,7 @@ import {
   allocateIncrementalTaskIds,
   filterNovelReviewTasks,
   selectBalancedWorkerIndex,
+  validateBuildPlanForDispatch,
   shouldApplyReviewResultToTask,
   shouldRecordToolCallResult,
   summarizeFileChange,
@@ -540,6 +544,8 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
 const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
+const BUILD_ENGINE_VERSION = "build-contracts-v1";
+const BUILD_CHECKPOINT_CONTRACT_VERSION = 2;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -1491,6 +1497,8 @@ export async function runBuildDiscussion(
       discussionId: discussion.id,
       status: input.status,
       updatedAt: new Date().toISOString(),
+      engineVersion: BUILD_ENGINE_VERSION,
+      checkpointContractVersion: BUILD_CHECKPOINT_CONTRACT_VERSION,
       runPolicy: buildSettings.runPolicy,
       stopReason: input.stopReason ?? null,
       wave: input.wave,
@@ -5612,10 +5620,14 @@ export async function runBuildDiscussion(
   const toTask = (
     raw: BuildPlanningAction["tasks"][number],
     index: number
-  ): BuildTask => ({
+  ): BuildTask => normalizeBuildTaskContract({
     id: raw.id?.trim() || `T${index + 1}`,
     title: raw.title || `Task ${index + 1}`,
     instructions: raw.instructions || raw.title || "",
+    kind: raw.kind,
+    completionMode: raw.completionMode,
+    verificationPolicy: raw.verificationPolicy,
+    requiredEvidence: raw.requiredEvidence,
     phaseSpec: activePhaseSpec,
     implementationContract:
       typeof raw.implementationContract === "string" && raw.implementationContract.trim()
@@ -5822,7 +5834,7 @@ export async function runBuildDiscussion(
         task.status === "in_progress" || task.status === "review"
           ? "planned"
           : task.status,
-    })));
+    }))).map(normalizeBuildTaskContract);
     tasks = reopenBuildTasksForBlockedQualityGateCheckpoint(normalizedResumeTasks, {
       status: existingCheckpoint.status,
       stopReason: existingCheckpoint.stopReason,
@@ -6184,7 +6196,27 @@ export async function runBuildDiscussion(
           .join(", ")}.`,
       });
     }
-    tasks = allocatedPlanTasks.tasks.map(toTask);
+    const dispatchValidation = validateBuildPlanForDispatch(
+      allocatedPlanTasks.tasks.map(toTask)
+    );
+    tasks = dispatchValidation.tasks;
+    for (const warning of dispatchValidation.warnings) {
+      architectNotes = [architectNotes, `Plan validation: ${warning}`]
+        .filter(Boolean)
+        .join("\n");
+      recordBuildProblem({
+        code: "tool_warning",
+        severity: "warning",
+        source: "engine",
+        wave: 0,
+        message: warning,
+      });
+      emit({
+        type: "diagnostic",
+        phase: "round_preparing",
+        message: warning,
+      });
+    }
     // The Architect may scaffold files alongside the plan JSON.
     const { issues } = await writeEmittedFiles(planResult.text);
     if (issues.length > 0) {
@@ -6277,6 +6309,21 @@ export async function runBuildDiscussion(
       )
     : "";
   let verifyCommand = runner ? (planVerifyCommand || detectedVerifyCommand) : "";
+  if (
+    verifyCommand &&
+    tasks.length > 0 &&
+    !tasks.some((task) =>
+      taskRequiresToolVerification(normalizeBuildTaskContract(task))
+    )
+  ) {
+    emit({
+      type: "diagnostic",
+      phase: "round_preparing",
+      message:
+        "Automated build check disabled because all current tasks use Architect/external/no-tool verification policy.",
+    });
+    verifyCommand = "";
+  }
   if (verifyCommand) {
     emit({
       type: "diagnostic",
@@ -7504,6 +7551,7 @@ export async function runBuildDiscussion(
         const declaredOutputPaths = task.outputPaths?.length
           ? task.outputPaths
           : outputPathsForTask(task);
+        const taskContract = normalizeBuildTaskContract(task);
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
           const scopedVerificationGapReport =
@@ -7516,7 +7564,7 @@ export async function runBuildDiscussion(
             hasLandedFiles: patchedFiles.length > 0,
             hasPreviewArtifacts,
             hasScopedVerificationGapReport: scopedVerificationGapReport,
-            expectsFileOutput: declaredOutputPaths.length > 0,
+            expectsFileOutput: taskContract.completionMode === "files",
             toolIssueCount: toolIssues.length,
           });
           if (!requestFinalOutput) {
@@ -7633,22 +7681,40 @@ export async function runBuildDiscussion(
           taskId: task.id,
           workerOutput: output,
         });
+        const reviewIssuesForDecision = evidenceOnlyNoFileReview
+          ? splitEvidenceOnlyReviewIssues(issues)
+          : { blocking: issues, warnings: [] };
+        const contractReviewDecision = canWorkerOutputAdvanceToReview({
+          task,
+          emittedFiles: files,
+          reviewFiles,
+          declaredOutputPaths,
+          evidence: skillEvidence,
+          workerOutput: output,
+          hasBlockingWriteIssues: reviewIssuesForDecision.blocking.length > 0,
+          toolBudgetBlocked: toolBudgetBlockedNoFiles,
+        });
+        const canReviewWorkerOutput =
+          contractReviewDecision.ok || evidenceOnlyNoFileReview;
         if (
           toolBudgetBlockedNoFiles ||
-          (reviewFiles.length === 0 && !evidenceOnlyNoFileReview)
+          (reviewFiles.length === 0 && !canReviewWorkerOutput)
         ) {
+          const failureDetail = toolBudgetBlockedNoFiles
+            ? `could not complete because tool budget was exhausted (${truncate(
+                toolIssues.join("; ") || output,
+                300
+              )})`
+            : contractReviewDecision.failureDetail
+              ? contractReviewDecision.failureDetail
+              : issues.length > 0
+                ? `produced no usable files (${truncate(issues.join("; "), 300)})`
+                : "returned no files";
           failTask(
             task,
             stat,
             worker,
-            toolBudgetBlockedNoFiles
-              ? `could not complete because tool budget was exhausted (${truncate(
-                  toolIssues.join("; ") || output,
-                  300
-                )})`
-              : issues.length > 0
-              ? `produced no usable files (${truncate(issues.join("; "), 300)})`
-              : "returned no files",
+            failureDetail,
             toolBudgetBlockedNoFiles ? "unavailable" : "bad"
           );
           return;
@@ -7664,9 +7730,7 @@ export async function runBuildDiscussion(
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
-        const reviewIssues = evidenceOnlyNoFileReview
-          ? splitEvidenceOnlyReviewIssues(issues)
-          : { blocking: issues, warnings: [] };
+        const reviewIssues = reviewIssuesForDecision;
         const issueNotes =
           issues.length > 0
             ? `\nWRITE ISSUES — these changes did NOT land; act on them in your review:\n${issues.map((s) => `- ${s}`).join("\n")}`
@@ -8391,6 +8455,27 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
       touchLiveCheckpoint({ force: true, reason: `${task.id} planned` });
     }
+    if (novelTasks.tasks.length > 0) {
+      const dispatchValidation = validateBuildPlanForDispatch(tasks);
+      tasks = dispatchValidation.tasks;
+      for (const warning of dispatchValidation.warnings) {
+        architectNotes = [architectNotes, `Plan validation: ${warning}`]
+          .filter(Boolean)
+          .join("\n");
+        recordBuildProblem({
+          code: "tool_warning",
+          severity: "warning",
+          source: "engine",
+          wave: cycle,
+          message: warning,
+        });
+        emit({
+          type: "diagnostic",
+          phase: "judging",
+          message: warning,
+        });
+      }
+    }
 
     let verifyCommandChangedThisWave = false;
     if (typeof action.verifyCommand === "string") {
@@ -8433,8 +8518,13 @@ export async function runBuildDiscussion(
       }
     }
 
+    const toolVerificationRequired = tasks.some((task) =>
+      taskRequiresToolVerification(normalizeBuildTaskContract(task))
+    );
     const verificationFixTask =
-      !verifyCommandChangedThisWave && shouldRecordAutomatedBuildCheckFailure(verifyResult)
+      toolVerificationRequired &&
+      !verifyCommandChangedThisWave &&
+      shouldRecordAutomatedBuildCheckFailure(verifyResult)
       ? buildVerificationFailureTask({
           tasks,
           verifyCommand,

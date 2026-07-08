@@ -204,6 +204,10 @@ export interface BuildCheckpointTask {
   id: string;
   title: string;
   instructions: string;
+  kind?: "modify" | "audit" | "verify" | "repo";
+  completionMode?: "files" | "evidence" | "either";
+  verificationPolicy?: "architect" | "tool" | "external" | "none";
+  requiredEvidence?: string[];
   contextFiles: string[];
   outputPaths?: string[];
   expectedOutputs?: string;
@@ -223,6 +227,8 @@ export interface BuildCheckpoint {
   discussionId: string;
   status: "running" | "stopped" | "blocked" | "completed";
   updatedAt: string;
+  engineVersion?: string;
+  checkpointContractVersion?: number;
   runPolicy: BuildRunPolicy;
   stopReason?: BuildStopReason | null;
   wave: number;
