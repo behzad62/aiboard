@@ -1,5 +1,6 @@
 /** Build context budget checks (run: npx tsx scripts/test-build-context-budget.mts) */
 import {
+  buildWorkerToolConversationCharLimit,
   createBuildPromptBudget,
   inferContextTier,
   type BuildPromptRole,
@@ -79,6 +80,20 @@ check(
     );
   }),
   workerBudgets
+);
+
+const workerToolConversationCaps = workerBudgets.map((budget) =>
+  buildWorkerToolConversationCharLimit({
+    totalInputTokens: budget.totalInputTokens,
+  })
+);
+check(
+  "worker tool-loop compaction char budget scales beyond the old 80k cap",
+  workerToolConversationCaps[0] === 80_000 &&
+    workerToolConversationCaps[1] > 80_000 &&
+    workerToolConversationCaps[2] > workerToolConversationCaps[1] &&
+    workerToolConversationCaps[3] > workerToolConversationCaps[2],
+  workerToolConversationCaps
 );
 
 const roleBudgets = (["architect", "worker", "reviewer", "summary"] as BuildPromptRole[]).map(

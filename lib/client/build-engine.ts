@@ -139,6 +139,7 @@ import {
 } from "@/lib/build-context/context-store";
 import {
   BuildContextManager,
+  buildWorkerToolConversationCharLimit,
   codeIntelResultToContextPack,
   createBuildPromptBudget,
   createCodeIntelPhaseBudget,
@@ -6564,6 +6565,9 @@ export async function runBuildDiscussion(
           fileCount: 1,
         })
       );
+      const workerToolConversationChars = buildWorkerToolConversationCharLimit({
+        totalInputTokens: workerContextBudget.totalInputTokens,
+      });
       const contextChunks: string[] = [];
       for (const path of task.contextFiles) {
         const content = await readFile(path);
@@ -6967,6 +6971,7 @@ export async function runBuildDiscussion(
             message: packToolBatchResult({
               served,
               skipped,
+              memory: replayCache.summary(),
               maxChars: workerToolBatchResultChars,
             }),
             servedCount: served.length,
@@ -6979,7 +6984,7 @@ export async function runBuildDiscussion(
         for (let turn = 0; turn < budgets.toolTurns; turn++) {
           const compacted = compactToolConversation(
             workerMessages,
-            80_000,
+            workerToolConversationChars,
             8,
             buildCompactionPlaceholder(
               `${worker.displayName} ${task.id} omitted tool exchange`
