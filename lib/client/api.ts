@@ -23,6 +23,7 @@ import {
   getAttachments,
   getDiscussionById,
   getFinalResult,
+  getBuildCheckpoint,
   getMessagesForDiscussion,
   getProviderKeys,
   insertMessage,
@@ -33,6 +34,7 @@ import {
   listDiscussions,
   updateDiscussion,
   updateUserSettings,
+  upsertBuildCheckpoint,
 } from "./store";
 import {
   getEnabledModels,
@@ -44,6 +46,7 @@ import {
   stopDiscussion,
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
+import { normalizeBuildTasksForResume } from "@/lib/orchestrator/build";
 import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
 export { runClientDiscussion as runDiscussion, stopDiscussion };
@@ -159,11 +162,20 @@ export function addDiscussionAttachments(
  */
 export function continueDiscussion(id: string): void {
   if (isDiscussionRunning(id)) return;
+  const now = new Date().toISOString();
+  const checkpoint = getBuildCheckpoint(id);
+  if (checkpoint?.tasks.length) {
+    upsertBuildCheckpoint({
+      ...checkpoint,
+      tasks: normalizeBuildTasksForResume(checkpoint.tasks),
+      updatedAt: now,
+    });
+  }
   updateDiscussion(id, {
     status: "pending",
     buildStopReason: null,
     buildStoppedAt: null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   });
 }
 

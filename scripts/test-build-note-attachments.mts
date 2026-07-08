@@ -2,21 +2,25 @@
 import { createRequire } from "node:module";
 import {
   type addAttachment,
+  type getBuildCheckpoint,
   type getDiscussionById,
   type getMessagesForDiscussion,
   type insertDiscussion,
+  type upsertBuildCheckpoint,
   type __resetClientStoreForTests,
 } from "../lib/client/store";
 import type { AttachmentRecord } from "../lib/attachments/types";
-import type { Discussion } from "../lib/db/schema";
+import type { BuildCheckpoint, Discussion } from "../lib/db/schema";
 
 const require = createRequire(import.meta.url);
 const storeApi = require("../lib/client/store") as {
   __resetClientStoreForTests: typeof __resetClientStoreForTests;
   addAttachment: typeof addAttachment;
+  getBuildCheckpoint: typeof getBuildCheckpoint;
   insertDiscussion: typeof insertDiscussion;
   getDiscussionById: typeof getDiscussionById;
   getMessagesForDiscussion: typeof getMessagesForDiscussion;
+  upsertBuildCheckpoint: typeof upsertBuildCheckpoint;
 };
 const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
 
@@ -119,6 +123,43 @@ check(
   "the Architect timeline note records the follow-up file name",
   message?.content.includes(newAttachment.filename) === true,
   message
+);
+
+const blockedCheckpoint: BuildCheckpoint = {
+  discussionId: discussion.id,
+  status: "blocked",
+  stopReason: "blocked",
+  updatedAt: now,
+  wave: 7,
+  tasks: [
+    {
+      id: "T1",
+      title: "Failed implementation",
+      instructions: "Continue the implementation.",
+      contextFiles: [],
+      outputPaths: ["src/game.js"],
+      status: "failed",
+      failCount: 6,
+      workerIndex: 0,
+      assignTo: "broken-worker",
+      retryAfterMs: 9999999999999,
+    },
+  ],
+  architectNotes: "Resume from failed task.",
+};
+storeApi.upsertBuildCheckpoint(blockedCheckpoint);
+clientApi.continueDiscussion(discussion.id);
+const resumedCheckpoint = storeApi.getBuildCheckpoint(discussion.id);
+const resumedTask = resumedCheckpoint?.tasks[0];
+
+check(
+  "resume normalizes failed checkpoint tasks before the engine starts",
+  resumedTask?.status === "fixing" &&
+    resumedTask.failCount === undefined &&
+    resumedTask.workerIndex === undefined &&
+    resumedTask.assignTo === undefined &&
+    resumedTask.retryAfterMs === undefined,
+  resumedTask
 );
 
 if (failed === 0) {
