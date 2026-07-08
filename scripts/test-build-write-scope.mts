@@ -1,5 +1,7 @@
 /** Build worker write-scope checks (run: npx tsx scripts/test-build-write-scope.mts) */
 import {
+  buildWorkerContextFileCharLimit,
+  evaluateExistingFileRewrite,
   isSuspiciousBuildArtifactPath,
   isTaskWritePathAllowed,
   type BuildTask,
@@ -51,6 +53,61 @@ const contextOnlyTask: BuildTask = {
 check(
   "task without explicit outputs may patch a context file",
   isTaskWritePathAllowed(contextOnlyTask, "package.json"),
+);
+
+const largeRewrite = evaluateExistingFileRewrite({
+  path: "src/game.js",
+  existingLength: 38_845,
+  replacementLength: 63_916,
+  writer: "worker",
+});
+check(
+  "worker full-file rewrite of a large existing file is rejected even when it expands",
+  largeRewrite.reject && largeRewrite.code === "large_existing_file_rewrite",
+  largeRewrite,
+);
+
+const suspiciousShrink = evaluateExistingFileRewrite({
+  path: "src/game.js",
+  existingLength: 38_845,
+  replacementLength: 1_500,
+  writer: "worker",
+});
+check(
+  "suspicious shrinking rewrite remains rejected",
+  suspiciousShrink.reject && suspiciousShrink.code === "suspicious_rewrite",
+  suspiciousShrink,
+);
+
+const explicitLargeRewrite = evaluateExistingFileRewrite({
+  path: "src/generated.js",
+  existingLength: 40_000,
+  replacementLength: 44_000,
+  writer: "worker",
+  allowLargeRewrite: true,
+});
+check(
+  "explicitly authorized large existing rewrite can pass",
+  !explicitLargeRewrite.reject,
+  explicitLargeRewrite,
+);
+
+const smallRewrite = evaluateExistingFileRewrite({
+  path: "src/small.js",
+  existingLength: 1_500,
+  replacementLength: 2_200,
+  writer: "worker",
+});
+check("small existing file rewrite can pass", !smallRewrite.reject, smallRewrite);
+
+check(
+  "worker context file sizing uses context capacity instead of a fixed 6K cap",
+  buildWorkerContextFileCharLimit({ contextPackTokens: 32_000, fileCount: 1 }) > 60_000
+);
+check(
+  "worker context file sizing caps broad multi-file fanout",
+  buildWorkerContextFileCharLimit({ contextPackTokens: 32_000, fileCount: 8 }) <
+    buildWorkerContextFileCharLimit({ contextPackTokens: 32_000, fileCount: 1 })
 );
 
 process.exit(failed === 0 ? 0 : 1);

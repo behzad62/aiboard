@@ -67,6 +67,7 @@ import {
   shouldStopForNoProgress,
 } from "@/lib/orchestrator/build-progress";
 import {
+  createReadRangeLoopGuard,
   createToolReplayCache,
   packToolBatchResult,
   scheduleBuildToolActions,
@@ -138,6 +139,7 @@ import {
 import {
   BuildContextManager,
   codeIntelResultToContextPack,
+  createBuildPromptBudget,
   createCodeIntelPhaseBudget,
   createCodeIntelProvider,
   filterCodebaseMemoryMcpToolsForGenericUse,
@@ -158,6 +160,7 @@ import {
   buildArchitectGuidancePrompt,
   buildIncompleteTaskFailure,
   buildOutstandingTasksDigest,
+  buildWorkerContextFileCharLimit,
   buildReviewDiffPackContent,
   buildWorkerToolInstructions,
   buildWaveReviewDigest,
@@ -177,6 +180,7 @@ import {
   isBuildTaskDependencySatisfied,
   isArchitectTerminalActionForExpected,
   isReviewResultApproved,
+  evaluateExistingFileRewrite,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
   isRedundantToolCall,
@@ -4595,19 +4599,25 @@ export async function runBuildDiscussion(
         issues.push(scopeIssue);
         continue;
       }
-      // A full-file rewrite that shrinks an existing file drastically is far
-      // more often a truncated/lazy rewrite ("// rest unchanged") than a real
-      // refactor — refuse it and tell the model to use edit blocks instead.
+      // Large existing-file rewrites are usually an unsafe escape from brittle
+      // patching. Force targeted edit blocks unless a path explicitly opts in.
       const existing = await readFile(file.path);
-      if (
-        existing != null &&
-        existing.length > 2_000 &&
-        file.content.length < existing.length * 0.5
-      ) {
-        const issue = `Rewrite of ${file.path} skipped as suspicious: the existing file is ${existing.length} chars but the replacement is only ${file.content.length}. Use SEARCH/REPLACE edit blocks for changes, or re-emit the COMPLETE file if a smaller rewrite is genuinely intended.`;
+      const rewriteEvaluation =
+        existing == null
+          ? { reject: false as const }
+          : evaluateExistingFileRewrite({
+              path: file.path,
+              existingLength: existing.length,
+              replacementLength: file.content.length,
+              writer: taskId == null ? "architect" : "worker",
+            });
+      if (rewriteEvaluation.reject && existing != null) {
+        const issue =
+          rewriteEvaluation.message ??
+          `Rewrite of ${file.path} skipped. Use SEARCH/REPLACE edit blocks for existing files.`;
         issues.push(issue);
         recordBuildProblem({
-          code: "suspicious_rewrite",
+          code: rewriteEvaluation.code ?? "suspicious_rewrite",
           severity: "error",
           source: "file_writer",
           taskId,
@@ -4617,7 +4627,7 @@ export async function runBuildDiscussion(
         emit({
           type: "diagnostic",
           phase: "model_failed",
-          message: `Skipped suspicious rewrite of ${file.path} (${existing.length} → ${file.content.length} chars)${taskId ? ` (${taskId})` : ""}`,
+          message: `Skipped full rewrite of ${file.path} (${existing.length} -> ${file.content.length} chars)${taskId ? ` (${taskId})` : ""}`,
         });
         continue;
       }
@@ -6183,6 +6193,43 @@ export async function runBuildDiscussion(
     });
   }
 
+  let userStopCheckpointSaved = false;
+  const saveUserStopCheckpoint = (): void => {
+    if (userStopCheckpointSaved || tasks.length === 0) return;
+    userStopCheckpointSaved = true;
+    const wave = Math.max(0, wavesRun);
+    const message =
+      "Build stopped by the user. Resume keeps the current checkpoint and re-queues any in-progress task.";
+    const report = createStopReport({
+      status: "stopped",
+      stopReason: "user",
+      message,
+      wave,
+      tasks,
+      verifyCommand,
+    });
+    const toolReviewReport = createToolReviewReport({
+      status: "stopped",
+      wave,
+    });
+    saveCheckpoint({
+      status: "stopped",
+      stopReason: "user",
+      wave,
+      tasks,
+      architectNotes,
+      verifyCommand,
+      stopReport: report,
+      toolReviewReport,
+    });
+    markStopped("user", message, report, toolReviewReport);
+  };
+  signal?.addEventListener("abort", saveUserStopCheckpoint, { once: true });
+  if (signal?.aborted) {
+    saveUserStopCheckpoint();
+    throwIfAborted();
+  }
+
   // ── Branch safety gate (NRW-005) ───────────────────────────────────────────
   // Before any worker writes files, make sure repo workflow won't accidentally
   // land commit-capable changes on the default / main / master branch. We
@@ -6448,6 +6495,8 @@ export async function runBuildDiscussion(
     ): string =>
       buildWorkerToolInstructions({
         ...budget,
+        codeIntelStatus: codeIntelProvider?.status.detail,
+        codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
         mcpCallsLeft: mcpCallsLeftThisPhase(),
         localServerUrls,
@@ -6475,11 +6524,28 @@ export async function runBuildDiscussion(
         cycle,
       });
 
+      const workerContextBudget = createBuildPromptBudget({
+        role: "worker",
+        profile: modelContextProfile(worker),
+      });
+      const workerContextFileCharLimit = buildWorkerContextFileCharLimit({
+        contextPackTokens: workerContextBudget.contextPackTokens,
+        fileCount: Math.max(1, task.contextFiles.length),
+      });
+      const workerToolBatchResultChars = Math.max(
+        TOOL_BATCH_RESULT_CHARS,
+        buildWorkerContextFileCharLimit({
+          contextPackTokens: workerContextBudget.contextPackTokens,
+          fileCount: 1,
+        })
+      );
       const contextChunks: string[] = [];
       for (const path of task.contextFiles) {
         const content = await readFile(path);
         if (content != null) {
-          contextChunks.push(`\n--- ${path} ---\n${truncate(content, PER_FILE_REVIEW_CHARS)}`);
+          contextChunks.push(
+            `\n--- ${path} ---\n${truncate(content, workerContextFileCharLimit)}`
+          );
         }
       }
       const workerSkills = selectSkills(
@@ -6575,6 +6641,7 @@ export async function runBuildDiscussion(
         ];
         const tracker = createToolCallTracker();
         const replayCache = createToolReplayCache();
+        const readRangeLoopGuard = createReadRangeLoopGuard();
         let badToolCalls = 0;
         let skippedOnlyToolBatches = 0;
         let blockingGuidanceAsked = false;
@@ -6620,6 +6687,13 @@ export async function runBuildDiscussion(
               continue;
             }
             if (isRedundantToolCall(tracker, action)) {
+              if (action.action === "read_range") {
+                const readLoopReason = readRangeLoopGuard.shouldInterrupt(action);
+                if (readLoopReason) {
+                  terminalSkip(item.label, readLoopReason);
+                  continue;
+                }
+              }
               const replayed = replayCache.replay(action);
               if (replayed) {
                 served.push({
@@ -6641,6 +6715,30 @@ export async function runBuildDiscussion(
                 result,
                 preserveFullResult: true,
               });
+              continue;
+            }
+            if (action.action === "code_intel") {
+              const replayed = replayCache.replay(action);
+              if (replayed) {
+                served.push({
+                  label: `${item.label} (replayed)`,
+                  result: replayed,
+                });
+                continue;
+              }
+              if (codeIntelCallsLeftThisPhase() <= 0) {
+                terminalSkip(item.label, "no code_intel calls left in this phase");
+                continue;
+              }
+              const result = await runCodeIntelQuery(action, worker);
+              const packedResult = storeLongToolResult(
+                "tool_exchange",
+                `Code intelligence: ${action.op}`,
+                result.content
+              );
+              recordToolCall(tracker, action);
+              replayCache.remember(action, packedResult);
+              served.push({ label: item.label, result: packedResult });
               continue;
             }
             if (action.action === "tool") {
@@ -6760,7 +6858,16 @@ export async function runBuildDiscussion(
               );
               recordToolCall(tracker, action);
               replayCache.remember(action, joined);
-              served.push({ label: item.label, result: truncate(joined, 18_000) });
+              served.push({
+                label: item.label,
+                result: truncate(
+                  joined,
+                  buildWorkerContextFileCharLimit({
+                    contextPackTokens: workerContextBudget.contextPackTokens,
+                    fileCount: Math.max(1, paths.length),
+                  })
+                ),
+              });
               continue;
             }
             if (action.action === "read_range" && budgets.rangeReads > 0) {
@@ -6773,6 +6880,7 @@ export async function runBuildDiscussion(
               const deliveredRange = parseDeliveredRange(out);
               recordToolCall(tracker, action, deliveredRange);
               replayCache.remember(action, out, deliveredRange);
+              readRangeLoopGuard.record(action, out);
               served.push({ label: item.label, result: out });
               continue;
             }
@@ -6831,7 +6939,11 @@ export async function runBuildDiscussion(
             summary: `${served.length} served, ${skipped.length} skipped`,
           });
           return {
-            message: packToolBatchResult({ served, skipped, maxChars: TOOL_BATCH_RESULT_CHARS }),
+            message: packToolBatchResult({
+              served,
+              skipped,
+              maxChars: workerToolBatchResultChars,
+            }),
             servedCount: served.length,
             skippedCount: skipped.length,
             terminalSkippedCount: terminalSkippedReasons.length,
@@ -7274,7 +7386,7 @@ export async function runBuildDiscussion(
             break;
           }
           const instruction =
-            "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. If creating a new file, emit a fenced file block with path=...";
+            "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. Large existing full-file blocks are rejected by the engine. If creating a new file, emit a fenced file block with path=...";
           const finalOutputReason =
             toolIssues.length > 0
               ? "hit repeated tool issues"

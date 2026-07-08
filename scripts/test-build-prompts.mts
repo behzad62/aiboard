@@ -5,6 +5,7 @@ import {
   buildWorkerToolInstructions,
   buildWorkerTaskPrompt,
   buildArchitectReviewPrompt,
+  buildNativeBuildToolDefinitions,
   workerCapabilityRosterSection,
   extractLocalServerUrls,
   isWorkerBuildToolAction,
@@ -294,6 +295,8 @@ const workerTools = buildWorkerToolInstructions({
   localServerUrls: ["http://localhost:3001"],
   shellHint:
     "SHELL: commands run on Windows via cmd.exe - use `py -3 -m http.server 8000`; prefer http://127.0.0.1:<port> for browser navigation.",
+  codeIntelStatus: "Native code intelligence ready.",
+  codeIntelCallsLeft: 2,
 });
 check(
   "worker tool instructions advertise MCP tools",
@@ -308,6 +311,27 @@ check(
     /mode":"blocking"/.test(workerTools) &&
     /mode "async"/.test(workerTools),
   workerTools
+);
+check(
+  "worker tool instructions advertise code intelligence before large-file paging",
+  workerTools.includes('"action":"code_intel"') &&
+    workerTools.includes("search_symbols") &&
+    /before broad file-by-file exploration/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker native tool definitions include code_intel",
+  buildNativeBuildToolDefinitions("worker").some((tool) => tool.name === "code_intel")
+);
+check(
+  "worker tool policy allows code_intel actions",
+  isWorkerBuildToolAction({
+    action: "code_intel",
+    op: "search_symbols",
+    query: "createGame",
+    limit: 8,
+    reason: "find the current implementation before patching",
+  }),
 );
 check(
   "worker tool instructions include active local server URL",

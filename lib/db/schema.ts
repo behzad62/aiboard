@@ -85,6 +85,7 @@ export type BuildProblemCode =
   | "write_conflict"
   | "write_scope_rejected"
   | "suspicious_rewrite"
+  | "large_existing_file_rewrite"
   | "truncated_output"
   | "command_failed"
   | "tool_denied"

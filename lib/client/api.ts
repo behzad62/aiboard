@@ -163,11 +163,20 @@ export function addDiscussionAttachments(
 export function continueDiscussion(id: string): void {
   if (isDiscussionRunning(id)) return;
   const now = new Date().toISOString();
+  const discussion = getDiscussionById(id);
   const checkpoint = getBuildCheckpoint(id);
   if (checkpoint?.tasks.length) {
+    const stoppedWithRunningCheckpoint =
+      discussion?.mode === "build" &&
+      discussion.status === "stopped" &&
+      checkpoint.status === "running";
     upsertBuildCheckpoint({
       ...checkpoint,
       tasks: normalizeBuildTasksForResume(checkpoint.tasks),
+      status: stoppedWithRunningCheckpoint ? "stopped" : checkpoint.status,
+      stopReason: stoppedWithRunningCheckpoint
+        ? discussion.buildStopReason ?? "user"
+        : checkpoint.stopReason,
       updatedAt: now,
     });
   }

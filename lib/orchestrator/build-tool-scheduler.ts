@@ -256,6 +256,106 @@ function parseRangeResultLines(
   return { totalLines, lines: bodyLines };
 }
 
+interface ReadRangeLoopGuardState {
+  totalLines?: number;
+  intervals: Array<{ startLine: number; endLine: number }>;
+}
+
+export interface ReadRangeLoopGuardOptions {
+  minTotalLines?: number;
+  coverageThreshold?: number;
+  restartFraction?: number;
+}
+
+export function createReadRangeLoopGuard(
+  options: ReadRangeLoopGuardOptions = {}
+): {
+  record: (
+    action: Extract<ArchitectAction, { action: "read_range" }>,
+    result: string
+  ) => void;
+  shouldInterrupt: (
+    action: Extract<ArchitectAction, { action: "read_range" }>
+  ) => string | null;
+} {
+  const minTotalLines = Math.max(1, Math.floor(options.minTotalLines ?? 800));
+  const coverageThreshold = Math.max(
+    0.1,
+    Math.min(1, options.coverageThreshold ?? 0.85)
+  );
+  const restartFraction = Math.max(
+    0.05,
+    Math.min(0.75, options.restartFraction ?? 0.3)
+  );
+  const states = new Map<string, ReadRangeLoopGuardState>();
+
+  const coveredLineCount = (intervals: ReadRangeLoopGuardState["intervals"]): number =>
+    intervals.reduce((sum, range) => sum + Math.max(0, range.endLine - range.startLine + 1), 0);
+
+  const mergeInterval = (
+    intervals: ReadRangeLoopGuardState["intervals"],
+    next: { startLine: number; endLine: number }
+  ): ReadRangeLoopGuardState["intervals"] => {
+    const sorted = [...intervals, next].sort((a, b) => a.startLine - b.startLine);
+    const merged: ReadRangeLoopGuardState["intervals"] = [];
+    for (const range of sorted) {
+      const prior = merged[merged.length - 1];
+      if (!prior || range.startLine > prior.endLine + 1) {
+        merged.push({ ...range });
+      } else {
+        prior.endLine = Math.max(prior.endLine, range.endLine);
+      }
+    }
+    return merged;
+  };
+
+  const parseDelivered = (
+    result: string
+  ): { startLine: number; endLine: number; totalLines?: number } | null => {
+    const header = result.split("\n", 1)[0] ?? "";
+    const match = /lines (\d+)-(\d+) of (\d+)/.exec(header);
+    if (!match) return null;
+    return {
+      startLine: Number(match[1]),
+      endLine: Number(match[2]),
+      totalLines: Number(match[3]),
+    };
+  };
+
+  return {
+    record(action, result) {
+      const requested = requestedRange(action);
+      const delivered = parseDelivered(result) ?? {
+        startLine: requested.startLine,
+        endLine: requested.endLine,
+        totalLines: undefined,
+      };
+      const startLine = Math.max(1, delivered.startLine);
+      const endLine = Math.max(startLine, delivered.endLine);
+      const existing = states.get(requested.path) ?? { intervals: [] };
+      states.set(requested.path, {
+        totalLines:
+          typeof delivered.totalLines === "number" && Number.isFinite(delivered.totalLines)
+            ? delivered.totalLines
+            : existing.totalLines,
+        intervals: mergeInterval(existing.intervals, { startLine, endLine }),
+      });
+    },
+    shouldInterrupt(action) {
+      const requested = requestedRange(action);
+      const state = states.get(requested.path);
+      const totalLines = state?.totalLines;
+      if (!state || !totalLines || totalLines < minTotalLines) return null;
+      const coverage = coveredLineCount(state.intervals) / totalLines;
+      if (coverage < coverageThreshold) return null;
+      const restartZoneEnd = Math.max(1, Math.floor(totalLines * restartFraction));
+      if (requested.startLine > restartZoneEnd) return null;
+      const percent = Math.round(coverage * 100);
+      return `read_range loop detected for ${requested.path}: already delivered ${percent}% of this ${totalLines}-line file, then the worker started paging from the beginning again. Stop rereading chunks; use code_intel/search to target symbols, emit a scoped patch, ask guidance, or finalize from existing context.`;
+    },
+  };
+}
+
 function buildSyntheticRangeReplay(input: {
   path: string;
   requested: { startLine: number; endLine: number };

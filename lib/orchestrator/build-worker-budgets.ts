@@ -10,10 +10,14 @@ export interface BuildWorkerBudget {
   badToolCalls: number;
 }
 
-export type BuildWorkerToolInstructionBudget = Pick<
-  BuildWorkerBudget,
-  "reads" | "rangeReads" | "searches" | "runs" | "fetches" | "patches" | "appends"
->;
+export interface BuildWorkerToolInstructionBudget
+  extends Pick<
+    BuildWorkerBudget,
+    "reads" | "rangeReads" | "searches" | "runs" | "fetches" | "patches" | "appends"
+  > {
+  codeIntelStatus?: string;
+  codeIntelCallsLeft?: number;
+}
 
 export interface BuildWorkerBudgetInput {
   difficulty?: number | null;

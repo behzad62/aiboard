@@ -1330,6 +1330,7 @@ const WORKER_NATIVE_ACTIONS = [
   "read",
   "read_range",
   "context_retrieve",
+  "code_intel",
   "guidance_request",
   "search",
   "patch",
@@ -2142,6 +2143,72 @@ export function isTaskWritePathAllowed(
       : normalizedPathSet(task.contextFiles ?? []);
   if (scope.size === 0) return false;
   return scope.has(path.toLowerCase());
+}
+
+export const MIN_WORKER_CONTEXT_FILE_CHARS = 6_000;
+export const MAX_WORKER_CONTEXT_FILE_CHARS = 160_000;
+export const WORKER_CONTEXT_TOKEN_TO_CHAR_RATIO = 3.2;
+
+export function buildWorkerContextFileCharLimit(input: {
+  contextPackTokens: number;
+  fileCount: number;
+}): number {
+  const files = Math.max(1, Math.floor(input.fileCount || 1));
+  const contextTokens =
+    typeof input.contextPackTokens === "number" && Number.isFinite(input.contextPackTokens)
+      ? Math.max(0, Math.floor(input.contextPackTokens))
+      : 0;
+  const perFile = Math.floor((contextTokens * WORKER_CONTEXT_TOKEN_TO_CHAR_RATIO) / files);
+  return Math.max(
+    MIN_WORKER_CONTEXT_FILE_CHARS,
+    Math.min(MAX_WORKER_CONTEXT_FILE_CHARS, perFile)
+  );
+}
+
+export const LARGE_EXISTING_FILE_REWRITE_CHARS = 20_000;
+export const SUSPICIOUS_REWRITE_SHRINK_RATIO = 0.5;
+
+export type ExistingFileRewriteRejectionCode =
+  | "large_existing_file_rewrite"
+  | "suspicious_rewrite";
+
+export interface ExistingFileRewriteEvaluation {
+  reject: boolean;
+  code?: ExistingFileRewriteRejectionCode;
+  message?: string;
+}
+
+export function evaluateExistingFileRewrite(input: {
+  path: string;
+  existingLength: number;
+  replacementLength: number;
+  writer?: "worker" | "architect" | string;
+  allowLargeRewrite?: boolean;
+}): ExistingFileRewriteEvaluation {
+  const existingLength = Math.max(0, Math.floor(input.existingLength || 0));
+  const replacementLength = Math.max(0, Math.floor(input.replacementLength || 0));
+  if (
+    existingLength > 2_000 &&
+    replacementLength < existingLength * SUSPICIOUS_REWRITE_SHRINK_RATIO
+  ) {
+    return {
+      reject: true,
+      code: "suspicious_rewrite",
+      message: `Rewrite of ${input.path} skipped as suspicious: the existing file is ${existingLength} chars but the replacement is only ${replacementLength}. Use SEARCH/REPLACE edit blocks for changes, or append chunks with reset=true only when an explicit full replacement is required.`,
+    };
+  }
+  if (
+    !input.allowLargeRewrite &&
+    existingLength >= LARGE_EXISTING_FILE_REWRITE_CHARS
+  ) {
+    const actor = input.writer === "architect" ? "Architect" : "worker";
+    return {
+      reject: true,
+      code: "large_existing_file_rewrite",
+      message: `Full-file rewrite of large existing file ${input.path} was rejected for ${actor}: the existing file is ${existingLength} chars and the replacement is ${replacementLength}. Use targeted SEARCH/REPLACE patch ops, append chunks with reset=true only when explicitly authorized, or split the task.`,
+    };
+  }
+  return { reject: false };
 }
 
 export interface TaskSplitResult {
@@ -3322,6 +3389,7 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
     action.action === "read" ||
     action.action === "read_range" ||
     action.action === "context_retrieve" ||
+    action.action === "code_intel" ||
     action.action === "guidance_request" ||
     action.action === "search" ||
     action.action === "patch" ||
@@ -4094,6 +4162,8 @@ export function buildWorkerToolInstructions(budget: {
   localServerUrls?: string[];
   shellHint?: string;
   allowSplit?: boolean;
+  codeIntelStatus?: string;
+  codeIntelCallsLeft?: number;
 }): string {
   const localServers = [...new Set(budget.localServerUrls ?? [])].filter(Boolean);
   return [
@@ -4107,6 +4177,7 @@ export function buildWorkerToolInstructions(budget: {
     budget.searches > 0
       ? `- Search project text: {"action":"search","query":"functionName"} (${budget.searches} left). After search results, read_range around the returned path:line matches, not from the start of the file.`
       : "",
+    codeIntelToolDoc(budget.codeIntelStatus, budget.codeIntelCallsLeft),
     budget.runs && budget.runs > 0
       ? `- Run project checks: {"action":"run","command":"npm test","reason":"verify the reproduced failure"} (${budget.runs} left). Use simple project-root commands only; no cd, pipes, redirects; no installs or file writes. Long-lived dev servers/watchers are allowed only for browser acceptance and must be background commands with one trailing & after a host-valid command. Reuse active local server URLs before starting another server; do not move to a new port unless the current server is demonstrably unusable.`
       : "",

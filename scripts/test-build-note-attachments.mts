@@ -6,6 +6,7 @@ import {
   type getDiscussionById,
   type getMessagesForDiscussion,
   type insertDiscussion,
+  type updateDiscussion,
   type upsertBuildCheckpoint,
   type __resetClientStoreForTests,
 } from "../lib/client/store";
@@ -20,6 +21,7 @@ const storeApi = require("../lib/client/store") as {
   insertDiscussion: typeof insertDiscussion;
   getDiscussionById: typeof getDiscussionById;
   getMessagesForDiscussion: typeof getMessagesForDiscussion;
+  updateDiscussion: typeof updateDiscussion;
   upsertBuildCheckpoint: typeof upsertBuildCheckpoint;
 };
 const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
@@ -160,6 +162,39 @@ check(
     resumedTask.assignTo === undefined &&
     resumedTask.retryAfterMs === undefined,
   resumedTask
+);
+
+storeApi.updateDiscussion(discussion.id, {
+  status: "stopped",
+  buildStopReason: "user",
+  buildStoppedAt: now,
+  updatedAt: now,
+});
+storeApi.upsertBuildCheckpoint({
+  ...blockedCheckpoint,
+  status: "running",
+  stopReason: null,
+  wave: 9,
+  tasks: [
+    {
+      id: "T2",
+      title: "Interrupted implementation",
+      instructions: "Continue after stop.",
+      contextFiles: ["src/game.js"],
+      outputPaths: ["src/game.js"],
+      status: "in_progress",
+    },
+  ],
+});
+clientApi.continueDiscussion(discussion.id);
+const normalizedStoppedCheckpoint = storeApi.getBuildCheckpoint(discussion.id);
+
+check(
+  "resume normalizes stale running checkpoint when discussion was stopped",
+  normalizedStoppedCheckpoint?.status === "stopped" &&
+    normalizedStoppedCheckpoint.stopReason === "user" &&
+    normalizedStoppedCheckpoint.tasks[0]?.status === "planned",
+  normalizedStoppedCheckpoint
 );
 
 if (failed === 0) {

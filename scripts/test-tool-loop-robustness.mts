@@ -10,6 +10,7 @@ import {
   type ConversationMessage,
 } from "../lib/orchestrator/build";
 import {
+  createReadRangeLoopGuard,
   packToolBatchResult,
   scheduleBuildToolActions,
 } from "../lib/orchestrator/build-tool-scheduler";
@@ -217,6 +218,50 @@ check(
     "scheduler explains skipped extra context_retrieve",
     /context_retrieve/i.test(scheduled.skipped[0]?.reason ?? ""),
     scheduled.skipped
+  );
+}
+
+// Sequential large-file paging is useful once, but when a worker has already
+// covered nearly the whole file and starts the same sweep again, replaying cached
+// chunks keeps the model busy without progress. Interrupt before replay.
+{
+  const guard = createReadRangeLoopGuard({
+    minTotalLines: 1_000,
+    coverageThreshold: 0.85,
+    restartFraction: 0.25,
+  });
+  const linesFor = (start: number, end: number): string =>
+    Array.from({ length: end - start + 1 }, (_, index) => `line ${start + index}`).join("\n");
+  const record = (startLine: number, endLine: number) => {
+    const action = range("src/game.js", startLine, endLine - startLine + 1);
+    const before = guard.shouldInterrupt(action);
+    check(`first pass ${startLine}-${endLine} is not interrupted`, before === null, before);
+    guard.record(
+      action,
+      `--- src/game.js lines ${startLine}-${endLine} of 1972 (partial range) ---\n${linesFor(startLine, endLine)}`
+    );
+  };
+  record(1, 200);
+  record(201, 400);
+  record(401, 600);
+  record(601, 800);
+  record(801, 1000);
+  record(1001, 1200);
+  record(1201, 1400);
+  record(1401, 1600);
+  record(1601, 1800);
+  record(1801, 1972);
+
+  const repeatedSweep = guard.shouldInterrupt(range("src/game.js", 200, 200));
+  check(
+    "second sweep over already-covered large file is interrupted",
+    repeatedSweep?.includes("already delivered") === true &&
+      repeatedSweep.includes("src/game.js"),
+    repeatedSweep
+  );
+  check(
+    "targeted reread far from the restart zone is still allowed",
+    guard.shouldInterrupt(range("src/game.js", 1400, 80)) === null
   );
 }
 
