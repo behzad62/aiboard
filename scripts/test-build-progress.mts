@@ -1,11 +1,14 @@
 /** Build progress tracking checks (run: npx tsx scripts/test-build-progress.mts) */
 import {
+  appendBuildEvidenceLedgerEntry,
   buildVerificationFailureTask,
   countTaskStatusTransitions,
   extractVerificationFailurePaths,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
   recordBuildFailure,
+  renderBuildEvidenceLedger,
+  shouldRefreshLiveCheckpoint,
   shouldStopForNoProgress,
 } from "../lib/orchestrator/build-progress";
 import type { BuildTask } from "../lib/orchestrator/build";
@@ -29,6 +32,79 @@ check("three same failures can stop", shouldStopForNoProgress({ repeatedFailureC
 check("four no-progress waves can stop", shouldStopForNoProgress({ repeatedFailureCount: 0, noProgressWaves: 4 }));
 check("file writes count as progress", hasMeaningfulBuildProgress({ filesWritten: 1, tasksAdvanced: 0, failureChanged: false, repoAdvanced: false }));
 check("changed failure counts as progress", hasMeaningfulBuildProgress({ filesWritten: 0, tasksAdvanced: 0, failureChanged: true, repoAdvanced: false }));
+check(
+  "live checkpoint refresh waits for task state and throttle interval",
+  !shouldRefreshLiveCheckpoint({
+    hasTasks: false,
+    lastSavedAtMs: 0,
+    nowMs: 1_000,
+    minIntervalMs: 2_000,
+  }) &&
+    shouldRefreshLiveCheckpoint({
+      hasTasks: true,
+      lastSavedAtMs: 0,
+      nowMs: 1_000,
+      minIntervalMs: 2_000,
+    }) &&
+    !shouldRefreshLiveCheckpoint({
+      hasTasks: true,
+      lastSavedAtMs: 1_000,
+      nowMs: 2_000,
+      minIntervalMs: 2_000,
+    }) &&
+    shouldRefreshLiveCheckpoint({
+      hasTasks: true,
+      lastSavedAtMs: 1_000,
+      nowMs: 3_000,
+      minIntervalMs: 2_000,
+    }) &&
+    shouldRefreshLiveCheckpoint({
+      hasTasks: true,
+      lastSavedAtMs: 2_900,
+      nowMs: 3_000,
+      minIntervalMs: 2_000,
+      force: true,
+    })
+);
+let evidenceLedger = appendBuildEvidenceLedgerEntry(
+  [],
+  {
+    at: "2026-07-08T12:00:00.000Z",
+    actor: "Architect",
+    label: "run: npm test",
+    summary: "PASS all tests",
+  },
+  2
+);
+evidenceLedger = appendBuildEvidenceLedgerEntry(
+  evidenceLedger,
+  {
+    at: "2026-07-08T12:01:00.000Z",
+    actor: "Reviewer",
+    label: "tool: browser_snapshot",
+    summary: "Snapshot showed the arena wall holes rendered.",
+  },
+  2
+);
+evidenceLedger = appendBuildEvidenceLedgerEntry(
+  evidenceLedger,
+  {
+    at: "2026-07-08T12:02:00.000Z",
+    actor: "Reviewer",
+    label: "context_retrieve ctx_123",
+    summary: "Retrieved prior verification output.",
+  },
+  2
+);
+const evidenceText = renderBuildEvidenceLedger(evidenceLedger);
+check(
+  "evidence ledger caps old entries and renders compact review context",
+  evidenceLedger.length === 2 &&
+    !evidenceText.includes("npm test") &&
+    evidenceText.includes("browser_snapshot") &&
+    evidenceText.includes("ctx_123"),
+  evidenceText
+);
 check(
   "net-same fixing task does not count as a status transition",
   countTaskStatusTransitions(

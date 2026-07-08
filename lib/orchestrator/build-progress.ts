@@ -70,6 +70,67 @@ export function shouldStopForNoProgress(input: {
   return input.repeatedFailureCount >= 3 || input.noProgressWaves >= 4;
 }
 
+export function shouldRefreshLiveCheckpoint(input: {
+  hasTasks: boolean;
+  lastSavedAtMs: number;
+  nowMs: number;
+  minIntervalMs: number;
+  force?: boolean;
+}): boolean {
+  if (!input.hasTasks) return false;
+  if (input.force) return true;
+  if (input.lastSavedAtMs <= 0) return true;
+  const interval = Math.max(0, input.minIntervalMs);
+  return input.nowMs - input.lastSavedAtMs >= interval;
+}
+
+export interface BuildEvidenceLedgerEntry {
+  at: string;
+  actor: string;
+  label: string;
+  summary: string;
+}
+
+function compactWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateEvidence(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 15)).trimEnd()} [truncated]`;
+}
+
+export function appendBuildEvidenceLedgerEntry(
+  entries: BuildEvidenceLedgerEntry[],
+  entry: BuildEvidenceLedgerEntry,
+  maxEntries = 24
+): BuildEvidenceLedgerEntry[] {
+  const normalized: BuildEvidenceLedgerEntry = {
+    at: entry.at,
+    actor: compactWhitespace(entry.actor).slice(0, 80) || "unknown",
+    label: compactWhitespace(entry.label).slice(0, 180) || "tool result",
+    summary: truncateEvidence(compactWhitespace(entry.summary), 700),
+  };
+  const next = [...entries, normalized];
+  return next.slice(-Math.max(1, maxEntries));
+}
+
+export function renderBuildEvidenceLedger(
+  entries: BuildEvidenceLedgerEntry[],
+  maxEntries = 8
+): string {
+  const visible = entries.slice(-Math.max(1, maxEntries));
+  if (visible.length === 0) return "";
+  return [
+    "Recent tool/verification evidence already available:",
+    ...visible.map(
+      (entry) =>
+        `- ${entry.at} | ${entry.actor} | ${entry.label}: ${entry.summary}`
+    ),
+    "Use this evidence before rerunning the same checks; rerun only when the files changed or the evidence is insufficient.",
+  ].join("\n");
+}
+
 function normalizePathForMatch(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }

@@ -60,12 +60,16 @@ import {
   ARCHITECT_SEARCHES_PER_PHASE,
 } from "@/lib/orchestrator/build-architect-budgets";
 import {
+  appendBuildEvidenceLedgerEntry,
+  renderBuildEvidenceLedger,
   buildVerificationFailureTask,
   countTaskStatusTransitions,
   fingerprintBuildFailure,
   hasMeaningfulBuildProgress,
   recordBuildFailure,
+  shouldRefreshLiveCheckpoint,
   shouldStopForNoProgress,
+  type BuildEvidenceLedgerEntry,
 } from "@/lib/orchestrator/build-progress";
 import {
   createReadRangeLoopGuard,
@@ -535,6 +539,7 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 // safe verification commands (read-only git / rg / npm scripts) per batch.
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
+const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -1464,6 +1469,10 @@ export async function runBuildDiscussion(
   // budget, time, blocker, or user can be resumed from where it left off. Repo
   // refs are read live (closure) so the checkpoint always reflects the latest
   // branch/PR/milestone/issue state.
+  let reviewEvidenceLedger: BuildEvidenceLedgerEntry[] = [
+    ...(existingCheckpoint?.evidenceLedger ?? []),
+  ].slice(-24);
+
   const saveCheckpoint = (input: {
     status: BuildCheckpoint["status"];
     stopReason?: BuildStopReason | null;
@@ -1502,12 +1511,18 @@ export async function runBuildDiscussion(
       commandProblems,
       stopReport: input.stopReport ?? null,
       toolReviewReport,
+      evidenceLedger: reviewEvidenceLedger,
       usageWindow,
       skillMode: buildSettings.skillMode,
       skillEvidence: skillEvidenceRecords,
       skillEvents: skillEventRecords,
     });
   };
+
+  let touchLiveCheckpoint: (options?: {
+    force?: boolean;
+    reason?: string;
+  }) => void = () => {};
 
   // Boundary guardrail check: when the active USD/time window is consumed, save a
   // resumable "stopped" checkpoint (when run state is available) and mark the run
@@ -5234,6 +5249,48 @@ export async function runBuildDiscussion(
     });
   };
 
+  const shouldRememberArchitectEvidence = (action: ArchitectAction): boolean => {
+    switch (action.action) {
+      case "run":
+      case "tool":
+      case "fetch":
+      case "context_retrieve":
+      case "code_intel":
+      case "repo_status":
+      case "repo_diff":
+      case "repo_init":
+      case "repo_branch_create":
+      case "repo_commit":
+      case "repo_issue_list":
+      case "repo_milestone_create":
+      case "repo_issue_create":
+      case "repo_issue_read":
+      case "repo_push":
+      case "repo_pr_create":
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const rememberArchitectEvidence = (
+    action: ArchitectAction,
+    label: string,
+    result: string,
+    actorLabel: string
+  ): void => {
+    if (!shouldRememberArchitectEvidence(action)) return;
+    reviewEvidenceLedger = appendBuildEvidenceLedgerEntry(
+      reviewEvidenceLedger,
+      {
+        at: new Date().toISOString(),
+        actor: actorLabel,
+        label,
+        summary: stripAnsi(result),
+      }
+    );
+  };
+
   // Dispatch a batch of Architect tool actions in one turn: the scheduler runs
   // safe reads/searches together, queues mutations in order, and keeps risky
   // commands single-step; duplicates are skipped (not re-dispatched); each served
@@ -5243,7 +5300,8 @@ export async function runBuildDiscussion(
     actions: ArchitectAction[],
     budgets: InspectionBudgets,
     appendContext: (text: string) => void,
-    tracker: ReturnType<typeof createToolCallTracker>
+    tracker: ReturnType<typeof createToolCallTracker>,
+    actorLabel = "Architect"
   ): Promise<{
     result: string;
     exhausted: boolean;
@@ -5282,6 +5340,12 @@ export async function runBuildDiscussion(
         result: dispatched.result,
         preserveFullResult: item.action.action === "context_retrieve",
       });
+      rememberArchitectEvidence(
+        item.action,
+        item.label,
+        dispatched.result,
+        actorLabel
+      );
       // Match the single-action loop: only record (for dedup) a tool that
       // actually delivered — a budget-exhausted result is not "already read".
       if (dispatched.exhausted) exhausted = true;
@@ -5293,11 +5357,12 @@ export async function runBuildDiscussion(
     }
     emit({
       type: "tool_batch",
-      actor: "Architect",
+      actor: actorLabel,
       served: served.length,
       skipped: skipped.length,
       summary: `${served.length} served, ${skipped.length} skipped`,
     });
+    touchLiveCheckpoint({ reason: `${actorLabel} tool batch` });
     return {
       result: packToolBatchResult({
         served,
@@ -5478,7 +5543,8 @@ export async function runBuildDiscussion(
         strict.actions,
         budgets,
         args.appendContext,
-        tracker
+        tracker,
+        actorLabel
       );
       emitInspectionBudget();
       if (batch.servedCount > 0 && batch.skippedCount > 0) {
@@ -5497,6 +5563,8 @@ export async function runBuildDiscussion(
         // Every requested action was a duplicate or unsafe/skipped — nothing
         // ran. Count it like a repeated lookup so a stuck loop still forces.
         duplicates += 1;
+        const evidenceNote =
+          terminal === "review" ? renderBuildEvidenceLedger(reviewEvidenceLedger) : "";
         emitArchitectLoopDiag(
           "model_failed",
           `Architect ${terminal} batch served nothing (all duplicate or skipped)`,
@@ -5504,16 +5572,18 @@ export async function runBuildDiscussion(
         );
         messages.push({
           role: "user",
-          content: `${warning}${batch.result}\n\n${DUPLICATE_TOOL_CALL_FEEDBACK}`,
+          content: `${warning}${batch.result}${evidenceNote ? `\n\n${evidenceNote}` : ""}\n\n${DUPLICATE_TOOL_CALL_FEEDBACK}`,
         });
         if (duplicates >= DUP_LIMIT) forceNow("repeated the same lookups");
         continue;
       }
       badTurns = 0;
+      const evidenceNote =
+        terminal === "review" ? renderBuildEvidenceLedger(reviewEvidenceLedger) : "";
       const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${expectedAction} JSON as soon as you have what you need.)`;
       messages.push({
         role: "user",
-        content: `${warning}${batch.result}${budgetNote}`,
+        content: `${warning}${batch.result}${evidenceNote ? `\n\n${evidenceNote}` : ""}${budgetNote}`,
       });
       if (batch.exhausted) {
         exhaustedStreak += 1;
@@ -6386,6 +6456,32 @@ export async function runBuildDiscussion(
     architectNotes,
     verifyCommand,
   });
+  let lastLiveCheckpointSaveMs = Date.now();
+  touchLiveCheckpoint = (options = {}) => {
+    const nowMs = Date.now();
+    if (
+      !shouldRefreshLiveCheckpoint({
+        hasTasks: tasks.length > 0,
+        lastSavedAtMs: lastLiveCheckpointSaveMs,
+        nowMs,
+        minIntervalMs: LIVE_CHECKPOINT_MIN_INTERVAL_MS,
+        force: options.force,
+      })
+    ) {
+      return;
+    }
+    lastLiveCheckpointSaveMs = nowMs;
+    saveCheckpoint({
+      status: "running",
+      wave: wavesRun,
+      tasks,
+      architectNotes,
+      verifyCommand,
+    });
+    updateDiscussion(discussion.id, {
+      updatedAt: new Date(nowMs).toISOString(),
+    });
+  };
 
   let done = false;
   // No-progress tracking: a wave that changes nothing increments noProgressWaves;
@@ -6497,6 +6593,10 @@ export async function runBuildDiscussion(
         worker: worker.displayName,
         cycle,
       });
+      touchLiveCheckpoint({
+        force: true,
+        reason: `${task.id} ${task.status}`,
+      });
       emit({
         type: "diagnostic",
         phase: "model_failed",
@@ -6534,6 +6634,7 @@ export async function runBuildDiscussion(
       const worker = workers[task.workerIndex!];
       const stat = scoreboard[task.workerIndex!];
       stat.attempts += 1;
+      task.status = "in_progress";
       // Fold a worker call's tokens into the scoreboard for the
       // tokens-per-approved-task KPI; shared by every streamConversation below.
       const attributeUsage = (u: { inputTokens: number; outputTokens: number }): void => {
@@ -6549,6 +6650,7 @@ export async function runBuildDiscussion(
         worker: worker.displayName,
         cycle,
       });
+      touchLiveCheckpoint({ force: true, reason: `${task.id} in_progress` });
 
       const workerContextBudget = createBuildPromptBudget({
         role: "worker",
@@ -7072,6 +7174,10 @@ export async function runBuildDiscussion(
                   });
                 }
               }
+              touchLiveCheckpoint({
+                force: true,
+                reason: `${task.id} split into subtasks`,
+              });
               emit({
                 type: "diagnostic",
                 phase: "round_preparing",
@@ -7600,6 +7706,7 @@ export async function runBuildDiscussion(
           worker: worker.displayName,
           cycle,
         });
+        touchLiveCheckpoint({ force: true, reason: `${task.id} review` });
       } catch (err) {
         if (isAbortError(err)) throw err;
         const message = err instanceof Error ? err.message : "error";
@@ -7630,6 +7737,7 @@ export async function runBuildDiscussion(
             worker: worker.displayName,
             cycle,
           });
+          touchLiveCheckpoint({ force: true, reason: `${task.id} review` });
           emit({
             type: "diagnostic",
             phase: "model_failed",
@@ -7907,6 +8015,16 @@ export async function runBuildDiscussion(
     // Skipped for certified benchmark runs (repo side effects are policy-blocked
     // there) and when the fetch fails — a diff failure NEVER fails the review.
     const reviewContextPacks = [...reviewImpactPacks];
+    const reviewEvidenceLedgerText = renderBuildEvidenceLedger(reviewEvidenceLedger);
+    if (reviewEvidenceLedgerText) {
+      reviewContextPacks.push({
+        id: `review-evidence-ledger-wave-${cycle}`,
+        kind: "diagnostic" as const,
+        title: "Recent tool and verification evidence",
+        content: reviewEvidenceLedgerText,
+        priority: 158,
+      });
+    }
     let hasReviewDiffDigest = false;
     if (runner && repoIsGit && reviewChangedFiles.length > 0 && !benchmark) {
       try {
@@ -8115,6 +8233,7 @@ export async function runBuildDiscussion(
         });
       }
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
+      touchLiveCheckpoint({ force: true, reason: `${task.id} fixing` });
     };
     const skillEvidenceGateFix = (fixInstructions: string): string =>
       `FIX (from skill evidence gate):\n${fixInstructions}`;
@@ -8155,6 +8274,7 @@ export async function runBuildDiscussion(
         task.status = "done";
         task.avoidWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
+        touchLiveCheckpoint({ force: true, reason: `${task.id} done` });
       } else {
         if (verdictStat) {
           verdictStat.fixes += 1;
@@ -8191,6 +8311,7 @@ export async function runBuildDiscussion(
           )
         );
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
+        touchLiveCheckpoint({ force: true, reason: `${task.id} fixing` });
       }
     }
     // Tasks the review didn't mention count as approved only when the review
@@ -8228,6 +8349,7 @@ export async function runBuildDiscussion(
         task.status = "done";
         task.avoidWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
+        touchLiveCheckpoint({ force: true, reason: `${task.id} done` });
       }
     }
 
@@ -8267,6 +8389,7 @@ export async function runBuildDiscussion(
       const task = toTask(raw, tasks.length);
       tasks.push(task);
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "planned", cycle });
+      touchLiveCheckpoint({ force: true, reason: `${task.id} planned` });
     }
 
     let verifyCommandChangedThisWave = false;
@@ -8336,6 +8459,10 @@ export async function runBuildDiscussion(
         title: verificationFixTask.title,
         status: "planned",
         cycle,
+      });
+      touchLiveCheckpoint({
+        force: true,
+        reason: `${verificationFixTask.id} planned`,
       });
       emit({
         type: "diagnostic",

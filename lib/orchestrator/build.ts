@@ -2772,17 +2772,32 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
     const parsed = JSON.parse(candidate) as Partial<ArchitectAction>;
     if (parsed && typeof parsed === "object" && "action" in parsed) {
       const actionName = (parsed as { action?: unknown }).action;
+      const cleanReadPaths = (value: unknown): string[] => {
+        const rawPaths = Array.isArray(value)
+          ? value
+          : typeof value === "string"
+            ? [value]
+            : [];
+        return rawPaths
+          .filter((path): path is string => typeof path === "string")
+          .map((path) => path.trim())
+          .filter(Boolean);
+      };
       if (actionName === "read_file") {
         const readFile = parsed as { path?: unknown; paths?: unknown };
-        const paths = Array.isArray(readFile.paths)
-          ? readFile.paths.filter((p): p is string => typeof p === "string")
-          : typeof readFile.path === "string"
-            ? [readFile.path]
-            : [];
+        const paths = cleanReadPaths(readFile.paths).length > 0
+          ? cleanReadPaths(readFile.paths)
+          : cleanReadPaths(readFile.path);
         if (paths.length > 0) return { action: "read", paths };
       }
-      if (parsed.action === "read" && Array.isArray((parsed as ReadAction).paths)) {
-        return parsed as ReadAction;
+      if (parsed.action === "read") {
+        const paths = cleanReadPaths((parsed as { paths?: unknown }).paths);
+        if (paths.length > 0) {
+          return {
+            ...(parsed as ReadAction),
+            paths,
+          };
+        }
       }
       if (
         parsed.action === "read_range" &&
