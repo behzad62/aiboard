@@ -262,6 +262,40 @@ check(
 );
 check("quality gate resume leaves unrelated done tasks alone", untouchedT2?.status === "done", qualityGateReopened);
 
+const architectPolicyQualityGateReopened = reopenBuildTasksForQualityGate(
+  [
+    {
+      id: "T2",
+      title: "Audit posture behavior",
+      instructions: "Inspect current posture behavior and report evidence.",
+      contextFiles: ["src/game.js"],
+      outputPaths: ["src/game.js"],
+      status: "done",
+      kind: "audit",
+      completionMode: "either",
+      verificationPolicy: "architect",
+    },
+  ],
+  {
+    skillEvidence: [
+      {
+        taskId: "T2",
+        skillId: "superpowers:strict-test-driven-development",
+        actor: "worker-b",
+        required: ["RED"],
+        reportedEvidence: ["Architect review accepted the substantive audit evidence."],
+        missingEvidence: ["RED test/check failure before implementation"],
+        violations: [],
+      },
+    ],
+  }
+);
+check(
+  "quality gate resume does not reopen architect-policy tasks for advisory skill evidence",
+  architectPolicyQualityGateReopened.find((task) => task.id === "T2")?.status === "done",
+  architectPolicyQualityGateReopened
+);
+
 const requestGateReopened = reopenBuildTasksForQualityGate(
   [
     {

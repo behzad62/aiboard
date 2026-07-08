@@ -124,6 +124,55 @@ check(
   missingSkillEvidence
 );
 
+const architectPolicySkillEvidence = evaluateBuildQualityGate({
+  githubWorkflow: true,
+  expectedPr: true,
+  repoStatus: cleanStatus,
+  repoPrUrl: "https://github.com/example/repo/pull/1",
+  repoPushedBranch: "codex/example",
+  requiredChecks: [
+    { name: "TypeScript", command: "npx tsc --noEmit", status: "passed" },
+  ],
+  tasks: [
+    {
+      id: "T2",
+      title: "Audit posture behavior",
+      instructions: "Inspect current posture behavior and report evidence.",
+      contextFiles: ["src/game.js"],
+      outputPaths: ["src/game.js"],
+      status: "done",
+      kind: "audit",
+      completionMode: "either",
+      verificationPolicy: "architect",
+    },
+  ],
+  skillEvidence: [
+    {
+      taskId: "T2",
+      skillId: "superpowers:strict-test-driven-development",
+      actor: "worker",
+      required: ["RED test/check failure before implementation"],
+      reportedEvidence: ["Architect review evidence is enough for this audit task."],
+      missingEvidence: ["RED test/check failure before implementation"],
+      violations: [
+        "Missing required evidence for superpowers:strict-test-driven-development: RED test/check failure before implementation",
+      ],
+    },
+  ],
+});
+
+check(
+  "architect-policy skill evidence gaps do not block final quality gate",
+  architectPolicySkillEvidence.status === "ready" &&
+    architectPolicySkillEvidence.blockers.every((b) => b.code !== "skill_evidence_missing"),
+  architectPolicySkillEvidence
+);
+check(
+  "architect-policy skill evidence gaps remain visible as warnings",
+  architectPolicySkillEvidence.warnings.some((b) => b.code === "skill_evidence_missing" && b.message.includes("T2")),
+  architectPolicySkillEvidence
+);
+
 const missingBrowserAcceptance = evaluateBuildQualityGate({
   githubWorkflow: false,
   expectedPr: false,

@@ -1,5 +1,6 @@
 /** Build task contract checks (run: npx tsx scripts/test-build-task-contracts.mts) */
 import {
+  buildReviewSkillEvidenceFixInstructions,
   canWorkerOutputAdvanceToReview,
   normalizeBuildTaskContract,
   taskRequiresToolVerification,
@@ -137,6 +138,26 @@ check(
   !toolMissingSkillEvidenceDecision.ok &&
     toolMissingSkillEvidenceDecision.failureDetail === "required evidence is missing",
   toolMissingSkillEvidenceDecision
+);
+
+const architectReviewEvidenceFix = buildReviewSkillEvidenceFixInstructions({
+  task: architectVerifiedMutation,
+  evidence: missingStyleEvidence,
+});
+check(
+  "Architect-approved task treats parsed skill gaps as advisory in review gate",
+  architectReviewEvidenceFix === "",
+  architectReviewEvidenceFix
+);
+
+const toolReviewEvidenceFix = buildReviewSkillEvidenceFixInstructions({
+  task: mutationTask,
+  evidence: missingStyleEvidence,
+});
+check(
+  "tool-verified task still receives review fix instructions for parsed skill gaps",
+  /required skill evidence/i.test(toolReviewEvidenceFix),
+  toolReviewEvidenceFix
 );
 
 const blockingPlan = validateBuildPlanForDispatch([

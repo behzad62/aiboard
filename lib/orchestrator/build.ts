@@ -238,6 +238,17 @@ export function taskRequiresToolVerification(
   return task.verificationPolicy === "tool";
 }
 
+export function buildReviewSkillEvidenceFixInstructions(input: {
+  task: BuildTask;
+  evidence: SkillEvidence[];
+  scopedVerificationGap?: boolean;
+}): string {
+  if (input.scopedVerificationGap) return "";
+  const task = normalizeBuildTaskContract(input.task);
+  if (!taskRequiresToolVerification(task)) return "";
+  return buildSkillEvidenceFixInstructions(input.evidence, task.id);
+}
+
 function hasSubstantiveEvidenceText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 40) return false;
@@ -513,10 +524,19 @@ export function reopenBuildTasksForQualityGate(
   input: BuildQualityGateReopenInput
 ): BuildTask[] {
   const blockingEvidence = getBlockingSkillEvidence(input.skillEvidence ?? []);
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
   const targetIds = new Set(
     blockingEvidence
       .map((record) => record.taskId)
-      .filter((taskId): taskId is string => !!taskId?.trim())
+      .filter((taskId): taskId is string => {
+        if (!taskId?.trim()) return false;
+        const task = taskById.get(taskId);
+        if (!task) return true;
+        return !!buildReviewSkillEvidenceFixInstructions({
+          task,
+          evidence: blockingEvidence,
+        });
+      })
   );
 
   if (
@@ -4246,7 +4266,7 @@ export const DUPLICATE_TOOL_CALL_FEEDBACK =
 export const FORCED_REVIEW_INSTRUCTION = [
   "STOP USING TOOLS. You have used your inspection budget for this review (or repeated the same lookups). Any further read/search/command requests will be IGNORED.",
   "Using ONLY the file contents, change digests, and tool results already in this conversation, produce your final review now as exactly ONE fenced ```json block matching the review schema.",
-  "For every reviewed task, return both `specVerdict` and `qualityVerdict`. If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence, misses the current phase spec, has code-quality problems, or is a web app without browser acceptance evidence, set the relevant gate to `fix` with concrete instructions. Also return requestFulfillment and do NOT set done=true unless requestFulfillment.reviewed=true and requestFulfillment.satisfied=true. Approve only tasks whose spec and quality gates are demonstrably complete.",
+  "For every reviewed task, return both `specVerdict` and `qualityVerdict`. If a task is not explicitly verified, has unresolved write/tool issues, is missing required skill evidence for a tool-verification task, misses the current phase spec, has code-quality problems, or is a web app without browser acceptance evidence, set the relevant gate to `fix` with concrete instructions. For architect-reviewed tasks, treat skill evidence gaps as review context and approve when the substantive evidence is sufficient. Also return requestFulfillment and do NOT set done=true unless requestFulfillment.reviewed=true and requestFulfillment.satisfied=true. Approve only tasks whose spec and quality gates are demonstrably complete.",
 ].join("\n");
 
 export const FORCED_PLAN_INSTRUCTION = [
@@ -5249,7 +5269,7 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
       : "",
     !hasAssembledContext ? input.executedText : "",
     !hasAssembledContext && input.skillEvidenceText?.trim()
-      ? `\n${input.skillEvidenceText}\nMissing required skill evidence is a blocking review issue: return a fix verdict unless the task is clearly exempt and the exemption evidence is present.`
+      ? `\n${input.skillEvidenceText}\nSkill evidence gaps are blocking only for tool-verification tasks. For architect-reviewed tasks, treat those gaps as review context and approve when the substantive task evidence is sufficient.`
       : "",
     !hasAssembledContext && input.outstandingTasks?.trim()
       ? `\nRequired tasks still not done:\n${input.outstandingTasks}\nDo NOT set "done": true while any required task is listed here. Approve completed outstanding tasks, send unfinished ones back with precise fix instructions, or create replacement tasks that explicitly cover the missing work.`

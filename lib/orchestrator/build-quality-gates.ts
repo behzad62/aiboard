@@ -3,6 +3,11 @@ import {
   getBlockingSkillEvidence,
 } from "@/lib/orchestrator/build-evidence-gates";
 import type { SkillEvidence } from "@/lib/skills/types";
+import {
+  normalizeBuildTaskContract,
+  taskRequiresToolVerification,
+  type BuildTask,
+} from "./build";
 
 export type BuildQualityCheckStatus = "passed" | "failed" | "missing";
 export type BuildQualityGateStatus = "ready" | "blocked";
@@ -54,6 +59,7 @@ export interface BuildQualityGateInput {
   repoPushedBranch?: string | null;
   requiredChecks: BuildQualityRequiredCheck[];
   issueNumbers?: number[];
+  tasks?: BuildTask[];
   skillEvidence?: SkillEvidence[];
   browserAcceptance?: {
     required: boolean;
@@ -143,6 +149,17 @@ function dirtyFiles(status: BuildQualityGateRepoStatus): string[] {
     ...status.untracked,
     ...status.conflicted,
   ];
+}
+
+function skillEvidenceRequiresHardGate(
+  record: SkillEvidence,
+  tasks: BuildTask[] | undefined
+): boolean {
+  if (!tasks) return true;
+  if (!record.taskId) return true;
+  const task = tasks.find((candidate) => candidate.id === record.taskId);
+  if (!task) return true;
+  return taskRequiresToolVerification(normalizeBuildTaskContract(task));
 }
 
 export function evaluateBuildQualityGate(
@@ -237,9 +254,15 @@ export function evaluateBuildQualityGate(
   }
 
   const blockingEvidence = getBlockingSkillEvidence(input.skillEvidence ?? []);
-  if (blockingEvidence.length > 0) {
+  const hardBlockingEvidence = blockingEvidence.filter((record) =>
+    skillEvidenceRequiresHardGate(record, input.tasks)
+  );
+  const advisoryEvidence = blockingEvidence.filter(
+    (record) => !skillEvidenceRequiresHardGate(record, input.tasks)
+  );
+  if (hardBlockingEvidence.length > 0) {
     const taskIds = [
-      ...new Set(blockingEvidence.map((record) => record.taskId).filter(Boolean)),
+      ...new Set(hardBlockingEvidence.map((record) => record.taskId).filter(Boolean)),
     ];
     blockers.push({
       code: "skill_evidence_missing",
@@ -247,7 +270,20 @@ export function evaluateBuildQualityGate(
         taskIds.length > 0
           ? `Required skill evidence is missing for ${taskIds.join(", ")}.`
           : "Required skill evidence is missing.",
-      details: formatBlockingSkillEvidence(blockingEvidence),
+      details: formatBlockingSkillEvidence(hardBlockingEvidence),
+    });
+  }
+  if (advisoryEvidence.length > 0) {
+    const taskIds = [
+      ...new Set(advisoryEvidence.map((record) => record.taskId).filter(Boolean)),
+    ];
+    warnings.push({
+      code: "skill_evidence_missing",
+      message:
+        taskIds.length > 0
+          ? `Skill evidence gaps were recorded for architect-reviewed task(s) ${taskIds.join(", ")}.`
+          : "Skill evidence gaps were recorded for architect-reviewed task(s).",
+      details: formatBlockingSkillEvidence(advisoryEvidence),
     });
   }
 

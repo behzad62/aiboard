@@ -81,7 +81,6 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
-  buildSkillEvidenceFixInstructions,
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   isScopedVerificationGapReport,
@@ -186,6 +185,7 @@ import {
   isBuildTaskDependencySatisfied,
   isArchitectTerminalActionForExpected,
   isReviewResultApproved,
+  buildReviewSkillEvidenceFixInstructions,
   evaluateExistingFileRewrite,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
@@ -8341,9 +8341,11 @@ export async function runBuildDiscussion(
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (isReviewResultApproved(result)) {
-        const evidenceFix = scopedVerificationGapTaskIds.has(task.id)
-          ? ""
-          : buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        const evidenceFix = buildReviewSkillEvidenceFixInstructions({
+          task,
+          evidence: waveSkillEvidence,
+          scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
+        });
         if (evidenceFix) {
           sendTaskBackForFix(
             task,
@@ -8403,9 +8405,11 @@ export async function runBuildDiscussion(
     // was explicit and no deterministic gate found a problem.
     for (const { task } of executed) {
       if (task.status === "review") {
-        const evidenceFix = scopedVerificationGapTaskIds.has(task.id)
-          ? ""
-          : buildSkillEvidenceFixInstructions(waveSkillEvidence, task.id);
+        const evidenceFix = buildReviewSkillEvidenceFixInstructions({
+          task,
+          evidence: waveSkillEvidence,
+          scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
+        });
         if (evidenceFix) {
           sendTaskBackForFix(
             task,
@@ -8809,6 +8813,7 @@ export async function runBuildDiscussion(
       repoPushedBranch,
       requiredChecks: finalChecks,
       issueNumbers,
+      tasks,
       skillEvidence: skillEvidenceRecords,
       browserAcceptance: {
         required: browserAcceptanceRequired,
