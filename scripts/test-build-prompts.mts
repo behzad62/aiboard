@@ -415,6 +415,13 @@ check(
   }),
 );
 check(
+  "worker tool instructions clarify AIBoard JSON tools are available in-band",
+  /AIBoard JSON tool actions/i.test(workerTools) &&
+    /do not depend on provider-native tool access/i.test(workerTools) &&
+    /emit the JSON action/i.test(workerTools),
+  workerTools
+);
+check(
   "worker tool instructions constrain shell checks to simple project-root commands",
   /project-root commands only/i.test(workerTools) &&
     /no cd, pipes, redirects/i.test(workerTools) &&

@@ -279,7 +279,7 @@ function hasNoopRepoEvidenceText(
       normalized
     );
   const hasCommitEvidence =
-    /\brepo_commit\b[\s\S]{0,320}\b(not executed|not run|skipped|no commit|did not run)\b/.test(
+    /\brepo_commit\b[\s\S]{0,320}\b(not executed|not run|not performed|skipped|no commit|did not run)\b/.test(
       normalized
     );
   const explainsNoCommit =
@@ -4725,6 +4725,7 @@ export function buildWorkerToolInstructions(budget: {
   const localServers = [...new Set(budget.localServerUrls ?? [])].filter(Boolean);
   return [
     "TOOLS - before your final answer, you may inspect, verify, or patch by responding with one or more JSON tool actions (and nothing else). The engine runs safe reads/searches together, applies writes in order, keeps MCP calls approval-gated, and reports which were served or skipped:",
+    "These are AIBoard JSON tool actions available in-band in this conversation; they do not depend on provider-native tool access. If your task needs one of the listed checks, emit the JSON action and wait for the engine result.",
     budget.reads > 0
       ? `- Read whole small files: {"action":"read","paths":["src/file.ts"]} (${budget.reads} left).`
       : "",

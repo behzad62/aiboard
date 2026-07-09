@@ -209,6 +209,27 @@ check(
   repoNoopReviewEvidenceFix
 );
 
+const repoNoopLiveOutput = [
+  "The repo is clean and the scoped diff for `src/game.js` and `README.md` is empty. There is nothing to commit for T10.",
+  "",
+  "Per the implementation contract and the Architect's note, I will not create a dummy commit.",
+  "",
+  "## Required evidence",
+  "- typed `repo_status` before commit: branch `codex/create-a-local-git-repo-in-the-folder-cr`, working tree clean, no upstream.",
+  "- typed `repo_diff` scoped to `src/game.js` and `README.md`: no changes.",
+  "- typed `repo_commit` evidence: not performed - there is nothing to commit and the Architect's note forbids a dummy commit.",
+].join("\n");
+const repoNoopLiveReviewEvidenceFix = buildReviewSkillEvidenceFixInstructions({
+  task: repoNoopTask,
+  evidence: missingStyleEvidence.map((record) => ({ ...record, taskId: "T10" })),
+  workerOutput: repoNoopLiveOutput,
+});
+check(
+  "no-op repo evidence wording from live workers does not receive skill-evidence fix instructions",
+  repoNoopLiveReviewEvidenceFix === "",
+  repoNoopLiveReviewEvidenceFix
+);
+
 const blockingPlan = validateBuildPlanForDispatch([
   baseTask({
     id: "T1",
