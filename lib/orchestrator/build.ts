@@ -1637,6 +1637,17 @@ const WORKER_NATIVE_ACTIONS = [
   "run",
   "tool",
   "fetch",
+  "repo_status",
+  "repo_diff",
+  "repo_init",
+  "repo_branch_create",
+  "repo_commit",
+  "repo_issue_list",
+  "repo_milestone_create",
+  "repo_issue_create",
+  "repo_issue_read",
+  "repo_push",
+  "repo_pr_create",
   "split_task",
 ] as const;
 
@@ -3727,7 +3738,18 @@ export function isWorkerBuildToolAction(action: ArchitectAction): boolean {
     action.action === "append" ||
     action.action === "run" ||
     action.action === "tool" ||
-    action.action === "fetch"
+    action.action === "fetch" ||
+    action.action === "repo_status" ||
+    action.action === "repo_diff" ||
+    action.action === "repo_init" ||
+    action.action === "repo_branch_create" ||
+    action.action === "repo_commit" ||
+    action.action === "repo_issue_list" ||
+    action.action === "repo_milestone_create" ||
+    action.action === "repo_issue_create" ||
+    action.action === "repo_issue_read" ||
+    action.action === "repo_push" ||
+    action.action === "repo_pr_create"
   );
 }
 
@@ -4522,6 +4544,9 @@ export function buildWorkerToolInstructions(budget: {
   localServerUrls?: string[];
   shellHint?: string;
   allowSplit?: boolean;
+  repoWorkflow?: boolean;
+  githubCli?: { available: boolean; authenticated: boolean };
+  githubWorkflow?: boolean;
   codeIntelStatus?: string;
   codeIntelCallsLeft?: number;
 }): string {
@@ -4546,6 +4571,16 @@ export function buildWorkerToolInstructions(budget: {
       : "",
     budget.fetches && budget.fetches > 0
       ? `- Fetch a PUBLIC docs/API-reference URL through the user's runner: {"action":"fetch","url":"https://example.com/docs","reason":"why"} (${budget.fetches} left). Known URLs only — this is not a search engine; local/private addresses are refused. The user may deny a fetch — respect that and continue.`
+      : "",
+    budget.repoWorkflow
+      ? repoToolDoc(
+          budget.repoWorkflow,
+          budget.githubCli,
+          budget.githubWorkflow
+        ).replace(
+          "TOOL — repo (Git):",
+          "TOOL — repo (Git), only when your assigned task explicitly asks for repository status/commit/push/PR:"
+        )
       : "",
     `- Retrieve compacted old context by ref: {"action":"context_retrieve","ref":"ctx_...","maxTokens":${CONTEXT_RETRIEVE_DEFAULT_TOKENS},"offsetChars":0,"reason":"why"} when a prior digest includes a ctx_ ref. This returns exact stored text from that character offset up to the cap; use read/read_range for current source files.`,
     '- Ask the Architect for task-local guidance: {"action":"guidance_request","mode":"blocking","question":"specific question","reason":"why Architect guidance is needed"} or mode "async". Use blocking when you cannot safely proceed without the answer. Use async when you can continue and want the answer on a later same-task iteration. Emit guidance_request by itself, with no other actions or prose.',

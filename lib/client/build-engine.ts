@@ -6710,6 +6710,9 @@ export async function runBuildDiscussion(
         localServerUrls,
         shellHint,
         allowSplit,
+        repoWorkflow: !!runner,
+        githubCli: githubCli ?? undefined,
+        githubWorkflow: githubWorkflow && !!runner,
       });
 
     const runWorkerTask = async (task: BuildTask): Promise<void> => {
@@ -6894,6 +6897,84 @@ export async function runBuildDiscussion(
             skipped.push({ label, reason });
             terminalSkippedReasons.push(`${label}: ${reason}`);
           };
+          const executeWorkerRepoAction = async (
+            action: ArchitectAction
+          ): Promise<{
+            kind: ContextBlobKind;
+            title: string;
+            result: string;
+          } | null> => {
+            switch (action.action) {
+              case "repo_status":
+                return {
+                  kind: "text",
+                  title: "Repo status",
+                  result: await executeRepoStatus(),
+                };
+              case "repo_diff":
+                return {
+                  kind: "repo_diff",
+                  title: "Repo diff",
+                  result: await executeRepoDiff(action),
+                };
+              case "repo_init":
+                return {
+                  kind: "command_output",
+                  title: "Repo init",
+                  result: await executeRepoInit(action),
+                };
+              case "repo_branch_create":
+                return {
+                  kind: "command_output",
+                  title: `Repo branch ${action.name}`,
+                  result: await executeRepoBranchCreate(action),
+                };
+              case "repo_commit":
+                return {
+                  kind: "command_output",
+                  title: `Repo commit ${action.message.split("\n")[0]}`,
+                  result: await executeRepoCommit(action),
+                };
+              case "repo_issue_list":
+                return {
+                  kind: "text",
+                  title: `Repo issues ${action.repo}`,
+                  result: await executeRepoIssueList(action),
+                };
+              case "repo_milestone_create":
+                return {
+                  kind: "command_output",
+                  title: `Repo milestone ${action.title}`,
+                  result: await executeRepoMilestoneCreate(action),
+                };
+              case "repo_issue_create":
+                return {
+                  kind: "command_output",
+                  title: `Repo issue ${action.title}`,
+                  result: await executeRepoIssueCreate(action),
+                };
+              case "repo_issue_read":
+                return {
+                  kind: "text",
+                  title: `Repo issue ${action.repo}#${action.issue}`,
+                  result: await executeRepoIssueRead(action),
+                };
+              case "repo_push":
+                return {
+                  kind: "command_output",
+                  title: `Repo push ${action.branch}`,
+                  result: await executeRepoPush(action),
+                };
+              case "repo_pr_create":
+                return {
+                  kind: "command_output",
+                  title: `Repo PR ${action.title}`,
+                  result: await executeRepoPrCreate(action),
+                };
+              default:
+                return null;
+            }
+          };
           for (const item of schedule.served) {
             const action = item.action;
             if (!isWorkerBuildToolAction(action)) {
@@ -6918,6 +6999,18 @@ export async function runBuildDiscussion(
                 continue;
               }
               skipped.push({ label: item.label, reason: "duplicate tool request (already delivered)" });
+              continue;
+            }
+            const repoResult = await executeWorkerRepoAction(action);
+            if (repoResult) {
+              const packedResult = storeLongToolResult(
+                repoResult.kind,
+                repoResult.title,
+                repoResult.result
+              );
+              recordToolCall(tracker, action);
+              replayCache.remember(action, packedResult);
+              served.push({ label: item.label, result: packedResult });
               continue;
             }
             if (action.action === "context_retrieve") {

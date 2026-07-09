@@ -1,6 +1,7 @@
 /* Provider-native Build tool calls (run: npx tsx scripts/test-provider-native-tools.mts) */
 import {
   buildNativeBuildToolDefinitions,
+  isWorkerBuildToolAction,
   mergeNativeToolActionContent,
   nativeToolCallsToActionText,
 } from "../lib/orchestrator/build";
@@ -49,12 +50,24 @@ check(
 );
 
 check(
-  "worker native tools are scoped to worker-safe actions",
+  "worker native tools include implementation and typed repo workflow actions",
   names(workerTools).includes("read") &&
     names(workerTools).includes("patch") &&
-    !names(workerTools).includes("repo_commit") &&
+    names(workerTools).includes("repo_status") &&
+    names(workerTools).includes("repo_diff") &&
+    names(workerTools).includes("repo_commit") &&
+    names(workerTools).includes("repo_push") &&
+    names(workerTools).includes("repo_pr_create") &&
     !names(workerTools).includes("plan"),
   names(workerTools)
+);
+
+check(
+  "worker action guard accepts typed repo actions but not Architect terminal actions",
+  isWorkerBuildToolAction({ action: "repo_commit", message: "chore: update repo" }) &&
+    isWorkerBuildToolAction({ action: "repo_status" }) &&
+    !isWorkerBuildToolAction({ action: "plan", tasks: [] }),
+  null
 );
 
 check(

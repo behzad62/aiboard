@@ -295,6 +295,9 @@ const workerTools = buildWorkerToolInstructions({
   localServerUrls: ["http://localhost:3001"],
   shellHint:
     "SHELL: commands run on Windows via cmd.exe - use `py -3 -m http.server 8000`; prefer http://127.0.0.1:<port> for browser navigation.",
+  repoWorkflow: true,
+  githubCli: { available: true, authenticated: true },
+  githubWorkflow: true,
   codeIntelStatus: "Native code intelligence ready.",
   codeIntelCallsLeft: 2,
 });
@@ -317,6 +320,15 @@ check(
   workerTools.includes('"action":"code_intel"') &&
     workerTools.includes("search_symbols") &&
     /before broad file-by-file exploration/i.test(workerTools),
+  workerTools
+);
+check(
+  "worker tool instructions advertise typed repo workflow actions",
+  workerTools.includes('"action":"repo_status"') &&
+    workerTools.includes('"action":"repo_commit"') &&
+    workerTools.includes('"action":"repo_push"') &&
+    workerTools.includes('"action":"repo_pr_create"') &&
+    /only when your assigned task explicitly asks/i.test(workerTools),
   workerTools
 );
 check(
