@@ -30,6 +30,7 @@ const markup = renderToStaticMarkup(
 assert.match(markup, /<details class="[^"]*mt-4/);
 assert.doesNotMatch(markup, /<details[^>]* open/);
 assert.match(markup, /<summary[^>]*>[\s\S]*Commands run \(1\)/);
+assert.match(markup, /Click to expand/);
 assert.match(markup, /npm run lint/);
 
 console.log("PASS build task board UI");

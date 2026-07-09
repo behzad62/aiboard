@@ -225,6 +225,7 @@ export function createAccountRunnerProvider(
                 credentialMode === "provider-api-key-with-runner-token"
               )
             ),
+            signal: params.signal,
           }
         );
         if (

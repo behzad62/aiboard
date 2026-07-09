@@ -78,6 +78,8 @@ export interface ChatParams {
   baseURL?: string;
   /** Local provider-runner token, when separate from the provider API key. */
   runnerToken?: string;
+  /** Optional cancellation signal for UI validation, games, and benchmark runs. */
+  signal?: AbortSignal;
   /** Build-mode context metadata resolved from the static registry + overrides. */
   contextProfile?: ModelContextProfile;
 }

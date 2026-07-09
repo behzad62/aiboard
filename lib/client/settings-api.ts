@@ -41,7 +41,9 @@ import {
   getProvider,
   listFoundryModelInfos,
   listNvidiaModelInfos,
+  resolveModelCapabilities,
 } from "./providers";
+import { formatModelId } from "@/lib/providers/base";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -181,6 +183,7 @@ const TEXT_PROMPT =
 // reasoning AND emit an answer. Cloud models bill per token generated, so a high
 // cap costs nothing for their short replies.
 const TEST_MAX_TOKENS = 4096;
+const DEFAULT_MODEL_TEST_TIMEOUT_MS = 30_000;
 
 export interface ModelTestResult {
   valid: boolean;
@@ -190,12 +193,17 @@ export interface ModelTestResult {
 }
 
 async function collectPreview(
-  stream: AsyncIterable<StreamChunk>
+  stream: AsyncIterable<StreamChunk>,
+  options: { signal?: AbortSignal; timeoutMs: number }
 ): Promise<{ preview: string; error?: string }> {
+  const iterator = stream[Symbol.asyncIterator]();
   let preview = "";
   let error: string | undefined;
   try {
-    for await (const chunk of stream) {
+    for (;;) {
+      const next = await nextPreviewChunk(iterator, options);
+      if (next.done) break;
+      const chunk = next.value;
       if (chunk.type === "error") {
         error = chunk.error ?? "Validation failed";
         break;
@@ -207,27 +215,107 @@ async function collectPreview(
     }
   } catch (err) {
     error = err instanceof Error ? err.message : "Validation failed";
+  } finally {
+    closePreviewIterator(iterator);
   }
   return { preview: preview.trim(), error };
 }
 
+function modelTestTimeoutMessage(timeoutMs: number): string {
+  return `Model test timed out after ${(timeoutMs / 1000).toFixed(1)}s`;
+}
+
+async function nextPreviewChunk(
+  iterator: AsyncIterator<StreamChunk>,
+  options: { signal?: AbortSignal; timeoutMs: number }
+): Promise<IteratorResult<StreamChunk>> {
+  if (options.signal?.aborted) {
+    closePreviewIterator(iterator);
+    throw new Error(modelTestTimeoutMessage(options.timeoutMs));
+  }
+  if (!options.signal) return iterator.next();
+
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      closePreviewIterator(iterator);
+      reject(new Error(modelTestTimeoutMessage(options.timeoutMs)));
+    };
+    options.signal?.addEventListener("abort", abortHandler, { once: true });
+  });
+
+  try {
+    return await Promise.race([iterator.next(), abortPromise]);
+  } finally {
+    if (abortHandler) {
+      options.signal.removeEventListener("abort", abortHandler);
+    }
+  }
+}
+
+function closePreviewIterator(iterator: AsyncIterator<StreamChunk>): void {
+  try {
+    const closeResult = iterator.return?.();
+    if (closeResult) {
+      void Promise.resolve(closeResult).catch(() => undefined);
+    }
+  } catch {
+    // The caller is already unwinding a completed, failed, or aborted stream.
+  }
+}
+
 /**
- * Unified test used by every provider AND custom models: always try the "red
- * dot" vision test first (so feedback is consistent — the model describes the
- * test image), then fall back to a plain text confirmation for models that
- * can't accept images.
+ * Unified test used by every provider AND custom models: try the "red dot"
+ * vision test when model metadata allows images, then fall back to a plain text
+ * confirmation for text-only models or endpoints that reject images.
  */
 type StreamFactory = (
   prompt: string,
-  attachments: AttachmentPayload[]
+  attachments: AttachmentPayload[],
+  signal?: AbortSignal
 ) => AsyncIterable<StreamChunk>;
 
-async function runModelTest(makeStream: StreamFactory): Promise<ModelTestResult> {
-  const vision = await collectPreview(makeStream(VISION_PROMPT, [TEST_IMAGE]));
-  if (!vision.error && vision.preview.length > 0) {
-    return { valid: true, usedImage: true, preview: vision.preview };
+async function collectProbePreview(
+  makeStream: StreamFactory,
+  prompt: string,
+  attachments: AttachmentPayload[],
+  timeoutMs: number
+): Promise<{ preview: string; error?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await collectPreview(makeStream(prompt, attachments, controller.signal), {
+      signal: controller.signal,
+      timeoutMs,
+    });
+  } finally {
+    clearTimeout(timer);
   }
-  const text = await collectPreview(makeStream(TEXT_PROMPT, []));
+}
+
+function normalizeModelTestTimeoutMs(timeoutMs: number | undefined): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : DEFAULT_MODEL_TEST_TIMEOUT_MS;
+}
+
+async function runModelTest(
+  makeStream: StreamFactory,
+  options?: { allowImage?: boolean; timeoutMs?: number }
+): Promise<ModelTestResult> {
+  const timeoutMs = normalizeModelTestTimeoutMs(options?.timeoutMs);
+  if (options?.allowImage !== false) {
+    const vision = await collectProbePreview(
+      makeStream,
+      VISION_PROMPT,
+      [TEST_IMAGE],
+      timeoutMs
+    );
+    if (!vision.error && vision.preview.length > 0) {
+      return { valid: true, usedImage: true, preview: vision.preview };
+    }
+  }
+  const text = await collectProbePreview(makeStream, TEXT_PROMPT, [], timeoutMs);
   const valid = !text.error && text.preview.length > 0;
   return {
     valid,
@@ -243,7 +331,7 @@ export async function validateProvider(input: {
   baseURL?: string;
   runnerToken?: string;
   modelId?: string;
-}): Promise<ModelTestResult & { modelId?: string }> {
+}, options?: { timeoutMs?: number }): Promise<ModelTestResult & { modelId?: string }> {
   const provider = getProvider(input.providerId);
   if (!provider) return { valid: false, usedImage: false, error: "Unknown provider" };
 
@@ -276,20 +364,24 @@ export async function validateProvider(input: {
             : "No model available",
     };
 
-  const result = await runModelTest((prompt, attachments) =>
-    provider.streamChat({
-      apiKey,
-      baseURL,
-      runnerToken,
-      model: modelId,
-      messages: [
-        { role: "system", content: TEST_SYSTEM },
-        { role: "user", content: prompt },
-      ],
-      attachments,
-      maxTokens: TEST_MAX_TOKENS,
-      temperature: 0.2,
-    })
+  const capabilities = resolveModelCapabilities(formatModelId(input.providerId, modelId));
+  const result = await runModelTest(
+    (prompt, attachments, signal) =>
+      provider.streamChat({
+        apiKey,
+        baseURL,
+        runnerToken,
+        model: modelId,
+        messages: [
+          { role: "system", content: TEST_SYSTEM },
+          { role: "user", content: prompt },
+        ],
+        attachments,
+        maxTokens: TEST_MAX_TOKENS,
+        temperature: 0.2,
+        signal,
+      }),
+    { allowImage: capabilities?.image !== false, timeoutMs: options?.timeoutMs }
   );
 
   if (usingSaved && saved) {

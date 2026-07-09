@@ -163,7 +163,7 @@ export function BuildTaskBoard({
               <span className="truncate">Commands run ({commands.length})</span>
             </span>
             <Badge variant="secondary" className="shrink-0">
-              collapsed
+              Click to expand
             </Badge>
           </summary>
           <ul className="space-y-1.5 border-t px-3 py-2">
