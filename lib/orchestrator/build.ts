@@ -3144,6 +3144,14 @@ function extractMalformedStringField(text: string, field: string): string | unde
   return value || undefined;
 }
 
+function containsProviderControlMarkup(value: string): boolean {
+  return (
+    /\]\s*<\]\s*[a-z0-9_-]+\s*\[>/i.test(value) ||
+    /\[\s*<\/\s*(?:command|reason|action|tool|args|json)\s*>\s*\]/i.test(value) ||
+    /<\/\s*(?:command|reason|action|tool|args|json)\s*>/i.test(value)
+  );
+}
+
 /**
  * All fenced code blocks, scanned line by line so a closing fence can never be
  * mistaken for an opening one — the failure a regex scan has when other code
@@ -3411,6 +3419,7 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
         (parsed as RunAction).command.trim()
       ) {
         const action = parsed as RunAction;
+        if (containsProviderControlMarkup(action.command)) return null;
         return { ...action, command: action.command.trim() };
       }
       if (actionName === "shell") {
@@ -3422,6 +3431,7 @@ function parseActionCandidate(candidate: string): ArchitectAction | null {
               ? shell.cmd
               : "";
         if (command.trim()) {
+          if (containsProviderControlMarkup(command)) return null;
           return {
             action: "run",
             command: command.trim(),

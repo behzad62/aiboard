@@ -92,6 +92,11 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
         ?.implementationContract === "Use the existing settings API and do not add routes.",
   ],
   ["unlabelled fence", '```\n{"action":"run","command":"npm test"}\n```', (a) => a?.action === "run"],
+  [
+    "run command contaminated with provider markup is rejected",
+    '{"action":"run","command":"node --check src/game.js && echo SYNTAX_OK]<]minimax[>[</command>]","reason":"verify"}',
+    (a) => a == null,
+  ],
   ["shell alias parses as run", '{"action":"shell","command":"npm test"}', (a) => a?.action === "run" && (a as { command: string }).command === "npm test"],
   ["shell cmd alias parses as run", '{"action":"shell","cmd":"node -e \\"console.log(1)\\""}', (a) => a?.action === "run" && (a as { command: string }).command.includes("console.log")],
   ["read_file alias parses as read", '{"action":"read_file","path":"src/game.js"}', (a) => a?.action === "read" && (a as { paths: string[] }).paths[0] === "src/game.js"],
