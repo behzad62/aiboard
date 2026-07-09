@@ -137,6 +137,17 @@ function repoWorkflowTask(input: SkillActivationInput): boolean {
   return input.task?.kind === "repo";
 }
 
+function evidenceOnlyVerificationTask(input: SkillActivationInput): boolean {
+  const kind = input.task?.kind;
+  if (kind !== "audit" && kind !== "verify") return false;
+  const completionMode = input.task?.completionMode;
+  if (completionMode !== "evidence" && completionMode !== "either") return false;
+  return (
+    (input.task?.outputPaths ?? []).length === 0 &&
+    (input.task?.testOutputPaths ?? []).length === 0
+  );
+}
+
 function configOnlyTask(input: SkillActivationInput): boolean {
   const paths = taskPaths(input);
   return (
@@ -240,18 +251,24 @@ function selectWorkerOverlays(input: SkillActivationInput): string[] {
   if (docsOnlyTask(input)) {
     return ["agent:incremental-implementation", "agent:documentation-and-adrs"];
   }
+  const verificationOnly = evidenceOnlyVerificationTask(input);
 
-  const workflow = ["agent:incremental-implementation"];
-  if (changesBehavior(input)) {
+  const workflow = verificationOnly ? [] : ["agent:incremental-implementation"];
+  if (!verificationOnly && changesBehavior(input)) {
     workflow.push(
       skillMode === "strict"
         ? "superpowers:strict-test-driven-development"
         : "agent:test-driven-development"
     );
   }
-  if (taskLooksLikeBugFix(input)) workflow.push("superpowers:systematic-debugging");
+  if (!verificationOnly && taskLooksLikeBugFix(input)) {
+    workflow.push("superpowers:systematic-debugging");
+  }
 
   const domains: string[] = [];
+  if (verificationOnly && needsBrowserAcceptance(input)) {
+    domains.push("aiboard:browser-acceptance");
+  }
   if (
     touchesSecurityBoundary(input) ||
     (skillMode === "safe" && (input.runnerAvailable || input.repoAvailable))
@@ -259,7 +276,9 @@ function selectWorkerOverlays(input: SkillActivationInput): string[] {
     domains.push("agent:security-and-hardening");
   }
   if (pathsIncludeUi(input)) domains.push("agent:frontend-ui-engineering");
-  if (needsBrowserAcceptance(input)) domains.push("aiboard:browser-acceptance");
+  if (!verificationOnly && needsBrowserAcceptance(input)) {
+    domains.push("aiboard:browser-acceptance");
+  }
   if (touchesApiOrContract(input)) domains.push("agent:api-and-interface-design");
   if (touchesDocs(input)) domains.push("agent:documentation-and-adrs");
 

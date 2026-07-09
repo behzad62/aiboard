@@ -82,4 +82,44 @@ check(
   repoCommitActivation
 );
 
+const finalVerificationTask: BuildTask = {
+  id: "T12",
+  title: "Run final updated verification and browser acceptance",
+  kind: "verify",
+  completionMode: "evidence",
+  verificationPolicy: "tool",
+  instructions:
+    "Run final deterministic checks, browser acceptance, repo status, and report evidence only.",
+  contextFiles: ["src/game.js", "src/renderer.js", "src/main.js", "index.html"],
+  outputPaths: [],
+  expectedOutputs: "Final verification evidence and browser acceptance.",
+  status: "planned",
+};
+
+const finalVerificationActivation = selectSkills({
+  phase: "worker",
+  actor: "worker",
+  userRequest: "Verify the completed paintball arena implementation.",
+  task: finalVerificationTask,
+  touchedPaths: finalVerificationTask.contextFiles,
+  riskFlags: ["runner"],
+  runnerAvailable: true,
+  repoAvailable: true,
+  skillMode: "strict",
+  mcpServers: ["playwright"],
+});
+
+check(
+  "strict verification-only tasks require acceptance evidence without TDD",
+  finalVerificationActivation.overlays.includes("aiboard:browser-acceptance") &&
+    !finalVerificationActivation.overlays.includes(
+      "superpowers:strict-test-driven-development"
+    ) &&
+    !finalVerificationActivation.overlays.includes("agent:test-driven-development") &&
+    !finalVerificationActivation.evidenceRequired.some((item) =>
+      /test-driven-development|RED test|GREEN test/i.test(item)
+    ),
+  finalVerificationActivation
+);
+
 process.exit(failed === 0 ? 0 : 1);
