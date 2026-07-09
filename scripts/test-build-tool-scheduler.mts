@@ -216,4 +216,38 @@ replayCache.remember(fetchAction, "fetched docs body");
 check("exact fetch duplicate can be replayed from cache",
   !!replayCache.replay(fetchAction)?.includes("fetched docs body"), replayCache.replay(fetchAction));
 
+const consoleMessagesAction = {
+  action: "tool" as const,
+  server: "playwright",
+  tool: "browser_console_messages",
+  args: { level: "error", all: true },
+  reason: "check browser errors",
+};
+replayCache.remember(consoleMessagesAction, "[] no console errors");
+const replayedConsoleMessages = replayDuplicateToolAction({
+  action: consoleMessagesAction,
+  label: "mcp:playwright.browser_console_messages",
+  replayCache,
+});
+check(
+  "duplicate read-only MCP browser tool is replayed from cache instead of skipped",
+  replayedConsoleMessages.served?.label === "mcp:playwright.browser_console_messages (replayed)" &&
+    replayedConsoleMessages.served.result.includes("no console errors") &&
+    replayedConsoleMessages.skipped === null,
+  replayedConsoleMessages
+);
+
+const clickAction = {
+  action: "tool" as const,
+  server: "playwright",
+  tool: "browser_click",
+  args: { target: "#toggleRunBtn", element: "Start button" },
+};
+replayCache.remember(clickAction, "clicked");
+check(
+  "interactive MCP browser actions are not replayed from cache",
+  replayCache.replay(clickAction) === null,
+  replayCache.replay(clickAction)
+);
+
 process.exit(failed === 0 ? 0 : 1);

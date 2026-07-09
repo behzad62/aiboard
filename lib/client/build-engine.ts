@@ -7079,13 +7079,17 @@ export async function runBuildDiscussion(
                 });
                 toolResultText += "\n[screenshot captured and stored for the reviewer]";
               }
+              const packedToolResult = storeLongToolResult(
+                "tool_exchange",
+                `MCP ${action.server}.${action.tool}`,
+                toolResultText
+              );
+              if (shouldRecordToolCallResult(action, toolResult.status)) {
+                replayCache.remember(action, packedToolResult);
+              }
               served.push({
                 label: item.label,
-                result: storeLongToolResult(
-                  "tool_exchange",
-                  `MCP ${action.server}.${action.tool}`,
-                  toolResultText
-                ),
+                result: packedToolResult,
               });
               continue;
             }

@@ -412,11 +412,28 @@ function replayableExactKey(action: ArchitectAction): string | null {
     action.action !== "context_retrieve" &&
     action.action !== "code_intel" &&
     action.action !== "run" &&
-    action.action !== "fetch"
+    action.action !== "fetch" &&
+    !isReplayableMcpToolAction(action)
   ) {
     return null;
   }
   return exactToolKey(action);
+}
+
+function isReplayableMcpToolAction(
+  action: ArchitectAction
+): action is Extract<ArchitectAction, { action: "tool" }> {
+  if (action.action !== "tool") return false;
+  const server = action.server.trim().toLowerCase();
+  const tool = action.tool.trim().toLowerCase();
+  if (server !== "playwright" && server !== "browser") return false;
+  return (
+    tool === "browser_console_messages" ||
+    tool === "browser_snapshot" ||
+    tool === "browser_evaluate" ||
+    tool === "browser_take_screenshot" ||
+    tool === "browser_screenshot"
+  );
 }
 
 export interface ToolReplayCache {
@@ -548,6 +565,8 @@ function toolMemoryLabel(action: ArchitectAction): string {
       }`;
     case "fetch":
       return `fetch ${action.url}`;
+    case "tool":
+      return `mcp:${action.server.trim().toLowerCase()}.${action.tool.trim().toLowerCase()}`;
     default:
       return exactToolKey(action) ?? action.action;
   }
