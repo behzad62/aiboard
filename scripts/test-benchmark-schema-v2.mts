@@ -1,6 +1,5 @@
 /* Benchmark schema v2 regression checks (run: npx tsx scripts/test-benchmark-schema-v2.mts) */
 import {
-  __exportBenchmarkStoreForTests,
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   importBenchmarkReportBundleV2,

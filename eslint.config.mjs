@@ -10,12 +10,22 @@ const eslintConfig = [
 eslintConfig.push({
   rules: {
     // The React Hooks 7 compiler checks are useful signals, but this app does
-    // not enable React Compiler yet. Keep upgrade-time linting actionable
-    // without rewriting existing synchronous client-state effects.
-    "react-hooks/preserve-manual-memoization": "warn",
-    "react-hooks/refs": "warn",
-    "react-hooks/set-state-in-effect": "warn",
-    "react-hooks/static-components": "warn",
+    // not enable React Compiler yet. Do not warn on existing client-state
+    // initialization patterns until the compiler migration is deliberate work.
+    "react-hooks/preserve-manual-memoization": "off",
+    "react-hooks/refs": "off",
+    "react-hooks/set-state-in-effect": "off",
+    "react-hooks/static-components": "off",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      {
+        argsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+        destructuredArrayIgnorePattern: "^_",
+        ignoreRestSiblings: true,
+        varsIgnorePattern: "^_",
+      },
+    ],
   },
 });
 

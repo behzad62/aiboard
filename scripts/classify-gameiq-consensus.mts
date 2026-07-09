@@ -17,7 +17,6 @@ import {
 } from "../lib/benchmark/fireworks/scenario-packs";
 import type { FireworksScenario } from "../lib/benchmark/fireworks/types";
 import {
-  applyFireworksAction,
   cloneFireworksState,
   fireworksActionsEqual,
   getLegalFireworksActions,

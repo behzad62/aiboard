@@ -56,7 +56,7 @@ async function stopRunner(child: ChildProcessWithoutNullStreams | null) {
   ]);
 }
 
-function writeFakeCodeGraph(fakeBin: string, recordPath: string) {
+function writeFakeCodeGraph(fakeBin: string) {
   fs.mkdirSync(fakeBin, { recursive: true });
 
   const fakeCodeGraphJs = path.join(fakeBin, "fake-codegraph.js");
@@ -149,7 +149,7 @@ async function testCliShortcut() {
   const fakeBin = path.join(temp, "bin");
   const recordPath = path.join(temp, "fake-codegraph-record.jsonl");
   fs.mkdirSync(root);
-  writeFakeCodeGraph(fakeBin, recordPath);
+  writeFakeCodeGraph(fakeBin);
 
   const port = 20_000 + Math.floor(Math.random() * 1_000);
   const token = "test-token";
@@ -208,7 +208,7 @@ async function testPanelSetupEndpoint() {
   const fakeBin = path.join(temp, "bin");
   const recordPath = path.join(temp, "fake-codegraph-record.jsonl");
   fs.mkdirSync(root);
-  writeFakeCodeGraph(fakeBin, recordPath);
+  writeFakeCodeGraph(fakeBin);
 
   const port = 21_000 + Math.floor(Math.random() * 1_000);
   const token = "test-token";
@@ -261,7 +261,7 @@ async function testPanelSetupFindsStandardWindowsInstallWhenPathIsStale() {
   const fakeBin = path.join(localAppData, "codegraph", "current", "bin");
   const recordPath = path.join(temp, "fake-codegraph-record.jsonl");
   fs.mkdirSync(root, { recursive: true });
-  writeFakeCodeGraph(fakeBin, recordPath);
+  writeFakeCodeGraph(fakeBin);
 
   const port = 22_000 + Math.floor(Math.random() * 1_000);
   const token = "test-token";

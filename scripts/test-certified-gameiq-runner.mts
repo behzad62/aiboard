@@ -250,7 +250,6 @@ const chessSummary = await runCertifiedBenchmark({
 });
 const chessAttempts = await listBenchmarkAttemptsV2();
 const chessAttempt = chessAttempts[0];
-const chessVerifier = (await listBenchmarkVerifierResults())[0];
 const chessActionSchema =
   observedChessStructuredOutput?.schema.properties?.action?.properties ?? {};
 check(
@@ -272,7 +271,6 @@ __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(chessCaseV2);
 await saveBenchmarkTeamComposition(team);
 
-let invalidChessCallIndex = 0;
 await runCertifiedBenchmark({
   runId: "run-certified-gameiq-chess-failure-evidence",
   suiteId: "suite-certified-gameiq",
@@ -289,7 +287,6 @@ await runCertifiedBenchmark({
       teamCompositionIds: [team.id],
       trials: 1,
       streamChat: async function* (): AsyncIterable<StreamChunk> {
-        invalidChessCallIndex++;
         yield {
           type: "token",
           content: JSON.stringify({
