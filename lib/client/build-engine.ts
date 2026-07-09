@@ -548,7 +548,7 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
 const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
-const BUILD_ENGINE_VERSION = "build-contracts-v1";
+const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v2";
 const BUILD_CHECKPOINT_CONTRACT_VERSION = 2;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {

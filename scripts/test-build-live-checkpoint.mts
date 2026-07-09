@@ -9,6 +9,11 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 
 const source = readFileSync("lib/client/build-engine.ts", "utf8");
 
+check(
+  "build engine marker advertises live-checkpoint durability behavior",
+  /const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v2"/.test(source)
+);
+
 const messageInsertIndex = source.indexOf("insertMessage({");
 const messageCompleteIndex = source.indexOf('emit({ type: "message_complete"', messageInsertIndex);
 const messagePersistenceBlock =
