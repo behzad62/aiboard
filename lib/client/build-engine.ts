@@ -4214,6 +4214,7 @@ export async function runBuildDiscussion(
       content,
       createdAt: new Date().toISOString(),
     });
+    touchLiveCheckpoint({ reason: `${opts.label} message persisted` });
     emit({ type: "message_complete", messageId, content });
     const usage = resolveModelCallUsage({
       messages,
@@ -7255,6 +7256,7 @@ export async function runBuildDiscussion(
             skipped: skipped.length,
             summary: `${served.length} served, ${skipped.length} skipped`,
           });
+          touchLiveCheckpoint({ reason: `${actor} tool batch` });
           return {
             message: packToolBatchResult({
               served,
