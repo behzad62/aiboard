@@ -3034,6 +3034,8 @@ function uniqueActionCandidates(text: string): string[] {
   for (let i = balanced.length - 1; i >= 0; i--) {
     add(balanced[i]);
   }
+  const recoveredContextRetrieve = recoverMalformedContextRetrieveCandidate(text);
+  if (recoveredContextRetrieve) add(recoveredContextRetrieve);
   return candidates;
 }
 
@@ -3055,7 +3057,48 @@ function uniqueActionCandidatesInDocumentOrder(text: string): string[] {
   for (const candidate of balancedObjects(text)) {
     add(candidate);
   }
+  const recoveredContextRetrieve = recoverMalformedContextRetrieveCandidate(text);
+  if (recoveredContextRetrieve) add(recoveredContextRetrieve);
   return candidates;
+}
+
+function recoverMalformedContextRetrieveCandidate(text: string): string | null {
+  if (!/"action"\s*:\s*"context_retrieve"/i.test(text)) return null;
+
+  const ref = extractSafeContextRef(text);
+  if (!ref) return null;
+
+  const reason = extractMalformedStringField(text, "reason");
+  const action: ContextRetrieveAction = {
+    action: "context_retrieve",
+    ref,
+    maxTokens: clampContextRetrieveMaxTokens(extractMalformedNumberField(text, "maxTokens")),
+    offsetChars: clampContextRetrieveOffsetChars(extractMalformedNumberField(text, "offsetChars")),
+    ...(reason ? { reason } : {}),
+  };
+  return JSON.stringify(action);
+}
+
+function extractSafeContextRef(text: string): string | null {
+  const match = /(?:^|[^A-Za-z0-9_/-])(ctx_[A-Za-z0-9_-]{3,120})(?![A-Za-z0-9_/-])/.exec(text);
+  const ref = match?.[1]?.trim();
+  return isContextBlobRef(ref) ? ref : null;
+}
+
+function extractMalformedNumberField(text: string, field: string): number | undefined {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}[^0-9-]{0,80}(-?\\d{1,10})`, "i").exec(text);
+  if (!match) return undefined;
+  const value = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function extractMalformedStringField(text: string, field: string): string | undefined {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const jsonMatch = new RegExp(`"${escaped}"\\s*:\\s*"([^"]{1,300})"`, "i").exec(text);
+  const tagMatch = new RegExp(`<${escaped}>\\s*([^"<\\]}]{1,300})`, "i").exec(text);
+  const value = (jsonMatch?.[1] ?? tagMatch?.[1])?.trim();
+  return value || undefined;
 }
 
 /**

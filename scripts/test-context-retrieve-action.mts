@@ -66,6 +66,25 @@ check(
     parseArchitectAction('{"action":"context_retrieve","ref":"ctx_","maxTokens":4000}') === null
 );
 
+const malformedMiniMaxRetrieve = parseArchitectAction(
+  '{"action":"context_retrieve","<ref":"ctx_repo_diff_0cdbneg11qpfc0","maxTokens>4000]<]minimax[>[<\\/maxTokens>]<]minimax[>[<offsetChars>1200]<]minimax[>[<\\/offsetChars>]<]minimax[>[<reason>Inspect diff content"}'
+);
+check(
+  "parser repairs MiniMax-marked context_retrieve payloads",
+  malformedMiniMaxRetrieve?.action === "context_retrieve" &&
+    malformedMiniMaxRetrieve.ref === "ctx_repo_diff_0cdbneg11qpfc0" &&
+    malformedMiniMaxRetrieve.maxTokens === 4000 &&
+    malformedMiniMaxRetrieve.offsetChars === 1200,
+  malformedMiniMaxRetrieve
+);
+
+check(
+  "parser does not repair context_retrieve without a safe ref",
+  parseArchitectAction(
+    '{"action":"context_retrieve","<ref":"../secret","maxTokens>4000]<]minimax[>[<\\/maxTokens>]'
+  ) === null
+);
+
 if (parsed) {
   const keyA = exactToolKey(parsed);
   const keyB = exactToolKey({
