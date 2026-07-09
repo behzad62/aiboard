@@ -76,10 +76,9 @@ const repoCommitActivation = selectSkills({
 });
 
 check(
-  "repo evidence tasks do not require implementation TDD skills",
-  !repoCommitActivation.overlays.includes("agent:test-driven-development") &&
-    !repoCommitActivation.overlays.includes("superpowers:strict-test-driven-development") &&
-    !repoCommitActivation.evidenceRequired.some((item) => /test-driven|RED|GREEN/i.test(item)),
+  "repo evidence tasks do not require worker skill overlays",
+  repoCommitActivation.overlays.length === 0 &&
+    repoCommitActivation.evidenceRequired.length === 0,
   repoCommitActivation
 );
 

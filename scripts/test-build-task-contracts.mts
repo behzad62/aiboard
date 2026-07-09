@@ -162,6 +162,53 @@ check(
   toolReviewEvidenceFix
 );
 
+const repoNoopTask = normalizeBuildTaskContract(
+  baseTask({
+    id: "T10",
+    title: "Commit scoped posture timing and README changes",
+    instructions:
+      "Use typed repo_status/repo_diff/repo_commit actions. If the scoped diff is empty and the tree is clean, report evidence only and do not create a dummy commit.",
+    kind: "repo",
+    completionMode: "evidence",
+    verificationPolicy: "tool",
+    outputPaths: [],
+  })
+);
+const repoNoopOutput = [
+  "T10 evidence only:",
+  "- repo_status: branch codex/create-a-local-git-repo-in-the-folder-cr; working tree clean",
+  "- repo_diff scoped to src/game.js and README.md: no changes",
+  "- repo_commit: not executed because the scoped diff is empty; creating an empty commit would violate task scope.",
+  "Skill evidence:",
+  "- superpowers:strict-test-driven-development: Exemption - no implementation change was available or appropriate for this no-op repo evidence task.",
+].join("\n");
+const repoNoopDecision = canWorkerOutputAdvanceToReview({
+  task: repoNoopTask,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: [],
+  workerOutput: repoNoopOutput,
+  evidence: missingStyleEvidence.map((record) => ({ ...record, taskId: "T10" })),
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: false,
+});
+check(
+  "no-op repo evidence task can advance with clean status and empty diff evidence",
+  repoNoopDecision.ok && repoNoopDecision.reason === "evidence",
+  repoNoopDecision
+);
+
+const repoNoopReviewEvidenceFix = buildReviewSkillEvidenceFixInstructions({
+  task: repoNoopTask,
+  evidence: missingStyleEvidence.map((record) => ({ ...record, taskId: "T10" })),
+  workerOutput: repoNoopOutput,
+});
+check(
+  "no-op repo evidence task does not receive skill-evidence fix instructions",
+  repoNoopReviewEvidenceFix === "",
+  repoNoopReviewEvidenceFix
+);
+
 const blockingPlan = validateBuildPlanForDispatch([
   baseTask({
     id: "T1",

@@ -55,8 +55,10 @@ import {
   type BuildWorkerToolInstructionBudget,
 } from "@/lib/orchestrator/build-worker-budgets";
 import {
-  ARCHITECT_RANGE_READS_PER_PHASE,
   ARCHITECT_READS_PER_PHASE,
+  ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
+  ARCHITECT_REVIEW_READS_PER_PHASE,
+  ARCHITECT_REVIEW_SEARCHES_PER_PHASE,
   ARCHITECT_SEARCHES_PER_PHASE,
 } from "@/lib/orchestrator/build-architect-budgets";
 import {
@@ -6606,6 +6608,7 @@ export async function runBuildDiscussion(
       task: BuildTask;
       worker: SelectedModel;
       files: string[];
+      output: string;
       notes: string;
       changes: string[];
     }> = [];
@@ -7922,6 +7925,7 @@ export async function runBuildDiscussion(
           task,
           worker,
           files: reviewFiles,
+          output,
           notes:
             truncate(prose, 1_500) +
             (files.length === 0
@@ -7958,6 +7962,7 @@ export async function runBuildDiscussion(
             task,
             worker,
             files: [...new Set(patchedFiles)],
+            output,
             notes:
               `Provider became unavailable after writing files (${message}). Review the landed files before approving.` +
               (toolIssues.length > 0
@@ -8348,14 +8353,14 @@ export async function runBuildDiscussion(
         outstandingTasks: "",
         maxNewTasks: BUILD_TASKS_PER_WAVE,
         cyclesLeft: Math.max(0, BUILD_MAX_WAVES - cycle),
-        readHopsLeft: ARCHITECT_READS_PER_PHASE,
-        rangeReadsLeft: ARCHITECT_RANGE_READS_PER_PHASE,
+        readHopsLeft: ARCHITECT_REVIEW_READS_PER_PHASE,
+        rangeReadsLeft: ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
         githubLabels: repoLabels,
-        searchesLeft: ARCHITECT_SEARCHES_PER_PHASE,
+        searchesLeft: ARCHITECT_REVIEW_SEARCHES_PER_PHASE,
         codeIntelStatus: codeIntelStatusForPrompt(),
         codeIntelCallsLeft: codeIntelCallsLeftThisPhase(),
         mcpToolsDoc,
@@ -8379,9 +8384,9 @@ export async function runBuildDiscussion(
       }),
       initialAttachments: [...reviewAttachments, ...screenshotAttachments],
       budgets: {
-        reads: ARCHITECT_READS_PER_PHASE,
-        rangeReads: ARCHITECT_RANGE_READS_PER_PHASE,
-        searches: ARCHITECT_SEARCHES_PER_PHASE,
+        reads: ARCHITECT_REVIEW_READS_PER_PHASE,
+        rangeReads: ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
+        searches: ARCHITECT_REVIEW_SEARCHES_PER_PHASE,
       },
       appendContext: (textChunk) => {
         extraFileContext += textChunk;
@@ -8492,10 +8497,12 @@ export async function runBuildDiscussion(
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (isReviewResultApproved(result)) {
+        const prior = executed.find((e) => e.task.id === task.id);
         const evidenceFix = buildReviewSkillEvidenceFixInstructions({
           task,
           evidence: waveSkillEvidence,
           scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
+          workerOutput: prior?.output ?? prior?.notes ?? "",
         });
         if (evidenceFix) {
           sendTaskBackForFix(
@@ -8554,12 +8561,14 @@ export async function runBuildDiscussion(
     }
     // Tasks the review didn't mention count as approved only when the review
     // was explicit and no deterministic gate found a problem.
-    for (const { task } of executed) {
+    for (const item of executed) {
+      const { task } = item;
       if (task.status === "review") {
         const evidenceFix = buildReviewSkillEvidenceFixInstructions({
           task,
           evidence: waveSkillEvidence,
           scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
+          workerOutput: item.output ?? item.notes,
         });
         if (evidenceFix) {
           sendTaskBackForFix(

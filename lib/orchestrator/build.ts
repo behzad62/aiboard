@@ -244,10 +244,12 @@ export function buildReviewSkillEvidenceFixInstructions(input: {
   task: BuildTask;
   evidence: SkillEvidence[];
   scopedVerificationGap?: boolean;
+  workerOutput?: string;
 }): string {
   if (input.scopedVerificationGap) return "";
   const task = normalizeBuildTaskContract(input.task);
   if (!taskRequiresToolVerification(task)) return "";
+  if (hasNoopRepoEvidenceText(task, input.workerOutput ?? "")) return "";
   return buildSkillEvidenceFixInstructions(input.evidence, task.id);
 }
 
@@ -256,6 +258,39 @@ function hasSubstantiveEvidenceText(text: string): boolean {
   if (trimmed.length < 40) return false;
   return /\b(verified|verification|confirmed|complete|passed|clean|commit|status|no action required|already present|no changes? needed|satisfies|evidence)\b/i.test(
     trimmed
+  );
+}
+
+function hasNoopRepoEvidenceText(
+  task: Pick<BuildTask, "kind" | "completionMode">,
+  text: string
+): boolean {
+  if (task.kind !== "repo" || task.completionMode !== "evidence") return false;
+  const normalized = text.toLowerCase();
+  const hasStatusEvidence =
+    /\brepo_status\b[\s\S]{0,240}\b(clean|no changes|nothing to commit|working tree clean|working tree is clean)\b/.test(
+      normalized
+    ) || /\bworking tree (?:is )?clean\b/.test(normalized);
+  const hasDiffEvidence =
+    /\brepo_diff\b[\s\S]{0,240}\b(no changes|empty|no diff|clean)\b/.test(
+      normalized
+    ) ||
+    /\bscoped diff\b[\s\S]{0,240}\b(empty|no changes|no diff)\b/.test(
+      normalized
+    );
+  const hasCommitEvidence =
+    /\brepo_commit\b[\s\S]{0,320}\b(not executed|not run|skipped|no commit|did not run)\b/.test(
+      normalized
+    );
+  const explainsNoCommit =
+    /\b(empty|dummy|synthetic|no pending|no changes|working tree is clean|nothing to commit|violate task scope)\b/.test(
+      normalized
+    ) || /\bscoped diff (?:is |was |remains )?empty\b/.test(normalized);
+  return (
+    hasStatusEvidence &&
+    hasDiffEvidence &&
+    hasCommitEvidence &&
+    explainsNoCommit
   );
 }
 
@@ -314,7 +349,12 @@ export function canWorkerOutputAdvanceToReview(input: {
   const blockingEvidence = input.evidence?.length
     ? getBlockingSkillEvidence(input.evidence, task.id)
     : [];
-  if (taskRequiresToolVerification(task) && blockingEvidence.length > 0) {
+  const hasNoopRepoEvidence = hasNoopRepoEvidenceText(task, input.workerOutput);
+  if (
+    taskRequiresToolVerification(task) &&
+    blockingEvidence.length > 0 &&
+    !hasNoopRepoEvidence
+  ) {
     return {
       ...base,
       ok: false,
@@ -324,7 +364,10 @@ export function canWorkerOutputAdvanceToReview(input: {
   }
   const evidenceAllowed =
     task.completionMode === "evidence" || task.completionMode === "either";
-  if (evidenceAllowed && hasSubstantiveEvidenceText(input.workerOutput)) {
+  if (
+    evidenceAllowed &&
+    (hasNoopRepoEvidence || hasSubstantiveEvidenceText(input.workerOutput))
+  ) {
     return { ...base, ok: true, reason: "evidence" };
   }
   if (expectsFileOutput) {
