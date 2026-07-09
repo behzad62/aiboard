@@ -126,7 +126,8 @@ export function StorageSettings({
       });
       lock();
       await refresh();
-      setMessage("Encryption off.");
+      await onChanged?.();
+      setMessage("Passphrase lock removed. The main store is now saved unencrypted.");
     });
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -273,10 +274,11 @@ export function StorageSettings({
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
                 Encryption is on for the main store. Discussion folders remain
-                readable local JSON files.
+                readable local JSON files. Remove the passphrase lock to stop
+                requiring an unlock after tab or browser restarts.
               </p>
               <Button variant="outline" onClick={disableEncryption} disabled={busy}>
-                Turn off encryption
+                Remove passphrase lock
               </Button>
             </div>
           ) : (
