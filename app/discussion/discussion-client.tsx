@@ -16,7 +16,6 @@ import {
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
 import {
-  BuildContextPanel,
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
   reduceBuildContextPanelState,
 } from "@/components/BuildContextPanel";
@@ -200,7 +199,7 @@ function DiscussionPageInner() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
   const [buildTasks, setBuildTasks] = useState<BuildTaskView[]>([]);
-  const [buildContextState, setBuildContextState] = useState(
+  const [, setBuildContextState] = useState(
     EMPTY_BUILD_CONTEXT_PANEL_STATE
   );
   const [, setBuildSkillEvents] = useState<BuildSkillEvent[]>([]);
@@ -1329,49 +1328,6 @@ function DiscussionPageInner() {
         <BuildToolReviewPanel report={buildToolReviewReport} />
       )}
 
-      {discussion.mode === "build" && (
-        <BuildRunStats
-          status={status}
-          policy={discussion.buildRunPolicy ?? "finish"}
-          budgetUsd={discussion.buildBudgetUsd ?? 0}
-          timeLimitMinutes={discussion.buildTimeLimitMinutes ?? 120}
-          stopReason={discussion.buildStopReason}
-          branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
-          prUrl={repoWorkflow?.prUrl ?? null}
-          usage={buildUsage}
-        />
-      )}
-
-      {discussion.mode === "build" && (
-        <BuildContextPanel state={buildContextState} />
-      )}
-
-      {discussion.mode === "build" &&
-        discussion.buildStopReason &&
-        !buildStopReport &&
-        status === "stopped" && (
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-            {discussion.buildStopReason === "blocked"
-              ? "Build stopped after repeated no-progress recovery attempts."
-              : `Build stopped because the ${discussion.buildStopReason} guardrail was reached.`}{" "}
-            Resume starts a fresh budget window and keeps the current checkpoint
-            (task graph, files, and repo/GitHub refs).
-          </p>
-        )}
-
-      {discussion.mode === "build" && (
-        <BuildTaskBoard
-          tasks={buildTasks}
-          files={writtenFiles}
-          commands={commandRuns}
-          folderName={discussion.projectFolderName}
-        />
-      )}
-
-      {discussion.mode === "build" && (
-        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} workflow={repoWorkflow} />
-      )}
-
       {discussion.mode === "build" &&
         status !== "loading" &&
         status !== "locked" &&
@@ -1383,8 +1339,8 @@ function DiscussionPageInner() {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {isActive
-                ? "Picked up at the Architect's next planning or review step — use it to steer the build while it runs."
-                : "The build is finished — sending a note starts a follow-up pass in which the Architect addresses it."}
+                ? "Picked up at the Architect's next planning or review step - use it to steer the build while it runs."
+                : "The build is finished - sending a note starts a follow-up pass in which the Architect addresses it."}
             </p>
             <div className="mt-2 space-y-2">
               <div className="flex items-end gap-2">
@@ -1398,7 +1354,7 @@ function DiscussionPageInner() {
                     }
                   }}
                   rows={2}
-                  placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle…"
+                  placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle..."
                   className="flex-1 resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
                 <Button
@@ -1453,6 +1409,45 @@ function DiscussionPageInner() {
             </div>
           </div>
         )}
+
+      {discussion.mode === "build" && (
+        <BuildRunStats
+          status={status}
+          policy={discussion.buildRunPolicy ?? "finish"}
+          budgetUsd={discussion.buildBudgetUsd ?? 0}
+          timeLimitMinutes={discussion.buildTimeLimitMinutes ?? 120}
+          stopReason={discussion.buildStopReason}
+          branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
+          prUrl={repoWorkflow?.prUrl ?? null}
+          usage={buildUsage}
+        />
+      )}
+
+      {discussion.mode === "build" &&
+        discussion.buildStopReason &&
+        !buildStopReport &&
+        status === "stopped" && (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+            {discussion.buildStopReason === "blocked"
+              ? "Build stopped after repeated no-progress recovery attempts."
+              : `Build stopped because the ${discussion.buildStopReason} guardrail was reached.`}{" "}
+            Resume starts a fresh budget window and keeps the current checkpoint
+            (task graph, files, and repo/GitHub refs).
+          </p>
+        )}
+
+      {discussion.mode === "build" && (
+        <BuildTaskBoard
+          tasks={buildTasks}
+          files={writtenFiles}
+          commands={commandRuns}
+          folderName={discussion.projectFolderName}
+        />
+      )}
+
+      {discussion.mode === "build" && (
+        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} workflow={repoWorkflow} />
+      )}
 
       <DiscussionAttachments attachments={attachments} />
 

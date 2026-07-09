@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ModelAccent } from "@/lib/ui/model-accent";
 
+export const BUILD_TRANSCRIPT_INITIAL_ROUNDS = 5;
+export const BUILD_TRANSCRIPT_ROUND_INCREMENT = 5;
+
 interface BuildTranscriptPanelProps {
   messages: TimelineMessage[];
   accentMap: Map<string, ModelAccent>;
@@ -19,6 +22,15 @@ export function BuildTranscriptPanel({
   onDownload,
 }: BuildTranscriptPanelProps) {
   const [open, setOpen] = useState(false);
+  const [visibleRoundCount, setVisibleRoundCount] = useState(
+    BUILD_TRANSCRIPT_INITIAL_ROUNDS
+  );
+  const visibleMessages = selectBuildTranscriptMessages(
+    messages,
+    visibleRoundCount
+  );
+  const totalRounds = countTranscriptRounds(messages);
+  const hiddenRounds = Math.max(0, totalRounds - visibleRoundCount);
 
   return (
     <section className="rounded-lg border bg-card shadow-sm">
@@ -56,15 +68,56 @@ export function BuildTranscriptPanel({
         </Button>
       </div>
       {open && (
-        <div className="border-t p-4">
+        <div className="space-y-4 border-t p-4">
           <DiscussionTimeline
-            messages={messages}
+            messages={visibleMessages}
             accentMap={accentMap}
             emptyTitle="No raw model turns yet"
             emptyHint="Build progress appears in the task board and activity log."
+            roundOrder="desc"
           />
+          {hiddenRounds > 0 && (
+            <div className="flex justify-center border-t pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setVisibleRoundCount(
+                    (count) => count + BUILD_TRANSCRIPT_ROUND_INCREMENT
+                  )
+                }
+              >
+                Load {Math.min(BUILD_TRANSCRIPT_ROUND_INCREMENT, hiddenRounds)}{" "}
+                older round{hiddenRounds === 1 ? "" : "s"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </section>
   );
+}
+
+export function selectBuildTranscriptMessages(
+  messages: TimelineMessage[],
+  visibleRoundCount: number
+): TimelineMessage[] {
+  if (visibleRoundCount <= 0) return [];
+
+  const grouped = new Map<number, TimelineMessage[]>();
+  for (const message of messages) {
+    const roundMessages = grouped.get(message.round) ?? [];
+    roundMessages.push(message);
+    grouped.set(message.round, roundMessages);
+  }
+
+  return Array.from(grouped.entries())
+    .sort((a, b) => b[0] - a[0])
+    .slice(0, visibleRoundCount)
+    .flatMap(([, roundMessages]) => roundMessages);
+}
+
+function countTranscriptRounds(messages: TimelineMessage[]): number {
+  return new Set(messages.map((message) => message.round)).size;
 }

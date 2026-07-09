@@ -25,6 +25,7 @@ interface DiscussionTimelineProps {
   accentMap: Map<string, ModelAccent>;
   emptyTitle?: string;
   emptyHint?: string;
+  roundOrder?: "asc" | "desc";
 }
 
 export function DiscussionTimeline({
@@ -32,6 +33,7 @@ export function DiscussionTimeline({
   accentMap,
   emptyTitle,
   emptyHint,
+  roundOrder = "asc",
 }: DiscussionTimelineProps) {
   const rounds = useMemo(() => {
     const grouped = new Map<number, TimelineMessage[]>();
@@ -40,8 +42,10 @@ export function DiscussionTimeline({
       list.push(msg);
       grouped.set(msg.round, list);
     }
-    return Array.from(grouped.entries()).sort((a, b) => a[0] - b[0]);
-  }, [messages]);
+    return Array.from(grouped.entries()).sort((a, b) =>
+      roundOrder === "desc" ? b[0] - a[0] : a[0] - b[0]
+    );
+  }, [messages, roundOrder]);
 
   if (rounds.length === 0) {
     return (
