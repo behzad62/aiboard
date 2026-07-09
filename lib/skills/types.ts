@@ -43,6 +43,9 @@ export interface SkillCard {
 export interface SkillTaskLike {
   id?: string;
   title?: string;
+  kind?: "modify" | "audit" | "verify" | "repo";
+  completionMode?: "files" | "evidence" | "either";
+  verificationPolicy?: "architect" | "tool" | "external" | "none";
   instructions?: string;
   contextFiles?: string[];
   outputPaths?: string[];

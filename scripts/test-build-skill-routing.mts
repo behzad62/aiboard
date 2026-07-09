@@ -49,4 +49,38 @@ check(
   activation.evidenceRequired
 );
 
+const repoCommitTask: BuildTask = {
+  id: "T10",
+  title: "Commit posture timing and documentation update",
+  kind: "repo",
+  completionMode: "evidence",
+  verificationPolicy: "tool",
+  instructions:
+    "Use typed repo actions to inspect status and commit already-landed src/game.js and README.md changes.",
+  contextFiles: ["src/game.js", "README.md"],
+  outputPaths: [],
+  expectedOutputs: "Commit evidence and repo status.",
+  status: "planned",
+};
+
+const repoCommitActivation = selectSkills({
+  phase: "worker",
+  actor: "worker",
+  userRequest: "Commit completed paintball arena implementation changes.",
+  task: repoCommitTask,
+  touchedPaths: repoCommitTask.contextFiles,
+  riskFlags: ["repo"],
+  runnerAvailable: true,
+  repoAvailable: true,
+  skillMode: "strict",
+});
+
+check(
+  "repo evidence tasks do not require implementation TDD skills",
+  !repoCommitActivation.overlays.includes("agent:test-driven-development") &&
+    !repoCommitActivation.overlays.includes("superpowers:strict-test-driven-development") &&
+    !repoCommitActivation.evidenceRequired.some((item) => /test-driven|RED|GREEN/i.test(item)),
+  repoCommitActivation
+);
+
 process.exit(failed === 0 ? 0 : 1);
