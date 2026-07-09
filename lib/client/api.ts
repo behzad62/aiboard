@@ -193,6 +193,42 @@ export function continueDiscussion(id: string): void {
 }
 
 /**
+ * Browser Build runs only have a live engine in the tab that started them. If
+ * the tab is refreshed, the persisted "running" checkpoint is no longer an
+ * exact continuation point, so stop it and require an explicit Resume.
+ */
+export function interruptOrphanedRunningBuild(id: string): boolean {
+  if (isDiscussionRunning(id)) return false;
+
+  const discussion = getDiscussionById(id);
+  if (discussion?.mode !== "build" || discussion.status !== "running") {
+    return false;
+  }
+
+  const checkpoint = getBuildCheckpoint(id);
+  const now = new Date().toISOString();
+  if (checkpoint?.status === "running") {
+    upsertBuildCheckpoint({
+      ...checkpoint,
+      status: "stopped",
+      stopReason: "user",
+      updatedAt: now,
+      recoveryLog: [
+        ...(checkpoint.recoveryLog ?? []),
+        "Build was interrupted by a browser refresh or tab reload; Resume starts from the last durable checkpoint.",
+      ],
+    });
+  }
+  updateDiscussion(id, {
+    status: "stopped",
+    buildStopReason: "user",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  return true;
+}
+
+/**
  * Attach, replace, or clear the local runner for an existing discussion so a
  * later Resume continues with disk access. Pass null to disconnect. Runner
  * config is otherwise frozen at creation; this lets the user wire one up after

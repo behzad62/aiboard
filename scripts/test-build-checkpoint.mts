@@ -1,5 +1,13 @@
 /** Build checkpoint shape checks (run: npx tsx scripts/test-build-checkpoint.mts) */
-import type { BuildCheckpoint } from "../lib/db/schema";
+import { createRequire } from "node:module";
+import type { BuildCheckpoint, Discussion } from "../lib/db/schema";
+import type {
+  getBuildCheckpoint,
+  getDiscussionById,
+  insertDiscussion,
+  upsertBuildCheckpoint,
+  __resetClientStoreForTests,
+} from "../lib/client/store";
 import {
   __resetBenchmarkStoreForTests,
   __setAdapterForTests,
@@ -11,6 +19,16 @@ import {
   reopenBuildTasksForBlockedQualityGateCheckpoint,
   reopenBuildTasksForQualityGate,
 } from "../lib/orchestrator/build";
+
+const require = createRequire(import.meta.url);
+const storeApi = require("../lib/client/store") as {
+  __resetClientStoreForTests: typeof __resetClientStoreForTests;
+  getBuildCheckpoint: typeof getBuildCheckpoint;
+  getDiscussionById: typeof getDiscussionById;
+  insertDiscussion: typeof insertDiscussion;
+  upsertBuildCheckpoint: typeof upsertBuildCheckpoint;
+};
+const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -144,6 +162,68 @@ check(
   "resume preserves transient retry avoidance",
   resumedTransient.avoidWorkerIndexes?.join(",") === "1",
   resumedTransient
+);
+
+const runningDiscussion: Discussion = {
+  id: "disc-refresh-review",
+  topic: "Build a browser app.",
+  mode: "build",
+  effort: "medium",
+  status: "running",
+  modelIds: JSON.stringify(["test:worker"]),
+  judgeModelId: "test:architect",
+  attachmentIds: null,
+  currentRound: 4,
+  maxRounds: 8,
+  convergenceScore: null,
+  buildRunPolicy: "budgeted",
+  buildSkillMode: "strict",
+  buildStopReason: null,
+  buildStoppedAt: null,
+  createdAt: "2026-07-09T07:00:00.000Z",
+  updatedAt: "2026-07-09T07:10:00.000Z",
+};
+const runningReviewCheckpoint: BuildCheckpoint = {
+  ...checkpoint,
+  discussionId: runningDiscussion.id,
+  status: "running",
+  stopReason: null,
+  updatedAt: "2026-07-09T07:10:00.000Z",
+  tasks: [
+    {
+      id: "T-review",
+      title: "Review landed implementation",
+      instructions: "Architect is reviewing the worker output.",
+      contextFiles: ["src/main.ts"],
+      outputPaths: ["src/main.ts"],
+      status: "review",
+      workerIndex: 0,
+    },
+  ],
+};
+storeApi.__resetClientStoreForTests();
+storeApi.insertDiscussion(runningDiscussion);
+storeApi.upsertBuildCheckpoint(runningReviewCheckpoint);
+const interrupted = clientApi.interruptOrphanedRunningBuild(runningDiscussion.id);
+const interruptedDiscussion = storeApi.getDiscussionById(runningDiscussion.id);
+const interruptedCheckpoint = storeApi.getBuildCheckpoint(runningDiscussion.id);
+check("refresh interruption is detected for orphaned running build", interrupted, {
+  interruptedDiscussion,
+  interruptedCheckpoint,
+});
+check(
+  "refresh interruption stops the discussion instead of leaving it auto-runnable",
+  interruptedDiscussion?.status === "stopped" &&
+    interruptedDiscussion.buildStopReason === "user" &&
+    typeof interruptedDiscussion.buildStoppedAt === "string",
+  interruptedDiscussion
+);
+check(
+  "refresh interruption preserves review task state for a controlled resume",
+  interruptedCheckpoint?.status === "stopped" &&
+    interruptedCheckpoint.stopReason === "user" &&
+    interruptedCheckpoint.tasks[0]?.status === "review",
+  interruptedCheckpoint
 );
 
 const resumed = normalizeBuildTasksForResume([
