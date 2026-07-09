@@ -47,6 +47,46 @@ const completeTdd: SkillEvidence = {
   violations: [],
 };
 
+const strictTransientOnlyEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: RED: node --input-type=module -e \"assert.equal(false, true)\" failed before implementation.",
+    "- superpowers:strict-test-driven-development: GREEN: node --input-type=module -e \"assert.equal(true, true)\" passed after implementation.",
+    "- superpowers:strict-test-driven-development: Refactor was not needed; kept checks green.",
+  ].join("\n"),
+  landedPaths: ["src/game.js"],
+  declaredOutputPaths: ["src/game.js", "tests/game.test.mjs"],
+});
+check(
+  "strict TDD rejects transient RED/GREEN evidence without a persisted test file",
+  strictTransientOnlyEvidence[0]?.missingEvidence.some((item) =>
+    /persisted test file/i.test(item)
+  ),
+  strictTransientOnlyEvidence
+);
+
+const strictPersistedTestEvidence = createSkillEvidence({
+  taskId: "T1",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Skill evidence:",
+    "- superpowers:strict-test-driven-development: RED: npx tsx tests/game.test.mjs failed for the expected wall-hole LOS assertion before implementation.",
+    "- superpowers:strict-test-driven-development: GREEN: npx tsx tests/game.test.mjs passed after implementation.",
+    "- superpowers:strict-test-driven-development: Refactor was not needed; kept checks green.",
+  ].join("\n"),
+  landedPaths: ["src/game.js", "tests/game.test.mjs"],
+  declaredOutputPaths: ["src/game.js", "tests/game.test.mjs"],
+});
+check(
+  "strict TDD accepts RED/GREEN evidence when a persisted test file landed",
+  strictPersistedTestEvidence[0]?.missingEvidence.length === 0,
+  strictPersistedTestEvidence
+);
+
 const missingDebugging: SkillEvidence = {
   taskId: "T2",
   skillId: "superpowers:systematic-debugging",

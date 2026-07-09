@@ -282,6 +282,23 @@ check(
   planPromptWithWorkerCapabilities
 );
 
+const strictTddPlanPrompt = buildArchitectPlanPrompt({
+  request: "Change game behavior.",
+  treeText: "src/game.js",
+  fileContext: "",
+  maxTasks: 2,
+  workerNames: ["Worker"],
+  readHopsLeft: 0,
+  strictTdd: true,
+});
+check(
+  "strict Architect plan prompt requires persisted testOutputPaths for TDD",
+  strictTddPlanPrompt.includes("testOutputPaths") &&
+    /Transient node --check/.test(strictTddPlanPrompt) &&
+    /do not satisfy strict TDD/i.test(strictTddPlanPrompt),
+  strictTddPlanPrompt
+);
+
 const workerTools = buildWorkerToolInstructions({
   reads: 1,
   rangeReads: 1,

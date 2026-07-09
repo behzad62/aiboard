@@ -76,6 +76,14 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
         "search/read evidence that current baseline exists",
   ],
   [
+    "build_plan action preserves strict TDD test output paths",
+    '{"action":"build_plan","tasks":[{"id":"T1","title":"Implement wall holes","instructions":"Write the failing test first, then implement.","implementationContract":"Persist tests/game.test.mjs as the RED/GREEN test artifact.","contextFiles":["src/game.js"],"outputPaths":["src/game.js"],"testOutputPaths":["tests/game.test.mjs"],"difficulty":3}]}',
+    (a) =>
+      a?.action === "build_plan" &&
+      (a as { tasks: Array<{ testOutputPaths?: string[] }> }).tasks[0]?.testOutputPaths?.[0] ===
+        "tests/game.test.mjs",
+  ],
+  [
     "review action preserves new-task implementation contracts",
     '{"action":"review","results":[],"newTasks":[{"id":"T9","title":"Follow-up","instructions":"Wire the saved settings","implementationContract":"Use the existing settings API and do not add routes.","contextFiles":["lib/client/settings-api.ts"],"outputPaths":["app/settings/page.tsx"],"difficulty":2}],"done":false}',
     (a) =>
@@ -493,6 +501,14 @@ const pathCases: Array<[string, Parameters<typeof outputPathsForTask>[0], string
       outputPaths: ["Makefile", "Dockerfile", "scripts/build"],
     },
     ["Makefile", "Dockerfile", "scripts/build"],
+  ],
+  [
+    "testOutputPaths are merged into writable task paths",
+    {
+      outputPaths: ["src/game.js"],
+      testOutputPaths: ["tests/game.test.mjs"],
+    },
+    ["src/game.js", "tests/game.test.mjs"],
   ],
 ];
 

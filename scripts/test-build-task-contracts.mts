@@ -2,7 +2,9 @@
 import {
   buildReviewSkillEvidenceFixInstructions,
   canWorkerOutputAdvanceToReview,
+  isTaskWritePathAllowed,
   normalizeBuildTaskContract,
+  outputPathsForTask,
   taskRequiresToolVerification,
   validateBuildPlanForDispatch,
   type BuildTask,
@@ -186,6 +188,46 @@ check(
   "plan validator keeps audit task evidence-only",
   blockingPlan.tasks.find((task) => task.id === "T1")?.completionMode === "evidence",
   blockingPlan
+);
+
+const strictTddPlan = validateBuildPlanForDispatch(
+  [
+    baseTask({
+      id: "T1",
+      title: "Implement arena wall holes",
+      instructions: "Change line-of-sight and projectile behavior for window walls.",
+      outputPaths: ["src/game.js"],
+    }),
+  ],
+  { strictTdd: true }
+);
+const strictTddTask = strictTddPlan.tasks[0]!;
+check(
+  "strict TDD plan validation adds a writable persisted test output path",
+  outputPathsForTask(strictTddTask).includes("tests/game.test.mjs") &&
+    isTaskWritePathAllowed(strictTddTask, "tests/game.test.mjs") &&
+    strictTddPlan.warnings.some((warning) => /Strict TDD.*test output path/i.test(warning)),
+  strictTddPlan
+);
+
+const strictTddWithDeclaredTestPath = validateBuildPlanForDispatch(
+  [
+    baseTask({
+      id: "T1",
+      title: "Implement arena wall holes",
+      instructions: "Change line-of-sight and projectile behavior for window walls.",
+      outputPaths: ["src/game.js"],
+      testOutputPaths: ["tests/window-wall.test.mjs"],
+    }),
+  ],
+  { strictTdd: true }
+);
+check(
+  "strict TDD plan validation preserves Architect-declared test output paths",
+  outputPathsForTask(strictTddWithDeclaredTestPath.tasks[0]!).includes(
+    "tests/window-wall.test.mjs"
+  ) && strictTddWithDeclaredTestPath.warnings.length === 0,
+  strictTddWithDeclaredTestPath
 );
 
 process.exit(failed === 0 ? 0 : 1);

@@ -5670,6 +5670,7 @@ export async function runBuildDiscussion(
         : undefined,
     contextFiles: (raw.contextFiles ?? []).slice(0, MAX_CONTEXT_FILES),
     outputPaths: outputPathsForTask(raw),
+    testOutputPaths: outputPathsForTask({ outputPaths: raw.testOutputPaths }),
     expectedOutputs: raw.expectedOutputs,
     status: "planned",
     dependsOn: Array.isArray(raw.dependsOn)
@@ -6040,6 +6041,7 @@ export async function runBuildDiscussion(
         shellHint,
         skillContext: planSkillContext,
         assembledContext: planAssembledContext,
+        strictTdd: buildSettings.skillMode === "strict",
       }),
       budgets: {
         reads: ARCHITECT_READS_PER_PHASE,
@@ -6232,7 +6234,8 @@ export async function runBuildDiscussion(
       });
     }
     const dispatchValidation = validateBuildPlanForDispatch(
-      allocatedPlanTasks.tasks.map(toTask)
+      allocatedPlanTasks.tasks.map(toTask),
+      { strictTdd: buildSettings.skillMode === "strict" }
     );
     tasks = dispatchValidation.tasks;
     for (const warning of dispatchValidation.warnings) {
@@ -7755,6 +7758,8 @@ export async function runBuildDiscussion(
           actor: worker.displayName,
           activeSkillIds: workerSkills.overlays,
           workerOutput: output,
+          landedPaths: files,
+          declaredOutputPaths,
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
             emittedFiles: files,
             declaredOutputPaths,
@@ -8623,7 +8628,9 @@ export async function runBuildDiscussion(
       touchLiveCheckpoint({ force: true, reason: `${task.id} planned` });
     }
     if (novelTasks.tasks.length > 0) {
-      const dispatchValidation = validateBuildPlanForDispatch(tasks);
+      const dispatchValidation = validateBuildPlanForDispatch(tasks, {
+        strictTdd: buildSettings.skillMode === "strict",
+      });
       tasks = dispatchValidation.tasks;
       for (const warning of dispatchValidation.warnings) {
         architectNotes = [architectNotes, `Plan validation: ${warning}`]

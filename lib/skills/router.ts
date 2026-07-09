@@ -91,6 +91,7 @@ function taskText(task?: SkillTaskLike): string {
     task.expectedOutputs,
     ...(task.contextFiles ?? []),
     ...(task.outputPaths ?? []),
+    ...(task.testOutputPaths ?? []),
     task.status,
   ]
     .filter(Boolean)
@@ -103,11 +104,15 @@ function taskPaths(input: SkillActivationInput): string[] {
     ...(input.touchedPaths ?? []),
     ...(input.task?.contextFiles ?? []),
     ...(input.task?.outputPaths ?? []),
+    ...(input.task?.testOutputPaths ?? []),
   ].map((path) => path.toLowerCase());
 }
 
 function writableTaskPaths(input: SkillActivationInput): string[] {
-  const outputs = input.task?.outputPaths ?? [];
+  const outputs = [
+    ...(input.task?.outputPaths ?? []),
+    ...(input.task?.testOutputPaths ?? []),
+  ];
   return (outputs.length > 0 ? outputs : taskPaths(input)).map((path) =>
     path.toLowerCase()
   );

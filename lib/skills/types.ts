@@ -49,6 +49,7 @@ export interface SkillTaskLike {
   instructions?: string;
   contextFiles?: string[];
   outputPaths?: string[];
+  testOutputPaths?: string[];
   expectedOutputs?: string;
   status?: string;
 }

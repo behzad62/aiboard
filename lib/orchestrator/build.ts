@@ -107,6 +107,8 @@ export interface BuildTask {
   contextFiles: string[];
   /** Exact files this task is allowed/expected to create or modify. */
   outputPaths?: string[];
+  /** Exact persisted test files this task may create or modify for strict TDD. */
+  testOutputPaths?: string[];
   /** What the Architect expects back (free text, e.g. file paths). */
   expectedOutputs?: string;
   status: BuildTaskStatus;
@@ -183,7 +185,7 @@ function taskContractText(task: Pick<BuildTask, "title" | "instructions" | "expe
     .toLowerCase();
 }
 
-function inferBuildTaskKind(task: Pick<BuildTask, "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths">): BuildTaskKind {
+function inferBuildTaskKind(task: Pick<BuildTask, "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths" | "testOutputPaths">): BuildTaskKind {
   const text = taskContractText(task);
   if (/\b(commit|branch|pull request|pr |github|repo_status|repo status|repository workflow)\b/.test(text)) {
     return "repo";
@@ -198,7 +200,7 @@ function inferBuildTaskKind(task: Pick<BuildTask, "title" | "instructions" | "ex
 }
 
 function defaultCompletionModeForTask(
-  task: Pick<BuildTask, "kind" | "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths">
+  task: Pick<BuildTask, "kind" | "title" | "instructions" | "expectedOutputs" | "implementationContract" | "outputPaths" | "testOutputPaths">
 ): BuildTaskCompletionMode {
   if (task.kind === "audit" || task.kind === "verify" || task.kind === "repo") {
     return outputPathsForTask(task).length > 0 ? "either" : "evidence";
@@ -207,7 +209,7 @@ function defaultCompletionModeForTask(
 }
 
 function defaultVerificationPolicyForTask(
-  task: Pick<BuildTask, "kind" | "completionMode" | "outputPaths">
+  task: Pick<BuildTask, "kind" | "completionMode" | "outputPaths" | "testOutputPaths">
 ): BuildTaskVerificationPolicy {
   if (task.kind === "audit" || task.completionMode === "evidence") return "architect";
   if (task.kind === "repo") return "external";
@@ -357,16 +359,41 @@ export interface BuildPlanDispatchValidation {
 }
 
 export function validateBuildPlanForDispatch(
-  tasks: BuildTask[]
+  tasks: BuildTask[],
+  options: { strictTdd?: boolean } = {}
 ): BuildPlanDispatchValidation {
-  const normalized = tasks.map((task) => normalizeBuildTaskContract({ ...task }));
-  const auditBlockerIds = new Set(
-    normalized.filter(isLikelyBaselineAuditBlocker).map((task) => task.id)
-  );
   const warnings: string[] = [];
-  if (auditBlockerIds.size === 0) return { tasks: normalized, warnings };
+  const normalized = tasks.map((task) => {
+    const next = normalizeBuildTaskContract({ ...task });
+    const outputPaths = outputPathsForTask(next);
+    return outputPaths.length > 0 ? { ...next, outputPaths } : next;
+  });
+  const strictTddNormalized = options.strictTdd
+    ? normalized.map((task) => {
+        if (!taskNeedsStrictTddTestOutput(task)) return task;
+        const testPath = suggestedStrictTddTestOutputPath(task);
+        const outputPaths = outputPathsForTask(task);
+        const requiredEvidence = [
+          ...(task.requiredEvidence ?? []),
+          `Persisted RED/GREEN test artifact: ${testPath}`,
+        ];
+        warnings.push(
+          `Strict TDD added missing test output path to ${task.id}: ${testPath}.`
+        );
+        return normalizeBuildTaskContract({
+          ...task,
+          outputPaths: [...outputPaths, testPath],
+          testOutputPaths: [...(task.testOutputPaths ?? []), testPath],
+          requiredEvidence: uniqueStrings(requiredEvidence),
+        });
+      })
+    : normalized;
+  const auditBlockerIds = new Set(
+    strictTddNormalized.filter(isLikelyBaselineAuditBlocker).map((task) => task.id)
+  );
+  if (auditBlockerIds.size === 0) return { tasks: strictTddNormalized, warnings };
 
-  const nextTasks = normalized.map((task) => {
+  const nextTasks = strictTddNormalized.map((task) => {
     if (!task.dependsOn?.length) return task;
     const stripped = task.dependsOn.filter((dep) => !auditBlockerIds.has(dep));
     if (stripped.length !== task.dependsOn.length) {
@@ -473,6 +500,7 @@ function isLikelyUiTask(task: BuildTask): boolean {
     task.title,
     task.instructions,
     ...(task.outputPaths ?? []),
+    ...(task.testOutputPaths ?? []),
     ...task.contextFiles,
   ]
     .join("\n")
@@ -486,6 +514,7 @@ function isLikelyDocumentationTask(task: BuildTask): boolean {
     task.title,
     task.instructions,
     ...(task.outputPaths ?? []),
+    ...(task.testOutputPaths ?? []),
     ...task.contextFiles,
   ]
     .join("\n")
@@ -592,6 +621,7 @@ export function reopenBuildTasksForQualityGate(
       contextFiles: uniqueStrings([
         ...task.contextFiles,
         ...(task.outputPaths ?? []),
+        ...(task.testOutputPaths ?? []),
       ]).slice(0, maxContextFiles),
       instructions,
     };
@@ -764,7 +794,7 @@ export function allocateIncrementalTaskIds(
 }
 
 export function filterNovelReviewTasks(
-  existingTasks: Pick<BuildTask, "id" | "title" | "status" | "outputPaths">[],
+  existingTasks: Pick<BuildTask, "id" | "title" | "status" | "outputPaths" | "testOutputPaths">[],
   candidates: PlanAction["tasks"]
 ): ReviewTaskFilterResult {
   const existingByOutputPath = new Map<
@@ -773,7 +803,7 @@ export function filterNovelReviewTasks(
   >();
   for (const task of existingTasks) {
     if (task.status === "done") continue;
-    for (const outputPath of task.outputPaths ?? []) {
+    for (const outputPath of outputPathsForTask(task)) {
       const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
       if (normalized) {
         existingByOutputPath.set(normalized, {
@@ -787,7 +817,7 @@ export function filterNovelReviewTasks(
   const skipped: ReviewTaskFilterResult["skipped"] = [];
   for (const candidate of candidates) {
     const id = candidate.id?.trim();
-    const duplicateOutput = (candidate.outputPaths ?? [])
+    const duplicateOutput = outputPathsForTask(candidate)
       .map((path) => path.trim().replace(/\\/g, "/").toLowerCase())
       .filter(Boolean)
       .map((path) => existingByOutputPath.get(path))
@@ -801,7 +831,7 @@ export function filterNovelReviewTasks(
       continue;
     }
     accepted.push(candidate);
-    for (const outputPath of candidate.outputPaths ?? []) {
+    for (const outputPath of outputPathsForTask(candidate)) {
       const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
       if (normalized) {
         existingByOutputPath.set(normalized, {
@@ -1014,6 +1044,7 @@ export interface PlanAction {
     implementationContract?: string;
     contextFiles?: string[];
     outputPaths?: string[];
+    testOutputPaths?: string[];
     expectedOutputs?: string;
     dependsOn?: string[];
     /** Optional: pin this task to a worker by display name (e.g. the best
@@ -1263,6 +1294,9 @@ const buildTaskActionSchema = (): JsonSchemaObject => ({
     ),
     contextFiles: stringArraySchema("Files the worker should inspect."),
     outputPaths: stringArraySchema("Files this task may create or modify."),
+    testOutputPaths: stringArraySchema(
+      "Persisted test files this task may create or modify for TDD."
+    ),
     expectedOutputs: stringSchema("Expected completion signal."),
     dependsOn: stringArraySchema("Task ids that must complete first."),
     assignTo: stringSchema("Optional worker display-name preference."),
@@ -2390,11 +2424,16 @@ function pathsFromExpectedOutputs(expectedOutputs?: string): string[] {
 
 export function outputPathsForTask(task: {
   outputPaths?: unknown;
+  testOutputPaths?: unknown;
   expectedOutputs?: string;
 }): string[] {
-  const explicit = Array.isArray(task.outputPaths)
+  const explicitOutputs = Array.isArray(task.outputPaths)
     ? task.outputPaths.filter((p): p is string => typeof p === "string")
     : [];
+  const explicitTests = Array.isArray(task.testOutputPaths)
+    ? task.testOutputPaths.filter((p): p is string => typeof p === "string")
+    : [];
+  const explicit = [...explicitOutputs, ...explicitTests];
   const candidates =
     explicit.length > 0 ? explicit : pathsFromExpectedOutputs(task.expectedOutputs);
   const seen = new Set<string>();
@@ -2411,6 +2450,51 @@ export function outputPathsForTask(task: {
     paths.push(path);
   }
   return paths;
+}
+
+export function isLikelyTestOutputPath(rawPath: string): boolean {
+  const path = normalizeExplicitOutputPath(rawPath)?.toLowerCase();
+  if (!path) return false;
+  const filename = path.split("/").pop() ?? path;
+  return (
+    path.startsWith("tests/") ||
+    path.startsWith("test/") ||
+    path.includes("/tests/") ||
+    path.includes("/test/") ||
+    path.includes("/__tests__/") ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(filename) ||
+    /^test[-_.].*\.[cm]?[jt]sx?$/.test(filename)
+  );
+}
+
+function isStrictTddCodeOutputPath(rawPath: string): boolean {
+  const path = normalizeExplicitOutputPath(rawPath);
+  if (!path || isLikelyTestOutputPath(path)) return false;
+  return /\.(?:[cm]?[jt]sx?|py|go|rs|java|cs|php|rb)$/i.test(path);
+}
+
+function taskNeedsStrictTddTestOutput(task: BuildTask): boolean {
+  const normalized = normalizeBuildTaskContract(task);
+  if (normalized.kind !== "modify") return false;
+  const outputs = outputPathsForTask(normalized);
+  if (outputs.some(isLikelyTestOutputPath)) return false;
+  return outputs.some(isStrictTddCodeOutputPath);
+}
+
+function suggestedStrictTddTestOutputPath(task: BuildTask): string {
+  const sourcePath =
+    outputPathsForTask(task).find(isStrictTddCodeOutputPath) ??
+    `${task.id || "task"}.js`;
+  const filename = sourcePath.split("/").pop() ?? sourcePath;
+  const parts = filename.split(".");
+  const extension = parts.pop()?.toLowerCase() ?? "js";
+  const rawStem = parts.length > 0 ? parts.join(".") : filename;
+  const stem = rawStem
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || (task.id || "task").toLowerCase();
+  const testExtension = /^(?:ts|tsx|mts|cts)$/.test(extension) ? "mts" : "mjs";
+  return `tests/${stem}.test.${testExtension}`;
 }
 
 const SUSPICIOUS_BUILD_ARTIFACT_PATHS = new Set([
@@ -2441,7 +2525,7 @@ function normalizedPathSet(paths: string[]): Set<string> {
 }
 
 export function isTaskWritePathAllowed(
-  task: Pick<BuildTask, "contextFiles" | "outputPaths" | "expectedOutputs">,
+  task: Pick<BuildTask, "contextFiles" | "outputPaths" | "testOutputPaths" | "expectedOutputs">,
   rawPath: string
 ): boolean {
   const path = normalizeExplicitOutputPath(rawPath);
@@ -3090,6 +3174,7 @@ function normalizePlanningTaskAction(
   const completionMode = cleanTaskCompletionMode(raw.completionMode);
   const verificationPolicy = cleanTaskVerificationPolicy(raw.verificationPolicy);
   const requiredEvidence = stringArrayFromUnknown(raw.requiredEvidence);
+  const testOutputPaths = stringArrayFromUnknown(raw.testOutputPaths);
   return {
     ...task,
     ...(implementationContract ? { implementationContract } : {}),
@@ -3097,6 +3182,7 @@ function normalizePlanningTaskAction(
     ...(completionMode ? { completionMode } : {}),
     ...(verificationPolicy ? { verificationPolicy } : {}),
     ...(requiredEvidence.length > 0 ? { requiredEvidence } : {}),
+    ...(testOutputPaths.length > 0 ? { testOutputPaths } : {}),
   };
 }
 
@@ -4911,9 +4997,14 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
   memoryBrief?: string;
   /** AIBoard-native compact skill context selected by the engine. */
   skillContext?: string;
+  /** Strict skill mode requires persisted test artifacts for behavior changes. */
+  strictTdd?: boolean;
 }): string {
   const assembledContext = renderAssembledContext(input.assembledContext);
   const hasAssembledContext = assembledContext.trim().length > 0;
+  const strictTddRule = input.strictTdd
+    ? `Strict TDD rule: every behavior-changing kind="modify" task that edits executable source must include at least one persisted test file in "testOutputPaths" (or outputPaths) and must require writing/updating that test before implementation in instructions or implementationContract. If no harness exists, include the harness/test file path and any package/lockfile updates needed. Transient node --check, browser smoke checks, or inline node -e assertions are verification only; they do not satisfy strict TDD.`
+    : "";
   const readOption = input.readHopsLeft > 0
     ? `If you need to inspect existing files before planning, respond with only JSON tool actions — e.g.\n{"action":"read","paths":["relative/path", "..."]}\n(max 8 paths; you have ${input.readHopsLeft} read request${input.readHopsLeft === 1 ? "" : "s"} left). You may send a few independent reads/searches together; the engine runs the safe ones as a batch and returns a served/skipped report. Otherwise, plan now.`
     : "Plan now — no more file reads are available.";
@@ -4954,15 +5045,16 @@ export function buildArchitectPlanPrompt(input: BuildPromptContextInput & {
       : "Before listing worker tasks, define a compact current phase spec. This is the contract for the current wave only: objective, acceptance criteria, code-quality criteria, verification expectations, and constraints workers/reviewers must follow.",
     `To plan, respond with a short rationale followed by ONE fenced json block:`,
     "```json",
-    `{"action":"build_plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"implementationPlan":"brief Architect-owned implementation sequence and integration strategy","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","implementationContract":"binding design details for this worker: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
+    `{"action":"build_plan","phaseSpec":{"id":"P1","objective":"current phase objective","acceptanceCriteria":["observable behavior or file outcome required before this phase can pass"],"qualityCriteria":["maintainability, scope, integration, and test expectations for this phase"],"verification":["non-mutating command or evidence expected for this phase"],"constraints":["important repo/user constraints workers must preserve"]},"implementationPlan":"brief Architect-owned implementation sequence and integration strategy","tasks":[{"id":"T1","title":"...","instructions":"complete, self-contained instructions — the worker sees nothing else; include the relevant phase acceptance and quality criteria","implementationContract":"binding design details for this worker: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every source/config file this task may create or modify"],"testOutputPaths":["persisted test files this task may create or modify for TDD"],"expectedOutputs":"short prose summary of expected files or outcomes","dependsOn":["ids of tasks whose output this one needs, [] when independent"],"assignTo":"optional worker display name for this task (omit to auto-assign by performance)","difficulty":3}],"notes":"conventions all workers must follow","verifyCommand":"ONE non-interactive shell command that compiles or syntax-checks this project; it runs automatically after every wave and its errors come back to you. Match the stack: dotnet build | go build ./... | cargo check | npx --yes tsc --noEmit | cmake -S . -B .verify-build && cmake --build .verify-build | g++ -fsyntax-only src/*.cpp | php -l src/index.php | python -m compileall -q . | ./gradlew compileJava. On Windows runners, do not use POSIX-only checks like test -f or grep; use npm/build commands or a node -e verifier. Omit only when nothing meaningful can run."}`,
     "```",
     `Task ids are advisory; the engine assigns the final incremental T<number> ids before workers start. Keep dependsOn internally consistent within your JSON plan.`,
     `verifyCommand must be a non-mutating verification command. It must not edit files; all source changes must go through worker output, patch, or append.`,
     `Rules: at most ${input.maxTasks} tasks this wave (you can add more after reviewing); make each task independently doable by one model in one response; put shared conventions (naming, stack, structure) in notes AND in each task's instructions; put binding design details in each task's implementationContract.`,
     `Task contract rule: use kind="modify" + completionMode="files" for tasks that must write files; kind="audit" or "verify" + completionMode="evidence" for no-change/current-state/acceptance-evidence tasks; completionMode="either" only when existing work may already satisfy the task. Do not force a file patch for an audit task.`,
+    strictTddRule,
     `Verification rule: verificationPolicy="tool" only when a command/browser/tool result is required. Use verificationPolicy="architect" when Architect review of available evidence is enough; the system will not force a tool check for that task.`,
     `Tasks run CONCURRENTLY whenever their "dependsOn" tasks are finished — maximize parallelism: keep dependsOn empty unless a task truly consumes another task's files, and prefer many independent tasks over one long chain. Workers cannot see each other's in-progress output, so each task must own its files exclusively.`,
-    `List in every task's "outputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
+    `List in every task's "outputPaths" and "testOutputPaths" ALL files it may create or modify; an integration/wiring/final-pass task that edits files produced by other tasks MUST name those tasks in its "dependsOn" — tasks with overlapping outputPaths or testOutputPaths are never run concurrently (the engine defers them), so omitting the dependency only stalls the wave, it cannot make them safe.`,
     `Rate each task's "difficulty" 1-5 honestly (1 = trivial boilerplate, 3 = typical feature, 5 = hard/architectural). It does not change who does the work — it weights the global model leaderboard so a model approved on a hard task outranks one approved on a trivial one. Be consistent across tasks.`,
   ]
     .filter(Boolean)
@@ -5140,7 +5232,7 @@ export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
     "You are the Build Architect answering a worker's task-local guidance request.",
     "Answer the worker's exact question. Keep the answer advisory and scoped to this task.",
     'If the answer affects conventions across the build, include a short optional "memory" field with that reusable convention. Omit "memory" for task-only answers.',
-    "Do not change outputPaths, dependsOn, file ownership, or write permissions. If the task contract is wrong, say what follow-up planning or review should do, but do not rewrite the contract in this answer.",
+    "Do not change outputPaths, testOutputPaths, dependsOn, file ownership, or write permissions. If the task contract is wrong, say what follow-up planning or review should do, but do not rewrite the contract in this answer.",
     "",
     "Overall project request:",
     input.request,
@@ -5156,6 +5248,9 @@ export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
     input.task.outputPaths?.length
       ? `Task outputPaths: ${input.task.outputPaths.join(", ")}`
       : "Task outputPaths: none declared.",
+    input.task.testOutputPaths?.length
+      ? `Task testOutputPaths: ${input.task.testOutputPaths.join(", ")}`
+      : "",
     input.task.expectedOutputs
       ? `Expected outputs: ${input.task.expectedOutputs}`
       : "",
@@ -5340,10 +5435,10 @@ export function buildArchitectReviewPrompt(input: BuildPromptContextInput & {
     'If the automated verifier itself is wrong for this stack, replace the automated verifier by adding `verifyCommand` to your review JSON. Use a real non-mutating command that matches the files, or `""` only when no meaningful automated verifier exists. Do not replace a failing valid verifier just to hide real implementation failures.',
     "End with ONE fenced json block:",
     "```json",
-    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every file this task may create or modify"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"requestFulfillment":{"reviewed":true,"satisfied":false,"summary":"Compared landed output to the original user request; gaps remain.","evidence":["files, checks, browser/CLI/API/docs/repo evidence reviewed"],"gaps":["blocking unmet requirement or missing evidence"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
+    `{"action":"review","results":[{"taskId":"T1","specVerdict":"approve","qualityVerdict":"fix","specIssues":"","qualityIssues":"code-quality issue when qualityVerdict is fix","fixInstructions":"required when either verdict is fix"}],"newTasks":[{"id":"T9","title":"...","instructions":"...","implementationContract":"binding design details for this new task: exact APIs/components/state shape/file boundaries/error cases/tests or evidence; do not leave these choices to the worker","contextFiles":["existing files the worker must see"],"outputPaths":["every source/config file this task may create or modify"],"testOutputPaths":["persisted test files this task may create or modify for TDD"],"dependsOn":[],"assignTo":"optional worker display name","difficulty":3}],"phaseSpec":{"id":"P2","objective":"next phase objective for newTasks when the phase changes","acceptanceCriteria":["criterion for new tasks"],"qualityCriteria":["quality bar for new tasks"],"verification":["command or evidence"],"constraints":["constraint to preserve"]},"requestFulfillment":{"reviewed":true,"satisfied":false,"summary":"Compared landed output to the original user request; gaps remain.","evidence":["files, checks, browser/CLI/API/docs/repo evidence reviewed"],"gaps":["blocking unmet requirement or missing evidence"]},"verifyCommand":"optional replacement verifier when the current one is wrong for this stack","done":false,"notes":"updated conventions if any"}`,
     "```",
     `Task ids in newTasks are advisory only; the engine assigns the next incremental T<number> ids and preserves existing task ids across refresh/resume. Use dependsOn only for existing task ids or other new-task ids you defined in the same JSON.`,
-    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
+    `New tasks run CONCURRENTLY when their "dependsOn" tasks are finished — keep dependsOn empty unless a task consumes another task's output, and give each task exclusive ownership of its files via outputPaths and testOutputPaths. Always list the existing files a new task builds on in contextFiles. Every new task must include an implementationContract so workers do not invent architecture, APIs, state shape, file boundaries, edge cases, or verification evidence.`,
     `Every new task should also include kind, completionMode, verificationPolicy, and requiredEvidence when no-file or Architect-reviewed completion is acceptable.`,
     "Spec-compliance review checks whether the landed work satisfies the Architect spec, current phase spec, task instructions, and implementation contract. Code-quality review checks maintainability, scoped changes, integration, verification evidence, and repo conventions. A task is approved only when BOTH specVerdict and qualityVerdict are approve.",
     `Rules: max ${input.maxNewTasks} new tasks; ${input.cyclesLeft} review cycle${input.cyclesLeft === 1 ? "" : "s"} remain after this one, so prioritize what makes the project complete and working. Set "done": true ONLY when the project fulfils the request with no outstanding fixes.`,

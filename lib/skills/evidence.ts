@@ -67,11 +67,55 @@ function isEvidenceOnlyOptionalSkill(skillId: string): boolean {
   );
 }
 
+function normalizeEvidencePath(rawPath: string): string {
+  return rawPath.trim().replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase();
+}
+
+function isLikelyPersistedTestPath(rawPath: string): boolean {
+  const path = normalizeEvidencePath(rawPath);
+  if (!path) return false;
+  const filename = path.split("/").pop() ?? path;
+  return (
+    path.startsWith("tests/") ||
+    path.startsWith("test/") ||
+    path.includes("/tests/") ||
+    path.includes("/test/") ||
+    path.includes("/__tests__/") ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(filename) ||
+    /^test[-_.].*\.[cm]?[jt]sx?$/.test(filename)
+  );
+}
+
+function hasPersistedStrictTddTestEvidence(
+  joined: string,
+  context: SkillEvidenceContext
+): boolean {
+  if ((context.landedPaths ?? []).some(isLikelyPersistedTestPath)) return true;
+  const declaredTestPaths = (context.declaredOutputPaths ?? [])
+    .map(normalizeEvidencePath)
+    .filter(isLikelyPersistedTestPath);
+  if (declaredTestPaths.length === 0) return false;
+  const mentionsPersistedTest =
+    /\b(existing|persisted|test file|added|created|updated|modified|landed|wrote|committed)\b/.test(
+      joined
+    );
+  return (
+    mentionsPersistedTest &&
+    declaredTestPaths.some((path) => joined.includes(path))
+  );
+}
+
+interface SkillEvidenceContext {
+  landedPaths?: string[];
+  declaredOutputPaths?: string[];
+}
+
 function missingForSkill(
   skillId: string,
   required: string[],
   reported: string[],
-  allowVerificationOnlyExemptions: boolean
+  allowVerificationOnlyExemptions: boolean,
+  context: SkillEvidenceContext
 ): string[] {
   if (reported.length === 0) {
     return allowVerificationOnlyExemptions && isEvidenceOnlyOptionalSkill(skillId)
@@ -98,6 +142,12 @@ function missingForSkill(
       !/refactor|no refactor|kept.*green/.test(joined)
     ) {
       missing.push("Refactor kept checks green or was not needed");
+    }
+    if (
+      skillId === "superpowers:strict-test-driven-development" &&
+      !hasPersistedStrictTddTestEvidence(joined, context)
+    ) {
+      missing.push("Persisted test file evidence (added/updated or identified existing test file)");
     }
     return missing;
   }
@@ -153,6 +203,8 @@ export function createSkillEvidence(input: {
   actor: string;
   activeSkillIds: string[];
   workerOutput: string;
+  landedPaths?: string[];
+  declaredOutputPaths?: string[];
   allowVerificationOnlyExemptions?: boolean;
 }): SkillEvidence[] {
   const reported = evidenceLines(input.workerOutput);
@@ -164,7 +216,11 @@ export function createSkillEvidence(input: {
         skill.id,
         required,
         reported,
-        input.allowVerificationOnlyExemptions ?? false
+        input.allowVerificationOnlyExemptions ?? false,
+        {
+          landedPaths: input.landedPaths,
+          declaredOutputPaths: input.declaredOutputPaths,
+        }
       );
       return {
         taskId: input.taskId,
