@@ -14,11 +14,13 @@ import type {
   Verbosity,
 } from "@/lib/db/schema";
 import {
+  getBuildCheckpoint,
   getDiscussionById,
   getMessagesForDiscussion,
   insertFinalResult,
   insertMessage,
   updateDiscussion,
+  upsertBuildCheckpoint,
 } from "./store";
 import {
   CUSTOM_PROVIDER_ID,
@@ -1049,6 +1051,13 @@ export async function runDiscussion(
         message: "Stopped by the user — restart it whenever you're ready",
       });
     } else {
+      const failedDiscussion = getDiscussionById(discussionId);
+      if (failedDiscussion?.mode === "build") {
+        finalizeRunningBuildCheckpointAfterFailure(
+          discussionId,
+          err instanceof Error ? err.message : "Discussion failed"
+        );
+      }
       updateDiscussion(discussionId, {
         status: "failed",
         updatedAt: new Date().toISOString(),
@@ -1070,4 +1079,40 @@ export async function runDiscussion(
     runningDiscussions.delete(discussionId);
     abortControllers.delete(discussionId);
   }
+}
+
+export function finalizeRunningBuildCheckpointAfterFailure(
+  discussionId: string,
+  message: string
+): boolean {
+  const checkpoint = getBuildCheckpoint(discussionId);
+  if (!checkpoint || checkpoint.status !== "running") return false;
+
+  const now = new Date().toISOString();
+  const detail = message.trim() || "Discussion failed";
+  const buildProblems = [
+    ...(checkpoint.buildProblems ?? []),
+    {
+      id: uuidv4(),
+      createdAt: now,
+      code: "incomplete_tasks" as const,
+      severity: "blocked" as const,
+      source: "engine" as const,
+      wave: checkpoint.wave,
+      message: `Build failed before a terminal checkpoint was saved: ${detail}`,
+    },
+  ].slice(-80);
+
+  upsertBuildCheckpoint({
+    ...checkpoint,
+    status: "blocked",
+    stopReason: "blocked",
+    updatedAt: now,
+    recoveryLog: [
+      ...(checkpoint.recoveryLog ?? []),
+      `Stopped as blocked after unexpected failure: ${detail}`,
+    ],
+    buildProblems,
+  });
+  return true;
 }

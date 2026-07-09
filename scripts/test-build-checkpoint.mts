@@ -29,6 +29,7 @@ const storeApi = require("../lib/client/store") as {
   upsertBuildCheckpoint: typeof upsertBuildCheckpoint;
 };
 const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
+const engineApi = require("../lib/client/engine") as typeof import("../lib/client/engine");
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -224,6 +225,56 @@ check(
     interruptedCheckpoint.stopReason === "user" &&
     interruptedCheckpoint.tasks[0]?.status === "review",
   interruptedCheckpoint
+);
+
+const thrownFailureDiscussion: Discussion = {
+  ...runningDiscussion,
+  id: "disc-thrown-build-failure",
+  status: "running",
+  updatedAt: "2026-07-09T09:58:00.000Z",
+};
+const thrownFailureCheckpoint: BuildCheckpoint = {
+  ...runningReviewCheckpoint,
+  discussionId: thrownFailureDiscussion.id,
+  status: "running",
+  stopReason: null,
+  updatedAt: "2026-07-09T09:58:00.000Z",
+  tasks: [
+    {
+      id: "T7",
+      title: "Run final verification",
+      instructions: "Run deterministic and browser checks.",
+      contextFiles: ["src/game.js"],
+      outputPaths: ["src/game.js"],
+      status: "failed",
+      failCount: 3,
+    },
+    {
+      id: "T12",
+      title: "Final browser acceptance",
+      instructions: "Run browser acceptance.",
+      contextFiles: ["index.html"],
+      outputPaths: [],
+      status: "planned",
+    },
+  ],
+};
+storeApi.__resetClientStoreForTests();
+storeApi.insertDiscussion(thrownFailureDiscussion);
+storeApi.upsertBuildCheckpoint(thrownFailureCheckpoint);
+const finalizedAfterThrow = engineApi.finalizeRunningBuildCheckpointAfterFailure(
+  thrownFailureDiscussion.id,
+  "Failed to generate completions"
+);
+const failedCheckpoint = storeApi.getBuildCheckpoint(thrownFailureDiscussion.id);
+check("thrown build failure finalizes a running checkpoint", finalizedAfterThrow, failedCheckpoint);
+check(
+  "thrown build failure checkpoint becomes blocked and resumable",
+  failedCheckpoint?.status === "blocked" &&
+    failedCheckpoint.stopReason === "blocked" &&
+    failedCheckpoint.tasks[0]?.status === "failed" &&
+    /unexpected failure/i.test(failedCheckpoint.recoveryLog.at(-1) ?? ""),
+  failedCheckpoint
 );
 
 const resumed = normalizeBuildTasksForResume([

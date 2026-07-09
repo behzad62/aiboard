@@ -548,7 +548,7 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
 const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
-const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v2";
+const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v3";
 const BUILD_CHECKPOINT_CONTRACT_VERSION = 2;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
@@ -6883,6 +6883,7 @@ export async function runBuildDiscussion(
           message: string;
           servedCount: number;
           skippedCount: number;
+          replayedCount: number;
           terminalSkippedCount: number;
           terminalSkippedReasons: string[];
         }> => {
@@ -6899,6 +6900,7 @@ export async function runBuildDiscussion(
             label: item.label,
             reason: item.reason,
           }));
+          let replayedCount = 0;
           const terminalSkippedReasons: string[] = [];
           const terminalSkip = (label: string, reason: string): void => {
             skipped.push({ label, reason });
@@ -6998,6 +7000,7 @@ export async function runBuildDiscussion(
               }
               const replayed = replayCache.replay(action);
               if (replayed) {
+                replayedCount += 1;
                 served.push({
                   label: `${item.label} (replayed)`,
                   result: replayed,
@@ -7034,6 +7037,7 @@ export async function runBuildDiscussion(
             if (action.action === "code_intel") {
               const replayed = replayCache.replay(action);
               if (replayed) {
+                replayedCount += 1;
                 served.push({
                   label: `${item.label} (replayed)`,
                   result: replayed,
@@ -7100,6 +7104,7 @@ export async function runBuildDiscussion(
             if (action.action === "run") {
               const replayed = replayCache.replay(action);
               if (replayed) {
+                replayedCount += 1;
                 served.push({
                   label: `${item.label} (replayed)`,
                   result: replayed,
@@ -7142,6 +7147,7 @@ export async function runBuildDiscussion(
               // the runner, per-fetch approval, pool accounting, and diagnostics).
               const replayed = replayCache.replay(action);
               if (replayed) {
+                replayedCount += 1;
                 served.push({ label: `${item.label} (replayed)`, result: replayed });
                 continue;
               }
@@ -7266,6 +7272,7 @@ export async function runBuildDiscussion(
             }),
             servedCount: served.length,
             skippedCount: skipped.length,
+            replayedCount,
             terminalSkippedCount: terminalSkippedReasons.length,
             terminalSkippedReasons,
           };
@@ -7577,8 +7584,13 @@ export async function runBuildDiscussion(
 
           const batch = await dispatchWorkerToolBatch(inspected.actions, actor);
           emitWorkerBudget();
+          const replayOnlyBatch =
+            batch.servedCount > 0 && batch.replayedCount === batch.servedCount;
           const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
-          const batchFeedback = `${preToolWriteNote}${warning}${batch.message}${skippedOnlyRecovery}`;
+          const replayOnlyRecovery = replayOnlyBatch
+            ? "\n\nAll requested tool results were replayed from cache; no new tools ran. Stop repeating these requests and produce the final task output from the context already available."
+            : "";
+          const batchFeedback = `${preToolWriteNote}${warning}${batch.message}${skippedOnlyRecovery}${replayOnlyRecovery}`;
           if (batch.terminalSkippedCount > 0) {
             toolIssues.push(
               ...batch.terminalSkippedReasons.map(
@@ -7647,11 +7659,11 @@ export async function runBuildDiscussion(
               details: batch.message,
             });
           }
-          if (batch.servedCount > 0) {
+          if (batch.servedCount > 0 && !replayOnlyBatch) {
             skippedOnlyToolBatches = 0;
           }
-          if (batch.servedCount === 0) {
-            if (batch.skippedCount > 0) {
+          if (batch.servedCount === 0 || replayOnlyBatch) {
+            if (batch.skippedCount > 0 || replayOnlyBatch) {
               skippedOnlyToolBatches += 1;
               if (skippedOnlyToolBatches === 1) {
                 recordBuildProblem({
@@ -7663,7 +7675,9 @@ export async function runBuildDiscussion(
                   providerId: parseModelId(worker.modelId).providerId,
                   taskId: task.id,
                   wave: cycle,
-                  message: `${worker.displayName} tool batch for ${task.id} served nothing; requested actions were skipped and the worker was told to finalize without more tools.`,
+                  message: replayOnlyBatch
+                    ? `${worker.displayName} tool batch for ${task.id} only replayed cached results; the worker was told to finalize without more tools.`
+                    : `${worker.displayName} tool batch for ${task.id} served nothing; requested actions were skipped and the worker was told to finalize without more tools.`,
                   details: batch.message,
                 });
                 continue;
