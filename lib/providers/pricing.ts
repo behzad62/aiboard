@@ -199,6 +199,52 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://openrouter.ai/moonshotai/kimi-k2.7-code",
     verifiedAt: "2026-06-29",
   },
+
+  [formatModelId("xai", "grok-4.5")]: {
+    inputUsdPer1M: 2,
+    cachedInputUsdPer1M: 0.5,
+    outputUsdPer1M: 6,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/developers/models/grok-4.5",
+    verifiedAt: "2026-07-09",
+  },
+  [formatModelId("xai", "grok-4.3")]: {
+    inputUsdPer1M: 1.25,
+    cachedInputUsdPer1M: 0.2,
+    outputUsdPer1M: 2.5,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/developers/models/grok-4.3",
+    verifiedAt: "2026-07-09",
+  },
+  [formatModelId("xai", "grok-4.20-0309-reasoning")]: {
+    inputUsdPer1M: 1.25,
+    outputUsdPer1M: 2.5,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/docs/models",
+    verifiedAt: "2026-07-09",
+  },
+  [formatModelId("xai", "grok-4.20-0309-non-reasoning")]: {
+    inputUsdPer1M: 1.25,
+    outputUsdPer1M: 2.5,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/docs/models",
+    verifiedAt: "2026-07-09",
+  },
+  [formatModelId("xai", "grok-4.20-multi-agent-0309")]: {
+    inputUsdPer1M: 1.25,
+    outputUsdPer1M: 2.5,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/docs/models",
+    verifiedAt: "2026-07-09",
+  },
+  [formatModelId("xai", "grok-build-0.1")]: {
+    inputUsdPer1M: 1,
+    cachedInputUsdPer1M: 0.2,
+    outputUsdPer1M: 2,
+    sourceLabel: "xAI model pricing",
+    sourceUrl: "https://docs.x.ai/developers/models/grok-build-0.1",
+    verifiedAt: "2026-07-09",
+  },
 };
 
 export function getModelPricing(

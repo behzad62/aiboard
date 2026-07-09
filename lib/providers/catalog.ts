@@ -256,6 +256,51 @@ export const MODEL_CATALOG: CatalogModel[] = [
     description: "Free agentic MoE for coding, tool use, and deep research (262K context)",
     capabilities: { image: true, document: false, audio: false, video: false },
   },
+
+  // xAI — https://docs.x.ai/docs/models
+  {
+    id: "grok-4.5",
+    name: "Grok 4.5",
+    providerId: "xai",
+    description: "xAI flagship for coding, reasoning, and agentic tool use (500K context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
+    id: "grok-4.3",
+    name: "Grok 4.3",
+    providerId: "xai",
+    description: "Advanced flagship with strong tool calling and instruction following (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
+    id: "grok-4.20-0309-reasoning",
+    name: "Grok 4.20 Reasoning",
+    providerId: "xai",
+    description: "Reasoning-focused Grok 4.20 release for complex analysis (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
+    id: "grok-4.20-0309-non-reasoning",
+    name: "Grok 4.20",
+    providerId: "xai",
+    description: "Fast non-reasoning Grok 4.20 release for lower-latency chat (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
+    id: "grok-4.20-multi-agent-0309",
+    name: "Grok 4.20 Multi-Agent",
+    providerId: "xai",
+    description: "Multi-agent Grok 4.20 release for collaborative agentic workflows (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
+    id: "grok-build-0.1",
+    name: "Grok Build 0.1",
+    providerId: "xai",
+    description: "Agentic coding model for software engineering and workflow tasks (256K context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
 ];
 
 export function getCatalogModelsForProvider(providerId: ProviderId): CatalogModel[] {

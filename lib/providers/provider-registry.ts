@@ -4,6 +4,7 @@ export const PROVIDER_IDS = [
   "foundry",
   "google",
   "openrouter",
+  "xai",
   "chatgpt",
   "github-copilot",
   "nvidia",
@@ -94,6 +95,14 @@ function isClaudeLike(modelId: string): boolean {
   return /^claude-/i.test(modelId.trim());
 }
 
+function isXAINonReasoningModel(modelId: string): boolean {
+  return normalizedModelId(modelId).includes("non-reasoning");
+}
+
+function isGrokLike(modelId: string): boolean {
+  return /^grok-/i.test(modelId.trim());
+}
+
 function isGemini25OrNewer(modelId: string): boolean {
   const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec(modelId.trim());
   if (!match) return false;
@@ -166,6 +175,11 @@ const MODEL_TOOL_SUPPORT: Partial<
   openrouter: {
     nativeWebSearch: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
     nativeBuildTools: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
+  },
+  xai: {
+    // xAI docs list function calling and the web_search server tool on current Grok models.
+    nativeWebSearch: isGrokLike,
+    nativeBuildTools: isGrokLike,
   },
   chatgpt: {
     // The ChatGPT/Codex account backend accepts the current Responses hosted
@@ -286,6 +300,22 @@ export const PROVIDER_DEFINITIONS = {
         "OpenAI, DeepSeek, and Grok models cache automatically through OpenRouter. For Anthropic, Gemini, and Qwen models the app marks the stable prompt prefix as an ephemeral cache_control breakpoint.",
       concurrencyNote:
         "OpenRouter may queue concurrent requests server-side per account, so parallel Build tasks on OpenRouter models can appear to stream one at a time - especially on free models or with low account credit. This is account-side throttling, not an app limitation.",
+    },
+  },
+  xai: {
+    id: "xai",
+    name: "xAI",
+    modelSource: "catalog",
+    nativeWebSearch: true,
+    reasoningEffort: (modelId: string) => !isXAINonReasoningModel(modelId),
+    maxTokens: true,
+    runtimeBehavior: {
+      temperatureLabel: "Temperature is sent",
+      temperatureNote:
+        "The effort-level temperature is forwarded to xAI's Responses API.",
+      promptCachingLabel: "Prompt caching enabled",
+      promptCachingNote:
+        "xAI's Responses API automatically caches repeated prefixes; usage reports cached input tokens when a cache hit occurs.",
     },
   },
   chatgpt: {

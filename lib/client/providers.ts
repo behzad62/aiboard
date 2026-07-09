@@ -22,6 +22,7 @@ import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
+import { xaiProvider } from "@/lib/providers/xai";
 import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { nvidiaProvider } from "@/lib/providers/nvidia";
@@ -72,6 +73,7 @@ const providers: Record<ProviderId, AIProvider> = {
   foundry: foundryProvider,
   google: googleProvider,
   openrouter: openrouterProvider,
+  xai: xaiProvider,
   chatgpt: chatgptProvider,
   "github-copilot": githubCopilotProvider,
   nvidia: nvidiaProvider,

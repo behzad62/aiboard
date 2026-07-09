@@ -34,6 +34,46 @@ export function openAIReasoningEffort(effort: ReasoningEffort): string | null {
   }
 }
 
+function normalizedXAIModelId(model: string): string {
+  return model.trim().toLowerCase();
+}
+
+/** Whether this xAI model accepts `reasoning.effort` controls. */
+export function xAIModelSupportsReasoningEffort(model: string): boolean {
+  const normalized = normalizedXAIModelId(model);
+  return !normalized.includes("non-reasoning");
+}
+
+/**
+ * xAI Responses API `reasoning.effort` string, or null to omit.
+ * Reasoning cannot be disabled on reasoning-capable Grok models; "none" maps to low.
+ */
+export function xAIReasoningEffort(
+  model: string,
+  effort: ReasoningEffort
+): string | null {
+  if (effort === "default" || !xAIModelSupportsReasoningEffort(model)) {
+    return null;
+  }
+
+  const supportsXHigh = normalizedXAIModelId(model).includes("multi-agent");
+
+  switch (effort) {
+    case "none":
+      return "low";
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "max":
+      return supportsXHigh ? "xhigh" : "high";
+    default:
+      return null;
+  }
+}
+
 /** OpenRouter `reasoning_effort` string, or null to omit. */
 export function openRouterReasoningEffort(
   effort: ReasoningEffort
