@@ -82,6 +82,47 @@ check(
   repoCommitActivation
 );
 
+const repoBrowserVerificationTask: BuildTask = {
+  id: "T7",
+  title: "Final repo verification with browser acceptance",
+  kind: "repo",
+  completionMode: "either",
+  verificationPolicy: "external",
+  instructions:
+    "Run final repo status, repo diff, Playwright browser acceptance, console checks, and screenshot evidence. Report evidence in the worker response.",
+  contextFiles: ["index.html", "src/game.js", "src/renderer.js", "src/main.js"],
+  outputPaths: ["diff/status"],
+  expectedOutputs:
+    "Final verification evidence with browser acceptance, console status, repo status, and repo diff.",
+  status: "planned",
+};
+
+const repoBrowserVerificationActivation = selectSkills({
+  phase: "worker",
+  actor: "worker",
+  userRequest: "Verify and report final browser acceptance evidence for the game.",
+  task: repoBrowserVerificationTask,
+  touchedPaths: repoBrowserVerificationTask.contextFiles,
+  riskFlags: ["repo"],
+  runnerAvailable: true,
+  repoAvailable: true,
+  skillMode: "strict",
+  mcpServers: ["playwright"],
+});
+
+check(
+  "repo browser verification tasks receive browser evidence guidance without TDD",
+  repoBrowserVerificationActivation.overlays.includes("aiboard:browser-acceptance") &&
+    !repoBrowserVerificationActivation.overlays.includes(
+      "superpowers:strict-test-driven-development"
+    ) &&
+    !repoBrowserVerificationActivation.overlays.includes("agent:test-driven-development") &&
+    repoBrowserVerificationActivation.evidenceRequired.some((item) =>
+      /browser-acceptance|browser_navigate|console/i.test(item)
+    ),
+  repoBrowserVerificationActivation
+);
+
 const finalVerificationTask: BuildTask = {
   id: "T12",
   title: "Run final updated verification and browser acceptance",

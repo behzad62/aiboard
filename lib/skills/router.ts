@@ -247,7 +247,9 @@ function evidenceFor(ids: string[]): string[] {
 
 function selectWorkerOverlays(input: SkillActivationInput): string[] {
   const skillMode = input.skillMode ?? "balanced";
-  if (repoWorkflowTask(input)) return [];
+  if (repoWorkflowTask(input)) {
+    return needsBrowserAcceptance(input) ? ["aiboard:browser-acceptance"] : [];
+  }
   if (docsOnlyTask(input)) {
     return ["agent:incremental-implementation", "agent:documentation-and-adrs"];
   }

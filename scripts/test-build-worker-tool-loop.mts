@@ -39,4 +39,16 @@ check(
   workerLoopBlock.slice(0, 1800)
 );
 
+check(
+  "replay-only feedback asks for different missing evidence or a scoped gap",
+  /request a different non-duplicate tool\/action that can collect it/.test(
+    workerLoopBlock
+  ) &&
+    /report a scoped verification gap instead of claiming acceptance without fresh evidence/.test(
+      workerLoopBlock
+    ) &&
+    /collect different missing evidence or report a verification gap/.test(workerLoopBlock),
+  workerLoopBlock.slice(0, 2400)
+);
+
 process.exit(failed === 0 ? 0 : 1);

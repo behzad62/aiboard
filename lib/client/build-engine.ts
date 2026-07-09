@@ -7588,7 +7588,7 @@ export async function runBuildDiscussion(
             batch.servedCount > 0 && batch.replayedCount === batch.servedCount;
           const skippedOnlyRecovery = skippedOnlyToolBatchRecoveryInstruction(batch);
           const replayOnlyRecovery = replayOnlyBatch
-            ? "\n\nAll requested tool results were replayed from cache; no new tools ran. Stop repeating these requests and produce the final task output from the context already available."
+            ? "\n\nAll requested tool results were replayed from cache; no new tools ran. Stop repeating these exact requests. If required evidence is still missing, request a different non-duplicate tool/action that can collect it; otherwise produce the final task output from the cached context. For evidence-only verification, report a scoped verification gap instead of claiming acceptance without fresh evidence."
             : "";
           const batchFeedback = `${preToolWriteNote}${warning}${batch.message}${skippedOnlyRecovery}${replayOnlyRecovery}`;
           if (batch.terminalSkippedCount > 0) {
@@ -7676,7 +7676,7 @@ export async function runBuildDiscussion(
                   taskId: task.id,
                   wave: cycle,
                   message: replayOnlyBatch
-                    ? `${worker.displayName} tool batch for ${task.id} only replayed cached results; the worker was told to finalize without more tools.`
+                    ? `${worker.displayName} tool batch for ${task.id} only replayed cached results; the worker was told to stop repeating those requests and collect different missing evidence or report a verification gap.`
                     : `${worker.displayName} tool batch for ${task.id} served nothing; requested actions were skipped and the worker was told to finalize without more tools.`,
                   details: batch.message,
                 });
