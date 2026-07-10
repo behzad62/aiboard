@@ -100,6 +100,35 @@ const redTestTask = normalizeBuildTaskContract(
     verificationPolicy: "tool",
   })
 );
+const contractDeclaredRedTestTask = normalizeBuildTaskContract(
+  baseTask({
+    title: "Add RED voxel renderer tests",
+    instructions:
+      "Add focused Node tests before production rendering changes.",
+    implementationContract:
+      "Do not modify production files. Run `node --test tests/voxel.test.mjs` and capture RED evidence.",
+    requiredEvidence: [
+      "RED command output from running `node --test tests/voxel.test.mjs` before production implementation, or explain if it unexpectedly passes.",
+    ],
+    expectedOutputs: "A persisted RED renderer test suite.",
+    outputPaths: ["tests/voxel.test.mjs"],
+    testOutputPaths: ["tests/voxel.test.mjs"],
+    verificationPolicy: "tool",
+  })
+);
+const fullTddImplementationTask = normalizeBuildTaskContract(
+  baseTask({
+    title: "Implement renderer behavior with TDD",
+    instructions: "Observe RED before implementation and GREEN afterward.",
+    requiredEvidence: [
+      "Observe RED before implementation.",
+      "Record GREEN after implementation.",
+    ],
+    outputPaths: ["src/renderer.js", "tests/renderer.test.mjs"],
+    testOutputPaths: ["tests/renderer.test.mjs"],
+    verificationPolicy: "tool",
+  })
+);
 
 const architectVerifiedMutation = normalizeBuildTaskContract({
   ...mutationTask,
@@ -159,6 +188,16 @@ check(
   "RED-only test wave defers the passing project verifier until implementation",
   !shouldRunWaveBuildVerifier([redTestTask]),
   redTestTask
+);
+check(
+  "RED task declared through implementation and evidence contracts defers the passing project verifier",
+  !shouldRunWaveBuildVerifier([contractDeclaredRedTestTask]),
+  contractDeclaredRedTestTask
+);
+check(
+  "full TDD implementation task still runs the passing project verifier",
+  shouldRunWaveBuildVerifier([fullTddImplementationTask]),
+  fullTddImplementationTask
 );
 
 const missingStyleEvidence: SkillEvidence[] = [
