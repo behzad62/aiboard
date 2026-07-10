@@ -5463,7 +5463,8 @@ export async function runBuildDiscussion(
     appendContext: (text: string) => void,
     tracker: ReturnType<typeof createToolCallTracker>,
     replayCache: ReturnType<typeof createToolReplayCache>,
-    actorLabel = "Architect"
+    actorLabel = "Architect",
+    allowRun = true
   ): Promise<{
     result: string;
     exhausted: boolean;
@@ -5485,6 +5486,14 @@ export async function runBuildDiscussion(
     }));
     let exhausted = false;
     for (const item of schedule.served) {
+      if (!allowRun && item.action.action === "run") {
+        skipped.push({
+          label: item.label,
+          reason:
+            "Command runs are disabled for this review because none of the reviewed tasks use tool verification. Judge their declared evidence instead.",
+        });
+        continue;
+      }
       if (isRedundantToolCall(tracker, item.action)) {
         const replayed = replayDuplicateToolAction({
           action: item.action,
@@ -5559,6 +5568,8 @@ export async function runBuildDiscussion(
     budgets: InspectionBudgets;
     actor?: SelectedModel;
     actorLabel?: string;
+    /** Review-only command gate derived from the reviewed tasks' verification policy. */
+    allowRun?: boolean;
     /** Accumulate delivered read/search results for cross-phase memory. */
     appendContext: (text: string) => void;
   }): Promise<{ action: ArchitectAction; text: string; forced: boolean }> => {
@@ -5719,7 +5730,8 @@ export async function runBuildDiscussion(
         args.appendContext,
         tracker,
         replayCache,
-        actorLabel
+        actorLabel,
+        args.allowRun ?? true
       );
       emitInspectionBudget();
       if (batch.servedCount > 0 && batch.skippedCount > 0) {
@@ -8670,9 +8682,10 @@ export async function runBuildDiscussion(
     );
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
-    const waveVerifyCommand = shouldRunWaveBuildVerifier(
+    const reviewRequiresToolVerification = shouldRunWaveBuildVerifier(
       executed.map(({ task }) => task)
-    )
+    );
+    const waveVerifyCommand = reviewRequiresToolVerification
       ? verifyCommand
       : "";
     const verifyResult = await runVerify(waveVerifyCommand, {
@@ -8914,7 +8927,7 @@ export async function runBuildDiscussion(
         cyclesLeft: Math.max(0, finalWave - cycle),
         readHopsLeft: ARCHITECT_REVIEW_READS_PER_PHASE,
         rangeReadsLeft: ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
-        runsLeft: runsLeftThisPhase(),
+        runsLeft: reviewRequiresToolVerification ? runsLeftThisPhase() : 0,
         githubWorkflow: githubWorkflow && !!runner,
         repoWorkflow: !!runner,
         githubCli: githubCli ?? undefined,
@@ -8947,6 +8960,7 @@ export async function runBuildDiscussion(
         rangeReads: ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
         searches: ARCHITECT_REVIEW_SEARCHES_PER_PHASE,
       },
+      allowRun: reviewRequiresToolVerification,
       appendContext: (textChunk) => {
         extraFileContext += textChunk;
       },

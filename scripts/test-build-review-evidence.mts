@@ -675,5 +675,14 @@ check(
       buildEngineSource.indexOf("extractReviewMemories({"),
   "review approval gate wiring is missing or ordered after review side effects"
 );
+check(
+  "Architect review commands are disabled when the reviewed wave has no tool-policy tasks",
+  /allowRun:\s*reviewRequiresToolVerification/.test(buildEngineSource) &&
+    /runsLeft:\s*reviewRequiresToolVerification\s*\?\s*runsLeftThisPhase\(\)\s*:\s*0/.test(
+      buildEngineSource
+    ) &&
+    /!allowRun\s*&&\s*item\.action\.action\s*===\s*"run"/.test(buildEngineSource),
+  "review command budget is not scoped to task verification policy"
+);
 
 process.exit(failed === 0 ? 0 : 1);
