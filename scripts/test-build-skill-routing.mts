@@ -163,4 +163,65 @@ check(
   finalVerificationActivation
 );
 
+const staticBrowserAuditTask: BuildTask = {
+  id: "T1",
+  title: "Prepare safe branch and audit current script/API shape",
+  kind: "audit",
+  completionMode: "evidence",
+  verificationPolicy: "architect",
+  instructions:
+    "Inspect the current static-browser loading model and public API usage. Do not edit files. Report script load order and browser module compatibility.",
+  contextFiles: ["index.html", "src/game.js", "src/main.js", "src/renderer.js"],
+  outputPaths: [],
+  expectedOutputs: "Evidence-only API and module-shape audit; no file changes.",
+  status: "fixing",
+};
+
+const staticBrowserAuditActivation = selectSkills({
+  phase: "worker",
+  actor: "worker",
+  userRequest: "Preserve the static browser game while changing engagement behavior.",
+  task: staticBrowserAuditTask,
+  touchedPaths: staticBrowserAuditTask.contextFiles,
+  riskFlags: ["repo"],
+  runnerAvailable: true,
+  repoAvailable: true,
+  skillMode: "strict",
+  mcpServers: ["playwright"],
+});
+
+check(
+  "static browser architecture audit does not require end-to-end browser acceptance",
+  !staticBrowserAuditActivation.overlays.includes("aiboard:browser-acceptance") &&
+    !staticBrowserAuditActivation.evidenceRequired.some((item) =>
+      /browser_navigate|browser-acceptance|console evidence/i.test(item)
+    ),
+  staticBrowserAuditActivation
+);
+
+const explicitBrowserAuditActivation = selectSkills({
+  phase: "worker",
+  actor: "worker",
+  userRequest: "Audit the running game in Chrome.",
+  task: {
+    ...staticBrowserAuditTask,
+    id: "T-browser-audit",
+    title: "Audit the live browser acceptance workflow",
+    instructions:
+      "Use Playwright browser_navigate on localhost, inspect the settled visible UI, and check browser console errors.",
+  },
+  touchedPaths: staticBrowserAuditTask.contextFiles,
+  riskFlags: [],
+  runnerAvailable: true,
+  repoAvailable: true,
+  skillMode: "strict",
+  mcpServers: ["playwright"],
+});
+
+check(
+  "explicit live-browser audit still requires browser acceptance evidence",
+  explicitBrowserAuditActivation.overlays.includes("aiboard:browser-acceptance"),
+  explicitBrowserAuditActivation
+);
+
 process.exit(failed === 0 ? 0 : 1);

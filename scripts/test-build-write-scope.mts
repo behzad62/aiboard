@@ -55,6 +55,23 @@ check(
   isTaskWritePathAllowed(contextOnlyTask, "package.json"),
 );
 
+const evidenceOnlyAuditTask: BuildTask = {
+  id: "T-audit",
+  title: "Audit current browser module shape",
+  instructions: "Inspect src/game.js and report evidence only. Do not edit files.",
+  kind: "audit",
+  completionMode: "evidence",
+  verificationPolicy: "architect",
+  contextFiles: ["src/game.js", "index.html"],
+  outputPaths: [],
+  expectedOutputs: "Evidence-only audit; no file changes.",
+  status: "fixing",
+};
+check(
+  "evidence-only audit cannot mutate a context file without declared outputs",
+  !isTaskWritePathAllowed(evidenceOnlyAuditTask, "src/game.js"),
+);
+
 const largeRewrite = evaluateExistingFileRewrite({
   path: "src/game.js",
   existingLength: 38_845,

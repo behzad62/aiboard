@@ -3040,12 +3040,29 @@ function normalizedPathSet(paths: string[]): Set<string> {
 }
 
 export function isTaskWritePathAllowed(
-  task: Pick<BuildTask, "contextFiles" | "outputPaths" | "testOutputPaths" | "expectedOutputs">,
+  task: Pick<
+    BuildTask,
+    | "contextFiles"
+    | "outputPaths"
+    | "testOutputPaths"
+    | "expectedOutputs"
+    | "kind"
+    | "completionMode"
+  >,
   rawPath: string
 ): boolean {
   const path = normalizeExplicitOutputPath(rawPath);
   if (!path || isSuspiciousBuildArtifactPath(path)) return false;
   const outputPaths = outputPathsForTask(task);
+  if (
+    outputPaths.length === 0 &&
+    (task.completionMode === "evidence" ||
+      task.kind === "audit" ||
+      task.kind === "verify" ||
+      task.kind === "repo")
+  ) {
+    return false;
+  }
   const scope =
     outputPaths.length > 0
       ? normalizedPathSet(outputPaths)

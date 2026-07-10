@@ -194,12 +194,27 @@ function hasBrowserMcp(input: SkillActivationInput): boolean {
   );
 }
 
+function explicitlyRequestsBrowserAcceptance(input: SkillActivationInput): boolean {
+  const text = taskText(input.task);
+  return /\bbrowser acceptance\b|\bplaywright\b|\bbrowser_navigate\b|\bbrowser_console(?:_messages)?\b|\blocalhost\b|\b127\.0\.0\.1\b|\blocal server\b|\bscreenshot\b|\bvisual (?:acceptance|verification|review)\b|\bconsole (?:errors?|messages?)\b/.test(
+    text
+  );
+}
+
 function needsBrowserAcceptance(input: SkillActivationInput): boolean {
   if (!hasBrowserMcp(input)) return false;
   const text = taskText(input.task);
+  const explicit = explicitlyRequestsBrowserAcceptance(input);
+  if (
+    input.task?.kind === "audit" &&
+    evidenceOnlyVerificationTask(input)
+  ) {
+    return explicit;
+  }
   return (
     pathsIncludeUi(input) ||
-    /\bweb app|browser acceptance|playwright|localhost|local server|ui workflow\b/.test(text)
+    explicit ||
+    /\bweb app|ui workflow\b/.test(text)
   );
 }
 
