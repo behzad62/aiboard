@@ -6,6 +6,7 @@ import {
   hasBlockingSkillEvidence,
   isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
+  restoredLandedTaskFiles,
   splitEvidenceOnlyReviewIssues,
   shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
@@ -106,10 +107,44 @@ const redPhaseEvidence = createSkillEvidence({
   declaredOutputPaths: ["tests/engagement.test.js"],
   tddPhase: "red",
 });
+const speculativeRedPhaseEvidence = createSkillEvidence({
+  taskId: "T-red-speculative",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Skill evidence:",
+    "- RED failure observed for the expected reason: expected once `node tests/engagement.test.js` is run.",
+    "- Persisted test file identified at tests/engagement.test.js.",
+  ].join("\n"),
+  landedPaths: ["tests/engagement.test.js"],
+  declaredOutputPaths: ["tests/engagement.test.js"],
+  tddPhase: "red",
+});
+const restoredRedFiles = restoredLandedTaskFiles({
+  contextFiles: ["src/game.js", "tests/engagement.test.js"],
+  declaredOutputPaths: [
+    "tests/engagement.test.js",
+    "tests/not-landed.test.js",
+  ],
+  availablePaths: ["tests/engagement.test.js"],
+  writeGeneration: 2,
+});
 check(
   "strict TDD RED task requires RED and a persisted test but not GREEN/refactor",
   redPhaseEvidence[0]?.missingEvidence.length === 0,
   redPhaseEvidence
+);
+check(
+  "speculative expected RED prose does not count as an observed failure",
+  speculativeRedPhaseEvidence[0]?.missingEvidence.includes(
+    "RED test/check failure before implementation"
+  ) === true,
+  speculativeRedPhaseEvidence
+);
+check(
+  "restored landed task file is recovered only from durable declared output",
+  restoredRedFiles.join(",") === "tests/engagement.test.js",
+  restoredRedFiles
 );
 check(
   "strict TDD accepts RED/GREEN evidence when a persisted test file landed",

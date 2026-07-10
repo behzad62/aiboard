@@ -113,6 +113,7 @@ import {
   isEvidenceArtifactWritePath,
   isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
+  restoredLandedTaskFiles,
   shouldAllowEvidenceOnlySkillExemptions,
   shouldReviewEvidenceOnlyTask,
   splitEvidenceOnlyReviewIssues,
@@ -8304,13 +8305,19 @@ export async function runBuildDiscussion(
           !scopedVerificationGapReport &&
           (toolIssues.some((issue) => issue.startsWith("TOOL BUDGET BLOCKED:")) ||
             isWorkerOutputBlockedByToolBudget(output));
+        const durableTaskFiles = restoredLandedTaskFiles({
+          contextFiles: task.contextFiles ?? [],
+          declaredOutputPaths,
+          availablePaths: virtualFs.keys(),
+          writeGeneration: task.writeGeneration,
+        });
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
           wave: cycle,
           actor: worker.displayName,
           activeSkillIds: workerSkills.overlays,
           workerOutput: output,
-          landedPaths: files,
+          landedPaths: [...new Set([...files, ...durableTaskFiles])],
           declaredOutputPaths,
           tddPhase: isRedBuildTask(task) ? "red" : "full",
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({

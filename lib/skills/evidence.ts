@@ -111,6 +111,15 @@ interface SkillEvidenceContext {
   tddPhase?: "red" | "full";
 }
 
+function hasObservedRedFailure(joined: string): boolean {
+  return joined.split("\n").some((line) => {
+    if (!/\bred\b|\bfail(?:ed|ing|s|ure)?\b/.test(line)) return false;
+    return !/\b(?:expected once|will fail|would fail|should fail|not (?:yet )?(?:run|executed)|once .{0,120}\b(?:run|executed))\b/.test(
+      line
+    );
+  });
+}
+
 function missingForSkill(
   skillId: string,
   required: string[],
@@ -146,7 +155,7 @@ function missingForSkill(
       return [];
     }
     const missing: string[] = [];
-    if (!/\bred\b|fail|failed|failing/.test(joined)) {
+    if (!hasObservedRedFailure(joined)) {
       missing.push("RED test/check failure before implementation");
     }
     if (

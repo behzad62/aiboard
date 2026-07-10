@@ -8,6 +8,25 @@ function isBlocking(record: SkillEvidence): boolean {
   return record.missingEvidence.length > 0 || record.violations.length > 0;
 }
 
+function normalizeGatePath(value: string): string {
+  return value.trim().replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase();
+}
+
+export function restoredLandedTaskFiles(input: {
+  contextFiles: string[];
+  declaredOutputPaths: string[];
+  availablePaths: Iterable<string>;
+  writeGeneration?: number;
+}): string[] {
+  if ((input.writeGeneration ?? 0) <= 0) return [];
+  const declared = new Set(input.declaredOutputPaths.map(normalizeGatePath));
+  const available = new Set([...input.availablePaths].map(normalizeGatePath));
+  return [...new Set(input.contextFiles)].filter((path) => {
+    const normalized = normalizeGatePath(path);
+    return declared.has(normalized) && available.has(normalized);
+  });
+}
+
 export function getLatestSkillEvidence(
   records: SkillEvidence[],
   taskId?: string
@@ -77,16 +96,14 @@ export function evidenceOnlyRetryFiles(input: {
   ignoreBlockingSkillEvidence?: boolean;
 }): string[] {
   if (input.emittedFiles.length > 0) return [...new Set(input.emittedFiles)];
-  const normalizePath = (value: string) =>
-    value.replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase();
   const declaredPaths =
     input.declaredOutputPaths === undefined
       ? null
-      : new Set(input.declaredOutputPaths.map(normalizePath));
+      : new Set(input.declaredOutputPaths.map(normalizeGatePath));
   const priorLandedFiles =
     declaredPaths === null
       ? input.priorFiles
-      : input.priorFiles.filter((path) => declaredPaths.has(normalizePath(path)));
+      : input.priorFiles.filter((path) => declaredPaths.has(normalizeGatePath(path)));
   if (
     (input.declaredOutputPaths?.length ?? 0) === 0 &&
     priorLandedFiles.length > 0 &&
