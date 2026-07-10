@@ -159,6 +159,20 @@ export function compileBuildTaskVerificationRequirements(input: {
   }
   const seen = new Set<string>();
   return requirements.filter((requirement) => {
+    if (
+      requirement.source === undefined &&
+      requirements.some(
+        (candidate) =>
+          candidate.source === "project_verifier" &&
+          candidate.action === requirement.action &&
+          candidate.verifierIdentity === requirement.verifierIdentity &&
+          requirement.coveredPaths.every((path) =>
+            candidate.coveredPaths.includes(path)
+          )
+      )
+    ) {
+      return false;
+    }
     const key = `${requirement.action}\u0000${requirement.source ?? ""}\u0000${requirement.verifierIdentity ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -177,10 +191,18 @@ export function validateBuildReviewApprovals(input: {
   const errors: BuildReviewContractIssue[] = [];
   const seenErrorKeys = new Set<string>();
   const pushError = (
-    action: string,
+    requirement: BuildTaskVerificationRequirement,
+    mismatchKind: string,
     error: BuildReviewContractIssue
   ): void => {
-    const key = `${error.taskId}\u0000${action}\u0000${error.code}`;
+    const key = [
+      error.taskId,
+      requirement.action,
+      requirement.source ?? "",
+      requirement.verifierIdentity ?? "<unresolved>",
+      mismatchKind,
+      error.code,
+    ].join("\u0000");
     if (seenErrorKeys.has(key)) return;
     seenErrorKeys.add(key);
     errors.push(error);
@@ -198,39 +220,56 @@ export function validateBuildReviewApprovals(input: {
       projectVerifier: input.projectVerifier,
     })) {
       const { action } = requirement;
-      const matching = input.facts.filter(
+      const trustedActionFacts = input.facts.filter(
         (fact) =>
           fact.taskId === task.id &&
           fact.action === action &&
-          fact.writeGeneration !== undefined &&
-          fact.writeGeneration === (task.writeGeneration ?? 0) &&
-          requirement.verifierIdentity !== null &&
-          normalizeIdentity(fact.verifierIdentity ?? "") ===
-            normalizeIdentity(requirement.verifierIdentity) &&
-          requirement.coveredPaths.every((path) =>
-            fact.coveredPaths.map(normalizePath).includes(path)
-          ) &&
-          (!requirement.source || fact.source === requirement.source) &&
           (fact.source === "worker" || fact.source === "project_verifier")
       );
-      const current = matching
+      const sourceFacts = trustedActionFacts.filter(
+        (fact) => !requirement.source || fact.source === requirement.source
+      );
+      const identityFacts = sourceFacts.filter(
+        (fact) =>
+          requirement.verifierIdentity !== null &&
+          normalizeIdentity(fact.verifierIdentity ?? "") ===
+            normalizeIdentity(requirement.verifierIdentity)
+      );
+      const generationFacts = identityFacts.filter(
+        (fact) =>
+          fact.writeGeneration !== undefined &&
+          fact.writeGeneration === (task.writeGeneration ?? 0)
+      );
+      const coveredFacts = generationFacts.filter((fact) =>
+        requirement.coveredPaths.every((path) =>
+          fact.coveredPaths.map(normalizePath).includes(path)
+        )
+      );
+      const current = coveredFacts
         .filter((fact) => fact.wave === input.wave)
         .sort((left, right) => left.at.localeCompare(right.at));
+      const verifierLabel = `${action} verifier ${JSON.stringify(
+        requirement.verifierIdentity ?? "<unresolved>"
+      )} (source: ${requirement.source ?? "trusted worker or project verifier"})`;
       if (current.length === 0) {
-        const stale = input.facts.some(
-          (fact) =>
-            fact.taskId === task.id &&
-            fact.action === action &&
-            fact.source !== undefined &&
-            (fact.wave !== input.wave ||
-              fact.writeGeneration !== (task.writeGeneration ?? 0))
-        );
-        pushError(action, {
+        const mismatchKind =
+          requirement.verifierIdentity === null
+            ? "unresolved verifier identity"
+            : sourceFacts.length === 0
+              ? "missing source fact"
+              : identityFacts.length === 0
+                ? "verifier identity mismatch"
+                : generationFacts.length === 0
+                  ? "stale generation"
+                  : coveredFacts.length === 0
+                    ? "path coverage mismatch"
+                    : "stale wave";
+        const stale =
+          mismatchKind === "stale generation" || mismatchKind === "stale wave";
+        pushError(requirement, mismatchKind, {
           code: stale ? "stale_task_verification" : "missing_task_verification",
           taskId: task.id,
-          message: stale
-            ? `Task ${task.id} approval requires current-wave ${action} evidence; only stale evidence is recorded.`
-            : `Task ${task.id} approval requires current-wave ${action} evidence, but none is recorded.`,
+          message: `Task ${task.id} approval requires ${verifierLabel}; mismatch: ${mismatchKind}.`,
         });
         continue;
       }
@@ -242,16 +281,16 @@ export function validateBuildReviewApprovals(input: {
           fact.status === "failed" && index > latestPassingIndex
       );
       if (laterFailure) {
-        pushError(action, {
+        pushError(requirement, "failed", {
           code: "failed_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval contradicts current-wave ${action} evidence: failed — ${laterFailure.summary}`,
+          message: `Task ${task.id} approval contradicts current-wave ${verifierLabel}; mismatch: failed — ${laterFailure.summary}`,
         });
       } else if (latestPassingIndex < 0) {
-        pushError(action, {
+        pushError(requirement, "skipped", {
           code: "missing_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval requires a successful current-wave ${action} fact; the action was skipped.`,
+          message: `Task ${task.id} approval requires a successful current-wave ${verifierLabel}; mismatch: skipped.`,
         });
       }
     }

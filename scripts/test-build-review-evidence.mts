@@ -189,7 +189,6 @@ check(
     results: [approved],
     facts: [fact({ taskId: "T1", wave: 2, status: "passed", writeGeneration: 0 })],
     wave: 2,
-    projectVerifier: "npm test",
   }).errors[0]?.code === "stale_task_verification"
 );
 check(
@@ -199,7 +198,6 @@ check(
     results: [approved],
     facts: [fact({ taskId: "T1", wave: 2, status: "passed", writeGeneration: 1 })],
     wave: 2,
-    projectVerifier: "npm test",
   }).errors[0]?.code === "stale_task_verification"
 );
 check(
@@ -468,6 +466,66 @@ check(
   overlappingRunObligations.errors.length === 1 &&
     overlappingRunObligations.errors[0]?.code === "failed_task_verification",
   overlappingRunObligations
+);
+const twoCommandTask: BuildTask = {
+  ...toolTask,
+  requiredToolActions: undefined,
+  phaseSpec: {
+    ...toolTask.phaseSpec!,
+    verification: ["npm test", "npm run lint"],
+  },
+};
+const twoMissingCommands = validateBuildReviewApprovals({
+  tasks: [twoCommandTask],
+  results: [approved],
+  facts: [],
+  wave: 2,
+});
+check(
+  "two missing exact run requirements retain distinct actionable verifier issues",
+  twoMissingCommands.errors.length === 2 &&
+    twoMissingCommands.errors.some((error) => error.message.includes('"npm test"')) &&
+    twoMissingCommands.errors.some((error) => error.message.includes('"npm run lint"')),
+  twoMissingCommands
+);
+const twoCommandMismatches = validateBuildReviewApprovals({
+  tasks: [twoCommandTask],
+  results: [approved],
+  facts: [
+    fact({
+      taskId: "T1",
+      wave: 2,
+      status: "failed",
+      verifierIdentity: "npm test",
+      summary: "tests failed",
+    }),
+    fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      verifierIdentity: "npm run lint",
+      writeGeneration: 0,
+      summary: "lint passed before the latest write",
+    }),
+  ],
+  wave: 2,
+});
+check(
+  "two exact run requirements report verifier-specific failure and stale-generation mismatches",
+  twoCommandMismatches.errors.length === 2 &&
+    twoCommandMismatches.errors.some(
+      (error) =>
+        error.code === "failed_task_verification" &&
+        error.message.includes('"npm test"') &&
+        error.message.includes("failed")
+    ) &&
+    twoCommandMismatches.errors.some(
+      (error) =>
+        error.code === "stale_task_verification" &&
+        error.message.includes('"npm run lint"') &&
+        error.message.includes("generation")
+    ),
+  twoCommandMismatches
 );
 check(
   "a later failure contradicts an earlier current-wave pass",

@@ -119,8 +119,10 @@ The first independent read-only review found three Critical, two Important, and 
 - tests used unrealistic `"run"` identities;
 - this report overstated the initial implementation.
 
-Each issue received a targeted regression and remediation described above. Final re-review and focused commit recording are pending.
+Each issue received a targeted regression and remediation described above, followed by the first re-review summarized next.
 
 The first re-review found two remaining gaps: exact/backticked `run` could disguise the unresolved action class, and path-owning phase/MCP-only contracts could omit full path coverage. Both now have RED regressions. Standalone/backticked `run` is always rejected and must be replaced by the concrete command identity; full normalized path coverage is an explicit compiled obligation supplied only by the accepted project verifier or exact phase command. Arbitrary typed actions remain zero-coverage.
 
-The final independent re-review found no Critical or Important issues. Its two Minor report corrections are incorporated here; the complete final-code verification evidence is recorded above.
+The final independent re-review for the original blockers found no Critical or Important issues. Its two Minor report corrections were incorporated before commit `3cc13c71`.
+
+A subsequent whole-branch review found two additional Minor issues: verifier-specific approval errors were deduplicated by generic action name, and this review chronology still used stale “pending” wording. The follow-up commit adds exact verifier/source/mismatch details to deterministic issue keys and messages, preserves distinct issues for commands such as `npm test` and `npm run lint`, retains true-duplicate collapse, and corrects this chronology.
