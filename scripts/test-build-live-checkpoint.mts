@@ -11,8 +11,8 @@ const source = readFileSync("lib/client/build-engine.ts", "utf8");
 
 check(
   "build engine marker advertises live-checkpoint durability behavior",
-  /const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v5"/.test(source) &&
-    /const BUILD_CHECKPOINT_CONTRACT_VERSION = 3;/.test(source)
+  /const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v6"/.test(source) &&
+    /const BUILD_CHECKPOINT_CONTRACT_VERSION = 4;/.test(source)
 );
 
 const messageInsertIndex = source.indexOf("insertMessage({");
