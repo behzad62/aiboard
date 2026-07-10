@@ -399,6 +399,62 @@ const resumed = normalizeBuildTasksForResume([
   },
 ]);
 
+const resumedReviewWithLandedOutput = normalizeBuildTasksForResume(
+  [
+    {
+      id: "T-red",
+      title: "Add RED renderer tests",
+      instructions: "Persist the RED test before implementation.",
+      contextFiles: ["src/renderer.js"],
+      outputPaths: [
+        "tests/voxel-renderer.test.mjs",
+        "tests/not-yet-landed.test.mjs",
+      ],
+      testOutputPaths: [
+        "tests/voxel-renderer.test.mjs",
+        "tests/not-yet-landed.test.mjs",
+      ],
+      status: "review",
+      writeGeneration: 1,
+    },
+  ],
+  ["tests/voxel-renderer.test.mjs"]
+)[0]!;
+check(
+  "resume carries only restored landed outputs into requeued review context",
+  resumedReviewWithLandedOutput.status === "planned" &&
+    resumedReviewWithLandedOutput.contextFiles.includes(
+      "tests/voxel-renderer.test.mjs"
+    ) &&
+    !resumedReviewWithLandedOutput.contextFiles.includes(
+      "tests/not-yet-landed.test.mjs"
+    ),
+  resumedReviewWithLandedOutput
+);
+const resumedFixingWithLandedOutput = normalizeBuildTasksForResume(
+  [
+    {
+      id: "T-fix",
+      title: "Repair RED renderer tests",
+      instructions: "Make the smallest correction to the persisted test.",
+      contextFiles: [],
+      outputPaths: ["tests/voxel-renderer.test.mjs"],
+      testOutputPaths: ["tests/voxel-renderer.test.mjs"],
+      status: "fixing",
+      writeGeneration: 2,
+    },
+  ],
+  ["tests/voxel-renderer.test.mjs"]
+)[0]!;
+check(
+  "resume carries restored landed outputs into an existing fix context",
+  resumedFixingWithLandedOutput.status === "fixing" &&
+    resumedFixingWithLandedOutput.contextFiles.includes(
+      "tests/voxel-renderer.test.mjs"
+    ),
+  resumedFixingWithLandedOutput
+);
+
 const resumedFailed = resumed.find((task) => task.id === "T2");
 check("resume makes terminal failed tasks runnable", resumedFailed?.status === "fixing", resumed);
 check("resume resets failed task retry budget", (resumedFailed?.failCount ?? 0) === 0, resumedFailed);

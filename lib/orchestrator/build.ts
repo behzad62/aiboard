@@ -732,12 +732,41 @@ export function restoreBuildUnavailableWorkerRouting(
   });
 }
 
-export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
+export function normalizeBuildTasksForResume(
+  tasks: BuildTask[],
+  restoredPaths: Iterable<string> = []
+): BuildTask[] {
+  const normalizeRestoredPath = (path: string): string =>
+    path.trim().replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase();
+  const restoredPathByKey = new Map(
+    [...restoredPaths]
+      .map((path) => [normalizeRestoredPath(path), path.trim()] as const)
+      .filter(([key, path]) => key.length > 0 && path.length > 0)
+  );
   let normalized: BuildTask[] = tasks.map((task): BuildTask => {
     const migratedTask = migrateDynamicTaskInstructions(task);
+    const landedOutputs =
+      task.status !== "done" && (migratedTask.writeGeneration ?? 0) > 0
+        ? outputPathsForTask(migratedTask).flatMap((path) => {
+            const restored = restoredPathByKey.get(normalizeRestoredPath(path));
+            return restored ? [restored] : [];
+          })
+        : [];
+    const resumeTask =
+      landedOutputs.length > 0
+        ? {
+            ...migratedTask,
+            contextFiles: [
+              ...new Set([
+                ...(migratedTask.contextFiles ?? []),
+                ...landedOutputs,
+              ]),
+            ],
+          }
+        : migratedTask;
     if (task.status === "in_progress" || task.status === "review") {
       return {
-        ...migratedTask,
+        ...resumeTask,
         status: "planned",
         workerIndex: undefined,
         retryAfterMs: undefined,
@@ -746,7 +775,7 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
 
     if (task.status === "failed") {
       return {
-        ...migratedTask,
+        ...resumeTask,
         status: "fixing",
         // Resume starts a new retry window; failure history is kept in
         // buildProblems/recovery notes rather than this live retry counter.
@@ -757,7 +786,7 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
       };
     }
 
-    return migratedTask;
+    return resumeTask;
   });
 
   const unfinishedFinalVerifications = normalized.filter(

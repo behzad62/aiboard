@@ -6222,11 +6222,9 @@ export async function runBuildDiscussion(
       // "planned" so the resumed run re-dispatches and re-reviews it — otherwise
       // it is never picked up again (dispatch only takes planned/fixing) and the
       // build would end with a spurious "incomplete tasks" failure.
-          status:
-            task.status === "in_progress" || task.status === "review"
-              ? "planned"
-              : task.status,
-        }))
+          status: task.status,
+        })),
+        virtualFs.keys()
       ).map(normalizeBuildTaskContract),
       existingCheckpoint.buildProblems ?? [],
       workers.map((worker) => worker.modelId)
