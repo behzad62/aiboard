@@ -1714,6 +1714,16 @@ export async function __loadClientStoreFromAdapterForTests(
   return { needsPassphrase: false };
 }
 
+export async function __switchClientStoreAdapterForTests(
+  next: StorageAdapter
+): Promise<StorageSwitchResult> {
+  return switchClientStoreAdapter(
+    next,
+    { kind: next.kind, encryptionEnabled: false },
+    false
+  );
+}
+
 export async function __setClientStorePassphraseForTests(
   passphrase: string
 ): Promise<string> {
@@ -1737,4 +1747,95 @@ export async function applyStorageConfig(next: StorageConfig): Promise<void> {
   await setStorageConfig(next);
   adapter = await createAdapter(next);
   await flush();
+}
+
+export interface StorageSwitchResult {
+  loadedExisting: boolean;
+  needsPassphrase: boolean;
+}
+
+/**
+ * Switch storage locations without destroying an existing destination.
+ * Existing data is authoritative and gets loaded; an empty destination receives
+ * the current in-memory store.
+ */
+export async function switchStorageLocation(
+  next: StorageConfig
+): Promise<StorageSwitchResult> {
+  await flush();
+  const nextAdapter = await createAdapter(next);
+  return switchClientStoreAdapter(nextAdapter, next, true);
+}
+
+async function switchClientStoreAdapter(
+  nextAdapter: StorageAdapter,
+  requestedConfig: StorageConfig,
+  persistConfig: boolean
+): Promise<StorageSwitchResult> {
+  const raw = await nextAdapter.load();
+  const [discussionIds, benchmarkRunIds] = await Promise.all([
+    nextAdapter.listDiscussionIds(),
+    nextAdapter.listBenchmarkRunIds(),
+  ]);
+  const loadedExisting =
+    raw !== null || discussionIds.length > 0 || benchmarkRunIds.length > 0;
+
+  const env = raw ? parseEnvelope(raw) : null;
+  const resolvedConfig: StorageConfig = raw
+    ? {
+        ...requestedConfig,
+        encryptionEnabled: env?.encrypted ?? false,
+        salt: env?.encrypted ? env.salt : undefined,
+      }
+    : requestedConfig;
+
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDirty = false;
+  initGeneration++;
+  initPromise = null;
+  pendingDeletedDiscussionIds.clear();
+  adapter = nextAdapter;
+  config = resolvedConfig;
+  if (persistConfig) await setStorageConfig(resolvedConfig);
+
+  if (!loadedExisting) {
+    schedulePersist();
+    await flush();
+    return { loadedExisting: false, needsPassphrase: false };
+  }
+
+  if (env?.encrypted && !isUnlocked()) {
+    memory = null;
+    return { loadedExisting: true, needsPassphrase: true };
+  }
+
+  let persisted: Partial<ClientStore> = {};
+  if (raw) {
+    try {
+      const json = env ? await unwrap(env) : raw;
+      persisted = JSON.parse(json) as Partial<ClientStore>;
+    } catch (error) {
+      if (env?.encrypted) {
+        memory = null;
+        return { loadedExisting: true, needsPassphrase: true };
+      }
+      throw error;
+    }
+  }
+
+  const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
+  const hadLegacyDiscussionData = hasDiscussionOwnedStoreFields(persisted);
+  const benchmarkData = await loadBenchmarkStoreFields();
+  const loaded = await loadDiscussionStoreFields(
+    hydrateStore(stripBenchmarkStoreFields(persisted))
+  );
+  memory = mergeBenchmarkStoreFields(loaded, benchmarkData);
+  notifyReady();
+  if (hadLegacyBenchmarkData || hadLegacyDiscussionData || raw === null) {
+    schedulePersist();
+  }
+  return { loadedExisting: true, needsPassphrase: false };
 }

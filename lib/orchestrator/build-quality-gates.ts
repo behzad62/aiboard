@@ -342,6 +342,27 @@ function renderItems(items: BuildQualityGateItem[]): string[] {
   });
 }
 
+/**
+ * Render deterministic checks as facts for the Architect. The engine owns the
+ * observations, but never turns them into the semantic completion verdict.
+ */
+export function formatBuildQualityGateArchitectBrief(
+  result: BuildQualityGateResult
+): string {
+  const findings = [...result.blockers, ...result.warnings];
+  const lines = [
+    "## Final verification findings for the Architect",
+    "",
+    "The engine recorded the facts below. The Architect alone decides whether they require a fix or whether the build satisfies the request.",
+  ];
+  if (findings.length === 0) {
+    lines.push("", "- No deterministic verification findings were recorded.");
+  } else {
+    lines.push("", "### Findings", ...renderItems(findings));
+  }
+  return lines.join("\n");
+}
+
 export function formatBuildQualityGateSummary(
   result: BuildQualityGateResult
 ): string {

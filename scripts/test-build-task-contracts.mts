@@ -73,6 +73,22 @@ const noFileMutationDecision = canWorkerOutputAdvanceToReview({
 });
 check("file mutation task cannot advance without files", !noFileMutationDecision.ok, noFileMutationDecision);
 
+const engineFactDecision = canWorkerOutputAdvanceToReview({
+  task: mutationTask,
+  emittedFiles: [],
+  reviewFiles: [],
+  declaredOutputPaths: ["src/game.js"],
+  workerOutput: "I was still gathering context when the bounded tool phase ended.",
+  hasBlockingWriteIssues: false,
+  toolBudgetBlocked: true,
+  hasEngineEvidence: true,
+});
+check(
+  "engine-recorded facts route protocol gaps to the Architect instead of automatic retry",
+  engineFactDecision.ok && engineFactDecision.reason === "evidence",
+  engineFactDecision
+);
+
 const architectVerifiedMutation = normalizeBuildTaskContract({
   ...mutationTask,
   completionMode: "either",
@@ -136,9 +152,9 @@ const toolMissingSkillEvidenceDecision = canWorkerOutputAdvanceToReview({
   toolBudgetBlocked: false,
 });
 check(
-  "tool verification still hard-blocks missing parsed skill evidence",
-  !toolMissingSkillEvidenceDecision.ok &&
-    toolMissingSkillEvidenceDecision.failureDetail === "required evidence is missing",
+  "tool verification sends parsed skill gaps to the Architect instead of pre-review rejection",
+  toolMissingSkillEvidenceDecision.ok &&
+    toolMissingSkillEvidenceDecision.reason === "evidence",
   toolMissingSkillEvidenceDecision
 );
 

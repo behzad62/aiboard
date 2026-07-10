@@ -5,7 +5,7 @@ import type { ReasoningEffort } from "../db/schema";
 /**
  * Maps the app's unified reasoning-effort level to each provider's native
  * parameter. Sources (verified 2026-07-02):
- *  - OpenAI GPT-5.5 `reasoning_effort`: none|low|medium|high|xhigh (default medium)
+ *  - OpenAI GPT-5 family `reasoning_effort`: none|low|medium|high|xhigh (default medium)
  *  - Anthropic `output_config.effort`: low|medium|high|xhigh|max (default high);
  *    Opus 4.5 supports effort plus manual `thinking.budget_tokens`, but not
  *    adaptive thinking or max effort; Haiku 4.5 does NOT support effort.

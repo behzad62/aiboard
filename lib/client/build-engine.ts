@@ -100,7 +100,7 @@ import {
 } from "@/lib/orchestrator/build-tool-safety";
 import {
   evaluateBuildQualityGate,
-  formatBuildQualityGateSummary,
+  formatBuildQualityGateArchitectBrief,
   shouldRequireBrowserAcceptance,
   shouldRequireRequestFulfillment,
   type BuildQualityGateRepoStatus,
@@ -189,7 +189,6 @@ import {
   isBuildTaskDependencySatisfied,
   isArchitectTerminalActionForExpected,
   isReviewResultApproved,
-  buildReviewSkillEvidenceFixInstructions,
   evaluateExistingFileRewrite,
   isGitHubWorkflowCommand,
   isRawCommitCommand,
@@ -197,8 +196,7 @@ import {
   isTaskWritePathAllowed,
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
-  reopenBuildTasksForBlockedQualityGateCheckpoint,
-  reopenBuildTasksForQualityGate,
+  restoreArchitectApprovedTasksAfterLegacyQualityGateVeto,
   shouldRequestWorkerFinalOutput,
   taskRequiresToolVerification,
   outputPathsForTask,
@@ -215,8 +213,12 @@ import {
   buildRepoWorkflowSummary,
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
+  buildTaskFailureGuidanceUpdate,
+  buildWorkerFinalResponseInstruction,
+  hasWorkerFinalEvidenceResponse,
   buildReviewGateFixInstructions,
   canWorkerOutputAdvanceToReview,
+  renderBuildTaskInstructions,
   renderTaskGuidanceForWorker,
   resolveRunnerProjectTree,
   normalizeBuildTaskContract,
@@ -540,7 +542,9 @@ const TOTAL_CODE_INTEL_CALLS = 12;
 // Fetch pools are runaway-loop stops (like the MCP/run pools), not cost controls; the USD/time budget window governs spend. Architect AND workers now draw from this one shared pool, so it is sized to outlast a wave's realistic docs-lookup usage.
 const FETCHES_PER_PHASE = 18;
 const TOTAL_FETCHES = 24;
-const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
+// One normal tools-disabled finalization turn plus one bounded protocol repair
+// if the model ignores it and emits another tool action instead of a report.
+const WORKER_FINAL_OUTPUT_ATTEMPTS = 2;
 
 // Tool batching: one combined tool-result message is capped so it fits common
 // model contexts; in full-access mode the Architect may run a small queue of
@@ -548,8 +552,8 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 1;
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
 const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
-const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v4";
-const BUILD_CHECKPOINT_CONTRACT_VERSION = 2;
+const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v5";
+const BUILD_CHECKPOINT_CONTRACT_VERSION = 3;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -1481,7 +1485,7 @@ export async function runBuildDiscussion(
   // branch/PR/milestone/issue state.
   let reviewEvidenceLedger: BuildEvidenceLedgerEntry[] = [
     ...(existingCheckpoint?.evidenceLedger ?? []),
-  ].slice(-24);
+  ].slice(-96);
 
   const saveCheckpoint = (input: {
     status: BuildCheckpoint["status"];
@@ -5874,7 +5878,7 @@ export async function runBuildDiscussion(
           ? "planned"
           : task.status,
     }))).map(normalizeBuildTaskContract);
-    tasks = reopenBuildTasksForBlockedQualityGateCheckpoint(normalizedResumeTasks, {
+    tasks = restoreArchitectApprovedTasksAfterLegacyQualityGateVeto(normalizedResumeTasks, {
       status: existingCheckpoint.status,
       stopReason: existingCheckpoint.stopReason,
       recoveryLog: existingCheckpoint.recoveryLog,
@@ -6613,7 +6617,6 @@ export async function runBuildDiscussion(
       notes: string;
       changes: string[];
     }> = [];
-    const scopedVerificationGapTaskIds = new Set<string>();
 
     // Latest screenshot per task this wave (e.g. a Playwright browser_take_screenshot),
     // for the reviewer to judge visual acceptance. WAVE-scoped (like `executed`),
@@ -6655,7 +6658,10 @@ export async function runBuildDiscussion(
         task.retryAfterMs = decision.retryDelayMs
           ? Date.now() + decision.retryDelayMs
           : undefined;
-        task.instructions = `${task.instructions}\n\n${decision.instructionNote}`;
+        Object.assign(
+          task,
+          buildTaskFailureGuidanceUpdate(task, decision.instructionNote)
+        );
       } else {
         task.retryAfterMs = undefined;
       }
@@ -6817,7 +6823,12 @@ export async function runBuildDiscussion(
         treeText: treeText(),
         task,
         contextFileText: workerContextFileText,
-        architectNotes,
+        architectNotes: [
+          architectNotes,
+          renderBuildEvidenceLedger(reviewEvidenceLedger, 32, [task.id]),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
         memoryRecords: activeBuildMemories(),
       });
       emitBuildMemoryEvent();
@@ -6895,6 +6906,7 @@ export async function runBuildDiscussion(
             label: string;
             result: string;
             preserveFullResult?: boolean;
+            status?: BuildEvidenceLedgerEntry["status"];
           }> = [];
           const skipped = schedule.skipped.map((item) => ({
             label: item.label,
@@ -7098,6 +7110,12 @@ export async function runBuildDiscussion(
               served.push({
                 label: item.label,
                 result: packedToolResult,
+                status:
+                  toolResult.status === "ok"
+                    ? "succeeded"
+                    : toolResult.status === "denied"
+                      ? "skipped"
+                      : "failed",
               });
               continue;
             }
@@ -7262,6 +7280,29 @@ export async function runBuildDiscussion(
             skipped: skipped.length,
             summary: `${served.length} served, ${skipped.length} skipped`,
           });
+          const scheduledActions = new Map(
+            schedule.served.map((scheduled) => [scheduled.label, scheduled.action])
+          );
+          for (const fact of served) {
+            if (/ \(replayed\)$/.test(fact.label)) continue;
+            const action = scheduledActions.get(fact.label);
+            if (!action) continue;
+            reviewEvidenceLedger = appendBuildEvidenceLedgerEntry(
+              reviewEvidenceLedger,
+              {
+                at: new Date().toISOString(),
+                actor: worker.displayName,
+                taskId: task.id,
+                source: "worker",
+                action: action.action === "tool"
+                  ? `${action.server}.${action.tool}`
+                  : action.action,
+                status: fact.status ?? "succeeded",
+                label: fact.label,
+                summary: stripAnsi(fact.result),
+              }
+            );
+          }
           touchLiveCheckpoint({ reason: `${actor} tool batch` });
           return {
             message: packToolBatchResult({
@@ -7278,7 +7319,26 @@ export async function runBuildDiscussion(
           };
         };
 
-        for (let turn = 0; turn < budgets.toolTurns; turn++) {
+        const finalizationOnlyAttempt =
+          task.nextAttemptPhase === "finalizing" &&
+          reviewEvidenceLedger.some(
+            (entry) =>
+              entry.taskId === task.id && entry.status === "succeeded"
+          );
+        if (finalizationOnlyAttempt) {
+          emit({
+            type: "diagnostic",
+            phase: "model_streaming",
+            modelId: worker.modelId,
+            modelName: worker.displayName,
+            providerId: parseModelId(worker.modelId).providerId,
+            message: `${worker.displayName} is finalizing ${task.id} from persisted engine facts; tool gathering is disabled until the Architect requests a specific gap`,
+          });
+        }
+        const workerToolTurnLimit = finalizationOnlyAttempt
+          ? 0
+          : budgets.toolTurns;
+        for (let turn = 0; turn < workerToolTurnLimit; turn++) {
           const compacted = compactToolConversation(
             workerMessages,
             workerToolConversationChars,
@@ -7734,16 +7794,27 @@ export async function runBuildDiscussion(
             hasScopedVerificationGapReport: scopedVerificationGapReport,
             expectsFileOutput: taskContract.completionMode === "files",
             toolIssueCount: toolIssues.length,
+            endedWithToolAction:
+              inspectStrictToolActionBatchOutput(output).actions.length > 0,
+            requiresFinalEvidenceResponse:
+              taskContract.completionMode !== "files",
+            hasFinalEvidenceResponse:
+              hasWorkerFinalEvidenceResponse(output),
           });
           if (!requestFinalOutput) {
             break;
           }
-          const instruction =
-            "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. Large existing full-file blocks are rejected by the engine. If creating a new file, emit a fenced file block with path=...";
+          const instruction = buildWorkerFinalResponseInstruction({
+            expectsFileOutput: taskContract.completionMode === "files",
+            hasLandedFiles:
+              patchedFiles.length > 0 || preToolArtifactFiles.length > 0,
+          });
           const finalOutputReason =
-            toolIssues.length > 0
+            inspectStrictToolActionBatchOutput(output).actions.length > 0
+              ? "ended its bounded tool loop without a final evidence response"
+              : toolIssues.length > 0
               ? "hit repeated tool issues"
-              : "ended tool/context gathering without file output";
+              : "ended gathering without a structured final response";
           workerMessages.push({ role: "user", content: instruction });
           emit({
             type: "diagnostic",
@@ -7751,7 +7822,7 @@ export async function runBuildDiscussion(
             modelId: worker.modelId,
             modelName: worker.displayName,
             providerId: parseModelId(worker.modelId).providerId,
-            message: `${worker.displayName} ${finalOutputReason} for ${task.id}; requesting final file output without more tools`,
+            message: `${worker.displayName} ${finalOutputReason} for ${task.id}; requesting a tools-disabled final ${taskContract.completionMode === "files" ? "file output" : "evidence response"}`,
           });
           output = await streamConversation(worker, workerMessages, {
             maxTokens: workerMaxTokens(worker),
@@ -7786,7 +7857,7 @@ export async function runBuildDiscussion(
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
             emittedFiles: files,
             declaredOutputPaths,
-            taskInstructions: task.instructions,
+            taskInstructions: renderBuildTaskInstructions(task),
             taskKind: taskContract.kind,
             completionMode: taskContract.completionMode,
             verificationPolicy: taskContract.verificationPolicy,
@@ -7873,13 +7944,14 @@ export async function runBuildDiscussion(
           workerOutput: output,
           hasBlockingWriteIssues: reviewIssuesForDecision.blocking.length > 0,
           toolBudgetBlocked: toolBudgetBlockedNoFiles,
+          hasEngineEvidence: reviewEvidenceLedger.some(
+            (entry) =>
+              entry.taskId === task.id && entry.status === "succeeded"
+          ),
         });
         const canReviewWorkerOutput =
           contractReviewDecision.ok || evidenceOnlyNoFileReview;
-        if (
-          toolBudgetBlockedNoFiles ||
-          (reviewFiles.length === 0 && !canReviewWorkerOutput)
-        ) {
+        if (reviewFiles.length === 0 && !canReviewWorkerOutput) {
           const failureDetail = toolBudgetBlockedNoFiles
             ? `could not complete because tool budget was exhausted (${truncate(
                 toolIssues.join("; ") || output,
@@ -7914,10 +7986,8 @@ export async function runBuildDiscussion(
         stat.responseMs += Date.now() - startedAt;
         stat.responseChars += output.length;
         task.retryAfterMs = undefined;
+        task.nextAttemptPhase = undefined;
         task.status = "review";
-        if (scopedVerificationGapReport) {
-          scopedVerificationGapTaskIds.add(task.id);
-        }
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
@@ -8272,7 +8342,11 @@ export async function runBuildDiscussion(
     // Skipped for certified benchmark runs (repo side effects are policy-blocked
     // there) and when the fetch fails — a diff failure NEVER fails the review.
     const reviewContextPacks = [...reviewImpactPacks];
-    const reviewEvidenceLedgerText = renderBuildEvidenceLedger(reviewEvidenceLedger);
+    const reviewEvidenceLedgerText = renderBuildEvidenceLedger(
+      reviewEvidenceLedger,
+      64,
+      executed.map(({ task }) => task.id)
+    );
     if (reviewEvidenceLedgerText) {
       reviewContextPacks.push({
         id: `review-evidence-ledger-wave-${cycle}`,
@@ -8492,9 +8566,6 @@ export async function runBuildDiscussion(
       emit({ type: "task_status", taskId: task.id, title: task.title, status: "fixing", cycle });
       touchLiveCheckpoint({ force: true, reason: `${task.id} fixing` });
     };
-    const skillEvidenceGateFix = (fixInstructions: string): string =>
-      `FIX (from skill evidence gate):\n${fixInstructions}`;
-
     for (const result of action.results) {
       const task = tasks.find((t) => t.id === result.taskId);
       if (!task) continue;
@@ -8513,21 +8584,6 @@ export async function runBuildDiscussion(
       const verdictStat =
         task.workerIndex != null ? scoreboard[task.workerIndex] : null;
       if (isReviewResultApproved(result)) {
-        const prior = executed.find((e) => e.task.id === task.id);
-        const evidenceFix = buildReviewSkillEvidenceFixInstructions({
-          task,
-          evidence: waveSkillEvidence,
-          scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
-          workerOutput: prior?.output ?? prior?.notes ?? "",
-        });
-        if (evidenceFix) {
-          sendTaskBackForFix(
-            task,
-            skillEvidenceGateFix(evidenceFix),
-            `Architect approval for ${task.id} was blocked because required skill evidence is missing.`
-          );
-          continue;
-        }
         if (verdictStat) {
           verdictStat.approvals += 1;
           verdictStat.wApprovals += difficultyWeight(task);
@@ -8580,20 +8636,6 @@ export async function runBuildDiscussion(
     for (const item of executed) {
       const { task } = item;
       if (task.status === "review") {
-        const evidenceFix = buildReviewSkillEvidenceFixInstructions({
-          task,
-          evidence: waveSkillEvidence,
-          scopedVerificationGap: scopedVerificationGapTaskIds.has(task.id),
-          workerOutput: item.output ?? item.notes,
-        });
-        if (evidenceFix) {
-          sendTaskBackForFix(
-            task,
-            skillEvidenceGateFix(evidenceFix),
-            `Review omitted ${task.id}, but required skill evidence is missing.`
-          );
-          continue;
-        }
         if (reviewResult.forced || !reviewedTaskIds.has(task.id)) {
           sendTaskBackForFix(
             task,
@@ -9008,77 +9050,30 @@ export async function runBuildDiscussion(
           : "Build mode must record explicit requestFulfillment evidence that the landed output was compared against and satisfies the original user request before completion.",
       },
     });
-    finalQualityGateSummary = formatBuildQualityGateSummary(qualityGate);
-
-    if (qualityGate.status === "blocked") {
-      for (const blocker of qualityGate.blockers) {
-        recordBuildProblem({
-          code:
-            blocker.code === "browser_acceptance_missing"
-              ? "browser_acceptance_missing"
-              : blocker.code === "request_fulfillment_missing"
+    finalQualityGateSummary =
+      formatBuildQualityGateArchitectBrief(qualityGate);
+    for (const finding of [...qualityGate.blockers, ...qualityGate.warnings]) {
+      recordBuildProblem({
+        code:
+          finding.code === "browser_acceptance_missing"
+            ? "browser_acceptance_missing"
+            : finding.code === "request_fulfillment_missing"
               ? "request_fulfillment_missing"
               : "quality_gate_failed",
-          severity: "blocked",
-          source: "engine",
-          wave: wavesRun,
-          message: blocker.message,
-          details: blocker.details,
-        });
-      }
-      const message = `Build blocked by final quality gate:\n${qualityGate.blockers
-        .map((blocker) => `- ${blocker.message}`)
-        .join("\n")}`;
-      recoveryLog.push(
-        `Stopped as blocked by final quality gate after wave ${wavesRun}.`
-      );
-      const browserAcceptanceBlocker = qualityGate.blockers.find(
-        (blocker) => blocker.code === "browser_acceptance_missing"
-      );
-      const requestFulfillmentBlocker = qualityGate.blockers.find(
-        (blocker) => blocker.code === "request_fulfillment_missing"
-      );
-      tasks = reopenBuildTasksForQualityGate(tasks, {
-        skillEvidence: skillEvidenceRecords,
-        browserAcceptanceMissing: !!browserAcceptanceBlocker,
-        browserAcceptanceReason:
-          browserAcceptanceBlocker?.details ?? browserAcceptanceBlocker?.message,
-        requestFulfillmentMissing: !!requestFulfillmentBlocker,
-        requestFulfillmentReason:
-          requestFulfillmentBlocker?.details ??
-          requestFulfillmentBlocker?.message,
-        maxContextFiles: MAX_CONTEXT_FILES,
-      });
-      const report = createStopReport({
-        status: "blocked",
-        stopReason: "blocked",
-        message,
+        severity: "warning",
+        source: "engine",
         wave: wavesRun,
-        tasks,
-        verifyCommand:
-          finalChecks.map((check) => check.command).join("; ") || verifyCommand,
+        message: `Final verification finding for Architect: ${finding.message}`,
+        details: finding.details,
       });
-      const toolReviewReport = createToolReviewReport({
-        status: "blocked",
-        wave: wavesRun,
-      });
-      saveCheckpoint({
-        status: "blocked",
-        stopReason: "blocked",
-        wave: wavesRun,
-        tasks,
-        architectNotes,
-        verifyCommand,
-        stopReport: report,
-        toolReviewReport,
-      });
+    }
+    if (qualityGate.blockers.length > 0) {
       emit({
         type: "diagnostic",
-        phase: "model_failed",
-        message: `${message}\n\n${truncate(finalQualityGateSummary, 2_500)}`,
+        phase: "judging",
+        message:
+          "Final verification produced findings; the engine recorded them for the Architect and did not issue a completion verdict.",
       });
-      markStopped("blocked", message, report, toolReviewReport);
-      return;
     }
   }
 

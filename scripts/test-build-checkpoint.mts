@@ -16,7 +16,7 @@ import {
 import type { BenchmarkReportBundleV2 } from "../lib/benchmark/types";
 import {
   normalizeBuildTasksForResume,
-  reopenBuildTasksForBlockedQualityGateCheckpoint,
+  restoreArchitectApprovedTasksAfterLegacyQualityGateVeto,
   reopenBuildTasksForQualityGate,
 } from "../lib/orchestrator/build";
 
@@ -381,15 +381,16 @@ check(
 );
 check(
   "quality gate resume explains missing skill evidence",
-  /Required skill evidence is missing/i.test(reopenedT1?.instructions ?? "") &&
-    /GREEN test\/check pass/i.test(reopenedT1?.instructions ?? ""),
-  reopenedT1?.instructions
+  reopenedT1?.instructions === "Create the browser game." &&
+    /Required skill evidence is missing/i.test(reopenedT1?.reviewInstructions ?? "") &&
+    /GREEN test\/check pass/i.test(reopenedT1?.reviewInstructions ?? ""),
+  reopenedT1
 );
 check(
   "quality gate resume requests browser acceptance",
-  /real-browser acceptance/i.test(reopenedT1?.instructions ?? "") &&
-    /no visible stuck loading/i.test(reopenedT1?.instructions ?? ""),
-  reopenedT1?.instructions
+  /real-browser acceptance/i.test(reopenedT1?.reviewInstructions ?? "") &&
+    /no visible stuck loading/i.test(reopenedT1?.reviewInstructions ?? ""),
+  reopenedT1?.reviewInstructions
 );
 check("quality gate resume leaves unrelated done tasks alone", untouchedT2?.status === "done", qualityGateReopened);
 
@@ -457,13 +458,14 @@ const reopenedRequest = requestGateReopened.find((task) => task.id === "T1");
 check("request-fulfillment gate reopens a likely implementation task", reopenedRequest?.status === "fixing", requestGateReopened);
 check(
   "request-fulfillment gate asks for user-request comparison",
-  /request fulfillment/i.test(reopenedRequest?.instructions ?? "") &&
-    /original user request/i.test(reopenedRequest?.instructions ?? "") &&
-    /requestFulfillment/i.test(reopenedRequest?.instructions ?? ""),
-  reopenedRequest?.instructions
+  reopenedRequest?.instructions === "Build the parser and command-line interface." &&
+    /request fulfillment/i.test(reopenedRequest?.reviewInstructions ?? "") &&
+    /original user request/i.test(reopenedRequest?.reviewInstructions ?? "") &&
+    /requestFulfillment/i.test(reopenedRequest?.reviewInstructions ?? ""),
+  reopenedRequest
 );
 
-const legacyCheckpointResume = reopenBuildTasksForBlockedQualityGateCheckpoint(
+const legacyCheckpointResume = restoreArchitectApprovedTasksAfterLegacyQualityGateVeto(
   normalizeBuildTasksForResume([
     {
       id: "T1",
@@ -471,7 +473,11 @@ const legacyCheckpointResume = reopenBuildTasksForBlockedQualityGateCheckpoint(
       instructions: "Create the browser game.",
       contextFiles: [],
       outputPaths: ["index.html", "src/main.js"],
-      status: "done",
+      status: "fixing",
+      reviewInstructions:
+        "Final Build quality gate:\nRequired skill evidence is missing and browser acceptance was not recorded.",
+      retryInstructions:
+        "NOTE: a previous evidence-only attempt ended with an incomplete final evidence response.",
     },
   ]),
   {
@@ -507,9 +513,10 @@ const legacyCheckpointResume = reopenBuildTasksForBlockedQualityGateCheckpoint(
   }
 );
 check(
-  "legacy quality-gate checkpoint resumes with runnable remediation",
-  legacyCheckpointResume[0]?.status === "fixing" &&
-    /final Build quality gate/i.test(legacyCheckpointResume[0]?.instructions ?? ""),
+  "legacy engine-veto checkpoint restores the Architect-approved task",
+  legacyCheckpointResume[0]?.status === "done" &&
+    legacyCheckpointResume[0]?.reviewInstructions === undefined &&
+    legacyCheckpointResume[0]?.retryInstructions === undefined,
   legacyCheckpointResume
 );
 

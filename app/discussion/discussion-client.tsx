@@ -587,7 +587,7 @@ function DiscussionPageInner() {
   useEffect(() => {
     requestNotificationPermission();
 
-    (async () => {
+    void (async () => {
       const { needsPassphrase } = await ensureReady();
       if (needsPassphrase) {
         setStatus("locked");
@@ -644,7 +644,14 @@ function DiscussionPageInner() {
       if (data.discussion.status === "completed" && data.finalResult) {
         notifyComplete(data.discussion.topic);
       }
-    })();
+    })().catch((loadError) => {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Failed to load the discussion."
+      );
+      setStatus("failed");
+    });
   }, [id, requestNotificationPermission, notifyComplete]);
 
   useEffect(() => {
@@ -1061,6 +1068,36 @@ function DiscussionPageInner() {
           </a>{" "}
           and enter your passphrase, then return to this discussion.
         </p>
+      </div>
+    );
+  }
+
+  if (status === "not_found") {
+    return (
+      <div className="mx-auto max-w-md rounded-xl border bg-card p-6 text-center shadow-sm">
+        <h2 className="font-display text-xl font-semibold">Discussion unavailable</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          This discussion is not present in the currently available storage. If
+          you use a local folder, open{" "}
+          <a href="/settings?tab=storage" className="underline">
+            Settings → Storage
+          </a>{" "}
+          and grant folder access, then return here.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === "failed" && !discussion) {
+    return (
+      <div className="mx-auto max-w-md rounded-xl border bg-card p-6 text-center shadow-sm">
+        <h2 className="font-display text-xl font-semibold">Discussion failed to load</h2>
+        <p className="mt-2 text-sm text-destructive">
+          {error ?? "An unexpected storage error prevented this discussion from loading."}
+        </p>
+        <a href="/settings?tab=storage" className="mt-3 inline-block text-sm underline">
+          Open Storage settings
+        </a>
       </div>
     );
   }

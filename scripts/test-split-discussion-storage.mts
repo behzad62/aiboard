@@ -10,6 +10,7 @@ import {
   __loadClientStoreFromAdapterForTests,
   __resetClientStoreForTests,
   __setAdapterForTests,
+  __switchClientStoreAdapterForTests,
 } from "../lib/client/store";
 import type { StorageAdapter } from "../lib/client/storage-adapter";
 import type {
@@ -33,6 +34,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 class MemorySplitAdapter implements StorageAdapter {
   readonly kind = "filesystem" as const;
   main: string | null = null;
+  saveCalls = 0;
   discussionFiles = new Map<string, string>();
 
   private key(discussionId: string, relativePath: string): string {
@@ -44,6 +46,7 @@ class MemorySplitAdapter implements StorageAdapter {
   }
 
   async save(blob: string): Promise<void> {
+    this.saveCalls += 1;
     this.main = blob;
   }
 
@@ -264,6 +267,68 @@ check(
     (key) => !key.startsWith(`${discussion.id}/`)
   ),
   Array.from(adapter.discussionFiles.keys())
+);
+
+__clearClientStoreForTests();
+
+const existingDestination = new MemorySplitAdapter();
+existingDestination.main = JSON.stringify({
+  v: 1,
+  encrypted: false,
+  data: JSON.stringify({
+    providerKeys: [
+      {
+        providerId: "openai",
+        apiKey: "saved-destination-key",
+        enabled: true,
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      },
+    ],
+  }),
+});
+__resetClientStoreForTests({ providerKeys: [] });
+await __switchClientStoreAdapterForTests(existingDestination);
+const switchedToExisting = exportStore();
+check(
+  "switching storage loads an existing destination instead of overwriting it",
+  switchedToExisting.providerKeys[0]?.providerId === "openai" &&
+    existingDestination.saveCalls === 0,
+  {
+    providerIds: switchedToExisting.providerKeys.map((key) => key.providerId),
+    saveCalls: existingDestination.saveCalls,
+  }
+);
+
+__clearClientStoreForTests();
+
+const emptyDestination = new MemorySplitAdapter();
+__resetClientStoreForTests({
+  providerKeys: [
+    {
+      providerId: "anthropic",
+      apiKey: "source-key",
+      enabled: true,
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    },
+  ],
+});
+const emptySwitch = await __switchClientStoreAdapterForTests(emptyDestination);
+const migratedEnvelope = JSON.parse(emptyDestination.main ?? "{}") as {
+  data?: string;
+};
+const migratedMain = JSON.parse(migratedEnvelope.data ?? "{}") as {
+  providerKeys?: Array<{ providerId?: string }>;
+};
+check(
+  "switching storage migrates current data only when the destination is empty",
+  emptySwitch.loadedExisting === false &&
+    emptyDestination.saveCalls === 1 &&
+    migratedMain.providerKeys?.[0]?.providerId === "anthropic",
+  {
+    result: emptySwitch,
+    saveCalls: emptyDestination.saveCalls,
+    providerIds: migratedMain.providerKeys?.map((key) => key.providerId),
+  }
 );
 
 __clearClientStoreForTests();

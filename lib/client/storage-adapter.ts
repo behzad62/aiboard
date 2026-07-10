@@ -518,12 +518,35 @@ export async function getSavedDirectory(): Promise<FileSystemDirectoryHandle | n
 }
 
 export async function verifyPermission(
-  handle: FileSystemDirectoryHandle
+  handle: FileSystemDirectoryHandle,
+  userActivationOverride?: { isActive: boolean }
 ): Promise<boolean> {
   const h = handle as unknown as PermissionHandle;
   const opts = { mode: "readwrite" as const };
-  if ((await h.queryPermission?.(opts)) === "granted") return true;
-  return (await h.requestPermission?.(opts)) === "granted";
+  try {
+    if (await queryPermissionGranted(handle)) return true;
+    const userActivation =
+      userActivationOverride ??
+      (typeof navigator !== "undefined" ? navigator.userActivation : undefined);
+    if (userActivation && !userActivation.isActive) return false;
+    return (await h.requestPermission?.(opts)) === "granted";
+  } catch {
+    // Chromium rejects requestPermission() without a fresh user gesture. App
+    // startup must fall back to IndexedDB instead of hanging on an unhandled
+    // SecurityError; the Storage page can request access from a real click.
+    return false;
+  }
+}
+
+export async function queryPermissionGranted(
+  handle: FileSystemDirectoryHandle
+): Promise<boolean> {
+  const h = handle as unknown as PermissionHandle;
+  try {
+    return (await h.queryPermission?.({ mode: "readwrite" })) === "granted";
+  } catch {
+    return false;
+  }
 }
 
 // ── Storage configuration ─────────────────────────────────────────────────────
@@ -554,7 +577,7 @@ export async function createAdapter(
 ): Promise<StorageAdapter> {
   if (config.kind === "filesystem") {
     const dir = await getSavedDirectory();
-    if (dir && (await verifyPermission(dir))) {
+    if (dir && (await queryPermissionGranted(dir))) {
       return new FileSystemAdapter(dir);
     }
   }

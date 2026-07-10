@@ -148,6 +148,30 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
 };
 
 export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> = {
+  "openai:gpt-5.6": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "openai:gpt-5.6-pro": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
+  },
+  "openai:gpt-5.6-mini": {
+    contextWindowTokens: 400_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
+  },
   "openai:gpt-5.5": {
     contextWindowTokens: 1_050_000,
     maxOutputTokens: 128_000,
@@ -203,6 +227,30 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     longContextQuality: "excellent",
     promptCaching: true,
     recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "chatgpt:gpt-5.6": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "chatgpt:gpt-5.6-pro": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: ["architect", "reviewer", "summary"],
+  },
+  "chatgpt:gpt-5.6-mini": {
+    contextWindowTokens: 400_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   "chatgpt:gpt-5.4": {
     contextWindowTokens: 1_050_000,

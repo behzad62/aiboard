@@ -21,6 +21,28 @@ export interface CatalogModel {
 export const MODEL_CATALOG: CatalogModel[] = [
   // OpenAI — https://developers.openai.com/api/docs/models
   {
+    id: "gpt-5.6",
+    name: "GPT-5.6",
+    providerId: "openai",
+    description: "Latest frontier model for coding and professional work",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-pro",
+    name: "GPT-5.6 Pro",
+    providerId: "openai",
+    description: "Highest-intelligence GPT-5.6 variant for complex tasks",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-mini",
+    name: "GPT-5.6 Mini",
+    providerId: "openai",
+    description: "Cost-optimized GPT-5.6 variant for fast responses",
+    capabilities: { image: true, document: true, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
     id: "gpt-5.5",
     name: "GPT-5.5",
     providerId: "openai",
@@ -62,11 +84,35 @@ export const MODEL_CATALOG: CatalogModel[] = [
     providerId: "openai",
     description: "Cost-optimized model for fast responses",
     capabilities: { image: true, document: true, audio: false, video: false },
-    validationCandidate: true,
   },
 
   // ChatGPT account-backed models - served through the local account-provider
   // runner, but represented as normal provider catalog entries in the app.
+  {
+    id: "gpt-5.6",
+    name: "GPT-5.6 (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "ChatGPT Plus/Pro account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-pro",
+    name: "GPT-5.6 Pro (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Highest-intelligence ChatGPT account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-mini",
+    name: "GPT-5.6 Mini (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Fast ChatGPT account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+    validationCandidate: true,
+  },
   {
     id: "gpt-5.5",
     name: "GPT-5.5 (ChatGPT)",
@@ -90,7 +136,6 @@ export const MODEL_CATALOG: CatalogModel[] = [
     description:
       "Fast ChatGPT account model through the local account-provider runner",
     capabilities: { image: true, document: true, audio: false, video: false },
-    validationCandidate: true,
   },
   {
     id: "gpt-5.3-codex-spark",

@@ -81,7 +81,14 @@ export type BuildTaskVerificationPolicy = "architect" | "tool" | "external" | "n
 export interface BuildTask {
   id: string;
   title: string;
+  /** Immutable Architect-authored task contract. */
   instructions: string;
+  /** Latest mutable review correction; replaces prior review guidance. */
+  reviewInstructions?: string;
+  /** Latest mutable retry/provider-failure guidance; replaces prior retry guidance. */
+  retryInstructions?: string;
+  /** Durable worker state for the next attempt; the engine, not prose, enforces it. */
+  nextAttemptPhase?: "gathering" | "finalizing";
   /**
    * High-level task intent. The engine uses this to decide whether "no file
    * changes needed" is a valid output or a failed implementation attempt.
@@ -217,16 +224,17 @@ function defaultVerificationPolicyForTask(
 }
 
 export function normalizeBuildTaskContract<T extends BuildTask>(task: T): T {
-  const kind = cleanTaskKind(task.kind) ?? inferBuildTaskKind(task);
+  const migratedTask = migrateDynamicTaskInstructions(task);
+  const kind = cleanTaskKind(migratedTask.kind) ?? inferBuildTaskKind(migratedTask);
   const completionMode =
-    cleanTaskCompletionMode(task.completionMode) ??
-    defaultCompletionModeForTask({ ...task, kind });
+    cleanTaskCompletionMode(migratedTask.completionMode) ??
+    defaultCompletionModeForTask({ ...migratedTask, kind });
   const verificationPolicy =
-    cleanTaskVerificationPolicy(task.verificationPolicy) ??
-    defaultVerificationPolicyForTask({ ...task, kind, completionMode });
-  const requiredEvidence = stringArrayFromUnknown(task.requiredEvidence);
+    cleanTaskVerificationPolicy(migratedTask.verificationPolicy) ??
+    defaultVerificationPolicyForTask({ ...migratedTask, kind, completionMode });
+  const requiredEvidence = stringArrayFromUnknown(migratedTask.requiredEvidence);
   return {
-    ...task,
+    ...migratedTask,
     kind,
     completionMode,
     verificationPolicy,
@@ -312,6 +320,7 @@ export function canWorkerOutputAdvanceToReview(input: {
   evidence?: SkillEvidence[];
   hasBlockingWriteIssues: boolean;
   toolBudgetBlocked: boolean;
+  hasEngineEvidence?: boolean;
 }): WorkerOutputReviewDecision {
   const task = normalizeBuildTaskContract(input.task);
   const declaredOutputPaths =
@@ -327,7 +336,7 @@ export function canWorkerOutputAdvanceToReview(input: {
     expectsFileOutput,
   };
 
-  if (input.toolBudgetBlocked) {
+  if (input.toolBudgetBlocked && !input.hasEngineEvidence) {
     return {
       ...base,
       ok: false,
@@ -338,7 +347,12 @@ export function canWorkerOutputAdvanceToReview(input: {
   if (input.emittedFiles.length > 0 || input.reviewFiles.length > 0) {
     return { ...base, ok: true, reason: "files" };
   }
-  if (input.hasBlockingWriteIssues && task.completionMode !== "evidence") {
+  if (
+    input.hasBlockingWriteIssues &&
+    task.completionMode !== "evidence" &&
+    !input.hasEngineEvidence &&
+    !hasSubstantiveEvidenceText(input.workerOutput)
+  ) {
     return {
       ...base,
       ok: false,
@@ -346,27 +360,14 @@ export function canWorkerOutputAdvanceToReview(input: {
       failureDetail: "write issues prevented expected files from landing",
     };
   }
-  const blockingEvidence = input.evidence?.length
-    ? getBlockingSkillEvidence(input.evidence, task.id)
-    : [];
   const hasNoopRepoEvidence = hasNoopRepoEvidenceText(task, input.workerOutput);
+  // The engine only checks whether a reviewable response exists. Parsed skill
+  // gaps and task-contract mismatches are evidence for the Architect, not a
+  // semantic verdict that may bypass review and re-run the worker wholesale.
   if (
-    taskRequiresToolVerification(task) &&
-    blockingEvidence.length > 0 &&
-    !hasNoopRepoEvidence
-  ) {
-    return {
-      ...base,
-      ok: false,
-      reason: "blocked",
-      failureDetail: "required evidence is missing",
-    };
-  }
-  const evidenceAllowed =
-    task.completionMode === "evidence" || task.completionMode === "either";
-  if (
-    evidenceAllowed &&
-    (hasNoopRepoEvidence || hasSubstantiveEvidenceText(input.workerOutput))
+    input.hasEngineEvidence ||
+    hasNoopRepoEvidence ||
+    hasSubstantiveEvidenceText(input.workerOutput)
   ) {
     return { ...base, ok: true, reason: "evidence" };
   }
@@ -459,13 +460,57 @@ export interface BuildTaskFailureDecision {
   retryDelayMs?: number;
 }
 
+type BuildTaskFailureContract = Pick<
+  BuildTask,
+  "failCount" | "kind" | "completionMode" | "outputPaths"
+>;
+
+function isEvidenceOnlyFailureContract(task: BuildTaskFailureContract): boolean {
+  if (task.completionMode === "evidence") return true;
+  return (
+    task.completionMode === "either" &&
+    (task.outputPaths?.length ?? 0) === 0 &&
+    (task.kind === "audit" || task.kind === "verify" || task.kind === "repo")
+  );
+}
+
+export function buildTaskFailureInstruction(
+  task: BuildTaskFailureContract,
+  kind: "bad" | "unavailable",
+  detail: string
+): string {
+  if (isEvidenceOnlyFailureContract(task)) {
+    const cause =
+      kind === "unavailable"
+        ? `a transient provider failure (${detail})`
+        : `an incomplete final evidence response (${detail})`;
+    return `NOTE: a previous evidence-only attempt ended with ${cause}. Reuse engine-recorded tool facts already included in the task context. Run only checks whose evidence is absent or stale, then provide a final evidence response without more tool JSON. Include a \`Skill evidence:\` section with concrete results. Do not modify files unless the Architect's task contract explicitly identifies a defect.`;
+  }
+  return kind === "unavailable"
+    ? `NOTE: a previous attempt hit a transient provider failure (${detail}). Retry the task from the current project state, inspect any files that may already exist, and continue with the smallest necessary file tool actions.`
+    : `NOTE: a previous attempt produced no usable output (${detail}). Do not retry by emitting one large full-file block. Use read_range/search plus patch for existing files; use append chunks with reset=true to create or replace a large/missing file.`;
+}
+
 export function shouldRequestWorkerFinalOutput(input: {
   hasLandedFiles: boolean;
   hasPreviewArtifacts: boolean;
   hasScopedVerificationGapReport: boolean;
   expectsFileOutput: boolean;
   toolIssueCount: number;
+  endedWithToolAction?: boolean;
+  requiresFinalEvidenceResponse?: boolean;
+  hasFinalEvidenceResponse?: boolean;
 }): boolean {
+  if (
+    input.requiresFinalEvidenceResponse &&
+    !input.hasFinalEvidenceResponse
+  ) {
+    return true;
+  }
+  // A tool action is an instruction to the engine, not a completion report.
+  // When the bounded tool loop ends on one, every task mode needs one reserved
+  // model turn to turn the observed results into reviewable evidence.
+  if (input.endedWithToolAction) return true;
   if (
     input.hasLandedFiles ||
     input.hasPreviewArtifacts ||
@@ -476,8 +521,41 @@ export function shouldRequestWorkerFinalOutput(input: {
   return input.expectsFileOutput || input.toolIssueCount > 0;
 }
 
+export function hasWorkerFinalEvidenceResponse(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.length < 80) return false;
+  const structured =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?task result\s*:/i.test(normalized) &&
+    /(?:^|\n)\s*(?:#{1,6}\s*)?verification evidence\s*:/i.test(normalized) &&
+    /(?:^|\n)\s*(?:#{1,6}\s*)?skill evidence\s*:/i.test(normalized);
+  const scopedGap =
+    /\bverification (?:gap|incomplete|blocked)\b/i.test(normalized) &&
+    /\b(evidence already obtained|remaining checks?|acceptance still required|recommendation)\b/i.test(
+      normalized
+    );
+  return structured || scopedGap;
+}
+
+export function buildWorkerFinalResponseInstruction(input: {
+  expectsFileOutput: boolean;
+  hasLandedFiles?: boolean;
+}): string {
+  const evidenceInstruction =
+    'Use these exact headings: `Task result:`, `Verification evidence:`, and `Skill evidence:`. Under Skill evidence, include one concrete bullet per active required skill, based only on tool results already shown. For browser acceptance, name the exact browser_navigate URL, the settled visible state (including no stuck loading, error banner, blank screen, or blocking overlay), and the browser_console_messages result. If acceptance could not be established, report a scoped verification gap instead of claiming success.';
+  if (input.expectsFileOutput && !input.hasLandedFiles) {
+    return [
+      "FINAL ATTEMPT: stop using tools. Using only the context and tool results already shown, output the files/patches for this task now. Do not emit JSON tool actions. If modifying an existing file, emit SEARCH/REPLACE edit blocks copied from the current content you already read. Large existing full-file blocks are rejected by the engine. If creating a new file, emit a fenced file block with path=...",
+      evidenceInstruction,
+    ].join("\n\n");
+  }
+  return [
+    "FINAL EVIDENCE RESPONSE REQUIRED: stop using tools. Using only the context and tool results already shown, provide a concise completion and verification report for this task. Do not emit JSON tool actions and do not repeat any tool call.",
+    evidenceInstruction,
+  ].join("\n\n");
+}
+
 export function decideBuildTaskFailure(
-  task: Pick<BuildTask, "failCount">,
+  task: BuildTaskFailureContract,
   kind: "bad" | "unavailable",
   detail: string
 ): BuildTaskFailureDecision {
@@ -489,19 +567,17 @@ export function decideBuildTaskFailure(
           Math.min(failCount - 1, BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS.length - 1)
         ]
       : undefined;
-  const instructionNote =
-    kind === "unavailable"
-      ? `NOTE: a previous attempt hit a transient provider failure (${detail}). Retry the task from the current project state, inspect any files that may already exist, and continue with the smallest necessary file tool actions.`
-      : `NOTE: a previous attempt produced no usable output (${detail}). Do not retry by emitting one large full-file block. Use read_range/search plus patch for existing files; use append chunks with reset=true to create or replace a large/missing file.`;
+  const instructionNote = buildTaskFailureInstruction(task, kind, detail);
 
   return { failCount, status, instructionNote, retryDelayMs };
 }
 
 export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
-  return tasks.map((task) => {
+  let normalized: BuildTask[] = tasks.map((task): BuildTask => {
+    const migratedTask = migrateDynamicTaskInstructions(task);
     if (task.status === "in_progress" || task.status === "review") {
       return {
-        ...task,
+        ...migratedTask,
         status: "planned",
         workerIndex: undefined,
         retryAfterMs: undefined,
@@ -510,7 +586,7 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
 
     if (task.status === "failed") {
       return {
-        ...task,
+        ...migratedTask,
         status: "fixing",
         // Resume starts a new retry window; failure history is kept in
         // buildProblems/recovery notes rather than this live retry counter.
@@ -521,8 +597,50 @@ export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
       };
     }
 
-    return { ...task };
+    return migratedTask;
   });
+
+  const unfinishedFinalVerifications = normalized.filter(
+    (task) => task.status !== "done" && isFinalEvidenceVerificationTask(task)
+  );
+  if (unfinishedFinalVerifications.length <= 1) return normalized;
+
+  const retained = unfinishedFinalVerifications.at(-1)!;
+  const supersededIds = new Set(
+    unfinishedFinalVerifications
+      .slice(0, -1)
+      .map((task) => buildTaskIdKey(task.id))
+  );
+  normalized = normalized.map((task) => {
+    const taskKey = buildTaskIdKey(task.id);
+    const superseded = supersededIds.has(taskKey);
+    const dependsOn = task.dependsOn
+      ? [
+          ...new Set(
+            task.dependsOn
+              .map((dependency) =>
+                supersededIds.has(buildTaskIdKey(dependency))
+                  ? retained.id
+                  : dependency
+              )
+              .filter((dependency) => dependency !== task.id)
+          ),
+        ]
+      : undefined;
+    if (!superseded) return { ...task, dependsOn };
+    return {
+      ...task,
+      title: task.title.includes(`superseded by ${retained.id}`)
+        ? task.title
+        : `${task.title} (superseded by ${retained.id})`,
+      status: "done",
+      workerIndex: undefined,
+      assignTo: undefined,
+      retryAfterMs: undefined,
+      dependsOn,
+    };
+  });
+  return normalized;
 }
 
 export interface BuildQualityGateReopenInput {
@@ -632,6 +750,7 @@ export function reopenBuildTasksForQualityGate(
   const maxContextFiles = input.maxContextFiles ?? 12;
   return tasks.map((task) => {
     if (!targetIds.has(task.id)) return { ...task };
+    const migratedTask = migrateDynamicTaskInstructions(task);
 
     const skillInstructions = buildSkillEvidenceFixInstructions(
       blockingEvidence,
@@ -648,25 +767,24 @@ export function reopenBuildTasksForQualityGate(
     ]
       .filter((part) => part.trim())
       .join("\n\n");
-    const note = fixInstructions
-      ? `FIX (from final Build quality gate):\n${fixInstructions}`
-      : "FIX (from final Build quality gate): address the blocked completion gate.";
-    const instructions = task.instructions.includes("FIX (from final Build quality gate):")
-      ? task.instructions
-      : `${task.instructions}\n\n${note}`;
+    const reviewInstructions = capDynamicTaskInstruction(
+      fixInstructions
+        ? `Final Build quality gate:\n${fixInstructions}`
+        : "Final Build quality gate: address the blocked completion gate."
+    );
 
     return {
-      ...task,
+      ...migratedTask,
       status: "fixing",
       workerIndex: undefined,
       assignTo: undefined,
       retryAfterMs: undefined,
       contextFiles: uniqueStrings([
-        ...task.contextFiles,
-        ...(task.outputPaths ?? []),
-        ...(task.testOutputPaths ?? []),
+        ...migratedTask.contextFiles,
+        ...(migratedTask.outputPaths ?? []),
+        ...(migratedTask.testOutputPaths ?? []),
       ]).slice(0, maxContextFiles),
-      instructions,
+      reviewInstructions,
     };
   });
 }
@@ -701,6 +819,43 @@ function checkpointWasBlockedByQualityGate(
   return /final Build quality gate|quality_gate_failed|browser_acceptance_missing|request_fulfillment_missing|request fulfillment|requestFulfillment/i.test(
     text
   );
+}
+
+/**
+ * Checkpoints written by older engines may have changed Architect-approved
+ * tasks back to `fixing` solely because the engine's semantic quality gate
+ * vetoed completion. Restore only those engine-authored fix states; genuine
+ * Architect fixes use different review guidance and remain runnable.
+ */
+export function restoreArchitectApprovedTasksAfterLegacyQualityGateVeto(
+  tasks: BuildTask[],
+  input: BuildQualityGateCheckpointReopenInput
+): BuildTask[] {
+  if (!checkpointWasBlockedByQualityGate(input)) {
+    return tasks.map((task) => ({ ...task }));
+  }
+  return tasks.map((task) => {
+    const migratedTask = migrateDynamicTaskInstructions(task);
+    if (
+      migratedTask.status !== "fixing" ||
+      !/^Final Build quality gate:/i.test(
+        migratedTask.reviewInstructions?.trim() ?? ""
+      )
+    ) {
+      return migratedTask;
+    }
+    return {
+      ...migratedTask,
+      status: "done",
+      workerIndex: undefined,
+      assignTo: undefined,
+      retryAfterMs: undefined,
+      avoidWorkerIndexes: undefined,
+      reviewInstructions: undefined,
+      retryInstructions: undefined,
+      nextAttemptPhase: undefined,
+    };
+  });
 }
 
 export function reopenBuildTasksForBlockedQualityGateCheckpoint(
@@ -837,7 +992,16 @@ export function allocateIncrementalTaskIds(
 }
 
 export function filterNovelReviewTasks(
-  existingTasks: Pick<BuildTask, "id" | "title" | "status" | "outputPaths" | "testOutputPaths">[],
+  existingTasks: Pick<
+    BuildTask,
+    | "id"
+    | "title"
+    | "status"
+    | "kind"
+    | "completionMode"
+    | "outputPaths"
+    | "testOutputPaths"
+  >[],
   candidates: PlanAction["tasks"]
 ): ReviewTaskFilterResult {
   const existingByOutputPath = new Map<
@@ -858,8 +1022,22 @@ export function filterNovelReviewTasks(
   }
   const accepted: PlanAction["tasks"] = [];
   const skipped: ReviewTaskFilterResult["skipped"] = [];
+  const unfinishedFinalVerificationTasks = existingTasks
+    .filter((task) => task.status !== "done" && isFinalEvidenceVerificationTask(task))
+    .map((task) => ({ title: task.title, status: task.status }));
   for (const candidate of candidates) {
     const id = candidate.id?.trim();
+    const duplicateFinalVerification = isFinalEvidenceVerificationTask(candidate)
+      ? unfinishedFinalVerificationTasks[0]
+      : undefined;
+    if (duplicateFinalVerification) {
+      skipped.push({
+        id: id || "(unassigned)",
+        title: duplicateFinalVerification.title,
+        existingStatus: duplicateFinalVerification.status,
+      });
+      continue;
+    }
     const duplicateOutput = outputPathsForTask(candidate)
       .map((path) => path.trim().replace(/\\/g, "/").toLowerCase())
       .filter(Boolean)
@@ -874,6 +1052,12 @@ export function filterNovelReviewTasks(
       continue;
     }
     accepted.push(candidate);
+    if (isFinalEvidenceVerificationTask(candidate)) {
+      unfinishedFinalVerificationTasks.push({
+        title: candidate.title,
+        status: "planned",
+      });
+    }
     for (const outputPath of outputPathsForTask(candidate)) {
       const normalized = outputPath.trim().replace(/\\/g, "/").toLowerCase();
       if (normalized) {
@@ -885,6 +1069,19 @@ export function filterNovelReviewTasks(
     }
   }
   return { accepted, skipped };
+}
+
+function isFinalEvidenceVerificationTask(
+  task: Pick<BuildTask, "title" | "kind" | "completionMode">
+): boolean {
+  const title = task.title.trim().toLowerCase();
+  const isFinal = /\b(final|release)\b/.test(title);
+  const isVerification = /\b(verif(?:y|ication)?|acceptance)\b/.test(title);
+  // Final verification is a terminal project gate even when the Architect
+  // classifies it as repo/either/external rather than verify/evidence/tool.
+  // Running two unfinished "final verification" tasks duplicates the same
+  // expensive browser/repo evidence work, so title intent is authoritative.
+  return isFinal && isVerification;
 }
 
 export function shouldApplyReviewResultToTask(
@@ -977,6 +1174,7 @@ export function buildReviewFixTaskUpdate(
   maxContextFiles: number,
   options?: { avoidWorkerIndex?: number | null }
 ): BuildTask {
+  const migratedTask = migrateDynamicTaskInstructions(task);
   const contextFiles = [
     ...new Set([...task.contextFiles, ...priorFiles]),
   ].slice(0, maxContextFiles);
@@ -984,17 +1182,156 @@ export function buildReviewFixTaskUpdate(
     ...(task.avoidWorkerIndexes ?? []),
     options?.avoidWorkerIndex,
   ]);
+  const reviewInstructions = capDynamicTaskInstruction(
+    fixInstructions ?? "address the review feedback"
+  );
   return {
-    ...task,
+    ...migratedTask,
     status: "fixing",
     workerIndex: undefined,
     assignTo: undefined,
     retryAfterMs: undefined,
     avoidWorkerIndexes: avoidWorkerIndexes.length > 0 ? avoidWorkerIndexes : undefined,
     contextFiles,
-    instructions: `${task.instructions}\n\nFIX (from the Architect's review): ${
-      fixInstructions ?? "address the review feedback"
-    }`,
+    reviewInstructions,
+    retryInstructions: undefined,
+    nextAttemptPhase: "gathering",
+  };
+}
+
+const DYNAMIC_REVIEW_PREFIX = "FIX (from the Architect's review):";
+const LEGACY_FINAL_GATE_PREFIX = "FIX (from final Build quality gate):";
+const DYNAMIC_FAILURE_PREFIX = "NOTE: a previous attempt";
+const MAX_DYNAMIC_TASK_INSTRUCTION_CHARS = 6_000;
+
+interface DynamicTaskInstructionSections {
+  base: string;
+  reviewSection?: string;
+  failureSection?: string;
+}
+
+function parseDynamicTaskInstructions(
+  instructions: string
+): DynamicTaskInstructionSections {
+  const parts = instructions
+    .trim()
+    .split(
+      /\n\n(?=FIX \(from (?:the Architect's review|final Build quality gate)\):|NOTE: a previous attempt)/
+    );
+  const base = parts.shift()?.trimEnd() ?? "";
+  let reviewSection: string | undefined;
+  let failureSection: string | undefined;
+  for (const part of parts) {
+    const section = part.trim();
+    if (
+      section.startsWith(DYNAMIC_REVIEW_PREFIX) ||
+      section.startsWith(LEGACY_FINAL_GATE_PREFIX)
+    ) {
+      reviewSection = section;
+    }
+    else if (section.startsWith(DYNAMIC_FAILURE_PREFIX)) failureSection = section;
+  }
+  return { base, reviewSection, failureSection };
+}
+
+function capDynamicTaskInstruction(section: string): string {
+  if (section.length <= MAX_DYNAMIC_TASK_INSTRUCTION_CHARS) return section;
+  const suffix = "\n[Latest feedback truncated before reuse in retry prompts.]";
+  return `${section
+    .slice(0, MAX_DYNAMIC_TASK_INSTRUCTION_CHARS - suffix.length)
+    .trimEnd()}${suffix}`;
+}
+
+function migrateDynamicTaskInstructions<T extends BuildTask>(task: T): T {
+  const parsed = parseDynamicTaskInstructions(task.instructions);
+  const legacyReview = legacyReviewGuidance(parsed.reviewSection);
+  let retryInstructions = task.retryInstructions ?? parsed.failureSection;
+  if (
+    isEvidenceOnlyFailureContract(task) &&
+    /previous attempt produced no usable output/i.test(retryInstructions ?? "")
+  ) {
+    retryInstructions = buildTaskFailureInstruction(
+      task,
+      "bad",
+      /required evidence is missing/i.test(retryInstructions ?? "")
+        ? "required evidence is missing"
+        : "legacy evidence response was not reviewable"
+    );
+  }
+  const nextAttemptPhase =
+    task.nextAttemptPhase ??
+    (isEvidenceOnlyFailureContract(task) &&
+    /(?:incomplete final evidence response|required evidence is missing)/i.test(
+      retryInstructions ?? ""
+    )
+      ? "finalizing"
+      : undefined);
+  return {
+    ...task,
+    instructions: parsed.base,
+    reviewInstructions: capOptionalDynamicTaskInstruction(
+      task.reviewInstructions ?? legacyReview
+    ),
+    retryInstructions: capOptionalDynamicTaskInstruction(
+      retryInstructions
+    ),
+    nextAttemptPhase,
+  };
+}
+
+function legacyReviewGuidance(section: string | undefined): string | undefined {
+  const trimmed = section?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith(LEGACY_FINAL_GATE_PREFIX)) {
+    const detail = trimmed.slice(LEGACY_FINAL_GATE_PREFIX.length).trim();
+    return detail
+      ? `Final Build quality gate:\n${detail}`
+      : "Final Build quality gate: address the blocked completion gate.";
+  }
+  if (trimmed.startsWith(DYNAMIC_REVIEW_PREFIX)) {
+    return trimmed.slice(DYNAMIC_REVIEW_PREFIX.length).trim() || undefined;
+  }
+  return trimmed;
+}
+
+function capOptionalDynamicTaskInstruction(
+  section: string | undefined
+): string | undefined {
+  const trimmed = section?.trim();
+  return trimmed ? capDynamicTaskInstruction(trimmed) : undefined;
+}
+
+export function renderBuildTaskInstructions(
+  task: Pick<BuildTask, "instructions" | "reviewInstructions" | "retryInstructions">
+): string {
+  return [
+    task.instructions.trim(),
+    task.reviewInstructions?.trim()
+      ? `Latest Architect review guidance:\n${task.reviewInstructions.trim()}`
+      : "",
+    task.retryInstructions?.trim()
+      ? `Latest retry guidance:\n${task.retryInstructions.trim()}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function buildTaskFailureGuidanceUpdate(
+  task: BuildTask,
+  instructionNote: string
+): BuildTask {
+  const migratedTask = migrateDynamicTaskInstructions(task);
+  return {
+    ...migratedTask,
+    retryInstructions: capDynamicTaskInstruction(instructionNote.trim()),
+    nextAttemptPhase:
+      isEvidenceOnlyFailureContract(migratedTask) &&
+      /(?:incomplete final evidence response|required evidence is missing)/i.test(
+        instructionNote
+      )
+        ? "finalizing"
+        : migratedTask.nextAttemptPhase,
   };
 }
 
@@ -5281,7 +5618,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
     !hasAssembledContext ? input.contextFileText : "",
     "",
     `YOUR TASK — ${input.task.id}: ${input.task.title}`,
-    input.task.instructions,
+    renderBuildTaskInstructions(input.task),
     input.task.implementationContract?.trim()
       ? `Implementation contract from Architect:\n${input.task.implementationContract.trim()}`
       : "",
@@ -5341,7 +5678,7 @@ export function buildArchitectGuidancePrompt(input: BuildPromptContextInput & {
       : "",
     "",
     `Task ${input.task.id}: ${input.task.title}`,
-    input.task.instructions,
+    renderBuildTaskInstructions(input.task),
     input.task.outputPaths?.length
       ? `Task outputPaths: ${input.task.outputPaths.join(", ")}`
       : "Task outputPaths: none declared.",

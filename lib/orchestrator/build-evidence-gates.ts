@@ -183,7 +183,7 @@ export function shouldAllowEvidenceOnlySkillExemptions(input: {
   ) {
     return true;
   }
-  return /FIX \(from (?:final Build quality gate|skill evidence gate)\):/i.test(
+  return /(?:Final Build quality gate:|FIX \(from (?:final Build quality gate|skill evidence gate)\):)/i.test(
     input.taskInstructions ?? ""
   );
 }

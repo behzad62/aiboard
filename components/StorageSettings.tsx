@@ -19,6 +19,7 @@ import {
   getConfig,
   initStore,
   replaceStore,
+  switchStorageLocation,
 } from "@/lib/client/store";
 import {
   fileSystemAccessSupported,
@@ -82,20 +83,32 @@ export function StorageSettings({
 
   const useBrowser = () =>
     run(async () => {
-      await applyStorageConfig({ ...getConfig(), kind: "indexeddb" });
+      const result = await switchStorageLocation({
+        ...getConfig(),
+        kind: "indexeddb",
+      });
       await refresh();
       await onChanged?.();
-      setMessage("Now using this browser (IndexedDB).");
+      setMessage(
+        result.loadedExisting
+          ? "Loaded the existing data stored in this browser (IndexedDB)."
+          : "Now using this browser (IndexedDB). Your current data was copied here."
+      );
     });
 
   const useFolder = () =>
     run(async () => {
       await pickDirectory();
-      await applyStorageConfig({ ...getConfig(), kind: "filesystem" });
+      const result = await switchStorageLocation({
+        ...getConfig(),
+        kind: "filesystem",
+      });
       await refresh();
       await onChanged?.();
       setMessage(
-        "Now using a local folder. Point another browser at the same folder, or sync it via OneDrive/Dropbox, to share state."
+        result.loadedExisting
+          ? "Loaded the existing data from this local folder."
+          : "Now using a local folder. Your current data was copied there."
       );
     });
 

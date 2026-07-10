@@ -2,7 +2,11 @@
 import {
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
+  buildTaskFailureGuidanceUpdate,
+  buildWorkerFinalResponseInstruction,
   decideBuildTaskFailure,
+  hasWorkerFinalEvidenceResponse,
+  renderBuildTaskInstructions,
   selectBalancedWorkerIndex,
   shouldRequestWorkerFinalOutput,
   type BuildTask,
@@ -33,6 +37,78 @@ check("second transient failure still requeues", second.status === "fixing", sec
 check("second failure count increments", second.failCount === 2, second);
 check("transient note explains rate-limit retry", /transient provider failure/i.test(second.instructionNote), second);
 check("transient retries include backoff", (second.retryDelayMs ?? 0) > 0, second);
+
+const evidenceFailure = decideBuildTaskFailure(
+  {
+    ...task(0),
+    kind: "verify",
+    completionMode: "evidence",
+    outputPaths: [],
+  },
+  "bad",
+  "required evidence is missing"
+);
+check(
+  "evidence-task retry asks for a bounded final report instead of file patching",
+  /final evidence response/i.test(evidenceFailure.instructionNote) &&
+    /Skill evidence:/i.test(evidenceFailure.instructionNote) &&
+    !/append chunks|full-file block|patch for existing files/i.test(
+      evidenceFailure.instructionNote
+    ),
+  evidenceFailure
+);
+
+const taskWithReview = buildReviewFixTaskUpdate(
+  task(0),
+  "Use the current acceptance criteria only.",
+  [],
+  8
+);
+const taskAfterFirstFailure = buildTaskFailureGuidanceUpdate(
+  taskWithReview,
+  first.instructionNote
+);
+const taskAfterSecondFailure = buildTaskFailureGuidanceUpdate(
+  taskAfterFirstFailure,
+  second.instructionNote
+);
+const renderedRetryInstructions = renderBuildTaskInstructions(taskAfterSecondFailure);
+check(
+  "retry notes replace stale failure guidance without discarding latest review feedback",
+  taskAfterSecondFailure.instructions === "Create docs/tool-call-audit-2.json" &&
+    taskAfterSecondFailure.reviewInstructions ===
+      "Use the current acceptance criteria only." &&
+    !taskAfterSecondFailure.retryInstructions?.includes("returned no files") &&
+    taskAfterSecondFailure.retryInstructions?.includes("429 Rate limit exceeded") &&
+    (renderedRetryInstructions.match(/NOTE: a previous attempt/g) ?? []).length === 1,
+  taskAfterSecondFailure
+);
+const evidenceRetryTask = buildTaskFailureGuidanceUpdate(
+  {
+    ...task(0),
+    kind: "verify",
+    completionMode: "evidence",
+  },
+  evidenceFailure.instructionNote
+);
+check(
+  "incomplete evidence response persists a finalization-only next attempt",
+  evidenceRetryTask.nextAttemptPhase === "finalizing",
+  evidenceRetryTask
+);
+
+const architectFixAfterEvidenceRetry = buildReviewFixTaskUpdate(
+  evidenceRetryTask,
+  "The Architect needs one missing browser interaction checked.",
+  [],
+  8
+);
+check(
+  "Architect fix explicitly returns the task to scoped gathering",
+  architectFixAfterEvidenceRetry.nextAttemptPhase === "gathering" &&
+    architectFixAfterEvidenceRetry.retryInstructions === undefined,
+  architectFixAfterEvidenceRetry
+);
 
 const third = decideBuildTaskFailure(task(2), "unavailable", "was unavailable (429 Rate limit exceeded)");
 check("third failure gives up", third.status === "failed", third);
@@ -103,14 +179,62 @@ check(
   }) === false
 );
 check(
-  "evidence-only worker without tool issues is not forced to emit files",
+  "evidence-only transitional prose is forced through the finalization phase",
   shouldRequestWorkerFinalOutput({
     hasLandedFiles: false,
     hasPreviewArtifacts: false,
     hasScopedVerificationGapReport: false,
     expectsFileOutput: false,
     toolIssueCount: 0,
-  }) === false
+    requiresFinalEvidenceResponse: true,
+    hasFinalEvidenceResponse: false,
+  }) === true
+);
+const completeEvidenceResponse = [
+  "Task result: verification completed without file changes.",
+  "Verification evidence: syntax and browser checks passed.",
+  "Skill evidence:",
+  "- aiboard:browser-acceptance: browser_navigate and console checks completed.",
+].join("\n");
+check(
+  "structured evidence report is recognized as a real final response",
+  hasWorkerFinalEvidenceResponse(completeEvidenceResponse) &&
+    !shouldRequestWorkerFinalOutput({
+      hasLandedFiles: false,
+      hasPreviewArtifacts: false,
+      hasScopedVerificationGapReport: false,
+      expectsFileOutput: false,
+      toolIssueCount: 0,
+      requiresFinalEvidenceResponse: true,
+      hasFinalEvidenceResponse: hasWorkerFinalEvidenceResponse(
+        completeEvidenceResponse
+      ),
+    }),
+  completeEvidenceResponse
+);
+check(
+  "evidence-only worker ending on a tool action gets a final evidence turn",
+  shouldRequestWorkerFinalOutput({
+    hasLandedFiles: false,
+    hasPreviewArtifacts: false,
+    hasScopedVerificationGapReport: false,
+    expectsFileOutput: false,
+    toolIssueCount: 0,
+    endedWithToolAction: true,
+  }) === true
+);
+const evidenceFinalInstruction = buildWorkerFinalResponseInstruction({
+  expectsFileOutput: false,
+});
+check(
+  "evidence-only final turn asks for a Skill evidence report instead of files",
+  /final evidence response/i.test(evidenceFinalInstruction) &&
+    /Task result:/i.test(evidenceFinalInstruction) &&
+    /Verification evidence:/i.test(evidenceFinalInstruction) &&
+    /Skill evidence:/i.test(evidenceFinalInstruction) &&
+    /Do not emit JSON tool actions/i.test(evidenceFinalInstruction) &&
+    !/output the files\/patches/i.test(evidenceFinalInstruction),
+  evidenceFinalInstruction
 );
 check(
   "tool issues still trigger final-output recovery",

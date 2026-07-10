@@ -3,6 +3,7 @@ import {
   allocateIncrementalTaskIds,
   buildReviewFixTaskUpdate,
   filterNovelReviewTasks,
+  normalizeBuildTasksForResume,
   selectBalancedWorkerIndex,
   shouldApplyReviewResultToTask,
   type BuildTask,
@@ -191,7 +192,136 @@ check(
   fixUpdate.contextFiles.includes("lib/games/chess/ai.ts"),
   fixUpdate
 );
-check("review fix appends instructions", /Compile and fix imports/.test(fixUpdate.instructions), fixUpdate);
+check(
+  "review fix keeps base instructions immutable and stores mutable guidance separately",
+  fixUpdate.instructions === "Create ai.ts" &&
+    fixUpdate.reviewInstructions === "Compile and fix imports",
+  fixUpdate
+);
+
+const latestFixUpdate = buildReviewFixTaskUpdate(
+  fixUpdate,
+  "Run the current browser acceptance once and report its evidence",
+  [],
+  8
+);
+check(
+  "review fix replaces the dedicated latest-review field",
+  latestFixUpdate.instructions === "Create ai.ts" &&
+    latestFixUpdate.reviewInstructions ===
+      "Run the current browser acceptance once and report its evidence",
+  latestFixUpdate
+);
+const boundedFixUpdate = buildReviewFixTaskUpdate(
+  fixing,
+  `Current evidence only: ${"x".repeat(12_000)}`,
+  [],
+  8
+);
+check(
+  "review fix feedback is capped before it enters every retry prompt",
+  (boundedFixUpdate.reviewInstructions?.length ?? 0) < 7_000 &&
+    (boundedFixUpdate.reviewInstructions?.includes("feedback truncated") ?? false) &&
+    boundedFixUpdate.instructions === "Create ai.ts",
+  boundedFixUpdate.reviewInstructions?.length
+);
+
+const duplicateFinalVerification = filterNovelReviewTasks(
+  [
+    ...existing,
+    {
+      id: "T7",
+      title: "Run final deterministic browser and repo verification",
+      instructions: "Verify the completed static app.",
+      kind: "repo",
+      completionMode: "either",
+      verificationPolicy: "external",
+      contextFiles: ["src/game.js"],
+      status: "fixing",
+    },
+  ],
+  [
+    {
+      id: "T13",
+      title: "Run final updated verification and browser acceptance",
+      instructions: "Repeat final release verification.",
+      kind: "verify",
+      completionMode: "evidence",
+      contextFiles: ["src/game.js"],
+      outputPaths: [],
+    },
+  ]
+);
+check(
+  "review does not create a second unfinished final verification task",
+  duplicateFinalVerification.accepted.length === 0 &&
+    duplicateFinalVerification.skipped[0]?.id === "T13" &&
+    duplicateFinalVerification.skipped[0]?.title ===
+      "Run final deterministic browser and repo verification",
+  duplicateFinalVerification
+);
+
+const normalizedDuplicateFinals = normalizeBuildTasksForResume([
+  {
+    id: "T7",
+    title: "Run final deterministic browser and repo verification",
+    instructions:
+      "Verify the completed app.\n\nFIX (from the Architect's review): stale criteria",
+    kind: "repo",
+    completionMode: "either",
+    verificationPolicy: "external",
+    contextFiles: [],
+    status: "review",
+  },
+  {
+    id: "T13",
+    title: "Run final updated verification and browser acceptance",
+    instructions: "Verify the latest requirements.",
+    kind: "verify",
+    completionMode: "evidence",
+    retryInstructions:
+      "NOTE: a previous attempt produced no usable output (required evidence is missing). Do not retry by emitting one large full-file block. Use read_range/search plus patch for existing files; use append chunks with reset=true to create or replace a large/missing file.",
+    contextFiles: [],
+    status: "in_progress",
+  },
+  {
+    id: "T14",
+    title: "Publish summary",
+    instructions:
+      "Summarize.\n\nNOTE: a previous attempt produced no usable output (old).\n\nNOTE: a previous attempt hit a transient provider failure (latest).",
+    contextFiles: [],
+    status: "fixing",
+    dependsOn: ["T7"],
+  },
+]);
+const supersededFinal = normalizedDuplicateFinals.find((task) => task.id === "T7");
+const retainedFinal = normalizedDuplicateFinals.find((task) => task.id === "T13");
+const dependentTask = normalizedDuplicateFinals.find((task) => task.id === "T14");
+check(
+  "resume supersedes older duplicate final verification and redirects dependencies",
+  supersededFinal?.status === "done" &&
+    supersededFinal.title.includes("superseded by T13") &&
+    retainedFinal?.status === "planned" &&
+    dependentTask?.dependsOn?.join(",") === "T13",
+  normalizedDuplicateFinals
+);
+check(
+  "resume compacts historical retry notes before prompting a worker",
+  dependentTask?.instructions === "Summarize." &&
+    !dependentTask.retryInstructions?.includes("(old)") &&
+    dependentTask.retryInstructions?.includes("(latest)"),
+  dependentTask
+);
+check(
+  "resume migrates legacy file-repair guidance on evidence-only tasks",
+  /final evidence response/i.test(retainedFinal?.retryInstructions ?? "") &&
+    /Skill evidence:/i.test(retainedFinal?.retryInstructions ?? "") &&
+    retainedFinal?.nextAttemptPhase === "finalizing" &&
+    !/append chunks|patch for existing files/i.test(
+      retainedFinal?.retryInstructions ?? ""
+    ),
+  retainedFinal
+);
 
 check(
   "review verdicts only mutate tasks currently awaiting review",

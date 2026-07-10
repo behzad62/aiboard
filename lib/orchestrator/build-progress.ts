@@ -89,6 +89,14 @@ export interface BuildEvidenceLedgerEntry {
   actor: string;
   label: string;
   summary: string;
+  /** Task-scoped engine fact. Legacy Architect entries may omit this. */
+  taskId?: string;
+  /** Who produced the fact; this is provenance, not a verdict. */
+  source?: "worker" | "architect" | "reviewer" | "engine";
+  /** Typed operation that actually ran. */
+  action?: string;
+  /** Transport outcome only; semantic sufficiency belongs to the Architect. */
+  status?: "succeeded" | "failed" | "skipped";
 }
 
 function compactWhitespace(text: string): string {
@@ -103,13 +111,17 @@ function truncateEvidence(text: string, maxChars: number): string {
 export function appendBuildEvidenceLedgerEntry(
   entries: BuildEvidenceLedgerEntry[],
   entry: BuildEvidenceLedgerEntry,
-  maxEntries = 24
+  maxEntries = 96
 ): BuildEvidenceLedgerEntry[] {
   const normalized: BuildEvidenceLedgerEntry = {
     at: entry.at,
     actor: compactWhitespace(entry.actor).slice(0, 80) || "unknown",
     label: compactWhitespace(entry.label).slice(0, 180) || "tool result",
     summary: truncateEvidence(compactWhitespace(entry.summary), 700),
+    taskId: entry.taskId?.trim().slice(0, 80) || undefined,
+    source: entry.source,
+    action: entry.action?.trim().slice(0, 120) || undefined,
+    status: entry.status,
   };
   const next = [...entries, normalized];
   return next.slice(-Math.max(1, maxEntries));
@@ -117,17 +129,25 @@ export function appendBuildEvidenceLedgerEntry(
 
 export function renderBuildEvidenceLedger(
   entries: BuildEvidenceLedgerEntry[],
-  maxEntries = 8
+  maxEntries = 8,
+  taskIds?: string[]
 ): string {
-  const visible = entries.slice(-Math.max(1, maxEntries));
+  const taskIdSet = taskIds?.length ? new Set(taskIds) : null;
+  const visible = entries
+    .filter((entry) => !taskIdSet || (!!entry.taskId && taskIdSet.has(entry.taskId)))
+    .slice(-Math.max(1, maxEntries));
   if (visible.length === 0) return "";
   return [
-    "Recent tool/verification evidence already available:",
+    "Engine-recorded tool facts already available (the Architect decides what they prove):",
     ...visible.map(
-      (entry) =>
-        `- ${entry.at} | ${entry.actor} | ${entry.label}: ${entry.summary}`
+      (entry) => {
+        const scope = entry.taskId ? ` | ${entry.taskId}` : "";
+        const operation = entry.action ? ` | ${entry.action}` : "";
+        const outcome = entry.status ? ` | ${entry.status}` : "";
+        return `- ${entry.at}${scope} | ${entry.actor}${operation}${outcome} | ${entry.label}: ${entry.summary}`;
+      }
     ),
-    "Use this evidence before rerunning the same checks; rerun only when the files changed or the evidence is insufficient.",
+    "Treat these as execution facts, not an engine verdict. Use them before rerunning checks; the Architect alone decides whether they satisfy the task.",
   ].join("\n");
 }
 

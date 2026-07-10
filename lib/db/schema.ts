@@ -204,6 +204,9 @@ export interface BuildCheckpointTask {
   id: string;
   title: string;
   instructions: string;
+  reviewInstructions?: string;
+  retryInstructions?: string;
+  nextAttemptPhase?: "gathering" | "finalizing";
   kind?: "modify" | "audit" | "verify" | "repo";
   completionMode?: "files" | "evidence" | "either";
   verificationPolicy?: "architect" | "tool" | "external" | "none";

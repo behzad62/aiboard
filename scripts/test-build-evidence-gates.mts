@@ -376,7 +376,7 @@ check(
     emittedFiles: [],
     declaredOutputPaths: ["index.html", "README.md", ".gitignore"],
     taskInstructions:
-      "Create the static shell.\n\nFIX (from final Build quality gate): provide missing evidence and browser acceptance.",
+      "Create the static shell.\n\nLatest Architect review guidance:\nFinal Build quality gate: provide missing evidence and browser acceptance.",
   }),
 );
 check(

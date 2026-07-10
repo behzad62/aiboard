@@ -147,7 +147,7 @@ const MODEL_TOOL_SUPPORT: Partial<
   Record<ProviderId | "custom", Partial<Record<ModelToolFeature, ModelToolRule>>>
 > = {
   openai: {
-    // OpenAI docs show hosted web search on current GPT-5.4+ / GPT-5.5 models.
+    // OpenAI docs show hosted web search on current GPT-5.4+ / GPT-5.6 models.
     // Codex 5.3 is kept off: the account-backed Spark sibling rejected
     // web_search_preview in the stopped build, and Codex-specific docs do not
     // advertise web search for that line.
@@ -183,7 +183,8 @@ const MODEL_TOOL_SUPPORT: Partial<
   },
   chatgpt: {
     // The ChatGPT/Codex account backend accepts the current Responses hosted
-    // web_search tool on GPT-5.4+ account models; Codex Spark remains off.
+    // web_search tool on GPT-5.4+ account models (including GPT-5.6 family);
+    // Codex Spark remains off.
     nativeWebSearch: (modelId) => gptAtLeast(modelId, 5, 4) && !isCodexLine(modelId),
     nativeBuildTools: false,
     hostedBuildTools: false,

@@ -1,6 +1,7 @@
 /** Build quality gate checks (run: npx tsx scripts/test-build-quality-gates.mts) */
 import {
   evaluateBuildQualityGate,
+  formatBuildQualityGateArchitectBrief,
   formatBuildQualityGateSummary,
   shouldRequireBrowserAcceptance,
   shouldRequireRequestFulfillment,
@@ -347,5 +348,14 @@ const summary = formatBuildQualityGateSummary(missingChecks);
 check("summary has quality gate heading", summary.includes("Build quality gate"), summary);
 check("summary names failed build command", summary.includes("npm run build"), summary);
 check("summary includes output preview", summary.includes("prefer-const"), summary);
+
+const architectBrief = formatBuildQualityGateArchitectBrief(missingChecks);
+check(
+  "final gate presents engine findings without claiming the completion verdict",
+  /Architect alone decides/i.test(architectBrief) &&
+    /npm run build/i.test(architectBrief) &&
+    !/- Status: blocked/i.test(architectBrief),
+  architectBrief
+);
 
 process.exit(failed === 0 ? 0 : 1);

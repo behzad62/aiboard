@@ -93,6 +93,10 @@ evidenceLedger = appendBuildEvidenceLedgerEntry(
     actor: "Reviewer",
     label: "context_retrieve ctx_123",
     summary: "Retrieved prior verification output.",
+    taskId: "T2",
+    source: "worker",
+    action: "context_retrieve",
+    status: "succeeded",
   },
   2
 );
@@ -104,6 +108,15 @@ check(
     evidenceText.includes("browser_snapshot") &&
     evidenceText.includes("ctx_123"),
   evidenceText
+);
+const taskEvidenceText = renderBuildEvidenceLedger(evidenceLedger, 8, ["T2"]);
+check(
+  "task evidence rendering filters durable engine facts for Architect review and retries",
+  taskEvidenceText.includes("T2") &&
+    taskEvidenceText.includes("context_retrieve") &&
+    taskEvidenceText.includes("succeeded") &&
+    !taskEvidenceText.includes("browser_snapshot"),
+  taskEvidenceText
 );
 check(
   "net-same fixing task does not count as a status transition",

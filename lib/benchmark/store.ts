@@ -1589,6 +1589,13 @@ function isBuildCheckpointTask(value: unknown): boolean {
     typeof value.id === "string" &&
     typeof value.title === "string" &&
     typeof value.instructions === "string" &&
+    (value.reviewInstructions === undefined ||
+      typeof value.reviewInstructions === "string") &&
+    (value.retryInstructions === undefined ||
+      typeof value.retryInstructions === "string") &&
+    (value.nextAttemptPhase === undefined ||
+      value.nextAttemptPhase === "gathering" ||
+      value.nextAttemptPhase === "finalizing") &&
     isStringArray(value.contextFiles) &&
     isBuildTaskStatus(value.status) &&
     (value.outputPaths === undefined || isStringArray(value.outputPaths)) &&
