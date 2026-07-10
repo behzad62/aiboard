@@ -79,6 +79,7 @@ import {
   discardSupersededTaskVerificationFacts,
   resolveBuildReviewContract,
   validateBuildReviewApprovals,
+  validateReadOnlyReviewFixes,
   type BuildReviewContractIssue,
   type BuildTaskVerificationFact,
 } from "@/lib/orchestrator/build-review-evidence";
@@ -8985,11 +8986,21 @@ export async function runBuildDiscussion(
         wave: cycle,
         projectVerifier: verifyCommand,
       });
+      const readOnlyValidation = validateReadOnlyReviewFixes({
+        tasks,
+        results: applicableCandidateResults,
+      });
+      const baseErrors = [
+        ...validation.errors,
+        ...readOnlyValidation.errors,
+      ];
       const changesVerifier =
         typeof candidate.verifyCommand === "string" &&
         candidate.verifyCommand.trim().toLowerCase() !== verifyCommand.trim().toLowerCase();
-      if (!changesVerifier) return validation;
-      const existingIssueTasks = new Set(validation.errors.map((error) => error.taskId));
+      if (!changesVerifier) {
+        return { valid: baseErrors.length === 0, errors: baseErrors };
+      }
+      const existingIssueTasks = new Set(baseErrors.map((error) => error.taskId));
       const verifierChangeErrors = applicableCandidateResults
         .filter((result) => isReviewResultApproved(result))
         .map((result) => tasks.find((task) => task.id === result.taskId))
@@ -9000,7 +9011,7 @@ export async function runBuildDiscussion(
           taskId: task.id,
           message: `Task ${task.id} cannot be approved in the same review action that changes verifyCommand; run the replacement verifier in the next wave and review fresh facts.`,
         }));
-      const errors = [...validation.errors, ...verifierChangeErrors];
+      const errors = [...baseErrors, ...verifierChangeErrors];
       return { valid: errors.length === 0, errors };
     };
     const reviewContractResolution = await resolveBuildReviewContract({

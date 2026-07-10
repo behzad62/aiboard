@@ -20,9 +20,58 @@ export interface BuildReviewContractIssue {
   code:
     | "missing_task_verification"
     | "stale_task_verification"
-    | "failed_task_verification";
+    | "failed_task_verification"
+    | "read_only_task_mutation";
   taskId: string;
   message: string;
+}
+
+function reviewResultApproved(result: ReviewResult): boolean {
+  return (
+    result.specVerdict === "approve" && result.qualityVerdict === "approve"
+  );
+}
+
+function requestsReadOnlyTaskMutation(instructions: string): boolean {
+  const text = instructions.trim();
+  if (!text) return false;
+  const explicitWriteAction =
+    /\b(?:typed\s+)?file\s+edits?\b|\b(?:patch|append|rewrite)\b/i.test(text);
+  const mutationNearPath =
+    /\b(?:edit|modify|move|remove|merge|change|implement|add|fix)\b[\s\S]{0,140}\b(?:[a-z0-9_.-]+\/)+(?:[a-z0-9_.-]+\.[a-z0-9]+)\b/i.test(
+      text
+    );
+  const projectCommand =
+    /\b(?:run|execute)\b[\s\S]{0,120}\b(?:node|npm|pnpm|yarn|bun|pytest|cargo|go|dotnet|gradle|mvn)\b/i.test(
+      text
+    );
+  return explicitWriteAction || mutationNearPath || projectCommand;
+}
+
+export function validateReadOnlyReviewFixes(input: {
+  tasks: ReadonlyArray<BuildTask>;
+  results: ReadonlyArray<ReviewResult>;
+}): { valid: boolean; errors: BuildReviewContractIssue[] } {
+  const errors: BuildReviewContractIssue[] = [];
+  for (const result of input.results) {
+    if (reviewResultApproved(result)) continue;
+    const task = input.tasks.find((item) => item.id === result.taskId);
+    if (
+      !task ||
+      task.completionMode !== "evidence" ||
+      (task.outputPaths?.length ?? 0) > 0 ||
+      (task.testOutputPaths?.length ?? 0) > 0
+    ) {
+      continue;
+    }
+    if (!requestsReadOnlyTaskMutation(result.fixInstructions ?? "")) continue;
+    errors.push({
+      code: "read_only_task_mutation",
+      taskId: task.id,
+      message: `Task ${task.id} is read-only evidence work and cannot be returned with file edits or project commands. Review it only against its declared evidence. If implementation is required, approve or evidence-correct this task and add a separate modify task with explicit outputPaths and tool verification.`,
+    });
+  }
+  return { valid: errors.length === 0, errors };
 }
 
 export function appendBuildTaskVerificationFact(

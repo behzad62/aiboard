@@ -5,6 +5,7 @@ import {
   discardSupersededTaskVerificationFacts,
   resolveBuildReviewContract,
   validateBuildReviewApprovals,
+  validateReadOnlyReviewFixes,
   type BuildTaskVerificationFact,
 } from "../lib/orchestrator/build-review-evidence";
 import { buildReviewContractRevisionPrompt, type BuildTask, type ReviewResult } from "../lib/orchestrator/build";
@@ -27,6 +28,50 @@ const approved: ReviewResult = {
   qualityIssues: "",
   fixInstructions: "",
 };
+const readOnlyAudit: BuildTask = {
+  id: "T-audit",
+  title: "Audit public API",
+  instructions: "Inspect and report the public API without editing files.",
+  kind: "audit",
+  completionMode: "evidence",
+  verificationPolicy: "architect",
+  contextFiles: ["src/game.js"],
+  outputPaths: [],
+  status: "review",
+};
+const incompatibleReadOnlyFix: ReviewResult = {
+  taskId: "T-audit",
+  specVerdict: "fix",
+  qualityVerdict: "fix",
+  fixInstructions:
+    "Use typed file edits in src/game.js. Remove the duplicate export and run node --test tests/game.test.mjs.",
+};
+const evidenceOnlyFix: ReviewResult = {
+  taskId: "T-audit",
+  specVerdict: "fix",
+  qualityVerdict: "approve",
+  fixInstructions:
+    "Enumerate the missing public API names and provide the required repo_status evidence.",
+};
+check(
+  "read-only review contract rejects implementation instructions on the audit task",
+  validateReadOnlyReviewFixes({
+    tasks: [readOnlyAudit],
+    results: [incompatibleReadOnlyFix],
+  }).errors.some(
+    (issue) =>
+      issue.code === "read_only_task_mutation" && issue.taskId === "T-audit"
+  ),
+  validateReadOnlyReviewFixes
+);
+check(
+  "read-only review contract accepts a genuine missing-evidence correction",
+  validateReadOnlyReviewFixes({
+    tasks: [readOnlyAudit],
+    results: [evidenceOnlyFix],
+  }).valid,
+  validateReadOnlyReviewFixes
+);
 const toolTask: BuildTask = {
   id: "T1",
   title: "Verify the application",
