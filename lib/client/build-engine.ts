@@ -8231,6 +8231,35 @@ export async function runBuildDiscussion(
               break;
             }
           }
+          const toolLoopDeclaredPaths = task.outputPaths?.length
+            ? task.outputPaths
+            : outputPathsForTask(task);
+          const toolLoopDurableFiles = restoredLandedTaskFiles({
+            contextFiles: task.contextFiles ?? [],
+            declaredOutputPaths: toolLoopDeclaredPaths,
+            availablePaths: virtualFs.keys(),
+            writeGeneration: task.writeGeneration,
+          });
+          if (
+            toolLoopDurableFiles.length > 0 &&
+            isRedBuildTask(task) &&
+            pendingExpectedFailureVerifierCommands({
+              task,
+              facts: taskVerificationFacts,
+              wave: cycle,
+              projectVerifier: verifyCommand,
+            }).length === 0
+          ) {
+            emit({
+              type: "diagnostic",
+              phase: "model_streaming",
+              modelId: worker.modelId,
+              modelName: worker.displayName,
+              providerId: parseModelId(worker.modelId).providerId,
+              message: `${worker.displayName} collected the required current RED verification for ${task.id}; ending tool gathering and finalizing evidence`,
+            });
+            break;
+          }
           continue;
         }
 
