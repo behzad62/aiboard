@@ -1,5 +1,6 @@
 /** Build task scheduling checks (run: npx tsx scripts/test-build-task-scheduling.mts) */
 import { readFileSync } from "node:fs";
+import { BUILD_TASKS_PER_WAVE } from "../lib/orchestrator/config";
 import {
   allocateIncrementalTaskIds,
   buildReviewFixTaskUpdate,
@@ -12,6 +13,7 @@ import {
 import {
   buildTaskOwnedPaths,
   isBuildTaskRunnable,
+  selectBuildTaskDispatchBatch,
 } from "../lib/orchestrator/build-plan-contract";
 
 let failed = 0;
@@ -58,9 +60,11 @@ check(
   ),
   "scheduler still has an inline dependency-only gate"
 );
-const collisionGuardStart = buildEngineSource.indexOf("const paths =", buildEngineSource.indexOf("for (const task of due)"));
+const collisionGuardStart = buildEngineSource.indexOf(
+  "const selection = selectBuildTaskDispatchBatch"
+);
 const collisionGuardEnd = buildEngineSource.indexOf(
-  "for (const p of paths)",
+  "const ranked = rankedActiveWorkers()",
   collisionGuardStart
 );
 const collisionGuard =
@@ -91,9 +95,83 @@ check(
 );
 check(
   "live collision guard uses complete normalized task ownership",
-  /const paths = buildTaskOwnedPaths\(task\)/.test(collisionGuard) &&
-    /buildTaskOwnedPaths\(b\)/.test(collisionGuard),
+  /selectBuildTaskDispatchBatch\(\s*due,\s*BUILD_TASKS_PER_WAVE,\s*ready\s*\)/.test(
+    collisionGuard
+  ),
   collisionGuard
+);
+
+const overCapTasks = Array.from(
+  { length: BUILD_TASKS_PER_WAVE + 1 },
+  (_, index) =>
+    runnableTask({
+      id: `T${index + 1}`,
+      outputPaths:
+        index === 0
+          ? ["src/game.ts"]
+          : index === BUILD_TASKS_PER_WAVE
+            ? undefined
+            : [`src/unique-${index + 1}.ts`],
+      testOutputPaths:
+        index === BUILD_TASKS_PER_WAVE ? ["SRC\\GAME.TS"] : undefined,
+    })
+);
+const overCapSelection = selectBuildTaskDispatchBatch(
+  overCapTasks,
+  BUILD_TASKS_PER_WAVE
+);
+check(
+  "collision beyond the concurrency cap rejects the entire batch",
+  overCapSelection.batch.length === 0 &&
+    overCapSelection.collision?.owner.id === "T1" &&
+    overCapSelection.collision?.task.id === `T${BUILD_TASKS_PER_WAVE + 1}` &&
+    overCapSelection.collision?.path === "src/game.ts",
+  overCapSelection
+);
+
+const retryStaggeredTasks = [
+  runnableTask({ id: "T1", outputPaths: ["src/game.ts"] }),
+  runnableTask({
+    id: "T9",
+    testOutputPaths: ["SRC\\GAME.TS"],
+    retryAfterMs: Date.now() + 60_000,
+  }),
+];
+const retryStaggeredSelection = selectBuildTaskDispatchBatch(
+  [retryStaggeredTasks[0]],
+  BUILD_TASKS_PER_WAVE,
+  retryStaggeredTasks
+);
+check(
+  "delayed overlapping owner rejects the currently due batch",
+  retryStaggeredSelection.batch.length === 0 &&
+    retryStaggeredSelection.collision?.owner.id === "T1" &&
+    retryStaggeredSelection.collision?.task.id === "T9",
+  retryStaggeredSelection
+);
+
+const dependencyBlockedOverlap = [
+  runnableTask({ id: "T1", outputPaths: ["src/game.ts"] }),
+  runnableTask({
+    id: "T9",
+    outputPaths: ["SRC\\GAME.TS"],
+    dependsOn: ["missing"],
+  }),
+];
+const dependencyReady = dependencyBlockedOverlap.filter(
+  (candidate) => isBuildTaskRunnable(candidate, dependencyBlockedOverlap)
+);
+const dependencyBlockedSelection = selectBuildTaskDispatchBatch(
+  dependencyReady,
+  BUILD_TASKS_PER_WAVE,
+  dependencyReady
+);
+check(
+  "dependency-blocked owner stays outside runnable collision checks",
+  dependencyReady.map((candidate) => candidate.id).join(",") === "T1" &&
+    dependencyBlockedSelection.collision === null &&
+    dependencyBlockedSelection.batch[0]?.id === "T1",
+  { dependencyReady, dependencyBlockedSelection }
 );
 
 const existing: BuildTask[] = [

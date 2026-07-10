@@ -167,6 +167,37 @@ export function buildTaskOwnedPaths(task: BuildTask): string[] {
   return paths;
 }
 
+export interface BuildTaskOwnershipCollision {
+  owner: BuildTask;
+  task: BuildTask;
+  path: string;
+}
+
+export function selectBuildTaskDispatchBatch(
+  due: ReadonlyArray<BuildTask>,
+  cap: number,
+  runnable: ReadonlyArray<BuildTask> = due
+): { batch: BuildTask[]; collision: BuildTaskOwnershipCollision | null } {
+  const ownerByPath = new Map<string, BuildTask>();
+  for (const task of runnable) {
+    for (const path of buildTaskOwnedPaths(task)) {
+      const owner = ownerByPath.get(path);
+      if (owner) {
+        return {
+          batch: [],
+          collision: { owner, task, path },
+        };
+      }
+      ownerByPath.set(path, task);
+    }
+  }
+
+  return {
+    batch: due.slice(0, Math.max(0, Math.floor(cap))),
+    collision: null,
+  };
+}
+
 export function isLikelyTestOutputPath(rawPath: string): boolean {
   const path = pathKey(rawPath);
   if (!path || /\s/.test(path)) return false;

@@ -84,13 +84,13 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
-  buildTaskOwnedPaths,
   hasBuildPlanVerificationStateChanged,
   isBuildTaskRunnable,
   preserveBuildTaskRuntimeState,
   resolveBuildPlanContract,
   resolveBuildPlanReviewVerificationState,
   resolveBuildPlanVerifyCommand,
+  selectBuildTaskDispatchBatch,
   validateBuildPlanContract,
   type BuildPlanContractValidation,
 } from "@/lib/orchestrator/build-plan-contract";
@@ -8401,30 +8401,23 @@ export async function runBuildDiscussion(
       // can't know its writes — don't over-block). Valid plans transitively
       // order overlapping owners, so a collision here is fatal rather than
       // permission for the engine to serialize an invalid graph.
-      const cap = BUILD_TASKS_PER_WAVE;
-      const batch: BuildTask[] = [];
-      const claimed = new Set<string>();
-      for (const task of due) {
-        if (batch.length >= cap) break;
-        const paths = buildTaskOwnedPaths(task);
-        const clash = paths.find((p) => claimed.has(p));
-        if (clash) {
-          const owner = batch.find((b) =>
-            buildTaskOwnedPaths(b).includes(clash)
-          );
-          const message = `Build plan contract violation: ${task.id} and ${owner?.id ?? "another runnable task"} have unordered overlapping output path ${clash}. The Architect must explicitly order overlapping owners with dependsOn.`;
-          emit({
-            type: "diagnostic",
-            phase: "model_failed",
-            message,
-          });
-          throw new Error(message);
-        }
-        for (const p of paths) claimed.add(p);
-        batch.push(task);
+      const selection = selectBuildTaskDispatchBatch(
+        due,
+        BUILD_TASKS_PER_WAVE,
+        ready
+      );
+      if (selection.collision) {
+        const { owner, task, path } = selection.collision;
+        const message = `Build plan contract violation: ${task.id} and ${owner.id} have unordered overlapping output path ${path}. The Architect must explicitly order overlapping owners with dependsOn.`;
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message,
+        });
+        throw new Error(message);
       }
-      // Nothing could be admitted (everything left clashes with itself across
-      // iterations — shouldn't happen since claimed resets, but guard anyway).
+      const batch = selection.batch;
+      // Guard against a non-positive dispatch cap.
       if (batch.length === 0) break;
 
       // Assign a worker to each task: a still-active in-progress pin wins, then
