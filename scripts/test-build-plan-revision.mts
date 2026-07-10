@@ -12,6 +12,10 @@ import {
   buildPlanContractRevisionPrompt,
   type BuildTask,
 } from "../lib/orchestrator/build";
+import {
+  adoptBuildReviewVerificationState,
+  materializeBuildEnginePlanTasks,
+} from "../lib/client/build-engine";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -189,6 +193,49 @@ check(
   preservedRuntimeTask
 );
 
+const adoptedEngineReviewState = adoptBuildReviewVerificationState({
+  verifyCommand: "",
+  phaseSpec: {
+    id: "P-review",
+    objective: "Adopt the Architect's phase verifier.",
+    acceptanceCriteria: ["The task contract remains dispatch-valid."],
+    qualityCriteria: ["Do not rewrite adopted verification state."],
+    verification: ["playwright.browser_take_screenshot"],
+  },
+});
+check(
+  "engine adopts the exact validated review verification state",
+  adoptedEngineReviewState.verifyCommand === "" &&
+    adoptedEngineReviewState.phaseSpec?.verification?.join(",") ===
+      "playwright.browser_take_screenshot" &&
+    validateBuildPlanContract(toolPolicyPlan.tasks, {
+      verifyCommand: adoptedEngineReviewState.verifyCommand,
+      phaseVerification: adoptedEngineReviewState.phaseSpec?.verification,
+    }).valid,
+  adoptedEngineReviewState
+);
+
+const engineResumeTask = materializeBuildEnginePlanTasks(
+  [revisedRuntimeTask],
+  [fixingRuntimeTask]
+)[0];
+const engineBlockedTask = materializeBuildEnginePlanTasks(
+  [{ ...revisedRuntimeTask, title: "Blocked revised title" }],
+  [fixingRuntimeTask]
+)[0];
+check(
+  "engine resume and blocked materialization preserve runtime metadata",
+  engineResumeTask.status === "fixing" &&
+    engineResumeTask.reviewInstructions === fixingRuntimeTask.reviewInstructions &&
+    engineResumeTask.retryInstructions === fixingRuntimeTask.retryInstructions &&
+    engineResumeTask.nextAttemptPhase === "finalizing" &&
+    engineResumeTask.splitDepth === 1 &&
+    engineBlockedTask.title === "Blocked revised title" &&
+    engineBlockedTask.status === "fixing" &&
+    engineBlockedTask.guidance?.[0]?.answer === "Yes.",
+  { engineResumeTask, engineBlockedTask }
+);
+
 const corrected = await resolveBuildPlanContract({
   initialPlan: invalidPlan,
   validate: (plan) => validateBuildPlanContract(plan.tasks),
@@ -295,18 +342,6 @@ check(
     buildEngineSource
   ),
   "critic plan contract validation loses the accepted spec verifier"
-);
-const reviewVerifierApplyIndex = buildEngineSource.indexOf(
-  "verifyCommand = resolvedReviewVerifyCommand"
-);
-const remappedReviewValidationIndex = buildEngineSource.indexOf(
-  "const remappedValidation = validatePlanActionContract"
-);
-check(
-  "resolved review verifier is applied before remapped validation",
-  reviewVerifierApplyIndex >= 0 &&
-    reviewVerifierApplyIndex < remappedReviewValidationIndex,
-  "remapped review graph still validates against the stale verifier"
 );
 check(
   "validated review graphs are not semantically auto-repaired",

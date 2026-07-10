@@ -564,6 +564,28 @@ const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
 const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v6";
 const BUILD_CHECKPOINT_CONTRACT_VERSION = 4;
 
+export function adoptBuildReviewVerificationState(input: {
+  verifyCommand: string;
+  phaseSpec?: BuildPhaseSpec;
+}): { verifyCommand: string; phaseSpec?: BuildPhaseSpec } {
+  return {
+    verifyCommand: input.verifyCommand,
+    phaseSpec: input.phaseSpec
+      ? {
+          ...input.phaseSpec,
+          verification: [...(input.phaseSpec.verification ?? [])],
+        }
+      : undefined,
+  };
+}
+
+export function materializeBuildEnginePlanTasks(
+  revisedTasks: ReadonlyArray<BuildTask>,
+  currentTasks: ReadonlyArray<BuildTask>
+): BuildTask[] {
+  return preserveBuildTaskRuntimeState(revisedTasks, currentTasks);
+}
+
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
   try {
@@ -5786,7 +5808,10 @@ export async function runBuildDiscussion(
     });
     const invalidTasks = [
       ...prefixTasks,
-      ...plan.tasks.map((task, index) => toTask(task, prefixTasks.length + index)),
+      ...materializeBuildEnginePlanTasks(
+        plan.tasks.map((task, index) => toTask(task, prefixTasks.length + index)),
+        tasks
+      ),
     ];
     for (const issue of validation.errors) {
       recordBuildProblem({
@@ -6130,7 +6155,10 @@ export async function runBuildDiscussion(
     if (!resumeResolution) return;
     if (resumeResolution.revisions > 0) {
       activePhaseSpec = resumeResolution.plan.phaseSpec ?? activePhaseSpec;
-      tasks = resumeResolution.plan.tasks.map(toTask);
+      tasks = materializeBuildEnginePlanTasks(
+        resumeResolution.plan.tasks.map(toTask),
+        tasks
+      );
       architectNotes = resumeResolution.plan.notes ?? architectNotes;
       planVerifyCommand = resumeResolution.plan.verifyCommand ?? planVerifyCommand;
     }
@@ -9013,13 +9041,17 @@ export async function runBuildDiscussion(
       if (existingGraphResolution.revisions > 0) {
         activePhaseSpec =
           existingGraphResolution.plan.phaseSpec ?? activePhaseSpec;
-        tasks = preserveBuildTaskRuntimeState(
+        tasks = materializeBuildEnginePlanTasks(
           existingGraphResolution.plan.tasks.map(toTask),
           tasks
         );
       }
     }
-    action.verifyCommand = resolvedReviewVerifyCommand;
+    const adoptedReviewVerificationState = adoptBuildReviewVerificationState({
+      verifyCommand: resolvedReviewVerifyCommand,
+      phaseSpec: activePhaseSpec,
+    });
+    action.verifyCommand = adoptedReviewVerificationState.verifyCommand;
     if (resolvedReviewVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()) {
       verifyCommandChangedThisWave = true;
       emit({
@@ -9032,13 +9064,8 @@ export async function runBuildDiscussion(
         }.`,
       });
     }
-    verifyCommand = resolvedReviewVerifyCommand;
-    if (verifyCommandChangedThisWave && activePhaseSpec) {
-      activePhaseSpec = {
-        ...activePhaseSpec,
-        verification: verifyCommand ? [verifyCommand] : [],
-      };
-    }
+    verifyCommand = adoptedReviewVerificationState.verifyCommand;
+    activePhaseSpec = adoptedReviewVerificationState.phaseSpec;
 
     const novelTasks = allocateIncrementalTaskIds(
       tasks,
@@ -9107,46 +9134,6 @@ export async function runBuildDiscussion(
           phase: "judging",
           message: warning.message,
         });
-      }
-    }
-
-    if (typeof action.verifyCommand === "string") {
-      const requestedVerifyCommand = action.verifyCommand.trim();
-      if (!requestedVerifyCommand) {
-        if (verifyCommand) {
-          emit({
-            type: "diagnostic",
-            phase: "judging",
-            message: `${reviewActor.displayName} disabled the automated build check for future waves.`,
-          });
-        }
-        verifyCommand = "";
-        verifyCommandChangedThisWave = true;
-      } else {
-        const acceptedVerifyCommand = acceptVerifyCommandForRunner(
-          requestedVerifyCommand,
-          "Review verifyCommand",
-          tasks.flatMap((task) => task.outputPaths ?? [])
-        );
-        if (acceptedVerifyCommand) {
-          if (
-            acceptedVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()
-          ) {
-            emit({
-              type: "diagnostic",
-              phase: "judging",
-              message: `${reviewActor.displayName} changed the automated build check to \`${acceptedVerifyCommand}\`.`,
-            });
-            verifyCommandChangedThisWave = true;
-          }
-          verifyCommand = acceptedVerifyCommand;
-        }
-      }
-      if (verifyCommandChangedThisWave && activePhaseSpec) {
-        activePhaseSpec = {
-          ...activePhaseSpec,
-          verification: verifyCommand ? [verifyCommand] : [],
-        };
       }
     }
 
