@@ -153,6 +153,9 @@ export interface BuildTask {
   retryAfterMs?: number;
   /** Worker indexes that should be avoided for the next retry when alternatives exist. */
   avoidWorkerIndexes?: number[];
+  /** Worker indexes whose provider failed transiently. Availability exclusions
+   * outrank soft review-quality avoidance while another provider is active. */
+  unavailableWorkerIndexes?: number[];
   guidance?: BuildTaskGuidance[];
   /** 1 = created by a worker split; such tasks may not split again. */
   splitDepth?: number;
@@ -549,6 +552,126 @@ export function decideBuildTaskFailure(
   return { failCount, status, instructionNote, retryDelayMs };
 }
 
+/**
+ * Applies the durable routing state for a failed worker attempt.
+ *
+ * Provider outages are excluded from quality scoring, but the denied worker
+ * must still be avoided while another active worker is available. Otherwise a
+ * later review fix can immediately route the task back to the unavailable
+ * provider and repeat the same expensive attempt.
+ */
+export function buildTaskFailureUpdate(
+  task: BuildTask,
+  decision: BuildTaskFailureDecision,
+  kind: "bad" | "unavailable",
+  failedWorkerIndex: number,
+  nowMs = Date.now()
+): BuildTask {
+  const failed = {
+    ...task,
+    failCount: decision.failCount,
+    status: decision.status,
+  } satisfies BuildTask;
+  if (decision.status !== "fixing") {
+    return {
+      ...failed,
+      retryAfterMs: undefined,
+    };
+  }
+
+  const guided = buildTaskFailureGuidanceUpdate(
+    failed,
+    decision.instructionNote
+  );
+  const avoidWorkerIndexes = uniqueWorkerIndexes([
+    ...(task.avoidWorkerIndexes ?? []),
+    kind === "bad" ? failedWorkerIndex : undefined,
+  ]);
+  const availabilityUpdated =
+    kind === "unavailable"
+      ? buildTaskProviderUnavailableUpdate(guided, failedWorkerIndex)
+      : guided;
+  return {
+    ...availabilityUpdated,
+    workerIndex: undefined,
+    assignTo: undefined,
+    retryAfterMs: decision.retryDelayMs
+      ? nowMs + decision.retryDelayMs
+      : undefined,
+    avoidWorkerIndexes:
+      avoidWorkerIndexes.length > 0 ? avoidWorkerIndexes : undefined,
+  };
+}
+
+export function buildTaskProviderUnavailableUpdate(
+  task: BuildTask,
+  workerIndex: number
+): BuildTask {
+  const unavailableWorkerIndexes = uniqueWorkerIndexes([
+    ...(task.unavailableWorkerIndexes ?? []),
+    workerIndex,
+  ]);
+  return {
+    ...task,
+    unavailableWorkerIndexes:
+      unavailableWorkerIndexes.length > 0
+        ? unavailableWorkerIndexes
+        : undefined,
+  };
+}
+
+export interface BuildUnavailableRoutingProblem {
+  code: string;
+  taskId?: string;
+  modelId?: string;
+  message: string;
+}
+
+/**
+ * Migrates pre-availability-routing checkpoints from their durable problem log.
+ * Only explicit provider-unavailable records are used; ordinary bad output
+ * remains a soft quality retry and is never upgraded by message guesswork.
+ */
+export function restoreBuildUnavailableWorkerRouting(
+  tasks: BuildTask[],
+  problems: BuildUnavailableRoutingProblem[],
+  workerModelIds: string[]
+): BuildTask[] {
+  const modelIndex = new Map(
+    workerModelIds.map((modelId, index) => [modelId, index])
+  );
+  const unavailableByTask = new Map<string, Set<number>>();
+  for (const problem of problems) {
+    if (
+      problem.code !== "no_output" ||
+      !problem.taskId ||
+      !problem.modelId ||
+      !/\b(?:was|became) unavailable\b/i.test(problem.message)
+    ) {
+      continue;
+    }
+    const workerIndex = modelIndex.get(problem.modelId);
+    if (workerIndex == null) continue;
+    const indexes = unavailableByTask.get(problem.taskId) ?? new Set<number>();
+    indexes.add(workerIndex);
+    unavailableByTask.set(problem.taskId, indexes);
+  }
+
+  return tasks.map((task) => {
+    if (task.status === "done") return { ...task };
+    const restored = unavailableByTask.get(task.id);
+    if (!restored || restored.size === 0) return { ...task };
+    const unavailableWorkerIndexes = uniqueWorkerIndexes([
+      ...(task.unavailableWorkerIndexes ?? []),
+      ...restored,
+    ]);
+    return {
+      ...task,
+      unavailableWorkerIndexes,
+    };
+  });
+}
+
 export function normalizeBuildTasksForResume(tasks: BuildTask[]): BuildTask[] {
   let normalized: BuildTask[] = tasks.map((task): BuildTask => {
     const migratedTask = migrateDynamicTaskInstructions(task);
@@ -828,6 +951,7 @@ export function restoreArchitectApprovedTasksAfterLegacyQualityGateVeto(
       assignTo: undefined,
       retryAfterMs: undefined,
       avoidWorkerIndexes: undefined,
+      unavailableWorkerIndexes: undefined,
       reviewInstructions: undefined,
       retryInstructions: undefined,
       nextAttemptPhase: undefined,
@@ -1074,6 +1198,7 @@ export interface BalancedWorkerSelectionInput {
   pinnedIndex?: number | null;
   requestedIndex?: number | null;
   avoidWorkerIndexes?: number[];
+  unavailableWorkerIndexes?: number[];
 }
 
 export interface BalancedWorkerSelectionResult {
@@ -1090,7 +1215,12 @@ export function selectBalancedWorkerIndex(
   if (active.length === 0) {
     throw new Error("Cannot assign a build task without an active worker.");
   }
-  const activeSet = new Set(active);
+  const unavailableSet = new Set(input.unavailableWorkerIndexes ?? []);
+  const providerAvailable = active.filter((index) => !unavailableSet.has(index));
+  // If every selected provider is currently excluded, keep the build
+  // recoverable by falling back to the full active set after backoff.
+  const available = providerAvailable.length > 0 ? providerAvailable : active;
+  const availableSet = new Set(available);
   const assign = (
     index: number,
     assignCursor: number,
@@ -1101,13 +1231,13 @@ export function selectBalancedWorkerIndex(
     return { index, assignCursor, honoredPinned, honoredRequest };
   };
 
-  if (input.pinnedIndex != null && activeSet.has(input.pinnedIndex)) {
+  if (input.pinnedIndex != null && availableSet.has(input.pinnedIndex)) {
     return assign(input.pinnedIndex, input.assignCursor, true, false);
   }
 
   const avoidSet = new Set(input.avoidWorkerIndexes ?? []);
-  const preferredActive = active.filter((index) => !avoidSet.has(index));
-  const assignable = preferredActive.length > 0 ? preferredActive : active;
+  const preferredActive = available.filter((index) => !avoidSet.has(index));
+  const assignable = preferredActive.length > 0 ? preferredActive : available;
   const assignableSet = new Set(assignable);
   const minAssigned = Math.min(
     ...assignable.map((index) => input.assignmentCounts.get(index) ?? 0)

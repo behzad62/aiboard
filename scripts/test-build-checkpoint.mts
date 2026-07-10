@@ -69,6 +69,7 @@ const checkpoint: BuildCheckpoint = {
       outputPaths: ["lib/db/schema.ts"],
       status: "done",
       avoidWorkerIndexes: [1, 2],
+      unavailableWorkerIndexes: [3],
       guidance: [
         {
           id: "G-T1-1",
@@ -197,6 +198,11 @@ check(
   checkpoint.tasks[0]
 );
 check(
+  "checkpoint stores provider-unavailable worker indexes separately",
+  checkpoint.tasks[0].unavailableWorkerIndexes?.join(",") === "3",
+  checkpoint.tasks[0]
+);
+check(
   "checkpoint stores task-local guidance",
   checkpoint.tasks[0].guidance?.[0]?.id === "G-T1-1" &&
     checkpoint.tasks[0].guidance?.[0]?.answer === "Keep it task-scoped.",
@@ -213,6 +219,7 @@ const resumedTransient = normalizeBuildTasksForResume([
     workerIndex: 1,
     retryAfterMs: 12345,
     avoidWorkerIndexes: [1],
+    unavailableWorkerIndexes: [0],
   },
 ])[0];
 check("resume requeues transient task as planned", resumedTransient.status === "planned", resumedTransient);
@@ -228,7 +235,8 @@ check(
 );
 check(
   "resume preserves transient retry avoidance",
-  resumedTransient.avoidWorkerIndexes?.join(",") === "1",
+  resumedTransient.avoidWorkerIndexes?.join(",") === "1" &&
+    resumedTransient.unavailableWorkerIndexes?.join(",") === "0",
   resumedTransient
 );
 
@@ -708,6 +716,43 @@ async function expectAvoidWorkerImportRejects(
 await expectAvoidWorkerImportRejects(
   "benchmark import rejects malformed avoided worker indexes",
   [1, "2"]
+);
+async function expectUnavailableWorkerImportRejects(
+  name: string,
+  unavailableWorkerIndexes: unknown
+): Promise<void> {
+  __resetBenchmarkStoreForTests();
+  __setAdapterForTests(memoryAdapter);
+  let rejected = false;
+  let message = "";
+  try {
+    const bundle = benchmarkBundleWithGuidance(checkpoint.tasks[0].guidance![0]);
+    bundle.sourceEvidence!.buildCheckpoints = [
+      {
+        ...checkpoint,
+        tasks: [
+          {
+            ...checkpoint.tasks[0],
+            unavailableWorkerIndexes,
+          },
+        ],
+      } as never,
+    ];
+    await importBenchmarkReportBundleV2(bundle);
+  } catch (err) {
+    rejected = true;
+    message = err instanceof Error ? err.message : String(err);
+  }
+  check(
+    name,
+    rejected && /Invalid sourceEvidence\.buildCheckpoints/i.test(message),
+    message || "bundle imported"
+  );
+}
+
+await expectUnavailableWorkerImportRejects(
+  "benchmark import rejects malformed unavailable worker indexes",
+  [0, "1"]
 );
 __setAdapterForTests(null);
 

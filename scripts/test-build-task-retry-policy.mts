@@ -2,11 +2,14 @@
 import {
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
+  buildTaskFailureUpdate,
+  buildTaskProviderUnavailableUpdate,
   buildTaskFailureGuidanceUpdate,
   buildWorkerFinalResponseInstruction,
   decideBuildTaskFailure,
   hasWorkerFinalEvidenceResponse,
   renderBuildTaskInstructions,
+  restoreBuildUnavailableWorkerRouting,
   selectBalancedWorkerIndex,
   shouldRequestWorkerFinalOutput,
   type BuildTask,
@@ -124,6 +127,100 @@ const avoidedSelection = selectBalancedWorkerIndex({
   avoidWorkerIndexes: [0],
 });
 check("retry assignment avoids the previous worker when alternatives exist", avoidedSelection.index === 1, avoidedSelection);
+
+const unavailableRetryTask = buildTaskFailureUpdate(
+  {
+    ...task(0),
+    workerIndex: 0,
+    assignTo: "minimaxai/minimax-m3",
+  },
+  decideBuildTaskFailure(task(0), "unavailable", "was unavailable (429 Rate limit exceeded)"),
+  "unavailable",
+  0,
+  1_000
+);
+const partialUnavailableTask = buildTaskProviderUnavailableUpdate(
+  {
+    ...task(0),
+    status: "review",
+    workerIndex: 0,
+  },
+  0
+);
+check(
+  "provider outage after landed files remains a hard exclusion through review",
+  partialUnavailableTask.status === "review" &&
+    partialUnavailableTask.unavailableWorkerIndexes?.join(",") === "0",
+  partialUnavailableTask
+);
+check(
+  "provider-unavailable retry avoids the denied worker without pinning it",
+  unavailableRetryTask.status === "fixing" &&
+    unavailableRetryTask.workerIndex === undefined &&
+    unavailableRetryTask.assignTo === undefined &&
+    unavailableRetryTask.avoidWorkerIndexes === undefined &&
+    unavailableRetryTask.unavailableWorkerIndexes?.join(",") === "0" &&
+    (unavailableRetryTask.retryAfterMs ?? 0) > 1_000,
+  unavailableRetryTask
+);
+
+const reviewedUnavailableRetryTask = buildReviewFixTaskUpdate(
+  {
+    ...unavailableRetryTask,
+    workerIndex: 1,
+  },
+  "The Architect requested a correction after the fallback worker completed the attempt.",
+  [],
+  8,
+  { avoidWorkerIndex: 1 }
+);
+check(
+  "review fix preserves unavailable-worker avoidance while adding the reviewed worker",
+  reviewedUnavailableRetryTask.unavailableWorkerIndexes?.join(",") === "0" &&
+    reviewedUnavailableRetryTask.avoidWorkerIndexes?.join(",") === "1",
+  reviewedUnavailableRetryTask
+);
+
+const unavailablePreferredSelection = selectBalancedWorkerIndex({
+  activeWorkerIndexes: [0, 1],
+  assignmentCounts: new Map([
+    [0, 0],
+    [1, 0],
+  ]),
+  assignCursor: 0,
+  unavailableWorkerIndexes: reviewedUnavailableRetryTask.unavailableWorkerIndexes,
+  avoidWorkerIndexes: reviewedUnavailableRetryTask.avoidWorkerIndexes,
+});
+check(
+  "provider availability outranks soft review avoidance when every available worker was reviewed",
+  unavailablePreferredSelection.index === 1,
+  unavailablePreferredSelection
+);
+
+const restoredUnavailableRouting = restoreBuildUnavailableWorkerRouting(
+  [
+    {
+      ...task(1),
+      status: "planned",
+      avoidWorkerIndexes: [1],
+    },
+  ],
+  [
+    {
+      code: "no_output",
+      taskId: "T2",
+      modelId: "nvidia:minimaxai/minimax-m3",
+      message: "minimaxai/minimax-m3 was unavailable (NVIDIA NIM request failed: 429) for T2",
+    },
+  ],
+  ["nvidia:minimaxai/minimax-m3", "chatgpt:gpt-5.4"]
+)[0];
+check(
+  "legacy checkpoint resume reconstructs provider-unavailable routing from durable problems",
+  restoredUnavailableRouting.unavailableWorkerIndexes?.join(",") === "0" &&
+    restoredUnavailableRouting.avoidWorkerIndexes?.join(",") === "1",
+  restoredUnavailableRouting
+);
 
 const reviewFixTask = buildReviewFixTaskUpdate(
   {

@@ -218,6 +218,7 @@ import {
   isWorkerBuildToolAction,
   normalizeBuildTasksForResume,
   restoreArchitectApprovedTasksAfterLegacyQualityGateVeto,
+  restoreBuildUnavailableWorkerRouting,
   shouldRequestWorkerFinalOutput,
   taskRequiresToolVerification,
   outputPathsForTask,
@@ -235,7 +236,8 @@ import {
   buildRepoWorkflowSummary,
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
-  buildTaskFailureGuidanceUpdate,
+  buildTaskFailureUpdate,
+  buildTaskProviderUnavailableUpdate,
   buildWorkerFinalResponseInstruction,
   hasWorkerFinalEvidenceResponse,
   buildReviewGateFixInstructions,
@@ -6143,18 +6145,24 @@ export async function runBuildDiscussion(
   ) {
     // Failed checkpoint tasks must be reopened on Resume; otherwise dependents
     // stay blocked and the build can burn waves without dispatching any work.
-    const normalizedResumeTasks = normalizeBuildTasksForResume(existingCheckpoint.tasks.map((task) => ({
-      ...task,
+    const normalizedResumeTasks = restoreBuildUnavailableWorkerRouting(
+      normalizeBuildTasksForResume(
+        existingCheckpoint.tasks.map((task) => ({
+          ...task,
       // "in_progress"/"review" are transient mid-wave states. If the run stopped
       // while a task was being implemented or awaiting review, re-queue it as
       // "planned" so the resumed run re-dispatches and re-reviews it — otherwise
       // it is never picked up again (dispatch only takes planned/fixing) and the
       // build would end with a spurious "incomplete tasks" failure.
-      status:
-        task.status === "in_progress" || task.status === "review"
-          ? "planned"
-          : task.status,
-    }))).map(normalizeBuildTaskContract);
+          status:
+            task.status === "in_progress" || task.status === "review"
+              ? "planned"
+              : task.status,
+        }))
+      ).map(normalizeBuildTaskContract),
+      existingCheckpoint.buildProblems ?? [],
+      workers.map((worker) => worker.modelId)
+    );
     tasks = restoreArchitectApprovedTasksAfterLegacyQualityGateVeto(normalizedResumeTasks, {
       status: existingCheckpoint.status,
       stopReason: existingCheckpoint.stopReason,
@@ -6973,26 +6981,10 @@ export async function runBuildDiscussion(
         stat.wBadOutput += difficultyWeight(task);
       }
       const decision = decideBuildTaskFailure(task, kind, detail);
-      task.failCount = decision.failCount;
-      task.status = decision.status;
-      if (task.status === "fixing") {
-        if (kind === "bad") {
-          task.avoidWorkerIndexes = [
-            ...new Set([...(task.avoidWorkerIndexes ?? []), stat.index]),
-          ];
-        }
-        task.workerIndex = undefined;
-        task.assignTo = undefined;
-        task.retryAfterMs = decision.retryDelayMs
-          ? Date.now() + decision.retryDelayMs
-          : undefined;
-        Object.assign(
-          task,
-          buildTaskFailureGuidanceUpdate(task, decision.instructionNote)
-        );
-      } else {
-        task.retryAfterMs = undefined;
-      }
+      Object.assign(
+        task,
+        buildTaskFailureUpdate(task, decision, kind, stat.index)
+      );
       recordBuildProblem({
         code: "no_output",
         severity: task.status === "failed" ? "blocked" : "error",
@@ -8444,6 +8436,10 @@ export async function runBuildDiscussion(
           stat.responseChars += output.length;
           task.retryAfterMs = undefined;
           task.status = "review";
+          Object.assign(
+            task,
+            buildTaskProviderUnavailableUpdate(task, stat.index)
+          );
           executed.push({
             task,
             worker,
@@ -8563,6 +8559,7 @@ export async function runBuildDiscussion(
           pinnedIndex: pinned,
           requestedIndex: requestedActive,
           avoidWorkerIndexes: task.avoidWorkerIndexes,
+          unavailableWorkerIndexes: task.unavailableWorkerIndexes,
         });
         assignCursor = selected.assignCursor;
         task.workerIndex = selected.index;
@@ -9130,6 +9127,7 @@ export async function runBuildDiscussion(
         }
         task.status = "done";
         task.avoidWorkerIndexes = undefined;
+        task.unavailableWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
         touchLiveCheckpoint({ force: true, reason: `${task.id} done` });
       } else {
@@ -9195,6 +9193,7 @@ export async function runBuildDiscussion(
         }
         task.status = "done";
         task.avoidWorkerIndexes = undefined;
+        task.unavailableWorkerIndexes = undefined;
         emit({ type: "task_status", taskId: task.id, title: task.title, status: "done", cycle });
         touchLiveCheckpoint({ force: true, reason: `${task.id} done` });
       }

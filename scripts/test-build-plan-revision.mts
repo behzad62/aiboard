@@ -149,6 +149,7 @@ const fixingRuntimeTask: BuildTask = {
   writeGeneration: 7,
   retryAfterMs: 1234,
   avoidWorkerIndexes: [0, 2],
+  unavailableWorkerIndexes: [1],
   guidance: [
     {
       id: "G-T-tool-1",
@@ -192,6 +193,7 @@ check(
     preservedRuntimeTask.writeGeneration === 7 &&
     preservedRuntimeTask.retryAfterMs === 1234 &&
     preservedRuntimeTask.avoidWorkerIndexes?.join(",") === "0,2" &&
+    preservedRuntimeTask.unavailableWorkerIndexes?.join(",") === "1" &&
     preservedRuntimeTask.guidance?.[0]?.answer === "Yes.",
   preservedRuntimeTask
 );

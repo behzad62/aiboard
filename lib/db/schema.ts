@@ -228,6 +228,7 @@ export interface BuildCheckpointTask {
   failCount?: number;
   retryAfterMs?: number;
   avoidWorkerIndexes?: number[];
+  unavailableWorkerIndexes?: number[];
   difficulty?: number;
   guidance?: BuildTaskGuidanceRecord[];
 }

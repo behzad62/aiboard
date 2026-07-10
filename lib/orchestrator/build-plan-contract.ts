@@ -94,6 +94,7 @@ export function preserveBuildTaskRuntimeState(
       failCount: current.failCount,
       retryAfterMs: current.retryAfterMs,
       avoidWorkerIndexes: current.avoidWorkerIndexes,
+      unavailableWorkerIndexes: current.unavailableWorkerIndexes,
       guidance: current.guidance,
       splitDepth: current.splitDepth,
       writeGeneration: current.writeGeneration,
