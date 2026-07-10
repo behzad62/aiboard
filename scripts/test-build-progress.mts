@@ -97,6 +97,7 @@ evidenceLedger = appendBuildEvidenceLedgerEntry(
     source: "worker",
     action: "context_retrieve",
     status: "succeeded",
+    wave: 7,
   },
   2
 );
@@ -104,6 +105,7 @@ const evidenceText = renderBuildEvidenceLedger(evidenceLedger);
 check(
   "evidence ledger caps old entries and renders compact review context",
   evidenceLedger.length === 2 &&
+    evidenceLedger.at(-1)?.wave === 7 &&
     !evidenceText.includes("npm test") &&
     evidenceText.includes("browser_snapshot") &&
     evidenceText.includes("ctx_123"),

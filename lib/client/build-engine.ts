@@ -74,6 +74,14 @@ import {
   type BuildEvidenceLedgerEntry,
 } from "@/lib/orchestrator/build-progress";
 import {
+  appendBuildTaskVerificationFact,
+  discardSupersededTaskVerificationFacts,
+  resolveBuildReviewContract,
+  validateBuildReviewApprovals,
+  type BuildReviewContractIssue,
+  type BuildTaskVerificationFact,
+} from "@/lib/orchestrator/build-review-evidence";
+import {
   createReadRangeLoopGuard,
   createToolReplayCache,
   packToolBatchResult,
@@ -182,6 +190,7 @@ import {
   buildOutstandingTasksDigest,
   buildWorkerContextFileCharLimit,
   buildReviewDiffPackContent,
+  buildReviewContractRevisionPrompt,
   buildWorkerToolInstructions,
   buildWaveReviewDigest,
   compactToolConversation,
@@ -1522,6 +1531,9 @@ export async function runBuildDiscussion(
   let reviewEvidenceLedger: BuildEvidenceLedgerEntry[] = [
     ...(existingCheckpoint?.evidenceLedger ?? []),
   ].slice(-96);
+  let taskVerificationFacts: BuildTaskVerificationFact[] = [
+    ...(existingCheckpoint?.taskVerificationFacts ?? []),
+  ].slice(-96);
 
   const saveCheckpoint = (input: {
     status: BuildCheckpoint["status"];
@@ -1570,6 +1582,7 @@ export async function runBuildDiscussion(
       stopReport: input.stopReport ?? null,
       toolReviewReport,
       evidenceLedger: reviewEvidenceLedger,
+      taskVerificationFacts: taskVerificationFacts.slice(-96),
       usageWindow,
       skillMode: buildSettings.skillMode,
       skillEvidence: skillEvidenceRecords,
@@ -6867,7 +6880,9 @@ export async function runBuildDiscussion(
   let noProgressWaves = 0;
   let lastFailureFingerprint: string | null = null;
 
-  for (let cycle = 1; cycle <= BUILD_MAX_WAVES && !done; cycle++) {
+  const firstWave = wavesRun + 1;
+  const finalWave = wavesRun + BUILD_MAX_WAVES;
+  for (let cycle = firstWave; cycle <= finalWave && !done; cycle++) {
     wavesRun = cycle;
     const waveStartTaskStatuses = new Map(
       tasks.map((task) => [task.id, task.status] as const)
@@ -7419,6 +7434,11 @@ export async function runBuildDiscussion(
                 served.push({
                   label: item.label,
                   result,
+                  status: /(?:^|\n)exit 0\b/.test(result)
+                    ? "succeeded"
+                    : /DENIED|REJECTED/i.test(result)
+                      ? "skipped"
+                      : "failed",
                 });
               };
               if (!runner) {
@@ -7582,10 +7602,38 @@ export async function runBuildDiscussion(
                   ? `${action.server}.${action.tool}`
                   : action.action,
                 status: fact.status ?? "succeeded",
+                wave: cycle,
                 label: fact.label,
                 summary: stripAnsi(fact.result),
               }
             );
+            const actionName =
+              action.action === "tool"
+                ? `${action.server}.${action.tool}`
+                : action.action;
+            const isDeclaredVerificationTool =
+              action.action === "tool" &&
+              (task.requiredToolActions ?? []).includes(actionName);
+            if (actionName === "run" || isDeclaredVerificationTool) {
+              const transportStatus = fact.status ?? "succeeded";
+              taskVerificationFacts = appendBuildTaskVerificationFact(
+                taskVerificationFacts,
+                {
+                  taskId: task.id,
+                  wave: cycle,
+                  at: new Date().toISOString(),
+                  action: actionName,
+                  status:
+                    transportStatus === "succeeded"
+                      ? "passed"
+                      : transportStatus === "failed"
+                        ? "failed"
+                        : "skipped",
+                  summary: stripAnsi(fact.result),
+                  coveredPaths: outputPathsForTask(task),
+                }
+              );
+            }
           }
           touchLiveCheckpoint({ reason: `${actor} tool batch` });
           return {
@@ -8272,6 +8320,13 @@ export async function runBuildDiscussion(
         task.retryAfterMs = undefined;
         task.nextAttemptPhase = undefined;
         task.status = "review";
+        if (files.length > 0) {
+          taskVerificationFacts = discardSupersededTaskVerificationFacts(
+            taskVerificationFacts,
+            task.id,
+            cycle
+          );
+        }
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
@@ -8506,6 +8561,32 @@ export async function runBuildDiscussion(
     // is informed by the actual compiler, not only the models' reading.
     const verifyResult = await runVerify(verifyCommand);
     const verifyFeedback = verifyResult.feedback;
+    if (verifyCommand) {
+      for (const item of executed) {
+        if (!taskRequiresToolVerification(item.task)) continue;
+        taskVerificationFacts = appendBuildTaskVerificationFact(
+          taskVerificationFacts,
+          {
+            taskId: item.task.id,
+            wave: cycle,
+            at: new Date().toISOString(),
+            action: "run",
+            status: verifyFeedback
+              ? verifyResult.failed
+                ? "failed"
+                : "passed"
+              : "skipped",
+            summary: verifyFeedback
+              ? `${verifyCommand}: ${stripAnsi(verifyFeedback)}`
+              : `${verifyCommand}: verifier did not execute or return objective output.`,
+            coveredPaths:
+              item.files.length > 0
+                ? item.files
+                : outputPathsForTask(item.task),
+          }
+        );
+      }
+    }
 
     // Fingerprint a failing build/test so a recurring identical failure counts
     // toward the no-progress/blocked stop, while a failure that changes shape
@@ -8705,7 +8786,7 @@ export async function runBuildDiscussion(
         executedText: "",
         outstandingTasks: "",
         maxNewTasks: BUILD_TASKS_PER_WAVE,
-        cyclesLeft: Math.max(0, BUILD_MAX_WAVES - cycle),
+        cyclesLeft: Math.max(0, finalWave - cycle),
         readHopsLeft: ARCHITECT_REVIEW_READS_PER_PHASE,
         rangeReadsLeft: ARCHITECT_REVIEW_RANGE_READS_PER_PHASE,
         runsLeft: runsLeftThisPhase(),
@@ -8745,8 +8826,137 @@ export async function runBuildDiscussion(
         extraFileContext += textChunk;
       },
     });
-    const action = reviewResult.action as ReviewAction;
-    const text = reviewResult.text;
+    const initialReviewAction = reviewResult.action as ReviewAction;
+    let reviewActionText = reviewResult.text;
+    const reviewTaskIds = new Set(executed.map(({ task }) => task.id));
+    const objectiveReviewFacts = taskVerificationFacts.filter((fact) =>
+      reviewTaskIds.has(fact.taskId)
+    );
+    const validateReviewAction = (
+      candidate: ReviewAction
+    ): { valid: boolean; errors: BuildReviewContractIssue[] } => {
+      const applicableCandidateResults = candidate.results.filter((result) => {
+        const task = tasks.find((item) => item.id === result.taskId);
+        return shouldApplyReviewResultToTask(task);
+      });
+      const validation = validateBuildReviewApprovals({
+        tasks,
+        results: applicableCandidateResults,
+        facts: objectiveReviewFacts,
+        wave: cycle,
+      });
+      const changesVerifier =
+        typeof candidate.verifyCommand === "string" &&
+        candidate.verifyCommand.trim().toLowerCase() !== verifyCommand.trim().toLowerCase();
+      if (!changesVerifier) return validation;
+      const existingIssueTasks = new Set(validation.errors.map((error) => error.taskId));
+      const verifierChangeErrors = applicableCandidateResults
+        .filter((result) => isReviewResultApproved(result))
+        .map((result) => tasks.find((task) => task.id === result.taskId))
+        .filter((task): task is BuildTask => !!task && taskRequiresToolVerification(task))
+        .filter((task) => !existingIssueTasks.has(task.id))
+        .map((task): BuildReviewContractIssue => ({
+          code: "missing_task_verification",
+          taskId: task.id,
+          message: `Task ${task.id} cannot be approved in the same review action that changes verifyCommand; run the replacement verifier in the next wave and review fresh facts.`,
+        }));
+      const errors = [...validation.errors, ...verifierChangeErrors];
+      return { valid: errors.length === 0, errors };
+    };
+    const reviewContractResolution = await resolveBuildReviewContract({
+      initialAction: initialReviewAction,
+      validate: validateReviewAction,
+      revise: async (candidate, errors, revision) => {
+        emit({
+          type: "diagnostic",
+          phase: "judging",
+          message: `Architect review contract revision ${revision}/2 requested for ${errors.length} objective verification issue(s).`,
+        });
+        const revisedText = await streamConversation(
+          architect,
+          [
+            { role: "system", content: ARCHITECT_SYSTEM_ROLE },
+            {
+              role: "user",
+              content: buildReviewContractRevisionPrompt({
+                request: discussion.topic,
+                action: candidate,
+                facts: objectiveReviewFacts,
+                errors,
+              }),
+            },
+          ],
+          {
+            maxTokens: architectMaxTokens(architect),
+            label: `Architect review contract revision ${revision}/2`,
+            structuredOutput: architectActionResponseFormat,
+            validateStructuredOutput: (content) => {
+              const parsed = parseArchitectAction(content);
+              return parsed?.action === "review"
+                ? { ok: true, parsedResponseJson: JSON.stringify(parsed) }
+                : {
+                    ok: false,
+                    message: "Architect must return one complete review action.",
+                  };
+            },
+          }
+        );
+        const parsed = parseArchitectAction(revisedText);
+        if (parsed?.action === "review") {
+          reviewActionText = revisedText;
+          return parsed;
+        }
+        return candidate;
+      },
+      maxRevisions: 2,
+    });
+    const stopForInvalidReviewContract = (
+      errors: ReadonlyArray<BuildReviewContractIssue>
+    ): void => {
+      for (const issue of errors) {
+        recordBuildProblem({
+          code: "review_contract_invalid",
+          severity: "blocked",
+          source: "architect",
+          taskId: issue.taskId,
+          wave: cycle,
+          message: `[${issue.code}] ${issue.message}`,
+        });
+      }
+      const message = `Build blocked because the Architect review remained inconsistent with current task verification facts after two contract revisions.`;
+      recoveryLog.push(message);
+      const report = createStopReport({
+        status: "blocked",
+        stopReason: "blocked",
+        message,
+        wave: cycle,
+        tasks,
+        verifyCommand,
+      });
+      const toolReviewReport = createToolReviewReport({ status: "blocked", wave: cycle });
+      saveCheckpoint({
+        status: "blocked",
+        stopReason: "blocked",
+        wave: cycle,
+        tasks,
+        architectNotes,
+        verifyCommand,
+        stopReport: report,
+        toolReviewReport,
+      });
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `${message}\n${errors.map((issue) => `- [${issue.code}] ${issue.message}`).join("\n")}`,
+      });
+      markStopped("blocked", message, report, toolReviewReport);
+    };
+    if (reviewContractResolution.status === "blocked") {
+      stopForInvalidReviewContract(reviewContractResolution.errors);
+      return;
+    }
+    const action = reviewContractResolution.action;
+    const text = reviewActionText;
     recordRequestFulfillmentEvidence(
       action.requestFulfillment,
       text,

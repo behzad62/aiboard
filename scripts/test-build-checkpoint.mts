@@ -105,6 +105,17 @@ const checkpoint: BuildCheckpoint = {
     warnings: [],
   },
   planContractRevisionCount: 2,
+  taskVerificationFacts: [
+    {
+      taskId: "T1",
+      wave: 3,
+      at: "2026-06-21T00:00:00.000Z",
+      action: "run",
+      status: "passed",
+      summary: "npm run build exited successfully.",
+      coveredPaths: ["lib/db/schema.ts"],
+    },
+  ],
   usageWindow: {
     startedAt: "2026-06-21T00:00:00.000Z",
     elapsedMs: 1000,
@@ -153,6 +164,11 @@ check(
   checkpoint.planContractRevisionCount
 );
 check(
+  "checkpoint stores task verification facts with their wave",
+  checkpoint.taskVerificationFacts?.[0]?.wave === 3,
+  checkpoint.taskVerificationFacts
+);
+check(
   "Build engine v6 checkpoint contract snapshots plan validation state",
   buildEngineSource.includes('build-contracts-v1-live-checkpoint-v6') &&
     buildEngineSource.includes("BUILD_CHECKPOINT_CONTRACT_VERSION = 4") &&
@@ -161,8 +177,18 @@ check(
     ) &&
     /planContractRevisionCount:\s*input\.planContractRevisionCount\s*\?\?\s*planContractRevisionCount/.test(
       buildEngineSource
-    ),
+    ) &&
+    /taskVerificationFacts:\s*taskVerificationFacts\.slice\(-96\)/.test(buildEngineSource) &&
+    /existingCheckpoint\?\.taskVerificationFacts\s*\?\?\s*\[\]/.test(buildEngineSource),
   "checkpoint marker or plan contract snapshot fields are missing"
+);
+check(
+  "resumed wave numbering advances beyond checkpointed verification facts",
+  /const firstWave = wavesRun \+ 1/.test(buildEngineSource) &&
+    /const finalWave = wavesRun \+ BUILD_MAX_WAVES/.test(buildEngineSource) &&
+    /for \(let cycle = firstWave; cycle <= finalWave/.test(buildEngineSource) &&
+    /cyclesLeft: Math\.max\(0, finalWave - cycle\)/.test(buildEngineSource),
+  "resume would reuse old wave numbers"
 );
 check(
   "checkpoint stores avoided worker indexes for retry routing",

@@ -38,6 +38,10 @@ import {
   getBlockingSkillEvidence,
 } from "./build-evidence-gates";
 import type { SkillEvidence } from "@/lib/skills/types";
+import type {
+  BuildReviewContractIssue,
+  BuildTaskVerificationFact,
+} from "./build-review-evidence";
 
 export type BuildTaskStatus =
   | "planned"
@@ -2801,6 +2805,35 @@ export function outputPathsForTask(task: {
     paths.push(path);
   }
   return paths;
+}
+
+export function buildReviewContractRevisionPrompt(input: {
+  request: string;
+  action: ReviewAction;
+  facts: ReadonlyArray<BuildTaskVerificationFact>;
+  errors: ReadonlyArray<BuildReviewContractIssue>;
+}): string {
+  return [
+    ARCHITECT_ROLE,
+    "",
+    "The review action below cannot be applied because one or more approvals contradict current objective task-scoped verification facts.",
+    "The engine is not changing any verdict or deciding semantic completion. Reconsider the unchanged review action using the exact facts and issue codes below, then return one complete corrected review action.",
+    "Do not change verification policy to bypass an issue. If evidence is missing, stale, skipped, or failed, keep the affected task unapproved unless a future wave can gather fresh evidence.",
+    "",
+    "Original project request:",
+    input.request,
+    "",
+    "Unchanged review action:",
+    JSON.stringify(input.action, null, 2),
+    "",
+    "Objective task verification facts:",
+    JSON.stringify(input.facts, null, 2),
+    "",
+    "Review contract issues:",
+    JSON.stringify(input.errors, null, 2),
+    "",
+    "Return exactly one fenced JSON review action with explicit specVerdict and qualityVerdict values for every reviewed task. Do not request tools in this contract-revision response.",
+  ].join("\n");
 }
 
 const SUSPICIOUS_BUILD_ARTIFACT_PATHS = new Set([

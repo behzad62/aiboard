@@ -97,6 +97,8 @@ export interface BuildEvidenceLedgerEntry {
   action?: string;
   /** Transport outcome only; semantic sufficiency belongs to the Architect. */
   status?: "succeeded" | "failed" | "skipped";
+  /** Scheduler wave in which this fact was produced. */
+  wave?: number;
 }
 
 function compactWhitespace(text: string): string {
@@ -122,6 +124,7 @@ export function appendBuildEvidenceLedgerEntry(
     source: entry.source,
     action: entry.action?.trim().slice(0, 120) || undefined,
     status: entry.status,
+    wave: Number.isFinite(entry.wave) ? entry.wave : undefined,
   };
   const next = [...entries, normalized];
   return next.slice(-Math.max(1, maxEntries));
