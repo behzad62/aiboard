@@ -52,6 +52,12 @@ check(
   classifyBuildWorkerError("The usage limit has been reached") === "unavailable"
 );
 check(
+  "provider degraded function is unavailable, not bad output",
+  classifyBuildWorkerError(
+    "Function id '87ea0ddc-cff1-4bca-bf8b-3bd98a35ddd0': DEGRADED function cannot be invoked"
+  ) === "unavailable"
+);
+check(
   "ordinary worker implementation failure remains bad output",
   classifyBuildWorkerError("invalid patch output") === "bad"
 );
