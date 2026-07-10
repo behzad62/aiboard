@@ -57,6 +57,15 @@ for (const providerId of ["chatgpt", "github-copilot"]) {
   );
 }
 
+const chatGptAccountModelIds = MODEL_CATALOG.filter(
+  (model) => model.providerId === "chatgpt"
+).map((model) => model.id);
+check(
+  "ChatGPT catalog excludes models rejected by the account runner",
+  !chatGptAccountModelIds.some((modelId) => modelId.startsWith("gpt-5.6")),
+  chatGptAccountModelIds
+);
+
 check(
   "ChatGPT account-backed GPT models support reasoning effort",
   providerSupportsReasoning("chatgpt:gpt-5.4"),

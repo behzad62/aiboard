@@ -75,6 +75,16 @@ check(
 );
 
 check(
+  "build participant selection drops models that are no longer available",
+  selectParticipantModelIdsByInputSupport({
+    mode: "build",
+    selectedModelIds: ["openai:removed-worker", "openai:vision-worker"],
+    capabilitiesById: capabilityMap,
+    requiredInputTypes: [],
+  }).join(",") === "openai:vision-worker"
+);
+
+check(
   "non-build participant selection still filters models missing image support",
   selectParticipantModelIdsByInputSupport({
     mode: "panel",

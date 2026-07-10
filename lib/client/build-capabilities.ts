@@ -91,12 +91,15 @@ export function participantRequiredInputTypesForMode(
 export function selectParticipantModelIdsByInputSupport(
   input: ParticipantInputSupportInput
 ): string[] {
+  const availableModelIds = input.selectedModelIds.filter((id) =>
+    input.capabilitiesById.has(id)
+  );
   const required = participantRequiredInputTypesForMode(
     input.mode,
     input.requiredInputTypes
   );
-  if (required.length === 0) return input.selectedModelIds;
-  return input.selectedModelIds.filter((id) =>
+  if (required.length === 0) return availableModelIds;
+  return availableModelIds.filter((id) =>
     supportsInputTypes(input.capabilitiesById.get(id), required)
   );
 }
