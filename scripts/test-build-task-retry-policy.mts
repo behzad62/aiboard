@@ -48,6 +48,10 @@ check(
   classifyBuildWorkerError("Failed to generate completions") === "unavailable"
 );
 check(
+  "provider account usage limit is unavailable, not bad output",
+  classifyBuildWorkerError("The usage limit has been reached") === "unavailable"
+);
+check(
   "ordinary worker implementation failure remains bad output",
   classifyBuildWorkerError("invalid patch output") === "bad"
 );

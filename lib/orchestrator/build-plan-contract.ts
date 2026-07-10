@@ -529,3 +529,13 @@ export function isBuildTaskRunnable(
   if (task.kind !== "repo") return true;
   return tasks.every((candidate) => candidate.kind === "repo" || candidate.status === "done");
 }
+
+export function hasRunnablePendingBuildTask(
+  tasks: ReadonlyArray<BuildTask>
+): boolean {
+  return tasks.some(
+    (task) =>
+      (task.status === "planned" || task.status === "fixing") &&
+      isBuildTaskRunnable(task, tasks)
+  );
+}

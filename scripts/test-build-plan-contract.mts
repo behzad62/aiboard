@@ -1,5 +1,6 @@
 /** Build plan contract compiler checks (run: npx tsx scripts/test-build-plan-contract.mts) */
 import {
+  hasRunnablePendingBuildTask,
   isBuildTaskRunnable,
   renderBuildPlanContractErrors,
   validateBuildPlanContract,
@@ -305,5 +306,22 @@ check(
 );
 runnableTasks[1].status = "done";
 check("repo tasks run after every non-repo task", isBuildTaskRunnable(runnableTasks[2], runnableTasks));
+
+const failedDependencyTasks = [
+  task({ id: "T1", status: "failed" }),
+  task({ id: "T2", status: "planned", dependsOn: ["T1"] }),
+];
+check(
+  "terminal failed dependency leaves no retryable pending task",
+  !hasRunnablePendingBuildTask(failedDependencyTasks),
+  failedDependencyTasks
+);
+check(
+  "a fixing task with satisfied dependencies keeps the wave retryable",
+  hasRunnablePendingBuildTask([
+    task({ id: "T1", status: "done" }),
+    task({ id: "T2", status: "fixing", dependsOn: ["T1"] }),
+  ])
+);
 
 process.exit(failed === 0 ? 0 : 1);

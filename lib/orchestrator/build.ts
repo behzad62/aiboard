@@ -648,7 +648,7 @@ export interface BuildUnavailableRoutingProblem {
 }
 
 const BUILD_WORKER_UNAVAILABLE_ERROR =
-  /\b(429|500|502|503|504|529)\b|rate.?limit|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed|failed to generate completions/i;
+  /\b(429|500|502|503|504|529)\b|rate.?limit|usage limit|usage cap|account limit|insufficient credits?|credit balance|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed|failed to generate completions/i;
 
 export function classifyBuildWorkerError(
   message: string

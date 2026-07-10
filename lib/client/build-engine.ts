@@ -95,6 +95,7 @@ import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
   findPendingBuildVerifierInputs,
+  hasRunnablePendingBuildTask,
   hasBuildPlanVerificationStateChanged,
   isBuildTaskRunnable,
   preserveBuildTaskRuntimeState,
@@ -8659,6 +8660,15 @@ export async function runBuildDiscussion(
     }
 
     if (executed.length === 0) {
+      if (!hasRunnablePendingBuildTask(tasks)) {
+        emit({
+          type: "diagnostic",
+          phase: "model_failed",
+          message:
+            "No unfinished Build task is runnable because its dependency chain contains a terminal failed task.",
+        });
+        break;
+      }
       // Nothing usable this wave. Try the next wave (bounded by BUILD_MAX_WAVES,
       // guardrails, and no-progress detection) instead of silently ending the
       // build half-done.
