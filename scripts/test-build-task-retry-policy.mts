@@ -2,11 +2,14 @@
 import {
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
+  buildUnavailableWorkerIndexesFromProblems,
   buildTaskFailureUpdate,
   buildTaskProviderUnavailableUpdate,
   buildTaskFailureGuidanceUpdate,
   buildWorkerFinalResponseInstruction,
+  classifyBuildWorkerError,
   decideBuildTaskFailure,
+  deactivateBuildWorkerAfterUnavailable,
   hasWorkerFinalEvidenceResponse,
   renderBuildTaskInstructions,
   restoreBuildUnavailableWorkerRouting,
@@ -40,6 +43,22 @@ check("second transient failure still requeues", second.status === "fixing", sec
 check("second failure count increments", second.failCount === 2, second);
 check("transient note explains rate-limit retry", /transient provider failure/i.test(second.instructionNote), second);
 check("transient retries include backoff", (second.retryDelayMs ?? 0) > 0, second);
+check(
+  "provider completion transport failure is unavailable, not bad output",
+  classifyBuildWorkerError("Failed to generate completions") === "unavailable"
+);
+check(
+  "ordinary worker implementation failure remains bad output",
+  classifyBuildWorkerError("invalid patch output") === "bad"
+);
+check(
+  "provider outage globally removes a worker when a fallback is active",
+  deactivateBuildWorkerAfterUnavailable([0, 1], 0).join(",") === "1"
+);
+check(
+  "provider outage keeps the only active worker recoverable",
+  deactivateBuildWorkerAfterUnavailable([0], 0).join(",") === "0"
+);
 
 const evidenceFailure = decideBuildTaskFailure(
   {
@@ -215,6 +234,28 @@ const restoredUnavailableRouting = restoreBuildUnavailableWorkerRouting(
   ],
   ["nvidia:minimaxai/minimax-m3", "chatgpt:gpt-5.4"]
 )[0];
+const globallyUnavailableWorkers = buildUnavailableWorkerIndexesFromProblems(
+  [
+    {
+      code: "no_output",
+      taskId: "T1",
+      modelId: "nvidia:minimaxai/minimax-m3",
+      message: "minimaxai/minimax-m3 was unavailable (NVIDIA NIM request failed: 429) for T1",
+    },
+    {
+      code: "no_output",
+      taskId: "T13",
+      modelId: "nvidia:minimaxai/minimax-m3",
+      message: "minimaxai/minimax-m3 failed (Failed to generate completions) for T13",
+    },
+  ],
+  ["nvidia:minimaxai/minimax-m3", "chatgpt:gpt-5.4"]
+);
+check(
+  "durable provider failures reconstruct global worker unavailability once",
+  globallyUnavailableWorkers.join(",") === "0",
+  globallyUnavailableWorkers
+);
 check(
   "legacy checkpoint resume reconstructs provider-unavailable routing from durable problems",
   restoredUnavailableRouting.unavailableWorkerIndexes?.join(",") === "0" &&

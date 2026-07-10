@@ -200,8 +200,10 @@ import {
   formatBuildFileToolDiagnostic,
   buildWorkerTaskPrompt,
   classifyRunCommand,
+  classifyBuildWorkerError,
   classifyVerifyCommandForProject,
   decideBuildTaskFailure,
+  deactivateBuildWorkerAfterUnavailable,
   detectVerifyCommand,
   extractLocalServerUrls,
   findIncompleteBuildTasks,
@@ -237,6 +239,7 @@ import {
   buildReviewFixProblem,
   buildReviewFixTaskUpdate,
   buildTaskFailureUpdate,
+  buildUnavailableWorkerIndexesFromProblems,
   buildTaskProviderUnavailableUpdate,
   buildWorkerFinalResponseInstruction,
   hasWorkerFinalEvidenceResponse,
@@ -1059,6 +1062,24 @@ export async function runBuildDiscussion(
     active: true,
   }));
 
+  const markWorkerProviderUnavailable = (stat: WorkerStat): void => {
+    stat.unavailable += 1;
+    const activeBefore = scoreboard
+      .filter((candidate) => candidate.active)
+      .map((candidate) => candidate.index);
+    const activeAfter = deactivateBuildWorkerAfterUnavailable(
+      activeBefore,
+      stat.index
+    );
+    if (activeAfter.length === activeBefore.length) return;
+    stat.active = false;
+    emit({
+      type: "diagnostic",
+      phase: "round_preparing",
+      message: `Benching ${stat.name} for this Build run because its provider is unavailable; remaining workers will continue`,
+    });
+  };
+
   /** Normalized difficulty weight: medium (3) = 1.0, trivial = 0.33, hard = 1.67. */
   const difficultyWeight = (task: BuildTask): number =>
     Math.max(1, Math.min(5, task.difficulty ?? 3)) / 3;
@@ -1426,6 +1447,24 @@ export async function runBuildDiscussion(
   // persists across stops still be caught.
   const currentRunStartedAt = new Date().toISOString();
   const existingCheckpoint = getBuildCheckpoint(discussion.id);
+  const restoredUnavailableWorkerIndexes =
+    buildUnavailableWorkerIndexesFromProblems(
+      existingCheckpoint?.buildProblems ?? [],
+      workers.map((worker) => worker.modelId)
+    );
+  let restoredActiveWorkerIndexes = scoreboard.map((stat) => stat.index);
+  for (const workerIndex of restoredUnavailableWorkerIndexes) {
+    restoredActiveWorkerIndexes = deactivateBuildWorkerAfterUnavailable(
+      restoredActiveWorkerIndexes,
+      workerIndex
+    );
+    const stat = scoreboard[workerIndex];
+    if (stat) stat.unavailable = Math.max(1, stat.unavailable);
+  }
+  const restoredActiveWorkerSet = new Set(restoredActiveWorkerIndexes);
+  for (const stat of scoreboard) {
+    stat.active = restoredActiveWorkerSet.has(stat.index);
+  }
   let failureFingerprints: Record<string, number> =
     existingCheckpoint?.failureFingerprints ?? {};
   const recoveryLog: string[] = existingCheckpoint?.recoveryLog ?? [];
@@ -6975,7 +7014,7 @@ export async function runBuildDiscussion(
       // "unavailable" = the provider denied/timed out; it's not the model's
       // fault, so it never dents the quality score (only badOutput does).
       if (kind === "unavailable") {
-        stat.unavailable += 1;
+        markWorkerProviderUnavailable(stat);
       } else {
         stat.badOutput += 1;
         stat.wBadOutput += difficultyWeight(task);
@@ -7026,9 +7065,7 @@ export async function runBuildDiscussion(
     // Provider-side denials/transience are not a quality signal. Detected from
     // the error text the providers surface (status codes, "overloaded", quota,
     // timeouts, network) so a free-tier 429/503 doesn't tank a model's score.
-    const UNAVAILABLE = /\b(429|500|502|503|504|529)\b|rate.?limit|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed/i;
-    const classifyError = (message: string): "bad" | "unavailable" =>
-      UNAVAILABLE.test(message) ? "unavailable" : "bad";
+    const classifyError = classifyBuildWorkerError;
 
     const workerToolInstructions = (
       budget: BuildWorkerToolInstructionBudget,
@@ -8430,7 +8467,7 @@ export async function runBuildDiscussion(
         const message = err instanceof Error ? err.message : "error";
         const kind = classifyError(message);
         if (kind === "unavailable" && patchedFiles.length > 0) {
-          stat.unavailable += 1;
+          markWorkerProviderUnavailable(stat);
           stat.responses += 1;
           stat.responseMs += Date.now() - startedAt;
           stat.responseChars += output.length;

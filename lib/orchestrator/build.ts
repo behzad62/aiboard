@@ -627,6 +627,46 @@ export interface BuildUnavailableRoutingProblem {
   message: string;
 }
 
+const BUILD_WORKER_UNAVAILABLE_ERROR =
+  /\b(429|500|502|503|504|529)\b|rate.?limit|over.?loaded|high demand|capacity|quota|exhausted|timed? ?out|temporarily|unavailable|econnreset|etimedout|enotfound|socket hang up|network|fetch failed|failed to generate completions/i;
+
+export function classifyBuildWorkerError(
+  message: string
+): "bad" | "unavailable" {
+  return BUILD_WORKER_UNAVAILABLE_ERROR.test(message) ? "unavailable" : "bad";
+}
+
+export function deactivateBuildWorkerAfterUnavailable(
+  activeWorkerIndexes: number[],
+  unavailableWorkerIndex: number
+): number[] {
+  const active = uniqueWorkerIndexes(activeWorkerIndexes);
+  if (!active.includes(unavailableWorkerIndex)) return active;
+  const remaining = active.filter((index) => index !== unavailableWorkerIndex);
+  return remaining.length > 0 ? remaining : active;
+}
+
+export function buildUnavailableWorkerIndexesFromProblems(
+  problems: BuildUnavailableRoutingProblem[],
+  workerModelIds: string[]
+): number[] {
+  const modelIndex = new Map(
+    workerModelIds.map((modelId, index) => [modelId, index])
+  );
+  return uniqueWorkerIndexes(
+    problems.map((problem) => {
+      if (
+        problem.code !== "no_output" ||
+        !problem.modelId ||
+        classifyBuildWorkerError(problem.message) !== "unavailable"
+      ) {
+        return undefined;
+      }
+      return modelIndex.get(problem.modelId);
+    })
+  );
+}
+
 /**
  * Migrates pre-availability-routing checkpoints from their durable problem log.
  * Only explicit provider-unavailable records are used; ordinary bad output
@@ -646,7 +686,7 @@ export function restoreBuildUnavailableWorkerRouting(
       problem.code !== "no_output" ||
       !problem.taskId ||
       !problem.modelId ||
-      !/\b(?:was|became) unavailable\b/i.test(problem.message)
+      classifyBuildWorkerError(problem.message) !== "unavailable"
     ) {
       continue;
     }
