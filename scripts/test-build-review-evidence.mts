@@ -32,10 +32,19 @@ const toolTask: BuildTask = {
   title: "Verify the application",
   instructions: "Run the declared checks.",
   contextFiles: [],
-  outputPaths: ["src/app.ts"],
+  outputPaths: [],
   status: "review",
   verificationPolicy: "tool",
   requiredToolActions: ["run"],
+  writeGeneration: 1,
+  phaseSpec: {
+    id: "P1",
+    objective: "Verify the application",
+    acceptanceCriteria: [],
+    qualityCriteria: [],
+    verification: ["npm test"],
+    constraints: [],
+  },
 };
 const fact = (
   input: Partial<BuildTaskVerificationFact> & Pick<BuildTaskVerificationFact, "taskId" | "wave" | "status">
@@ -45,6 +54,10 @@ const fact = (
   summary: "npm test exited successfully.",
   coveredPaths: ["src/app.ts"],
   source: "worker",
+  writeGeneration: 1,
+  verifierIdentity:
+    input.verifierIdentity ??
+    (input.action && input.action !== "run" ? input.action : "npm test"),
   ...input,
 });
 
@@ -72,25 +85,25 @@ check(
   }).valid
 );
 check(
-  "phase-verification-covered tool task without declared actions passes through",
+  "phase-verification-covered tool task without facts is blocked",
   validateBuildReviewApprovals({
     tasks: [{ ...toolTask, requiredToolActions: undefined }],
     results: [approved],
     facts: [],
     wave: 2,
-  }).valid
+  }).errors[0]?.code === "missing_task_verification"
 );
 check(
-  "phase-only coverage ignores unrelated failed and skipped worker runs",
+  "phase-only coverage ignores unrelated worker runs but remains missing",
   validateBuildReviewApprovals({
     tasks: [{ ...toolTask, requiredToolActions: undefined }],
     results: [approved],
     facts: [
-      fact({ taskId: "T1", wave: 2, status: "failed", source: "worker" }),
-      fact({ taskId: "T1", wave: 2, status: "skipped", source: "worker" }),
+      fact({ taskId: "T1", wave: 2, status: "failed", source: "worker", verifierIdentity: "echo bad" }),
+      fact({ taskId: "T1", wave: 2, status: "skipped", source: "worker", verifierIdentity: "echo skip" }),
     ],
     wave: 2,
-  }).valid
+  }).errors[0]?.code === "missing_task_verification"
 );
 check(
   "accepted project verifier requires its own passing fact",
@@ -101,6 +114,7 @@ check(
       fact({ taskId: "T1", wave: 2, status: "failed", source: "project_verifier" }),
     ],
     wave: 2,
+    projectVerifier: "npm test",
   }).errors[0]?.code === "failed_task_verification"
 );
 check(
@@ -125,6 +139,7 @@ check(
       }),
     ],
     wave: 2,
+    projectVerifier: "npm test",
   }).errors[0]?.code === "failed_task_verification"
 );
 check(
@@ -168,6 +183,230 @@ check(
   }).valid
 );
 check(
+  "run before a landed patch cannot approve the newer task generation",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, outputPaths: ["src/app.ts"] }],
+    results: [approved],
+    facts: [fact({ taskId: "T1", wave: 2, status: "passed", writeGeneration: 0 })],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).errors[0]?.code === "stale_task_verification"
+);
+check(
+  "run before final file output cannot approve the newer task generation",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, outputPaths: ["src/app.ts"], writeGeneration: 2 }],
+    results: [approved],
+    facts: [fact({ taskId: "T1", wave: 2, status: "passed", writeGeneration: 1 })],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).errors[0]?.code === "stale_task_verification"
+);
+check(
+  "unrelated successful command cannot satisfy the declared verifier",
+  validateBuildReviewApprovals({
+    tasks: [{
+      ...toolTask,
+      phaseSpec: {
+        id: "P1",
+        objective: "Ship the app",
+        acceptanceCriteria: [],
+        qualityCriteria: [],
+        verification: ["npm test"],
+        constraints: [],
+      },
+    }],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      verifierIdentity: "echo ok",
+    })],
+    wave: 2,
+  }).errors.some((error) => error.code === "missing_task_verification")
+);
+check(
+  "successful verifier without full declared path coverage cannot approve",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, outputPaths: ["src/app.ts", "src/config.ts"] }],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      source: "project_verifier",
+      verifierIdentity: "npm test",
+      coveredPaths: ["src/app.ts"],
+    })],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).errors.some((error) => error.code === "missing_task_verification")
+);
+const phaseScopedPathTask: BuildTask = {
+  ...toolTask,
+  outputPaths: ["src/app.ts"],
+};
+check(
+  "phase command does not approve a path owner without compiler-declared coverage",
+  !validateBuildReviewApprovals({
+    tasks: [phaseScopedPathTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      coveredPaths: [],
+    })],
+    wave: 2,
+  }).valid
+);
+check(
+  "phase command approves current landed generation with full compiled path coverage",
+  validateBuildReviewApprovals({
+    tasks: [phaseScopedPathTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      coveredPaths: ["src/app.ts"],
+    })],
+    wave: 2,
+  }).valid
+);
+const phaseOnlyTask: BuildTask = {
+  ...toolTask,
+  requiredToolActions: undefined,
+  phaseSpec: {
+    id: "P1",
+    objective: "Ship the app",
+    acceptanceCriteria: [],
+    qualityCriteria: [],
+    verification: ["npm test"],
+    constraints: [],
+  },
+};
+check(
+  "phase verification compiles to an objective approval requirement",
+  validateBuildReviewApprovals({
+    tasks: [phaseOnlyTask],
+    results: [approved],
+    facts: [],
+    wave: 2,
+  }).errors[0]?.code === "missing_task_verification"
+);
+check(
+  "phase verification is satisfied only by the exact executed check",
+  validateBuildReviewApprovals({
+    tasks: [phaseOnlyTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      source: "project_verifier",
+      verifierIdentity: "npm test",
+    })],
+    wave: 2,
+  }).valid
+);
+check(
+  "verifier identity comparison preserves exact command arguments and casing",
+  !validateBuildReviewApprovals({
+    tasks: [phaseOnlyTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      source: "project_verifier",
+      verifierIdentity: "NPM TEST",
+    })],
+    wave: 2,
+  }).valid
+);
+const requiredEvidenceTask: BuildTask = {
+  ...toolTask,
+  requiredToolActions: undefined,
+  requiredEvidence: ["Run `npm test` and record its successful exit."],
+};
+check(
+  "required evidence compiles to an objective approval requirement",
+  validateBuildReviewApprovals({
+    tasks: [requiredEvidenceTask],
+    results: [approved],
+    facts: [],
+    wave: 2,
+  }).errors[0]?.code === "missing_task_verification"
+);
+check(
+  "required evidence is satisfied only by its exact executed check",
+  validateBuildReviewApprovals({
+    tasks: [requiredEvidenceTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      verifierIdentity: "npm test",
+    })],
+    wave: 2,
+  }).valid
+);
+check(
+  "accepted project verifier remains required when no fact was produced",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).errors[0]?.code === "missing_task_verification"
+);
+check(
+  "bare run action is satisfied by the accepted concrete project verifier",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, phaseSpec: undefined }],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      source: "project_verifier",
+      verifierIdentity: "npm test",
+    })],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).valid
+);
+check(
+  "semantic RED GREEN prose remains Architect context rather than command identity",
+  validateBuildReviewApprovals({
+    tasks: [{
+      ...toolTask,
+      requiredEvidence: ["Observe the RED failure.", "Record the GREEN passing run."],
+    }],
+    results: [approved],
+    facts: [fact({ taskId: "T1", wave: 2, status: "passed" })],
+    wave: 2,
+  }).valid
+);
+check(
+  "legacy fact without landed generation fails closed for approval",
+  !validateBuildReviewApprovals({
+    tasks: [toolTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      writeGeneration: undefined,
+    })],
+    wave: 2,
+  }).valid
+);
+check(
   "unrelated task success cannot satisfy an approval",
   validateBuildReviewApprovals({
     tasks: [toolTask],
@@ -206,6 +445,7 @@ check(
       }),
     ],
     wave: 2,
+    projectVerifier: "npm test",
   }).errors.some((error) => error.code === "failed_task_verification")
 );
 const overlappingRunObligations = validateBuildReviewApprovals({
@@ -221,6 +461,7 @@ const overlappingRunObligations = validateBuildReviewApprovals({
     }),
   ],
   wave: 2,
+  projectVerifier: "npm test",
 });
 check(
   "explicit run plus project verifier emits one actionable failure issue",
@@ -271,7 +512,7 @@ check(
   }).valid
 );
 const mixed = validateBuildReviewApprovals({
-  tasks: [toolTask, { ...toolTask, id: "T2", requiredToolActions: ["playwright.browser_navigate"] }],
+  tasks: [toolTask, { ...toolTask, id: "T2", phaseSpec: undefined, requiredToolActions: ["playwright.browser_navigate"] }],
   results: [approved, { ...approved, taskId: "T2" }],
   facts: [fact({ taskId: "T1", wave: 2, status: "passed" })],
   wave: 2,
@@ -352,10 +593,19 @@ check(
   /wave:\s*cycle/.test(buildEngineSource) &&
     /source:\s*"worker"/.test(buildEngineSource) &&
     /source:\s*"project_verifier"/.test(buildEngineSource) &&
-    /requiredToolActions[^\n]*includes\(actionName\)/.test(buildEngineSource) &&
+    /isCompiledVerificationAction/.test(buildEngineSource) &&
     /appendBuildTaskVerificationFact/.test(buildEngineSource) &&
-    /discardSupersededTaskVerificationFacts/.test(buildEngineSource),
+    /discardSupersededTaskVerificationFacts/.test(buildEngineSource) &&
+    /writeGeneration/.test(buildEngineSource) &&
+    /verifierIdentity/.test(buildEngineSource),
   "task-scoped fact production wiring is missing"
+);
+check(
+  "live engine uses compiled requirements for worker fact production without invented path coverage",
+  /compileBuildTaskVerificationRequirements/.test(buildEngineSource) &&
+    /compiledCoverage/.test(buildEngineSource) &&
+    /flatMap\(\(requirement\)\s*=>\s*requirement\.coveredPaths\)/.test(buildEngineSource),
+  "worker facts are not driven by the shared requirement compiler"
 );
 check(
   "live engine validates and revises review before applying results or scores",

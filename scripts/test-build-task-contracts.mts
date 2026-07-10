@@ -283,7 +283,7 @@ const strictTddPlan = validateBuildPlanForDispatch(
       outputPaths: ["src/game.js"],
     }),
   ],
-  { strictTdd: true }
+  { strictTdd: true, verifyCommand: "npm test" }
 );
 const strictTddTask = strictTddPlan.tasks[0]!;
 check(
@@ -308,7 +308,7 @@ const strictTddWithDeclaredTestPath = validateBuildPlanForDispatch(
       requiredToolActions: ["run"],
     }),
   ],
-  { strictTdd: true }
+  { strictTdd: true, verifyCommand: "npm test" }
 );
 check(
   "strict TDD plan validation preserves Architect-declared test output paths",

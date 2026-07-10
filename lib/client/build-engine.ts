@@ -75,6 +75,7 @@ import {
 } from "@/lib/orchestrator/build-progress";
 import {
   appendBuildTaskVerificationFact,
+  compileBuildTaskVerificationRequirements,
   discardSupersededTaskVerificationFacts,
   resolveBuildReviewContract,
   validateBuildReviewApprovals,
@@ -5726,6 +5727,7 @@ export async function runBuildDiscussion(
     verificationPolicy: raw.verificationPolicy,
     requiredEvidence: raw.requiredEvidence,
     requiredToolActions: raw.requiredToolActions,
+    writeGeneration: 0,
     phaseSpec: activePhaseSpec,
     implementationContract:
       typeof raw.implementationContract === "string" && raw.implementationContract.trim()
@@ -6514,7 +6516,7 @@ export async function runBuildDiscussion(
     // allocation is intentionally delayed until that decision is accepted.
     const allocatedPlanTasks = allocateIncrementalTaskIds(
       [],
-      planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE)
+      planAction.tasks
     );
     if (allocatedPlanTasks.remapped.length > 0) {
       emit({
@@ -7145,6 +7147,15 @@ export async function runBuildDiscussion(
       const preToolArtifactWarnings: string[] = [];
       const preToolArtifactOutputs = new Set<string>();
       const toolIssues: string[] = [];
+      const recordTaskLandedWrite = (written: ReadonlyArray<string>): void => {
+        if (written.length === 0) return;
+        task.writeGeneration = (task.writeGeneration ?? 0) + 1;
+        taskVerificationFacts = discardSupersededTaskVerificationFacts(
+          taskVerificationFacts,
+          task.id,
+          cycle
+        );
+      };
       try {
         await answerPendingGuidanceForTask(task, cycle);
 
@@ -7206,6 +7217,8 @@ export async function runBuildDiscussion(
             result: string;
             preserveFullResult?: boolean;
             status?: BuildEvidenceLedgerEntry["status"];
+            writeGeneration?: number;
+            verifierIdentity?: string;
           }> = [];
           const skipped = schedule.skipped.map((item) => ({
             label: item.label,
@@ -7409,6 +7422,8 @@ export async function runBuildDiscussion(
               served.push({
                 label: item.label,
                 result: packedToolResult,
+                writeGeneration: task.writeGeneration ?? 0,
+                verifierIdentity: `${action.server}.${action.tool}`,
                 status:
                   toolResult.status === "ok"
                     ? "succeeded"
@@ -7434,6 +7449,8 @@ export async function runBuildDiscussion(
                 served.push({
                   label: item.label,
                   result,
+                  writeGeneration: task.writeGeneration ?? 0,
+                  verifierIdentity: action.command,
                   status: /(?:^|\n)exit 0\b/.test(result)
                     ? "succeeded"
                     : /DENIED|REJECTED/i.test(result)
@@ -7559,6 +7576,7 @@ export async function runBuildDiscussion(
                 worker
               );
               patchedFiles.push(...result.written);
+              recordTaskLandedWrite(result.written);
               toolIssues.push(...result.issues);
               served.push({ label: item.label, result: result.summary });
               continue;
@@ -7571,6 +7589,7 @@ export async function runBuildDiscussion(
                 worker
               );
               patchedFiles.push(...result.written);
+              recordTaskLandedWrite(result.written);
               toolIssues.push(...result.issues);
               served.push({ label: item.label, result: result.summary });
               continue;
@@ -7611,10 +7630,27 @@ export async function runBuildDiscussion(
               action.action === "tool"
                 ? `${action.server}.${action.tool}`
                 : action.action;
-            const isDeclaredVerificationTool =
-              action.action === "tool" &&
-              (task.requiredToolActions ?? []).includes(actionName);
-            if (actionName === "run" || isDeclaredVerificationTool) {
+            const verifierIdentity =
+              action.action === "run" ? action.command : actionName;
+            const compiledRequirements = compileBuildTaskVerificationRequirements({
+              task,
+              projectVerifier: verifyCommand,
+            });
+            const isCompiledVerificationAction = compiledRequirements.some(
+              (requirement) =>
+                requirement.source !== "project_verifier" &&
+                requirement.action === actionName &&
+                requirement.verifierIdentity === verifierIdentity
+            );
+            if (isCompiledVerificationAction) {
+              const compiledCoverage = compiledRequirements
+                .filter(
+                  (requirement) =>
+                    requirement.source !== "project_verifier" &&
+                    requirement.action === actionName &&
+                    requirement.verifierIdentity === verifierIdentity
+                )
+                .flatMap((requirement) => requirement.coveredPaths);
               const transportStatus = fact.status ?? "succeeded";
               taskVerificationFacts = appendBuildTaskVerificationFact(
                 taskVerificationFacts,
@@ -7630,8 +7666,10 @@ export async function runBuildDiscussion(
                         ? "failed"
                         : "skipped",
                   summary: stripAnsi(fact.result),
-                  coveredPaths: outputPathsForTask(task),
+                  coveredPaths: [...new Set(compiledCoverage)],
                   source: "worker",
+                  writeGeneration: fact.writeGeneration,
+                  verifierIdentity: fact.verifierIdentity,
                 }
               );
             }
@@ -7935,6 +7973,7 @@ export async function runBuildDiscussion(
             preToolPreview.truncatedPaths.length > 0
           ) {
             const preToolArtifactResult = await writeEmittedFiles(output, task.id);
+            recordTaskLandedWrite(preToolArtifactResult.written);
             preToolArtifactOutputs.add(output);
             preToolArtifactFiles.push(...preToolArtifactResult.written);
             const preToolIssues = splitWorkerReviewIssuesForTask(
@@ -8168,6 +8207,7 @@ export async function runBuildDiscussion(
         const artifactResult = preToolArtifactOutputs.has(output)
           ? { written: [], issues: [] }
           : await writeEmittedFiles(output, task.id);
+        recordTaskLandedWrite(artifactResult.written);
         const files = [
           ...new Set([...patchedFiles, ...preToolArtifactFiles, ...artifactResult.written]),
         ];
@@ -8321,13 +8361,6 @@ export async function runBuildDiscussion(
         task.retryAfterMs = undefined;
         task.nextAttemptPhase = undefined;
         task.status = "review";
-        if (files.length > 0) {
-          taskVerificationFacts = discardSupersededTaskVerificationFacts(
-            taskVerificationFacts,
-            task.id,
-            cycle
-          );
-        }
         // Issues are appended AFTER the truncation so the Architect always
         // sees them in the review prompt — a silently skipped write must
         // never be approved blind.
@@ -8580,11 +8613,10 @@ export async function runBuildDiscussion(
             summary: verifyFeedback
               ? `${verifyCommand}: ${stripAnsi(verifyFeedback)}`
               : `${verifyCommand}: verifier did not execute or return objective output.`,
-            coveredPaths:
-              item.files.length > 0
-                ? item.files
-                : outputPathsForTask(item.task),
+            coveredPaths: outputPathsForTask(item.task),
             source: "project_verifier",
+            writeGeneration: item.task.writeGeneration ?? 0,
+            verifierIdentity: verifyCommand,
           }
         );
       }
@@ -8846,6 +8878,7 @@ export async function runBuildDiscussion(
         results: applicableCandidateResults,
         facts: objectiveReviewFacts,
         wave: cycle,
+        projectVerifier: verifyCommand,
       });
       const changesVerifier =
         typeof candidate.verifyCommand === "string" &&
@@ -9260,7 +9293,7 @@ export async function runBuildDiscussion(
 
     const novelTasks = allocateIncrementalTaskIds(
       tasks,
-      (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
+      action.newTasks ?? []
     );
     if (novelTasks.remapped.length > 0) {
       emit({

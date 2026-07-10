@@ -282,6 +282,33 @@ check(
   initialPlan.tasks[1]
 );
 
+const nineTaskPlan = Array.from({ length: BUILD_TASKS_PER_WAVE + 1 }, (_, index) => ({
+  id: `A${index + 1}`,
+  title: `Task ${index + 1}`,
+  instructions: `Implement task ${index + 1}.`,
+  outputPaths: [`src/task-${index + 1}.ts`],
+  dependsOn: index === BUILD_TASKS_PER_WAVE ? ["A1"] : [],
+}));
+const allocatedNineTaskPlan = allocateIncrementalTaskIds([], nineTaskPlan);
+check(
+  "validated nine-task plans retain every semantic task beyond the dispatch cap",
+  allocatedNineTaskPlan.tasks.length === BUILD_TASKS_PER_WAVE + 1,
+  allocatedNineTaskPlan.tasks.map((task) => task.id)
+);
+check(
+  "dependencies crossing the dispatch cap survive full-plan allocation",
+  allocatedNineTaskPlan.tasks.at(-1)?.dependsOn?.join(",") === "T1",
+  allocatedNineTaskPlan.tasks.at(-1)
+);
+check(
+  "live engine never slices validated initial or review-created semantic task graphs",
+  !/planAction\.tasks\.slice\(0,\s*BUILD_TASKS_PER_WAVE\)/.test(buildEngineSource) &&
+    !/\(action\.newTasks\s*\?\?\s*\[\]\)\.slice\(0,\s*BUILD_TASKS_PER_WAVE\)/.test(
+      buildEngineSource
+    ),
+  "semantic task truncation remains in build-engine.ts"
+);
+
 const staleDuplicate = filterNovelReviewTasks(existing, [
   {
     id: "T12",

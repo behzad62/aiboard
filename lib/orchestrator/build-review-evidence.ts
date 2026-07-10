@@ -10,6 +10,10 @@ export interface BuildTaskVerificationFact {
   coveredPaths: string[];
   /** Optional for legacy checkpoint readability; absent facts are not approval evidence. */
   source?: "worker" | "project_verifier";
+  /** Landed-content generation observed when the check actually executed. */
+  writeGeneration?: number;
+  /** Exact command or typed tool identifier that actually executed. */
+  verifierIdentity?: string;
 }
 
 export interface BuildReviewContractIssue {
@@ -30,6 +34,7 @@ export function appendBuildTaskVerificationFact(
     ...fact,
     taskId: fact.taskId.trim().slice(0, 80),
     action: fact.action.trim().slice(0, 160),
+    verifierIdentity: fact.verifierIdentity?.trim().slice(0, 500),
     summary: fact.summary.replace(/\s+/g, " ").trim().slice(0, 1_200),
     coveredPaths: [...new Set(fact.coveredPaths.map((path) => path.trim()).filter(Boolean))]
       .slice(0, 64),
@@ -46,33 +51,119 @@ export function discardSupersededTaskVerificationFacts(
   );
 }
 
-function requiredVerificationActions(
-  task: BuildTask,
-  facts: ReadonlyArray<BuildTaskVerificationFact>,
-  wave: number
-): Array<{
+export interface BuildTaskVerificationRequirement {
   action: string;
   source?: BuildTaskVerificationFact["source"];
-}> {
+  /** Null means the Architect declared an action class without a concrete identity. */
+  verifierIdentity: string | null;
+  coveredPaths: string[];
+}
+
+function normalizePath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+function normalizeIdentity(identity: string): string {
+  return identity.trim();
+}
+
+function extractQuotedVerifierIdentities(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  return [...trimmed.matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => !!value);
+}
+
+function requirementAction(verifierIdentity: string): string {
+  return verifierIdentity.includes(".") && !/\s/.test(verifierIdentity)
+    ? verifierIdentity
+    : "run";
+}
+
+function isTypedToolIdentity(value: string): boolean {
+  return /^(?:run|[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*)$/.test(value);
+}
+
+export function compileBuildTaskVerificationRequirements(input: {
+  task: BuildTask;
+  projectVerifier?: string;
+  phaseVerification?: ReadonlyArray<string>;
+}): BuildTaskVerificationRequirement[] {
+  const { task } = input;
   if (task.verificationPolicy !== "tool") return [];
-  const declared = (task.requiredToolActions ?? [])
+  const coveredPaths = [...new Set([
+    ...(task.outputPaths ?? []),
+    ...(task.testOutputPaths ?? []),
+  ].map(normalizePath).filter(Boolean))];
+  const declared = [...new Set((task.requiredToolActions ?? [])
     .map((action) => action.trim())
+    .filter(Boolean))];
+  const phaseChecks = (input.phaseVerification ?? task.phaseSpec?.verification ?? [])
+    .map((item) => item.trim())
     .filter(Boolean);
-  const projectVerifierCoveredTask = facts.some(
-    (fact) =>
-      fact.taskId === task.id &&
-      fact.wave === wave &&
-      fact.action === "run" &&
-      fact.source === "project_verifier"
-  );
-  const requirements: Array<{
-    action: string;
-    source?: BuildTaskVerificationFact["source"];
-  }> = [...new Set(declared)].map((action) => ({ action }));
-  if (projectVerifierCoveredTask) {
-    requirements.push({ action: "run", source: "project_verifier" });
+  const evidenceChecks = (task.requiredEvidence ?? []).flatMap((item) => {
+    const quoted = extractQuotedVerifierIdentities(item);
+    if (quoted.length > 0) return quoted;
+    const trimmed = item.trim();
+    return isTypedToolIdentity(trimmed) ? [trimmed] : [];
+  });
+  const requirements: BuildTaskVerificationRequirement[] = [];
+  for (const verifierIdentity of phaseChecks) {
+    const action = requirementAction(verifierIdentity);
+    requirements.push({
+      action,
+      verifierIdentity: verifierIdentity === "run" ? null : verifierIdentity,
+      coveredPaths: action === "run" && verifierIdentity !== "run" ? coveredPaths : [],
+    });
   }
-  return requirements;
+  for (const verifierIdentity of evidenceChecks) {
+    requirements.push({
+      action: requirementAction(verifierIdentity),
+      verifierIdentity: verifierIdentity === "run" ? null : verifierIdentity,
+      coveredPaths: [],
+    });
+  }
+  const acceptedProjectVerifier = input.projectVerifier?.trim();
+  if (acceptedProjectVerifier) {
+    requirements.push({
+      action: "run",
+      source: "project_verifier",
+      verifierIdentity: acceptedProjectVerifier,
+      coveredPaths,
+    });
+  }
+  const objectiveActions = new Set(requirements.map((requirement) => requirement.action));
+  for (const action of declared) {
+    if (objectiveActions.has(action)) continue;
+    requirements.push({
+      action,
+      verifierIdentity: action === "run" ? null : action,
+      coveredPaths: [],
+    });
+  }
+  if (
+    coveredPaths.length > 0 &&
+    !requirements.some(
+      (requirement) =>
+        requirement.verifierIdentity !== null &&
+        coveredPaths.every((path) => requirement.coveredPaths.includes(path))
+    )
+  ) {
+    requirements.push({
+      action: "run",
+      source: "project_verifier",
+      verifierIdentity: null,
+      coveredPaths,
+    });
+  }
+  const seen = new Set<string>();
+  return requirements.filter((requirement) => {
+    const key = `${requirement.action}\u0000${requirement.source ?? ""}\u0000${requirement.verifierIdentity ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function validateBuildReviewApprovals(input: {
@@ -80,6 +171,7 @@ export function validateBuildReviewApprovals(input: {
   results: ReadonlyArray<ReviewResult>;
   facts: ReadonlyArray<BuildTaskVerificationFact>;
   wave: number;
+  projectVerifier?: string;
 }): { valid: boolean; errors: BuildReviewContractIssue[] } {
   const tasksById = new Map(input.tasks.map((task) => [task.id, task]));
   const errors: BuildReviewContractIssue[] = [];
@@ -101,16 +193,23 @@ export function validateBuildReviewApprovals(input: {
     const task = tasksById.get(result.taskId);
     if (!task) continue;
 
-    for (const requirement of requiredVerificationActions(
+    for (const requirement of compileBuildTaskVerificationRequirements({
       task,
-      input.facts,
-      input.wave
-    )) {
+      projectVerifier: input.projectVerifier,
+    })) {
       const { action } = requirement;
       const matching = input.facts.filter(
         (fact) =>
           fact.taskId === task.id &&
           fact.action === action &&
+          fact.writeGeneration !== undefined &&
+          fact.writeGeneration === (task.writeGeneration ?? 0) &&
+          requirement.verifierIdentity !== null &&
+          normalizeIdentity(fact.verifierIdentity ?? "") ===
+            normalizeIdentity(requirement.verifierIdentity) &&
+          requirement.coveredPaths.every((path) =>
+            fact.coveredPaths.map(normalizePath).includes(path)
+          ) &&
           (!requirement.source || fact.source === requirement.source) &&
           (fact.source === "worker" || fact.source === "project_verifier")
       );
@@ -118,7 +217,14 @@ export function validateBuildReviewApprovals(input: {
         .filter((fact) => fact.wave === input.wave)
         .sort((left, right) => left.at.localeCompare(right.at));
       if (current.length === 0) {
-        const stale = matching.some((fact) => fact.wave !== input.wave);
+        const stale = input.facts.some(
+          (fact) =>
+            fact.taskId === task.id &&
+            fact.action === action &&
+            fact.source !== undefined &&
+            (fact.wave !== input.wave ||
+              fact.writeGeneration !== (task.writeGeneration ?? 0))
+        );
         pushError(action, {
           code: stale ? "stale_task_verification" : "missing_task_verification",
           taskId: task.id,

@@ -118,6 +118,8 @@ export interface BuildTask {
   requiredEvidence?: string[];
   /** Typed tool actions whose objective evidence is required for completion. */
   requiredToolActions?: string[];
+  /** Monotonic landed-content generation used to invalidate pre-write verification. */
+  writeGeneration?: number;
   /** Current wave/phase contract this task must satisfy. */
   phaseSpec?: BuildPhaseSpec;
   /** Exact implementation contract from the Architect; workers should not redesign this. */
@@ -252,6 +254,9 @@ export function normalizeBuildTaskContract<T extends BuildTask>(task: T): T {
         .filter(Boolean)
     ),
   ];
+  const writeGeneration = Number.isFinite(migratedTask.writeGeneration)
+    ? Math.max(0, Math.floor(Number(migratedTask.writeGeneration)))
+    : 0;
   return {
     ...migratedTask,
     kind,
@@ -261,6 +266,7 @@ export function normalizeBuildTaskContract<T extends BuildTask>(task: T): T {
     ...(migratedTask.requiredToolActions !== undefined
       ? { requiredToolActions }
       : {}),
+    writeGeneration,
   };
 }
 

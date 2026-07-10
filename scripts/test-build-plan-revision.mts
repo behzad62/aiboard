@@ -146,6 +146,7 @@ const fixingRuntimeTask: BuildTask = {
   splitDepth: 1,
   workerIndex: 2,
   failCount: 1,
+  writeGeneration: 7,
   retryAfterMs: 1234,
   avoidWorkerIndexes: [0, 2],
   guidance: [
@@ -170,6 +171,7 @@ const revisedRuntimeTask: BuildTask = {
   retryInstructions: undefined,
   nextAttemptPhase: undefined,
   splitDepth: undefined,
+  writeGeneration: 0,
 };
 const preservedRuntimeTask = preserveBuildTaskRuntimeState(
   [revisedRuntimeTask],
@@ -187,6 +189,7 @@ check(
     preservedRuntimeTask.splitDepth === 1 &&
     preservedRuntimeTask.workerIndex === 2 &&
     preservedRuntimeTask.failCount === 1 &&
+    preservedRuntimeTask.writeGeneration === 7 &&
     preservedRuntimeTask.retryAfterMs === 1234 &&
     preservedRuntimeTask.avoidWorkerIndexes?.join(",") === "0,2" &&
     preservedRuntimeTask.guidance?.[0]?.answer === "Yes.",
@@ -200,14 +203,14 @@ const adoptedEngineReviewState = adoptBuildReviewVerificationState({
     objective: "Adopt the Architect's phase verifier.",
     acceptanceCriteria: ["The task contract remains dispatch-valid."],
     qualityCriteria: ["Do not rewrite adopted verification state."],
-    verification: ["playwright.browser_take_screenshot"],
+    verification: ["npm test"],
   },
 });
 check(
   "engine adopts the exact validated review verification state",
   adoptedEngineReviewState.verifyCommand === "" &&
     adoptedEngineReviewState.phaseSpec?.verification?.join(",") ===
-      "playwright.browser_take_screenshot" &&
+      "npm test" &&
     validateBuildPlanContract(toolPolicyPlan.tasks, {
       verifyCommand: adoptedEngineReviewState.verifyCommand,
       phaseVerification: adoptedEngineReviewState.phaseSpec?.verification,
@@ -230,6 +233,7 @@ check(
     engineResumeTask.retryInstructions === fixingRuntimeTask.retryInstructions &&
     engineResumeTask.nextAttemptPhase === "finalizing" &&
     engineResumeTask.splitDepth === 1 &&
+    engineResumeTask.writeGeneration === 7 &&
     engineBlockedTask.title === "Blocked revised title" &&
     engineBlockedTask.status === "fixing" &&
     engineBlockedTask.guidance?.[0]?.answer === "Yes.",

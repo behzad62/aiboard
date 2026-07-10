@@ -156,9 +156,60 @@ const explicitStrictTdd = validateBuildPlanContract(
       requiredToolActions: ["run"],
     }),
   ],
-  { strictTdd: true }
+  { strictTdd: true, verifyCommand: "npm test" }
 );
 check("explicit strict TDD contracts are valid", explicitStrictTdd.valid, explicitStrictTdd);
+
+const bareRunContract = validateBuildPlanContract([
+  task({
+    id: "T-run",
+    kind: "verify",
+    verificationPolicy: "tool",
+    requiredToolActions: ["run"],
+  }),
+]);
+check(
+  "bare run action without a concrete verifier identity is rejected",
+  bareRunContract.errors.some(
+    (issue) => issue.code === "missing_tool_verification_contract"
+  ),
+  bareRunContract
+);
+for (const requiredEvidence of [["run"], ["Execute `run`."]]) {
+  const disguisedBareRun = validateBuildPlanContract([
+    task({
+      id: "T-run-evidence",
+      kind: "verify",
+      verificationPolicy: "tool",
+      requiredEvidence,
+    }),
+  ]);
+  check(
+    `required evidence ${JSON.stringify(requiredEvidence)} cannot disguise a bare run action class`,
+    disguisedBareRun.errors.some(
+      (issue) => issue.code === "missing_tool_verification_contract"
+    ),
+    disguisedBareRun
+  );
+}
+
+const pathOwnerWithoutProjectCoverage = validateBuildPlanContract(
+  [task({
+    id: "T-path",
+    kind: "modify",
+    outputPaths: ["src/app.ts"],
+    verificationPolicy: "tool",
+    requiredToolActions: ["playwright.browser_take_screenshot"],
+  })],
+  { phaseVerification: ["playwright.browser_take_screenshot"] }
+);
+check(
+  "path-owning tool task requires accepted project-verifier coverage",
+  pathOwnerWithoutProjectCoverage.errors.some(
+    (issue) => issue.code === "missing_tool_verification_contract"
+  ),
+  pathOwnerWithoutProjectCoverage
+);
 
 const missingToolContract = validateBuildPlanContract([
   task({ id: "T1", kind: "verify", verificationPolicy: "tool" }),

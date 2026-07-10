@@ -1,4 +1,5 @@
 import type { BuildTask } from "./build";
+import { compileBuildTaskVerificationRequirements } from "./build-review-evidence";
 
 export type BuildPlanContractIssueSeverity = "error" | "warning";
 export type BuildPlanContractIssueCode =
@@ -95,6 +96,7 @@ export function preserveBuildTaskRuntimeState(
       avoidWorkerIndexes: current.avoidWorkerIndexes,
       guidance: current.guidance,
       splitDepth: current.splitDepth,
+      writeGeneration: current.writeGeneration,
     };
   });
 }
@@ -383,10 +385,6 @@ export function validateBuildPlanContract(
     }
   }
 
-  const hasProjectVerifier = Boolean(options.verifyCommand?.trim());
-  const hasPhaseVerification = Boolean(
-    options.phaseVerification?.some((entry) => entry.trim())
-  );
   for (const task of tasks) {
     const ownedPaths = buildTaskOwnedPaths(task);
     const ownsSource = task.kind === "modify" && ownedPaths.some(isStrictTddCodeOutputPath);
@@ -414,12 +412,18 @@ export function validateBuildPlanContract(
     const hasMalformedToolAction = requiredToolActions.some(
       (action) => !isTypedToolActionName(action)
     );
+    const objectiveRequirements = compileBuildTaskVerificationRequirements({
+      task,
+      projectVerifier: options.verifyCommand,
+      phaseVerification: options.phaseVerification,
+    });
+    const hasUnresolvedActionClass = objectiveRequirements.some(
+      (requirement) => requirement.verifierIdentity === null
+    );
     if (
       hasMalformedToolAction ||
       (task.verificationPolicy === "tool" &&
-        requiredToolActions.length === 0 &&
-        !hasProjectVerifier &&
-        !hasPhaseVerification)
+        (objectiveRequirements.length === 0 || hasUnresolvedActionClass))
     ) {
       errors.push(
         issue(
@@ -428,7 +432,7 @@ export function validateBuildPlanContract(
           [task.id],
           hasMalformedToolAction
             ? `Task ${task.id} declares a malformed required tool action; use typed action names such as run or server.tool.`
-            : `Tool-policy task ${task.id} must declare required tool actions or be covered by project or phase verification.`
+            : `Tool-policy task ${task.id} must declare a concrete verifier identity through verifyCommand, phase verification, a typed tool identity, or backticked required evidence.`
         )
       );
     }

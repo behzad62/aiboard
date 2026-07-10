@@ -14,6 +14,7 @@ import {
 import type { ReasoningEffort } from "../lib/db/schema";
 import { getModelRuntimeBehavior } from "../lib/providers/runtime-behavior";
 import { shouldEnableProviderNativeWebSearch } from "../lib/providers/web-search";
+import { MODEL_CONTEXT_PROFILES } from "../lib/providers/model-context";
 
 let failures = 0;
 
@@ -64,6 +65,11 @@ check(
   "ChatGPT catalog excludes models rejected by the account runner",
   !chatGptAccountModelIds.some((modelId) => modelId.startsWith("gpt-5.6")),
   chatGptAccountModelIds
+);
+check(
+  "model context excludes stale ChatGPT 5.6 entries rejected by the account runner",
+  !Object.keys(MODEL_CONTEXT_PROFILES).some((modelId) => modelId.startsWith("chatgpt:gpt-5.6")),
+  Object.keys(MODEL_CONTEXT_PROFILES).filter((modelId) => modelId.startsWith("chatgpt:gpt-5.6"))
 );
 
 check(

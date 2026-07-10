@@ -216,6 +216,7 @@ export interface BuildCheckpointTask {
   verificationPolicy?: "architect" | "tool" | "external" | "none";
   requiredEvidence?: string[];
   requiredToolActions?: string[];
+  writeGeneration?: number;
   contextFiles: string[];
   outputPaths?: string[];
   expectedOutputs?: string;
