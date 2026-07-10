@@ -1,7 +1,11 @@
 /** Bounded Build plan contract revision checks (run: npx tsx scripts/test-build-plan-revision.mts) */
 import { readFileSync } from "node:fs";
 import {
+  hasBuildPlanVerificationStateChanged,
   resolveBuildPlanContract,
+  preserveBuildTaskRuntimeState,
+  resolveBuildPlanReviewVerificationState,
+  resolveBuildPlanVerifyCommand,
   validateBuildPlanContract,
 } from "../lib/orchestrator/build-plan-contract";
 import {
@@ -34,6 +38,156 @@ const validPlan = {
   ...invalidPlan,
   tasks: [task("T1", ["src/shared.ts"]), task("T2", ["src/shared.ts"], ["T1"])],
 };
+
+const toolPolicyPlan = {
+  action: "build_plan" as const,
+  tasks: [
+    {
+      ...task("T-tool", ["src/tool.ts"]),
+      verificationPolicy: "tool" as const,
+      requiredToolActions: [],
+    },
+  ],
+};
+const verifierBeforeReview = resolveBuildPlanVerifyCommand({
+  current: "npm test",
+});
+const reviewVerificationAfterDisable = resolveBuildPlanReviewVerificationState({
+  currentVerifyCommand: verifierBeforeReview,
+  requestedVerifyCommand: "",
+  phaseVerification: [verifierBeforeReview],
+});
+const verifierAfterDisable = reviewVerificationAfterDisable.verifyCommand;
+let disableRevisionAttempts = 0;
+const dispatchAfterDisable = await resolveBuildPlanContract({
+  initialPlan: toolPolicyPlan,
+  validate: (plan) =>
+    validateBuildPlanContract(plan.tasks, {
+      verifyCommand: verifierAfterDisable,
+      phaseVerification: reviewVerificationAfterDisable.phaseVerification,
+    }),
+  revise: async () => {
+    disableRevisionAttempts += 1;
+    return toolPolicyPlan;
+  },
+  maxRevisions: 2,
+});
+const dispatchReadyTasks =
+  dispatchAfterDisable.status === "valid" ? dispatchAfterDisable.plan.tasks : [];
+const blockedCheckpointVerifyCommand = resolveBuildPlanVerifyCommand({
+  current: verifierAfterDisable,
+  requested: dispatchAfterDisable.plan.verifyCommand,
+});
+check(
+  "explicit review verifier disable blocks tool task dispatch",
+  validateBuildPlanContract(toolPolicyPlan.tasks, {
+    verifyCommand: verifierBeforeReview,
+  }).valid &&
+    verifierAfterDisable === "" &&
+    reviewVerificationAfterDisable.phaseVerification.length === 0 &&
+    dispatchAfterDisable.status === "blocked" &&
+    disableRevisionAttempts === 2 &&
+    dispatchReadyTasks.length === 0 &&
+    blockedCheckpointVerifyCommand === "" &&
+    dispatchAfterDisable.validation.errors.some(
+      (issue) => issue.code === "missing_tool_verification_contract"
+    ),
+  {
+    verifierBeforeReview,
+    reviewVerificationAfterDisable,
+    disableRevisionAttempts,
+    dispatchReadyTasks,
+    blockedCheckpointVerifyCommand,
+    dispatchAfterDisable,
+  }
+);
+
+const phaseOnlyBefore = {
+  verifyCommand: "",
+  phaseVerification: ["npm test"],
+};
+const phaseOnlyAfter = resolveBuildPlanReviewVerificationState({
+  currentVerifyCommand: phaseOnlyBefore.verifyCommand,
+  phaseVerification: [],
+});
+let phaseOnlyRevisionAttempts = 0;
+const phaseOnlyBlocked = await resolveBuildPlanContract({
+  initialPlan: toolPolicyPlan,
+  validate: (plan) =>
+    validateBuildPlanContract(plan.tasks, {
+      verifyCommand: phaseOnlyAfter.verifyCommand,
+      phaseVerification: phaseOnlyAfter.phaseVerification,
+    }),
+  revise: async () => {
+    phaseOnlyRevisionAttempts += 1;
+    return toolPolicyPlan;
+  },
+  maxRevisions: 2,
+});
+check(
+  "phase-only verifier removal revalidates and blocks dispatch",
+  hasBuildPlanVerificationStateChanged(phaseOnlyBefore, phaseOnlyAfter) &&
+    phaseOnlyBlocked.status === "blocked" &&
+    phaseOnlyRevisionAttempts === 2 &&
+    (phaseOnlyBlocked.status === "valid" ? phaseOnlyBlocked.plan.tasks : []).length === 0,
+  { phaseOnlyBefore, phaseOnlyAfter, phaseOnlyBlocked, phaseOnlyRevisionAttempts }
+);
+
+const fixingRuntimeTask: BuildTask = {
+  ...toolPolicyPlan.tasks[0],
+  status: "fixing",
+  reviewInstructions: "Preserve this exact review correction.",
+  retryInstructions: "Retry only after refreshing context.",
+  nextAttemptPhase: "finalizing",
+  splitDepth: 1,
+  workerIndex: 2,
+  failCount: 1,
+  retryAfterMs: 1234,
+  avoidWorkerIndexes: [0, 2],
+  guidance: [
+    {
+      id: "G-T-tool-1",
+      taskId: "T-tool",
+      mode: "async",
+      question: "Keep the API?",
+      status: "answered",
+      answer: "Yes.",
+      requestedAtWave: 1,
+    },
+  ],
+};
+const revisedRuntimeTask: BuildTask = {
+  ...fixingRuntimeTask,
+  id: "t-tool",
+  title: "Architect-revised title",
+  instructions: "Architect-revised contract.",
+  status: "planned",
+  reviewInstructions: undefined,
+  retryInstructions: undefined,
+  nextAttemptPhase: undefined,
+  splitDepth: undefined,
+};
+const preservedRuntimeTask = preserveBuildTaskRuntimeState(
+  [revisedRuntimeTask],
+  [fixingRuntimeTask]
+)[0];
+check(
+  "review contract revision preserves fixing and split runtime state",
+  preservedRuntimeTask.id === "t-tool" &&
+    preservedRuntimeTask.title === "Architect-revised title" &&
+    preservedRuntimeTask.instructions === "Architect-revised contract." &&
+    preservedRuntimeTask.status === "fixing" &&
+    preservedRuntimeTask.reviewInstructions === fixingRuntimeTask.reviewInstructions &&
+    preservedRuntimeTask.retryInstructions === fixingRuntimeTask.retryInstructions &&
+    preservedRuntimeTask.nextAttemptPhase === "finalizing" &&
+    preservedRuntimeTask.splitDepth === 1 &&
+    preservedRuntimeTask.workerIndex === 2 &&
+    preservedRuntimeTask.failCount === 1 &&
+    preservedRuntimeTask.retryAfterMs === 1234 &&
+    preservedRuntimeTask.avoidWorkerIndexes?.join(",") === "0,2" &&
+    preservedRuntimeTask.guidance?.[0]?.answer === "Yes.",
+  preservedRuntimeTask
+);
 
 const corrected = await resolveBuildPlanContract({
   initialPlan: invalidPlan,

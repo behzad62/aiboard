@@ -84,7 +84,11 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
+  hasBuildPlanVerificationStateChanged,
+  preserveBuildTaskRuntimeState,
   resolveBuildPlanContract,
+  resolveBuildPlanReviewVerificationState,
+  resolveBuildPlanVerifyCommand,
   validateBuildPlanContract,
   type BuildPlanContractValidation,
 } from "@/lib/orchestrator/build-plan-contract";
@@ -5760,7 +5764,10 @@ export async function runBuildDiscussion(
       ],
       {
         strictTdd: buildSettings.skillMode === "strict",
-        verifyCommand: plan.verifyCommand || fallbackVerifyCommand,
+        verifyCommand: resolveBuildPlanVerifyCommand({
+          current: fallbackVerifyCommand,
+          requested: plan.verifyCommand,
+        }),
         phaseVerification: plan.phaseSpec?.verification ?? activePhaseSpec?.verification,
       }
     );
@@ -5769,9 +5776,14 @@ export async function runBuildDiscussion(
     plan: BuildPlanningAction,
     validation: BuildPlanContractValidation,
     wave: number,
-    prefixTasks: ReadonlyArray<BuildTask> = []
+    prefixTasks: ReadonlyArray<BuildTask> = [],
+    fallbackVerifyCommand = planVerifyCommand
   ): void => {
     planContractValidation = validation;
+    const blockedVerifyCommand = resolveBuildPlanVerifyCommand({
+      current: fallbackVerifyCommand,
+      requested: plan.verifyCommand,
+    });
     const invalidTasks = [
       ...prefixTasks,
       ...plan.tasks.map((task, index) => toTask(task, prefixTasks.length + index)),
@@ -5802,7 +5814,7 @@ export async function runBuildDiscussion(
       message,
       wave,
       tasks: invalidTasks,
-      verifyCommand: plan.verifyCommand || planVerifyCommand,
+      verifyCommand: blockedVerifyCommand,
     });
     const toolReviewReport = createToolReviewReport({ status: "blocked", wave });
     saveCheckpoint({
@@ -5811,7 +5823,7 @@ export async function runBuildDiscussion(
       wave,
       tasks: invalidTasks,
       architectNotes,
-      verifyCommand: plan.verifyCommand || planVerifyCommand,
+      verifyCommand: blockedVerifyCommand,
       planContractValidation: validation,
       planContractRevisionCount,
       stopReport: report,
@@ -5886,7 +5898,8 @@ export async function runBuildDiscussion(
         resolution.plan,
         resolution.validation,
         input.wave,
-        prefixTasks
+        prefixTasks,
+        input.fallbackVerifyCommand
       );
       return null;
     }
@@ -8912,26 +8925,51 @@ export async function runBuildDiscussion(
     });
 
     let verifyCommandChangedThisWave = false;
+    const priorReviewVerificationState = {
+      verifyCommand,
+      phaseVerification: activePhaseSpec?.verification ?? [],
+    };
     if (action.phaseSpec) {
       activePhaseSpec = action.phaseSpec;
     }
+    const requestedReviewVerifyCommand = action.verifyCommand;
+    const acceptedRequestedReviewVerifyCommand =
+      typeof requestedReviewVerifyCommand !== "string"
+        ? undefined
+        : requestedReviewVerifyCommand.trim()
+          ? acceptVerifyCommandForRunner(
+              requestedReviewVerifyCommand,
+              "Review verifyCommand",
+              [
+                ...tasks.flatMap((task) => task.outputPaths ?? []),
+                ...(action.newTasks ?? []).flatMap((task) =>
+                  outputPathsForTask(task)
+                ),
+              ]
+            ) || undefined
+          : "";
+    const reviewVerificationState = resolveBuildPlanReviewVerificationState({
+      currentVerifyCommand: verifyCommand,
+      requestedVerifyCommand: acceptedRequestedReviewVerifyCommand,
+      phaseVerification: activePhaseSpec?.verification,
+    });
+    const effectiveReviewVerifyCommand = reviewVerificationState.verifyCommand;
+    const reviewVerificationStateChanged =
+      hasBuildPlanVerificationStateChanged(
+        priorReviewVerificationState,
+        reviewVerificationState
+      );
+    if (
+      typeof acceptedRequestedReviewVerifyCommand === "string" &&
+      activePhaseSpec
+    ) {
+      activePhaseSpec = {
+        ...activePhaseSpec,
+        verification: reviewVerificationState.phaseVerification,
+      };
+    }
+    let resolvedReviewVerifyCommand = effectiveReviewVerifyCommand;
     if ((action.newTasks?.length ?? 0) > 0) {
-      const requestedReviewVerifyCommand = action.verifyCommand;
-      const effectiveReviewVerifyCommand =
-        typeof requestedReviewVerifyCommand !== "string"
-          ? verifyCommand
-          : requestedReviewVerifyCommand.trim()
-            ? acceptVerifyCommandForRunner(
-                requestedReviewVerifyCommand,
-                "Review verifyCommand",
-                [
-                  ...tasks.flatMap((task) => task.outputPaths ?? []),
-                  ...(action.newTasks ?? []).flatMap((task) =>
-                    outputPathsForTask(task)
-                  ),
-                ]
-              ) || verifyCommand
-            : "";
       const reviewPlan: BuildPlanningAction = {
         action: "build_plan",
         spec: activeSpec,
@@ -8945,32 +8983,61 @@ export async function runBuildDiscussion(
         label: "Architect revising review-created task graph",
         wave: cycle,
         prefixTasks: tasks,
+        fallbackVerifyCommand: effectiveReviewVerifyCommand,
       });
       if (!reviewPlanResolution) return;
       action.newTasks = reviewPlanResolution.plan.tasks;
-      const resolvedReviewVerifyCommand =
+      resolvedReviewVerifyCommand =
         reviewPlanResolution.plan.verifyCommand ?? effectiveReviewVerifyCommand;
-      action.verifyCommand = resolvedReviewVerifyCommand;
-      if (resolvedReviewVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()) {
-        verifyCommandChangedThisWave = true;
-        emit({
-          type: "diagnostic",
-          phase: "judging",
-          message: `${reviewActor.displayName} changed the automated build check to ${
-            resolvedReviewVerifyCommand
-              ? `\`${resolvedReviewVerifyCommand}\``
-              : "disabled"
-          }.`,
-        });
-      }
-      verifyCommand = resolvedReviewVerifyCommand;
       activePhaseSpec = reviewPlanResolution.plan.phaseSpec ?? activePhaseSpec;
-      if (verifyCommandChangedThisWave && activePhaseSpec) {
-        activePhaseSpec = {
-          ...activePhaseSpec,
-          verification: verifyCommand ? [verifyCommand] : [],
-        };
+    } else if (reviewVerificationStateChanged) {
+      // A verifier change affects every not-yet-dispatched task even when the
+      // review adds no tasks. Revalidate the current graph through the same
+      // bounded Architect revision path before scheduler state can continue.
+      const existingGraphResolution = await resolveArchitectPlanContract({
+        initialPlan: {
+          action: "build_plan",
+          spec: activeSpec,
+          phaseSpec: activePhaseSpec,
+          tasks,
+          notes: architectNotes,
+          verifyCommand: resolvedReviewVerifyCommand,
+        },
+        label: "Architect revising plan after verifier change",
+        wave: cycle,
+        fallbackVerifyCommand: resolvedReviewVerifyCommand,
+      });
+      if (!existingGraphResolution) return;
+      resolvedReviewVerifyCommand =
+        existingGraphResolution.plan.verifyCommand ?? resolvedReviewVerifyCommand;
+      if (existingGraphResolution.revisions > 0) {
+        activePhaseSpec =
+          existingGraphResolution.plan.phaseSpec ?? activePhaseSpec;
+        tasks = preserveBuildTaskRuntimeState(
+          existingGraphResolution.plan.tasks.map(toTask),
+          tasks
+        );
       }
+    }
+    action.verifyCommand = resolvedReviewVerifyCommand;
+    if (resolvedReviewVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()) {
+      verifyCommandChangedThisWave = true;
+      emit({
+        type: "diagnostic",
+        phase: "judging",
+        message: `${reviewActor.displayName} changed the automated build check to ${
+          resolvedReviewVerifyCommand
+            ? `\`${resolvedReviewVerifyCommand}\``
+            : "disabled"
+        }.`,
+      });
+    }
+    verifyCommand = resolvedReviewVerifyCommand;
+    if (verifyCommandChangedThisWave && activePhaseSpec) {
+      activePhaseSpec = {
+        ...activePhaseSpec,
+        verification: verifyCommand ? [verifyCommand] : [],
+      };
     }
 
     const novelTasks = allocateIncrementalTaskIds(

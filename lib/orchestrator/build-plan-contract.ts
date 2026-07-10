@@ -30,6 +30,75 @@ export interface BuildPlanContractOptions {
   phaseVerification?: string[];
 }
 
+export function resolveBuildPlanVerifyCommand(input: {
+  current: string;
+  requested?: string;
+}): string {
+  return typeof input.requested === "string"
+    ? input.requested.trim()
+    : input.current.trim();
+}
+
+export function resolveBuildPlanReviewVerificationState(input: {
+  currentVerifyCommand: string;
+  requestedVerifyCommand?: string;
+  phaseVerification?: ReadonlyArray<string>;
+}): { verifyCommand: string; phaseVerification: string[] } {
+  const verifyCommand = resolveBuildPlanVerifyCommand({
+    current: input.currentVerifyCommand,
+    requested: input.requestedVerifyCommand,
+  });
+  return {
+    verifyCommand,
+    phaseVerification:
+      typeof input.requestedVerifyCommand === "string"
+        ? verifyCommand
+          ? [verifyCommand]
+          : []
+        : (input.phaseVerification ?? []).map((item) => item.trim()).filter(Boolean),
+  };
+}
+
+export function hasBuildPlanVerificationStateChanged(
+  current: { verifyCommand: string; phaseVerification: ReadonlyArray<string> },
+  next: { verifyCommand: string; phaseVerification: ReadonlyArray<string> }
+): boolean {
+  const normalizeList = (items: ReadonlyArray<string>): string[] =>
+    items.map((item) => item.trim()).filter(Boolean);
+  return (
+    current.verifyCommand.trim() !== next.verifyCommand.trim() ||
+    JSON.stringify(normalizeList(current.phaseVerification)) !==
+      JSON.stringify(normalizeList(next.phaseVerification))
+  );
+}
+
+export function preserveBuildTaskRuntimeState(
+  revisedTasks: ReadonlyArray<BuildTask>,
+  currentTasks: ReadonlyArray<BuildTask>
+): BuildTask[] {
+  const runtimeTaskIdKey = (id: string): string => id.trim().toLowerCase();
+  const currentById = new Map(
+    currentTasks.map((task) => [runtimeTaskIdKey(task.id), task])
+  );
+  return revisedTasks.map((revised) => {
+    const current = currentById.get(runtimeTaskIdKey(revised.id));
+    if (!current) return { ...revised };
+    return {
+      ...revised,
+      status: current.status,
+      reviewInstructions: current.reviewInstructions,
+      retryInstructions: current.retryInstructions,
+      nextAttemptPhase: current.nextAttemptPhase,
+      workerIndex: current.workerIndex,
+      failCount: current.failCount,
+      retryAfterMs: current.retryAfterMs,
+      avoidWorkerIndexes: current.avoidWorkerIndexes,
+      guidance: current.guidance,
+      splitDepth: current.splitDepth,
+    };
+  });
+}
+
 export type BuildPlanContractResolution<T> =
   | {
       status: "valid";
