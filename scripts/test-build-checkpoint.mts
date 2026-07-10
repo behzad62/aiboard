@@ -451,6 +451,12 @@ check(
   resumedFixingWithLandedOutput.status === "fixing" &&
     resumedFixingWithLandedOutput.contextFiles.includes(
       "tests/voxel-renderer.test.mjs"
+    ) &&
+    /restored landed output/i.test(
+      resumedFixingWithLandedOutput.retryInstructions ?? ""
+    ) &&
+    /do not emit (?:an? )?full-file rewrite/i.test(
+      resumedFixingWithLandedOutput.retryInstructions ?? ""
     ),
   resumedFixingWithLandedOutput
 );

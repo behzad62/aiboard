@@ -8237,6 +8237,12 @@ export async function runBuildDiscussion(
           ? task.outputPaths
           : outputPathsForTask(task);
         const taskContract = normalizeBuildTaskContract(task);
+        const durableTaskFiles = restoredLandedTaskFiles({
+          contextFiles: task.contextFiles ?? [],
+          declaredOutputPaths,
+          availablePaths: virtualFs.keys(),
+          writeGeneration: task.writeGeneration,
+        });
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
           const scopedVerificationGapReport =
@@ -8246,7 +8252,10 @@ export async function runBuildDiscussion(
             preview.edits.length > 0 ||
             preview.truncatedPaths.length > 0;
           const requestFinalOutput = shouldRequestWorkerFinalOutput({
-            hasLandedFiles: patchedFiles.length > 0,
+            hasLandedFiles:
+              patchedFiles.length > 0 ||
+              preToolArtifactFiles.length > 0 ||
+              durableTaskFiles.length > 0,
             hasPreviewArtifacts,
             hasScopedVerificationGapReport: scopedVerificationGapReport,
             expectsFileOutput: taskContract.completionMode === "files",
@@ -8264,7 +8273,9 @@ export async function runBuildDiscussion(
           const instruction = buildWorkerFinalResponseInstruction({
             expectsFileOutput: taskContract.completionMode === "files",
             hasLandedFiles:
-              patchedFiles.length > 0 || preToolArtifactFiles.length > 0,
+              patchedFiles.length > 0 ||
+              preToolArtifactFiles.length > 0 ||
+              durableTaskFiles.length > 0,
           });
           const finalOutputReason =
             inspectStrictToolActionBatchOutput(output).actions.length > 0
@@ -8305,12 +8316,6 @@ export async function runBuildDiscussion(
           !scopedVerificationGapReport &&
           (toolIssues.some((issue) => issue.startsWith("TOOL BUDGET BLOCKED:")) ||
             isWorkerOutputBlockedByToolBudget(output));
-        const durableTaskFiles = restoredLandedTaskFiles({
-          contextFiles: task.contextFiles ?? [],
-          declaredOutputPaths,
-          availablePaths: virtualFs.keys(),
-          writeGeneration: task.writeGeneration,
-        });
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
           wave: cycle,

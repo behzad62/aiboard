@@ -762,6 +762,13 @@ export function normalizeBuildTasksForResume(
                 ...landedOutputs,
               ]),
             ],
+            retryInstructions: capDynamicTaskInstruction(
+              [
+                `Resume restored landed output(s): ${landedOutputs.join(", ")}.`,
+                "Earlier guidance claiming these files are absent or never landed is stale for file-existence purposes only.",
+                "Inspect the restored files and collect the missing verification evidence first. Do not emit a full-file rewrite merely to re-land them; use a targeted patch only if inspection proves a concrete content defect.",
+              ].join("\n")
+            ),
           }
         : migratedTask;
     if (task.status === "in_progress" || task.status === "review") {
