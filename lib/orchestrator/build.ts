@@ -279,6 +279,14 @@ export function taskRequiresToolVerification(
   return task.verificationPolicy === "tool";
 }
 
+export function shouldRunWaveBuildVerifier(
+  tasks: ReadonlyArray<BuildTask>
+): boolean {
+  return tasks.some((task) =>
+    taskRequiresToolVerification(normalizeBuildTaskContract(task))
+  );
+}
+
 export function buildReviewSkillEvidenceFixInstructions(input: {
   task: BuildTask;
   evidence: SkillEvidence[];

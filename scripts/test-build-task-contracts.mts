@@ -5,6 +5,7 @@ import {
   isTaskWritePathAllowed,
   normalizeBuildTaskContract,
   outputPathsForTask,
+  shouldRunWaveBuildVerifier,
   taskRequiresToolVerification,
   validateBuildPlanForDispatch,
   type BuildTask,
@@ -108,6 +109,17 @@ const architectDecision = canWorkerOutputAdvanceToReview({
 check("explicit either/architect task can advance with evidence instead of files", architectDecision.ok, architectDecision);
 check("Architect verification policy does not force tool verification", !taskRequiresToolVerification(architectVerifiedMutation), architectVerifiedMutation);
 check("tool verification policy still requires tool verification", taskRequiresToolVerification(mutationTask), mutationTask);
+
+check(
+  "evidence-only audit wave does not run the project verifier",
+  !shouldRunWaveBuildVerifier([auditTask]),
+  shouldRunWaveBuildVerifier
+);
+check(
+  "wave with a tool-verified mutation runs the project verifier",
+  shouldRunWaveBuildVerifier([auditTask, mutationTask]),
+  shouldRunWaveBuildVerifier
+);
 
 const missingStyleEvidence: SkillEvidence[] = [
   {

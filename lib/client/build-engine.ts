@@ -222,6 +222,7 @@ import {
   restoreArchitectApprovedTasksAfterLegacyQualityGateVeto,
   restoreBuildUnavailableWorkerRouting,
   shouldRequestWorkerFinalOutput,
+  shouldRunWaveBuildVerifier,
   taskRequiresToolVerification,
   outputPathsForTask,
   applyTaskSplit,
@@ -8654,12 +8655,17 @@ export async function runBuildDiscussion(
     );
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
-    const verifyResult = await runVerify(verifyCommand, {
+    const waveVerifyCommand = shouldRunWaveBuildVerifier(
+      executed.map(({ task }) => task)
+    )
+      ? verifyCommand
+      : "";
+    const verifyResult = await runVerify(waveVerifyCommand, {
       tasks,
       availablePaths: [...diskTree, ...virtualFs.keys()],
     });
     const verifyFeedback = verifyResult.feedback;
-    if (verifyCommand) {
+    if (waveVerifyCommand) {
       for (const item of executed) {
         if (!taskRequiresToolVerification(item.task)) continue;
         taskVerificationFacts = appendBuildTaskVerificationFact(
@@ -8677,12 +8683,12 @@ export async function runBuildDiscussion(
                 : "passed"
               : "skipped",
             summary: verifyFeedback
-              ? `${verifyCommand}: ${stripAnsi(verifyFeedback)}`
-              : `${verifyCommand}: verifier did not execute or return objective output.`,
+              ? `${waveVerifyCommand}: ${stripAnsi(verifyFeedback)}`
+              : `${waveVerifyCommand}: verifier did not execute or return objective output.`,
             coveredPaths: outputPathsForTask(item.task),
             source: "project_verifier",
             writeGeneration: item.task.writeGeneration ?? 0,
-            verifierIdentity: verifyCommand,
+            verifierIdentity: waveVerifyCommand,
           }
         );
       }
@@ -8692,7 +8698,7 @@ export async function runBuildDiscussion(
     // toward the no-progress/blocked stop, while a failure that changes shape
     // after a fix counts as recovery progress (and resets the no-progress run).
     if (shouldRecordAutomatedBuildCheckFailure(verifyResult)) {
-      const fingerprint = fingerprintBuildFailure(verifyCommand, verifyFeedback);
+      const fingerprint = fingerprintBuildFailure(waveVerifyCommand, verifyFeedback);
       const failureChanged =
         lastFailureFingerprint !== null && lastFailureFingerprint !== fingerprint;
       lastFailureFingerprint = fingerprint;
@@ -8704,9 +8710,9 @@ export async function runBuildDiscussion(
             : "verification_failed",
         severity: "error",
         source: "runner",
-        action: verifyCommand,
+        action: waveVerifyCommand,
         wave: cycle,
-        message: `Automated build check failed in wave ${cycle}: ${verifyCommand}`,
+        message: `Automated build check failed in wave ${cycle}: ${waveVerifyCommand}`,
         details: truncate(verifyFeedback, 1_500),
       });
       if (failureChanged) {
