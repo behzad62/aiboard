@@ -113,7 +113,7 @@ const speculativeRedPhaseEvidence = createSkillEvidence({
   activeSkillIds: ["superpowers:strict-test-driven-development"],
   workerOutput: [
     "Skill evidence:",
-    "- RED failure observed for the expected reason: expected once `node tests/engagement.test.js` is run.",
+    "- RED test/check failure before implementation: expected by contract because the helper is not exported.",
     "- Persisted test file identified at tests/engagement.test.js.",
   ].join("\n"),
   landedPaths: ["tests/engagement.test.js"],

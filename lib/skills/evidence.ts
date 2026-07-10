@@ -114,7 +114,14 @@ interface SkillEvidenceContext {
 function hasObservedRedFailure(joined: string): boolean {
   return joined.split("\n").some((line) => {
     if (!/\bred\b|\bfail(?:ed|ing|s|ure)?\b/.test(line)) return false;
-    return !/\b(?:expected once|will fail|would fail|should fail|not (?:yet )?(?:run|executed)|once .{0,120}\b(?:run|executed))\b/.test(
+    if (
+      !/\b(?:failed|failing|not ok|non[ -]?zero|assertionerror|threw|exit(?:ed| code)?\s*[=:]?\s*[1-9]\d*)\b/.test(
+        line
+      )
+    ) {
+      return false;
+    }
+    return !/\b(?:expected once|expected by contract|will fail|would fail|should fail|not (?:yet )?(?:run|executed)|once .{0,120}\b(?:run|executed))\b/.test(
       line
     );
   });
