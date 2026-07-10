@@ -5670,6 +5670,7 @@ export async function runBuildDiscussion(
     completionMode: raw.completionMode,
     verificationPolicy: raw.verificationPolicy,
     requiredEvidence: raw.requiredEvidence,
+    requiredToolActions: raw.requiredToolActions,
     phaseSpec: activePhaseSpec,
     implementationContract:
       typeof raw.implementationContract === "string" && raw.implementationContract.trim()
@@ -6246,7 +6247,7 @@ export async function runBuildDiscussion(
     );
     tasks = dispatchValidation.tasks;
     for (const warning of dispatchValidation.warnings) {
-      architectNotes = [architectNotes, `Plan validation: ${warning}`]
+      architectNotes = [architectNotes, `Plan validation: ${warning.message}`]
         .filter(Boolean)
         .join("\n");
       recordBuildProblem({
@@ -6254,12 +6255,12 @@ export async function runBuildDiscussion(
         severity: "warning",
         source: "engine",
         wave: 0,
-        message: warning,
+        message: warning.message,
       });
       emit({
         type: "diagnostic",
         phase: "round_preparing",
-        message: warning,
+        message: warning.message,
       });
     }
     // The Architect may scaffold files alongside the plan JSON.
@@ -8704,7 +8705,7 @@ export async function runBuildDiscussion(
       });
       tasks = dispatchValidation.tasks;
       for (const warning of dispatchValidation.warnings) {
-        architectNotes = [architectNotes, `Plan validation: ${warning}`]
+        architectNotes = [architectNotes, `Plan validation: ${warning.message}`]
           .filter(Boolean)
           .join("\n");
         recordBuildProblem({
@@ -8712,12 +8713,12 @@ export async function runBuildDiscussion(
           severity: "warning",
           source: "engine",
           wave: cycle,
-          message: warning,
+          message: warning.message,
         });
         emit({
           type: "diagnostic",
           phase: "judging",
-          message: warning,
+          message: warning.message,
         });
       }
     }

@@ -260,12 +260,12 @@ const blockingPlan = validateBuildPlanForDispatch([
     instructions: "Change wall hole orientation around the arena map.",
     outputPaths: ["src/game.js"],
     dependsOn: ["T1"],
+    requiredToolActions: ["run"],
   }),
 ]);
-check("plan validator reports redundant audit blocker", blockingPlan.warnings.length > 0, blockingPlan);
 check(
-  "plan validator removes nonessential audit dependency from user-value task",
-  blockingPlan.tasks.find((task) => task.id === "T2")?.dependsOn?.length === 0,
+  "plan validator preserves Architect-declared audit dependencies",
+  blockingPlan.tasks.find((task) => task.id === "T2")?.dependsOn?.[0] === "T1",
   blockingPlan
 );
 check(
@@ -287,10 +287,12 @@ const strictTddPlan = validateBuildPlanForDispatch(
 );
 const strictTddTask = strictTddPlan.tasks[0]!;
 check(
-  "strict TDD plan validation adds a writable persisted test output path",
-  outputPathsForTask(strictTddTask).includes("tests/game.test.mjs") &&
-    isTaskWritePathAllowed(strictTddTask, "tests/game.test.mjs") &&
-    strictTddPlan.warnings.some((warning) => /Strict TDD.*test output path/i.test(warning)),
+  "strict TDD plan validation reports a missing explicit contract without adding paths",
+  !outputPathsForTask(strictTddTask).some((path) => /test/i.test(path)) &&
+    !isTaskWritePathAllowed(strictTddTask, "tests/game.test.mjs") &&
+    strictTddPlan.errors.some(
+      (error) => error.code === "missing_strict_tdd_contract"
+    ),
   strictTddPlan
 );
 
@@ -302,6 +304,8 @@ const strictTddWithDeclaredTestPath = validateBuildPlanForDispatch(
       instructions: "Change line-of-sight and projectile behavior for window walls.",
       outputPaths: ["src/game.js"],
       testOutputPaths: ["tests/window-wall.test.mjs"],
+      requiredEvidence: ["Observe RED before implementation.", "Record GREEN after implementation."],
+      requiredToolActions: ["run"],
     }),
   ],
   { strictTdd: true }
@@ -310,7 +314,7 @@ check(
   "strict TDD plan validation preserves Architect-declared test output paths",
   outputPathsForTask(strictTddWithDeclaredTestPath.tasks[0]!).includes(
     "tests/window-wall.test.mjs"
-  ) && strictTddWithDeclaredTestPath.warnings.length === 0,
+  ) && strictTddWithDeclaredTestPath.valid,
   strictTddWithDeclaredTestPath
 );
 
