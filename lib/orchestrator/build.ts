@@ -560,7 +560,10 @@ export function decideBuildTaskFailure(
   detail: string
 ): BuildTaskFailureDecision {
   const failCount = (task.failCount ?? 0) + 1;
-  const status = failCount < BUILD_TASK_MAX_FAILURES ? "fixing" : "failed";
+  const status =
+    kind === "unavailable" || failCount < BUILD_TASK_MAX_FAILURES
+      ? "fixing"
+      : "failed";
   const retryDelayMs =
     kind === "unavailable" && status === "fixing"
       ? BUILD_TASK_TRANSIENT_RETRY_DELAYS_MS[

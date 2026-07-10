@@ -143,8 +143,11 @@ check(
 );
 
 const third = decideBuildTaskFailure(task(2), "unavailable", "was unavailable (429 Rate limit exceeded)");
-check("third failure gives up", third.status === "failed", third);
-check("third failure count increments", third.failCount === 3, third);
+check("third provider outage remains resumable", third.status === "fixing", third);
+check("third provider outage count increments", third.failCount === 3, third);
+
+const thirdBadOutput = decideBuildTaskFailure(task(2), "bad", "returned invalid patch output");
+check("third bad-output failure gives up", thirdBadOutput.status === "failed", thirdBadOutput);
 
 const avoidedSelection = selectBalancedWorkerIndex({
   activeWorkerIndexes: [0, 1],

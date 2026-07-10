@@ -187,6 +187,7 @@ import {
   type ContextPack,
 } from "@/lib/build-context";
 import {
+  BUILD_TASK_MAX_FAILURES,
   buildArchitectPlanPrompt,
   buildArchitectSpecPrompt,
   buildArchitectActionResponseFormat,
@@ -8754,6 +8755,59 @@ export async function runBuildDiscussion(
         (r): r is PromiseRejectedResult => r.status === "rejected"
       );
       if (rejected) throw rejected.reason;
+
+      const activeWorkerIndexes = scoreboard
+        .filter((stat) => stat.active)
+        .map((stat) => stat.index);
+      const providerBlockedTask = tasks.find(
+        (task) =>
+          task.status === "fixing" &&
+          (task.failCount ?? 0) >= BUILD_TASK_MAX_FAILURES &&
+          activeWorkerIndexes.length > 0 &&
+          activeWorkerIndexes.every((index) =>
+            (task.unavailableWorkerIndexes ?? []).includes(index)
+          )
+      );
+      if (providerBlockedTask) {
+        const message =
+          `Build stopped because every active worker provider is unavailable for ${providerBlockedTask.id}. ` +
+          "The task remains resumable; Resume after provider availability or worker settings change.";
+        recoveryLog.push(
+          `Stopped as blocked after wave ${cycle}: all active worker providers were unavailable for ${providerBlockedTask.id}.`
+        );
+        recordBuildProblem({
+          code: "no_output",
+          severity: "blocked",
+          source: "engine",
+          taskId: providerBlockedTask.id,
+          wave: cycle,
+          message,
+        });
+        const report = createStopReport({
+          status: "blocked",
+          stopReason: "blocked",
+          message,
+          wave: cycle,
+          tasks,
+          verifyCommand,
+        });
+        const blockedToolReviewReport = createToolReviewReport({
+          status: "blocked",
+          wave: cycle,
+        });
+        saveCheckpoint({
+          status: "blocked",
+          stopReason: "blocked",
+          wave: cycle,
+          tasks,
+          architectNotes,
+          verifyCommand,
+          stopReport: report,
+          toolReviewReport: blockedToolReviewReport,
+        });
+        markStopped("blocked", message, report, blockedToolReviewReport);
+        return;
+      }
     }
 
     if (executed.length === 0) {
