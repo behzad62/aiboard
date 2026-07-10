@@ -112,6 +112,7 @@ const checkpoint: BuildCheckpoint = {
       at: "2026-06-21T00:00:00.000Z",
       action: "run",
       status: "passed",
+      source: "project_verifier",
       summary: "npm run build exited successfully.",
       coveredPaths: ["lib/db/schema.ts"],
     },

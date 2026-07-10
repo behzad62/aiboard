@@ -44,6 +44,7 @@ const fact = (
   action: "run",
   summary: "npm test exited successfully.",
   coveredPaths: ["src/app.ts"],
+  source: "worker",
   ...input,
 });
 
@@ -76,6 +77,75 @@ check(
     tasks: [{ ...toolTask, requiredToolActions: undefined }],
     results: [approved],
     facts: [],
+    wave: 2,
+  }).valid
+);
+check(
+  "phase-only coverage ignores unrelated failed and skipped worker runs",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [
+      fact({ taskId: "T1", wave: 2, status: "failed", source: "worker" }),
+      fact({ taskId: "T1", wave: 2, status: "skipped", source: "worker" }),
+    ],
+    wave: 2,
+  }).valid
+);
+check(
+  "accepted project verifier requires its own passing fact",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [
+      fact({ taskId: "T1", wave: 2, status: "failed", source: "project_verifier" }),
+    ],
+    wave: 2,
+  }).errors[0]?.code === "failed_task_verification"
+);
+check(
+  "later exploratory worker run cannot override failed project verifier",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [
+      fact({
+        taskId: "T1",
+        wave: 2,
+        status: "failed",
+        source: "project_verifier",
+        at: "2026-07-10T10:00:00.000Z",
+      }),
+      fact({
+        taskId: "T1",
+        wave: 2,
+        status: "passed",
+        source: "worker",
+        at: "2026-07-10T10:01:00.000Z",
+      }),
+    ],
+    wave: 2,
+  }).errors[0]?.code === "failed_task_verification"
+);
+check(
+  "accepted project verifier passes with its own current fact",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [
+      fact({ taskId: "T1", wave: 2, status: "passed", source: "project_verifier" }),
+    ],
+    wave: 2,
+  }).valid
+);
+check(
+  "legacy unprovenanced run cannot satisfy an explicit required run",
+  !validateBuildReviewApprovals({
+    tasks: [toolTask],
+    results: [approved],
+    facts: [
+      fact({ taskId: "T1", wave: 2, status: "passed", source: undefined }),
+    ],
     wave: 2,
   }).valid
 );
@@ -127,7 +197,13 @@ check(
         status: "passed",
         action: "playwright.browser_take_screenshot",
       }),
-      fact({ taskId: "T1", wave: 2, status: "failed", action: "run" }),
+      fact({
+        taskId: "T1",
+        wave: 2,
+        status: "failed",
+        action: "run",
+        source: "project_verifier",
+      }),
     ],
     wave: 2,
   }).errors.some((error) => error.code === "failed_task_verification")
@@ -254,6 +330,8 @@ check(
 check(
   "live engine records only current task verification actions with wave provenance",
   /wave:\s*cycle/.test(buildEngineSource) &&
+    /source:\s*"worker"/.test(buildEngineSource) &&
+    /source:\s*"project_verifier"/.test(buildEngineSource) &&
     /requiredToolActions[^\n]*includes\(actionName\)/.test(buildEngineSource) &&
     /appendBuildTaskVerificationFact/.test(buildEngineSource) &&
     /discardSupersededTaskVerificationFacts/.test(buildEngineSource),

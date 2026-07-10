@@ -7631,6 +7631,7 @@ export async function runBuildDiscussion(
                         : "skipped",
                   summary: stripAnsi(fact.result),
                   coveredPaths: outputPathsForTask(task),
+                  source: "worker",
                 }
               );
             }
@@ -8583,6 +8584,7 @@ export async function runBuildDiscussion(
               item.files.length > 0
                 ? item.files
                 : outputPathsForTask(item.task),
+            source: "project_verifier",
           }
         );
       }

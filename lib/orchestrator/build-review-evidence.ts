@@ -8,6 +8,8 @@ export interface BuildTaskVerificationFact {
   status: "passed" | "failed" | "skipped";
   summary: string;
   coveredPaths: string[];
+  /** Optional for legacy checkpoint readability; absent facts are not approval evidence. */
+  source?: "worker" | "project_verifier";
 }
 
 export interface BuildReviewContractIssue {
@@ -48,20 +50,29 @@ function requiredVerificationActions(
   task: BuildTask,
   facts: ReadonlyArray<BuildTaskVerificationFact>,
   wave: number
-): string[] {
+): Array<{
+  action: string;
+  source?: BuildTaskVerificationFact["source"];
+}> {
   if (task.verificationPolicy !== "tool") return [];
   const declared = (task.requiredToolActions ?? [])
     .map((action) => action.trim())
     .filter(Boolean);
   const projectVerifierCoveredTask = facts.some(
     (fact) =>
-      fact.taskId === task.id && fact.wave === wave && fact.action === "run"
+      fact.taskId === task.id &&
+      fact.wave === wave &&
+      fact.action === "run" &&
+      fact.source === "project_verifier"
   );
-  return [
-    ...new Set(
-      projectVerifierCoveredTask ? [...declared, "run"] : declared
-    ),
-  ];
+  const requirements: Array<{
+    action: string;
+    source?: BuildTaskVerificationFact["source"];
+  }> = [...new Set(declared)].map((action) => ({ action }));
+  if (projectVerifierCoveredTask) {
+    requirements.push({ action: "run", source: "project_verifier" });
+  }
+  return requirements;
 }
 
 export function validateBuildReviewApprovals(input: {
@@ -80,9 +91,18 @@ export function validateBuildReviewApprovals(input: {
     const task = tasksById.get(result.taskId);
     if (!task) continue;
 
-    for (const action of requiredVerificationActions(task, input.facts, input.wave)) {
+    for (const requirement of requiredVerificationActions(
+      task,
+      input.facts,
+      input.wave
+    )) {
+      const { action } = requirement;
       const matching = input.facts.filter(
-        (fact) => fact.taskId === task.id && fact.action === action
+        (fact) =>
+          fact.taskId === task.id &&
+          fact.action === action &&
+          (!requirement.source || fact.source === requirement.source) &&
+          (fact.source === "worker" || fact.source === "project_verifier")
       );
       const current = matching
         .filter((fact) => fact.wave === input.wave)
