@@ -143,6 +143,21 @@ check(
   blockedEvidenceOnlyFiles
 );
 
+const readOnlyAuditReviewFiles = evidenceOnlyRetryFiles({
+  emittedFiles: [],
+  priorFiles: ["index.html", "src/game.js", "src/main.js"],
+  declaredOutputPaths: [],
+  evidence: [completeTdd],
+  taskId: "T1",
+  workerOutput:
+    "Audit complete. Verified the module shape and enumerated the public API without changing files.",
+});
+check(
+  "read-only audit context files are not treated as landed review changes",
+  readOnlyAuditReviewFiles.length === 0,
+  readOnlyAuditReviewFiles
+);
+
 check(
   "no-file verification task with substantive evidence is reviewable",
   shouldReviewEvidenceOnlyTask({
@@ -259,7 +274,7 @@ check(
   scopedGapEvidence
 );
 check(
-  "scoped verification gap carries prior context files to review",
+  "scoped verification gap does not promote read-only context into changed review files",
   evidenceOnlyRetryFiles({
     emittedFiles: [],
     priorFiles: ["src/game.js"],
@@ -267,7 +282,7 @@ check(
     evidence: scopedGapEvidence,
     taskId: "T6",
     workerOutput: scopedVerificationGapOutput,
-  }).join(",") === "src/game.js",
+  }).length === 0,
 );
 
 const incompleteSecurityEvidence = createSkillEvidence({

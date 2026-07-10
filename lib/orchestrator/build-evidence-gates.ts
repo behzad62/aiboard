@@ -77,20 +77,36 @@ export function evidenceOnlyRetryFiles(input: {
   ignoreBlockingSkillEvidence?: boolean;
 }): string[] {
   if (input.emittedFiles.length > 0) return [...new Set(input.emittedFiles)];
+  const normalizePath = (value: string) =>
+    value.replace(/\\/g, "/").replace(/^\.\/+/, "").toLowerCase();
+  const declaredPaths =
+    input.declaredOutputPaths === undefined
+      ? null
+      : new Set(input.declaredOutputPaths.map(normalizePath));
+  const priorLandedFiles =
+    declaredPaths === null
+      ? input.priorFiles
+      : input.priorFiles.filter((path) => declaredPaths.has(normalizePath(path)));
   if (
     (input.declaredOutputPaths?.length ?? 0) === 0 &&
-    input.priorFiles.length > 0 &&
+    priorLandedFiles.length > 0 &&
     isScopedVerificationGapReport(input.workerOutput ?? "")
   ) {
-    return [...new Set(input.priorFiles)].slice(0, input.maxFiles ?? input.priorFiles.length);
+    return [...new Set(priorLandedFiles)].slice(
+      0,
+      input.maxFiles ?? priorLandedFiles.length
+    );
   }
   if (isWorkerOutputBlockedByToolBudget(input.workerOutput ?? "")) return [];
-  if (input.priorFiles.length === 0) return [];
+  if (priorLandedFiles.length === 0) return [];
   if (input.evidence.length === 0) return [];
   if (!input.ignoreBlockingSkillEvidence && hasBlockingSkillEvidence(input.evidence, input.taskId)) {
     return [];
   }
-  return [...new Set(input.priorFiles)].slice(0, input.maxFiles ?? input.priorFiles.length);
+  return [...new Set(priorLandedFiles)].slice(
+    0,
+    input.maxFiles ?? priorLandedFiles.length
+  );
 }
 
 export function isWorkerOutputBlockedByToolBudget(workerOutput: string): boolean {
