@@ -267,21 +267,25 @@ export function validateBuildPlanContract(
       }
     }
 
-    const declaredToolActions = (task.requiredToolActions ?? []).filter(
-      isTypedToolActionName
+    const requiredToolActions = task.requiredToolActions ?? [];
+    const hasMalformedToolAction = requiredToolActions.some(
+      (action) => !isTypedToolActionName(action)
     );
     if (
-      task.verificationPolicy === "tool" &&
-      declaredToolActions.length === 0 &&
-      !hasProjectVerifier &&
-      !hasPhaseVerification
+      hasMalformedToolAction ||
+      (task.verificationPolicy === "tool" &&
+        requiredToolActions.length === 0 &&
+        !hasProjectVerifier &&
+        !hasPhaseVerification)
     ) {
       errors.push(
         issue(
           "missing_tool_verification_contract",
           "error",
           [task.id],
-          `Tool-policy task ${task.id} must declare required tool actions or be covered by project or phase verification.`
+          hasMalformedToolAction
+            ? `Task ${task.id} declares a malformed required tool action; use typed action names such as run or server.tool.`
+            : `Tool-policy task ${task.id} must declare required tool actions or be covered by project or phase verification.`
         )
       );
     }

@@ -185,6 +185,22 @@ const declaredToolContract = validateBuildPlanContract([
 ]);
 check("typed tool action contracts are valid", declaredToolContract.valid, declaredToolContract);
 
+const mixedToolContract = validateBuildPlanContract([
+  task({
+    id: "T1",
+    kind: "verify",
+    verificationPolicy: "tool",
+    requiredToolActions: ["run", "not a typed action"],
+  }),
+]);
+check(
+  "one malformed required tool action rejects the whole contract",
+  mixedToolContract.errors.some(
+    (issue) => issue.code === "missing_tool_verification_contract"
+  ),
+  mixedToolContract
+);
+
 const projectVerified = validateBuildPlanContract(
   [task({ id: "T1", kind: "verify", verificationPolicy: "tool" })],
   { verifyCommand: "npm test" }
