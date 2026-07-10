@@ -83,6 +83,16 @@ export function validateBuildReviewApprovals(input: {
 }): { valid: boolean; errors: BuildReviewContractIssue[] } {
   const tasksById = new Map(input.tasks.map((task) => [task.id, task]));
   const errors: BuildReviewContractIssue[] = [];
+  const seenErrorKeys = new Set<string>();
+  const pushError = (
+    action: string,
+    error: BuildReviewContractIssue
+  ): void => {
+    const key = `${error.taskId}\u0000${action}\u0000${error.code}`;
+    if (seenErrorKeys.has(key)) return;
+    seenErrorKeys.add(key);
+    errors.push(error);
+  };
 
   for (const result of input.results) {
     if (result.specVerdict !== "approve" || result.qualityVerdict !== "approve") {
@@ -109,7 +119,7 @@ export function validateBuildReviewApprovals(input: {
         .sort((left, right) => left.at.localeCompare(right.at));
       if (current.length === 0) {
         const stale = matching.some((fact) => fact.wave !== input.wave);
-        errors.push({
+        pushError(action, {
           code: stale ? "stale_task_verification" : "missing_task_verification",
           taskId: task.id,
           message: stale
@@ -126,13 +136,13 @@ export function validateBuildReviewApprovals(input: {
           fact.status === "failed" && index > latestPassingIndex
       );
       if (laterFailure) {
-        errors.push({
+        pushError(action, {
           code: "failed_task_verification",
           taskId: task.id,
           message: `Task ${task.id} approval contradicts current-wave ${action} evidence: failed — ${laterFailure.summary}`,
         });
       } else if (latestPassingIndex < 0) {
-        errors.push({
+        pushError(action, {
           code: "missing_task_verification",
           taskId: task.id,
           message: `Task ${task.id} approval requires a successful current-wave ${action} fact; the action was skipped.`,

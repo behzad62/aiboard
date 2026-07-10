@@ -208,6 +208,26 @@ check(
     wave: 2,
   }).errors.some((error) => error.code === "failed_task_verification")
 );
+const overlappingRunObligations = validateBuildReviewApprovals({
+  tasks: [toolTask],
+  results: [approved],
+  facts: [
+    fact({
+      taskId: "T1",
+      wave: 2,
+      status: "failed",
+      action: "run",
+      source: "project_verifier",
+    }),
+  ],
+  wave: 2,
+});
+check(
+  "explicit run plus project verifier emits one actionable failure issue",
+  overlappingRunObligations.errors.length === 1 &&
+    overlappingRunObligations.errors[0]?.code === "failed_task_verification",
+  overlappingRunObligations
+);
 check(
   "a later failure contradicts an earlier current-wave pass",
   validateBuildReviewApprovals({
