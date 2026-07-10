@@ -77,6 +77,7 @@ import {
   appendBuildTaskVerificationFact,
   compileBuildTaskVerificationRequirements,
   discardSupersededTaskVerificationFacts,
+  pendingExpectedFailureVerifierCommands,
   resolveBuildReviewContract,
   validateBuildReviewApprovals,
   validateReadOnlyReviewFixes,
@@ -8243,6 +8244,48 @@ export async function runBuildDiscussion(
           availablePaths: virtualFs.keys(),
           writeGeneration: task.writeGeneration,
         });
+        const engineReportedEvidence: string[] = [];
+        if (durableTaskFiles.length > 0 && isRedBuildTask(task)) {
+          const pendingRedCommands = pendingExpectedFailureVerifierCommands({
+            task,
+            facts: taskVerificationFacts,
+            wave: cycle,
+            projectVerifier: verifyCommand,
+          });
+          for (const command of pendingRedCommands) {
+            const result = await runVerify(command, {
+              tasks,
+              availablePaths: [...diskTree, ...virtualFs.keys()],
+            });
+            const status = result.deferred
+              ? "skipped"
+              : result.feedback
+                ? result.failed
+                  ? "failed"
+                  : "passed"
+                : "skipped";
+            taskVerificationFacts = appendBuildTaskVerificationFact(
+              taskVerificationFacts,
+              {
+                taskId: task.id,
+                wave: cycle,
+                at: new Date().toISOString(),
+                action: "run",
+                status,
+                summary: result.feedback || `${command}: verifier did not execute.`,
+                coveredPaths: [],
+                source: "worker",
+                writeGeneration: task.writeGeneration ?? 0,
+                verifierIdentity: command,
+              }
+            );
+            if (status === "failed") {
+              engineReportedEvidence.push(
+                `RED: \`${command}\` failed with engine-recorded task-verifier output before implementation.`
+              );
+            }
+          }
+        }
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
           const scopedVerificationGapReport =
@@ -8325,6 +8368,7 @@ export async function runBuildDiscussion(
           landedPaths: [...new Set([...files, ...durableTaskFiles])],
           declaredOutputPaths,
           tddPhase: isRedBuildTask(task) ? "red" : "full",
+          engineReportedEvidence,
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
             emittedFiles: files,
             declaredOutputPaths,

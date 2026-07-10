@@ -236,6 +236,38 @@ export function compileBuildTaskVerificationRequirements(input: {
   });
 }
 
+export function pendingExpectedFailureVerifierCommands(input: {
+  task: BuildTask;
+  facts: ReadonlyArray<BuildTaskVerificationFact>;
+  wave: number;
+  projectVerifier?: string;
+}): string[] {
+  const writeGeneration = input.task.writeGeneration ?? 0;
+  return compileBuildTaskVerificationRequirements({
+    task: input.task,
+    projectVerifier: input.projectVerifier,
+  })
+    .filter(
+      (requirement) =>
+        requirement.action === "run" &&
+        requirement.expectedStatus === "failed" &&
+        requirement.verifierIdentity !== null
+    )
+    .map((requirement) => requirement.verifierIdentity!)
+    .filter(
+      (command) =>
+        !input.facts.some(
+          (fact) =>
+            fact.taskId === input.task.id &&
+            fact.wave === input.wave &&
+            fact.action === "run" &&
+            fact.writeGeneration === writeGeneration &&
+            normalizeIdentity(fact.verifierIdentity ?? "") ===
+              normalizeIdentity(command)
+        )
+    );
+}
+
 export function validateBuildReviewApprovals(input: {
   tasks: ReadonlyArray<BuildTask>;
   results: ReadonlyArray<ReviewResult>;

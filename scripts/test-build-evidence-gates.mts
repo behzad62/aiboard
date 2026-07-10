@@ -120,6 +120,19 @@ const speculativeRedPhaseEvidence = createSkillEvidence({
   declaredOutputPaths: ["tests/engagement.test.js"],
   tddPhase: "red",
 });
+const engineVerifiedRedPhaseEvidence = createSkillEvidence({
+  taskId: "T-red-engine",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput:
+    "Skill evidence:\n- RED was not executed by the worker in this turn.",
+  landedPaths: ["tests/engagement.test.js"],
+  declaredOutputPaths: ["tests/engagement.test.js"],
+  tddPhase: "red",
+  engineReportedEvidence: [
+    "RED: `node tests/engagement.test.js` failed with exit code 1 in the engine-recorded task verifier.",
+  ],
+});
 const restoredRedFiles = restoredLandedTaskFiles({
   contextFiles: ["src/game.js", "tests/engagement.test.js"],
   declaredOutputPaths: [
@@ -140,6 +153,11 @@ check(
     "RED test/check failure before implementation"
   ) === true,
   speculativeRedPhaseEvidence
+);
+check(
+  "engine-recorded exact RED failure satisfies skill evidence without model claims",
+  engineVerifiedRedPhaseEvidence[0]?.missingEvidence.length === 0,
+  engineVerifiedRedPhaseEvidence
 );
 check(
   "restored landed task file is recovered only from durable declared output",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   appendBuildTaskVerificationFact,
   discardSupersededTaskVerificationFacts,
+  pendingExpectedFailureVerifierCommands,
   resolveBuildReviewContract,
   validateBuildReviewApprovals,
   validateReadOnlyReviewFixes,
@@ -120,6 +121,26 @@ const redFailureFact: BuildTaskVerificationFact = {
   summary: "Expected missing engagement helper failure.",
   writeGeneration: 1,
 };
+check(
+  "RED task exposes its exact expected-failure command when current evidence is missing",
+  pendingExpectedFailureVerifierCommands({
+    task: redToolTask,
+    facts: [],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).join(",") === "node tests/engagement.test.js",
+  redToolTask
+);
+check(
+  "current exact RED command fact suppresses redundant engine verification",
+  pendingExpectedFailureVerifierCommands({
+    task: redToolTask,
+    facts: [redFailureFact],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).length === 0,
+  redFailureFact
+);
 check(
   "expected failure of the exact RED command satisfies RED task verification",
   validateBuildReviewApprovals({

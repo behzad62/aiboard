@@ -243,8 +243,12 @@ export function createSkillEvidence(input: {
   declaredOutputPaths?: string[];
   allowVerificationOnlyExemptions?: boolean;
   tddPhase?: "red" | "full";
+  engineReportedEvidence?: string[];
 }): SkillEvidence[] {
-  const reported = evidenceLines(input.workerOutput);
+  const reported = [
+    ...(input.engineReportedEvidence ?? []).map((line) => line.trim()).filter(Boolean),
+    ...evidenceLines(input.workerOutput),
+  ];
   return getSkillCards(input.activeSkillIds)
     .filter((skill) => (skill.evidenceRequirements ?? []).length > 0)
     .map((skill) => {
