@@ -3093,11 +3093,10 @@ export function findIncompleteBuildTasks(tasks: BuildTask[]): BuildTask[] {
 export function isBuildTaskDependencySatisfied(
   dependency: Pick<BuildTask, "status"> | null | undefined
 ): boolean {
-  // Unknown dependency ids are treated as satisfied so a typo cannot deadlock
-  // the build forever. Known tasks must be fully done; "review" is only a
-  // pending verdict, and "failed" must block dependents until the Architect
-  // replans or explicitly replaces the work.
-  return !dependency || dependency.status === "done";
+  // Unknown dependency ids remain blocked. The plan contract gate rejects
+  // them before dispatch; the scheduler must never reinterpret a malformed
+  // Architect graph as runnable work.
+  return dependency?.status === "done";
 }
 
 export function buildOutstandingTasksDigest(tasks: BuildTask[]): string {

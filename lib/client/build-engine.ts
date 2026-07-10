@@ -84,7 +84,9 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
+  buildTaskOwnedPaths,
   hasBuildPlanVerificationStateChanged,
+  isBuildTaskRunnable,
   preserveBuildTaskRuntimeState,
   resolveBuildPlanContract,
   resolveBuildPlanReviewVerificationState,
@@ -195,7 +197,6 @@ import {
   githubWorkflowRequested,
   hasCompleteBuildToolAction,
   inspectStrictToolActionBatchOutput,
-  isBuildTaskDependencySatisfied,
   isArchitectTerminalActionForExpected,
   isReviewResultApproved,
   evaluateExistingFileRewrite,
@@ -6888,10 +6889,9 @@ export async function runBuildDiscussion(
       (t) => t.status === "planned" || t.status === "fixing"
     );
     if (pending.length === 0) break;
-    // Write-conflict tracking and the deferral-announced set are per wave.
+    // Write-conflict tracking is per wave.
     waveWrites.clear();
     waveChangeSummaries = new Map<string, string[]>();
-    const deferAnnounced = new Set<string>();
 
     const executed: Array<{
       task: BuildTask;
@@ -8366,15 +8366,6 @@ export async function runBuildDiscussion(
       }
     };
 
-    // A dependency is satisfied only after the Architect has approved it.
-    // "review" output is not enough: dependents should not patch files built
-    // by an unreviewed task. Unknown ids are treated as satisfied by the shared
-    // helper so a typo cannot deadlock a run forever.
-    const dependencySettled = (depId: string): boolean => {
-      const dep = tasks.find((t) => t.id === depId);
-      return isBuildTaskDependencySatisfied(dep);
-    };
-
     // Dispatch every ready task CONCURRENTLY; repeat so dependency chains run
     // batch by batch (independent tasks never wait on each other).
     for (;;) {
@@ -8384,9 +8375,9 @@ export async function runBuildDiscussion(
       if (stopForGuardrail({ wave: cycle, tasks, architectNotes, verifyCommand }))
         return;
       const ready = tasks.filter(
-        (t) =>
-          (t.status === "planned" || t.status === "fixing") &&
-          (t.dependsOn ?? []).every(dependencySettled)
+        (task) =>
+          (task.status === "planned" || task.status === "fixing") &&
+          isBuildTaskRunnable(task, tasks)
       );
       if (ready.length === 0) break;
       const now = Date.now();
@@ -8407,32 +8398,27 @@ export async function runBuildDiscussion(
       // Greedily fill the batch, but never run two tasks whose DECLARED outputs
       // overlap concurrently — that's exactly the silent last-write-wins clobber
       // we want to prevent. A task with no parseable outputs always joins (we
-      // can't know its writes — don't over-block). Deferred tasks just stay
-      // planned/fixing and get picked up by the next loop iteration.
+      // can't know its writes — don't over-block). Valid plans transitively
+      // order overlapping owners, so a collision here is fatal rather than
+      // permission for the engine to serialize an invalid graph.
       const cap = BUILD_TASKS_PER_WAVE;
       const batch: BuildTask[] = [];
       const claimed = new Set<string>();
       for (const task of due) {
         if (batch.length >= cap) break;
-        const paths = (task.outputPaths?.length ? task.outputPaths : outputPathsForTask(task)).map((p) =>
-          p.toLowerCase()
-        );
+        const paths = buildTaskOwnedPaths(task);
         const clash = paths.find((p) => claimed.has(p));
         if (clash) {
-          if (!deferAnnounced.has(task.id)) {
-            deferAnnounced.add(task.id);
-            const owner = batch.find((b) =>
-              (b.outputPaths?.length ? b.outputPaths : outputPathsForTask(b))
-                .map((p) => p.toLowerCase())
-                .includes(clash)
-            );
-            emit({
-              type: "diagnostic",
-              phase: "round_preparing",
-              message: `Deferred ${task.id} to the next batch — its declared outputs overlap ${owner?.id ?? "another task"}'s (${clash})`,
-            });
-          }
-          continue;
+          const owner = batch.find((b) =>
+            buildTaskOwnedPaths(b).includes(clash)
+          );
+          const message = `Build plan contract violation: ${task.id} and ${owner?.id ?? "another runnable task"} have unordered overlapping output path ${clash}. The Architect must explicitly order overlapping owners with dependsOn.`;
+          emit({
+            type: "diagnostic",
+            phase: "model_failed",
+            message,
+          });
+          throw new Error(message);
         }
         for (const p of paths) claimed.add(p);
         batch.push(task);

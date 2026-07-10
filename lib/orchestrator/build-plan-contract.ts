@@ -155,7 +155,7 @@ const pathKey = (path: string): string =>
     .replace(/\/{2,}/g, "/")
     .toLowerCase();
 
-function explicitOwnedPaths(task: BuildTask): string[] {
+export function buildTaskOwnedPaths(task: BuildTask): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const raw of [...(task.outputPaths ?? []), ...(task.testOutputPaths ?? [])]) {
@@ -322,7 +322,7 @@ export function validateBuildPlanContract(
 
   const pathOwners = new Map<string, BuildTask[]>();
   for (const task of tasks) {
-    const owned = new Set(explicitOwnedPaths(task));
+    const owned = new Set(buildTaskOwnedPaths(task));
     for (const path of owned) {
       const owners = pathOwners.get(path) ?? [];
       owners.push(task);
@@ -357,7 +357,7 @@ export function validateBuildPlanContract(
     options.phaseVerification?.some((entry) => entry.trim())
   );
   for (const task of tasks) {
-    const ownedPaths = explicitOwnedPaths(task);
+    const ownedPaths = buildTaskOwnedPaths(task);
     const ownsSource = task.kind === "modify" && ownedPaths.some(isStrictTddCodeOutputPath);
     if (options.strictTdd && ownsSource) {
       const ownsTest = ownedPaths.some(isLikelyTestOutputPath);

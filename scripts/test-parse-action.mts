@@ -14,6 +14,8 @@ import {
   outputPathsForTask,
   parseArchitectAction,
 } from "../lib/orchestrator/build";
+import { isBuildTaskRunnable } from "../lib/orchestrator/build-plan-contract";
+import type { BuildTask } from "../lib/orchestrator/build";
 
 // Reproduction of the real round-4 failure: code blocks BEFORE the json action.
 const round4 = [
@@ -387,6 +389,10 @@ const cases: Array<[string, string, (a: ReturnType<typeof parseArchitectAction>)
 ];
 
 let failed = 0;
+const check = (name: string, ok: boolean, detail?: unknown) => {
+  console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
+  if (!ok) failed++;
+};
 for (const [name, input, check] of cases) {
   const result = parseArchitectAction(input);
   const ok = check(result);
@@ -527,7 +533,7 @@ for (const [name, task, expected] of pathCases) {
 const dependencyCases: Array<
   [string, Parameters<typeof isBuildTaskDependencySatisfied>[0], boolean]
 > = [
-  ["missing dependency id does not deadlock", null, true],
+  ["missing dependency id remains blocked", null, false],
   ["done dependency is satisfied", { status: "done" }, true],
   ["review dependency waits for Architect verdict", { status: "review" }, false],
   ["failed dependency blocks dependent task", { status: "failed" }, false],
@@ -540,6 +546,36 @@ for (const [name, dep, expected] of dependencyCases) {
   console.log(`${ok ? "PASS" : "FAIL"} â€” ${name}${ok ? "" : ` â†’ got ${result}`}`);
   if (!ok) failed++;
 }
+
+const schedulingTask = (
+  input: Partial<BuildTask> & Pick<BuildTask, "id">
+): BuildTask => ({
+  id: input.id,
+  title: input.title ?? input.id,
+  instructions: input.instructions ?? "Complete the declared contract.",
+  contextFiles: input.contextFiles ?? [],
+  status: input.status ?? "planned",
+  ...input,
+});
+
+check(
+  "unknown dependency is never runnable",
+  !isBuildTaskRunnable(
+    schedulingTask({ id: "T2", dependsOn: ["missing"] }),
+    [schedulingTask({ id: "T2", dependsOn: ["missing"] })]
+  )
+);
+
+check(
+  "repo task waits for every non-repo task",
+  !isBuildTaskRunnable(
+    schedulingTask({ id: "T3", kind: "repo" }),
+    [
+      schedulingTask({ id: "T1", kind: "modify", status: "review" }),
+      schedulingTask({ id: "T3", kind: "repo" }),
+    ]
+  )
+);
 
 const outstandingDigest = buildOutstandingTasksDigest([
   {

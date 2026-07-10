@@ -1,4 +1,5 @@
 /** Build task scheduling checks (run: npx tsx scripts/test-build-task-scheduling.mts) */
+import { readFileSync } from "node:fs";
 import {
   allocateIncrementalTaskIds,
   buildReviewFixTaskUpdate,
@@ -8,12 +9,92 @@ import {
   shouldApplyReviewResultToTask,
   type BuildTask,
 } from "../lib/orchestrator/build";
+import {
+  buildTaskOwnedPaths,
+  isBuildTaskRunnable,
+} from "../lib/orchestrator/build-plan-contract";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"} - ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
   if (!ok) failed++;
 };
+
+const runnableTask = (
+  input: Partial<BuildTask> & Pick<BuildTask, "id">
+): BuildTask => ({
+  id: input.id,
+  title: input.title ?? input.id,
+  instructions: input.instructions ?? "Complete the declared contract.",
+  contextFiles: input.contextFiles ?? [],
+  status: input.status ?? "planned",
+  ...input,
+});
+
+const schedulerTasks = [
+  runnableTask({ id: "T1", kind: "modify", status: "review" }),
+  runnableTask({ id: "T2", kind: "repo" }),
+];
+check(
+  "repo scheduling barrier holds until all non-repo tasks are done",
+  !isBuildTaskRunnable(schedulerTasks[1], schedulerTasks),
+  schedulerTasks
+);
+schedulerTasks[0].status = "done";
+check(
+  "repo scheduling barrier releases after all non-repo tasks are done",
+  isBuildTaskRunnable(schedulerTasks[1], schedulerTasks),
+  schedulerTasks
+);
+
+const buildEngineSource = readFileSync(
+  new URL("../lib/client/build-engine.ts", import.meta.url),
+  "utf8"
+);
+check(
+  "live scheduler uses the unified runnable predicate",
+  /const ready = tasks\.filter\([\s\S]{0,250}isBuildTaskRunnable\(task, tasks\)/.test(
+    buildEngineSource
+  ),
+  "scheduler still has an inline dependency-only gate"
+);
+const collisionGuardStart = buildEngineSource.indexOf("const paths =", buildEngineSource.indexOf("for (const task of due)"));
+const collisionGuardEnd = buildEngineSource.indexOf(
+  "for (const p of paths)",
+  collisionGuardStart
+);
+const collisionGuard =
+  collisionGuardStart >= 0 && collisionGuardEnd > collisionGuardStart
+    ? buildEngineSource.slice(collisionGuardStart, collisionGuardEnd)
+    : "";
+check(
+  "unexpected unordered output overlap is fatal instead of deferred",
+  collisionGuard.includes('phase: "model_failed"') &&
+    collisionGuard.includes("throw new Error") &&
+    !collisionGuard.includes("Deferred"),
+  collisionGuard
+);
+const sourceOwnerPaths = buildTaskOwnedPaths(
+  runnableTask({
+    id: "T-source",
+    outputPaths: ["src/game.ts"],
+    testOutputPaths: ["tests/game.test.ts"],
+  })
+);
+const testOwnerPaths = buildTaskOwnedPaths(
+  runnableTask({ id: "T-test", outputPaths: ["tests\\game.test.ts"] })
+);
+check(
+  "collision ownership merges source and test paths with slash normalization",
+  sourceOwnerPaths.some((path) => testOwnerPaths.includes(path)),
+  { sourceOwnerPaths, testOwnerPaths }
+);
+check(
+  "live collision guard uses complete normalized task ownership",
+  /const paths = buildTaskOwnedPaths\(task\)/.test(collisionGuard) &&
+    /buildTaskOwnedPaths\(b\)/.test(collisionGuard),
+  collisionGuard
+);
 
 const existing: BuildTask[] = [
   {
