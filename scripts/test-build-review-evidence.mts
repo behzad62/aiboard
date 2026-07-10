@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import {
   appendBuildTaskVerificationFact,
+  buildExpectedFailureEvidenceResponse,
   discardSupersededTaskVerificationFacts,
   pendingExpectedFailureVerifierCommands,
   resolveBuildReviewContract,
@@ -140,6 +141,22 @@ check(
     projectVerifier: "npm test",
   }).length === 0,
   redFailureFact
+);
+const engineRedEvidenceResponse = buildExpectedFailureEvidenceResponse({
+  task: redToolTask,
+  facts: [redFailureFact],
+  wave: 2,
+  durableFiles: ["tests/engagement.test.js"],
+  projectVerifier: "npm test",
+});
+check(
+  "engine RED evidence response is structured and grounded in the exact failed fact",
+  /Task result:/i.test(engineRedEvidenceResponse) &&
+    /Verification evidence:/i.test(engineRedEvidenceResponse) &&
+    /Skill evidence:/i.test(engineRedEvidenceResponse) &&
+    engineRedEvidenceResponse.includes("node tests/engagement.test.js") &&
+    /failed/i.test(engineRedEvidenceResponse),
+  engineRedEvidenceResponse
 );
 check(
   "expected failure of the exact RED command satisfies RED task verification",

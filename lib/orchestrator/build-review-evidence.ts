@@ -268,6 +268,69 @@ export function pendingExpectedFailureVerifierCommands(input: {
     );
 }
 
+export function buildExpectedFailureEvidenceResponse(input: {
+  task: BuildTask;
+  facts: ReadonlyArray<BuildTaskVerificationFact>;
+  wave: number;
+  durableFiles: ReadonlyArray<string>;
+  projectVerifier?: string;
+}): string {
+  if (input.durableFiles.length === 0) return "";
+  const writeGeneration = input.task.writeGeneration ?? 0;
+  const commands = compileBuildTaskVerificationRequirements({
+    task: input.task,
+    projectVerifier: input.projectVerifier,
+  })
+    .filter(
+      (requirement) =>
+        requirement.action === "run" &&
+        requirement.expectedStatus === "failed" &&
+        requirement.verifierIdentity !== null
+    )
+    .map((requirement) => requirement.verifierIdentity!);
+  const facts = commands.flatMap((command) => {
+    const matching = input.facts
+      .filter(
+        (fact) =>
+          fact.taskId === input.task.id &&
+          fact.wave === input.wave &&
+          fact.action === "run" &&
+          fact.writeGeneration === writeGeneration &&
+          normalizeIdentity(fact.verifierIdentity ?? "") ===
+            normalizeIdentity(command)
+      )
+      .sort((left, right) => left.at.localeCompare(right.at));
+    const latest = matching.at(-1);
+    return latest ? [{ command, fact: latest }] : [];
+  });
+  if (facts.length !== commands.length || commands.length === 0) return "";
+  const verificationLines = facts.map(
+    ({ command, fact }) =>
+      `- \`${command}\` ${fact.status}: ${fact.summary.slice(0, 1_200)}`
+  );
+  const failedCommands = facts
+    .filter(({ fact }) => fact.status === "failed")
+    .map(({ command }) => command);
+  return [
+    "Task result:",
+    `Restored landed output(s) retained without rewrite: ${input.durableFiles.join(", ")}.`,
+    "",
+    "Verification evidence:",
+    ...verificationLines,
+    "",
+    "Skill evidence:",
+    ...(failedCommands.length > 0
+      ? [
+          `- superpowers:strict-test-driven-development: RED: \`${failedCommands.join("`, `")}\` failed with engine-recorded current-wave output before implementation.`,
+        ]
+      : [
+          "- superpowers:strict-test-driven-development: RED was not observed; the exact verifier did not fail as expected.",
+        ]),
+    `- superpowers:systematic-debugging: Root cause or reproduction identified before the fix: the exact task verifier produced the current-wave status shown above. Fix verification is not applicable in this RED-only task.`,
+    "- agent:security-and-hardening: Trust boundary reviewed and unsafe case considered: the engine used only restored declared local outputs and a non-mutating task verifier; no file rewrite or trust-boundary expansion occurred.",
+  ].join("\n");
+}
+
 export function validateBuildReviewApprovals(input: {
   tasks: ReadonlyArray<BuildTask>;
   results: ReadonlyArray<ReviewResult>;

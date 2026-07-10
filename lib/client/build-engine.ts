@@ -75,6 +75,7 @@ import {
 } from "@/lib/orchestrator/build-progress";
 import {
   appendBuildTaskVerificationFact,
+  buildExpectedFailureEvidenceResponse,
   compileBuildTaskVerificationRequirements,
   discardSupersededTaskVerificationFacts,
   pendingExpectedFailureVerifierCommands,
@@ -8314,6 +8315,17 @@ export async function runBuildDiscussion(
               );
             }
           }
+        }
+        const expectedFailureEvidenceResponse =
+          buildExpectedFailureEvidenceResponse({
+            task,
+            facts: taskVerificationFacts,
+            wave: cycle,
+            durableFiles: durableTaskFiles,
+            projectVerifier: verifyCommand,
+          });
+        if (expectedFailureEvidenceResponse) {
+          output = expectedFailureEvidenceResponse;
         }
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
