@@ -91,6 +91,57 @@ const toolTask: BuildTask = {
     constraints: [],
   },
 };
+const redToolTask: BuildTask = {
+  ...toolTask,
+  id: "T-red",
+  title: "Add RED deterministic tests",
+  instructions:
+    "This is the RED phase. The persisted test must fail for the expected missing behavior before implementation.",
+  requiredEvidence: [
+    "RED evidence from running `node tests/engagement.test.js` before implementation.",
+  ],
+  outputPaths: ["tests/engagement.test.js"],
+  testOutputPaths: ["tests/engagement.test.js"],
+  writeGeneration: 1,
+};
+const approvedRed: ReviewResult = {
+  ...approved,
+  taskId: "T-red",
+};
+const redFailureFact: BuildTaskVerificationFact = {
+  taskId: "T-red",
+  wave: 2,
+  status: "failed",
+  at: "2026-07-10T10:00:00.000Z",
+  action: "run",
+  verifierIdentity: "node tests/engagement.test.js",
+  coveredPaths: [],
+  source: "worker",
+  summary: "Expected missing engagement helper failure.",
+  writeGeneration: 1,
+};
+check(
+  "expected failure of the exact RED command satisfies RED task verification",
+  validateBuildReviewApprovals({
+    tasks: [redToolTask],
+    results: [approvedRed],
+    facts: [redFailureFact],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).valid,
+  redToolTask
+);
+check(
+  "unexpectedly passing RED command does not satisfy RED evidence",
+  !validateBuildReviewApprovals({
+    tasks: [redToolTask],
+    results: [approvedRed],
+    facts: [{ ...redFailureFact, status: "passed" }],
+    wave: 2,
+    projectVerifier: "npm test",
+  }).valid,
+  redToolTask
+);
 const fact = (
   input: Partial<BuildTaskVerificationFact> & Pick<BuildTaskVerificationFact, "taskId" | "wave" | "status">
 ): BuildTaskVerificationFact => ({

@@ -108,6 +108,7 @@ function hasPersistedStrictTddTestEvidence(
 interface SkillEvidenceContext {
   landedPaths?: string[];
   declaredOutputPaths?: string[];
+  tddPhase?: "red" | "full";
 }
 
 function missingForSkill(
@@ -118,6 +119,20 @@ function missingForSkill(
   context: SkillEvidenceContext
 ): string[] {
   if (reported.length === 0) {
+    if (
+      context.tddPhase === "red" &&
+      (skillId === "agent:test-driven-development" ||
+        skillId === "superpowers:strict-test-driven-development")
+    ) {
+      return [
+        "RED test/check failure before implementation",
+        ...(skillId === "superpowers:strict-test-driven-development"
+          ? [
+              "Persisted test file evidence (added/updated or identified existing test file)",
+            ]
+          : []),
+      ];
+    }
     return allowVerificationOnlyExemptions && isEvidenceOnlyOptionalSkill(skillId)
       ? []
       : required;
@@ -134,11 +149,15 @@ function missingForSkill(
     if (!/\bred\b|fail|failed|failing/.test(joined)) {
       missing.push("RED test/check failure before implementation");
     }
-    if (!/\bgreen\b|pass|passed|passing/.test(joined)) {
+    if (
+      context.tddPhase !== "red" &&
+      !/\bgreen\b|pass|passed|passing/.test(joined)
+    ) {
       missing.push("GREEN test/check pass after implementation");
     }
     if (
       skillId === "superpowers:strict-test-driven-development" &&
+      context.tddPhase !== "red" &&
       !/refactor|no refactor|kept.*green/.test(joined)
     ) {
       missing.push("Refactor kept checks green or was not needed");
@@ -207,6 +226,7 @@ export function createSkillEvidence(input: {
   landedPaths?: string[];
   declaredOutputPaths?: string[];
   allowVerificationOnlyExemptions?: boolean;
+  tddPhase?: "red" | "full";
 }): SkillEvidence[] {
   const reported = evidenceLines(input.workerOutput);
   return getSkillCards(input.activeSkillIds)
@@ -221,6 +241,7 @@ export function createSkillEvidence(input: {
         {
           landedPaths: input.landedPaths,
           declaredOutputPaths: input.declaredOutputPaths,
+          tddPhase: input.tddPhase,
         }
       );
       return {

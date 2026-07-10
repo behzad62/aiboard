@@ -90,6 +90,16 @@ check(
   engineFactDecision.ok && engineFactDecision.reason === "evidence",
   engineFactDecision
 );
+const redTestTask = normalizeBuildTaskContract(
+  baseTask({
+    title: "Add RED engagement tests",
+    instructions:
+      "This is the RED phase. Create the persisted test first and prove it fails for the expected missing behavior before implementation.",
+    outputPaths: ["tests/engagement.test.js"],
+    testOutputPaths: ["tests/engagement.test.js"],
+    verificationPolicy: "tool",
+  })
+);
 
 const architectVerifiedMutation = normalizeBuildTaskContract({
   ...mutationTask,
@@ -144,6 +154,11 @@ check(
   "wave with a tool-verified mutation runs the project verifier",
   shouldRunWaveBuildVerifier([auditTask, mutationTask]),
   shouldRunWaveBuildVerifier
+);
+check(
+  "RED-only test wave defers the passing project verifier until implementation",
+  !shouldRunWaveBuildVerifier([redTestTask]),
+  redTestTask
 );
 
 const missingStyleEvidence: SkillEvidence[] = [

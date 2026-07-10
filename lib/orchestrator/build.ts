@@ -42,6 +42,7 @@ import type {
   BuildReviewContractIssue,
   BuildTaskVerificationFact,
 } from "./build-review-evidence";
+import { isRedBuildTask } from "./build-task-phase";
 
 export type BuildTaskStatus =
   | "planned"
@@ -283,7 +284,8 @@ export function shouldRunWaveBuildVerifier(
   tasks: ReadonlyArray<BuildTask>
 ): boolean {
   return tasks.some((task) =>
-    taskRequiresToolVerification(normalizeBuildTaskContract(task))
+    taskRequiresToolVerification(normalizeBuildTaskContract(task)) &&
+    !isRedBuildTask(task)
   );
 }
 

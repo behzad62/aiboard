@@ -93,6 +93,24 @@ const strictPersistedTestEvidence = createSkillEvidence({
   landedPaths: ["src/game.js", "tests/game.test.mjs"],
   declaredOutputPaths: ["src/game.js", "tests/game.test.mjs"],
 });
+const redPhaseEvidence = createSkillEvidence({
+  taskId: "T-red",
+  actor: "worker",
+  activeSkillIds: ["superpowers:strict-test-driven-development"],
+  workerOutput: [
+    "Skill evidence:",
+    "- RED: node tests/engagement.test.js failed for the expected missing engagement helper.",
+    "- Persisted test file added at tests/engagement.test.js.",
+  ].join("\n"),
+  landedPaths: ["tests/engagement.test.js"],
+  declaredOutputPaths: ["tests/engagement.test.js"],
+  tddPhase: "red",
+});
+check(
+  "strict TDD RED task requires RED and a persisted test but not GREEN/refactor",
+  redPhaseEvidence[0]?.missingEvidence.length === 0,
+  redPhaseEvidence
+);
 check(
   "strict TDD accepts RED/GREEN evidence when a persisted test file landed",
   strictPersistedTestEvidence[0]?.missingEvidence.length === 0,

@@ -1,4 +1,5 @@
 import type { BuildTask, ReviewResult } from "./build";
+import { isRedBuildTask } from "./build-task-phase";
 
 export interface BuildTaskVerificationFact {
   taskId: string;
@@ -106,6 +107,7 @@ export interface BuildTaskVerificationRequirement {
   /** Null means the Architect declared an action class without a concrete identity. */
   verifierIdentity: string | null;
   coveredPaths: string[];
+  expectedStatus?: "passed" | "failed";
 }
 
 function normalizePath(path: string): string {
@@ -141,6 +143,7 @@ export function compileBuildTaskVerificationRequirements(input: {
 }): BuildTaskVerificationRequirement[] {
   const { task } = input;
   if (task.verificationPolicy !== "tool") return [];
+  const redPhase = isRedBuildTask(task);
   const coveredPaths = [...new Set([
     ...(task.outputPaths ?? []),
     ...(task.testOutputPaths ?? []),
@@ -148,7 +151,9 @@ export function compileBuildTaskVerificationRequirements(input: {
   const declared = [...new Set((task.requiredToolActions ?? [])
     .map((action) => action.trim())
     .filter(Boolean))];
-  const phaseChecks = (input.phaseVerification ?? task.phaseSpec?.verification ?? [])
+  const phaseChecks = (redPhase
+    ? []
+    : input.phaseVerification ?? task.phaseSpec?.verification ?? [])
     .map((item) => item.trim())
     .filter(Boolean);
   const evidenceChecks = (task.requiredEvidence ?? []).flatMap((item) => {
@@ -171,10 +176,11 @@ export function compileBuildTaskVerificationRequirements(input: {
       action: requirementAction(verifierIdentity),
       verifierIdentity: verifierIdentity === "run" ? null : verifierIdentity,
       coveredPaths: [],
+      expectedStatus: redPhase ? "failed" : "passed",
     });
   }
   const acceptedProjectVerifier = input.projectVerifier?.trim();
-  if (acceptedProjectVerifier) {
+  if (acceptedProjectVerifier && !redPhase) {
     requirements.push({
       action: "run",
       source: "project_verifier",
@@ -192,6 +198,7 @@ export function compileBuildTaskVerificationRequirements(input: {
     });
   }
   if (
+    !redPhase &&
     coveredPaths.length > 0 &&
     !requirements.some(
       (requirement) =>
@@ -322,24 +329,27 @@ export function validateBuildReviewApprovals(input: {
         });
         continue;
       }
-      const latestPassingIndex = current.findLastIndex(
-        (fact) => fact.status === "passed"
+      const expectedStatus = requirement.expectedStatus ?? "passed";
+      const latestExpectedIndex = current.findLastIndex(
+        (fact) => fact.status === expectedStatus
       );
-      const laterFailure = current.find(
+      const contradictoryStatus =
+        expectedStatus === "passed" ? "failed" : "passed";
+      const laterContradiction = current.find(
         (fact, index) =>
-          fact.status === "failed" && index > latestPassingIndex
+          fact.status === contradictoryStatus && index > latestExpectedIndex
       );
-      if (laterFailure) {
-        pushError(requirement, "failed", {
+      if (laterContradiction) {
+        pushError(requirement, `unexpected ${contradictoryStatus}`, {
           code: "failed_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval contradicts current-wave ${verifierLabel}; mismatch: failed — ${laterFailure.summary}`,
+          message: `Task ${task.id} approval contradicts current-wave ${verifierLabel}; expected ${expectedStatus}, got ${contradictoryStatus} - ${laterContradiction.summary}`,
         });
-      } else if (latestPassingIndex < 0) {
+      } else if (latestExpectedIndex < 0) {
         pushError(requirement, "skipped", {
           code: "missing_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval requires a successful current-wave ${verifierLabel}; mismatch: skipped.`,
+          message: `Task ${task.id} approval requires a current-wave ${verifierLabel} with status ${expectedStatus}; mismatch: missing or skipped.`,
         });
       }
     }

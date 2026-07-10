@@ -105,6 +105,7 @@ import {
   validateBuildPlanContract,
   type BuildPlanContractValidation,
 } from "@/lib/orchestrator/build-plan-contract";
+import { isRedBuildTask } from "@/lib/orchestrator/build-task-phase";
 import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
@@ -8312,6 +8313,7 @@ export async function runBuildDiscussion(
           workerOutput: output,
           landedPaths: files,
           declaredOutputPaths,
+          tddPhase: isRedBuildTask(task) ? "red" : "full",
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
             emittedFiles: files,
             declaredOutputPaths,
