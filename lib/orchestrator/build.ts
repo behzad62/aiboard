@@ -462,6 +462,16 @@ function isEvidenceOnlyFailureContract(task: BuildTaskFailureContract): boolean 
   );
 }
 
+function isReadOnlyEvidenceContract(task: BuildTaskFailureContract): boolean {
+  return (
+    task.completionMode === "evidence" &&
+    (task.outputPaths?.length ?? 0) === 0
+  );
+}
+
+const READ_ONLY_EVIDENCE_RETRY_INSTRUCTION =
+  "Read-only evidence retry: do not patch, append, edit, or rewrite project files. Complete only the evidence and typed actions declared by the immutable task contract. Report implementation defects as audit findings; they require a separate modification task with explicit output paths.";
+
 export function buildTaskFailureInstruction(
   task: BuildTaskFailureContract,
   kind: "bad" | "unavailable",
@@ -1338,7 +1348,9 @@ export function buildReviewFixTaskUpdate(
     options?.avoidWorkerIndex,
   ]);
   const reviewInstructions = capDynamicTaskInstruction(
-    fixInstructions ?? "address the review feedback"
+    isReadOnlyEvidenceContract(migratedTask)
+      ? READ_ONLY_EVIDENCE_RETRY_INSTRUCTION
+      : fixInstructions ?? "address the review feedback"
   );
   return {
     ...migratedTask,
@@ -1421,11 +1433,14 @@ function migrateDynamicTaskInstructions<T extends BuildTask>(task: T): T {
     )
       ? "finalizing"
       : undefined);
+  const reviewInstructions = task.reviewInstructions ?? legacyReview;
   return {
     ...task,
     instructions: parsed.base,
     reviewInstructions: capOptionalDynamicTaskInstruction(
-      task.reviewInstructions ?? legacyReview
+      reviewInstructions && isReadOnlyEvidenceContract(task)
+        ? READ_ONLY_EVIDENCE_RETRY_INSTRUCTION
+        : reviewInstructions
     ),
     retryInstructions: capOptionalDynamicTaskInstruction(
       retryInstructions

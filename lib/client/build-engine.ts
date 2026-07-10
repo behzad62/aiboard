@@ -5739,7 +5739,14 @@ export async function runBuildDiscussion(
         // ran. Count it like a repeated lookup so a stuck loop still forces.
         duplicates += 1;
         const evidenceNote =
-          terminal === "review" ? renderBuildEvidenceLedger(reviewEvidenceLedger) : "";
+          terminal === "review"
+            ? renderBuildEvidenceLedger(
+                reviewEvidenceLedger,
+                64,
+                undefined,
+                wavesRun
+              )
+            : "";
         emitArchitectLoopDiag(
           "model_failed",
           `Architect ${terminal} batch served nothing (all duplicate or skipped)`,
@@ -5754,7 +5761,14 @@ export async function runBuildDiscussion(
       }
       badTurns = 0;
       const evidenceNote =
-        terminal === "review" ? renderBuildEvidenceLedger(reviewEvidenceLedger) : "";
+        terminal === "review"
+          ? renderBuildEvidenceLedger(
+              reviewEvidenceLedger,
+              64,
+              undefined,
+              wavesRun
+            )
+          : "";
       const budgetNote = `\n\n(Inspection budget left — whole-file reads: ${budgets.reads}, range reads: ${budgets.rangeReads}, searches: ${budgets.searches}. Produce your ${expectedAction} JSON as soon as you have what you need.)`;
       messages.push({
         role: "user",
@@ -7183,7 +7197,7 @@ export async function runBuildDiscussion(
         contextFileText: workerContextFileText,
         architectNotes: [
           architectNotes,
-          renderBuildEvidenceLedger(reviewEvidenceLedger, 32, [task.id]),
+          renderBuildEvidenceLedger(reviewEvidenceLedger, 32, [task.id], cycle),
         ]
           .filter(Boolean)
           .join("\n\n"),
@@ -8279,6 +8293,7 @@ export async function runBuildDiscussion(
             isWorkerOutputBlockedByToolBudget(output));
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
+          wave: cycle,
           actor: worker.displayName,
           activeSkillIds: workerSkills.overlays,
           workerOutput: output,
@@ -8722,7 +8737,10 @@ export async function runBuildDiscussion(
 
     const waveTaskIds = new Set(executed.map(({ task }) => task.id));
     const waveSkillEvidence = skillEvidenceRecords.filter(
-      (record) => record.taskId != null && waveTaskIds.has(record.taskId)
+      (record) =>
+        record.wave === cycle &&
+        record.taskId != null &&
+        waveTaskIds.has(record.taskId)
     );
     const reviewSkills = selectSkills(
       skillInput("review", "reviewer", {
@@ -8795,7 +8813,8 @@ export async function runBuildDiscussion(
     const reviewEvidenceLedgerText = renderBuildEvidenceLedger(
       reviewEvidenceLedger,
       64,
-      executed.map(({ task }) => task.id)
+      executed.map(({ task }) => task.id),
+      cycle
     );
     if (reviewEvidenceLedgerText) {
       reviewContextPacks.push({

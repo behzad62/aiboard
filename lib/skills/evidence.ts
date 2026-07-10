@@ -200,6 +200,7 @@ function missingForSkill(
 
 export function createSkillEvidence(input: {
   taskId?: string;
+  wave?: number;
   actor: string;
   activeSkillIds: string[];
   workerOutput: string;
@@ -224,6 +225,7 @@ export function createSkillEvidence(input: {
       );
       return {
         taskId: input.taskId,
+        wave: Number.isFinite(input.wave) ? input.wave : undefined,
         skillId: skill.id,
         actor: input.actor,
         required,

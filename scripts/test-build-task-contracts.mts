@@ -1,6 +1,7 @@
 /** Build task contract checks (run: npx tsx scripts/test-build-task-contracts.mts) */
 import {
   buildReviewSkillEvidenceFixInstructions,
+  buildReviewFixTaskUpdate,
   canWorkerOutputAdvanceToReview,
   isTaskWritePathAllowed,
   normalizeBuildTaskContract,
@@ -109,6 +110,30 @@ const architectDecision = canWorkerOutputAdvanceToReview({
 check("explicit either/architect task can advance with evidence instead of files", architectDecision.ok, architectDecision);
 check("Architect verification policy does not force tool verification", !taskRequiresToolVerification(architectVerifiedMutation), architectVerifiedMutation);
 check("tool verification policy still requires tool verification", taskRequiresToolVerification(mutationTask), mutationTask);
+
+const readOnlyAuditFix = buildReviewFixTaskUpdate(
+  auditTask,
+  "Remove the duplicate export from src/game.js, then run node --test tests/game.test.mjs.",
+  ["src/game.js"],
+  12
+);
+check(
+  "Architect fix keeps a read-only audit in evidence mode instead of injecting source edits",
+  readOnlyAuditFix.reviewInstructions?.includes("Read-only evidence retry") === true &&
+    !readOnlyAuditFix.reviewInstructions.includes("Remove the duplicate export"),
+  readOnlyAuditFix
+);
+const mutationFix = buildReviewFixTaskUpdate(
+  mutationTask,
+  "Remove the duplicate export from src/game.js.",
+  ["src/game.js"],
+  12
+);
+check(
+  "Architect fix preserves concrete correction guidance for writable tasks",
+  mutationFix.reviewInstructions?.includes("Remove the duplicate export") === true,
+  mutationFix
+);
 
 check(
   "evidence-only audit wave does not run the project verifier",

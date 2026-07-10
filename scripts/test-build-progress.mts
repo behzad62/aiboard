@@ -120,6 +120,42 @@ check(
     !taskEvidenceText.includes("browser_snapshot"),
   taskEvidenceText
 );
+const multiWaveEvidence = [
+  {
+    at: "2026-07-10T12:26:03.986Z",
+    actor: "Worker",
+    label: "run node --test tests/game.test.mjs",
+    summary: "FAILED duplicate export",
+    taskId: "T1",
+    source: "worker" as const,
+    action: "run",
+    status: "failed" as const,
+    wave: 8,
+  },
+  {
+    at: "2026-07-10T12:51:10.000Z",
+    actor: "Worker",
+    label: "repo_status",
+    summary: "Safe branch confirmed",
+    taskId: "T1",
+    source: "worker" as const,
+    action: "repo_status",
+    status: "succeeded" as const,
+    wave: 14,
+  },
+];
+const currentWaveEvidenceText = renderBuildEvidenceLedger(
+  multiWaveEvidence,
+  8,
+  ["T1"],
+  14
+);
+check(
+  "Architect review evidence excludes superseded task attempts from earlier waves",
+  currentWaveEvidenceText.includes("Safe branch confirmed") &&
+    !currentWaveEvidenceText.includes("duplicate export"),
+  currentWaveEvidenceText
+);
 check(
   "net-same fixing task does not count as a status transition",
   countTaskStatusTransitions(

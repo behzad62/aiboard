@@ -133,11 +133,16 @@ export function appendBuildEvidenceLedgerEntry(
 export function renderBuildEvidenceLedger(
   entries: BuildEvidenceLedgerEntry[],
   maxEntries = 8,
-  taskIds?: string[]
+  taskIds?: string[],
+  wave?: number
 ): string {
   const taskIdSet = taskIds?.length ? new Set(taskIds) : null;
   const visible = entries
-    .filter((entry) => !taskIdSet || (!!entry.taskId && taskIdSet.has(entry.taskId)))
+    .filter(
+      (entry) =>
+        (!taskIdSet || (!!entry.taskId && taskIdSet.has(entry.taskId))) &&
+        (wave === undefined || entry.wave === wave)
+    )
     .slice(-Math.max(1, maxEntries));
   if (visible.length === 0) return "";
   return [

@@ -60,6 +60,18 @@ const strictTransientOnlyEvidence = createSkillEvidence({
   landedPaths: ["src/game.js"],
   declaredOutputPaths: ["src/game.js", "tests/game.test.mjs"],
 });
+const waveScopedEvidence = createSkillEvidence({
+  taskId: "T-wave",
+  actor: "worker",
+  activeSkillIds: ["agent:security-and-hardening"],
+  workerOutput: "Skill evidence:\n- Trust boundary reviewed and unsafe case considered.",
+  wave: 14,
+});
+check(
+  "skill evidence records the wave that produced it",
+  waveScopedEvidence[0]?.wave === 14,
+  waveScopedEvidence
+);
 check(
   "strict TDD rejects transient RED/GREEN evidence without a persisted test file",
   strictTransientOnlyEvidence[0]?.missingEvidence.some((item) =>

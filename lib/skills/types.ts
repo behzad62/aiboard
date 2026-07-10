@@ -78,6 +78,8 @@ export interface SkillActivation {
 
 export interface SkillEvidence {
   taskId?: string;
+  /** Scheduler wave that produced this evidence; absent on legacy records. */
+  wave?: number;
   skillId: string;
   actor: string;
   required: string[];
