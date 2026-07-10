@@ -93,6 +93,7 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
+  findPendingBuildVerifierInputs,
   hasBuildPlanVerificationStateChanged,
   isBuildTaskRunnable,
   preserveBuildTaskRuntimeState,
@@ -3301,10 +3302,36 @@ export async function runBuildDiscussion(
   type BuildVerifyResult = {
     feedback: string;
     failed: boolean;
+    deferred?: boolean;
   };
 
-  const runVerify = async (command: string): Promise<BuildVerifyResult> => {
+  const runVerify = async (
+    command: string,
+    deferContext?: {
+      tasks: ReadonlyArray<BuildTask>;
+      availablePaths: ReadonlyArray<string>;
+    }
+  ): Promise<BuildVerifyResult> => {
     if (!runner || !command) return { feedback: "", failed: false };
+    if (deferContext) {
+      const pendingInputs = findPendingBuildVerifierInputs({
+        command,
+        tasks: deferContext.tasks,
+        availablePaths: deferContext.availablePaths,
+      });
+      if (pendingInputs.length > 0) {
+        const details = pendingInputs
+          .map((input) => `${input.path} (${input.taskIds.join(", ")})`)
+          .join(", ");
+        const feedback = `AUTOMATED BUILD CHECK DEFERRED - \`${command}\` references planned output that has not landed yet: ${details}. The engine will run this verifier after the owning task produces the file.`;
+        emit({
+          type: "diagnostic",
+          phase: "round_preparing",
+          message: feedback,
+        });
+        return { feedback, failed: false, deferred: true };
+      }
+    }
     emitBenchmarkEvent({
       type: "verifier_started",
       phase: "verifier",
@@ -8593,7 +8620,10 @@ export async function runBuildDiscussion(
     );
     // Mechanical backstop: compile/type-check the project now so the verdict
     // is informed by the actual compiler, not only the models' reading.
-    const verifyResult = await runVerify(verifyCommand);
+    const verifyResult = await runVerify(verifyCommand, {
+      tasks,
+      availablePaths: [...diskTree, ...virtualFs.keys()],
+    });
     const verifyFeedback = verifyResult.feedback;
     if (verifyCommand) {
       for (const item of executed) {
@@ -8605,7 +8635,9 @@ export async function runBuildDiscussion(
             wave: cycle,
             at: new Date().toISOString(),
             action: "run",
-            status: verifyFeedback
+            status: verifyResult.deferred
+              ? "skipped"
+              : verifyFeedback
               ? verifyResult.failed
                 ? "failed"
                 : "passed"

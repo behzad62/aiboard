@@ -169,6 +169,53 @@ export function buildTaskOwnedPaths(task: BuildTask): string[] {
   return paths;
 }
 
+export interface PendingBuildVerifierInput {
+  path: string;
+  taskIds: string[];
+}
+
+/**
+ * Find verifier inputs that the accepted plan says a future task will create,
+ * but which do not exist yet. Running the verifier before those producers have
+ * had a chance to land the files creates a false failure and wastes a review
+ * cycle. This is a scheduling decision only; it never adds dependencies or
+ * changes the Architect's task graph.
+ */
+export function findPendingBuildVerifierInputs(input: {
+  command: string;
+  tasks: ReadonlyArray<BuildTask>;
+  availablePaths: ReadonlyArray<string>;
+}): PendingBuildVerifierInput[] {
+  if (!input.command.trim()) return [];
+  const commandPaths = new Set(
+    input.command
+      .replace(/\\/g, "/")
+      .split(/[\s;&|<>=]+/)
+      .map(pathKey)
+      .filter((path): path is string => !!path)
+  );
+
+  const available = new Set(
+    input.availablePaths.map(pathKey).filter((path): path is string => !!path)
+  );
+  const pendingStatuses = new Set(["planned", "fixing", "in_progress"]);
+  const ownersByPath = new Map<string, string[]>();
+
+  for (const task of input.tasks) {
+    if (!pendingStatuses.has(task.status)) continue;
+    for (const path of buildTaskOwnedPaths(task)) {
+      if (available.has(path) || !commandPaths.has(path)) continue;
+      const owners = ownersByPath.get(path) ?? [];
+      owners.push(task.id);
+      ownersByPath.set(path, owners);
+    }
+  }
+
+  return [...ownersByPath.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, taskIds]) => ({ path, taskIds }));
+}
+
 export interface BuildTaskOwnershipCollision {
   owner: BuildTask;
   task: BuildTask;

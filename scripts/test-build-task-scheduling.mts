@@ -12,6 +12,7 @@ import {
 } from "../lib/orchestrator/build";
 import {
   buildTaskOwnedPaths,
+  findPendingBuildVerifierInputs,
   isBuildTaskRunnable,
   selectBuildTaskDispatchBatch,
 } from "../lib/orchestrator/build-plan-contract";
@@ -37,6 +38,141 @@ const schedulerTasks = [
   runnableTask({ id: "T1", kind: "modify", status: "review" }),
   runnableTask({ id: "T2", kind: "repo" }),
 ];
+
+const deferredVerifierInputs = findPendingBuildVerifierInputs({
+  command:
+    "node --check src/game.js && node tests/engagement-envelope.test.js",
+  tasks: [
+    runnableTask({
+      id: "T-audit",
+      kind: "audit",
+      status: "review",
+    }),
+    runnableTask({
+      id: "T-test",
+      kind: "modify",
+      status: "planned",
+      testOutputPaths: ["tests\\engagement-envelope.test.js"],
+    }),
+  ],
+  availablePaths: ["src/game.js"],
+});
+check(
+  "wave verifier waits for a referenced output owned by a future task",
+  deferredVerifierInputs.length === 1 &&
+    deferredVerifierInputs[0].path === "tests/engagement-envelope.test.js" &&
+    deferredVerifierInputs[0].taskIds.join(",") === "T-test",
+  deferredVerifierInputs
+);
+
+check(
+  "wave verifier runs once the referenced planned output exists",
+  findPendingBuildVerifierInputs({
+    command: "node tests/engagement-envelope.test.js",
+    tasks: [
+      runnableTask({
+        id: "T-test",
+        status: "planned",
+        testOutputPaths: ["tests/engagement-envelope.test.js"],
+      }),
+    ],
+    availablePaths: ["tests/engagement-envelope.test.js"],
+  }).length === 0
+);
+
+check(
+  "wave verifier does not defer unrelated future outputs",
+  findPendingBuildVerifierInputs({
+    command: "node --check src/game.js",
+    tasks: [
+      runnableTask({
+        id: "T-test",
+        status: "planned",
+        testOutputPaths: ["tests/engagement-envelope.test.js"],
+      }),
+    ],
+    availablePaths: ["src/game.js"],
+  }).length === 0
+);
+
+check(
+  "wave verifier does not confuse path prefixes or suffixes with exact inputs",
+  findPendingBuildVerifierInputs({
+    command: "node --check src/game.jsx && node archived/src/game.js.old",
+    tasks: [
+      runnableTask({
+        id: "T-game",
+        status: "planned",
+        outputPaths: ["src/game.js"],
+      }),
+    ],
+    availablePaths: ["src/game.jsx", "archived/src/game.js.old"],
+  }).length === 0
+);
+
+const activeVerifierOwners = findPendingBuildVerifierInputs({
+  command: "node tests/fixing.test.js && node tests/running.test.js",
+  tasks: [
+    runnableTask({
+      id: "T-fixing",
+      status: "fixing",
+      testOutputPaths: ["tests/fixing.test.js"],
+    }),
+    runnableTask({
+      id: "T-running",
+      status: "in_progress",
+      testOutputPaths: ["tests/running.test.js"],
+    }),
+  ],
+  availablePaths: [],
+});
+check(
+  "wave verifier defers missing inputs owned by fixing and in-progress tasks",
+  activeVerifierOwners.map((item) => item.taskIds[0]).sort().join(",") ===
+    "T-fixing,T-running",
+  activeVerifierOwners
+);
+
+check(
+  "wave verifier does not wait forever on review failed or done owners",
+  findPendingBuildVerifierInputs({
+    command:
+      "node tests/review.test.js && node tests/failed.test.js && node tests/done.test.js",
+    tasks: [
+      runnableTask({
+        id: "T-review",
+        status: "review",
+        testOutputPaths: ["tests/review.test.js"],
+      }),
+      runnableTask({
+        id: "T-failed",
+        status: "failed",
+        testOutputPaths: ["tests/failed.test.js"],
+      }),
+      runnableTask({
+        id: "T-done",
+        status: "done",
+        testOutputPaths: ["tests/done.test.js"],
+      }),
+    ],
+    availablePaths: [],
+  }).length === 0
+);
+
+check(
+  "wave verifier recognizes normalized existing input paths",
+  findPendingBuildVerifierInputs({
+    command: "node .\\tests\\engagement-envelope.test.js",
+    tasks: [
+      runnableTask({
+        id: "T-test",
+        status: "planned",
+        testOutputPaths: ["tests/engagement-envelope.test.js"],
+      }),
+    ],
+    availablePaths: ["./tests/engagement-envelope.test.js"],
+  }).length === 0
+);
 check(
   "repo scheduling barrier holds until all non-repo tasks are done",
   !isBuildTaskRunnable(schedulerTasks[1], schedulerTasks),
@@ -59,6 +195,19 @@ check(
     buildEngineSource
   ),
   "scheduler still has an inline dependency-only gate"
+);
+check(
+  "live wave verifier defers missing inputs owned by future tasks",
+  /findPendingBuildVerifierInputs\(\{[\s\S]{0,300}command,[\s\S]{0,300}tasks: deferContext\.tasks,[\s\S]{0,300}availablePaths: deferContext\.availablePaths/.test(
+    buildEngineSource
+  ) &&
+    /AUTOMATED BUILD CHECK DEFERRED[\s\S]{0,400}deferred: true/.test(
+      buildEngineSource
+    ) &&
+    /runVerify\(verifyCommand, \{[\s\S]{0,120}tasks,[\s\S]{0,120}availablePaths: \[\.\.\.diskTree, \.\.\.virtualFs\.keys\(\)\]/.test(
+      buildEngineSource
+    ),
+  "runVerify does not defer a verifier whose planned input has not landed"
 );
 const collisionGuardStart = buildEngineSource.indexOf(
   "const selection = selectBuildTaskDispatchBatch"
