@@ -1,5 +1,6 @@
 /** Build checkpoint shape checks (run: npx tsx scripts/test-build-checkpoint.mts) */
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import type { BuildCheckpoint, Discussion } from "../lib/db/schema";
 import type {
   getBuildCheckpoint,
@@ -30,6 +31,10 @@ const storeApi = require("../lib/client/store") as {
 };
 const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
 const engineApi = require("../lib/client/engine") as typeof import("../lib/client/engine");
+const buildEngineSource = readFileSync(
+  new URL("../lib/client/build-engine.ts", import.meta.url),
+  "utf8"
+);
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -87,6 +92,19 @@ const checkpoint: BuildCheckpoint = {
   issueNumbers: [12, 13],
   failureFingerprints: { "npm run build|TS123": 2 },
   recoveryLog: ["Split UI task after first failure."],
+  planContractValidation: {
+    valid: false,
+    errors: [
+      {
+        code: "unknown_dependency",
+        severity: "error",
+        taskIds: ["T1"],
+        message: 'Task T1 depends on unknown task "T0".',
+      },
+    ],
+    warnings: [],
+  },
+  planContractRevisionCount: 2,
   usageWindow: {
     startedAt: "2026-06-21T00:00:00.000Z",
     elapsedMs: 1000,
@@ -124,6 +142,28 @@ check("checkpoint stores budget stop reason", checkpoint.stopReason === "budget"
 check("checkpoint stores skill mode", checkpoint.skillMode === "strict", checkpoint);
 check("checkpoint stores skill evidence", checkpoint.skillEvidence?.length === 1, checkpoint);
 check("checkpoint stores skill events", checkpoint.skillEvents?.length === 1, checkpoint);
+check(
+  "checkpoint stores plan contract validation",
+  checkpoint.planContractValidation?.errors[0]?.code === "unknown_dependency",
+  checkpoint.planContractValidation
+);
+check(
+  "checkpoint stores plan contract revision count",
+  checkpoint.planContractRevisionCount === 2,
+  checkpoint.planContractRevisionCount
+);
+check(
+  "Build engine v6 checkpoint contract snapshots plan validation state",
+  buildEngineSource.includes('build-contracts-v1-live-checkpoint-v6') &&
+    buildEngineSource.includes("BUILD_CHECKPOINT_CONTRACT_VERSION = 4") &&
+    /planContractValidation:\s*input\.planContractValidation\s*\?\?\s*planContractValidation/.test(
+      buildEngineSource
+    ) &&
+    /planContractRevisionCount:\s*input\.planContractRevisionCount\s*\?\?\s*planContractRevisionCount/.test(
+      buildEngineSource
+    ),
+  "checkpoint marker or plan contract snapshot fields are missing"
+);
 check(
   "checkpoint stores avoided worker indexes for retry routing",
   checkpoint.tasks[0].avoidWorkerIndexes?.join(",") === "1,2",
@@ -208,6 +248,12 @@ storeApi.upsertBuildCheckpoint(runningReviewCheckpoint);
 const interrupted = clientApi.interruptOrphanedRunningBuild(runningDiscussion.id);
 const interruptedDiscussion = storeApi.getDiscussionById(runningDiscussion.id);
 const interruptedCheckpoint = storeApi.getBuildCheckpoint(runningDiscussion.id);
+check(
+  "checkpoint round-trips plan contract state",
+  interruptedCheckpoint?.planContractValidation?.errors[0]?.code === "unknown_dependency" &&
+    interruptedCheckpoint.planContractRevisionCount === 2,
+  interruptedCheckpoint
+);
 check("refresh interruption is detected for orphaned running build", interrupted, {
   interruptedDiscussion,
   interruptedCheckpoint,

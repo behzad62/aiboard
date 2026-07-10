@@ -84,6 +84,11 @@ import {
 import { createBuildStopReport } from "@/lib/orchestrator/build-stop-report";
 import { createBuildToolReviewReport } from "@/lib/orchestrator/build-tool-review-report";
 import {
+  resolveBuildPlanContract,
+  validateBuildPlanContract,
+  type BuildPlanContractValidation,
+} from "@/lib/orchestrator/build-plan-contract";
+import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   isEvidenceArtifactWritePath,
@@ -208,6 +213,7 @@ import {
   buildPlanCritiqueDigest,
   buildPlanCritiquePrompt,
   buildPlanRevisionPrompt,
+  buildPlanContractRevisionPrompt,
   buildEngineVerifiedOutputSummary,
   prCreateRefusalReason,
   buildRepoWorkflowSummary,
@@ -227,7 +233,6 @@ import {
   RUNS_PER_PHASE,
   TOTAL_RUNS,
   allocateIncrementalTaskIds,
-  filterNovelReviewTasks,
   selectBalancedWorkerIndex,
   validateBuildPlanForDispatch,
   shouldApplyReviewResultToTask,
@@ -552,8 +557,8 @@ const WORKER_FINAL_OUTPUT_ATTEMPTS = 2;
 const TOOL_BATCH_RESULT_CHARS = 24_000;
 const SAFE_RUN_QUEUE_LIMIT = 3;
 const LIVE_CHECKPOINT_MIN_INTERVAL_MS = 2_000;
-const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v5";
-const BUILD_CHECKPOINT_CONTRACT_VERSION = 3;
+const BUILD_ENGINE_VERSION = "build-contracts-v1-live-checkpoint-v6";
+const BUILD_CHECKPOINT_CONTRACT_VERSION = 4;
 
 function parseDiscussionAttachmentIds(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -1388,6 +1393,10 @@ export async function runBuildDiscussion(
   const commandProblems: BuildCommandProblem[] = [
     ...(existingCheckpoint?.commandProblems ?? []),
   ];
+  let planContractValidation: BuildPlanContractValidation | undefined =
+    existingCheckpoint?.planContractValidation;
+  let planContractRevisionCount =
+    existingCheckpoint?.planContractRevisionCount ?? 0;
 
   const recordBuildProblem = (
     input: Omit<BuildProblem, "id" | "createdAt"> & {
@@ -1498,6 +1507,8 @@ export async function runBuildDiscussion(
     recoveryLog?: string[];
     stopReport?: BuildStopReport | null;
     toolReviewReport?: BuildToolReviewReport | null;
+    planContractValidation?: BuildPlanContractValidation;
+    planContractRevisionCount?: number;
   }): void => {
     const toolReviewReport =
       input.toolReviewReport ?? createToolReviewReport(input);
@@ -1523,6 +1534,10 @@ export async function runBuildDiscussion(
       ],
       failureFingerprints: input.failureFingerprints ?? failureFingerprints,
       recoveryLog: input.recoveryLog ?? recoveryLog,
+      planContractValidation:
+        input.planContractValidation ?? planContractValidation,
+      planContractRevisionCount:
+        input.planContractRevisionCount ?? planContractRevisionCount,
       buildProblems,
       commandProblems,
       stopReport: input.stopReport ?? null,
@@ -5710,6 +5725,186 @@ export async function runBuildDiscussion(
   let tasks: BuildTask[] = [];
   let planVerifyCommand = ""; // build/check command the Architect declared
 
+  const acceptPlanVerifierForContract = (
+    plan: BuildPlanningAction,
+    source: string,
+    prefixTasks: ReadonlyArray<BuildTask> = []
+  ): BuildPlanningAction => {
+    if (typeof plan.verifyCommand !== "string") return plan;
+    const candidateFiles = [
+      ...prefixTasks.flatMap((task) => task.outputPaths ?? []),
+      ...plan.tasks.flatMap((task) => outputPathsForTask(task)),
+    ];
+    return {
+      ...plan,
+      verifyCommand: acceptVerifyCommandForRunner(
+        plan.verifyCommand,
+        source,
+        candidateFiles
+      ),
+    };
+  };
+
+  const validatePlanActionContract = (
+    plan: BuildPlanningAction,
+    prefixTasks: ReadonlyArray<BuildTask> = [],
+    fallbackVerifyCommand = planVerifyCommand
+  ): BuildPlanContractValidation =>
+    validateBuildPlanContract(
+      [
+        ...prefixTasks,
+        ...plan.tasks.map((task, index) => ({
+          ...toTask(task, prefixTasks.length + index),
+          phaseSpec: plan.phaseSpec ?? activePhaseSpec,
+        })),
+      ],
+      {
+        strictTdd: buildSettings.skillMode === "strict",
+        verifyCommand: plan.verifyCommand || fallbackVerifyCommand,
+        phaseVerification: plan.phaseSpec?.verification ?? activePhaseSpec?.verification,
+      }
+    );
+
+  const stopForInvalidPlanContract = (
+    plan: BuildPlanningAction,
+    validation: BuildPlanContractValidation,
+    wave: number,
+    prefixTasks: ReadonlyArray<BuildTask> = []
+  ): void => {
+    planContractValidation = validation;
+    const invalidTasks = [
+      ...prefixTasks,
+      ...plan.tasks.map((task, index) => toTask(task, prefixTasks.length + index)),
+    ];
+    for (const issue of validation.errors) {
+      recordBuildProblem({
+        code: "plan_contract_invalid",
+        severity: "blocked",
+        source: "architect",
+        taskId: issue.taskIds[0],
+        wave,
+        message: `[${issue.code}] ${issue.message}`,
+        details: issue.taskIds.length > 0 ? `Tasks: ${issue.taskIds.join(", ")}` : undefined,
+      });
+    }
+    const message = `Build blocked before worker dispatch because the Architect plan remained structurally invalid after ${planContractRevisionCount} contract revision attempt(s).`;
+    recoveryLog.push(message);
+    emit({
+      type: "diagnostic",
+      phase: wave === 0 ? "round_preparing" : "judging",
+      message: `${message}\n${validation.errors
+        .map((issue) => `- [${issue.code}] ${issue.message}`)
+        .join("\n")}`,
+    });
+    const report = createStopReport({
+      status: "blocked",
+      stopReason: "blocked",
+      message,
+      wave,
+      tasks: invalidTasks,
+      verifyCommand: plan.verifyCommand || planVerifyCommand,
+    });
+    const toolReviewReport = createToolReviewReport({ status: "blocked", wave });
+    saveCheckpoint({
+      status: "blocked",
+      stopReason: "blocked",
+      wave,
+      tasks: invalidTasks,
+      architectNotes,
+      verifyCommand: plan.verifyCommand || planVerifyCommand,
+      planContractValidation: validation,
+      planContractRevisionCount,
+      stopReport: report,
+      toolReviewReport,
+    });
+    markStopped("blocked", message, report, toolReviewReport);
+  };
+
+  const resolveArchitectPlanContract = async (input: {
+    initialPlan: BuildPlanningAction;
+    label: string;
+    wave: number;
+    prefixTasks?: ReadonlyArray<BuildTask>;
+    fallbackVerifyCommand?: string;
+  }) => {
+    const prefixTasks = input.prefixTasks ?? [];
+    const resolution = await resolveBuildPlanContract({
+      initialPlan: acceptPlanVerifierForContract(
+        input.initialPlan,
+        `${input.label} verifyCommand`,
+        prefixTasks
+      ),
+      validate: (plan) =>
+        validatePlanActionContract(
+          plan,
+          prefixTasks,
+          input.fallbackVerifyCommand
+        ),
+      revise: async (plan, validation, revision) => {
+        emit({
+          type: "diagnostic",
+          phase: input.wave === 0 ? "round_preparing" : "judging",
+          message: `Architect plan contract revision ${revision}/2 requested for ${validation.errors.length} structural issue(s).`,
+        });
+        const revisionText = await streamConversation(
+          architect,
+          [
+            { role: "system", content: ARCHITECT_SYSTEM_ROLE },
+            {
+              role: "user",
+              content: buildPlanContractRevisionPrompt({
+                request: discussion.topic,
+                spec: activeSpec,
+                currentPlan: plan,
+                validation,
+                revision,
+                maxRevisions: 2,
+              }),
+            },
+          ],
+          {
+            maxTokens: architectMaxTokens(architect),
+            label: `${input.label} (contract revision ${revision}/2)`,
+            structuredOutput: architectActionResponseFormat,
+          }
+        );
+        const revised = parseArchitectAction(revisionText);
+        return revised?.action === "build_plan" && revised.tasks.length > 0
+          ? acceptPlanVerifierForContract(
+              revised,
+              `${input.label} revision ${revision} verifyCommand`,
+              prefixTasks
+            )
+          : null;
+      },
+      maxRevisions: 2,
+    });
+    planContractValidation = resolution.validation;
+    planContractRevisionCount = resolution.revisions;
+    if (resolution.status === "blocked") {
+      stopForInvalidPlanContract(
+        resolution.plan,
+        resolution.validation,
+        input.wave,
+        prefixTasks
+      );
+      return null;
+    }
+    for (const warning of resolution.validation.warnings) {
+      architectNotes = [architectNotes, `Plan validation: ${warning.message}`]
+        .filter(Boolean)
+        .join("\n");
+      recordBuildProblem({
+        code: "tool_warning",
+        severity: "warning",
+        source: "engine",
+        wave: input.wave,
+        message: warning.message,
+      });
+    }
+    return resolution;
+  };
+
   const nextGuidanceId = (task: BuildTask): string =>
     `G-${task.id}-${(task.guidance?.length ?? 0) + 1}`;
 
@@ -5906,6 +6101,26 @@ export async function runBuildDiscussion(
     repoMilestoneTitle = existingCheckpoint.milestone;
     resumedFromCheckpoint = true;
     wavesRun = existingCheckpoint.wave;
+    const resumePlan: BuildPlanningAction = {
+      action: "build_plan",
+      spec: activeSpec,
+      phaseSpec: activePhaseSpec,
+      tasks,
+      notes: architectNotes,
+      verifyCommand: planVerifyCommand,
+    };
+    const resumeResolution = await resolveArchitectPlanContract({
+      initialPlan: resumePlan,
+      label: "Architect revising resumed checkpoint plan",
+      wave: existingCheckpoint.wave,
+    });
+    if (!resumeResolution) return;
+    if (resumeResolution.revisions > 0) {
+      activePhaseSpec = resumeResolution.plan.phaseSpec ?? activePhaseSpec;
+      tasks = resumeResolution.plan.tasks.map(toTask);
+      architectNotes = resumeResolution.plan.notes ?? architectNotes;
+      planVerifyCommand = resumeResolution.plan.verifyCommand ?? planVerifyCommand;
+    }
     emit({
       type: "diagnostic",
       phase: "initializing",
@@ -6060,7 +6275,20 @@ export async function runBuildDiscussion(
         extraFileContext += text;
       },
     });
-    const planAction = planResult.action as BuildPlanningAction;
+    let planAction = planResult.action as BuildPlanningAction;
+    const acceptedSpecVerifyCommand = acceptVerifyCommandForRunner(
+      specVerifyCommand,
+      "Architect spec verifyCommand",
+      planAction.tasks.flatMap((task) => outputPathsForTask(task))
+    );
+    const initialPlanResolution = await resolveArchitectPlanContract({
+      initialPlan: planAction,
+      label: "Architect revising initial plan",
+      wave: 0,
+      fallbackVerifyCommand: acceptedSpecVerifyCommand,
+    });
+    if (!initialPlanResolution) return;
+    planAction = initialPlanResolution.plan;
 
     // ── Plan critique gate ─────────────────────────────────────────────────
     // Before wave 1, a second model attacks the plan. Wrong decomposition is
@@ -6152,17 +6380,16 @@ export async function runBuildDiscussion(
             Array.isArray(revised.tasks) &&
             revised.tasks.length > 0
           ) {
-            // tasks come WHOLLY from the revision; the other fields fall back to
-            // the original when the revision omitted them.
-            planAction.tasks = revised.tasks;
-            if (revised.notes?.trim()) planAction.notes = revised.notes;
-            if (revised.phaseSpec) planAction.phaseSpec = revised.phaseSpec;
-            if (
-              typeof revised.verifyCommand === "string" &&
-              revised.verifyCommand.trim()
-            ) {
-              planAction.verifyCommand = revised.verifyCommand;
-            }
+            const critiqueResolution = await resolveArchitectPlanContract({
+              initialPlan: revised,
+              label: "Architect correcting structurally invalid critique revision",
+              wave: 0,
+              fallbackVerifyCommand: acceptedSpecVerifyCommand,
+            });
+            if (!critiqueResolution) return;
+            // A critic revision is consumed only after it passes the same
+            // structural contract as the original Architect plan.
+            planAction = critiqueResolution.plan;
             emit({
               type: "diagnostic",
               phase: "round_preparing",
@@ -6221,13 +6448,15 @@ export async function runBuildDiscussion(
     planVerifyCommand =
       typeof (planAction.verifyCommand || specVerifyCommand) === "string"
         ? acceptVerifyCommandForRunner(
-            planAction.verifyCommand || specVerifyCommand,
+            planAction.verifyCommand || acceptedSpecVerifyCommand,
             "Architect verifyCommand",
             plannedOutputPaths
           )
         : "";
     activePhaseSpec =
       planAction.phaseSpec ?? activeSpec ?? synthesizePhaseSpec(architectNotes);
+    // Raw Architect ids and dependencies have already passed contract validation;
+    // allocation is intentionally delayed until that decision is accepted.
     const allocatedPlanTasks = allocateIncrementalTaskIds(
       [],
       planAction.tasks.slice(0, BUILD_TASKS_PER_WAVE)
@@ -6246,6 +6475,19 @@ export async function runBuildDiscussion(
       { strictTdd: buildSettings.skillMode === "strict" }
     );
     tasks = dispatchValidation.tasks;
+    planContractValidation = validateBuildPlanContract(tasks, {
+      strictTdd: buildSettings.skillMode === "strict",
+      verifyCommand: planVerifyCommand,
+      phaseVerification: activePhaseSpec?.verification,
+    });
+    if (!planContractValidation.valid) {
+      stopForInvalidPlanContract(
+        { ...planAction, tasks },
+        planContractValidation,
+        0
+      );
+      return;
+    }
     for (const warning of dispatchValidation.warnings) {
       architectNotes = [architectNotes, `Plan validation: ${warning.message}`]
         .filter(Boolean)
@@ -8669,21 +8911,72 @@ export async function runBuildDiscussion(
       message: `Worker scoreboard after wave ${cycle}:\n${scoreboardText()}`,
     });
 
-    const filteredReviewTasks = filterNovelReviewTasks(
-      tasks,
-      (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
-    );
-    const novelTasks = allocateIncrementalTaskIds(tasks, filteredReviewTasks.accepted);
+    let verifyCommandChangedThisWave = false;
     if (action.phaseSpec) {
       activePhaseSpec = action.phaseSpec;
     }
-    for (const skipped of filteredReviewTasks.skipped) {
-      emit({
-        type: "diagnostic",
-        phase: "judging",
-        message: `Skipped overlapping new task "${skipped.id}" from review - an unfinished task already owns the same output path (${skipped.existingStatus}: ${skipped.title}). Mark the existing task as fix or choose non-overlapping output paths.`,
+    if ((action.newTasks?.length ?? 0) > 0) {
+      const requestedReviewVerifyCommand = action.verifyCommand;
+      const effectiveReviewVerifyCommand =
+        typeof requestedReviewVerifyCommand !== "string"
+          ? verifyCommand
+          : requestedReviewVerifyCommand.trim()
+            ? acceptVerifyCommandForRunner(
+                requestedReviewVerifyCommand,
+                "Review verifyCommand",
+                [
+                  ...tasks.flatMap((task) => task.outputPaths ?? []),
+                  ...(action.newTasks ?? []).flatMap((task) =>
+                    outputPathsForTask(task)
+                  ),
+                ]
+              ) || verifyCommand
+            : "";
+      const reviewPlan: BuildPlanningAction = {
+        action: "build_plan",
+        spec: activeSpec,
+        phaseSpec: activePhaseSpec,
+        tasks: action.newTasks ?? [],
+        notes: architectNotes,
+        verifyCommand: effectiveReviewVerifyCommand,
+      };
+      const reviewPlanResolution = await resolveArchitectPlanContract({
+        initialPlan: reviewPlan,
+        label: "Architect revising review-created task graph",
+        wave: cycle,
+        prefixTasks: tasks,
       });
+      if (!reviewPlanResolution) return;
+      action.newTasks = reviewPlanResolution.plan.tasks;
+      const resolvedReviewVerifyCommand =
+        reviewPlanResolution.plan.verifyCommand ?? effectiveReviewVerifyCommand;
+      action.verifyCommand = resolvedReviewVerifyCommand;
+      if (resolvedReviewVerifyCommand.toLowerCase() !== verifyCommand.toLowerCase()) {
+        verifyCommandChangedThisWave = true;
+        emit({
+          type: "diagnostic",
+          phase: "judging",
+          message: `${reviewActor.displayName} changed the automated build check to ${
+            resolvedReviewVerifyCommand
+              ? `\`${resolvedReviewVerifyCommand}\``
+              : "disabled"
+          }.`,
+        });
+      }
+      verifyCommand = resolvedReviewVerifyCommand;
+      activePhaseSpec = reviewPlanResolution.plan.phaseSpec ?? activePhaseSpec;
+      if (verifyCommandChangedThisWave && activePhaseSpec) {
+        activePhaseSpec = {
+          ...activePhaseSpec,
+          verification: verifyCommand ? [verifyCommand] : [],
+        };
+      }
     }
+
+    const novelTasks = allocateIncrementalTaskIds(
+      tasks,
+      (action.newTasks ?? []).slice(0, BUILD_TASKS_PER_WAVE)
+    );
     if (novelTasks.remapped.length > 0) {
       emit({
         type: "diagnostic",
@@ -8692,6 +8985,22 @@ export async function runBuildDiscussion(
           .map((item) => `${item.from} -> ${item.to}`)
           .join(", ")}.`,
       });
+    }
+    if (novelTasks.tasks.length > 0) {
+      const remappedPlan: BuildPlanningAction = {
+        action: "build_plan",
+        spec: activeSpec,
+        phaseSpec: activePhaseSpec,
+        tasks: novelTasks.tasks,
+        notes: architectNotes,
+        verifyCommand,
+      };
+      const remappedValidation = validatePlanActionContract(remappedPlan, tasks);
+      planContractValidation = remappedValidation;
+      if (!remappedValidation.valid) {
+        stopForInvalidPlanContract(remappedPlan, remappedValidation, cycle, tasks);
+        return;
+      }
     }
     for (const raw of novelTasks.tasks) {
       const task = toTask(raw, tasks.length);
@@ -8702,8 +9011,19 @@ export async function runBuildDiscussion(
     if (novelTasks.tasks.length > 0) {
       const dispatchValidation = validateBuildPlanForDispatch(tasks, {
         strictTdd: buildSettings.skillMode === "strict",
+        verifyCommand,
+        phaseVerification: activePhaseSpec?.verification,
       });
       tasks = dispatchValidation.tasks;
+      planContractValidation = dispatchValidation;
+      if (!dispatchValidation.valid) {
+        stopForInvalidPlanContract(
+          { action: "build_plan", tasks, phaseSpec: activePhaseSpec, verifyCommand },
+          dispatchValidation,
+          cycle
+        );
+        return;
+      }
       for (const warning of dispatchValidation.warnings) {
         architectNotes = [architectNotes, `Plan validation: ${warning.message}`]
           .filter(Boolean)
@@ -8723,7 +9043,6 @@ export async function runBuildDiscussion(
       }
     }
 
-    let verifyCommandChangedThisWave = false;
     if (typeof action.verifyCommand === "string") {
       const requestedVerifyCommand = action.verifyCommand.trim();
       if (!requestedVerifyCommand) {

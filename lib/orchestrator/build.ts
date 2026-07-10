@@ -5519,6 +5519,36 @@ export function buildPlanRevisionPrompt(input: {
     .join("\n");
 }
 
+export function buildPlanContractRevisionPrompt(input: {
+  request: string;
+  spec?: unknown;
+  currentPlan: unknown;
+  validation: BuildPlanContractValidation;
+  revision: number;
+  maxRevisions: number;
+}): string {
+  const issues = input.validation.errors
+    .map((item) => `- [${item.code}] ${item.message}`)
+    .join("\n");
+  return [
+    `The current Architect plan fails the machine-verifiable Build plan contract (revision ${input.revision}/${input.maxRevisions}).`,
+    "Return one complete build_plan response. The response must contain the entire revised plan; partial patches or commentary are not accepted.",
+    "The engine will validate the response as written and will not repair Architect decisions.",
+    "",
+    "ORIGINAL USER REQUEST:",
+    input.request,
+    "",
+    "APPROVED SPEC:",
+    JSON.stringify(input.spec ?? null, null, 2),
+    "",
+    "COMPLETE CURRENT PLAN:",
+    JSON.stringify(input.currentPlan, null, 2),
+    "",
+    "CONTRACT ISSUES:",
+    issues || "- No error details were supplied.",
+  ].join("\n");
+}
+
 export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
   request: string;
   treeText: string;

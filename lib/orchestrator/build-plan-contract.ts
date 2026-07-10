@@ -30,6 +30,49 @@ export interface BuildPlanContractOptions {
   phaseVerification?: string[];
 }
 
+export type BuildPlanContractResolution<T> =
+  | {
+      status: "valid";
+      plan: T;
+      validation: BuildPlanContractValidation;
+      revisions: number;
+    }
+  | {
+      status: "blocked";
+      plan: T;
+      validation: BuildPlanContractValidation;
+      revisions: number;
+    };
+
+export async function resolveBuildPlanContract<T>(input: {
+  initialPlan: T;
+  validate: (plan: T) => BuildPlanContractValidation;
+  revise: (
+    plan: T,
+    validation: BuildPlanContractValidation,
+    revision: number
+  ) => Promise<T | null>;
+  maxRevisions?: number;
+}): Promise<BuildPlanContractResolution<T>> {
+  const maxRevisions = Math.max(0, Math.floor(input.maxRevisions ?? 2));
+  let plan = input.initialPlan;
+  let validation = input.validate(plan);
+  let revisions = 0;
+
+  while (!validation.valid && revisions < maxRevisions) {
+    revisions += 1;
+    const revised = await input.revise(plan, validation, revisions);
+    if (revised !== null) {
+      plan = revised;
+      validation = input.validate(plan);
+    }
+  }
+
+  return validation.valid
+    ? { status: "valid", plan, validation, revisions }
+    : { status: "blocked", plan, validation, revisions };
+}
+
 const taskIdKey = (id: string): string => id.trim().toLowerCase();
 
 const pathKey = (path: string): string =>

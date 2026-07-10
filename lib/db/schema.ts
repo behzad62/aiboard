@@ -14,6 +14,7 @@ import type {
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
+import type { BuildPlanContractValidation } from "@/lib/orchestrator/build-plan-contract";
 import type { BuildEvidenceLedgerEntry } from "@/lib/orchestrator/build-progress";
 export type {
   ContextBlob,
@@ -98,6 +99,7 @@ export type BuildProblemCode =
   | "incomplete_tasks"
   | "quality_gate_failed"
   | "review_fix_required"
+  | "plan_contract_invalid"
   | "plan_critique_unresolved";
 
 export interface BuildProblem {
@@ -246,6 +248,8 @@ export interface BuildCheckpoint {
   issueNumbers: number[];
   failureFingerprints: Record<string, number>;
   recoveryLog: string[];
+  planContractValidation?: BuildPlanContractValidation;
+  planContractRevisionCount?: number;
   buildProblems?: BuildProblem[];
   commandProblems?: BuildCommandProblem[];
   stopReport?: BuildStopReport | null;
