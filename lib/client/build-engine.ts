@@ -80,6 +80,7 @@ import {
   discardSupersededTaskVerificationFacts,
   pendingExpectedFailureVerifierCommands,
   resolveBuildReviewContract,
+  successfulRunIdentityIncludes,
   validateBuildReviewApprovals,
   validateReadOnlyReviewFixes,
   type BuildReviewContractIssue,
@@ -7731,26 +7732,33 @@ export async function runBuildDiscussion(
                 : action.action;
             const verifierIdentity =
               action.action === "run" ? action.command : actionName;
+            const transportStatus = fact.status ?? "succeeded";
             const compiledRequirements = compileBuildTaskVerificationRequirements({
               task,
               projectVerifier: verifyCommand,
             });
+            const matchesCompiledRequirement = (
+              requirement: ReturnType<
+                typeof compileBuildTaskVerificationRequirements
+              >[number]
+            ): boolean =>
+              requirement.source !== "project_verifier" &&
+              requirement.action === actionName &&
+              requirement.verifierIdentity !== null &&
+              (requirement.verifierIdentity === verifierIdentity ||
+                (actionName === "run" &&
+                  transportStatus === "succeeded" &&
+                  successfulRunIdentityIncludes(
+                    verifierIdentity,
+                    requirement.verifierIdentity
+                  )));
             const isCompiledVerificationAction = compiledRequirements.some(
-              (requirement) =>
-                requirement.source !== "project_verifier" &&
-                requirement.action === actionName &&
-                requirement.verifierIdentity === verifierIdentity
+              matchesCompiledRequirement
             );
             if (isCompiledVerificationAction) {
               const compiledCoverage = compiledRequirements
-                .filter(
-                  (requirement) =>
-                    requirement.source !== "project_verifier" &&
-                    requirement.action === actionName &&
-                    requirement.verifierIdentity === verifierIdentity
-                )
+                .filter(matchesCompiledRequirement)
                 .flatMap((requirement) => requirement.coveredPaths);
-              const transportStatus = fact.status ?? "succeeded";
               taskVerificationFacts = appendBuildTaskVerificationFact(
                 taskVerificationFacts,
                 {

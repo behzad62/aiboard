@@ -202,6 +202,20 @@ function splitAndChainedCommands(identity: string): string[] {
   return commands.filter(Boolean);
 }
 
+export function successfulRunIdentityIncludes(
+  actualIdentity: string,
+  requiredIdentity: string
+): boolean {
+  const required = normalizeIdentity(requiredIdentity);
+  const actual = normalizeIdentity(actualIdentity);
+  return (
+    actual === required ||
+    splitAndChainedCommands(actual).some(
+      (component) => normalizeIdentity(component) === required
+    )
+  );
+}
+
 function verifierIdentityMatches(
   fact: BuildTaskVerificationFact,
   requirement: BuildTaskVerificationRequirement
@@ -215,9 +229,7 @@ function verifierIdentityMatches(
   return (
     requirement.action === "run" &&
     fact.status === "passed" &&
-    splitAndChainedCommands(actual).some(
-      (component) => normalizeIdentity(component) === required
-    )
+    successfulRunIdentityIncludes(actual, required)
   );
 }
 

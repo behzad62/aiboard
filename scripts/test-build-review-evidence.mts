@@ -921,6 +921,7 @@ check(
 check(
   "live engine uses compiled requirements for worker fact production without invented path coverage",
   /compileBuildTaskVerificationRequirements/.test(buildEngineSource) &&
+    /successfulRunIdentityIncludes/.test(buildEngineSource) &&
     /compiledCoverage/.test(buildEngineSource) &&
     /flatMap\(\(requirement\)\s*=>\s*requirement\.coveredPaths\)/.test(buildEngineSource),
   "worker facts are not driven by the shared requirement compiler"
