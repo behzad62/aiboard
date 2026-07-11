@@ -5,6 +5,8 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "copy-runner": "node scripts/build-runner.mjs",
+    "test:runner-v2": "tsx --test runner-v2/test/*.test.ts",
+    "typecheck:runner-v2": "tsc -p runner-v2/tsconfig.json --noEmit",
     "predev": "npm run copy-runner",
     "dev": "next dev --turbopack",
     "prebuild": "npm run copy-runner",
