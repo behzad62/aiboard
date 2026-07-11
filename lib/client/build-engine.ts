@@ -8414,6 +8414,21 @@ export async function runBuildDiscussion(
           !scopedVerificationGapReport &&
           (toolIssues.some((issue) => issue.startsWith("TOOL BUDGET BLOCKED:")) ||
             isWorkerOutputBlockedByToolBudget(output));
+        const currentTaskHasPassingVerification = taskVerificationFacts.some(
+          (fact) =>
+            fact.taskId === task.id &&
+            fact.wave === cycle &&
+            fact.status === "passed"
+        );
+        if (
+          files.length === 0 &&
+          durableTaskFiles.length > 0 &&
+          currentTaskHasPassingVerification
+        ) {
+          engineReportedEvidence.push(
+            "Refactor was not needed in this no-change recovery turn; current task verification remained GREEN."
+          );
+        }
         const skillEvidence = createSkillEvidence({
           taskId: task.id,
           wave: cycle,

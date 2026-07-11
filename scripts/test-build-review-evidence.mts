@@ -857,6 +857,13 @@ check(
   "post-patch verification can replay stale pre-patch tool results"
 );
 check(
+  "no-change recovery with current passing checks records deterministic refactor evidence",
+  /files\.length\s*===\s*0[\s\S]{0,260}currentTaskHasPassingVerification[\s\S]{0,300}Refactor was not needed/.test(
+    buildEngineSource
+  ),
+  "evidence-only recovery waves can loop solely because the model omitted refactor wording"
+);
+check(
   "Architect review commands are disabled when the reviewed wave has no tool-policy tasks",
   /allowRun:\s*reviewRequiresToolVerification/.test(buildEngineSource) &&
     /runsLeft:\s*reviewRequiresToolVerification\s*\?\s*runsLeftThisPhase\(\)\s*:\s*0/.test(
