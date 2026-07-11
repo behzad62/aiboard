@@ -137,8 +137,8 @@ import {
 } from "@/lib/orchestrator/build-quality-gates";
 import {
   addBuildUsageCall,
-  createBuildUsageWindow,
   estimatedUsdForTokens,
+  resumeBuildUsageWindow,
 } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import {
@@ -838,18 +838,25 @@ export async function runBuildDiscussion(
     });
   };
 
-  // The active budget window. Resume always starts a fresh window (USD spent and
-  // elapsed time reset to 0); historical spend lives in the saved checkpoint.
+  const existingCheckpoint = getBuildCheckpoint(discussion.id);
+
+  // Usage shown to the user is cumulative across refresh/resume. Guardrails still
+  // receive a fresh active budget window by subtracting the restored baseline.
   const buildWindowStartedAt = new Date().toISOString();
   const buildWindowStartMs = Date.now();
-  let usageWindow = createBuildUsageWindow(buildWindowStartedAt);
+  let usageWindow = resumeBuildUsageWindow(
+    existingCheckpoint?.usageWindow,
+    buildWindowStartedAt
+  );
+  const usageWindowBaselineUsd = usageWindow.estimatedUsd;
+  const usageWindowBaselineElapsedMs = usageWindow.elapsedMs;
   const emitBuildUsage = (): void => {
     emit({ type: "build_usage", usage: usageWindow });
   };
   const currentGuardrailStop = (): BuildStopReason | null =>
     shouldStopForBuildGuardrail({
       settings: buildSettings,
-      spentUsd: usageWindow.estimatedUsd,
+      spentUsd: Math.max(0, usageWindow.estimatedUsd - usageWindowBaselineUsd),
       elapsedMs: Date.now() - buildWindowStartMs,
     });
 
@@ -1456,7 +1463,6 @@ export async function runBuildDiscussion(
   // the same record. Failure fingerprints surviving a resume let a blocker that
   // persists across stops still be caught.
   const currentRunStartedAt = new Date().toISOString();
-  const existingCheckpoint = getBuildCheckpoint(discussion.id);
   const restoredUnavailableWorkerIndexes =
     buildUnavailableWorkerIndexesFromProblems(
       existingCheckpoint?.buildProblems ?? [],
@@ -4440,7 +4446,7 @@ export async function runBuildDiscussion(
       providerCost: usage.providerCost,
       providerCostUnit: usage.providerCostUnit,
     });
-    // Fold the call into the active Build budget window (aggregate per-model
+    // Fold the call into cumulative Build usage (aggregate per-model
     // tokens + estimated USD). Unknown-priced models leave USD null and surface
     // as a partial-estimate warning in the Build stats UI. (pricing/estimatedUsd
     // are computed above so the model-call trace can also carry the cost.)
@@ -4467,7 +4473,8 @@ export async function runBuildDiscussion(
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       pricing,
-      elapsedSinceWindowStartMs: Date.now() - buildWindowStartMs,
+      elapsedSinceWindowStartMs:
+        usageWindowBaselineElapsedMs + (Date.now() - buildWindowStartMs),
     });
     emitBuildUsage();
     history.push({ label: opts.label, text: content });
@@ -6214,9 +6221,9 @@ export async function runBuildDiscussion(
   }
 
   // ── Resume from a saved checkpoint, if one survived a prior stop ───────────
-  // Resume keeps the task graph, Architect notes, verify command, and repo refs,
-  // but starts a fresh budget window (usageWindow was created empty above and is
-  // deliberately NOT restored from the checkpoint's historical usage).
+  // Resume keeps the task graph, Architect notes, verify command, repo refs, and
+  // cumulative usage. The active guardrail budget remains fresh via the baseline
+  // captured above.
   let resumedFromCheckpoint = false;
   let wavesRun = 0;
   if (

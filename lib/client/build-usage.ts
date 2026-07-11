@@ -35,6 +35,20 @@ export function createBuildUsageWindow(startedAt: string): BuildUsageWindow {
   };
 }
 
+export function resumeBuildUsageWindow(
+  previous: BuildUsageWindow | null | undefined,
+  startedAt: string
+): BuildUsageWindow {
+  if (!previous) return createBuildUsageWindow(startedAt);
+  return {
+    startedAt: previous.startedAt || startedAt,
+    elapsedMs: previous.elapsedMs,
+    estimatedUsd: previous.estimatedUsd,
+    unknownPricedModelIds: [...previous.unknownPricedModelIds],
+    models: previous.models.map((model) => ({ ...model })),
+  };
+}
+
 export function addBuildUsageCall(
   window: BuildUsageWindow,
   input: BuildUsageCallInput
