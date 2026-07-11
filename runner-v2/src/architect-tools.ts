@@ -6,7 +6,10 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
-import type { SchedulerStore } from "./scheduler-store.js";
+import {
+  rebuildSchedulerProjection,
+  type SchedulerStore,
+} from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import { validateTaskGraph } from "./task-graph.js";
 
@@ -227,12 +230,17 @@ function reviewTaskTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const task = rebuildSchedulerProjection(
+        store.readRun(context.runId)
+      ).tasks[input.taskId];
       return appendEvent(store, {
         runId: context.runId,
         type: "review.decided",
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: `review:${input.taskId}`,
+        idempotencyKey: task
+          ? `review:${input.taskId}:attempt:${task.attempt}:changeset:${task.changeSetId ?? "none"}`
+          : `review:${input.taskId}:unknown`,
         payload: {
           taskId: input.taskId,
           decision: input.decision,

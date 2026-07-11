@@ -243,6 +243,56 @@ test("only Architect tools can approve, request integration, and complete", asyn
   });
 });
 
+test("Architect can review a retried task without colliding with the prior attempt", async () => {
+  await withStore(async (store) => {
+    seedSubmittedTask(store);
+    const registry = new ToolRegistry();
+    for (const tool of createArchitectTools({ store, clock: now })) {
+      registry.register(tool);
+    }
+    const rejected = await invoke(registry, architectContext(), "review_task", {
+      taskId: "task_a",
+      decision: "rejected",
+      summary: "Attempt one lacks relevant evidence.",
+      evidenceArtifactHashes: [],
+    });
+    assert.equal(rejected.isError, false);
+    store.append({
+      runId: "run_1",
+      type: "task.transitioned",
+      occurredAt: now(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "retry:task_a:1",
+      payload: { taskId: "task_a", status: "planned" },
+    });
+    transition(
+      store,
+      "assigned",
+      { attempt: 2, assignedWorkerId: "worker_2" },
+      "attempt:2"
+    );
+    transition(store, "running", {}, "attempt:2");
+    transition(
+      store,
+      "submitted",
+      { changeSetId: "changeset_2" },
+      "attempt:2"
+    );
+    const approved = await invoke(registry, architectContext(), "review_task", {
+      taskId: "task_a",
+      decision: "approved",
+      summary: "Attempt two includes the required evidence.",
+      evidenceArtifactHashes: ["b".repeat(64)],
+    });
+    assert.equal(approved.isError, false);
+    assert.equal(projection(store).tasks.task_a.status, "approved");
+    assert.equal(
+      projection(store).reviews.task_a.summary,
+      "Attempt two includes the required evidence."
+    );
+  });
+});
+
 test("durable reducer rejects authority bypass events", async () => {
   await withStore(async (store) => {
     seedSubmittedTask(store);
@@ -349,14 +399,15 @@ function seedPlan(store: SqliteSchedulerStore): void {
 function transition(
   store: SqliteSchedulerStore,
   status: "assigned" | "running" | "submitted",
-  patch: Record<string, unknown>
+  patch: Record<string, unknown>,
+  keySuffix = ""
 ): void {
   store.append({
     runId: "run_1",
     type: "task.transitioned",
     occurredAt: now(),
     actor: { role: "runner", id: "test" },
-    idempotencyKey: `task_a:${status}`,
+    idempotencyKey: `task_a:${status}${keySuffix ? `:${keySuffix}` : ""}`,
     payload: { taskId: "task_a", status, patch },
   });
 }
