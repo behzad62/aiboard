@@ -57,10 +57,15 @@ export async function runNativeBuildDiscussion(
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
   if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
-  const runtimeIds = [...new Set([architectRuntimeId, ...modelIds])];
+  const { configuredRuntimeIds, workerRuntimeIds } = selectNativeBuildRuntimes(
+    modelIds,
+    architectRuntimeId
+  );
   await configureNativeProviders(
     connection,
-    runtimeIds.map((runtimeId, index) => providerConfig(runtimeId, discussion, index))
+    configuredRuntimeIds.map((runtimeId, index) =>
+      providerConfig(runtimeId, discussion, index)
+    )
   );
   const objective = buildObjective(discussion);
   await createNativeBuild(connection, {
@@ -72,8 +77,8 @@ export async function runNativeBuildDiscussion(
       projectId: discussion.id,
       objective,
       architectRuntimeId,
-      workerRuntimeIds: modelIds,
-      maxConcurrency: Math.max(1, Math.min(4, modelIds.length)),
+      workerRuntimeIds,
+      maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
       budgetLimits: buildBudgets(discussion.effort),
     },
   });
@@ -167,6 +172,23 @@ export async function runNativeBuildDiscussion(
     }
     throw error;
   }
+}
+
+export function selectNativeBuildRuntimes(
+  modelIds: readonly string[],
+  architectRuntimeId: string
+): {
+  configuredRuntimeIds: string[];
+  workerRuntimeIds: string[];
+} {
+  const workers = [
+    ...new Set(modelIds.filter((runtimeId) => runtimeId !== architectRuntimeId)),
+  ];
+  if (workers.length === 0) workers.push(architectRuntimeId);
+  return {
+    configuredRuntimeIds: [...new Set([architectRuntimeId, ...workers])],
+    workerRuntimeIds: workers,
+  };
 }
 
 async function observeNativeStep(

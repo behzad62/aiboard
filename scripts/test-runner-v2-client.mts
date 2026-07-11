@@ -6,6 +6,25 @@ import {
   getNativeRunnerHealth,
   type NativeRunnerConnection,
 } from "../lib/client/runner-v2";
+import { selectNativeBuildRuntimes } from "../lib/client/native-build-engine";
+
+assert.deepEqual(
+  selectNativeBuildRuntimes(
+    ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
+    "chatgpt:gpt-5.5"
+  ),
+  {
+    configuredRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
+    workerRuntimeIds: ["chatgpt:gpt-5.4"],
+  }
+);
+assert.deepEqual(
+  selectNativeBuildRuntimes(["chatgpt:gpt-5.5"], "chatgpt:gpt-5.5"),
+  {
+    configuredRuntimeIds: ["chatgpt:gpt-5.5"],
+    workerRuntimeIds: ["chatgpt:gpt-5.5"],
+  }
+);
 
 const connection: NativeRunnerConnection = {
   url: "http://127.0.0.1:8787/",
