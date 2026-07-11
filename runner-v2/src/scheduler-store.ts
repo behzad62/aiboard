@@ -25,6 +25,8 @@ export type SchedulerEventType =
   | "run.paused"
   | "run.resumed"
   | "run.completed"
+  | "project.handoff_requested"
+  | "project.handoff_selected"
   | "provider.health_changed"
   | "worker.runtime_assigned"
   | "architect.runtime_assigned"
@@ -97,6 +99,20 @@ export interface RuntimeProjection {
   };
 }
 
+export type ProjectHandoffChoice =
+  | "keep_integration_branch"
+  | "apply_to_project";
+
+export interface ProjectHandoffProjection {
+  status: "requested" | "selected";
+  summary: string;
+  options: ProjectHandoffChoice[];
+  choice?: ProjectHandoffChoice;
+  integrationRevision?: string;
+  integrationBranch?: string;
+  appliedToProject?: boolean;
+}
+
 export interface SchedulerProjection {
   runId: string;
   status: "running" | "paused" | "completed";
@@ -105,6 +121,7 @@ export interface SchedulerProjection {
   guidance: Record<string, GuidanceProjection>;
   reviews: Record<string, ReviewProjection>;
   runtime: RuntimeProjection;
+  projectHandoff?: ProjectHandoffProjection;
   lastSequence: number;
 }
 
@@ -160,6 +177,14 @@ export function reduceSchedulerEvent(
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
     reviews: { ...current.reviews },
+    ...(current.projectHandoff
+      ? {
+          projectHandoff: {
+            ...current.projectHandoff,
+            options: [...current.projectHandoff.options],
+          },
+        }
+      : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -375,6 +400,51 @@ export function reduceSchedulerEvent(
       }
       next.status = "completed";
       break;
+    case "project.handoff_requested": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may request final project handoff.");
+      }
+      if (current.projectHandoff) {
+        throw new Error("Final project handoff was already requested.");
+      }
+      const nonterminal = Object.values(next.tasks).find(
+        (task) => task.status !== "integrated" && task.status !== "cancelled"
+      );
+      if (nonterminal) {
+        throw new Error(
+          `Final project handoff requires terminal task states; ${nonterminal.id} is ${nonterminal.status}.`
+        );
+      }
+      next.projectHandoff = {
+        status: "requested",
+        summary: requiredString(event.payload, "summary"),
+        options: ["keep_integration_branch", "apply_to_project"],
+      };
+      next.status = "paused";
+      break;
+    }
+    case "project.handoff_selected": {
+      if (event.actor.role !== "user") {
+        throw new Error("Final project handoff selection requires the user.");
+      }
+      if (current.projectHandoff?.status !== "requested") {
+        throw new Error("Final project handoff is not awaiting user selection.");
+      }
+      const choice = requiredString(event.payload, "choice");
+      if (choice !== "keep_integration_branch" && choice !== "apply_to_project") {
+        throw new Error(`Final project handoff choice ${choice} is invalid.`);
+      }
+      next.projectHandoff = {
+        ...current.projectHandoff,
+        status: "selected",
+        choice,
+        integrationRevision: requiredString(event.payload, "integrationRevision"),
+        integrationBranch: requiredString(event.payload, "integrationBranch"),
+        appliedToProject: event.payload.appliedToProject === true,
+      };
+      next.status = "completed";
+      break;
+    }
     case "provider.health_changed": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may record provider health.");

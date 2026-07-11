@@ -4,6 +4,7 @@ import type {
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools } from "./architect-tools.js";
 import type {
+  ProjectHandoffChoice,
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
@@ -133,6 +134,11 @@ export class BuildRuntime {
     if (projection.status === "completed") {
       throw new Error("A completed Build cannot be resumed.");
     }
+    if (projection.projectHandoff?.status === "requested") {
+      throw new Error(
+        "This Build is awaiting the user's final project handoff selection."
+      );
+    }
     this.store.append({
       runId: this.runId,
       type: "run.resumed",
@@ -155,6 +161,26 @@ export class BuildRuntime {
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  selectProjectHandoff(
+    choice: ProjectHandoffChoice,
+    result: {
+      integrationRevision: string;
+      integrationBranch: string;
+      appliedToProject: boolean;
+    },
+    idempotencyKey: string
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "project.handoff_selected",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { choice, ...result },
     });
     return this.projection();
   }

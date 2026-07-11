@@ -92,6 +92,8 @@ import {
   commandNativeRun,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
+  selectNativeProjectHandoff,
+  type NativeProjectHandoffChoice,
 } from "@/lib/client/runner-v2";
 import {
   BuildTaskBoard,
@@ -216,6 +218,10 @@ function DiscussionPageInner() {
   const [architectHandoff, setArchitectHandoff] = useState<{
     reason: string;
     candidateRuntimeIds: string[];
+  } | null>(null);
+  const [projectHandoff, setProjectHandoff] = useState<{
+    summary: string;
+    options: NativeProjectHandoffChoice[];
   } | null>(null);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
@@ -448,6 +454,12 @@ function DiscussionPageInner() {
           setArchitectHandoff({
             reason: event.reason,
             candidateRuntimeIds: [...event.candidateRuntimeIds],
+          });
+          break;
+        case "project_handoff_required":
+          setProjectHandoff({
+            summary: event.summary,
+            options: [...event.options],
           });
           break;
         case "tool_batch":
@@ -929,6 +941,30 @@ function DiscussionPageInner() {
     }
   };
 
+  const handleProjectHandoff = async (choice: NativeProjectHandoffChoice) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      await selectNativeProjectHandoff(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        choice,
+        `project-handoff:${discussion.nativeBuildRunId}:${choice}`
+      );
+      setProjectHandoff(null);
+      handleResume();
+    } catch (handoffError) {
+      setError(
+        handoffError instanceof Error
+          ? handoffError.message
+          : "Could not complete the final project handoff."
+      );
+    }
+  };
+
   const handleNoteFileSelection = (files: FileList | null) => {
     const selected = Array.from(files ?? []);
     if (selected.length === 0) return;
@@ -1218,6 +1254,7 @@ function DiscussionPageInner() {
                     <Button
                       size="sm"
                       onClick={handleResume}
+                      disabled={projectHandoff !== null}
                       title="Continue from where the run failed — already-generated responses are kept"
                     >
                       <Play className="mr-1 h-3.5 w-3.5" />
@@ -1544,6 +1581,42 @@ function DiscussionPageInner() {
               </Button>
             ))}
           </div>
+        </div>
+      )}
+
+      {discussion.mode === "build" && projectHandoff && (
+        <div className="space-y-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
+          <div>
+            <p className="font-medium">The Architect has finished — choose the final handoff</p>
+            <p className="mt-1 whitespace-pre-wrap text-xs opacity-80">
+              {projectHandoff.summary}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {projectHandoff.options.includes("keep_integration_branch") && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleProjectHandoff("keep_integration_branch")}
+              >
+                Keep integration branch
+              </Button>
+            )}
+            {projectHandoff.options.includes("apply_to_project") && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void handleProjectHandoff("apply_to_project")}
+              >
+                Apply to project
+              </Button>
+            )}
+          </div>
+          <p className="text-xs opacity-75">
+            Applying first performs a Git dry run. If your project has conflicting local changes,
+            Runner V2 leaves it untouched and keeps this decision open.
+          </p>
         </div>
       )}
 

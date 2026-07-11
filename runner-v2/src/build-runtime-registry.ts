@@ -1,5 +1,6 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
 import type {
+  ProjectHandoffChoice,
   SchedulerEvent,
   SchedulerProjection,
 } from "./scheduler-store.js";
@@ -16,6 +17,11 @@ export interface BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string
   ): SchedulerProjection;
+  selectProjectHandoff(
+    runId: string,
+    choice: ProjectHandoffChoice,
+    idempotencyKey: string
+  ): Promise<SchedulerProjection>;
 }
 
 export class BuildRuntimeRegistry implements BuildControlPlane {
@@ -65,6 +71,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     idempotencyKey: string
   ): SchedulerProjection {
     return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey);
+  }
+
+  async selectProjectHandoff(
+    _runId: string,
+    _choice: ProjectHandoffChoice,
+    _idempotencyKey: string
+  ): Promise<SchedulerProjection> {
+    throw new Error("Final project handoff requires the native Build manager.");
   }
 
   private require(runId: string): BuildRuntime {

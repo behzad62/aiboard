@@ -224,6 +224,11 @@ export type OrchestratorEvent =
       candidateRuntimeIds: string[];
     }
   | {
+      type: "project_handoff_required";
+      summary: string;
+      options: Array<"keep_integration_branch" | "apply_to_project">;
+    }
+  | {
       type: "tool_batch";
       actor: string;
       served: number;

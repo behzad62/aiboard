@@ -168,6 +168,10 @@ export class NativeBuildFactory {
     let closed = false;
     return {
       runtime,
+      projectHandoff: async (choice) =>
+        choice === "apply_to_project"
+          ? await integrationManager.applyToProject()
+          : integrationManager.descriptor(false),
       close: () => {
         if (closed) return;
         closed = true;

@@ -176,6 +176,61 @@ test("evidence-backed no-change tasks integrate without fabricating commits", as
   }
 });
 
+test("final handoff applies the integrated diff only after a successful dry run", async () => {
+  const fixture = await createFixture("handoff-apply");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "feature.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+
+    const result = await fixture.integration.applyToProject();
+    assert.equal(result.appliedToProject, true);
+    assert.equal(result.integrationRevision, fixture.integration.revision);
+    assert.match(result.integrationBranch, /^aiboard\//);
+    assert.equal(
+      readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(),
+      "integrated"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("final handoff conflicts leave the original project unchanged", async () => {
+  const fixture = await createFixture("handoff-conflict");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "shared.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Change shared");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+    writeFileSync(join(fixture.project, "shared.txt"), "user changed this\n");
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /cannot be applied safely/i
+    );
+    assert.equal(
+      readFileSync(join(fixture.project, "shared.txt"), "utf8"),
+      "user changed this\n"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 async function createFixture(label: string) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-integration-${label}-`));
   const project = join(root, "project");

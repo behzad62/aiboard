@@ -45,6 +45,11 @@ test("native Build manager recreates persisted runtimes and closes resources", a
         created.push(input.runId);
         return {
           runtime: fakeRuntime(input.runId),
+          projectHandoff: async () => ({
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
           close: () => {
             closed.push(input.runId);
           },

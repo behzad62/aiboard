@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
@@ -35,9 +35,16 @@ export type IntegrationResult =
       conflictPaths: string[];
     };
 
+export interface ProjectHandoffResult {
+  integrationRevision: string;
+  integrationBranch: string;
+  appliedToProject: boolean;
+}
+
 export class IntegrationManager {
   readonly path: string;
   private readonly repositoryRoot: string;
+  private readonly stateDirectory: string;
   private readonly runId: string;
   private readonly runSegment: string;
   private readonly baselineRevision: string;
@@ -48,6 +55,7 @@ export class IntegrationManager {
 
   constructor(options: IntegrationManagerOptions) {
     this.repositoryRoot = resolve(options.repositoryRoot);
+    this.stateDirectory = resolve(options.stateDirectory);
     this.runId = options.runId;
     this.runSegment = safeName(options.runId);
     const integrationRoot = resolve(options.stateDirectory, "integration");
@@ -65,6 +73,18 @@ export class IntegrationManager {
       throw new Error("Integration manager has not been initialized.");
     }
     return this.currentRevision;
+  }
+
+  get integrationBranch(): string {
+    return this.branch.slice("refs/heads/".length);
+  }
+
+  descriptor(appliedToProject = false): ProjectHandoffResult {
+    return {
+      integrationRevision: this.revision,
+      integrationBranch: this.integrationBranch,
+      appliedToProject,
+    };
   }
 
   async initialize(): Promise<void> {
@@ -174,6 +194,54 @@ export class IntegrationManager {
         integrationRevision: this.currentRevision,
         changedPaths: [...changeSet.changedPaths],
       };
+    });
+  }
+
+  async applyToProject(): Promise<ProjectHandoffResult> {
+    return await this.serialized(async () => {
+      await this.ensureIntegrationWorkspace();
+      const diff = await this.git(this.path, [
+        "diff",
+        "--binary",
+        "--full-index",
+        this.baselineRevision,
+        this.revision,
+        "--",
+      ]);
+      if (!diff.stdout) return this.descriptor(true);
+
+      const handoffDirectory = resolve(this.stateDirectory, "handoff");
+      const patchPath = resolve(handoffDirectory, `${this.runSegment}.patch`);
+      if (relative(handoffDirectory, patchPath).startsWith("..")) {
+        throw new Error("Project handoff patch escaped the runner state directory.");
+      }
+      await mkdir(handoffDirectory, { recursive: true });
+      await writeFile(patchPath, diff.stdout, "utf8");
+      try {
+        const check = await this.git(
+          this.repositoryRoot,
+          ["apply", "--check", "--binary", patchPath],
+          true
+        );
+        if (check.exitCode !== 0) {
+          throw new Error(
+            `The integrated result cannot be applied safely to the project: ${check.stderr.trim()}`
+          );
+        }
+        const applied = await this.git(
+          this.repositoryRoot,
+          ["apply", "--binary", patchPath],
+          true
+        );
+        if (applied.exitCode !== 0) {
+          throw new Error(
+            `The integrated result could not be applied to the project: ${applied.stderr.trim()}`
+          );
+        }
+        return this.descriptor(true);
+      } finally {
+        await rm(patchPath, { force: true });
+      }
     });
   }
 

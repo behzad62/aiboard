@@ -62,8 +62,8 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       const step = await runtime.step();
       const projection = runtime.projection();
       store.close();
-      if (projection.status === "completed") {
-        assert.equal(step.status, "completed");
+      if (projection.projectHandoff?.status === "requested") {
+        assert.equal(step.status, "paused");
         break;
       }
     }
@@ -79,7 +79,8 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       workspaceFor: async (task) => `C:/work/${task.id}`,
     });
     const projection = recovered.projection();
-    assert.equal(projection.status, "completed");
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.projectHandoff?.status, "requested");
     assert.deepEqual(
       Object.values(projection.tasks).map((task) => task.status),
       ["integrated", "integrated"]
@@ -91,6 +92,17 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     assert.equal(new Set(integration.calls).size, integration.calls.length);
     assert.equal(architect.planCalls, 1);
     assert.equal(architect.completeCalls, 1);
+    const selected = recovered.selectProjectHandoff(
+      "keep_integration_branch",
+      {
+        integrationRevision: "revision_task_b",
+        integrationBranch: "aiboard/integration/run_1",
+        appliedToProject: false,
+      },
+      "handoff:keep"
+    );
+    assert.equal(selected.status, "completed");
+    assert.equal(selected.projectHandoff?.choice, "keep_integration_branch");
     recoveredStore.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

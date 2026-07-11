@@ -308,10 +308,10 @@ function completeRunTool(
       if (denied) return denied;
       return appendEvent(store, {
         runId: context.runId,
-        type: "run.completed",
+        type: "project.handoff_requested",
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: "run-completed",
+        idempotencyKey: "project-handoff-requested",
         payload: { summary: input.summary },
       }, { type: "architect_action", action: "run_completed" });
     },

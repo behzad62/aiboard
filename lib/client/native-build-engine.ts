@@ -86,8 +86,17 @@ export async function runNativeBuildDiscussion(
   if (run.state === "created") {
     await commandNativeRun(connection, runId, "start", `start:${runId}`);
   } else if (run.state === "paused") {
+    const pausedProjection = await getNativeBuild(connection, runId);
+    if (pausedProjection.projectHandoff?.status === "requested") {
+      emitProjectHandoffPause(discussion, pausedProjection, emit);
+      return;
+    }
     await commandNativeRun(connection, runId, "resume", `resume:${Date.now()}`);
-  } else if (["completed", "failed", "stopped"].includes(run.state)) {
+  } else if (run.state === "completed") {
+    const events = await getNativeBuildEvents(connection, runId, 0);
+    finalizeNativeBuild(discussion, completionSummary(events), emit);
+    return;
+  } else if (["failed", "stopped"].includes(run.state)) {
     throw new Error(`Native Build ${runId} is terminal (${run.state}); start a new pass.`);
   }
 
@@ -108,30 +117,21 @@ export async function runNativeBuildDiscussion(
       const projection = await getNativeBuild(connection, runId);
       emitTaskProjection(projection, emit);
       if (result.status === "completed" || projection.status === "completed") {
-        const summary = completionSummary(events) ?? completionSummary(
-          await getNativeBuildEvents(connection, runId, 0)
-        ) ?? "Build completed by the Architect.";
-        const now = new Date().toISOString();
-        insertFinalResult({
-          discussionId: discussion.id,
-          answer: summary,
-          confidence: 1,
-          dissent: "[]",
-          createdAt: now,
-        });
-        updateDiscussion(discussion.id, {
-          status: "completed",
-          buildStopReason: "completed",
-          buildStoppedAt: now,
-          updatedAt: now,
-        });
-        emit({ type: "final_answer", answer: summary, confidence: 1, dissent: [] });
-        emit({ type: "diagnostic", phase: "finished", message: "Native Build completed" });
-        emit({ type: "complete" });
+        finalizeNativeBuild(
+          discussion,
+          completionSummary(events) ?? completionSummary(
+            await getNativeBuildEvents(connection, runId, 0)
+          ),
+          emit
+        );
         return;
       }
       if (result.status === "paused" || projection.status === "paused") {
         await pauseSupervisor(connection, runId);
+        if (projection.projectHandoff?.status === "requested") {
+          emitProjectHandoffPause(discussion, projection, emit);
+          return;
+        }
         const handoff = projection.runtime.architect.handoff;
         const message = handoff
           ? `Architect provider handoff requires your selection: ${handoff.candidateRuntimeIds.join(", ")}`
@@ -340,10 +340,63 @@ function eventSummary(event: NativeBuildEvent): string {
 }
 
 function completionSummary(events: NativeBuildEvent[]): string | undefined {
-  const completed = [...events].reverse().find((event) => event.type === "run.completed");
+  const completed = [...events].reverse().find(
+    (event) => event.type === "project.handoff_requested" || event.type === "run.completed"
+  );
   return typeof completed?.payload.summary === "string"
     ? completed.payload.summary
     : undefined;
+}
+
+function emitProjectHandoffPause(
+  discussion: Discussion,
+  projection: NativeBuildProjection,
+  emit: Emit
+): void {
+  const handoff = projection.projectHandoff;
+  if (!handoff || handoff.status !== "requested") return;
+  emit({
+    type: "project_handoff_required",
+    summary: handoff.summary,
+    options: [...handoff.options],
+  });
+  const now = new Date().toISOString();
+  updateDiscussion(discussion.id, {
+    status: "stopped",
+    buildStopReason: "blocked",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({
+    type: "build_stopped",
+    reason: "blocked",
+    message: "The Architect finished. Choose how Runner V2 should hand the integrated result back to the project.",
+  });
+}
+
+function finalizeNativeBuild(
+  discussion: Discussion,
+  summary: string | undefined,
+  emit: Emit
+): void {
+  const answer = summary ?? "Build completed by the Architect.";
+  const now = new Date().toISOString();
+  insertFinalResult({
+    discussionId: discussion.id,
+    answer,
+    confidence: 1,
+    dissent: "[]",
+    createdAt: now,
+  });
+  updateDiscussion(discussion.id, {
+    status: "completed",
+    buildStopReason: "completed",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({ type: "final_answer", answer, confidence: 1, dissent: [] });
+  emit({ type: "diagnostic", phase: "finished", message: "Native Build completed" });
+  emit({ type: "complete" });
 }
 
 async function pauseSupervisor(

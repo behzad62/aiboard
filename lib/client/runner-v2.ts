@@ -76,8 +76,21 @@ export interface NativeBuildProjection {
       };
     };
   };
+  projectHandoff?: {
+    status: "requested" | "selected";
+    summary: string;
+    options: NativeProjectHandoffChoice[];
+    choice?: NativeProjectHandoffChoice;
+    integrationRevision?: string;
+    integrationBranch?: string;
+    appliedToProject?: boolean;
+  };
   lastSequence: number;
 }
+
+export type NativeProjectHandoffChoice =
+  | "keep_integration_branch"
+  | "apply_to_project";
 
 export interface NativeBuildEvent {
   sequence: number;
@@ -243,6 +256,24 @@ export async function selectNativeArchitectHandoff(
     {
       method: "POST",
       body: JSON.stringify({ runtimeId, idempotencyKey }),
+    },
+    fetchImpl
+  );
+}
+
+export async function selectNativeProjectHandoff(
+  connection: NativeRunnerConnection,
+  runId: string,
+  choice: NativeProjectHandoffChoice,
+  idempotencyKey: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/project-handoff`,
+    {
+      method: "POST",
+      body: JSON.stringify({ choice, idempotencyKey }),
     },
     fetchImpl
   );

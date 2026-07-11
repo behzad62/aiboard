@@ -1,10 +1,16 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
-import type { SchedulerEvent, SchedulerProjection } from "./scheduler-store.js";
+import type {
+  ProjectHandoffChoice,
+  SchedulerEvent,
+  SchedulerProjection,
+} from "./scheduler-store.js";
+import type { ProjectHandoffResult } from "./integration-manager.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
+  projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   close(): void | Promise<void>;
 }
 
@@ -69,6 +75,20 @@ export class NativeBuildManager implements BuildControlPlane {
       runtimeId,
       idempotencyKey
     );
+  }
+
+  async selectProjectHandoff(
+    runId: string,
+    choice: ProjectHandoffChoice,
+    idempotencyKey: string
+  ): Promise<SchedulerProjection> {
+    const handle = this.require(runId);
+    const projection = handle.runtime.projection();
+    if (projection.projectHandoff?.status !== "requested") {
+      throw new Error("Final project handoff is not awaiting user selection.");
+    }
+    const result = await handle.projectHandoff(choice);
+    return handle.runtime.selectProjectHandoff(choice, result, idempotencyKey);
   }
 
   async close(): Promise<void> {

@@ -4,6 +4,7 @@ import {
   configureNativeProviders,
   createNativeBuild,
   getNativeRunnerHealth,
+  selectNativeProjectHandoff,
   type NativeRunnerConnection,
 } from "../lib/client/runner-v2";
 import { selectNativeBuildRuntimes } from "../lib/client/native-build-engine";
@@ -70,9 +71,18 @@ await createNativeBuild(connection, {
     budgetLimits: { maxModelCalls: 50, maxToolCalls: 500 },
   },
 }, fetchImpl);
+await selectNativeProjectHandoff(
+  connection,
+  "run_1",
+  "keep_integration_branch",
+  "handoff:keep",
+  fetchImpl
+);
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
 assert.equal(JSON.parse(String(calls[1].init.body)).configs[0].secret, "provider-secret");
 assert.equal(JSON.parse(String(calls[2].init.body)).build.maxConcurrency, 2);
+assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
+assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
 console.log("PASS runner-v2 client");

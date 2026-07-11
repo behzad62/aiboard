@@ -12,6 +12,7 @@ import type {
   RunEvent,
 } from "./contracts.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
+import type { ProjectHandoffChoice } from "./scheduler-store.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { checkGit, type GitPreflightResult } from "./git-preflight.js";
@@ -84,6 +85,11 @@ interface RunBuildBody {
 
 interface ArchitectHandoffBody {
   runtimeId: string;
+  idempotencyKey: string;
+}
+
+interface ProjectHandoffBody {
+  choice: ProjectHandoffChoice;
   idempotencyKey: string;
 }
 
@@ -324,6 +330,30 @@ export class ControlServer {
             body.idempotencyKey
           )
         );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "project-handoff" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ProjectHandoffBody>(request);
+        if (
+          (body.choice !== "keep_integration_branch" &&
+            body.choice !== "apply_to_project") ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        const projection = await this.requireBuilds().selectProjectHandoff(
+          runId,
+          body.choice,
+          body.idempotencyKey
+        );
+        if (projection.status !== "completed") {
+          throw new Error("Final project handoff did not complete the Build.");
+        }
+        this.syncBuildLifecycle(runId, "completed");
+        sendJson(response, 200, projection);
         return;
       }
       if (

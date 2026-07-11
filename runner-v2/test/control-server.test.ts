@@ -335,6 +335,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
     lastSequence: 1,
   };
+  let projectHandoffChoice = "";
   const builds: BuildControlPlane = {
     projection: () => projection,
     events: () => [],
@@ -349,6 +350,22 @@ test("native Build projections and pump controls are runner-owned API routes", a
     pause: () => ({ ...projection, status: "paused" }),
     resume: () => projection,
     selectArchitectHandoff: () => projection,
+    selectProjectHandoff: async (_runId, choice) => {
+      projectHandoffChoice = choice;
+      return {
+        ...projection,
+        status: "completed",
+        projectHandoff: {
+          status: "selected",
+          summary: "Done",
+          options: ["keep_integration_branch", "apply_to_project"],
+          choice,
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: choice === "apply_to_project",
+        },
+      };
+    },
   };
   const server = new ControlServer({
     supervisor,
@@ -382,6 +399,20 @@ test("native Build projections and pump controls are runner-owned API routes", a
       authorized({ method: "POST", body: JSON.stringify({ maxSteps: 12 }) })
     );
     assert.equal((await json(pump)).action, "max:12");
+
+    const handoff = await fetch(
+      `${url}/v2/runs/run_1/build/project-handoff`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          choice: "keep_integration_branch",
+          idempotencyKey: "handoff:keep",
+        }),
+      })
+    );
+    assert.equal(handoff.status, 200);
+    assert.equal((await json(handoff)).status, "completed");
+    assert.equal(projectHandoffChoice, "keep_integration_branch");
   } finally {
     await server.close();
     supervisor.close();
