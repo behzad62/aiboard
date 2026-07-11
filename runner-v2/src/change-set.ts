@@ -41,10 +41,12 @@ export async function createChangeSet(
   options: CreateChangeSetOptions
 ): Promise<ChangeSet> {
   const commit = options.taskCommit;
-  if (commit.commits.length === 0) {
-    throw new Error(`Task ${commit.taskId} has no commits for a change set.`);
-  }
   const evidence = unique(options.evidenceArtifactHashes ?? []);
+  if (commit.commits.length === 0 && evidence.length === 0) {
+    throw new Error(
+      `No-change task ${commit.taskId} requires durable evidence before submission.`
+    );
+  }
   for (const hash of evidence) assertArtifactHash(hash);
   for (const effect of options.externalEffects ?? []) {
     if (!effect.kind || !effect.idempotencyKey) {

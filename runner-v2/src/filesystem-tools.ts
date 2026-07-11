@@ -262,7 +262,75 @@ function definition(
   readOnly: boolean,
   effect: "none" | "workspace"
 ) {
-  return { name, description, inputSchema: { type: "object" }, readOnly, effect } as const;
+  return { name, description, inputSchema: filesystemSchema(name), readOnly, effect } as const;
+}
+
+function filesystemSchema(name: string): Record<string, unknown> {
+  const path = { type: "string", minLength: 1 };
+  const sha = { type: "string", pattern: "^[a-f0-9]{64}$" };
+  switch (name) {
+    case "fs.read":
+    case "fs.stat":
+      return objectSchema({ path }, ["path"]);
+    case "fs.list":
+      return objectSchema(
+        { path, maxDepth: { type: "integer", minimum: 0, maximum: 20 } },
+        ["path"]
+      );
+    case "fs.search":
+      return objectSchema(
+        {
+          path,
+          pattern: { type: "string" },
+          regex: { type: "boolean" },
+          caseSensitive: { type: "boolean" },
+        },
+        ["path", "pattern"]
+      );
+    case "fs.write":
+      return objectSchema(
+        {
+          path,
+          content: { type: "string" },
+          expectedSha256: sha,
+          createDirectories: { type: "boolean" },
+        },
+        ["path", "content"]
+      );
+    case "fs.patch":
+      return objectSchema(
+        {
+          path,
+          search: { type: "string", minLength: 1 },
+          replace: { type: "string" },
+          expectedSha256: sha,
+        },
+        ["path", "search", "replace", "expectedSha256"]
+      );
+    case "fs.move":
+      return objectSchema(
+        {
+          source: path,
+          destination: path,
+          createDirectories: { type: "boolean" },
+        },
+        ["source", "destination"]
+      );
+    case "fs.delete":
+      return objectSchema(
+        { path, recursive: { type: "boolean" } },
+        ["path"]
+      );
+    default:
+      throw new Error(`Unknown filesystem tool ${name}.`);
+  }
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[]
+): Record<string, unknown> {
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 function objectWithString(key: string) {

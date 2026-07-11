@@ -78,6 +78,15 @@ export class IntegrationManager {
       await this.ensureIntegrationWorkspace();
       this.assertCompatible(changeSet);
       await this.assertTaskHistory(changeSet);
+      if (changeSet.commits.length === 0) {
+        return {
+          status: "integrated",
+          changeSetId: changeSet.id,
+          taskId: changeSet.taskId,
+          integrationRevision: this.revision,
+          changedPaths: [],
+        };
+      }
       const appliedRef = this.appliedRef(changeSet.id);
       const alreadyApplied = await this.resolveRef(appliedRef);
       if (alreadyApplied) {
@@ -230,11 +239,13 @@ export class IntegrationManager {
     if (changeSet.baselineRevision !== this.baselineRevision) {
       throw new Error(`Change set ${changeSet.id} has a different baseline.`);
     }
-    if (changeSet.commits.length === 0) {
-      throw new Error(`Change set ${changeSet.id} has no task commits.`);
-    }
     if (changeSet.commits.at(-1) !== changeSet.taskRevision) {
-      throw new Error(`Change set ${changeSet.id} task revision is inconsistent.`);
+      if (
+        changeSet.commits.length !== 0 ||
+        changeSet.taskRevision !== changeSet.baselineRevision
+      ) {
+        throw new Error(`Change set ${changeSet.id} task revision is inconsistent.`);
+      }
     }
   }
 

@@ -21,8 +21,10 @@ import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
   TaskWorkspace,
+  TaskCommit,
   WorkspaceManager,
 } from "./workspace-manager.js";
+import { NoTaskChangesError } from "./workspace-manager.js";
 import {
   createSubmitTaskTool,
   createWorkerLifecycleTools,
@@ -132,23 +134,42 @@ export async function runWorkerTask(
 
   let producedChangeSet: ChangeSet | undefined;
   broker.register(createSubmitTaskTool(async (summary) => {
-    const commit = await options.workspaceManager.commitTask(
-      options.taskId,
-      summary
-    );
+    const evidenceHashes = options.evidenceStore
+      ? evidenceArtifactHashes(
+          options.evidenceStore.list({
+            runId: options.runId,
+            taskId: options.taskId,
+            limit: 1_000,
+          })
+        )
+      : [];
+    let commit: TaskCommit;
+    try {
+      commit = await options.workspaceManager.commitTask(
+        options.taskId,
+        summary
+      );
+    } catch (error) {
+      if (!(error instanceof NoTaskChangesError)) throw error;
+      if (evidenceHashes.length === 0) {
+        throw new Error(
+          "No-change submission requires durable evidence; run run_evidence_command first."
+        );
+      }
+      commit = {
+        runId: options.runId,
+        taskId: options.taskId,
+        revision: options.workspace.baselineRevision,
+        baselineRevision: options.workspace.baselineRevision,
+        commits: [],
+        changedPaths: [],
+      };
+    }
     producedChangeSet = await createChangeSet({
       workspacePath: options.workspace.path,
       taskCommit: commit,
       artifacts: options.artifacts,
-      evidenceArtifactHashes: options.evidenceStore
-        ? evidenceArtifactHashes(
-            options.evidenceStore.list({
-              runId: options.runId,
-              taskId: options.taskId,
-              limit: 1_000,
-            })
-          )
-        : [],
+      evidenceArtifactHashes: evidenceHashes,
     });
     return producedChangeSet;
   }));

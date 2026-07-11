@@ -34,7 +34,11 @@ function recallTool(options: MemoryToolsOptions): NativeTool<{
     definition: {
       name: "recall_project_memory",
       description: "Recall promoted memory from this project only",
-      inputSchema: { type: "object" },
+      inputSchema: objectSchema({
+        query: { type: "string" },
+        concepts: { type: "array", items: { type: "string", minLength: 1 } },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      }, ["query"]),
       readOnly: true,
       effect: "none",
     },
@@ -54,7 +58,10 @@ function proposeTool(
     definition: {
       name: "propose_project_memory",
       description: "Propose a project learning for later Architect promotion",
-      inputSchema: { type: "object" },
+      inputSchema: objectSchema({
+        content: { type: "string", minLength: 1 },
+        concepts: { type: "array", items: { type: "string", minLength: 1 } },
+      }, ["content", "concepts"]),
       readOnly: false,
       effect: "none",
     },
@@ -117,7 +124,10 @@ function listProposalsTool(options: MemoryToolsOptions): NativeTool<{ limit: num
     definition: {
       name: "list_memory_proposals",
       description: "List unpromoted memory proposals for this project",
-      inputSchema: { type: "object" },
+      inputSchema: objectSchema(
+        { limit: { type: "integer", minimum: 1, maximum: 100 } },
+        []
+      ),
       readOnly: true,
       effect: "none",
     },
@@ -142,7 +152,13 @@ function architectMutation<T>(
   mutate: (input: T, context: ToolExecutionContext) => Promise<ToolExecutionOutput>
 ): NativeTool<T> {
   return {
-    definition: { name, description, inputSchema: { type: "object" }, readOnly: false, effect: "none" },
+    definition: {
+      name,
+      description,
+      inputSchema: memoryMutationSchema(name),
+      readOnly: false,
+      effect: "none",
+    },
     validate,
     execute: async (input, context) => {
       if (context.actor.role !== "architect") return denied();
@@ -153,6 +169,32 @@ function architectMutation<T>(
       }
     },
   };
+}
+
+function memoryMutationSchema(name: string): Record<string, unknown> {
+  if (name === "promote_project_memory") {
+    return objectSchema(
+      { memoryId: { type: "string", minLength: 1 } },
+      ["memoryId"]
+    );
+  }
+  if (name === "archive_project_memory") {
+    return objectSchema(
+      {
+        memoryId: { type: "string", minLength: 1 },
+        reason: { type: "string", minLength: 1 },
+      },
+      ["memoryId", "reason"]
+    );
+  }
+  throw new Error(`Unknown memory mutation tool ${name}.`);
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[]
+): Record<string, unknown> {
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 function parseSearch(input: unknown): ValidationResult<{ query: string; concepts: string[]; limit: number }> {

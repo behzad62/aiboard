@@ -82,7 +82,17 @@ function askArchitectTool(
     definition: {
       name: "ask_architect",
       description: "Ask the Architect for task guidance, citing the latest durable evidence sequence",
-      inputSchema: { type: "object" },
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          question: { type: "string" },
+          blocking: { type: "boolean" },
+          evidenceSequence: { type: "integer", minimum: 0 },
+        },
+        required: ["requestId", "question", "blocking", "evidenceSequence"],
+        additionalProperties: false,
+      },
       readOnly: false,
       effect: "none",
       lifecycle: true,
@@ -121,7 +131,17 @@ function challengeGuidanceTool(
     definition: {
       name: "challenge_guidance",
       description: "Challenge one Architect guidance version using newer durable evidence",
-      inputSchema: { type: "object" },
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          expectedVersion: { type: "integer", minimum: 1 },
+          evidenceSequence: { type: "integer", minimum: 0 },
+          reason: { type: "string" },
+        },
+        required: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+        additionalProperties: false,
+      },
       readOnly: false,
       effect: "none",
       lifecycle: true,

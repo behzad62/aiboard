@@ -156,10 +156,49 @@ function definition(name: string, description: string, readOnly: boolean) {
   return {
     name,
     description,
-    inputSchema: { type: "object" },
+    inputSchema: gitSchema(name),
     readOnly,
     effect: "none" as const,
   };
+}
+
+function gitSchema(name: string): Record<string, unknown> {
+  switch (name) {
+    case "git.status":
+      return objectSchema({}, []);
+    case "git.diff":
+      return objectSchema(
+        {
+          staged: { type: "boolean" },
+          base: { type: "string", minLength: 1 },
+        },
+        []
+      );
+    case "git.log":
+      return objectSchema(
+        { limit: { type: "integer", minimum: 1, maximum: 100 } },
+        []
+      );
+    case "git.show":
+      return objectSchema(
+        { revision: { type: "string", minLength: 1 } },
+        []
+      );
+    case "git.commit":
+      return objectSchema(
+        { message: { type: "string", minLength: 1 } },
+        ["message"]
+      );
+    default:
+      throw new Error(`Unknown Git tool ${name}.`);
+  }
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[]
+): Record<string, unknown> {
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 function objectInput(input: unknown): ValidationResult<Input> {

@@ -42,7 +42,18 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
     definition: {
       name: "run_evidence_command",
       description: "Run an argument-array command and record exit/output/revision facts without a verdict",
-      inputSchema: { type: "object" },
+      inputSchema: {
+        type: "object",
+        properties: {
+          label: { type: "string", minLength: 1 },
+          command: { type: "string", minLength: 1 },
+          args: { type: "array", items: { type: "string" } },
+          cwd: { type: "string" },
+          timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs },
+        },
+        required: ["label", "command", "args"],
+        additionalProperties: false,
+      },
       readOnly: false,
       effect: "workspace",
     },
@@ -104,7 +115,11 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
     definition: {
       name: "inspect_evidence",
       description: "Inspect immutable command evidence facts; no semantic verdict is provided",
-      inputSchema: { type: "object" },
+      inputSchema: {
+        type: "object",
+        properties: { taskId: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
       readOnly: true,
       effect: "none",
     },

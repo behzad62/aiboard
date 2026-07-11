@@ -177,6 +177,79 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
   }
 });
 
+test("worker can submit an evidence-backed inspection task without fabricating a commit", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-no-change-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "unchanged\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let evidenceStore: SqliteEvidenceStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_inspection",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_inspection",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_inspection");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    const result = await runWorkerTask({
+      model: new ScriptedModel([
+        toolTurn("inspect", "run_evidence_command", {
+          label: "confirm repository state",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('inspected')"],
+          cwd: ".",
+        }),
+        toolTurn("submit", "submit_task", {
+          summary: "Repository inspection found no required changes",
+        }),
+      ]),
+      runId: "run_inspection",
+      sessionId: "session_inspection",
+      taskId: "task_inspection",
+      actorId: "worker_1",
+      permissionProfile: "project",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore,
+      initialMessages: [
+        { id: "system", role: "system", content: "Inspect and submit evidence." },
+        { id: "user", role: "user", content: "Report whether changes are needed." },
+      ],
+    });
+    assert.equal(result.loop.status, "submitted");
+    assert.deepEqual(result.changeSet?.commits, []);
+    assert.deepEqual(result.changeSet?.changedPaths, []);
+    assert.equal(result.changeSet?.taskRevision, baseline.revision);
+    assert.equal(result.changeSet?.evidenceArtifactHashes.length, 2);
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    evidenceStore?.close();
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  }
+});
+
 function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return {
     blocks: [{ type: "tool_call", callId, name, arguments: args }],

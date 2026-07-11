@@ -20,6 +20,32 @@ import { createWorkerLifecycleTools } from "../src/worker-lifecycle-tools.js";
 
 const now = () => "2026-07-12T00:00:00.000Z";
 
+test("Architect and worker lifecycle tools publish complete model-facing schemas", async () => {
+  await withStore(async (store) => {
+    const tools = [
+      ...createArchitectTools({ store, clock: now }),
+      ...createWorkerLifecycleTools({ store, taskId: "task_a", clock: now }),
+    ];
+    const expectedRequired: Record<string, string[]> = {
+      plan_tasks: ["revision", "tasks"],
+      revise_task: ["taskId", "revision"],
+      answer_guidance: ["requestId", "expectedVersion", "answer"],
+      review_task: ["taskId", "decision", "summary", "evidenceArtifactHashes"],
+      request_integration: ["taskId"],
+      complete_run: ["summary"],
+      ask_architect: ["requestId", "question", "blocking", "evidenceSequence"],
+      challenge_guidance: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+    };
+    for (const tool of tools) {
+      const schema = tool.definition.inputSchema as Record<string, unknown>;
+      assert.equal(schema.type, "object", tool.definition.name);
+      assert.deepEqual(schema.required, expectedRequired[tool.definition.name], tool.definition.name);
+      assert.equal(schema.additionalProperties, false, tool.definition.name);
+      assert.equal(typeof schema.properties, "object", tool.definition.name);
+    }
+  });
+});
+
 test("architect lifecycle changes require typed tool calls, not completion prose", async () => {
   await withStore(async (store) => {
     const registry = new ToolRegistry();

@@ -123,6 +123,48 @@ test("integration conflicts are mechanical results and leave canonical integrati
   }
 });
 
+test("evidence-backed no-change tasks integrate without fabricating commits", async () => {
+  const fixture = await createFixture("no-change");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("inspection");
+    const evidence = await fixture.artifacts.put(
+      Buffer.from("inspection passed"),
+      "text/plain",
+      "Inspection evidence"
+    );
+    const taskCommit = {
+      runId: "run_no-change",
+      taskId: "inspection",
+      revision: fixture.baseline.revision,
+      baselineRevision: fixture.baseline.revision,
+      commits: [],
+      changedPaths: [],
+    };
+    await assert.rejects(
+      () => createChangeSet({
+        workspacePath: workspace.path,
+        taskCommit,
+        artifacts: fixture.artifacts,
+      }),
+      /durable evidence/i
+    );
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [evidence.hash],
+    });
+    assert.deepEqual(changeSet.commits, []);
+    const before = fixture.integration.revision;
+    const result = await fixture.integration.integrate(changeSet);
+    assert.equal(result.status, "integrated");
+    assert.equal(result.integrationRevision, before);
+    assert.deepEqual(result.changedPaths, []);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 async function createFixture(label: string) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-integration-${label}-`));
   const project = join(root, "project");

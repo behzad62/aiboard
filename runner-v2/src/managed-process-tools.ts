@@ -87,7 +87,46 @@ function definition(
   readOnly: boolean,
   effect: "none" | "workspace"
 ) {
-  return { name, description, inputSchema: { type: "object" }, readOnly, effect } as const;
+  return { name, description, inputSchema: managedProcessSchema(name), readOnly, effect } as const;
+}
+
+function managedProcessSchema(name: string): Record<string, unknown> {
+  switch (name) {
+    case "process.start":
+      return objectSchema({
+        command: { type: "string", minLength: 1 },
+        args: { type: "array", items: { type: "string" } },
+        cwd: { type: "string" },
+        env: {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
+      }, ["command"]);
+    case "process.poll":
+      return objectSchema(
+        { processId: { type: "string", minLength: 1 } },
+        ["processId"]
+      );
+    case "process.list":
+      return objectSchema({}, []);
+    case "process.signal":
+      return objectSchema(
+        {
+          processId: { type: "string", minLength: 1 },
+          signal: { type: "string", enum: ["SIGTERM", "SIGINT", "SIGKILL"] },
+        },
+        ["processId", "signal"]
+      );
+    default:
+      throw new Error(`Unknown managed process tool ${name}.`);
+  }
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[]
+): Record<string, unknown> {
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 function validateStart(input: unknown): ValidationResult<Input> {

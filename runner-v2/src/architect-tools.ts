@@ -129,7 +129,18 @@ function reviseTaskTool(
   return lifecycleTool({
     name: "revise_task",
     description: "Revise a planned task without interpreting its semantic intent",
-    schema: { type: "object" },
+    schema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", minLength: 1 },
+        revision: { type: "integer", minimum: 1 },
+        objective: { type: "string", minLength: 1 },
+        dependencies: { type: "array", items: { type: "string" } },
+        requiredCapabilities: { type: "array", items: { type: "string" } },
+      },
+      required: ["taskId", "revision"],
+      additionalProperties: false,
+    },
     validate: validateRevision,
     execute: async (input, context) => {
       const denied = architectOnly(context);
@@ -164,7 +175,11 @@ function answerGuidanceTool(
   return lifecycleTool({
     name: "answer_guidance",
     description: "Answer a worker guidance request as the Architect",
-    schema: { type: "object" },
+    schema: objectSchema({
+      requestId: { type: "string", minLength: 1 },
+      expectedVersion: { type: "integer", minimum: 1 },
+      answer: { type: "string", minLength: 1 },
+    }, ["requestId", "expectedVersion", "answer"]),
     validate: (input) => validateObject(input, (value) => {
       if (!nonEmpty(value.requestId) || !positiveInteger(value.expectedVersion) || !nonEmpty(value.answer)) return null;
       return value as unknown as AnswerGuidanceInput;
@@ -199,7 +214,15 @@ function reviewTaskTool(
   return lifecycleTool({
     name: "review_task",
     description: "Record the Architect semantic review decision for a submitted task",
-    schema: { type: "object" },
+    schema: objectSchema({
+      taskId: { type: "string", minLength: 1 },
+      decision: { type: "string", enum: ["approved", "rejected"] },
+      summary: { type: "string", minLength: 1 },
+      evidenceArtifactHashes: {
+        type: "array",
+        items: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
+    }, ["taskId", "decision", "summary", "evidenceArtifactHashes"]),
     validate: validateReview,
     execute: async (input, context) => {
       const denied = architectOnly(context);
@@ -232,7 +255,10 @@ function requestIntegrationTool(
   return lifecycleTool({
     name: "request_integration",
     description: "Request serialized integration of an Architect-approved task",
-    schema: { type: "object" },
+    schema: objectSchema(
+      { taskId: { type: "string", minLength: 1 } },
+      ["taskId"]
+    ),
     validate: (input) => validateObject(input, (value) =>
       nonEmpty(value.taskId) ? value as unknown as TaskIdInput : null,
     "taskId is required"),
@@ -262,7 +288,10 @@ function completeRunTool(
   return lifecycleTool({
     name: "complete_run",
     description: "Record the Architect's semantic decision that the build is complete",
-    schema: { type: "object" },
+    schema: objectSchema(
+      { summary: { type: "string", minLength: 1 } },
+      ["summary"]
+    ),
     validate: (input) => validateObject(input, (value) =>
       nonEmpty(value.summary) ? value as unknown as CompleteRunInput : null,
     "summary is required"),
@@ -410,6 +439,18 @@ function taskSchema(): Record<string, unknown> {
       requiredCapabilities: { type: "array", items: { type: "string" } },
     },
     required: ["id", "objective", "dependencies", "requiredCapabilities"],
+    additionalProperties: false,
+  };
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[]
+): Record<string, unknown> {
+  return {
+    type: "object",
+    properties,
+    required,
     additionalProperties: false,
   };
 }
