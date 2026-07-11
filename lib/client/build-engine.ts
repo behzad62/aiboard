@@ -8348,6 +8348,7 @@ export async function runBuildDiscussion(
         if (expectedFailureEvidenceResponse) {
           output = expectedFailureEvidenceResponse;
         }
+        let finalEvidenceResponseOnly = false;
         for (let finalAttempt = 0; finalAttempt < WORKER_FINAL_OUTPUT_ATTEMPTS; finalAttempt++) {
           const preview = extractArtifacts(output);
           const scopedVerificationGapReport =
@@ -8356,11 +8357,12 @@ export async function runBuildDiscussion(
             preview.files.length > 0 ||
             preview.edits.length > 0 ||
             preview.truncatedPaths.length > 0;
+          const hasLandedTaskFiles =
+            patchedFiles.length > 0 ||
+            preToolArtifactFiles.length > 0 ||
+            durableTaskFiles.length > 0;
           const requestFinalOutput = shouldRequestWorkerFinalOutput({
-            hasLandedFiles:
-              patchedFiles.length > 0 ||
-              preToolArtifactFiles.length > 0 ||
-              durableTaskFiles.length > 0,
+            hasLandedFiles: hasLandedTaskFiles,
             hasPreviewArtifacts,
             hasScopedVerificationGapReport: scopedVerificationGapReport,
             expectsFileOutput: taskContract.completionMode === "files",
@@ -8378,11 +8380,10 @@ export async function runBuildDiscussion(
           }
           const instruction = buildWorkerFinalResponseInstruction({
             expectsFileOutput: taskContract.completionMode === "files",
-            hasLandedFiles:
-              patchedFiles.length > 0 ||
-              preToolArtifactFiles.length > 0 ||
-              durableTaskFiles.length > 0,
+            hasLandedFiles: hasLandedTaskFiles,
           });
+          finalEvidenceResponseOnly =
+            taskContract.completionMode !== "files" || hasLandedTaskFiles;
           const finalOutputReason =
             inspectStrictToolActionBatchOutput(output).actions.length > 0
               ? "ended its bounded tool loop without a final evidence response"
@@ -8406,9 +8407,11 @@ export async function runBuildDiscussion(
           workerMessages.push({ role: "assistant", content: output });
         }
 
-        const artifactResult = preToolArtifactOutputs.has(output)
+        const artifactResult = finalEvidenceResponseOnly
           ? { written: [], issues: [] }
-          : await writeEmittedFiles(output, task.id);
+          : preToolArtifactOutputs.has(output)
+            ? { written: [], issues: [] }
+            : await writeEmittedFiles(output, task.id);
         recordTaskLandedWrite(artifactResult.written);
         const files = [
           ...new Set([...patchedFiles, ...preToolArtifactFiles, ...artifactResult.written]),

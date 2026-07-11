@@ -944,6 +944,14 @@ check(
   "file tasks can finish without the structured evidence required by their active skills"
 );
 check(
+  "tools-disabled evidence finalization cannot land post-verification file artifacts",
+  /finalEvidenceResponseOnly/.test(buildEngineSource) &&
+    /finalEvidenceResponseOnly\s*\?\s*\{\s*written:\s*\[\],\s*issues:\s*\[\]\s*\}/.test(
+      buildEngineSource
+    ),
+  "evidence-only final responses can still advance the task write generation"
+);
+check(
   "landed worker writes invalidate same-attempt tool dedup state",
   /recordTaskLandedWrite[\s\S]{0,500}tracker\.exact\.clear\(\)[\s\S]{0,120}tracker\.ranges\.clear\(\)[\s\S]{0,120}replayCache\.clear\(\)/.test(
     buildEngineSource
