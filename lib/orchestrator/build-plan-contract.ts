@@ -299,16 +299,17 @@ export interface PendingBuildVerifierInput {
 }
 
 /**
- * Find verifier inputs that the accepted plan says a future task will create,
- * but which do not exist yet. Running the verifier before those producers have
- * had a chance to land the files creates a false failure and wastes a review
- * cycle. This is a scheduling decision only; it never adds dependencies or
- * changes the Architect's task graph.
+ * Find verifier inputs still owned by unfinished future tasks. Existing files
+ * are not necessarily final: a later accepted task may be scheduled to change
+ * them. Running the final verifier before those owners land creates a false
+ * failure and wastes a review cycle. Current task ids are exempt so workers can
+ * verify their own output. This is scheduling only; it never changes the graph.
  */
 export function findPendingBuildVerifierInputs(input: {
   command: string;
   tasks: ReadonlyArray<BuildTask>;
   availablePaths: ReadonlyArray<string>;
+  currentTaskIds?: ReadonlyArray<string>;
 }): PendingBuildVerifierInput[] {
   if (!input.command.trim()) return [];
   const commandPaths = new Set(
@@ -319,16 +320,17 @@ export function findPendingBuildVerifierInputs(input: {
       .filter((path): path is string => !!path)
   );
 
-  const available = new Set(
-    input.availablePaths.map(pathKey).filter((path): path is string => !!path)
-  );
   const pendingStatuses = new Set(["planned", "fixing", "in_progress"]);
+  const currentTaskIds = new Set(
+    (input.currentTaskIds ?? []).map(taskIdKey).filter(Boolean)
+  );
   const ownersByPath = new Map<string, string[]>();
 
   for (const task of input.tasks) {
     if (!pendingStatuses.has(task.status)) continue;
+    if (currentTaskIds.has(taskIdKey(task.id))) continue;
     for (const path of buildTaskOwnedPaths(task)) {
-      if (available.has(path) || !commandPaths.has(path)) continue;
+      if (!commandPaths.has(path)) continue;
       const owners = ownersByPath.get(path) ?? [];
       owners.push(task.id);
       ownersByPath.set(path, owners);

@@ -3359,6 +3359,7 @@ export async function runBuildDiscussion(
     deferContext?: {
       tasks: ReadonlyArray<BuildTask>;
       availablePaths: ReadonlyArray<string>;
+      currentTaskIds?: ReadonlyArray<string>;
     }
   ): Promise<BuildVerifyResult> => {
     if (!runner || !command) return { feedback: "", failed: false };
@@ -3367,12 +3368,13 @@ export async function runBuildDiscussion(
         command,
         tasks: deferContext.tasks,
         availablePaths: deferContext.availablePaths,
+        currentTaskIds: deferContext.currentTaskIds,
       });
       if (pendingInputs.length > 0) {
         const details = pendingInputs
           .map((input) => `${input.path} (${input.taskIds.join(", ")})`)
           .join(", ");
-        const feedback = `AUTOMATED BUILD CHECK DEFERRED - \`${command}\` references planned output that has not landed yet: ${details}. The engine will run this verifier after the owning task produces the file.`;
+        const feedback = `AUTOMATED BUILD CHECK DEFERRED - \`${command}\` references output still owned by an unfinished future task: ${details}. The engine will run this verifier after the owning task lands its planned changes.`;
         emit({
           type: "diagnostic",
           phase: "round_preparing",
@@ -8292,6 +8294,7 @@ export async function runBuildDiscussion(
             const result = await runVerify(command, {
               tasks,
               availablePaths: [...diskTree, ...virtualFs.keys()],
+              currentTaskIds: [task.id],
             });
             const status = result.deferred
               ? "skipped"
@@ -8858,6 +8861,7 @@ export async function runBuildDiscussion(
     const verifyResult = await runVerify(waveVerifyCommand, {
       tasks,
       availablePaths: [...diskTree, ...virtualFs.keys()],
+      currentTaskIds: executed.map(({ task }) => task.id),
     });
     const verifyFeedback = verifyResult.feedback;
     if (waveVerifyCommand) {

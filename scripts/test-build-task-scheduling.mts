@@ -66,7 +66,7 @@ check(
 );
 
 check(
-  "wave verifier runs once the referenced planned output exists",
+  "wave verifier waits when an existing input still has a future planned owner",
   findPendingBuildVerifierInputs({
     command: "node tests/engagement-envelope.test.js",
     tasks: [
@@ -77,6 +77,22 @@ check(
       }),
     ],
     availablePaths: ["tests/engagement-envelope.test.js"],
+  }).length === 1
+);
+
+check(
+  "the current task may verify its own existing output",
+  findPendingBuildVerifierInputs({
+    command: "node tests/engagement-envelope.test.js",
+    tasks: [
+      runnableTask({
+        id: "T-test",
+        status: "in_progress",
+        testOutputPaths: ["tests/engagement-envelope.test.js"],
+      }),
+    ],
+    availablePaths: ["tests/engagement-envelope.test.js"],
+    currentTaskIds: ["T-test"],
   }).length === 0
 );
 
@@ -160,7 +176,7 @@ check(
 );
 
 check(
-  "wave verifier recognizes normalized existing input paths",
+  "current-task verifier recognizes normalized existing input paths",
   findPendingBuildVerifierInputs({
     command: "node .\\tests\\engagement-envelope.test.js",
     tasks: [
@@ -171,6 +187,7 @@ check(
       }),
     ],
     availablePaths: ["./tests/engagement-envelope.test.js"],
+    currentTaskIds: ["T-test"],
   }).length === 0
 );
 check(
@@ -208,6 +225,16 @@ check(
       buildEngineSource
     ),
   "runVerify does not defer a verifier whose planned input has not landed"
+);
+check(
+  "live verifier identifies the current task while deferring future owners",
+  /runVerify\(command, \{[\s\S]{0,180}currentTaskIds:\s*\[task\.id\]/.test(
+    buildEngineSource
+  ) &&
+    /runVerify\(waveVerifyCommand, \{[\s\S]{0,180}currentTaskIds:\s*executed\.map/.test(
+      buildEngineSource
+    ),
+  "worker and wave verifier calls do not distinguish current from future task owners"
 );
 const collisionGuardStart = buildEngineSource.indexOf(
   "const selection = selectBuildTaskDispatchBatch"
