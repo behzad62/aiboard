@@ -12,6 +12,7 @@ import {
   cell,
   shipFor,
 } from "../lib/benchmark/gameiq/battleship-builders";
+import type { BattleshipGameState } from "../lib/games/battleship/types";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -72,6 +73,62 @@ check(
 // multiset regression: probability of E4 must be 3/5 (five placements incl.
 // BOTH the len-3 and len-4 families) — a deduped-sizes bug would change totals.
 check("oracle: E4 probability 3/5", Math.abs((ratios.get(k("E4"))?.probability ?? 0) - 0.6) < 1e-9);
+
+// --- oracle hardening: maxCount === 0 must throw loud, not return an empty
+// map silently. Construct a state whose ONLY consistent placement is
+// fully-hit: destroyer(2) is the sole remaining (unsunk) ship, its two cells
+// (E5,E6) are both already hit, and every orthogonal extension cell around
+// that pair is a miss (E4,E7,D5,D6,F5,F6). The only length-2 placement that
+// covers both hits IS {E5,E6} itself, but both cells are already shot, so it
+// contributes to no unshot cell's count: total=1 (a placement was found) but
+// maxCount=0 (no unshot cell is coverable).
+//
+// This state cannot be produced by firing real shots through the engine:
+// hitting BOTH cells of a size-2 ship always auto-sinks it (isShipSunk /
+// fireBattleshipShot in lib/games/battleship/engine.ts), which would drop it
+// from remainingSizes and resolve the hits — contradicting the "unsunk ship,
+// unresolved hits" premise by construction. So this is a hand-built minimal
+// BattleshipGameState object literal instead; the oracle only reads
+// state.boards.orange (ships + shotsReceived), so the other 4 fleet ships
+// are safely omitted rather than fabricated as sunk.
+const degenerateState: BattleshipGameState = {
+  boards: {
+    orange: {
+      ships: [
+        { id: "destroyer", name: "Destroyer", size: 2, cells: [cell("E5"), cell("E6")] },
+      ],
+      shotsReceived: [
+        { target: cell("E4"), result: "miss", timestamp: 1 },
+        { target: cell("E7"), result: "miss", timestamp: 2 },
+        { target: cell("D5"), result: "miss", timestamp: 3 },
+        { target: cell("D6"), result: "miss", timestamp: 4 },
+        { target: cell("F5"), result: "miss", timestamp: 5 },
+        { target: cell("F6"), result: "miss", timestamp: 6 },
+        { target: cell("E5"), result: "hit", shipId: "destroyer", timestamp: 7 },
+        { target: cell("E6"), result: "hit", shipId: "destroyer", timestamp: 8 },
+      ],
+    },
+    blue: { ships: [], shotsReceived: [] },
+  },
+  turn: "blue",
+  status: "playing",
+  winner: null,
+  moveHistory: [],
+};
+let threwOnDegenerateMaxCount = false;
+let degenerateThrowMessage = "";
+try {
+  battleshipCellRatios(degenerateState);
+} catch (error) {
+  threwOnDegenerateMaxCount = error instanceof Error;
+  degenerateThrowMessage = error instanceof Error ? error.message : String(error);
+}
+check(
+  "oracle: all-fully-hit-placements corner throws (maxCount === 0) instead of returning an empty map",
+  threwOnDegenerateMaxCount &&
+    degenerateThrowMessage === "battleship oracle: no unshot cell is coverable — degenerate scenario state",
+  degenerateThrowMessage
+);
 
 console.log(failures === 0 ? "PASS" : `FAIL (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

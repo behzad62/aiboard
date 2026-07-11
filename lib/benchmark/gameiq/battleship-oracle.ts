@@ -74,6 +74,7 @@ export function battleshipCellRatios(
           } else if (cells.some((x) => shotAll.has(keyOf(x)))) {
             continue;
           }
+          // A target-mode placement lying entirely on the unresolved hits (fully-hit, contradicting not-sunk) still counts here toward `total` — making `probability` slightly conservative — but covers no unshot cell, so `ratio` (what keys/grading use) is unaffected.
           total++;
           for (const x of cells) counts.set(keyOf(x), (counts.get(keyOf(x)) ?? 0) + 1);
         }
@@ -88,6 +89,11 @@ export function battleshipCellRatios(
   let maxCount = 0;
   for (const [cellKey, n] of counts) {
     if (!shotAll.has(cellKey)) maxCount = Math.max(maxCount, n);
+  }
+  if (maxCount === 0) {
+    throw new Error(
+      "battleship oracle: no unshot cell is coverable — degenerate scenario state"
+    );
   }
   const out = new Map<string, BattleshipCellRatio>();
   for (const [cellKey, n] of counts) {
