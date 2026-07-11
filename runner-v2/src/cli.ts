@@ -80,6 +80,10 @@ async function main(): Promise<void> {
       builds,
       buildProvisioner: builds,
       providerConfigs,
+      runnerInfo: {
+        projectPath: options.projectPath,
+        nodeVersion: process.versions.node,
+      },
       token: options.token,
       checkGit: async () => git,
       bootstrapRun: async (input) => {

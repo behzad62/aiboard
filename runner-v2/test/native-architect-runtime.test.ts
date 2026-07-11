@@ -82,6 +82,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       evidenceStore: evidence,
       projectId: "project_1",
       projectRoot: project,
+      objective: "Build the requested feature.",
     });
     const runtime = new BuildRuntime({
       runId: "run_1",

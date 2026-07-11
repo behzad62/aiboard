@@ -32,6 +32,7 @@ export interface ControlServerOptions {
   builds?: BuildControlPlane;
   buildProvisioner?: { create(spec: NativeBuildSpec): Promise<unknown> };
   providerConfigs?: ProviderConfigStore;
+  runnerInfo?: { projectPath: string; nodeVersion: string };
 }
 
 export interface RunBootstrapInput {
@@ -59,6 +60,7 @@ interface CreateRunBody {
   idempotencyKey: string;
   build?: {
     projectId: string;
+    objective: string;
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     maxConcurrency: number;
@@ -104,6 +106,7 @@ export class ControlServer {
   private readonly builds?: BuildControlPlane;
   private readonly buildProvisioner?: ControlServerOptions["buildProvisioner"];
   private readonly providerConfigs?: ProviderConfigStore;
+  private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
 
@@ -117,6 +120,7 @@ export class ControlServer {
     this.builds = options.builds;
     this.buildProvisioner = options.buildProvisioner;
     this.providerConfigs = options.providerConfigs;
+    this.runnerInfo = options.runnerInfo;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -170,6 +174,11 @@ export class ControlServer {
   ): Promise<void> {
     setCommonHeaders(response);
     try {
+      if (request.method === "OPTIONS") {
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (!url.pathname.startsWith("/v2")) {
         throw new HttpError(404, "not_found", "Route not found.");
@@ -198,6 +207,18 @@ export class ControlServer {
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (segments.length === 2 && segments[1] === "health" && request.method === "GET") {
+      if (!this.runnerInfo) {
+        throw new HttpError(503, "runner_info_unavailable", "Runner information is unavailable.");
+      }
+      sendJson(response, 200, {
+        ok: true,
+        protocolVersion: 2,
+        projectPath: this.runnerInfo.projectPath,
+        nodeVersion: this.runnerInfo.nodeVersion,
+      });
+      return;
+    }
     if (segments.length === 2 && segments[1] === "provider-configs") {
       const store = this.requireProviderConfigs();
       if (request.method === "GET") {
@@ -254,6 +275,7 @@ export class ControlServer {
             version: 1,
             runId: body.runId,
             projectId: body.build.projectId,
+            objective: body.build.objective,
             architectRuntimeId: body.build.architectRuntimeId,
             workerRuntimeIds: [...body.build.workerRuntimeIds],
             maxConcurrency: body.build.maxConcurrency,
@@ -353,7 +375,9 @@ export class ControlServer {
         request.method === "POST"
       ) {
         await readJson<Record<string, never>>(request);
-        sendJson(response, 200, await this.requireBuilds().step(runId));
+        const result = await this.requireBuilds().step(runId);
+        this.syncBuildLifecycle(runId, result.status);
+        sendJson(response, 200, result);
         return;
       }
       if (
@@ -367,11 +391,9 @@ export class ControlServer {
           body.maxSteps !== undefined &&
           (!Number.isSafeInteger(body.maxSteps) || body.maxSteps < 1)
         ) invalidBody();
-        sendJson(
-          response,
-          200,
-          await this.requireBuilds().runUntilBlocked(runId, body.maxSteps)
-        );
+        const result = await this.requireBuilds().runUntilBlocked(runId, body.maxSteps);
+        this.syncBuildLifecycle(runId, result.status);
+        sendJson(response, 200, result);
         return;
       }
       if (
@@ -381,7 +403,7 @@ export class ControlServer {
       ) {
         const body = await readJson<CommandBody>(request);
         assertCommandBody(body);
-        sendJson(response, 200, this.applyCommand(runId, body));
+        sendJson(response, 200, await this.applyCommand(runId, body));
         return;
       }
       if (
@@ -426,8 +448,27 @@ export class ControlServer {
     return this.builds;
   }
 
-  private applyCommand(runId: string, body: CommandBody) {
-    switch (body.command) {
+  private syncBuildLifecycle(
+    runId: string,
+    status: "progressed" | "paused" | "completed" | "idle"
+  ): void {
+    let run;
+    try {
+      run = this.supervisor.getRun(runId);
+    } catch (error) {
+      if (error instanceof Error && /^Unknown run /.test(error.message)) return;
+      throw error;
+    }
+    if (status === "completed" && !["completed", "failed", "stopped"].includes(run.state)) {
+      this.supervisor.complete(runId, `native-build-completed:${run.lastSequence}`);
+    } else if (status === "paused" && run.state === "running") {
+      this.supervisor.pause(runId, `native-build-paused:${run.lastSequence}`, "native-build");
+    }
+  }
+
+  private async applyCommand(runId: string, body: CommandBody) {
+    const projection = (() => {
+      switch (body.command) {
       case "start":
         return this.supervisor.start(runId, body.idempotencyKey);
       case "pause":
@@ -444,7 +485,27 @@ export class ControlServer {
           body.idempotencyKey,
           body.reason ?? "user"
         );
+      }
+    })();
+    if (this.builds) {
+      try {
+        this.builds.projection(runId);
+        if (body.command === "start" || body.command === "resume") {
+          this.builds.resume(runId, `build:${body.idempotencyKey}`);
+        } else {
+          this.builds.pause(
+            runId,
+            body.reason ?? "user",
+            `build:${body.idempotencyKey}`
+          );
+        }
+      } catch (error) {
+        if (!(error instanceof Error) || !/^Unknown build runtime /.test(error.message)) {
+          throw error;
+        }
+      }
     }
+    return projection;
   }
 
   private openEventStream(
@@ -535,6 +596,9 @@ function hasBearerToken(header: string | undefined, expected: string): boolean {
 function setCommonHeaders(response: ServerResponse): void {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
@@ -584,6 +648,7 @@ function assertCreateRunBody(body: CreateRunBody): void {
 function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
   if (!body || typeof body !== "object") invalidBody();
   if (!isNonEmptyString(body.projectId)) invalidBody();
+  if (!isNonEmptyString(body.objective)) invalidBody();
   if (!isNonEmptyString(body.architectRuntimeId)) invalidBody();
   if (
     !Array.isArray(body.workerRuntimeIds) ||

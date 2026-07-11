@@ -49,6 +49,7 @@ export interface NativeArchitectRuntimeOptions {
   evidenceStore: EvidenceStore;
   projectId: string;
   projectRoot: string;
+  objective: string;
   budgetLedger?: BudgetLedger;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
@@ -264,6 +265,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         maxBytes: 512 * 1024,
         maxEstimatedTokens: 128 * 1024,
       },
+      objective: this.options.objective,
       reason: request.reason,
       projection,
       instructions,

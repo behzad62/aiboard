@@ -100,11 +100,48 @@ export class BuildRuntime {
   }
 
   projection(): SchedulerProjection {
-    return rebuildSchedulerProjection(this.store.readRun(this.runId));
+    const events = this.store.readRun(this.runId);
+    return events.length === 0
+      ? emptyProjection(this.runId)
+      : rebuildSchedulerProjection(events);
   }
 
   events(afterSequence = 0) {
     return this.store.readRun(this.runId, afterSequence);
+  }
+
+  pause(reason: string, idempotencyKey: string): SchedulerProjection {
+    this.ensureInitialized();
+    const projection = this.projection();
+    if (projection.status === "completed") {
+      throw new Error("A completed Build cannot be paused.");
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { reason },
+    });
+    return this.projection();
+  }
+
+  resume(idempotencyKey: string): SchedulerProjection {
+    this.ensureInitialized();
+    const projection = this.projection();
+    if (projection.status === "completed") {
+      throw new Error("A completed Build cannot be resumed.");
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "run.resumed",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: {},
+    });
+    return this.projection();
   }
 
   selectArchitectHandoff(
@@ -278,6 +315,18 @@ export class BuildRuntime {
       return { status: "progressed", action: "workers_advanced" };
     }
     return { status: "idle", action: "no_mechanical_progress" };
+  }
+
+  private ensureInitialized(): void {
+    if (this.store.readRun(this.runId).length > 0) return;
+    this.store.append({
+      runId: this.runId,
+      type: "run.initialized",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "run-initialized",
+      payload: {},
+    });
   }
 
   private async runArchitect(

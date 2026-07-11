@@ -52,6 +52,14 @@ export class NativeBuildManager implements BuildControlPlane {
     return await this.require(runId).runtime.runUntilBlocked(maxSteps);
   }
 
+  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {
+    return this.require(runId).runtime.pause(reason, idempotencyKey);
+  }
+
+  resume(runId: string, idempotencyKey: string): SchedulerProjection {
+    return this.require(runId).runtime.resume(idempotencyKey);
+  }
+
   selectArchitectHandoff(
     runId: string,
     runtimeId: string,

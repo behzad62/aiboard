@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Download, Terminal, PanelsTopLeft } from "lucide-react";
-import { checkRunner, DEFAULT_RUNNER_URL } from "@/lib/client/runner";
+import { DEFAULT_RUNNER_URL } from "@/lib/client/runner";
+import { getNativeRunnerHealth } from "@/lib/client/runner-v2";
 
 export interface RunnerSelection {
   url: string;
@@ -18,274 +19,163 @@ interface RunnerSetupProps {
   onChange?: (selection: RunnerSelection | null) => void;
   initialSelection?: RunnerSelection | null;
   disabled?: boolean;
-  /** Name of the browser-picked project folder, to warn on a mismatch. */
   pickedFolderName?: string | null;
-  /** Reveal + scroll to the no-terminal browser-folder fallback. */
   onUseBrowserFolder?: () => void;
 }
 
-/**
- * The primary way to connect a project in Build mode: the user downloads
- * runner.mjs (served from /runner.mjs — copied from scripts/runner.mjs at
- * build time), starts `node runner.mjs <folder>` in their own terminal, and
- * pastes its URL + token here. Connecting is the opt-in — pasting the token
- * enables it, clearing the token disconnects. Grants file access to the
- * runner's folder, command execution (gated by the access level), and MCP
- * tools.
- */
 export function RunnerSetup({
   onChange,
   initialSelection,
   disabled = false,
-  pickedFolderName,
-  onUseBrowserFolder,
 }: RunnerSetupProps) {
   const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_URL);
   const [token, setToken] = useState(initialSelection?.token ?? "");
   const [access, setAccess] = useState<"ask" | "full">(
     initialSelection?.access ?? "ask"
   );
-  const [connectedDir, setConnectedDir] = useState<string | null>(null);
-  const [status, setStatus] = useState<
-    { state: "idle" | "ok" | "error"; message?: string }
-  >({ state: "idle" });
-  const [manifestVersion, setManifestVersion] = useState<number | null>(null);
-  const [connectedVersion, setConnectedVersion] = useState<number | null>(null);
-
-  // Latest runner version (from the build-time manifest) for the download label
-  // and the "update available" nudge.
-  useEffect(() => {
-    fetch("/runner-manifest.json")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((m) => {
-        if (m && typeof m.version === "number") setManifestVersion(m.version);
-      })
-      .catch(() => {});
-  }, []);
+  const [status, setStatus] = useState<{
+    state: "idle" | "checking" | "ok" | "error";
+    message?: string;
+  }>({ state: "idle" });
 
   useEffect(() => {
     setUrl(initialSelection?.url ?? DEFAULT_RUNNER_URL);
     setToken(initialSelection?.token ?? "");
     setAccess(initialSelection?.access ?? "ask");
-    setConnectedDir(null);
-    setConnectedVersion(null);
     setStatus({ state: "idle" });
   }, [initialSelection?.access, initialSelection?.token, initialSelection?.url]);
 
   const emit = (next: Partial<RunnerSelection>) => {
     if (disabled) return;
-    const sel = {
+    const selection = {
       url: next.url ?? url,
       token: next.token ?? token,
       access: next.access ?? access,
     };
-    onChange?.(sel.token.trim() ? sel : null);
+    onChange?.(selection.token.trim() ? selection : null);
   };
 
   const test = async () => {
-    if (disabled) return;
-    setStatus({ state: "idle", message: "Checking…" });
-    const result = await checkRunner({ url, token });
-    setConnectedDir(result.ok ? result.dir ?? null : null);
-    setConnectedVersion(result.ok ? result.version ?? null : null);
-    setStatus(
-      result.ok
-        ? { state: "ok", message: `Connected to folder "${result.dir}"` }
-        : { state: "error", message: result.error }
-    );
+    if (disabled || !token.trim()) return;
+    setStatus({ state: "checking", message: "Checking Runner V2…" });
+    try {
+      const health = await getNativeRunnerHealth({ url, token });
+      setStatus({
+        state: "ok",
+        message: `Connected to ${health.projectPath} · Node ${health.nodeVersion}`,
+      });
+    } catch (error) {
+      setStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "Runner V2 is unreachable.",
+      });
+    }
   };
-
-  // Both disk paths configured but pointing at different folders is almost
-  // always a mistake — files get written via the runner into ITS folder.
-  const folderMismatch =
-    !!pickedFolderName &&
-    !!connectedDir &&
-    pickedFolderName.toLowerCase() !== connectedDir.toLowerCase();
 
   return (
     <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
       <Label className="flex items-center gap-2">
         <Terminal className="h-4 w-4" />
-        Connect your project — local runner (recommended)
+        Connect Runner V2 (required for Build mode)
       </Label>
-
       <p className="text-sm text-muted-foreground">
-        The runner is a small script you start in your own terminal. It gives
-        the AI team access to a project folder (read, write, search), runs
-        commands like tests and installs, and can bridge MCP tools — all
-        approval-gated unless you choose Full access. It needs{" "}
-        <a
-          href="https://nodejs.org"
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2"
-        >
-          Node.js
-        </a>{" "}
-        18+ (free). Run it, then paste the URL and token it prints to connect,
-        and open its <strong>control panel</strong> to pick the folder, watch
-        live logs, and manage MCP servers.{" "}
-        <a
-          href="/runner-guide"
-          className="font-semibold underline underline-offset-2"
-        >
-          Read the runner guide
-        </a>{" "}
-        for flags, MCP setup, remote access, and self-update. The runner is
-        optional —{" "}
-        <button
-          type="button"
-          onClick={() => onUseBrowserFolder?.()}
-          className="underline underline-offset-2 hover:text-foreground"
-        >
-          pick a folder in the browser instead
-        </button>
-        .
+        The durable native agent kernel owns Git worktrees, tools, checkpoints,
+        provider failover, and recovery. It requires Git and exactly Node.js
+        24.18.0; missing prerequisites stop before any model call.
       </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" asChild>
-          <a href="/runner.mjs" download="runner.mjs">
-            <Download className="mr-2 h-4 w-4" />
-            Download runner.mjs{manifestVersion ? ` (v${manifestVersion})` : ""}
-          </a>
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          then, in a terminal:
-        </span>
-      </div>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        {"node runner.mjs                 # root = the folder you run it from\n"}
-        {"node runner.mjs path/to/folder  # or pass a root folder"}
+        {"npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
       </pre>
-
-      <div className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
-            <Label htmlFor="runner-url" className="text-xs">
-              Runner URL
-            </Label>
-            <Input
-              id="runner-url"
-              value={url}
-              disabled={disabled}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                emit({ url: e.target.value });
-              }}
-              placeholder={DEFAULT_RUNNER_URL}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="runner-token" className="text-xs">
-              Token (printed by the runner)
-            </Label>
-            <Input
-              id="runner-token"
-              value={token}
-              disabled={disabled}
-              onChange={(e) => {
-                setToken(e.target.value);
-                emit({ token: e.target.value });
-              }}
-              placeholder="paste the token to connect"
-            />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor="runner-v2-url" className="text-xs">Runner URL</Label>
+          <Input
+            id="runner-v2-url"
+            value={url}
+            disabled={disabled}
+            onChange={(event) => {
+              setUrl(event.target.value);
+              emit({ url: event.target.value });
+            }}
+            placeholder={DEFAULT_RUNNER_URL}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="runner-v2-token" className="text-xs">Control token</Label>
+          <Input
+            id="runner-v2-token"
+            type="password"
+            value={token}
+            disabled={disabled}
+            onChange={(event) => {
+              setToken(event.target.value);
+              emit({ token: event.target.value });
+            }}
+            placeholder="Paste the token printed by Runner V2"
+          />
+        </div>
+      </div>
+      {token.trim() && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Access ceiling</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {([
+              {
+                value: "ask",
+                title: "Guarded",
+                description: "Project work is allowed; external or destructive actions require approval.",
+              },
+              {
+                value: "full",
+                title: "Full access",
+                description: "Trusted agents may perform destructive, external, credential, push, PR, and deployment actions without asking.",
+              },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setAccess(option.value);
+                  emit({ access: option.value });
+                }}
+                className={`rounded-md border p-3 text-left text-sm ${
+                  access === option.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+                }`}
+              >
+                <span className="font-medium">{option.title}</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {option.description}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
-
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={disabled || !token.trim()} onClick={test}>
+          Test Runner V2
+        </Button>
         {token.trim() && (
-          <div className="space-y-1.5">
-            <Label className="text-xs">Access level</Label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(
-                [
-                  {
-                    value: "ask",
-                    title: "Ask permission",
-                    desc: "Approve each shell command and MCP tool call before it runs. File reads/writes and safe read/search batches never prompt.",
-                  },
-                  {
-                    value: "full",
-                    title: "Full access",
-                    desc: "Commands and safe tool batches run without asking. Risky actions are still constrained by the Build engine and typed repo workflow. Only for trusted projects.",
-                  },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    setAccess(opt.value);
-                    emit({ access: opt.value });
-                  }}
-                  className={
-                    access === opt.value
-                      ? "rounded-lg border border-primary bg-primary/5 p-3 text-left ring-1 ring-primary"
-                      : "rounded-lg border p-3 text-left transition-colors hover:bg-accent"
-                  }
-                >
-                  <span className="text-sm font-medium">{opt.title}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {opt.desc}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            onClick={test}
-            disabled={disabled || !token.trim()}
+            disabled={disabled}
+            onClick={() => {
+              setToken("");
+              setStatus({ state: "idle" });
+              onChange?.(null);
+            }}
           >
-            Test connection
+            Disconnect
           </Button>
-          {status.state === "ok" && (
-            <Badge variant="success">{status.message}</Badge>
-          )}
-          {status.state === "error" && (
-            <span className="text-sm text-destructive">{status.message}</span>
-          )}
-          {status.message === "Checking…" && (
-            <span className="text-sm text-muted-foreground">Checking…</span>
-          )}
-          {status.state === "ok" && token.trim() && (
-            <Button type="button" variant="outline" size="sm" asChild>
-              <a
-                href={`${url.replace(/\/$/, "")}/#token=${encodeURIComponent(token.trim())}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <PanelsTopLeft className="mr-2 h-4 w-4" />
-                Open control panel
-              </a>
-            </Button>
-          )}
-        </div>
-
-        {folderMismatch && (
-          <p className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-            Heads up: the browser folder (&quot;{pickedFolderName}&quot;) and
-            the runner&apos;s folder (&quot;{connectedDir}&quot;) look
-            different. Files are written via the runner into{" "}
-            <strong>&quot;{connectedDir}&quot;</strong> — clear the browser
-            folder or restart the runner on the same project so they match.
-          </p>
         )}
-
-        {connectedVersion != null &&
-          manifestVersion != null &&
-          connectedVersion < manifestVersion && (
-            <p className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-              Your runner is v{connectedVersion}; v{manifestVersion} is
-              available. Re-download <code>runner.mjs</code> and restart it to
-              get the latest features and fixes.
-            </p>
-          )}
+        {status.state !== "idle" && (
+          <Badge variant={status.state === "ok" ? "default" : status.state === "error" ? "destructive" : "secondary"}>
+            {status.message}
+          </Badge>
+        )}
       </div>
     </div>
   );

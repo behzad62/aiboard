@@ -120,6 +120,36 @@ test("Architect prose or no-op return cannot fabricate scheduler progress", asyn
   }
 });
 
+test("fresh native Builds expose an empty projection and obey durable user pause/resume", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-control-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_control",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-07-12T00:00:00.000Z",
+    });
+    assert.equal(runtime.projection().planRevision, 0);
+    assert.equal(runtime.pause("user", "pause:1").status, "paused");
+    assert.equal((await runtime.step()).status, "paused");
+    assert.equal(runtime.resume("resume:1").status, "running");
+    assert.deepEqual(
+      runtime.events().map((event) => event.type),
+      ["run.initialized", "run.paused", "run.resumed"]
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;

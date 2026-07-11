@@ -13,6 +13,7 @@ test("native Build specs recover exactly and idempotently", () => {
     version: 1 as const,
     runId: "run_1",
     projectId: "project_1",
+    objective: "Build a reliable application.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.4", "chatgpt:gpt-5.5"],
     maxConcurrency: 2,

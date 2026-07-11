@@ -60,6 +60,16 @@ test("control API authenticates every route and drives durable lifecycle", async
   try {
     const address = await server.start(0);
     const base = address.url;
+    const preflight = await fetch(`${base}/v2/health`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
     assert.equal((await fetch(`${base}/v2/runs`)).status, 401);
     assert.equal(
       (
@@ -187,6 +197,7 @@ test("control API stores provider credentials without returning secrets and prov
           idempotencyKey: "create:run_native",
           build: {
             projectId: "project_native",
+            objective: "Build the requested feature.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             maxConcurrency: 2,
@@ -201,6 +212,7 @@ test("control API stores provider credentials without returning secrets and prov
       version: 1,
       runId: "run_native",
       projectId: "project_native",
+      objective: "Build the requested feature.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
       maxConcurrency: 2,
@@ -334,6 +346,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
       status: "idle",
       action: `max:${maxSteps ?? 100}`,
     }),
+    pause: () => ({ ...projection, status: "paused" }),
+    resume: () => projection,
     selectArchitectHandoff: () => projection,
   };
   const server = new ControlServer({

@@ -118,6 +118,7 @@ export class NativeBuildFactory {
       evidenceStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
+      objective: spec.objective,
       budgetLedger,
     });
     const integrationDriver: IntegrationRuntimeDriver = {

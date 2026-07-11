@@ -6,6 +6,7 @@ export interface NativeBuildSpec {
   version: 1;
   runId: string;
   projectId: string;
+  objective: string;
   architectRuntimeId: string;
   workerRuntimeIds: string[];
   maxConcurrency: number;
@@ -27,6 +28,7 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
   if (
     !spec.runId ||
     !spec.projectId ||
+    !spec.objective.trim() ||
     !spec.architectRuntimeId ||
     !spec.idempotencyKey
   ) throw new Error("Build spec identity is incomplete.");

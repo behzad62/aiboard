@@ -106,6 +106,7 @@ export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack 
 
 export interface BuildArchitectContextInput {
   limits: ContextLimits;
+  objective: string;
   reason: unknown;
   projection: SchedulerProjection;
   instructions: ProjectInstructionSource[];
@@ -120,6 +121,7 @@ export function buildArchitectContext(
 ): ContextPack {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("build-objective", "user-intent", input.objective),
     required("architect-action", "architect", JSON.stringify(input.reason, null, 2)),
     required(
       "task-graph",

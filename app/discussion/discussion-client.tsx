@@ -88,7 +88,11 @@ import {
   queryProjectPermission,
   requestProjectPermission,
 } from "@/lib/client/project-fs";
-import { checkRunner } from "@/lib/client/runner";
+import {
+  commandNativeRun,
+  getNativeRunnerHealth,
+  selectNativeArchitectHandoff,
+} from "@/lib/client/runner-v2";
 import {
   BuildTaskBoard,
   type BuildTaskView,
@@ -101,7 +105,7 @@ import {
   type RepoDiffView,
   type RepoWorkflowView,
 } from "@/components/RepoWorkflowPanel";
-import type { CommandApprovalDecision } from "@/lib/client/build-engine";
+type CommandApprovalDecision = "allow" | "allow-all" | "deny";
 import {
   accentFor,
   buildAccentMap,
@@ -209,6 +213,10 @@ function DiscussionPageInner() {
     useState<BuildStopReport | null>(null);
   const [buildToolReviewReport, setBuildToolReviewReport] =
     useState<BuildToolReviewReport | null>(null);
+  const [architectHandoff, setArchitectHandoff] = useState<{
+    reason: string;
+    candidateRuntimeIds: string[];
+  } | null>(null);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
@@ -434,6 +442,12 @@ function DiscussionPageInner() {
             ].slice(0, ACTIVITY_LOG_CAP);
             saveDiagnostics(id, next);
             return next;
+          });
+          break;
+        case "architect_handoff_required":
+          setArchitectHandoff({
+            reason: event.reason,
+            candidateRuntimeIds: [...event.candidateRuntimeIds],
           });
           break;
         case "tool_batch":
@@ -673,6 +687,11 @@ function DiscussionPageInner() {
       setFolderGrant("ready");
       return;
     }
+    if (discussion.runnerUrl && discussion.runnerToken) {
+      setFolderGrant("ready");
+      setFolderHandle(null);
+      return;
+    }
     (async () => {
       const handle = await getProjectHandle(discussion.id);
       if (!handle) {
@@ -798,6 +817,26 @@ function DiscussionPageInner() {
   // command approval is pending, deny it so the engine isn't stuck awaiting.
   const handleStop = () => {
     pendingApproval?.resolve("deny");
+    if (
+      discussion?.mode === "build" &&
+      discussion.runnerUrl &&
+      discussion.runnerToken &&
+      discussion.nativeBuildRunId
+    ) {
+      void commandNativeRun(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        "pause",
+        `pause:${Date.now()}`,
+        "user"
+      ).catch((stopError) => {
+        setError(
+          stopError instanceof Error
+            ? stopError.message
+            : "Could not pause Runner V2."
+        );
+      });
+    }
     stopDiscussion(id);
   };
 
@@ -866,6 +905,30 @@ function DiscussionPageInner() {
     setStatus("pending");
   };
 
+  const handleArchitectHandoff = async (runtimeId: string) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      await selectNativeArchitectHandoff(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        runtimeId,
+        `architect-handoff:${discussion.nativeBuildRunId}:${runtimeId}`
+      );
+      setArchitectHandoff(null);
+      handleResume();
+    } catch (handoffError) {
+      setError(
+        handoffError instanceof Error
+          ? handoffError.message
+          : "Could not select the Architect runtime."
+      );
+    }
+  };
+
   const handleNoteFileSelection = (files: FileList | null) => {
     const selected = Array.from(files ?? []);
     if (selected.length === 0) return;
@@ -932,7 +995,7 @@ function DiscussionPageInner() {
       },
     ]);
     if (status === "completed" || status === "stopped" || status === "failed") {
-      continueDiscussion(id);
+      continueDiscussion(id, true);
       notifiedRef.current = false;
       setFinalResult(null);
       setError(null);
@@ -1462,6 +1525,28 @@ function DiscussionPageInner() {
         />
       )}
 
+      {discussion.mode === "build" && architectHandoff && (
+        <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <div>
+            <p className="font-medium">Select the Architect runtime to continue</p>
+            <p className="mt-1 text-xs opacity-80">{architectHandoff.reason}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {architectHandoff.candidateRuntimeIds.map((runtimeId) => (
+              <Button
+                key={runtimeId}
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleArchitectHandoff(runtimeId)}
+              >
+                {getModelDisplayName(runtimeId)}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {discussion.mode === "build" &&
         discussion.buildStopReason &&
         !buildStopReport &&
@@ -1656,13 +1741,18 @@ function RunnerChip({
     }
     let cancelled = false;
     const ping = async () => {
-      const res = await checkRunner({ url, token });
+      let next: RunnerState;
+      try {
+        const res = await getNativeRunnerHealth({ url, token });
+        next = { kind: "reachable", dir: res.projectPath };
+      } catch (error) {
+        next = {
+          kind: "unreachable",
+          error: error instanceof Error ? error.message : "Runner V2 is unreachable.",
+        };
+      }
       if (cancelled) return;
-      setState(
-        res.ok
-          ? { kind: "reachable", dir: res.dir }
-          : { kind: "unreachable", error: res.error }
-      );
+      setState(next);
     };
     ping();
     // Re-poll only while the run is live; a finished run's runner going offline

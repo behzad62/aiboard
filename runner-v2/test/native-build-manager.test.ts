@@ -13,6 +13,7 @@ const spec: NativeBuildSpec = {
   version: 1,
   runId: "run_1",
   projectId: "project_1",
+  objective: "Build a reliable application.",
   architectRuntimeId: "chatgpt:gpt-5.5",
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
   maxConcurrency: 1,

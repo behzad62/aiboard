@@ -90,6 +90,7 @@ export function restartDiscussion(id: string): void {
     convergenceScore: null,
     buildStopReason: null,
     buildStoppedAt: null,
+    nativeBuildRunId: `native-${uuidv4()}`,
     updatedAt: new Date().toISOString(),
   });
 }
@@ -161,7 +162,7 @@ export function addDiscussionAttachments(
  * transcript and final result stay; the Architect re-plans over the existing
  * files (and any queued user notes) and writes a fresh summary.
  */
-export function continueDiscussion(id: string): void {
+export function continueDiscussion(id: string, forceNewBuildPass = false): void {
   if (isDiscussionRunning(id)) return;
   const now = new Date().toISOString();
   const discussion = getDiscussionById(id);
@@ -188,6 +189,10 @@ export function continueDiscussion(id: string): void {
     status: "pending",
     buildStopReason: null,
     buildStoppedAt: null,
+    ...(discussion?.mode === "build" &&
+    (forceNewBuildPass || discussion.status !== "stopped")
+      ? { nativeBuildRunId: `native-${uuidv4()}` }
+      : {}),
     updatedAt: now,
   });
 }
@@ -204,6 +209,9 @@ export function interruptOrphanedRunningBuild(id: string): boolean {
   if (discussion?.mode !== "build" || discussion.status !== "running") {
     return false;
   }
+  // Runner V2 owns the durable process and survives browser reloads. A reload
+  // is not an interruption and must never rewrite its authoritative state.
+  if (discussion.runnerUrl && discussion.runnerToken) return false;
 
   const checkpoint = getBuildCheckpoint(id);
   const now = new Date().toISOString();
@@ -445,6 +453,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerUrl: input.runnerUrl ?? null,
     runnerToken: input.runnerToken ?? null,
     runnerAccess: input.runnerAccess ?? null,
+    nativeBuildRunId: input.mode === "build" ? `native-${uuidv4()}` : null,
     buildRunPolicy: input.mode === "build" ? buildSettings.runPolicy : undefined,
     buildSkillMode: input.mode === "build" ? buildSettings.skillMode : undefined,
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,

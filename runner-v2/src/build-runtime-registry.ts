@@ -9,6 +9,8 @@ export interface BuildControlPlane {
   events(runId: string, afterSequence?: number): SchedulerEvent[];
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
+  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection;
+  resume(runId: string, idempotencyKey: string): SchedulerProjection;
   selectArchitectHandoff(
     runId: string,
     runtimeId: string,
@@ -47,6 +49,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     maxSteps?: number
   ): Promise<BuildStepResult> {
     return await this.require(runId).runUntilBlocked(maxSteps);
+  }
+
+  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {
+    return this.require(runId).pause(reason, idempotencyKey);
+  }
+
+  resume(runId: string, idempotencyKey: string): SchedulerProjection {
+    return this.require(runId).resume(idempotencyKey);
   }
 
   selectArchitectHandoff(

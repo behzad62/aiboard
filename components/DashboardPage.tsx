@@ -263,6 +263,8 @@ export default function DashboardPage() {
   const blockerHint =
     totalEnabledModels === 0
       ? "Add API keys and enable providers in Settings."
+      : mode === "build" && !runner
+        ? "Connect Runner V2 to start a Build."
       : !hasEnoughModels
         ? participatingModelRequirementMessage(mode)
         : !hasJudge

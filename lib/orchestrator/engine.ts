@@ -219,6 +219,11 @@ export type OrchestratorEvent =
       toolReviewReport?: BuildToolReviewReport | null;
     }
   | {
+      type: "architect_handoff_required";
+      reason: string;
+      candidateRuntimeIds: string[];
+    }
+  | {
       type: "tool_batch";
       actor: string;
       served: number;
