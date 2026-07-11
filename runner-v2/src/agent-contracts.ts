@@ -17,6 +17,11 @@ export interface ArtifactBlock {
   label?: string;
 }
 
+export interface JsonBlock {
+  type: "json";
+  value: unknown;
+}
+
 export interface ToolCallBlock {
   type: "tool_call";
   callId: string;
@@ -25,7 +30,7 @@ export interface ToolCallBlock {
 }
 
 export type AssistantBlock = TextBlock | ToolCallBlock;
-export type ToolContentBlock = TextBlock | ArtifactBlock;
+export type ToolContentBlock = TextBlock | ArtifactBlock | JsonBlock;
 
 export interface AgentMessage {
   id: string;

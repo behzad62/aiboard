@@ -174,8 +174,9 @@ export class ToolBroker implements AgentToolRuntime {
     input: TInput,
     context: ToolExecutionContext
   ): Promise<ToolExecutionOutput> {
+    const toolContext = { ...context, workspacePath: this.workspacePath };
     const callId = context.callId ?? "unknown";
-    const access = tool.assessAccess?.(input, context) ?? {
+    const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
     const outsideWorkspace = await this.hasOutsidePath(access);
@@ -237,7 +238,7 @@ export class ToolBroker implements AgentToolRuntime {
       : timeoutController.signal;
     let timeout: NodeJS.Timeout | undefined;
     try {
-      const execution = tool.execute(input, { ...context, signal });
+      const execution = tool.execute(input, { ...toolContext, signal });
       const timeoutResult = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           timeoutController.abort();
