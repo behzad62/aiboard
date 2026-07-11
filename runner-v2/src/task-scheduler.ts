@@ -23,7 +23,8 @@ export type WorkerOutcome =
       question: string;
       evidenceSequence: number;
     }
-  | { type: "failed"; reason: string };
+  | { type: "failed"; reason: string }
+  | { type: "paused"; reason: string };
 
 export interface WorkerRuntimeDriver {
   run(assignment: WorkerAssignment): Promise<WorkerOutcome>;
@@ -207,6 +208,17 @@ export class TaskScheduler {
           question: outcome.question,
           evidenceSequence: outcome.evidenceSequence,
         },
+      });
+      return;
+    }
+    if (outcome.type === "paused") {
+      this.store.append({
+        runId: this.runId,
+        type: "run.paused",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "scheduler" },
+        idempotencyKey: `worker-pause:${taskId}:${attempt}`,
+        payload: { reason: outcome.reason, taskId },
       });
       return;
     }

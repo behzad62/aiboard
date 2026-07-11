@@ -13,6 +13,10 @@ import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SchedulerStore } from "./scheduler-store.js";
+import type { SkillCatalog } from "./skill-catalog.js";
+import { createSkillTools } from "./skill-tools.js";
+import type { ProjectMemoryStore } from "./project-memory.js";
+import { createMemoryTools } from "./memory-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
@@ -38,6 +42,10 @@ export interface RunWorkerTaskOptions {
   sessions: SqliteAgentSessionStore;
   schedulerStore?: SchedulerStore;
   evidenceStore?: EvidenceStore;
+  skillCatalog?: SkillCatalog;
+  memoryStore?: ProjectMemoryStore;
+  projectId?: string;
+  continuationMessages?: readonly AgentMessage[];
   initialMessages: readonly AgentMessage[];
   clock?: () => string;
 }
@@ -74,6 +82,14 @@ export async function runWorkerTask(
       };
     }
   }
+  if (options.continuationMessages) {
+    const existingIds = new Set(messages.map((message) => message.id));
+    messages.push(
+      ...options.continuationMessages.filter(
+        (message) => !existingIds.has(message.id)
+      )
+    );
+  }
 
   const broker = new ToolBroker({
     permissionProfile: options.permissionProfile,
@@ -90,6 +106,18 @@ export async function runWorkerTask(
     for (const tool of createEvidenceTools({
       store: options.evidenceStore,
       artifacts: options.artifacts,
+      taskId: options.taskId,
+      clock,
+    })) broker.register(tool);
+  }
+  if (options.skillCatalog) {
+    for (const tool of createSkillTools(options.skillCatalog)) broker.register(tool);
+  }
+  if (options.memoryStore && options.projectId) {
+    for (const tool of createMemoryTools({
+      store: options.memoryStore,
+      projectId: options.projectId,
+      runId: options.runId,
       taskId: options.taskId,
       clock,
     })) broker.register(tool);

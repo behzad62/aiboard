@@ -320,6 +320,11 @@ function emptyProjection(runId: string): SchedulerProjection {
     tasks: {},
     guidance: {},
     reviews: {},
+    runtime: {
+      providerHealth: {},
+      workerAssignments: {},
+      architect: {},
+    },
     lastSequence: 0,
   };
 }

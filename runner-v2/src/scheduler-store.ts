@@ -23,7 +23,12 @@ export type SchedulerEventType =
   | "review.decided"
   | "run.paused"
   | "run.resumed"
-  | "run.completed";
+  | "run.completed"
+  | "provider.health_changed"
+  | "worker.runtime_assigned"
+  | "architect.runtime_assigned"
+  | "architect.handoff_required"
+  | "architect.handoff_selected";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -59,6 +64,38 @@ export interface ReviewProjection {
   evidenceArtifactHashes: string[];
 }
 
+export interface ProviderHealthProjection {
+  providerId: string;
+  status: "healthy" | "cooldown";
+  consecutiveFailures: number;
+  updatedAt: number;
+  failureKind?: string;
+  failureMessage?: string;
+  cooldownUntil?: number;
+}
+
+export interface WorkerRuntimeAssignmentProjection {
+  taskId: string;
+  attempt: number;
+  runtimeId: string;
+  sessionId: string;
+}
+
+export interface ArchitectHandoffProjection {
+  reason: string;
+  requiredCapabilities: string[];
+  candidateRuntimeIds: string[];
+}
+
+export interface RuntimeProjection {
+  providerHealth: Record<string, ProviderHealthProjection>;
+  workerAssignments: Record<string, WorkerRuntimeAssignmentProjection>;
+  architect: {
+    runtimeId?: string;
+    handoff?: ArchitectHandoffProjection;
+  };
+}
+
 export interface SchedulerProjection {
   runId: string;
   status: "running" | "paused" | "completed";
@@ -66,6 +103,7 @@ export interface SchedulerProjection {
   tasks: Record<string, BuildTask>;
   guidance: Record<string, GuidanceProjection>;
   reviews: Record<string, ReviewProjection>;
+  runtime: RuntimeProjection;
   lastSequence: number;
 }
 
@@ -109,6 +147,11 @@ export function reduceSchedulerEvent(
       tasks: Object.fromEntries(tasks.map((task) => [task.id, { ...task }])),
       guidance: {},
       reviews: {},
+      runtime: {
+        providerHealth: {},
+        workerAssignments: {},
+        architect: {},
+      },
       lastSequence: event.sequence,
     };
   }
@@ -120,6 +163,11 @@ export function reduceSchedulerEvent(
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
     reviews: { ...current.reviews },
+    runtime: {
+      providerHealth: { ...current.runtime.providerHealth },
+      workerAssignments: { ...current.runtime.workerAssignments },
+      architect: { ...current.runtime.architect },
+    },
     lastSequence: event.sequence,
   };
   switch (event.type) {
@@ -310,6 +358,92 @@ export function reduceSchedulerEvent(
       }
       next.status = "completed";
       break;
+    case "provider.health_changed": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may record provider health.");
+      }
+      const state = event.payload.state;
+      if (typeof state !== "object" || state === null || Array.isArray(state)) {
+        throw new Error("Provider health state is required.");
+      }
+      const value = state as Record<string, unknown>;
+      const providerId = requiredString(value, "providerId");
+      const status = requiredString(value, "status");
+      if (status !== "healthy" && status !== "cooldown") {
+        throw new Error(`Provider health status ${status} is invalid.`);
+      }
+      next.runtime.providerHealth[providerId] = {
+        providerId,
+        status,
+        consecutiveFailures: requiredNumber(value, "consecutiveFailures"),
+        updatedAt: requiredNumber(value, "updatedAt"),
+        ...(typeof value.failureKind === "string"
+          ? { failureKind: value.failureKind }
+          : {}),
+        ...(typeof value.failureMessage === "string"
+          ? { failureMessage: value.failureMessage }
+          : {}),
+        ...(typeof value.cooldownUntil === "number"
+          ? { cooldownUntil: value.cooldownUntil }
+          : {}),
+      };
+      break;
+    }
+    case "worker.runtime_assigned": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may assign worker runtimes.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const attempt = requiredNumber(event.payload, "attempt");
+      const task = next.tasks[taskId];
+      if (!task || task.attempt !== attempt) {
+        throw new Error(`Worker runtime assignment does not match task ${taskId} attempt.`);
+      }
+      next.runtime.workerAssignments[`${taskId}:${attempt}`] = {
+        taskId,
+        attempt,
+        runtimeId: requiredString(event.payload, "runtimeId"),
+        sessionId: requiredString(event.payload, "sessionId"),
+      };
+      break;
+    }
+    case "architect.runtime_assigned": {
+      if (event.actor.role !== "user") {
+        throw new Error("Architect runtime selection requires the user.");
+      }
+      next.runtime.architect = {
+        runtimeId: requiredString(event.payload, "runtimeId"),
+      };
+      break;
+    }
+    case "architect.handoff_required": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may request Architect handoff.");
+      }
+      next.runtime.architect = {
+        ...next.runtime.architect,
+        handoff: {
+          reason: requiredString(event.payload, "reason"),
+          requiredCapabilities: stringArray(event.payload, "requiredCapabilities"),
+          candidateRuntimeIds: stringArray(event.payload, "candidateRuntimeIds"),
+        },
+      };
+      next.status = "paused";
+      break;
+    }
+    case "architect.handoff_selected": {
+      if (event.actor.role !== "user") {
+        throw new Error("Architect handoff selection requires the user.");
+      }
+      const runtimeId = requiredString(event.payload, "runtimeId");
+      const handoff = next.runtime.architect.handoff;
+      if (!handoff || !handoff.candidateRuntimeIds.includes(runtimeId)) {
+        throw new Error(`Runtime ${runtimeId} is not an offered Architect handoff.`);
+      }
+      next.runtime.architect = { runtimeId };
+      next.status = "running";
+      break;
+    }
     case "plan.created":
       throw new Error("A scheduler run cannot create a second initial plan.");
   }

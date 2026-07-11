@@ -225,6 +225,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     },
     guidance: {},
     reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
     lastSequence: 1,
   };
   const builds: BuildControlPlane = {
