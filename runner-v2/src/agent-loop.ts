@@ -7,7 +7,10 @@ import type {
   ToolCallBlock,
   ToolExecutionContext,
 } from "./agent-contracts.js";
-import { AgentProtocolError, ToolRegistry } from "./tool-registry.js";
+import {
+  AgentProtocolError,
+  type AgentToolRuntime,
+} from "./tool-registry.js";
 
 export type AgentSuspensionReason =
   | "model_ended_without_lifecycle"
@@ -47,7 +50,7 @@ export type AgentLoopResult =
 
 export interface RunAgentLoopOptions {
   model: AgentModel;
-  registry: ToolRegistry;
+  registry: AgentToolRuntime;
   context: ToolExecutionContext;
   initialMessages: readonly AgentMessage[];
   maxTurns?: number;
@@ -149,7 +152,7 @@ export async function runAgentLoop(
 
 function assertLifecycleBatch(
   calls: readonly ToolCallBlock[],
-  registry: ToolRegistry
+  registry: AgentToolRuntime
 ): void {
   const lifecycleCalls = calls.filter((call) =>
     registry.isLifecycleTool(call.name)

@@ -21,7 +21,20 @@ export class AgentProtocolError extends Error {
   }
 }
 
-export class ToolRegistry {
+export interface AgentToolRuntime {
+  definitions(): ToolDefinition[];
+  isLifecycleTool(name: string): boolean;
+  assertUniqueCallIds(
+    calls: readonly ToolCallBlock[],
+    seenCallIds: ReadonlySet<string>
+  ): void;
+  invoke(
+    call: ToolCallBlock,
+    context: ToolExecutionContext
+  ): Promise<ToolResult>;
+}
+
+export class ToolRegistry implements AgentToolRuntime {
   private readonly tools = new Map<string, NativeTool<unknown>>();
 
   register<TInput>(tool: NativeTool<TInput>): void {
@@ -97,7 +110,11 @@ export class ToolRegistry {
       };
     }
     try {
-      const output = await tool.execute(validation.value, context);
+      const output = await tool.execute(validation.value, {
+        ...context,
+        callId: call.callId,
+        toolName: call.name,
+      });
       if (output.lifecycle && tool.definition.lifecycle !== true) {
         return failure(
           call,

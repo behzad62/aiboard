@@ -84,6 +84,23 @@ export interface ToolExecutionContext {
   actor: AgentActor;
   workspacePath?: string;
   signal?: AbortSignal;
+  callId?: string;
+  toolName?: string;
+}
+
+export type ToolPathAccessMode = "read" | "write" | "delete";
+
+export interface ToolPathAccess {
+  path: string;
+  access: ToolPathAccessMode;
+}
+
+export interface ToolAccessRequest {
+  capability: string;
+  paths?: ToolPathAccess[];
+  external?: boolean;
+  destructive?: boolean;
+  credentialChange?: boolean;
 }
 
 export interface ToolExecutionOutput {
@@ -96,6 +113,10 @@ export interface ToolExecutionOutput {
 export interface NativeTool<TInput = unknown> {
   definition: ToolDefinition;
   validate(input: unknown): ValidationResult<TInput>;
+  assessAccess?(
+    input: TInput,
+    context: ToolExecutionContext
+  ): ToolAccessRequest;
   execute(
     input: TInput,
     context: ToolExecutionContext
