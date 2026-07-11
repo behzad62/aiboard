@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
 import type { BuildControlPlane } from "../src/build-runtime-registry.js";
+import type { NativeBuildSpec } from "../src/build-spec.js";
+import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
@@ -114,6 +116,99 @@ test("control API authenticates every route and drives durable lifecycle", async
       [1, 2, 3]
     );
     assert.equal(events.headers.get("cache-control"), "no-store");
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("control API stores provider credentials without returning secrets and provisions native Builds", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-native-build-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite")),
+    { clock: () => "2026-07-11T00:00:00.000Z" }
+  );
+  let configs: RunnerProviderConfig[] = [];
+  const created: NativeBuildSpec[] = [];
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun,
+    providerConfigs: {
+      load: () => configs.map((config) => ({ ...config })),
+      save: (next) => {
+        configs = next.map((config) => ({ ...config, capabilities: [...config.capabilities] }));
+      },
+      close: () => undefined,
+    },
+    buildProvisioner: {
+      create: async (spec) => {
+        created.push(spec);
+        return {} as never;
+      },
+    },
+  });
+  try {
+    const { url } = await server.start(0);
+    const configured = await fetch(
+      `${url}/v2/provider-configs`,
+      authorized({
+        method: "PUT",
+        body: JSON.stringify({
+          configs: [{
+            runtimeId: "chatgpt:gpt-5.5",
+            providerId: "chatgpt",
+            modelId: "gpt-5.5",
+            transport: "account-runner",
+            baseUrl: "http://127.0.0.1:9911",
+            secret: "provider-secret",
+            runnerToken: "runner-secret",
+            capabilities: ["code"],
+            priority: 1,
+          }],
+        }),
+      })
+    );
+    assert.equal(configured.status, 200);
+    const listed = await json(await fetch(`${url}/v2/provider-configs`, authorized()));
+    assert.equal(JSON.stringify(listed).includes("provider-secret"), false);
+    assert.equal(JSON.stringify(listed).includes("runner-secret"), false);
+
+    const create = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_native",
+          projectPath: join(directory, "project"),
+          permissionProfile: "full",
+          idempotencyKey: "create:run_native",
+          build: {
+            projectId: "project_native",
+            architectRuntimeId: "chatgpt:gpt-5.5",
+            workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            maxConcurrency: 2,
+            budgetLimits: { maxModelCalls: 50, maxToolCalls: 200 },
+          },
+        }),
+      })
+    );
+    assert.equal(create.status, 201);
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0], {
+      version: 1,
+      runId: "run_native",
+      projectId: "project_native",
+      architectRuntimeId: "chatgpt:gpt-5.5",
+      workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      maxConcurrency: 2,
+      permissionProfile: "full",
+      budgetLimits: { maxModelCalls: 50, maxToolCalls: 200 },
+      createdAt: "2026-07-11T00:00:00.000Z",
+      idempotencyKey: "build:create:run_native",
+    });
   } finally {
     await server.close();
     supervisor.close();

@@ -12,7 +12,13 @@ import type {
   RunEvent,
 } from "./contracts.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
+import type { NativeBuildSpec } from "./build-spec.js";
+import { assertBudgetLimits } from "./budget-policy.js";
 import { checkGit, type GitPreflightResult } from "./git-preflight.js";
+import type {
+  ProviderConfigStore,
+  RunnerProviderConfig,
+} from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -24,6 +30,8 @@ export interface ControlServerOptions {
   bootstrapRun: (input: RunBootstrapInput) => Promise<RunBootstrapResult>;
   heartbeatMs?: number;
   builds?: BuildControlPlane;
+  buildProvisioner?: { create(spec: NativeBuildSpec): Promise<unknown> };
+  providerConfigs?: ProviderConfigStore;
 }
 
 export interface RunBootstrapInput {
@@ -49,6 +57,17 @@ interface CreateRunBody {
   projectPath: string;
   permissionProfile: PermissionProfile;
   idempotencyKey: string;
+  build?: {
+    projectId: string;
+    architectRuntimeId: string;
+    workerRuntimeIds: string[];
+    maxConcurrency: number;
+    budgetLimits: NativeBuildSpec["budgetLimits"];
+  };
+}
+
+interface ProviderConfigsBody {
+  configs: RunnerProviderConfig[];
 }
 
 interface CommandBody {
@@ -83,6 +102,8 @@ export class ControlServer {
   private readonly bootstrapRun: ControlServerOptions["bootstrapRun"];
   private readonly heartbeatMs: number;
   private readonly builds?: BuildControlPlane;
+  private readonly buildProvisioner?: ControlServerOptions["buildProvisioner"];
+  private readonly providerConfigs?: ProviderConfigStore;
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
 
@@ -94,6 +115,8 @@ export class ControlServer {
     this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
     this.builds = options.builds;
+    this.buildProvisioner = options.buildProvisioner;
+    this.providerConfigs = options.providerConfigs;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -175,6 +198,20 @@ export class ControlServer {
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (segments.length === 2 && segments[1] === "provider-configs") {
+      const store = this.requireProviderConfigs();
+      if (request.method === "GET") {
+        sendJson(response, 200, store.load().map(redactProviderConfig));
+        return;
+      }
+      if (request.method === "PUT") {
+        const body = await readJson<ProviderConfigsBody>(request);
+        if (!Array.isArray(body.configs)) invalidBody();
+        store.save(body.configs);
+        sendJson(response, 200, body.configs.map(redactProviderConfig));
+        return;
+      }
+    }
     if (segments.length === 2 && segments[1] === "runs") {
       if (request.method === "GET") {
         sendJson(response, 200, this.supervisor.listRuns());
@@ -207,6 +244,24 @@ export class ControlServer {
             );
             throw error;
           }
+        }
+        if (body.build) {
+          if (!this.buildProvisioner) {
+            throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
+          }
+          assertBuildBody(body.build);
+          await this.buildProvisioner.create({
+            version: 1,
+            runId: body.runId,
+            projectId: body.build.projectId,
+            architectRuntimeId: body.build.architectRuntimeId,
+            workerRuntimeIds: [...body.build.workerRuntimeIds],
+            maxConcurrency: body.build.maxConcurrency,
+            permissionProfile: body.permissionProfile,
+            budgetLimits: { ...body.build.budgetLimits },
+            createdAt: projection.createdAt,
+            idempotencyKey: `build:${body.idempotencyKey}`,
+          });
         }
         sendJson(response, 201, projection);
         return;
@@ -285,6 +340,15 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "stream" &&
+        request.method === "GET"
+      ) {
+        this.openBuildEventStream(response, request, runId, readAfterSequence(url));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "step" &&
         request.method === "POST"
       ) {
@@ -342,6 +406,13 @@ export class ControlServer {
       }
     }
     throw new HttpError(404, "not_found", "Route not found.");
+  }
+
+  private requireProviderConfigs(): ProviderConfigStore {
+    if (!this.providerConfigs) {
+      throw new HttpError(503, "provider_config_unavailable", "Provider configuration is unavailable.");
+    }
+    return this.providerConfigs;
   }
 
   private requireBuilds(): BuildControlPlane {
@@ -413,6 +484,45 @@ export class ControlServer {
     request.once("close", cleanup);
     response.once("close", cleanup);
   }
+
+  private openBuildEventStream(
+    response: ServerResponse,
+    request: IncomingMessage,
+    runId: string,
+    afterSequence: number
+  ): void {
+    const builds = this.requireBuilds();
+    builds.projection(runId);
+    response.statusCode = 200;
+    response.setHeader("Content-Type", "text/event-stream");
+    response.setHeader("Connection", "keep-alive");
+    response.setHeader("X-Accel-Buffering", "no");
+    response.flushHeaders();
+    this.streams.add(response);
+
+    let cursor = afterSequence;
+    const replay = () => {
+      for (const event of builds.events(runId, cursor)) {
+        if (event.sequence <= cursor) continue;
+        cursor = event.sequence;
+        response.write(`id: ${event.sequence}\n`);
+        response.write(`event: ${event.type}\n`);
+        response.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+    };
+    replay();
+    const poll = setInterval(replay, 250);
+    poll.unref();
+    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), this.heartbeatMs);
+    heartbeat.unref();
+    const cleanup = () => {
+      clearInterval(poll);
+      clearInterval(heartbeat);
+      this.streams.delete(response);
+    };
+    request.once("close", cleanup);
+    response.once("close", cleanup);
+  }
 }
 
 function hasBearerToken(header: string | undefined, expected: string): boolean {
@@ -469,6 +579,39 @@ function assertCreateRunBody(body: CreateRunBody): void {
   if (!(["guarded", "project", "full"] as unknown[]).includes(body.permissionProfile)) {
     invalidBody();
   }
+}
+
+function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
+  if (!body || typeof body !== "object") invalidBody();
+  if (!isNonEmptyString(body.projectId)) invalidBody();
+  if (!isNonEmptyString(body.architectRuntimeId)) invalidBody();
+  if (
+    !Array.isArray(body.workerRuntimeIds) ||
+    body.workerRuntimeIds.length < 1 ||
+    body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId))
+  ) invalidBody();
+  if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
+    invalidBody();
+  }
+  try {
+    assertBudgetLimits(body.budgetLimits);
+  } catch {
+    invalidBody();
+  }
+}
+
+function redactProviderConfig(config: RunnerProviderConfig) {
+  return {
+    runtimeId: config.runtimeId,
+    providerId: config.providerId,
+    modelId: config.modelId,
+    transport: config.transport,
+    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    capabilities: [...config.capabilities],
+    priority: config.priority,
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    configured: true,
+  };
 }
 
 function assertCommandBody(body: CommandBody): void {

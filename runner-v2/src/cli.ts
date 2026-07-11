@@ -3,10 +3,13 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
-import { BuildRuntimeRegistry } from "./build-runtime-registry.js";
+import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
+import { NativeBuildFactory } from "./native-build-factory.js";
+import { NativeBuildManager } from "./native-build-manager.js";
 import { RunSupervisor } from "./run-supervisor.js";
+import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 
 const CERTIFIED_NODE_VERSION = "24.18.0";
@@ -22,6 +25,8 @@ interface CliOptions {
 interface RunnerResources {
   server: ControlServer;
   supervisor: RunSupervisor;
+  builds: NativeBuildManager;
+  buildFactory: NativeBuildFactory;
 }
 
 void main();
@@ -50,10 +55,31 @@ async function main(): Promise<void> {
     const supervisor = new RunSupervisor(
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
-    const builds = new BuildRuntimeRegistry();
+    const providerConfigs = new EncryptedProviderConfigStore(
+      join(options.stateDirectory, "provider-configs.enc"),
+      options.token
+    );
+    const buildFactory = new NativeBuildFactory({
+      projectRoot: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      providerConfigs,
+      baselineFor: (runId) => {
+        const revision = supervisor.getRun(runId).baselineRevision;
+        if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
+        return revision;
+      },
+    });
+    const builds = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(
+        join(options.stateDirectory, "build-specs.sqlite")
+      ),
+      createRuntime: (spec) => buildFactory.create(spec),
+    });
     const server = new ControlServer({
       supervisor,
       builds,
+      buildProvisioner: builds,
+      providerConfigs,
       token: options.token,
       checkGit: async () => git,
       bootstrapRun: async (input) => {
@@ -73,7 +99,8 @@ async function main(): Promise<void> {
         };
       },
     });
-    resources = { server, supervisor };
+    resources = { server, supervisor, builds, buildFactory };
+    await builds.recover();
     const address = await server.start(options.port);
 
     process.stdout.write(
@@ -180,6 +207,8 @@ async function assertDirectory(path: string, label: string): Promise<void> {
 async function closeResources(resources: RunnerResources | undefined): Promise<void> {
   if (!resources) return;
   await resources.server.close();
+  await resources.builds.close();
+  resources.buildFactory.close();
   resources.supervisor.close();
 }
 

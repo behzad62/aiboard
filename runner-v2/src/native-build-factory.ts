@@ -1,0 +1,237 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+
+import { AccountRunnerModel } from "./account-runner-model.js";
+import type { AgentModel } from "./agent-contracts.js";
+import { ArtifactStore } from "./artifact-store.js";
+import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import type { NativeBuildSpec } from "./build-spec.js";
+import { IntegrationManager } from "./integration-manager.js";
+import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
+import { NativeArchitectRuntime } from "./native-architect-runtime.js";
+import { NativeWorkerDriver } from "./native-worker-driver.js";
+import type {
+  ProviderConfigStore,
+  RunnerProviderConfig,
+} from "./provider-config-store.js";
+import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
+import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
+import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import { SkillCatalog } from "./skill-catalog.js";
+import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
+import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
+import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
+import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
+import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
+import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import { WorkspaceManager } from "./workspace-manager.js";
+
+export interface NativeBuildFactoryOptions {
+  projectRoot: string;
+  stateDirectory: string;
+  providerConfigs: ProviderConfigStore;
+  baselineFor(runId: string): string;
+}
+
+export class NativeBuildFactory {
+  private readonly artifacts: ArtifactStore;
+  private readonly memoryStore: SqliteProjectMemoryStore;
+  private closed = false;
+
+  constructor(private readonly options: NativeBuildFactoryOptions) {
+    this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
+    this.memoryStore = new SqliteProjectMemoryStore(
+      join(options.stateDirectory, "project-memory.sqlite")
+    );
+  }
+
+  async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
+    const baselineRevision = this.options.baselineFor(spec.runId);
+    const selectedConfigs = selectConfigs(this.options.providerConfigs.load(), spec);
+    const candidates = selectedConfigs.map(toCandidate);
+    const models = new Map<string, AgentModel>(
+      selectedConfigs.map((config) => [config.runtimeId, createModel(config)])
+    );
+    const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    const sessions = new SqliteAgentSessionStore(
+      join(runRoot, "sessions.sqlite"),
+      this.artifacts
+    );
+    const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
+    const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
+      limitsFor: (scopeId) => {
+        if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);
+        return { ...spec.budgetLimits };
+      },
+    });
+    const workspaceManager = new WorkspaceManager({
+      repositoryRoot: this.options.projectRoot,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      baselineRevision,
+    });
+    const integrationManager = new IntegrationManager({
+      repositoryRoot: this.options.projectRoot,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      baselineRevision,
+    });
+    await integrationManager.initialize();
+    const initialHealth = Object.values(
+      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).runtime.providerHealth
+    ).filter(isProviderHealthState);
+    const health = new ProviderHealthRegistry({ initial: initialHealth });
+    const router = new RuntimeRouter({ candidates, health });
+    const skillCatalog = new SkillCatalog({ projectRoot: this.options.projectRoot });
+    const workerDriver = new NativeWorkerDriver({
+      schedulerStore,
+      router,
+      health,
+      candidates,
+      models,
+      permissionProfile: spec.permissionProfile,
+      workspaceManager,
+      artifacts: this.artifacts,
+      ledger,
+      sessions,
+      evidenceStore,
+      skillCatalog,
+      memoryStore: this.memoryStore,
+      projectId: spec.projectId,
+      projectRoot: this.options.projectRoot,
+      budgetLedger,
+    });
+    const architectDriver = new NativeArchitectRuntime({
+      schedulerStore,
+      router,
+      health,
+      candidates,
+      models,
+      initialRuntimeId: spec.architectRuntimeId,
+      sessions,
+      artifacts: this.artifacts,
+      skillCatalog,
+      memoryStore: this.memoryStore,
+      evidenceStore,
+      projectId: spec.projectId,
+      projectRoot: this.options.projectRoot,
+      budgetLedger,
+    });
+    const integrationDriver: IntegrationRuntimeDriver = {
+      integrate: async ({ taskId, changeSetId }) => {
+        const task = rebuildSchedulerProjection(
+          schedulerStore.readRun(spec.runId)
+        ).tasks[taskId];
+        if (!task) throw new Error(`Unknown integration task ${taskId}.`);
+        const session = await sessions.load(
+          `worker:${spec.runId}:${taskId}:${task.attempt}`
+        );
+        if (!session.changeSet || session.changeSet.id !== changeSetId) {
+          throw new Error(`Submitted change set ${changeSetId} is unavailable.`);
+        }
+        const result = await integrationManager.integrate(session.changeSet);
+        return result.status === "integrated"
+          ? { status: "integrated", integrationRevision: result.integrationRevision }
+          : {
+              status: "conflict",
+              integrationRevision: result.integrationRevision,
+              conflictPaths: [...result.conflictPaths],
+            };
+      },
+    };
+    const runtime = new BuildRuntime({
+      runId: spec.runId,
+      store: schedulerStore,
+      workerDriver,
+      architectDriver,
+      integrationDriver,
+      maxConcurrency: spec.maxConcurrency,
+      workspaceFor: async (task) =>
+        (await workspaceManager.createTaskWorkspace(task.id)).path,
+    });
+    let closed = false;
+    return {
+      runtime,
+      close: () => {
+        if (closed) return;
+        closed = true;
+        budgetLedger.close();
+        evidenceStore.close();
+        ledger.close();
+        sessions.close();
+        schedulerStore.close();
+      },
+    };
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.memoryStore.close();
+    this.options.providerConfigs.close();
+  }
+}
+
+function selectConfigs(
+  configs: readonly RunnerProviderConfig[],
+  spec: NativeBuildSpec
+): RunnerProviderConfig[] {
+  const required = new Set([spec.architectRuntimeId, ...spec.workerRuntimeIds]);
+  const selected = configs.filter((config) => required.has(config.runtimeId));
+  for (const runtimeId of required) {
+    if (!selected.some((config) => config.runtimeId === runtimeId)) {
+      throw new Error(`Provider runtime ${runtimeId} is not configured.`);
+    }
+  }
+  return selected;
+}
+
+function toCandidate(config: RunnerProviderConfig): AgentRuntimeCandidate {
+  return {
+    runtimeId: config.runtimeId,
+    providerId: config.providerId,
+    modelId: config.modelId,
+    capabilities: [...config.capabilities],
+    priority: config.priority,
+  };
+}
+
+function createModel(config: RunnerProviderConfig): AgentModel {
+  if (config.transport !== "account-runner") {
+    throw new Error(`Provider transport ${config.transport} is not implemented yet.`);
+  }
+  if (!config.baseUrl) {
+    throw new Error(`Account runtime ${config.runtimeId} requires a baseUrl.`);
+  }
+  return new AccountRunnerModel({
+    baseUrl: config.baseUrl,
+    runnerPath: config.providerId,
+    runnerToken: config.runnerToken ?? config.secret,
+    modelId: config.modelId,
+    ...(config.runnerToken ? { providerApiKey: config.secret } : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+  });
+}
+
+function isProviderHealthState(value: unknown): value is ProviderHealthState {
+  if (!value || typeof value !== "object") return false;
+  const state = value as Partial<ProviderHealthState>;
+  return (
+    typeof state.providerId === "string" &&
+    (state.status === "healthy" || state.status === "cooldown") &&
+    typeof state.consecutiveFailures === "number" &&
+    typeof state.updatedAt === "number"
+  );
+}
+
+function safeSegment(value: string): string {
+  const readable = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "run";
+  return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+}
