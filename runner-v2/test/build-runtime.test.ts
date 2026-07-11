@@ -150,6 +150,51 @@ test("fresh native Builds expose an empty projection and obey durable user pause
   }
 });
 
+test("an idempotently repeated worker pause remains paused instead of becoming idle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-repeat-pause-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append({
+      runId: "run_repeat_pause",
+      type: "plan.created",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: "task_a",
+          objective: "Do work",
+          dependencies: [],
+          status: "running",
+          requiredCapabilities: ["code"],
+          attempt: 1,
+          assignedWorkerId: "worker_task_a_1",
+          workspacePath: "C:/work/task_a",
+        }],
+      },
+    });
+    const runtime = new BuildRuntime({
+      runId: "run_repeat_pause",
+      store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "blocked" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task_a",
+      clock: () => "2026-07-12T00:00:00.000Z",
+    });
+    await runtime.step();
+    runtime.resume("resume:repeat");
+    assert.equal((await runtime.step()).status, "paused");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;

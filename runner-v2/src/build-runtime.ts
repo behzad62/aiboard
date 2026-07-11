@@ -311,6 +311,12 @@ export class BuildRuntime {
     await this.scheduler.tick();
     await this.scheduler.awaitIdle();
     const afterWorkers = this.projection();
+    if (afterWorkers.status === "paused") {
+      return { status: "paused", action: "worker_paused" };
+    }
+    if (afterWorkers.status === "completed") {
+      return { status: "completed", action: "worker_completed" };
+    }
     if (afterWorkers.lastSequence > sequenceBeforeWorkers) {
       return { status: "progressed", action: "workers_advanced" };
     }

@@ -11,6 +11,7 @@ import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
 import {
   classifyProviderFailure,
+  type ProviderFailure,
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { RuntimeRouter, AgentRuntimeCandidate } from "./runtime-router.js";
@@ -161,6 +162,12 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         });
         this.options.health.recordFailure(candidate.providerId, failure);
         this.persistHealth(assignment.runId, candidate.providerId);
+        if (!shouldFailoverWorkerFailure(failure)) {
+          return {
+            type: "failed",
+            reason: `provider_${failure.kind}:${failure.message}`,
+          };
+        }
         const selection = this.options.router.selectWorker(
           assignment.task.requiredCapabilities,
           new Set([runtimeId])
@@ -287,6 +294,10 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       recentHistory: [],
     });
   }
+}
+
+export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
+  return failure.kind !== "invalid_request" && failure.kind !== "cancelled";
 }
 
 async function snapshotRepository(workspacePath: string): Promise<string> {

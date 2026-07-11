@@ -8,7 +8,10 @@ import test from "node:test";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
-import { NativeWorkerDriver } from "../src/native-worker-driver.js";
+import {
+  NativeWorkerDriver,
+  shouldFailoverWorkerFailure,
+} from "../src/native-worker-driver.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
@@ -31,6 +34,23 @@ class ScriptedModel implements AgentModel {
     return turn;
   }
 }
+
+test("invalid worker requests fail once instead of cycling through runtimes", () => {
+  assert.equal(
+    shouldFailoverWorkerFailure({
+      kind: "invalid_request",
+      message: "Invalid tool schema.",
+    }),
+    false
+  );
+  assert.equal(
+    shouldFailoverWorkerFailure({
+      kind: "provider_unavailable",
+      message: "Provider unavailable.",
+    }),
+    true
+  );
+});
 
 test("native worker fails over with the same session, context, tools, and evidence", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-"));

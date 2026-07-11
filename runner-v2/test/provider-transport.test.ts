@@ -51,7 +51,7 @@ test("account runner transport maps native tool calls, usage, and tool results",
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({
       type: "tool_call",
-      toolCall: { id: "call_1", name: "fs.read", arguments: { path: "a.txt" } },
+      toolCall: { id: "call_1", name: "fs_read", arguments: { path: "a.txt" } },
     })}\n\n`);
     response.write(`data: ${JSON.stringify({
       type: "usage",
@@ -104,6 +104,10 @@ test("account runner transport maps native tool calls, usage, and tool results",
     assert.deepEqual(turn.usage, { inputTokens: 12, outputTokens: 3 });
     assert.match(JSON.stringify(requests[0]), /TOOL_RESULT/);
     assert.equal((requests[0].nativeTools as unknown[]).length, 1);
+    assert.equal(
+      (requests[0].nativeTools as Array<{ name: string }>)[0].name,
+      "fs_read"
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

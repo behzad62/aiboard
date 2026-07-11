@@ -59,6 +59,10 @@ export class AccountRunnerModel implements AgentModel {
   }
 
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const wireNames = buildWireToolNames(request.tools);
+    const originalNameFor = new Map(
+      [...wireNames].map(([original, wire]) => [wire, original])
+    );
     const response = await this.fetchImpl(
       `${this.options.baseUrl.replace(/\/$/, "")}/providers/${encodeURIComponent(
         this.options.runnerPath
@@ -75,7 +79,9 @@ export class AccountRunnerModel implements AgentModel {
             : {}),
           model: this.options.modelId,
           messages: request.messages.map(toRunnerMessage),
-          nativeTools: request.tools.map(toRunnerTool),
+          nativeTools: request.tools.map((tool) =>
+            toRunnerTool(tool, wireNames.get(tool.name)!)
+          ),
           reasoningEffort: this.options.reasoningEffort,
           attachments: [],
           sessionId: request.sessionId,
@@ -126,7 +132,7 @@ export class AccountRunnerModel implements AgentModel {
         blocks.push({
           type: "tool_call",
           callId: event.toolCall.id ?? `tool_${toolIndex}`,
-          name: event.toolCall.name,
+          name: originalNameFor.get(event.toolCall.name) ?? event.toolCall.name,
           arguments: toolArguments(event.toolCall),
         });
       } else if (event.type === "usage" && event.usage) {
@@ -202,13 +208,33 @@ function serializeToolResult(result: ToolResult): string {
   });
 }
 
-function toRunnerTool(tool: ToolDefinition) {
+function toRunnerTool(tool: ToolDefinition, wireName: string) {
   return {
-    name: tool.name,
+    name: wireName,
     description: tool.description,
     parameters: tool.inputSchema,
     strict: false,
   };
+}
+
+function buildWireToolNames(tools: readonly ToolDefinition[]): Map<string, string> {
+  const result = new Map<string, string>();
+  const used = new Set<string>();
+  for (const tool of tools) {
+    const normalized = tool.name
+      .replace(/[^a-zA-Z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "tool";
+    let candidate = normalized.slice(0, 64);
+    let suffix = 2;
+    while (used.has(candidate)) {
+      const marker = `_${suffix}`;
+      candidate = `${normalized.slice(0, 64 - marker.length)}${marker}`;
+      suffix += 1;
+    }
+    used.add(candidate);
+    result.set(tool.name, candidate);
+  }
+  return result;
 }
 
 function toolArguments(

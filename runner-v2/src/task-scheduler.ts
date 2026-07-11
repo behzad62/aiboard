@@ -212,12 +212,13 @@ export class TaskScheduler {
       return;
     }
     if (outcome.type === "paused") {
+      const lastSequence = this.projection().lastSequence;
       this.store.append({
         runId: this.runId,
         type: "run.paused",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "scheduler" },
-        idempotencyKey: `worker-pause:${taskId}:${attempt}`,
+        idempotencyKey: `worker-pause:${taskId}:${attempt}:${lastSequence}`,
         payload: { reason: outcome.reason, taskId },
       });
       return;
