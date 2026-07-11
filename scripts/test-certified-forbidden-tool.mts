@@ -1,6 +1,6 @@
 /* Certified forbidden-tool quality shield (run: npx tsx scripts/test-certified-forbidden-tool.mts) */
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
-import { validateBuildBenchmarkCommand } from "../lib/client/build-engine";
+import { validateBuildBenchmarkCommand } from "../lib/client/legacy-build-engine.benchmark";
 
 let failures = 0;
 

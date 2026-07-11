@@ -1,9 +1,7 @@
 /**
- * Build mode runner: the Architect (judge model) plans tasks, worker models
- * implement them with focused context, the Architect reviews/fixes and adds
- * tasks until done. Files are written immediately — always to a virtual FS
- * (drives the artifact panel / zip), and also to the user's project folder
- * when one was granted.
+ * Legacy browser Build engine retained only for certified WorkBench benchmark
+ * compatibility. Product Build mode must never import this module; execution
+ * is owned exclusively by Runner V2 through native-build-engine.ts.
  */
 
 import { v4 as uuidv4 } from "uuid";

@@ -5,7 +5,7 @@ import {
   shouldBlockBuildBenchmarkAction,
   validateBuildBenchmarkCommand,
   type BuildHooks,
-} from "../lib/client/build-engine";
+} from "../lib/client/legacy-build-engine.benchmark";
 import {
   createWorkBenchBenchmarkHooks,
   runWorkBenchBuild,

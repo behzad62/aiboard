@@ -1786,10 +1786,10 @@ type RunnerState =
   | { kind: "unreachable"; error?: string };
 
 /**
- * Build-mode runner status: is a local runner attached, reachable, and what
+ * Build-mode runner status: is Runner V2 attached, reachable, and what
  * folder does it point at? Pings /health and, while a run is active, re-checks
- * every 30s. The loud case is "unreachable while active" — the build will
- * silently fall back to in-app files, so the user needs to see it.
+ * every 30s. An unreachable active runner stops Build execution; there is no
+ * browser fallback.
  */
 function RunnerChip({
   url,
@@ -1881,10 +1881,10 @@ function RunnerChip({
     return (
       <Chip
         className={`${base} bg-background/60 text-muted-foreground`}
-        title="No local runner was attached to this build — files stay in the app (and the browser-picked folder, if any). Attach a runner on the dashboard when creating a build."
+        title="Runner V2 is required for Build mode. Attach it in Session settings before resuming."
       >
         {dot("bg-slate-400")}
-        No runner
+        Runner V2 required
       </Chip>
     );
   }
@@ -1893,7 +1893,7 @@ function RunnerChip({
     return (
       <Chip
         className={`${base} bg-background/60 text-muted-foreground`}
-        title={`Checking the local runner at ${url}…`}
+        title={`Checking Runner V2 at ${url}…`}
       >
         {dot("bg-slate-400", true)}
         Runner: checking…
@@ -1905,7 +1905,7 @@ function RunnerChip({
     return (
       <Chip
         className={`${base} border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300`}
-        title={`Local runner connected at ${url}${state.dir ? ` — ${state.dir}` : ""}`}
+        title={`Runner V2 connected at ${url}${state.dir ? ` — ${state.dir}` : ""}`}
       >
         {dot("bg-emerald-500")}
         {/* dir is an absolute path — keep long ones from blowing up the chip */}
@@ -1921,7 +1921,7 @@ function RunnerChip({
     return (
       <Chip
         className={`${base} border-amber-500/40 bg-amber-500/12 text-amber-700 dark:text-amber-300`}
-        title={`Can't reach the runner at ${url}${state.error ? ` — ${state.error}` : ""}. This build will fall back to in-app files.`}
+        title={`Can't reach Runner V2 at ${url}${state.error ? ` — ${state.error}` : ""}. Build execution is paused.`}
       >
         {dot("bg-amber-500", true)}
         Runner unreachable
@@ -1933,8 +1933,8 @@ function RunnerChip({
       className={`${base} bg-background/60 text-muted-foreground`}
       title={
         onManage
-          ? `A local runner was attached at ${url}, but it isn't reachable now. If you restarted the runner it printed a NEW token — paste it here to reconnect and Resume.`
-          : `A local runner was attached at ${url}, but it isn't reachable now. That's normal once a run has finished.`
+          ? `Runner V2 at ${url} is unreachable. If you restarted it with a new token, paste that token here before resuming.`
+          : `Runner V2 at ${url} is offline. That's normal once a run has finished.`
       }
     >
       {dot("bg-slate-400")}

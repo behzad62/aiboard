@@ -11,18 +11,18 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 const workflowPath = ".github/workflows/deploy-aiboard.yml";
 const workflow = readFileSync(workflowPath, "utf8");
 
-const copyRunnerIndex = workflow.indexOf("npm run copy-runner");
+const publishDownloadsIndex = workflow.indexOf("npm run publish-downloads");
 const buildIndex = workflow.indexOf("npm run build");
 const verifyIndex = workflow.indexOf("npx tsx scripts/test-deploy-runner-artifacts.mts");
 const uploadIndex = workflow.indexOf("appleboy/scp-action");
 
-check("deploy workflow explicitly regenerates runner downloads", copyRunnerIndex >= 0, {
+check("deploy workflow explicitly publishes supported downloads", publishDownloadsIndex >= 0, {
   workflowPath,
 });
 check(
-  "deploy workflow regenerates runners before static build",
-  copyRunnerIndex >= 0 && buildIndex >= 0 && copyRunnerIndex < buildIndex,
-  { copyRunnerIndex, buildIndex }
+  "deploy workflow publishes downloads before static build",
+  publishDownloadsIndex >= 0 && buildIndex >= 0 && publishDownloadsIndex < buildIndex,
+  { publishDownloadsIndex, buildIndex }
 );
 check("deploy workflow verifies exported runner downloads", verifyIndex >= 0, {
   workflowPath,

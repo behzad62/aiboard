@@ -7,7 +7,7 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failed++;
 };
 
-const source = readFileSync("lib/client/build-engine.ts", "utf8");
+const source = readFileSync("lib/client/legacy-build-engine.benchmark.ts", "utf8");
 
 check(
   "build engine marker advertises live-checkpoint durability behavior",

@@ -42,7 +42,7 @@ check("failure message names failed task", /T2/.test(message), message);
 check("failure message names fixing task", /T3/.test(message), message);
 check("failure message says incomplete", /incomplete/i.test(message), message);
 
-const buildEngineSource = readFileSync("lib/client/build-engine.ts", "utf8");
+const buildEngineSource = readFileSync("lib/client/legacy-build-engine.benchmark.ts", "utf8");
 const incompleteBlockStart = buildEngineSource.indexOf(
   "const incompleteTasks = findIncompleteBuildTasks(tasks);"
 );

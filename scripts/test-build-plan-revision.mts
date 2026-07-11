@@ -15,7 +15,7 @@ import {
 import {
   adoptBuildReviewVerificationState,
   materializeBuildEnginePlanTasks,
-} from "../lib/client/build-engine";
+} from "../lib/client/legacy-build-engine.benchmark";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -307,7 +307,7 @@ check(
 );
 
 const buildEngineSource = readFileSync(
-  new URL("../lib/client/build-engine.ts", import.meta.url),
+  new URL("../lib/client/legacy-build-engine.benchmark.ts", import.meta.url),
   "utf8"
 );
 check(

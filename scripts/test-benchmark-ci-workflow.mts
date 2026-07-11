@@ -16,7 +16,7 @@ const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") :
 
 for (const expected of [
   "npm ci",
-  "npm run copy-runner",
+  "npm run publish-downloads",
   "npm run test:certified",
   "npm run test:benchmark",
   "npm run build",

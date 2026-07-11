@@ -3,7 +3,7 @@ import type {
   HarnessCertificationResult,
   HarnessProfile,
 } from "@/lib/benchmark/types";
-import { validateBuildBenchmarkCommand } from "@/lib/client/build-engine";
+import { validateBuildBenchmarkCommand } from "@/lib/client/legacy-build-engine.benchmark";
 import { extractArtifacts } from "@/lib/artifacts/extract";
 import { parseArchitectAction } from "@/lib/orchestrator/build";
 import {

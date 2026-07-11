@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.18.0
           cache: npm
 
       - name: Install dependencies
@@ -29,7 +29,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p benchmark-results
-          npm run copy-runner 2>&1 | tee benchmark-results/copy-runner.log
+          npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
           npm run test:certified 2>&1 | tee benchmark-results/test-certified.log
           npm run test:benchmark 2>&1 | tee benchmark-results/test-benchmark.log
           npm run build 2>&1 | tee benchmark-results/build.log

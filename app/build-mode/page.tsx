@@ -60,14 +60,15 @@ export default function BuildModePage() {
 
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">
-          Local-first project access
+          Native Runner V2 kernel
         </h2>
         <p>
-          Files can stay in the browser, be downloaded as a zip, be written to a
-          browser-picked folder, or go through the optional local runner. The
-          runner is a script you start yourself. It can write to your project
-          folder, run tests/builds with your approval, fetch public pages, and
-          bridge MCP tools such as Playwright, Context7, or SearXNG search.
+          Build execution never runs in the browser. Runner V2 owns durable
+          checkpoints, isolated Git worktrees, native tools, skills, project
+          memory, evidence, provider failover, and recovery. It requires Git
+          and Node.js 24.18.0 and stops before model calls when prerequisites
+          are missing. When the Architect finishes, the run pauses for your
+          final project handoff decision.
         </p>
       </section>
 
@@ -77,7 +78,7 @@ export default function BuildModePage() {
           <li>Scaffolding a small app or feature from a clear prompt.</li>
           <li>Splitting implementation work across several AI models.</li>
           <li>Letting one model review another model&apos;s code before hand-off.</li>
-          <li>Running local checks through a user-controlled runner.</li>
+          <li>Running real local checks through a durable native agent kernel.</li>
         </ul>
       </section>
 

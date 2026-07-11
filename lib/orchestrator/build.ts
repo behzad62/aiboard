@@ -4,7 +4,8 @@
  * The judge model acts as the Architect (planner/reviewer); the other selected
  * models are workers. This module holds the shared vocabulary: task types, the
  * Architect's JSON action protocol (with tolerant parsing), and every prompt.
- * The loop itself runs in lib/client/build-engine.ts.
+ * The legacy WorkBench benchmark loop lives in
+ * lib/client/legacy-build-engine.benchmark.ts. Product Build mode is native.
  */
 
 import { FILE_OUTPUT_INSTRUCTION, META_FOOTER_INSTRUCTION } from "./prompts";

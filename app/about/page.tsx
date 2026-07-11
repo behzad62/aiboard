@@ -138,7 +138,7 @@ export default function AboutPage() {
           </li>
           <li>
             <Link href="/runner-guide" className="underline hover:text-foreground">
-              Runner guide — local runner &amp; control panel
+              Runner V2 guide
             </Link>
           </li>
         </ul>

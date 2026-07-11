@@ -32,7 +32,7 @@ const storeApi = require("../lib/client/store") as {
 const clientApi = require("../lib/client/api") as typeof import("../lib/client/api");
 const engineApi = require("../lib/client/engine") as typeof import("../lib/client/engine");
 const buildEngineSource = readFileSync(
-  new URL("../lib/client/build-engine.ts", import.meta.url),
+  new URL("../lib/client/legacy-build-engine.benchmark.ts", import.meta.url),
   "utf8"
 );
 

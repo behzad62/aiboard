@@ -1,3 +1,5 @@
+export const DEFAULT_RUNNER_V2_URL = "http://127.0.0.1:8787";
+
 export interface NativeRunnerConnection {
   url: string;
   token: string;

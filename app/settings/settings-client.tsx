@@ -465,12 +465,11 @@ export default function SettingsPage() {
               </p>
               <p>
                 <strong className="text-foreground">
-                  The local runner is opt-in and visible.
+                  Runner V2 is local and visible.
                 </strong>{" "}
-                It binds to 127.0.0.1 on your machine, only touches the folder
-                you point it at, logs every command, and asks your approval per
-                command unless you chose Full access. Stop it any time with
-                Ctrl+C.
+                Build mode requires it. It binds to 127.0.0.1, is scoped by the
+                selected access profile, and persists recovery state outside
+                the project. Stop it any time with Ctrl+C.
               </p>
             </CardContent>
           </Card>

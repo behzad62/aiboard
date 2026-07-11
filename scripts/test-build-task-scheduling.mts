@@ -203,7 +203,7 @@ check(
 );
 
 const buildEngineSource = readFileSync(
-  new URL("../lib/client/build-engine.ts", import.meta.url),
+  new URL("../lib/client/legacy-build-engine.benchmark.ts", import.meta.url),
   "utf8"
 );
 check(

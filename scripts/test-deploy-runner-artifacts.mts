@@ -1,6 +1,5 @@
 /* Static deploy runner artifact checks (run after npm run build). */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 let failures = 0;
@@ -12,10 +11,6 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
-}
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
 }
 
 function nodeCheck(path: string): boolean {
@@ -43,12 +38,11 @@ for (const path of [
   exportedAccountRunner,
   publicBenchRunner,
   exportedBenchRunner,
-  publicRunner,
-  exportedRunner,
-  publicManifest,
-  exportedManifest,
 ]) {
   check(`${path} exists`, existsSync(path));
+}
+for (const path of [publicRunner, exportedRunner, publicManifest, exportedManifest]) {
+  check(`${path} is retired`, !existsSync(path));
 }
 
 if (existsSync(publicAccountRunner) && existsSync(sourceAccountRunner)) {
@@ -76,26 +70,6 @@ if (existsSync(exportedBenchRunner) && existsSync(sourceBenchRunner)) {
   );
 }
 
-if (existsSync(exportedRunner) && existsSync(exportedManifest)) {
-  const runner = read(exportedRunner);
-  const manifest = JSON.parse(read(exportedManifest)) as {
-    version?: unknown;
-    sha256?: unknown;
-    url?: unknown;
-  };
-  const fileVersion = Number((runner.match(/const VERSION = (\d+)/) ?? [])[1] ?? 0);
-  check("exported runner manifest url points at download", manifest.url === "/runner.mjs", manifest);
-  check(
-    "exported runner manifest version matches file",
-    manifest.version === fileVersion && fileVersion > 0,
-    { manifestVersion: manifest.version, fileVersion }
-  );
-  check("exported runner manifest sha256 matches file", manifest.sha256 === sha256(runner));
-}
-
-if (existsSync(exportedRunner)) {
-  check("exported runner is valid JavaScript", nodeCheck(exportedRunner));
-}
 if (existsSync(exportedAccountRunner)) {
   check("exported account runner is valid JavaScript", nodeCheck(exportedAccountRunner));
 }

@@ -166,7 +166,7 @@ installIndexedDbStub();
 storeApi.__resetClientStoreForTests();
 storeApi.insertDiscussion(discussion);
 
-const { runBuildDiscussion } = await import("../lib/client/build-engine");
+const { runBuildDiscussion } = await import("../lib/client/legacy-build-engine.benchmark");
 
 const calls: ModelOverrideCall[] = [];
 const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {

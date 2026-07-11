@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { DEFAULT_RUNNER_URL } from "@/lib/client/runner";
-import { getNativeRunnerHealth } from "@/lib/client/runner-v2";
+import {
+  DEFAULT_RUNNER_V2_URL,
+  getNativeRunnerHealth,
+} from "@/lib/client/runner-v2";
 
 export interface RunnerSelection {
   url: string;
@@ -28,7 +30,7 @@ export function RunnerSetup({
   initialSelection,
   disabled = false,
 }: RunnerSetupProps) {
-  const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_URL);
+  const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_V2_URL);
   const [token, setToken] = useState(initialSelection?.token ?? "");
   const [access, setAccess] = useState<"ask" | "full">(
     initialSelection?.access ?? "ask"
@@ -39,7 +41,7 @@ export function RunnerSetup({
   }>({ state: "idle" });
 
   useEffect(() => {
-    setUrl(initialSelection?.url ?? DEFAULT_RUNNER_URL);
+    setUrl(initialSelection?.url ?? DEFAULT_RUNNER_V2_URL);
     setToken(initialSelection?.token ?? "");
     setAccess(initialSelection?.access ?? "ask");
     setStatus({ state: "idle" });
@@ -97,7 +99,7 @@ export function RunnerSetup({
               setUrl(event.target.value);
               emit({ url: event.target.value });
             }}
-            placeholder={DEFAULT_RUNNER_URL}
+            placeholder={DEFAULT_RUNNER_V2_URL}
           />
         </div>
         <div className="space-y-1">

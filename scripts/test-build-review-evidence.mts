@@ -18,7 +18,7 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failed++;
 };
 const buildEngineSource = readFileSync(
-  new URL("../lib/client/build-engine.ts", import.meta.url),
+  new URL("../lib/client/legacy-build-engine.benchmark.ts", import.meta.url),
   "utf8"
 );
 

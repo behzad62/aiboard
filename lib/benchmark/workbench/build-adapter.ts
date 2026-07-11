@@ -1,4 +1,4 @@
-import type { BuildHooks } from "@/lib/client/build-engine";
+import type { BuildHooks } from "@/lib/client/legacy-build-engine.benchmark";
 import { getBenchmarkTraces } from "@/lib/client/store";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type {
@@ -145,7 +145,7 @@ function isValidWorkBenchToolCall(trace: BenchmarkToolCallTrace): boolean {
 }
 
 async function loadRunBuildDiscussion(): Promise<RunBuildDiscussionFn> {
-  const engine = await import("@/lib/client/build-engine");
+  const engine = await import("@/lib/client/legacy-build-engine.benchmark");
   return engine.runBuildDiscussion;
 }
 
