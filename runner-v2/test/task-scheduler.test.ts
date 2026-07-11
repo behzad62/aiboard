@@ -145,11 +145,12 @@ function transitionToIntegrated(
     "integrating",
     "integrated",
   ] as const) {
+    const role = status === "integrated" ? "runner" as const : "architect" as const;
     store.append({
       runId,
       type: "task.transitioned",
       occurredAt: "2026-07-12T00:00:00.000Z",
-      actor: { role: "architect", id: "architect_1" },
+      actor: { role, id: role === "architect" ? "architect_1" : "integration_manager" },
       idempotencyKey: `${taskId}:${status}`,
       payload: { taskId, status },
     });

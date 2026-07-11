@@ -42,6 +42,19 @@ export type AgentLoopResult =
       messages: AgentMessage[];
     }
   | {
+      status: "architect_action";
+      action:
+        | "plan_created"
+        | "task_revised"
+        | "guidance_answered"
+        | "review_decided"
+        | "integration_requested"
+        | "run_completed";
+      referenceId?: string;
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
       status: "suspended";
       reason: AgentSuspensionReason;
       error?: string;
@@ -295,6 +308,14 @@ function lifecycleResult(
       return {
         status: "replan_requested",
         requestId: signal.requestId,
+        turns,
+        messages,
+      };
+    case "architect_action":
+      return {
+        status: "architect_action",
+        action: signal.action,
+        ...(signal.referenceId ? { referenceId: signal.referenceId } : {}),
         turns,
         messages,
       };

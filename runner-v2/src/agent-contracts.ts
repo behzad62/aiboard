@@ -77,7 +77,18 @@ export interface ToolDefinition {
 export type AgentLifecycleSignal =
   | { type: "submit_task"; changeSetId: string }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
-  | { type: "request_replan"; requestId: string };
+  | { type: "request_replan"; requestId: string }
+  | {
+      type: "architect_action";
+      action:
+        | "plan_created"
+        | "task_revised"
+        | "guidance_answered"
+        | "review_decided"
+        | "integration_requested"
+        | "run_completed";
+      referenceId?: string;
+    };
 
 export type ValidationResult<T> =
   | { ok: true; value: T }

@@ -14,6 +14,7 @@ export interface SchedulerActor {
 
 export type SchedulerEventType =
   | "plan.created"
+  | "task.revised"
   | "task.transitioned"
   | "guidance.requested"
   | "guidance.answered"
@@ -47,6 +48,15 @@ export interface GuidanceProjection {
   status: "open" | "answered";
   answer?: string;
   challengeEvidenceSequence?: number;
+  challengedVersion?: number;
+  challengeReason?: string;
+}
+
+export interface ReviewProjection {
+  taskId: string;
+  status: "requested" | "approved" | "rejected";
+  summary?: string;
+  evidenceArtifactHashes: string[];
 }
 
 export interface SchedulerProjection {
@@ -55,6 +65,7 @@ export interface SchedulerProjection {
   planRevision: number;
   tasks: Record<string, BuildTask>;
   guidance: Record<string, GuidanceProjection>;
+  reviews: Record<string, ReviewProjection>;
   lastSequence: number;
 }
 
@@ -81,6 +92,9 @@ export function reduceSchedulerEvent(
     if (event.sequence !== 1 || event.type !== "plan.created") {
       throw new Error(`Scheduler run ${event.runId} must begin with plan.created.`);
     }
+    if (event.actor.role !== "architect") {
+      throw new Error("Only the Architect may create a plan.");
+    }
     const tasks = event.payload.tasks as BuildTask[];
     const validation = validateTaskGraph(tasks);
     if (!validation.valid) {
@@ -94,6 +108,7 @@ export function reduceSchedulerEvent(
       planRevision: requiredNumber(event.payload, "revision"),
       tasks: Object.fromEntries(tasks.map((task) => [task.id, { ...task }])),
       guidance: {},
+      reviews: {},
       lastSequence: event.sequence,
     };
   }
@@ -104,16 +119,50 @@ export function reduceSchedulerEvent(
     ...current,
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
+    reviews: { ...current.reviews },
     lastSequence: event.sequence,
   };
   switch (event.type) {
+    case "task.revised": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may revise a task.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const task = next.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      if (task.status !== "planned") {
+        throw new Error(`Task ${taskId} must be planned before revision.`);
+      }
+      const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      const revised = { ...task, ...patch, id: task.id, status: task.status };
+      const candidate = Object.values({ ...next.tasks, [taskId]: revised });
+      const validation = validateTaskGraph(candidate);
+      if (!validation.valid) {
+        throw new Error(
+          `Task revision has mechanical issues: ${validation.issues
+            .map((issue) => issue.code)
+            .join(", ")}.`
+        );
+      }
+      next.tasks[taskId] = revised;
+      const revision = requiredNumber(event.payload, "revision");
+      if (revision !== current.planRevision + 1) {
+        throw new Error(
+          `Task revision must advance plan revision ${current.planRevision} by one.`
+        );
+      }
+      next.planRevision = revision;
+      break;
+    }
     case "task.transitioned": {
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
+      const status = requiredString(event.payload, "status") as BuildTask["status"];
+      assertTransitionAuthority(status, event.actor.role);
       next.tasks[taskId] = applyTaskTransition(
         task,
-        requiredString(event.payload, "status") as BuildTask["status"],
+        status,
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {}
       );
       break;
@@ -121,6 +170,13 @@ export function reduceSchedulerEvent(
     case "guidance.requested": {
       const requestId = requiredString(event.payload, "requestId");
       const taskId = requiredString(event.payload, "taskId");
+      if (event.actor.role !== "worker") {
+        throw new Error("Only a worker may request Architect guidance.");
+      }
+      const task = next.tasks[taskId];
+      if (!task || task.status !== "running") {
+        throw new Error(`Task ${taskId} must be running to request guidance.`);
+      }
       if (next.guidance[requestId]) throw new Error(`Duplicate guidance ${requestId}.`);
       const blocking = event.payload.blocking === true;
       next.guidance[requestId] = {
@@ -133,8 +189,6 @@ export function reduceSchedulerEvent(
         status: "open",
       };
       if (blocking) {
-        const task = next.tasks[taskId];
-        if (!task) throw new Error(`Unknown task ${taskId}.`);
         next.tasks[taskId] = applyTaskTransition(task, "waiting_guidance", {
           guidanceRequestId: requestId,
         });
@@ -144,13 +198,24 @@ export function reduceSchedulerEvent(
     case "guidance.answered": {
       const requestId = requiredString(event.payload, "requestId");
       const guidance = next.guidance[requestId];
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may answer guidance.");
+      }
       if (!guidance || guidance.status !== "open") {
         throw new Error(`Guidance ${requestId} is not open.`);
       }
+      const expectedVersion = requiredNumber(event.payload, "expectedVersion");
+      if (expectedVersion !== guidance.version) {
+        throw new Error(
+          `Guidance ${requestId} version is ${guidance.version}, not ${expectedVersion}.`
+        );
+      }
+      const answeredChallenge = guidance.challengedVersion === guidance.version;
       next.guidance[requestId] = {
         ...guidance,
         status: "answered",
         answer: requiredString(event.payload, "answer"),
+        version: answeredChallenge ? guidance.version + 1 : guidance.version,
       };
       if (guidance.blocking) {
         const task = next.tasks[guidance.taskId];
@@ -158,6 +223,79 @@ export function reduceSchedulerEvent(
           guidanceRequestId: undefined,
         });
       }
+      break;
+    }
+    case "guidance.challenged": {
+      const requestId = requiredString(event.payload, "requestId");
+      const guidance = next.guidance[requestId];
+      if (event.actor.role !== "worker") {
+        throw new Error("Only a worker may challenge guidance.");
+      }
+      if (!guidance) throw new Error(`Unknown guidance ${requestId}.`);
+      const expectedVersion = requiredNumber(event.payload, "expectedVersion");
+      if (expectedVersion !== guidance.version) {
+        throw new Error(
+          `Guidance ${requestId} version is ${guidance.version}, not ${expectedVersion}.`
+        );
+      }
+      if (guidance.challengedVersion === guidance.version) {
+        throw new Error(`Guidance ${requestId} version ${guidance.version} was already challenged.`);
+      }
+      if (guidance.status !== "answered") {
+        throw new Error(`Guidance ${requestId} must be answered before challenge.`);
+      }
+      const evidenceSequence = requiredNumber(event.payload, "evidenceSequence");
+      if (evidenceSequence <= guidance.evidenceSequence) {
+        throw new Error("A guidance challenge requires newer evidence.");
+      }
+      next.guidance[requestId] = {
+        ...guidance,
+        status: "open",
+        challengedVersion: guidance.version,
+        challengeEvidenceSequence: evidenceSequence,
+        challengeReason: requiredString(event.payload, "reason"),
+      };
+      if (guidance.blocking) {
+        const task = next.tasks[guidance.taskId];
+        next.tasks[guidance.taskId] = applyTaskTransition(task, "waiting_guidance", {
+          guidanceRequestId: requestId,
+        });
+      }
+      break;
+    }
+    case "review.requested": {
+      const taskId = requiredString(event.payload, "taskId");
+      const task = next.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      next.tasks[taskId] = applyTaskTransition(task, "architect_review");
+      next.reviews[taskId] = {
+        taskId,
+        status: "requested",
+        evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
+      };
+      break;
+    }
+    case "review.decided": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may decide a review.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      let task = next.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      if (task.status === "submitted") {
+        task = applyTaskTransition(task, "architect_review");
+      }
+      const decision = requiredString(event.payload, "decision");
+      if (decision !== "approved" && decision !== "rejected") {
+        throw new Error(`Review decision ${decision} is invalid.`);
+      }
+      next.tasks[taskId] = applyTaskTransition(task, decision);
+      next.reviews[taskId] = {
+        taskId,
+        status: decision,
+        summary: requiredString(event.payload, "summary"),
+        evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
+      };
       break;
     }
     case "run.paused":
@@ -174,12 +312,37 @@ export function reduceSchedulerEvent(
       break;
     case "plan.created":
       throw new Error("A scheduler run cannot create a second initial plan.");
-    case "guidance.challenged":
-    case "review.requested":
-    case "review.decided":
-      break;
   }
   return next;
+}
+
+function assertTransitionAuthority(
+  status: BuildTask["status"],
+  role: SchedulerActorRole
+): void {
+  const architectStatuses: BuildTask["status"][] = [
+    "architect_review",
+    "approved",
+    "rejected",
+    "integrating",
+  ];
+  if (architectStatuses.includes(status) && role !== "architect") {
+    throw new Error(`Only the Architect may transition a task to ${status}.`);
+  }
+  if (
+    (status === "integrated" || status === "integration_resolution") &&
+    role !== "runner"
+  ) {
+    throw new Error(`Only the runner may transition a task to ${status}.`);
+  }
+}
+
+function stringArray(payload: Record<string, unknown>, key: string): string[] {
+  const value = payload[key];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`Missing ${key}.`);
+  }
+  return [...value] as string[];
 }
 
 function requiredString(payload: Record<string, unknown>, key: string): string {

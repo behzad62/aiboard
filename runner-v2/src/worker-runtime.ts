@@ -1,7 +1,6 @@
 import type {
   AgentMessage,
   AgentModel,
-  NativeTool,
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -11,12 +10,17 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
+import type { SchedulerStore } from "./scheduler-store.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
   TaskWorkspace,
   WorkspaceManager,
 } from "./workspace-manager.js";
+import {
+  createSubmitTaskTool,
+  createWorkerLifecycleTools,
+} from "./worker-lifecycle-tools.js";
 
 export interface RunWorkerTaskOptions {
   model: AgentModel;
@@ -30,6 +34,7 @@ export interface RunWorkerTaskOptions {
   artifacts: ArtifactStore;
   ledger: ToolInvocationLedger;
   sessions: SqliteAgentSessionStore;
+  schedulerStore?: SchedulerStore;
   initialMessages: readonly AgentMessage[];
   clock?: () => string;
 }
@@ -78,9 +83,16 @@ export async function runWorkerTask(
   }
   for (const tool of createProcessTools()) broker.register(tool);
   for (const tool of createGitTools()) broker.register(tool);
+  if (options.schedulerStore) {
+    for (const tool of createWorkerLifecycleTools({
+      store: options.schedulerStore,
+      taskId: options.taskId,
+      clock,
+    })) broker.register(tool);
+  }
 
   let producedChangeSet: ChangeSet | undefined;
-  broker.register(submitTaskTool(async (summary) => {
+  broker.register(createSubmitTaskTool(async (summary) => {
     const commit = await options.workspaceManager.commitTask(
       options.taskId,
       summary
@@ -121,47 +133,15 @@ export async function runWorkerTask(
       loop.error,
       clock()
     );
+  } else if (loop.status === "waiting_for_architect") {
+    options.sessions.suspend(
+      options.sessionId,
+      "waiting_for_architect",
+      loop.requestId,
+      clock()
+    );
   }
   return { loop, ...(producedChangeSet ? { changeSet: producedChangeSet } : {}) };
-}
-
-function submitTaskTool(
-  submit: (summary: string) => Promise<ChangeSet>
-): NativeTool<{ summary: string }> {
-  return {
-    definition: {
-      name: "submit_task",
-      description: "Commit the task workspace and submit a typed change set",
-      inputSchema: {
-        type: "object",
-        properties: { summary: { type: "string" } },
-        required: ["summary"],
-        additionalProperties: false,
-      },
-      readOnly: false,
-      effect: "workspace",
-      lifecycle: true,
-    },
-    validate: (input) =>
-      typeof input === "object" &&
-      input !== null &&
-      typeof (input as { summary?: unknown }).summary === "string" &&
-      (input as { summary: string }).summary.trim()
-        ? { ok: true, value: input as { summary: string } }
-        : { ok: false, issues: ["summary must be a non-empty string"] },
-    assessAccess: () => ({
-      capability: "task.submit",
-      paths: [{ path: ".", access: "write" }],
-    }),
-    execute: async (input) => {
-      const changeSet = await submit(input.summary.trim());
-      return {
-        content: [{ type: "json", value: changeSet }],
-        isError: false,
-        lifecycle: { type: "submit_task", changeSetId: changeSet.id },
-      };
-    },
-  };
 }
 
 function changeSetFromMessages(

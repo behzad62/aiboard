@@ -10,6 +10,10 @@ import type {
   SchedulerEventType,
   SchedulerStore,
 } from "./scheduler-store.js";
+import {
+  rebuildSchedulerProjection,
+  reduceSchedulerEvent,
+} from "./scheduler-store.js";
 
 interface EventRow {
   event_id: string;
@@ -79,6 +83,17 @@ export class SqliteSchedulerStore implements SchedulerStore {
         eventId: `sched_${randomUUID()}`,
         sequence: row.sequence,
       };
+      const priorRows = this.database
+        .prepare(
+          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
+        )
+        .all(input.runId) as unknown as EventRow[];
+      const priorEvents = priorRows.map(decode);
+      const priorProjection =
+        priorEvents.length > 0
+          ? rebuildSchedulerProjection(priorEvents)
+          : undefined;
+      reduceSchedulerEvent(priorProjection, event);
       this.database
         .prepare(
           `INSERT INTO scheduler_events (

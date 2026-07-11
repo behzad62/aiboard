@@ -105,7 +105,15 @@ function event(
     runId,
     type,
     occurredAt: "2026-07-12T00:00:00.000Z",
-    actor: { role: type === "plan.created" ? "architect" : "runner", id: "actor_1" },
+    actor: {
+      role:
+        type === "plan.created"
+          ? "architect"
+          : type === "guidance.requested"
+            ? "worker"
+            : "runner",
+      id: "actor_1",
+    },
     idempotencyKey,
     payload,
   };
