@@ -169,6 +169,58 @@ function normalizeIdentity(identity: string): string {
   return identity.trim();
 }
 
+function splitAndChainedCommands(identity: string): string[] {
+  const commands: string[] = [];
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < identity.length; index++) {
+    const char = identity[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote) {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "&" && identity[index + 1] === "&") {
+      commands.push(identity.slice(start, index).trim());
+      index += 1;
+      start = index + 1;
+    }
+  }
+  commands.push(identity.slice(start).trim());
+  return commands.filter(Boolean);
+}
+
+function verifierIdentityMatches(
+  fact: BuildTaskVerificationFact,
+  requirement: BuildTaskVerificationRequirement
+): boolean {
+  if (requirement.verifierIdentity === null) return false;
+  const required = normalizeIdentity(requirement.verifierIdentity);
+  const actual = normalizeIdentity(fact.verifierIdentity ?? "");
+  if (actual === required) return true;
+  // An exit-0 AND chain proves every component ran successfully. Failed chains
+  // are deliberately not decomposed because the failing component is unknown.
+  return (
+    requirement.action === "run" &&
+    fact.status === "passed" &&
+    splitAndChainedCommands(actual).some(
+      (component) => normalizeIdentity(component) === required
+    )
+  );
+}
+
 function extractQuotedVerifierIdentities(text: string): string[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
@@ -451,10 +503,7 @@ export function validateBuildReviewApprovals(input: {
         (fact) => !requirement.source || fact.source === requirement.source
       );
       const identityFacts = sourceFacts.filter(
-        (fact) =>
-          requirement.verifierIdentity !== null &&
-          normalizeIdentity(fact.verifierIdentity ?? "") ===
-            normalizeIdentity(requirement.verifierIdentity)
+        (fact) => verifierIdentityMatches(fact, requirement)
       );
       const generationFacts = identityFacts.filter(
         (fact) =>

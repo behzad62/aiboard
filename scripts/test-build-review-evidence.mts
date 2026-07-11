@@ -733,6 +733,21 @@ check(
     twoMissingCommands.errors.some((error) => error.message.includes('"npm run lint"')),
   twoMissingCommands
 );
+check(
+  "successful AND-chained command satisfies each exact component verifier",
+  validateBuildReviewApprovals({
+    tasks: [twoCommandTask],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 2,
+      status: "passed",
+      verifierIdentity: "node -e \"console.log('preflight')\" && npm test && npm run lint",
+      summary: "all chained checks passed",
+    })],
+    wave: 2,
+  }).valid
+);
 const twoCommandMismatches = validateBuildReviewApprovals({
   tasks: [twoCommandTask],
   results: [approved],
