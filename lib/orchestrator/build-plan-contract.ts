@@ -12,6 +12,7 @@ export type BuildPlanContractIssueCode =
   | "unordered_output_overlap"
   | "missing_strict_tdd_contract"
   | "missing_tool_verification_contract"
+  | "duplicate_repo_task"
   | "repo_task_not_terminal";
 
 export interface BuildPlanContractIssue {
@@ -613,6 +614,25 @@ export function validateBuildPlanContract(
         )
       );
     }
+  }
+
+  const unfinishedRepoTasks = tasks.filter(
+    (task) =>
+      task.kind === "repo" &&
+      task.status !== "done" &&
+      task.status !== "failed"
+  );
+  if (unfinishedRepoTasks.length > 1) {
+    errors.push(
+      issue(
+        "duplicate_repo_task",
+        "error",
+        unfinishedRepoTasks.map((task) => task.id),
+        `Only one unfinished repository-finalization task is allowed. Consolidate ${unfinishedRepoTasks
+          .map((task) => task.id)
+          .join(", ")} into the existing terminal repo task and update its dependencies/evidence contract instead of creating another commit task.`
+      )
+    );
   }
 
   const nonRepoTasks = tasks.filter((task) => task.kind !== "repo");

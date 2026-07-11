@@ -386,6 +386,30 @@ check(
   repoWarning
 );
 check("warnings do not block dispatch", repoWarning.valid, repoWarning);
+const duplicateRepoTasks = validateBuildPlanContract([
+  task({ id: "T1", kind: "modify" }),
+  task({ id: "T2", kind: "repo" }),
+  task({ id: "T3", kind: "repo" }),
+]);
+check(
+  "multiple unfinished repository-finalization tasks are rejected",
+  duplicateRepoTasks.errors.some(
+    (issue) => issue.code === "duplicate_repo_task"
+  ),
+  duplicateRepoTasks
+);
+const historicalRepoTask = validateBuildPlanContract([
+  task({ id: "T1", kind: "repo", status: "done" }),
+  task({ id: "T2", kind: "modify" }),
+  task({ id: "T3", kind: "repo", dependsOn: ["T2"] }),
+]);
+check(
+  "a completed historical repo task does not block one new finalization task",
+  !historicalRepoTask.errors.some(
+    (issue) => issue.code === "duplicate_repo_task"
+  ),
+  historicalRepoTask
+);
 const terminalRepo = validateBuildPlanContract([
   task({ id: "T1", kind: "modify" }),
   task({ id: "T2", kind: "repo", dependsOn: ["T1"] }),
