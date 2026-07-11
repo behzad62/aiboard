@@ -116,8 +116,13 @@ test("duplicate call IDs suspend before the repeated tool executes", async () =>
 });
 
 test("provider errors and hard turn limits suspend with resumable messages", async () => {
+  const providerError = Object.assign(new Error("provider unavailable"), {
+    status: 429,
+    code: "usage_limit_reached",
+    retryAfterMs: 60_000,
+  });
   const providerFailure = await runAgentLoop({
-    model: new ScriptedModel([new Error("provider unavailable")]),
+    model: new ScriptedModel([providerError]),
     registry: new ToolRegistry(),
     context: context(),
     initialMessages,
@@ -125,6 +130,12 @@ test("provider errors and hard turn limits suspend with resumable messages", asy
   assert.equal(providerFailure.status, "suspended");
   assert.equal(providerFailure.reason, "provider_error");
   assert.match(providerFailure.error ?? "", /provider unavailable/);
+  assert.deepEqual(providerFailure.providerError, {
+    name: "Error",
+    status: 429,
+    code: "usage_limit_reached",
+    retryAfterMs: 60_000,
+  });
 
   const registry = new ToolRegistry();
   registry.register(textTool("read_file", "content"));

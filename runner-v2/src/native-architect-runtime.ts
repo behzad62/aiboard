@@ -163,9 +163,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         result.error,
         this.clock()
       );
-      const failure = classifyProviderFailure(
-        new Error(result.error ?? "Architect provider failed.")
-      );
+      const failure = classifyProviderFailure({
+        ...result.providerError,
+        message: result.error ?? "Architect provider failed.",
+      });
       this.options.health.recordFailure(candidate.providerId, failure);
       this.persistHealth(request.runId, candidate.providerId);
       this.requireHandoff(request.runId, failure.message, ["code"], runtimeId);

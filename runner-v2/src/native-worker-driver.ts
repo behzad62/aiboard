@@ -155,9 +155,10 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         result.loop.status === "suspended" &&
         result.loop.reason === "provider_error"
       ) {
-        const failure = classifyProviderFailure(
-          new Error(result.loop.error ?? "Provider failed.")
-        );
+        const failure = classifyProviderFailure({
+          ...result.loop.providerError,
+          message: result.loop.error ?? "Provider failed.",
+        });
         this.options.health.recordFailure(candidate.providerId, failure);
         this.persistHealth(assignment.runId, candidate.providerId);
         const selection = this.options.router.selectWorker(

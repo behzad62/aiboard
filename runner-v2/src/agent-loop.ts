@@ -58,6 +58,12 @@ export type AgentLoopResult =
       status: "suspended";
       reason: AgentSuspensionReason;
       error?: string;
+      providerError?: {
+        name?: string;
+        status?: number;
+        code?: string;
+        retryAfterMs?: number;
+      };
       turns: number;
       messages: AgentMessage[];
     };
@@ -166,7 +172,8 @@ export async function runAgentLoop(
         options.signal?.aborted ? "cancelled" : "provider_error",
         turnNumber - 1,
         messages,
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
+        providerErrorDetails(error)
       );
     }
 
@@ -326,13 +333,35 @@ function suspended(
   reason: AgentSuspensionReason,
   turns: number,
   messages: AgentMessage[],
-  error?: string
+  error?: string,
+  providerError?: {
+    name?: string;
+    status?: number;
+    code?: string;
+    retryAfterMs?: number;
+  }
 ): AgentLoopResult {
   return {
     status: "suspended",
     reason,
     ...(error ? { error } : {}),
+    ...(providerError && Object.keys(providerError).length > 0
+      ? { providerError }
+      : {}),
     turns,
     messages,
+  };
+}
+
+function providerErrorDetails(error: unknown) {
+  if (typeof error !== "object" || error === null) return undefined;
+  const value = error as Record<string, unknown>;
+  return {
+    ...(typeof value.name === "string" ? { name: value.name } : {}),
+    ...(typeof value.status === "number" ? { status: value.status } : {}),
+    ...(typeof value.code === "string" ? { code: value.code } : {}),
+    ...(typeof value.retryAfterMs === "number"
+      ? { retryAfterMs: value.retryAfterMs }
+      : {}),
   };
 }
