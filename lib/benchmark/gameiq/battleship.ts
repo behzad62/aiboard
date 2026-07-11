@@ -1,21 +1,21 @@
 import {
-  BATTLESHIP_FLEET,
-  createBattleshipShip,
   createBattleshipStateWithBoards,
   fireBattleshipShot,
-  targetToLabel,
 } from "@/lib/games/battleship/engine";
 import type {
-  BattleshipCoordinate,
   BattleshipGameState,
-  BattleshipOrientation,
-  BattleshipPlayerBoard,
   BattleshipShip,
 } from "@/lib/games/battleship/types";
-import type {
-  BattleshipGameIqAction,
-  BattleshipGameIqScenario,
-} from "./types";
+import type { BattleshipGameIqScenario } from "./types";
+import {
+  blueBoard,
+  blueShotHistory,
+  cell,
+  orangeBoard,
+  shipFor,
+  target,
+} from "./battleship-builders";
+import type { ExpectedAction } from "./battleship-builders";
 
 // -----------------------------------------------------------------------------
 // GameIQ Battleship targeting pack.
@@ -39,74 +39,6 @@ import type {
 // set with an independent placement enumerator, so these scenarios are provably
 // correct, not merely plausible.
 // -----------------------------------------------------------------------------
-
-type ExpectedAction = {
-  action: BattleshipGameIqAction;
-  label: string;
-  weight: number;
-  note?: string;
-};
-
-function shipFor(
-  id: string,
-  start: BattleshipCoordinate,
-  orientation: BattleshipOrientation
-): BattleshipShip {
-  const definition = BATTLESHIP_FLEET.find((ship) => ship.id === id);
-  if (!definition) throw new Error(`Unknown ship id: ${id}`);
-  return createBattleshipShip(definition, start, orientation);
-}
-
-function orangeBoard(ships: BattleshipShip[]): BattleshipPlayerBoard {
-  return { ships, shotsReceived: [] };
-}
-
-// A valid, fixed Blue fleet. Blue's board is never fired upon in these
-// scenarios (Blue is always the mover), so its placement is irrelevant to the
-// model view; it exists only to satisfy fleet validation.
-function blueBoard(): BattleshipPlayerBoard {
-  return orangeBoard([
-    shipFor("carrier", { row: 0, column: 0 }, "horizontal"),
-    shipFor("battleship", { row: 2, column: 0 }, "horizontal"),
-    shipFor("cruiser", { row: 4, column: 0 }, "horizontal"),
-    shipFor("submarine", { row: 6, column: 0 }, "horizontal"),
-    shipFor("destroyer", { row: 8, column: 0 }, "horizontal"),
-  ]);
-}
-
-// Fire an ordered list of Blue shots against the given Orange fleet, keeping the
-// turn on Blue between shots so the whole history accrues to one player's view.
-function blueShotHistory(
-  orangeShips: BattleshipShip[],
-  shots: BattleshipCoordinate[]
-): BattleshipGameState {
-  let state = createBattleshipStateWithBoards(blueBoard(), orangeBoard(orangeShips));
-  let timestamp = 1;
-  for (const shot of shots) {
-    const next = fireBattleshipShot({ ...state, turn: "blue" }, shot, timestamp++);
-    state = { ...next, turn: "blue" as const };
-  }
-  return state;
-}
-
-function cell(label: string): BattleshipCoordinate {
-  const match = /^([A-J])(10|[1-9])$/.exec(label);
-  if (!match) throw new Error(`Bad label: ${label}`);
-  return {
-    row: "ABCDEFGHIJ".indexOf(match[1]),
-    column: Number(match[2]) - 1,
-  };
-}
-
-function target(label: string, weight = 1, note?: string): ExpectedAction {
-  const coordinate = cell(label);
-  return {
-    action: { target: coordinate },
-    label: targetToLabel(coordinate),
-    weight,
-    note,
-  };
-}
 
 interface ScenarioSpec {
   id: string;

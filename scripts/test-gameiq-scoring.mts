@@ -7,18 +7,27 @@ import {
   type GameIqScenario,
 } from "../lib/benchmark/gameiq";
 import {
+  actionMatchesExpected,
   FIREWORKS_DEAD_CLUE_GRADE,
   FIREWORKS_NEUTRAL_LEGAL_GRADE,
+  gradeBattleshipAction,
   gradeFireworksAction,
 } from "../lib/benchmark/gameiq/validation";
 import {
   GAMEIQ_CORRECT_QUALITY_BAR,
   GAMEIQ_SCORING_VERSION,
+  type BattleshipGameIqScenario,
   type FireworksGameIqScenario,
 } from "../lib/benchmark/gameiq/types";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 import { fireworksActionsEqual } from "../lib/games/fireworks/engine";
 import type { FireworksAction } from "../lib/games/fireworks/types";
+import {
+  blueShotHistory as bsHistory,
+  cell as bsCell,
+  shipFor as bsShip,
+} from "../lib/benchmark/gameiq/battleship-builders";
+import { battleshipKeyedCells } from "../lib/benchmark/gameiq/battleship-oracle";
 
 let failures = 0;
 
@@ -486,6 +495,45 @@ check(
   "concurrency omitted: metrics identical to a perfect run's shape (score 100)",
   sequential.score === 100 && sequential.metrics.scoredScenarioCount === concurrencyScenarios.length,
   sequential
+);
+
+// --- battleship graded rubric (v2) ---
+const bsState = bsHistory(
+  [
+    bsShip("battleship", { row: 4, column: 3 }, "horizontal"),
+    bsShip("carrier", { row: 0, column: 0 }, "horizontal"),
+    bsShip("cruiser", { row: 9, column: 6 }, "horizontal"),
+    bsShip("submarine", { row: 7, column: 0 }, "horizontal"),
+    bsShip("destroyer", { row: 2, column: 8 }, "horizontal"),
+  ],
+  ["A1", "A2", "A3", "A4", "A5", "H1", "H2", "H3", "C9", "C10", "E5", "E6"].map(bsCell)
+);
+const bsScenario: BattleshipGameIqScenario = {
+  id: "test-bs-grade",
+  gameId: "battleship",
+  title: "t",
+  category: "target-priority",
+  difficulty: "hard",
+  version: "0.1.0",
+  prompt: "t",
+  initialState: bsState,
+  expectedActions: battleshipKeyedCells(bsState, GAMEIQ_CORRECT_QUALITY_BAR).map((r) => ({
+    action: { target: r.cell },
+    label: `${r.cell.row},${r.cell.column}`,
+    weight: Math.round(r.ratio * 10000) / 10000,
+  })),
+  tags: ["test"],
+};
+check("bs grade: keyed argmax (E4) = 1", gradeBattleshipAction(bsScenario, { target: bsCell("E4") }) === 1);
+check(
+  "bs grade: non-keyed legal cell earns its sub-bar ratio (E3 = 1/3)",
+  Math.abs(gradeBattleshipAction(bsScenario, { target: bsCell("E3") }) - 1 / 3) < 1e-9
+);
+check("bs grade: already-shot cell = 0", gradeBattleshipAction(bsScenario, { target: bsCell("E5") }) === 0);
+check("bs grade: out of bounds = 0", gradeBattleshipAction(bsScenario, { target: { row: 11, column: 0 } }) === 0);
+check(
+  "bs grade: routed through actionMatchesExpected",
+  Math.abs(actionMatchesExpected(bsScenario, { target: bsCell("E8") }) - 1 / 3) < 1e-9
 );
 
 if (failures === 0) {

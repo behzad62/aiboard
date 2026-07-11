@@ -19,6 +19,7 @@ import type {
   BattleshipCoordinate,
   BattleshipGameState,
 } from "@/lib/games/battleship/types";
+import { battleshipCellRatios } from "./battleship-oracle";
 import {
   submitCodenamesGuess,
   validateCodenamesClue,
@@ -31,6 +32,7 @@ import type {
 } from "@/lib/games/fireworks/types";
 import type {
   BattleshipGameIqAction,
+  BattleshipGameIqScenario,
   ChessGameIqAction,
   CodenamesGameIqAction,
   ConnectFourGameIqAction,
@@ -387,6 +389,10 @@ export function actionMatchesExpected(
     return gradeFireworksAction(scenario as FireworksGameIqScenario, action);
   }
 
+  if (scenario.gameId === "battleship") {
+    return gradeBattleshipAction(scenario as BattleshipGameIqScenario, action);
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {
@@ -459,6 +465,41 @@ export function gradeFireworksAction(
     }
   }
   return FIREWORKS_NEUTRAL_LEGAL_GRADE;
+}
+
+// Graded quality for battleship shots (v2 rubric): keyed cells earn their
+// authored weight (the oracle ratio, >= the correct bar by key-completeness);
+// any other legal unshot cell earns its recomputed oracle ratio — sub-bar by
+// construction, so it feeds moveQuality without ever counting correct.
+// Already-shot or out-of-bounds targets earn 0 (absent from the oracle's
+// map). Recomputing at grade time keeps ONE source of truth (the oracle
+// module); the pack guard cross-checks it against an independent enumerator.
+// The recompute is wrapped in try/catch: the oracle throws on a degenerate
+// state (zero consistent placements, or zero coverable unshot cells), which
+// must never crash scoring — the pack guard is what keeps such states from
+// shipping.
+export function gradeBattleshipAction(
+  scenario: BattleshipGameIqScenario,
+  action: unknown
+): number {
+  if (!isStructuredGameIqAction(scenario, action)) return 0;
+  const target = (action as BattleshipGameIqAction).target;
+  let best = 0;
+  for (const expected of scenario.expectedActions) {
+    const e = expected.action as BattleshipGameIqAction;
+    if (e.target.row === target.row && e.target.column === target.column) {
+      best = Math.max(best, expected.weight);
+    }
+  }
+  if (best > 0) return Math.min(1, best);
+  try {
+    const entry = battleshipCellRatios(
+      scenario.initialState as BattleshipGameState
+    ).get(`${target.row},${target.column}`);
+    return entry ? entry.ratio : 0;
+  } catch {
+    return 0;
+  }
 }
 
 // Exact per-game action equality (candidate vs reference), exported for the
