@@ -24,6 +24,7 @@ export interface BuildTask {
   workspacePath?: string;
   changeSetId?: string;
   guidanceRequestId?: string;
+  failureReason?: string;
 }
 
 export interface TaskGraph {
