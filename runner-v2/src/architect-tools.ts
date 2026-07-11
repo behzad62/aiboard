@@ -131,7 +131,7 @@ function reviseTaskTool(
 ): NativeTool<ReviseTaskInput> {
   return lifecycleTool({
     name: "revise_task",
-    description: "Revise a planned task without interpreting its semantic intent",
+    description: "Revise a planned task or grant a revised failed task one fresh attempt without interpreting its semantic intent",
     schema: {
       type: "object",
       properties: {

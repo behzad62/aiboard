@@ -22,6 +22,12 @@ export type ArchitectActionReason =
   | { type: "review_required"; taskId: string; changeSetId: string }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
   | { type: "completion_decision_required" }
+  | {
+      type: "task_failure_resolution_required";
+      taskId: string;
+      attempt: number;
+      failureReason: string;
+    }
   | { type: "integration_resolution_required"; taskId: string };
 
 export interface ArchitectActionRequest {
@@ -307,17 +313,30 @@ export class BuildRuntime {
       return this.afterArchitect("integration_resolution_required");
     }
 
-    const retryable = [...Object.values(projection.tasks)]
+    const failed = [...Object.values(projection.tasks)]
       .sort((left, right) => left.id.localeCompare(right.id))
-      .find((task) => task.status === "failed" || task.status === "rejected");
-    if (retryable) {
+      .find((task) => task.status === "failed");
+    if (failed) {
+      await this.runArchitect({
+        type: "task_failure_resolution_required",
+        taskId: failed.id,
+        attempt: failed.attempt,
+        failureReason: failed.failureReason ?? "worker_failed",
+      }, projection);
+      return this.afterArchitect("task_failure_resolution_required");
+    }
+
+    const rejected = [...Object.values(projection.tasks)]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .find((task) => task.status === "rejected");
+    if (rejected) {
       this.store.append({
         runId: this.runId,
         type: "task.transitioned",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `retry:${retryable.id}:${retryable.attempt}`,
-        payload: { taskId: retryable.id, status: "planned" },
+        idempotencyKey: `retry:${rejected.id}:${rejected.attempt}`,
+        payload: { taskId: rejected.id, status: "planned" },
       });
       return { status: "progressed", action: "task_retry_planned" };
     }

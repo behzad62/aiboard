@@ -198,9 +198,9 @@ export function continueDiscussion(id: string, forceNewBuildPass = false): void 
 }
 
 /**
- * Browser Build runs only have a live engine in the tab that started them. If
- * the tab is refreshed, the persisted "running" checkpoint is no longer an
- * exact continuation point, so stop it and require an explicit Resume.
+ * Native Build execution is runner-owned. A stale browser-side "running"
+ * marker is still interrupted so the UI requires an explicit reconnect and
+ * Resume; Runner V2 keeps the authoritative checkpoint.
  */
 export function interruptOrphanedRunningBuild(id: string): boolean {
   if (isDiscussionRunning(id)) return false;

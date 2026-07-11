@@ -220,11 +220,22 @@ export function reduceSchedulerEvent(
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
-      if (task.status !== "planned") {
-        throw new Error(`Task ${taskId} must be planned before revision.`);
+      if (task.status !== "planned" && task.status !== "failed") {
+        throw new Error(`Task ${taskId} must be planned or failed before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
-      const revised = { ...task, ...patch, id: task.id, status: task.status };
+      const revised: BuildTask = task.status === "failed"
+        ? {
+            ...task,
+            ...patch,
+            id: task.id,
+            status: "planned",
+            attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
+            assignedWorkerId: undefined,
+            changeSetId: undefined,
+            failureReason: undefined,
+          }
+        : { ...task, ...patch, id: task.id, status: task.status };
       const candidate = Object.values({ ...next.tasks, [taskId]: revised });
       const validation = validateTaskGraph(candidate);
       if (!validation.valid) {

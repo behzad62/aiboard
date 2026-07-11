@@ -207,6 +207,69 @@ test("an idempotently repeated worker pause remains paused instead of becoming i
   }
 });
 
+test("exhausted failed tasks return to the Architect for revision instead of deadlocking", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-exhausted-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append({
+      runId: "run_exhausted",
+      type: "plan.created",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: "task_a",
+          objective: "Original approach",
+          dependencies: [],
+          status: "failed",
+          requiredCapabilities: ["code"],
+          attempt: 2,
+          failureReason: "model_ended_without_lifecycle",
+        }],
+      },
+    });
+    let reasonSeen: ArchitectActionRequest["reason"] | undefined;
+    const runtime = new BuildRuntime({
+      runId: "run_exhausted",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          reasonSeen = request.reason;
+          const result = await request.tools.invoke({
+            type: "tool_call",
+            callId: "revise_failed_task",
+            name: "revise_task",
+            arguments: {
+              taskId: "task_a",
+              revision: 2,
+              objective: "Use a revised approach",
+            },
+          }, request.context);
+          assert.equal(result.isError, false, result.error?.message ?? "revision failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      maxTaskAttempts: 2,
+      workspaceFor: async () => "C:/work/task_a",
+    });
+
+    const step = await runtime.step();
+    assert.equal(step.status, "progressed");
+    assert.equal(reasonSeen?.type, "task_failure_resolution_required");
+    assert.equal(runtime.projection().tasks.task_a.status, "planned");
+    assert.equal(runtime.projection().tasks.task_a.attemptLimit, 3);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;

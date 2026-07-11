@@ -20,6 +20,8 @@ export interface BuildTask {
   status: TaskStatus;
   requiredCapabilities: string[];
   attempt: number;
+  /** Architect-granted mechanical ceiling after revising an exhausted failure. */
+  attemptLimit?: number;
   assignedWorkerId?: string;
   workspacePath?: string;
   changeSetId?: string;

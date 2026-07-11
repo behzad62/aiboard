@@ -170,6 +170,7 @@ export async function runNativeBuildDiscussion(
       emit({ type: "build_stopped", reason: "user", message: "Native Build paused by the user." });
       return;
     }
+    await pauseSupervisor(connection, runId).catch(() => undefined);
     throw error;
   }
 }

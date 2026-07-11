@@ -111,7 +111,7 @@ export class TaskScheduler {
       for (const taskId of readyTaskIds(Object.values(projection.tasks))) {
         if (this.active.size >= this.maxConcurrency) break;
         const task = projection.tasks[taskId];
-        if (task.attempt >= this.maxTaskAttempts) {
+        if (task.attempt >= (task.attemptLimit ?? this.maxTaskAttempts)) {
           this.store.append({
             runId: this.runId,
             type: "run.paused",
