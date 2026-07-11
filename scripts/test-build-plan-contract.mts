@@ -376,6 +376,38 @@ const phaseVerified = validateBuildPlanContract(
 );
 check("phase verification covers a tool-policy task", phaseVerified.valid, phaseVerified);
 
+const evidenceTaskWithFakeOutput = validateBuildPlanContract([
+  task({
+    id: "T1",
+    kind: "verify",
+    completionMode: "evidence",
+    outputPaths: ["checks/tests"],
+  }),
+]);
+check(
+  "evidence-only verification tasks cannot claim fake writable output paths",
+  evidenceTaskWithFakeOutput.errors.some(
+    (issue) => issue.code === "read_only_task_owns_output"
+  ),
+  evidenceTaskWithFakeOutput
+);
+
+const repoTaskWithFakeOutput = validateBuildPlanContract([
+  task({
+    id: "T1",
+    kind: "repo",
+    completionMode: "evidence",
+    outputPaths: ["status/diff/commit"],
+  }),
+]);
+check(
+  "repository evidence tasks cannot claim typed actions as writable paths",
+  repoTaskWithFakeOutput.errors.some(
+    (issue) => issue.code === "read_only_task_owns_output"
+  ),
+  repoTaskWithFakeOutput
+);
+
 const repoWarning = validateBuildPlanContract([
   task({ id: "T1", kind: "modify" }),
   task({ id: "T2", kind: "repo" }),

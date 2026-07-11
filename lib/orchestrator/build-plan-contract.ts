@@ -12,6 +12,7 @@ export type BuildPlanContractIssueCode =
   | "unordered_output_overlap"
   | "missing_strict_tdd_contract"
   | "missing_tool_verification_contract"
+  | "read_only_task_owns_output"
   | "duplicate_repo_task"
   | "repo_task_not_terminal";
 
@@ -565,6 +566,24 @@ export function validateBuildPlanContract(
 
   for (const task of tasks) {
     const ownedPaths = buildTaskOwnedPaths(task);
+    if (
+      ownedPaths.length > 0 &&
+      (task.kind === "audit" ||
+        task.kind === "verify" ||
+        task.kind === "repo" ||
+        task.completionMode === "evidence")
+    ) {
+      errors.push(
+        issue(
+          "read_only_task_owns_output",
+          "error",
+          [task.id],
+          `Read-only ${task.kind ?? "evidence"} task ${task.id} cannot own outputPaths/testOutputPaths (${ownedPaths.join(
+            ", "
+          )}). Use empty output paths and declare typed requiredToolActions/requiredEvidence; create a separate modify task for real project-file changes.`
+        )
+      );
+    }
     const ownsSource = task.kind === "modify" && ownedPaths.some(isStrictTddCodeOutputPath);
     if (options.strictTdd && ownsSource) {
       const ownsTest = ownedPaths.some(isLikelyTestOutputPath);
