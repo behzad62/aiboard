@@ -8356,7 +8356,8 @@ export async function runBuildDiscussion(
             endedWithToolAction:
               inspectStrictToolActionBatchOutput(output).actions.length > 0,
             requiresFinalEvidenceResponse:
-              taskContract.completionMode !== "files",
+              taskContract.completionMode !== "files" ||
+              workerSkills.evidenceRequired.length > 0,
             hasFinalEvidenceResponse:
               hasWorkerFinalEvidenceResponse(output),
           });

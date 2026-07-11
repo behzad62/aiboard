@@ -843,6 +843,13 @@ check(
   "review approval gate wiring is missing or ordered after review side effects"
 );
 check(
+  "file-producing workers reserve finalization when active skills require evidence",
+  /requiresFinalEvidenceResponse:\s*taskContract\.completionMode\s*!==\s*"files"\s*\|\|\s*workerSkills\.evidenceRequired\.length\s*>\s*0/.test(
+    buildEngineSource
+  ),
+  "file tasks can finish without the structured evidence required by their active skills"
+);
+check(
   "Architect review commands are disabled when the reviewed wave has no tool-policy tasks",
   /allowRun:\s*reviewRequiresToolVerification/.test(buildEngineSource) &&
     /runsLeft:\s*reviewRequiresToolVerification\s*\?\s*runsLeftThisPhase\(\)\s*:\s*0/.test(
