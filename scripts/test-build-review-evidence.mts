@@ -864,6 +864,13 @@ check(
   "evidence-only recovery waves can loop solely because the model omitted refactor wording"
 );
 check(
+  "deferred future-owned project checks do not block the current task review",
+  /validateBuildReviewApprovals\(\{[\s\S]{0,300}projectVerifier:\s*verifyResult\.deferred\s*\?\s*""\s*:\s*verifyCommand/.test(
+    buildEngineSource
+  ),
+  "review requires a project verifier that the scheduler deliberately deferred to future owners"
+);
+check(
   "Architect review commands are disabled when the reviewed wave has no tool-policy tasks",
   /allowRun:\s*reviewRequiresToolVerification/.test(buildEngineSource) &&
     /runsLeft:\s*reviewRequiresToolVerification\s*\?\s*runsLeftThisPhase\(\)\s*:\s*0/.test(

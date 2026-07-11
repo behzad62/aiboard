@@ -9177,7 +9177,7 @@ export async function runBuildDiscussion(
         results: applicableCandidateResults,
         facts: objectiveReviewFacts,
         wave: cycle,
-        projectVerifier: verifyCommand,
+        projectVerifier: verifyResult.deferred ? "" : verifyCommand,
       });
       const readOnlyValidation = validateReadOnlyReviewFixes({
         tasks,
