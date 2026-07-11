@@ -139,6 +139,12 @@ export function createFilesystemTools(
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
         const root = toolPath(context, input.path as string);
+        const limit = integer(
+          input.maxMatches,
+          Math.min(100, maxSearchMatches),
+          1,
+          maxSearchMatches
+        );
         let expression: RegExp;
         try {
           const source = input.regex === true
@@ -149,8 +155,8 @@ export function createFilesystemTools(
           return error("invalid_pattern", cause instanceof Error ? cause.message : "Invalid pattern.");
         }
         const matches: Array<{ path: string; line: number; column: number; text: string }> = [];
-        await walk(root, 50, async (path, type) => {
-          if (type !== "file" || matches.length >= maxSearchMatches) return true;
+        const searchFile = async (path: string): Promise<boolean> => {
+          if (matches.length >= limit) return false;
           const bytes = await readFile(path);
           if (!isUtf8Text(bytes)) return true;
           const lines = decodeText(bytes).split(/\r?\n/);
@@ -164,15 +170,25 @@ export function createFilesystemTools(
                 column: match.index + 1,
                 text: lines[lineIndex],
               });
-              if (matches.length >= maxSearchMatches) break;
+              if (matches.length >= limit) break;
               if (match[0].length === 0) expression.lastIndex += 1;
             }
-            if (matches.length >= maxSearchMatches) break;
+            if (matches.length >= limit) break;
           }
-          return true;
-        }, context.signal);
+          return matches.length < limit;
+        };
+        const rootDetails = await lstat(root);
+        if (rootDetails.isFile()) {
+          await searchFile(root);
+        } else if (rootDetails.isDirectory()) {
+          await walk(root, 50, async (path, type) =>
+            type === "file" ? await searchFile(path) : matches.length < limit,
+          context.signal);
+        } else {
+          return error("invalid_search_path", "Search path must be a file or directory.");
+        }
         return {
-          content: [json({ matches, truncated: matches.length >= maxSearchMatches })],
+          content: [json({ matches, truncated: matches.length >= limit })],
           isError: false,
         };
       },
@@ -284,6 +300,7 @@ function filesystemSchema(name: string): Record<string, unknown> {
           pattern: { type: "string" },
           regex: { type: "boolean" },
           caseSensitive: { type: "boolean" },
+          maxMatches: { type: "integer", minimum: 1 },
         },
         ["path", "pattern"]
       );

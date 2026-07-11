@@ -47,6 +47,24 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.deepEqual((json(search) as { matches: unknown[] }).matches, [
       { path: "src/app.ts", line: 2, column: 7, text: "const beta = 2;" },
     ]);
+    const fileSearch = await invoke(broker, "search_file", "fs.search", {
+      path: "src/app.ts",
+      pattern: "const",
+      maxMatches: 1,
+    });
+    assert.equal(fileSearch.isError, false);
+    assert.deepEqual(
+      (json(fileSearch) as {
+        matches: unknown[];
+        truncated: boolean;
+      }),
+      {
+        matches: [
+          { path: "src/app.ts", line: 1, column: 1, text: "const alpha = 1;" },
+        ],
+        truncated: true,
+      }
+    );
 
     const patch = await invoke(broker, "patch", "fs.patch", {
       path: "src/app.ts",
