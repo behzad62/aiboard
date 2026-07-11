@@ -5,7 +5,11 @@
   "engines": {
     "node": "24.18.0"
   },
+  "bin": {
+    "aiboard-runner-v2": "./src/cli.ts"
+  },
   "scripts": {
+    "dev": "tsx src/cli.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   }
