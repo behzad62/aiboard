@@ -532,6 +532,13 @@ check(
   reviewPrompt
 );
 check(
+  "architect review prompt scopes task approval to the task contract instead of future phase work",
+  /approve each reviewed task when its own instructions.*phase criteria assigned/i.test(reviewPrompt) &&
+    /do not require.*future|outstanding.*task/i.test(reviewPrompt) &&
+    /overall request fulfillment.*separate/i.test(reviewPrompt),
+  reviewPrompt
+);
+check(
   "architect review prompt names structured browser acceptance fields",
   browserEvidenceFields.every((field) => reviewPrompt.includes(field)),
   reviewPrompt
