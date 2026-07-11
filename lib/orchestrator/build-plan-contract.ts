@@ -5,6 +5,7 @@ export type BuildPlanContractIssueSeverity = "error" | "warning";
 export type BuildPlanContractIssueCode =
   | "duplicate_task_id"
   | "duplicate_unfinished_task"
+  | "existing_task_contract_changed"
   | "unknown_dependency"
   | "self_dependency"
   | "dependency_cycle"
@@ -30,6 +31,7 @@ export interface BuildPlanContractOptions {
   strictTdd?: boolean;
   verifyCommand?: string;
   phaseVerification?: string[];
+  immutableTasks?: ReadonlyArray<BuildTask>;
 }
 
 export function resolveBuildPlanVerifyCommand(input: {
@@ -222,6 +224,59 @@ function duplicateUnfinishedTaskIssues(tasks: ReadonlyArray<BuildTask>): BuildPl
         )
       );
     }
+  }
+  return issues;
+}
+
+function normalizedContractList(
+  values: ReadonlyArray<string> | undefined,
+  normalize: (value: string) => string = (value) => value.replace(/\s+/g, " ").trim()
+): string[] {
+  return [...new Set((values ?? []).map(normalize).filter(Boolean))].sort();
+}
+
+function immutableTaskContract(task: BuildTask): Record<string, unknown> {
+  return {
+    title: task.title.replace(/\s+/g, " ").trim(),
+    instructions: task.instructions.replace(/\s+/g, " ").trim(),
+    kind: task.kind ?? null,
+    completionMode: task.completionMode ?? null,
+    verificationPolicy: task.verificationPolicy ?? null,
+    outputPaths: normalizedContractList(task.outputPaths, pathKey),
+    testOutputPaths: normalizedContractList(task.testOutputPaths, pathKey),
+    requiredToolActions: normalizedContractList(
+      task.requiredToolActions,
+      (value) => value.trim().toLowerCase()
+    ),
+    requiredEvidence: normalizedContractList(task.requiredEvidence),
+  };
+}
+
+function changedImmutableTaskContractIssues(
+  tasks: ReadonlyArray<BuildTask>,
+  immutableTasks: ReadonlyArray<BuildTask>
+): BuildPlanContractIssue[] {
+  const immutableById = new Map(
+    immutableTasks.map((task) => [taskIdKey(task.id), task])
+  );
+  const issues: BuildPlanContractIssue[] = [];
+  for (const task of tasks) {
+    const immutable = immutableById.get(taskIdKey(task.id));
+    if (!immutable) continue;
+    if (
+      JSON.stringify(immutableTaskContract(task)) ===
+      JSON.stringify(immutableTaskContract(immutable))
+    ) {
+      continue;
+    }
+    issues.push(
+      issue(
+        "existing_task_contract_changed",
+        "error",
+        [task.id],
+        `Task ${task.id} reuses an existing id for a changed title, instructions, output scope, or verification contract. Preserve the existing contract, remove the obsolete task, or assign genuinely new work a new id.`
+      )
+    );
   }
   return issues;
 }
@@ -467,6 +522,9 @@ export function validateBuildPlanContract(
       }
     }
   }
+  errors.push(
+    ...changedImmutableTaskContractIssues(tasks, options.immutableTasks ?? [])
+  );
   errors.push(...duplicateUnfinishedTaskIssues(tasks));
   errors.push(...dependencyCycleIssues(tasksById));
 

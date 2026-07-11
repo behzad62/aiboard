@@ -350,6 +350,13 @@ check(
   "critic plan contract validation loses the accepted spec verifier"
 );
 check(
+  "resumed checkpoint revisions validate immutable task identities",
+  /label:\s*"Architect revising resumed checkpoint plan",[\s\S]{0,300}immutableTasks:\s*tasks/.test(
+    buildEngineSource
+  ),
+  "resume revision can silently repurpose an existing task id"
+);
+check(
   "validated review graphs are not semantically auto-repaired",
   !buildEngineSource.includes("filterNovelReviewTasks("),
   "engine still removes Architect tasks after contract validation"

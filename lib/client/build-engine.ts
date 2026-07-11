@@ -5892,7 +5892,8 @@ export async function runBuildDiscussion(
   const validatePlanActionContract = (
     plan: BuildPlanningAction,
     prefixTasks: ReadonlyArray<BuildTask> = [],
-    fallbackVerifyCommand = planVerifyCommand
+    fallbackVerifyCommand = planVerifyCommand,
+    immutableTasks: ReadonlyArray<BuildTask> = []
   ): BuildPlanContractValidation =>
     validateBuildPlanContract(
       [
@@ -5909,6 +5910,7 @@ export async function runBuildDiscussion(
           requested: plan.verifyCommand,
         }),
         phaseVerification: plan.phaseSpec?.verification ?? activePhaseSpec?.verification,
+        immutableTasks,
       }
     );
 
@@ -5981,6 +5983,7 @@ export async function runBuildDiscussion(
     wave: number;
     prefixTasks?: ReadonlyArray<BuildTask>;
     fallbackVerifyCommand?: string;
+    immutableTasks?: ReadonlyArray<BuildTask>;
   }) => {
     const prefixTasks = input.prefixTasks ?? [];
     const resolution = await resolveBuildPlanContract({
@@ -5993,7 +5996,8 @@ export async function runBuildDiscussion(
         validatePlanActionContract(
           plan,
           prefixTasks,
-          input.fallbackVerifyCommand
+          input.fallbackVerifyCommand,
+          input.immutableTasks
         ),
       revise: async (plan, validation, revision) => {
         emit({
@@ -6273,6 +6277,7 @@ export async function runBuildDiscussion(
       initialPlan: resumePlan,
       label: "Architect revising resumed checkpoint plan",
       wave: existingCheckpoint.wave,
+      immutableTasks: tasks,
     });
     if (!resumeResolution) return;
     if (resumeResolution.revisions > 0) {

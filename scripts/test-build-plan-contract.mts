@@ -143,6 +143,47 @@ check(
   distinctSameFilePhases
 );
 
+const immutableTask: BuildTask = task({
+  id: "T2",
+  title: "Add RED renderer regression tests",
+  instructions: "Create only tests/renderer.test.mjs and capture expected RED evidence.",
+  kind: "modify",
+  completionMode: "files",
+  verificationPolicy: "tool",
+  outputPaths: ["tests/renderer.test.mjs"],
+  requiredEvidence: ["Expected failure from `node --test tests/renderer.test.mjs`."],
+});
+const repurposedTaskIdentity = validateBuildPlanContract(
+  [
+    task({
+      ...immutableTask,
+      title: "Repair game import TDZ blocker",
+      instructions: "Modify src/game.js and make game tests pass.",
+      outputPaths: ["src/game.js", "tests/game.test.mjs"],
+    }),
+  ],
+  { immutableTasks: [immutableTask] }
+);
+check(
+  "resumed plans cannot repurpose an existing task id for a new contract",
+  repurposedTaskIdentity.errors.some(
+    (issue) => issue.code === "existing_task_contract_changed"
+  ),
+  repurposedTaskIdentity
+);
+
+const reroutedImmutableTask = validateBuildPlanContract(
+  [task({ ...immutableTask, dependsOn: ["T1"] }), task({ id: "T1", status: "done" })],
+  { immutableTasks: [immutableTask] }
+);
+check(
+  "resumed plans may update dependencies without changing task identity",
+  !reroutedImmutableTask.errors.some(
+    (issue) => issue.code === "existing_task_contract_changed"
+  ),
+  reroutedImmutableTask
+);
+
 const badDependencies = validateBuildPlanContract([
   task({ id: "T1", dependsOn: ["missing", "T1"] }),
 ]);
