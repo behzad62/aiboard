@@ -395,12 +395,27 @@ check(
   }).valid
 );
 check(
-  "stale-wave evidence is rejected explicitly",
+  "same-generation worker verification survives a no-write recovery wave",
   validateBuildReviewApprovals({
     tasks: [toolTask],
     results: [approved],
     facts: [fact({ taskId: "T1", wave: 1, status: "passed" })],
     wave: 2,
+  }).valid
+);
+check(
+  "project verifier evidence remains current-wave scoped",
+  validateBuildReviewApprovals({
+    tasks: [{ ...toolTask, requiredToolActions: undefined }],
+    results: [approved],
+    facts: [fact({
+      taskId: "T1",
+      wave: 1,
+      status: "passed",
+      source: "project_verifier",
+    })],
+    wave: 2,
+    projectVerifier: "npm test",
   }).errors[0]?.code === "stale_task_verification"
 );
 check(

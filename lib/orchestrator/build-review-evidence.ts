@@ -466,8 +466,15 @@ export function validateBuildReviewApprovals(input: {
           fact.coveredPaths.map(normalizePath).includes(path)
         )
       );
+      // Task-scoped shell checks remain valid while the landed write generation
+      // is unchanged. Requiring every check in the same recovery wave causes
+      // multi-command tasks to alternate forever when a worker gathers only one
+      // missing result per turn. Project verifiers and non-shell actions still
+      // describe current external state and therefore remain wave-scoped.
+      const requiresCurrentWave =
+        requirement.source === "project_verifier" || action !== "run";
       const current = coveredFacts
-        .filter((fact) => fact.wave === input.wave)
+        .filter((fact) => !requiresCurrentWave || fact.wave === input.wave)
         .sort((left, right) => left.at.localeCompare(right.at));
       const verifierLabel = `${action} verifier ${JSON.stringify(
         requirement.verifierIdentity ?? "<unresolved>"
@@ -508,13 +515,13 @@ export function validateBuildReviewApprovals(input: {
         pushError(requirement, `unexpected ${contradictoryStatus}`, {
           code: "failed_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval contradicts current-wave ${verifierLabel}; expected ${expectedStatus}, got ${contradictoryStatus} - ${laterContradiction.summary}`,
+          message: `Task ${task.id} approval contradicts current landed-generation ${verifierLabel}; expected ${expectedStatus}, got ${contradictoryStatus} - ${laterContradiction.summary}`,
         });
       } else if (latestExpectedIndex < 0) {
         pushError(requirement, "skipped", {
           code: "missing_task_verification",
           taskId: task.id,
-          message: `Task ${task.id} approval requires a current-wave ${verifierLabel} with status ${expectedStatus}; mismatch: missing or skipped.`,
+          message: `Task ${task.id} approval requires ${requiresCurrentWave ? "a current-wave" : "current landed-generation"} ${verifierLabel} with status ${expectedStatus}; mismatch: missing or skipped.`,
         });
       }
     }
