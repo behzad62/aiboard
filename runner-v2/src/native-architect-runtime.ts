@@ -103,7 +103,11 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       {
         id: "architect-system",
         role: "system",
-        content: "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+        content: [
+          "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+          "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
+          "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
+        ].join("\n"),
       },
     ];
     if (this.options.sessions.events(sessionId).length === 0) {
@@ -124,6 +128,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     };
     if (!messages.some((message) => message.id === contextMessage.id)) {
       messages.push(contextMessage);
+    } else {
+      const reminder: AgentMessage = {
+        id: `action-resume:${projection.lastSequence}`,
+        role: "user",
+        content: [
+          "Resume the current Architect action from the runner's current durable state.",
+          "Earlier mechanical tool errors may have been resolved since the prior attempt.",
+          "Re-evaluate the requested action and invoke exactly one semantically appropriate lifecycle tool; do not substitute prose or an unrelated lifecycle operation.",
+          `Current action: ${JSON.stringify(request.reason)}`,
+        ].join("\n"),
+      };
+      if (!messages.some((message) => message.id === reminder.id)) {
+        messages.push(reminder);
+      }
     }
     const extras = new ToolRegistry();
     for (const tool of createSkillTools(this.options.skillCatalog)) extras.register(tool);

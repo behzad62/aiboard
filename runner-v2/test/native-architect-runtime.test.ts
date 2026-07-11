@@ -130,3 +130,113 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("resumed Architect action receives a fresh mechanical reminder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-resume-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  try {
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:architect",
+      providerId: "primary",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const model = new ScriptedModel([
+      {
+        blocks: [{ type: "text", text: "I should use a lifecycle tool." }],
+        stopReason: "end_turn",
+      },
+      {
+        blocks: [{
+          type: "tool_call",
+          callId: "plan_after_resume",
+          name: "plan_tasks",
+          arguments: {
+            revision: 1,
+            tasks: [{
+              id: "task_a",
+              objective: "Implement the feature",
+              dependencies: [],
+              requiredCapabilities: ["code"],
+            }],
+          },
+        }],
+        stopReason: "tool_calls",
+      },
+    ]);
+    const health = new ProviderHealthRegistry();
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, model]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project_1",
+      projectRoot: project,
+      objective: "Build the requested feature.",
+    });
+    const runtime = new BuildRuntime({
+      runId: "run_resume",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: architect,
+      integrationDriver: {
+        integrate: async () => ({
+          status: "integrated",
+          integrationRevision: "unused",
+        }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+    });
+    assert.equal((await runtime.step()).status, "paused");
+    scheduler.append({
+      runId: "run_resume",
+      type: "run.resumed",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "resume:1",
+      payload: {},
+    });
+    assert.equal((await runtime.step()).status, "progressed");
+    const resumedMessages = model.requests[1].messages;
+    const priorProseIndex = resumedMessages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (block) => block.type === "text" && block.text.includes("lifecycle tool")
+        )
+    );
+    assert.notEqual(priorProseIndex, -1);
+    const reminder = resumedMessages.slice(priorProseIndex + 1).find(
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("Earlier mechanical tool errors may have been resolved")
+    );
+    assert.ok(reminder, "resume must add a fresh current-action reminder");
+    assert.equal(runtime.projection().planRevision, 1);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
