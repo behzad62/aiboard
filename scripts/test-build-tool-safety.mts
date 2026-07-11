@@ -149,6 +149,34 @@ const badConsoleLevel = validateBuildMcpToolAction({
 check("Playwright console messages rejects invalid all level", badConsoleLevel.allowed === false, badConsoleLevel);
 check("console level guidance names valid levels", /error.*warning.*info.*debug/i.test(badConsoleLevel.guidance ?? ""), badConsoleLevel);
 
+const millisecondStyleWait = validateBuildMcpToolAction({
+  action: "tool",
+  server: "playwright",
+  tool: "browser_wait_for",
+  args: { time: 2500 },
+  reason: "wait for animation",
+});
+check(
+  "Playwright wait rejects likely millisecond values",
+  millisecondStyleWait.allowed === false,
+  millisecondStyleWait
+);
+check(
+  "Playwright wait guidance explains seconds and the likely conversion",
+  /seconds/i.test(millisecondStyleWait.guidance ?? "") &&
+    /2\.5/.test(millisecondStyleWait.guidance ?? ""),
+  millisecondStyleWait
+);
+
+const secondsWait = validateBuildMcpToolAction({
+  action: "tool",
+  server: "playwright",
+  tool: "browser_wait_for",
+  args: { time: 2.5 },
+  reason: "wait for animation",
+});
+check("Playwright wait accepts bounded seconds", secondsWait.allowed === true, secondsWait);
+
 const filtered = filterBuildMcpToolsForPrompt({
   name: "playwright",
   status: "ready",

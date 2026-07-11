@@ -139,6 +139,28 @@ export function validateBuildMcpToolAction(
     }
   }
 
+  if (tool === "browser_wait_for") {
+    const time = args.time;
+    if (
+      time != null &&
+      (typeof time !== "number" || !Number.isFinite(time) || time < 0 || time > 60)
+    ) {
+      const likelySeconds =
+        typeof time === "number" && Number.isFinite(time) && time >= 1_000
+          ? time / 1_000
+          : null;
+      return {
+        allowed: false,
+        message:
+          "Playwright browser_wait_for `time` is measured in seconds and must be between 0 and 60.",
+        guidance:
+          likelySeconds != null
+            ? `The value ${time} looks like milliseconds. Retry with {"time":${likelySeconds}} for ${likelySeconds} seconds.`
+            : 'Use a bounded seconds value, for example {"time":2.5}.',
+      };
+    }
+  }
+
   if (tool === "browser_evaluate") {
     const source = functionText(args);
     if (!source.trim()) {
