@@ -43,11 +43,10 @@ function requestsReadOnlyTaskMutation(instructions: string): boolean {
     /\b(?:edit|modify|move|remove|merge|change|implement|add|fix)\b[\s\S]{0,140}\b(?:[a-z0-9_.-]+\/)+(?:[a-z0-9_.-]+\.[a-z0-9]+)\b/i.test(
       text
     );
-  const projectCommand =
-    /\b(?:run|execute)\b[\s\S]{0,120}\b(?:node|npm|pnpm|yarn|bun|pytest|cargo|go|dotnet|gradle|mvn)\b/i.test(
-      text
-    );
-  return explicitWriteAction || mutationNearPath || projectCommand;
+  // Running a non-mutating check is normal evidence collection for a read-only
+  // task. Do not classify project commands themselves as file mutations; the
+  // runner's command policy remains responsible for unsafe command approval.
+  return explicitWriteAction || mutationNearPath;
 }
 
 const normalizeReviewPath = (value: string): string =>
@@ -121,7 +120,7 @@ export function validateReadOnlyReviewFixes(input: {
     errors.push({
       code: "read_only_task_mutation",
       taskId: task.id,
-      message: `Task ${task.id} is read-only evidence work and cannot be returned with file edits or project commands. Review it only against its declared evidence. If implementation is required, approve or evidence-correct this task and add a separate modify task with explicit outputPaths and tool verification.`,
+      message: `Task ${task.id} is read-only evidence work and cannot be returned with file edits. Review it against its declared evidence and allow non-mutating verification commands when evidence is missing. If implementation is required, approve or evidence-correct this task and add a separate modify task with explicit outputPaths and tool verification.`,
     });
   }
   return { valid: errors.length === 0, errors };

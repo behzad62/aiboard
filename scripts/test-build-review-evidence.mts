@@ -55,6 +55,13 @@ const evidenceOnlyFix: ReviewResult = {
   fixInstructions:
     "Enumerate the missing public API names and provide the required repo_status evidence.",
 };
+const commandEvidenceFix: ReviewResult = {
+  taskId: "T-audit",
+  specVerdict: "fix",
+  qualityVerdict: "approve",
+  fixInstructions:
+    "Run node --check src/game.js and report the exact exit status as missing verification evidence. Do not modify files.",
+};
 check(
   "read-only review contract rejects implementation instructions on the audit task",
   validateReadOnlyReviewFixes({
@@ -73,6 +80,17 @@ check(
     results: [evidenceOnlyFix],
   }).valid,
   validateReadOnlyReviewFixes
+);
+check(
+  "read-only evidence task may be returned for non-mutating command evidence",
+  validateReadOnlyReviewFixes({
+    tasks: [readOnlyAudit],
+    results: [commandEvidenceFix],
+  }).valid,
+  validateReadOnlyReviewFixes({
+    tasks: [readOnlyAudit],
+    results: [commandEvidenceFix],
+  })
 );
 const scopedModifyTask: BuildTask = {
   id: "T-red",
