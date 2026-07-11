@@ -7,11 +7,15 @@
  * budget. Uses the same fake/oracle model path as
  * scripts/test-certified-e2e-gameiq.mts.
  *
- * The bundle now excludes the saturated Battleship pack (11/11 across all
- * four 2026-07 reference models — see lib/benchmark/gameiq/saturation.ts),
- * so the default bundle is 6 of the 7 catalog packs. Battleship stays in the
- * full pack catalog and remains selectable as its own standalone suite
- * option; this file checks both halves of that split.
+ * The bundle excludes only the saturated v1 Battleship pack (11/11 across
+ * all four 2026-07 reference models — see lib/benchmark/gameiq/saturation.ts);
+ * v2 Battleship (gameiq-v0.2-battleship, oracle-graded, unsaturated) rejoined
+ * the bundle when it shipped, so the default bundle is 7 of the 8 catalog
+ * packs. v1 Battleship stays in the full pack catalog and remains selectable
+ * as its own standalone suite option; this file checks both halves of that
+ * split. Pack counts below are computed from the live catalog/bundle
+ * expansion, not hardcoded, so this file does not need updating every time a
+ * pack is added or removed -- only this comment's prose does.
  */
 import {
   __resetBenchmarkStoreForTests,
@@ -84,7 +88,7 @@ check(
   suiteOptions[0]
 );
 check(
-  "bundle label states what it actually runs (6 packs, battleship excluded)",
+  "bundle label states what it actually runs (7 packs, v1 battleship excluded)",
   suiteOptions[0]?.label ===
     `All GameIQ packs (${bundlePackIds.length} packs - one run per pack)`,
   suiteOptions[0]?.label
@@ -268,7 +272,7 @@ check(
   { callIndex, totalScenarios }
 );
 check(
-  "bundle produces one attempt per pack (battleship excluded, 6 packs)",
+  "bundle produces one attempt per pack (v1 battleship excluded, 7 packs)",
   attempts.length === bundlePacks.length &&
     summary.attemptCount === bundlePacks.length,
   { attemptCount: attempts.length, packs: bundlePacks.length }
