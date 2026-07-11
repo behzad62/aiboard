@@ -122,6 +122,45 @@ test("Architect provider failure pauses for user-selected handoff before plannin
         .join("\n"),
       /Keep the API stable/
     );
+
+    const onlyCandidate = candidates[0];
+    const noFallbackHealth = new ProviderHealthRegistry();
+    const noFallbackArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [onlyCandidate], health: noFallbackHealth }),
+      health: noFallbackHealth,
+      candidates: [onlyCandidate],
+      models: new Map([
+        [onlyCandidate.runtimeId, new ScriptedModel([new Error("usage limit reached")])],
+      ]),
+      initialRuntimeId: onlyCandidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project_1",
+      projectRoot: project,
+      objective: "Build the requested feature.",
+    });
+    const noFallbackRuntime = new BuildRuntime({
+      runId: "run_no_fallback",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: noFallbackArchitect,
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+    });
+    assert.equal((await noFallbackRuntime.step()).status, "paused");
+    const noFallbackProjection = noFallbackRuntime.projection();
+    assert.equal(noFallbackProjection.runtime.architect.handoff, undefined);
+    assert.equal(
+      scheduler.readRun("run_no_fallback").at(-1)?.payload.reason,
+      "all_architect_runtimes_unavailable"
+    );
   } finally {
     sessions.close();
     scheduler.close();
