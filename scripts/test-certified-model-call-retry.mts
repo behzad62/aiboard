@@ -97,6 +97,21 @@ check(
   "invalid api key classifies fatal",
   classifyProviderFailure("Unauthorized: invalid api key") === "fatal"
 );
+// 2026-07 fresh-run additions: the verbatim OpenRouter 402 credits error
+// (killed the GLM/MiniMax GameIQ runs) and Gemini's quota phrasing are
+// account errors — fatal, never retried.
+check(
+  "OpenRouter 402 credits error classifies fatal",
+  classifyProviderFailure(
+    "402 This request requires more credits, or fewer max_tokens. You requested up to 16384 tokens, but can only afford 9914. To increase, visit https://openrouter.ai/workspaces/default/keys"
+  ) === "fatal"
+);
+check(
+  "exceeded-your-current-quota classifies fatal",
+  classifyProviderFailure(
+    "You exceeded your current quota, please check your plan and billing details."
+  ) === "fatal"
+);
 check(
   "structured-output parse failure classifies other",
   classifyProviderFailure("Certified structured response was not valid JSON: x") === "other"

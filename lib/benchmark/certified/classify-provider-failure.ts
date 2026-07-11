@@ -10,8 +10,16 @@ export type ProviderFailureClass = "transient" | "fatal" | "other";
 // Fatal patterns win over transient ones: a quota/billing 429 must not be
 // retried (every retry burns nothing but time — the account is out of funds),
 // while a rate-limit 429 or any 5xx/timeout usually clears on its own.
+// Fresh-run additions (2026-07 GameIQ reruns): OpenRouter's 402 ("This request
+// requires more credits, or fewer max_tokens. You requested up to 16384
+// tokens, but can only afford 9914.", also seen without the leading "402")
+// killed the GLM/MiniMax runs while classifying "other" — it's an
+// account/credits error, retrying burns nothing but time. Gemini's "You
+// exceeded your current quota, please check your plan and billing details"
+// was only caught via the incidental "billing" token; pin the quota phrasing
+// explicitly.
 const FATAL_PATTERN =
-  /credits? (are )?depleted|prepayment|billing|quota exceeded|insufficient (funds|quota|credit)|payment required|api key|unauthorized|forbidden|invalid.*key|model.*not.*(found|exist)/i;
+  /credits? (are )?depleted|requires more credits|can only afford|prepayment|billing|quota exceeded|exceeded your current quota|insufficient (funds|quota|credit)|payment required|api key|unauthorized|forbidden|invalid.*key|model.*not.*(found|exist)/i;
 const TRANSIENT_PATTERN =
   /timed?\s?out|timeout|too many requests|rate.?limit|429|500|502|503|504|overloaded|server error|unavailable|network|fetch failed|econn|socket|empty response|processing your request|retry your request|help\.openai\.com|request id/i;
 
