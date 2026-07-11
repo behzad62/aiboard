@@ -25,6 +25,8 @@ export interface BuildTask {
   changeSetId?: string;
   guidanceRequestId?: string;
   failureReason?: string;
+  integrationRevision?: string;
+  conflictPaths?: string[];
 }
 
 export interface TaskGraph {

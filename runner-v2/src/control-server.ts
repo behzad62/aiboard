@@ -11,6 +11,7 @@ import type {
   RunCommand,
   RunEvent,
 } from "./contracts.js";
+import type { BuildControlPlane } from "./build-runtime-registry.js";
 import { checkGit, type GitPreflightResult } from "./git-preflight.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 
@@ -22,6 +23,7 @@ export interface ControlServerOptions {
   checkGit?: () => Promise<GitPreflightResult>;
   bootstrapRun: (input: RunBootstrapInput) => Promise<RunBootstrapResult>;
   heartbeatMs?: number;
+  builds?: BuildControlPlane;
 }
 
 export interface RunBootstrapInput {
@@ -55,6 +57,10 @@ interface CommandBody {
   reason?: string;
 }
 
+interface RunBuildBody {
+  maxSteps?: number;
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -71,6 +77,7 @@ export class ControlServer {
   private readonly gitPreflight: () => Promise<GitPreflightResult>;
   private readonly bootstrapRun: ControlServerOptions["bootstrapRun"];
   private readonly heartbeatMs: number;
+  private readonly builds?: BuildControlPlane;
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
 
@@ -81,6 +88,7 @@ export class ControlServer {
     this.gitPreflight = options.checkGit ?? (() => checkGit());
     this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
+    this.builds = options.builds;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -208,6 +216,75 @@ export class ControlServer {
       }
       if (
         segments.length === 4 &&
+        segments[3] === "build" &&
+        request.method === "GET"
+      ) {
+        sendJson(response, 200, this.requireBuilds().projection(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "tasks" &&
+        request.method === "GET"
+      ) {
+        const projection = this.requireBuilds().projection(runId);
+        sendJson(response, 200, Object.values(projection.tasks));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "guidance" &&
+        request.method === "GET"
+      ) {
+        const projection = this.requireBuilds().projection(runId);
+        sendJson(response, 200, Object.values(projection.guidance));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "events" &&
+        request.method === "GET"
+      ) {
+        sendJson(
+          response,
+          200,
+          this.requireBuilds().events(runId, readAfterSequence(url))
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "step" &&
+        request.method === "POST"
+      ) {
+        await readJson<Record<string, never>>(request);
+        sendJson(response, 200, await this.requireBuilds().step(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "run" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<RunBuildBody>(request);
+        if (
+          body.maxSteps !== undefined &&
+          (!Number.isSafeInteger(body.maxSteps) || body.maxSteps < 1)
+        ) invalidBody();
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().runUntilBlocked(runId, body.maxSteps)
+        );
+        return;
+      }
+      if (
+        segments.length === 4 &&
         segments[3] === "commands" &&
         request.method === "POST"
       ) {
@@ -238,6 +315,17 @@ export class ControlServer {
       }
     }
     throw new HttpError(404, "not_found", "Route not found.");
+  }
+
+  private requireBuilds(): BuildControlPlane {
+    if (!this.builds) {
+      throw new HttpError(
+        404,
+        "build_runtime_not_found",
+        "No native Build runtime is registered."
+      );
+    }
+    return this.builds;
   }
 
   private applyCommand(runId: string, body: CommandBody) {
@@ -386,6 +474,9 @@ function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
   const message = error instanceof Error ? error.message : "Unknown error.";
   if (/^Unknown run /.test(message)) return new HttpError(404, "run_not_found", message);
+  if (/^Unknown build runtime /.test(message)) {
+    return new HttpError(404, "build_runtime_not_found", message);
+  }
   if (/cannot accept|must be the first|Expected event sequence/i.test(message)) {
     return new HttpError(409, "invalid_transition", message);
   }

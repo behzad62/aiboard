@@ -3,6 +3,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import { BuildRuntimeRegistry } from "./build-runtime-registry.js";
 import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
 import { RunSupervisor } from "./run-supervisor.js";
@@ -49,8 +50,10 @@ async function main(): Promise<void> {
     const supervisor = new RunSupervisor(
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
+    const builds = new BuildRuntimeRegistry();
     const server = new ControlServer({
       supervisor,
+      builds,
       token: options.token,
       checkGit: async () => git,
       bootstrapRun: async (input) => {

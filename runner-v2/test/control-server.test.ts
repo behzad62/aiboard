@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
+import type { BuildControlPlane } from "../src/build-runtime-registry.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
@@ -195,6 +196,81 @@ test("Git bootstrap failure becomes a durable failed run before model work", asy
       supervisor.events("run_failed").map((event) => event.type),
       ["run.created", "run.failed"]
     );
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("native Build projections and pump controls are runner-owned API routes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-build-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite"))
+  );
+  let steps = 0;
+  const projection = {
+    runId: "run_1",
+    status: "running" as const,
+    planRevision: 1,
+    tasks: {
+      task_a: {
+        id: "task_a",
+        objective: "Implement A",
+        dependencies: [],
+        status: "planned" as const,
+        requiredCapabilities: ["code"],
+        attempt: 0,
+      },
+    },
+    guidance: {},
+    reviews: {},
+    lastSequence: 1,
+  };
+  const builds: BuildControlPlane = {
+    projection: () => projection,
+    events: () => [],
+    step: async () => {
+      steps += 1;
+      return { status: "progressed", action: "workers_advanced" };
+    },
+    runUntilBlocked: async (_runId, maxSteps) => ({
+      status: "idle",
+      action: `max:${maxSteps ?? 100}`,
+    }),
+  };
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun,
+    builds,
+  });
+  try {
+    const { url } = await server.start(0);
+    const build = await fetch(`${url}/v2/runs/run_1/build`, authorized());
+    assert.equal(build.status, 200);
+    assert.equal((await json(build)).planRevision, 1);
+
+    const tasks = await fetch(
+      `${url}/v2/runs/run_1/build/tasks`,
+      authorized()
+    );
+    assert.equal(((await tasks.json()) as unknown[]).length, 1);
+
+    const step = await fetch(
+      `${url}/v2/runs/run_1/build/step`,
+      authorized({ method: "POST", body: "{}" })
+    );
+    assert.equal(step.status, 200);
+    assert.equal((await json(step)).action, "workers_advanced");
+    assert.equal(steps, 1);
+
+    const pump = await fetch(
+      `${url}/v2/runs/run_1/build/run`,
+      authorized({ method: "POST", body: JSON.stringify({ maxSteps: 12 }) })
+    );
+    assert.equal((await json(pump)).action, "max:12");
   } finally {
     await server.close();
     supervisor.close();

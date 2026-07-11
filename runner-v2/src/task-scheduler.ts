@@ -71,6 +71,12 @@ export class TaskScheduler {
     return this.active.size;
   }
 
+  async awaitIdle(): Promise<void> {
+    while (this.active.size > 0) {
+      await Promise.all([...this.active.values()]);
+    }
+  }
+
   async tick(): Promise<void> {
     const previous = this.tickQueue;
     let release!: () => void;
