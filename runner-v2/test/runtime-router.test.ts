@@ -129,6 +129,23 @@ test("all compatible workers unavailable returns a pause decision", () => {
   });
 });
 
+test("a general-purpose native runtime does not hard-reject Architect capability labels", () => {
+  const health = new ProviderHealthRegistry({ clock: () => 1_000 });
+  const router = new RuntimeRouter({
+    health,
+    candidates: [{
+      runtimeId: "general:agent",
+      providerId: "general",
+      modelId: "agent",
+      capabilities: ["*"],
+      priority: 1,
+    }],
+  });
+  const selected = router.selectWorker(["repo-edit", "javascript", "tests"]);
+  assert.equal(selected.status, "assigned");
+  assert.equal(selected.runtime?.runtimeId, "general:agent");
+});
+
 test("Architect handoff always waits for explicit user selection", () => {
   const health = new ProviderHealthRegistry({ clock: () => 1_000 });
   const router = new RuntimeRouter({ candidates: runtimes, health });

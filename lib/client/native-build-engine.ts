@@ -245,7 +245,9 @@ function providerConfig(
     baseUrl: saved.baseURL,
     secret: saved.apiKey,
     ...(saved.runnerToken ? { runnerToken: saved.runnerToken } : {}),
-    capabilities: ["code"],
+    // Native coding agents can use the task-scoped tool registry regardless of
+    // the descriptive labels the Architect chooses for a task.
+    capabilities: ["*"],
     priority,
     ...(discussion.reasoningEffort && discussion.reasoningEffort !== "default"
       ? { reasoningEffort: discussion.reasoningEffort }

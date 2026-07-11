@@ -187,6 +187,7 @@ function hasCapabilities(
   required: readonly string[]
 ): boolean {
   const available = new Set(runtime.capabilities);
+  if (available.has("*")) return true;
   return required.every((capability) => available.has(capability));
 }
 
