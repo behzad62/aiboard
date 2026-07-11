@@ -204,7 +204,7 @@ check(
     /AUTOMATED BUILD CHECK DEFERRED[\s\S]{0,400}deferred: true/.test(
       buildEngineSource
     ) &&
-    /runVerify\(verifyCommand, \{[\s\S]{0,120}tasks,[\s\S]{0,120}availablePaths: \[\.\.\.diskTree, \.\.\.virtualFs\.keys\(\)\]/.test(
+    /runVerify\((?:wave)?VerifyCommand, \{[\s\S]{0,120}tasks,[\s\S]{0,120}availablePaths: \[\.\.\.diskTree, \.\.\.virtualFs\.keys\(\)\]/.test(
       buildEngineSource
     ),
   "runVerify does not defer a verifier whose planned input has not landed"

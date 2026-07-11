@@ -4,6 +4,7 @@ import { compileBuildTaskVerificationRequirements } from "./build-review-evidenc
 export type BuildPlanContractIssueSeverity = "error" | "warning";
 export type BuildPlanContractIssueCode =
   | "duplicate_task_id"
+  | "duplicate_unfinished_task"
   | "unknown_dependency"
   | "self_dependency"
   | "dependency_cycle"
@@ -157,6 +158,73 @@ const pathKey = (path: string): string =>
     .replace(/^\/+/, "")
     .replace(/\/{2,}/g, "/")
     .toLowerCase();
+
+const TASK_INTENT_STOP_WORDS = new Set([
+  "add", "and", "behavior", "changes", "compact", "completed", "conversion",
+  "coverage", "create", "evidence", "final", "fix", "fixes", "full", "green",
+  "implement", "meaningful", "persist", "red", "repair", "repository", "review", "run", "safe",
+  "strict", "the", "typed", "update", "with",
+]);
+
+function taskIntentTokens(title: string): Set<string> {
+  const tokens = title
+    .toLowerCase()
+    .replace(/readme|documentation/g, "docs")
+    .replace(/engagement[-\s]+envelope/g, "engagement envelope")
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1 && !TASK_INTENT_STOP_WORDS.has(token));
+  return new Set(tokens);
+}
+
+function taskIntentSimilarity(first: BuildTask, second: BuildTask): number {
+  const left = taskIntentTokens(first.title);
+  const right = taskIntentTokens(second.title);
+  const union = new Set([...left, ...right]);
+  if (union.size === 0) return 0;
+  let intersection = 0;
+  for (const token of left) if (right.has(token)) intersection += 1;
+  return intersection / union.size;
+}
+
+function sameOwnedPathSet(first: BuildTask, second: BuildTask): boolean {
+  const left = [...buildTaskOwnedPaths(first)].sort();
+  const right = [...buildTaskOwnedPaths(second)].sort();
+  return (
+    left.length > 0 &&
+    left.length === right.length &&
+    left.every((path, index) => path === right[index])
+  );
+}
+
+function duplicateUnfinishedTaskIssues(tasks: ReadonlyArray<BuildTask>): BuildPlanContractIssue[] {
+  const unfinished = tasks.filter((task) => task.status !== "done");
+  const issues: BuildPlanContractIssue[] = [];
+  for (let left = 0; left < unfinished.length; left++) {
+    for (let right = left + 1; right < unfinished.length; right++) {
+      const first = unfinished[left];
+      const second = unfinished[right];
+      if (first.kind !== second.kind) continue;
+      const terminalDuplicate =
+        (first.kind === "verify" || first.kind === "repo") &&
+        buildTaskOwnedPaths(first).length === 0 &&
+        buildTaskOwnedPaths(second).length === 0 &&
+        taskIntentSimilarity(first, second) >= 0.7;
+      const scopedDuplicate =
+        sameOwnedPathSet(first, second) &&
+        taskIntentSimilarity(first, second) >= 0.7;
+      if (!terminalDuplicate && !scopedDuplicate) continue;
+      issues.push(
+        issue(
+          "duplicate_unfinished_task",
+          "error",
+          [first.id, second.id],
+          `Tasks ${first.id} and ${second.id} describe the same unfinished work scope. Revise the existing task instead of appending another task for the same deliverable.`
+        )
+      );
+    }
+  }
+  return issues;
+}
 
 export function buildTaskOwnedPaths(task: BuildTask): string[] {
   const seen = new Set<string>();
@@ -399,6 +467,7 @@ export function validateBuildPlanContract(
       }
     }
   }
+  errors.push(...duplicateUnfinishedTaskIssues(tasks));
   errors.push(...dependencyCycleIssues(tasksById));
 
   const pathOwners = new Map<string, BuildTask[]>();

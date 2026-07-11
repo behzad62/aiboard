@@ -74,6 +74,39 @@ check(
   }).valid,
   validateReadOnlyReviewFixes
 );
+const scopedModifyTask: BuildTask = {
+  id: "T-red",
+  title: "Add RED renderer regression tests",
+  instructions: "Create the declared RED test only.",
+  kind: "modify",
+  completionMode: "files",
+  verificationPolicy: "tool",
+  contextFiles: ["src/renderer.js"],
+  outputPaths: ["tests/renderer.test.mjs"],
+  testOutputPaths: ["tests/renderer.test.mjs"],
+  status: "review",
+};
+const scopeExpandingFix: ReviewResult = {
+  taskId: "T-red",
+  specVerdict: "fix",
+  qualityVerdict: "fix",
+  fixInstructions:
+    "You may modify src/game.js and tests/game.test.mjs to repair an unrelated import blocker before finishing tests/renderer.test.mjs.",
+};
+check(
+  "review fix cannot expand a modify task beyond its declared output paths",
+  validateReadOnlyReviewFixes({
+    tasks: [scopedModifyTask],
+    results: [scopeExpandingFix],
+  }).errors.some(
+    (issue) =>
+      issue.code === "out_of_scope_task_fix" && issue.taskId === "T-red"
+  ),
+  validateReadOnlyReviewFixes({
+    tasks: [scopedModifyTask],
+    results: [scopeExpandingFix],
+  })
+);
 const toolTask: BuildTask = {
   id: "T1",
   title: "Verify the application",

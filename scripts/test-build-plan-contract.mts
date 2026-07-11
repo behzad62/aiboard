@@ -73,6 +73,76 @@ check(
   duplicate
 );
 
+const duplicateUnfinishedImplementation = validateBuildPlanContract([
+  task({
+    id: "T15",
+    title: "Implement voxel renderer and engagement-envelope behavior with strict RED/GREEN evidence",
+    kind: "modify",
+    outputPaths: ["src/game.js", "src/renderer.js", "tests/renderer.test.mjs"],
+  }),
+  task({
+    id: "T21",
+    title: "Implement voxel renderer and engagement-envelope gameplay behavior",
+    kind: "modify",
+    outputPaths: ["src/game.js", "src/renderer.js", "tests/renderer.test.mjs"],
+    dependsOn: ["T15"],
+  }),
+]);
+check(
+  "semantically duplicate unfinished tasks are rejected even when dependency-ordered",
+  duplicateUnfinishedImplementation.errors.some(
+    (issue) => issue.code === "duplicate_unfinished_task"
+  ),
+  duplicateUnfinishedImplementation
+);
+
+const duplicateTerminalGates = validateBuildPlanContract([
+  task({ id: "T5", title: "Run final browser acceptance verification", kind: "verify", completionMode: "evidence" }),
+  task({ id: "T11", title: "Run full automated and browser acceptance verification", kind: "verify", completionMode: "evidence", dependsOn: ["T5"] }),
+]);
+check(
+  "multiple unfinished terminal verification tasks are rejected",
+  duplicateTerminalGates.errors.some(
+    (issue) => issue.code === "duplicate_unfinished_task"
+  ),
+  duplicateTerminalGates
+);
+
+const distinctVerificationPhases = validateBuildPlanContract([
+  task({ id: "T5", title: "Run unit tests", kind: "verify", completionMode: "evidence" }),
+  task({ id: "T11", title: "Run browser acceptance", kind: "verify", completionMode: "evidence", dependsOn: ["T5"] }),
+]);
+check(
+  "distinct terminal verification phases remain valid",
+  !distinctVerificationPhases.errors.some(
+    (issue) => issue.code === "duplicate_unfinished_task"
+  ),
+  distinctVerificationPhases
+);
+
+const distinctSameFilePhases = validateBuildPlanContract([
+  task({
+    id: "T2",
+    title: "Add RED renderer regression tests",
+    kind: "modify",
+    outputPaths: ["tests/renderer.test.mjs"],
+  }),
+  task({
+    id: "T8",
+    title: "Add accessibility keyboard regression tests",
+    kind: "modify",
+    outputPaths: ["tests/renderer.test.mjs"],
+    dependsOn: ["T2"],
+  }),
+]);
+check(
+  "distinct dependency-ordered work in one shared file remains valid",
+  !distinctSameFilePhases.errors.some(
+    (issue) => issue.code === "duplicate_unfinished_task"
+  ),
+  distinctSameFilePhases
+);
+
 const badDependencies = validateBuildPlanContract([
   task({ id: "T1", dependsOn: ["missing", "T1"] }),
 ]);

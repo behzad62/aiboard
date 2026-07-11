@@ -22,7 +22,8 @@ export interface BuildReviewContractIssue {
     | "missing_task_verification"
     | "stale_task_verification"
     | "failed_task_verification"
-    | "read_only_task_mutation";
+    | "read_only_task_mutation"
+    | "out_of_scope_task_fix";
   taskId: string;
   message: string;
 }
@@ -49,6 +50,45 @@ function requestsReadOnlyTaskMutation(instructions: string): boolean {
   return explicitWriteAction || mutationNearPath || projectCommand;
 }
 
+const normalizeReviewPath = (value: string): string =>
+  value
+    .trim()
+    .replace(/^[`'"([{]+|[`'".,;:)\]}]+$/g, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .toLowerCase();
+
+function outOfScopeMutationPaths(
+  task: BuildTask,
+  instructions: string
+): string[] {
+  const owned = new Set(
+    [...(task.outputPaths ?? []), ...(task.testOutputPaths ?? [])]
+      .map(normalizeReviewPath)
+      .filter(Boolean)
+  );
+  if (owned.size === 0) return [];
+  const pathPattern = /(?:[a-z0-9_.-]+[\\/])+(?:[a-z0-9_.-]+\.[a-z0-9]+)\b/gi;
+  const violations = new Set<string>();
+  for (const match of instructions.matchAll(pathPattern)) {
+    const path = normalizeReviewPath(match[0]);
+    if (!path || owned.has(path)) continue;
+    const start = Math.max(0, (match.index ?? 0) - 160);
+    const nearby = instructions.slice(start, (match.index ?? 0) + match[0].length);
+    if (/\bdo\s+not\s+(?:modify|edit|patch|rewrite|add|create|repair)\b/i.test(nearby)) {
+      continue;
+    }
+    if (
+      /\b(?:may|must|should|need\s+to|please)?\s*(?:modify|edit|patch|rewrite|add|create|repair|move|remove|merge|change)\b/i.test(
+        nearby
+      )
+    ) {
+      violations.add(path);
+    }
+  }
+  return [...violations];
+}
+
 export function validateReadOnlyReviewFixes(input: {
   tasks: ReadonlyArray<BuildTask>;
   results: ReadonlyArray<ReviewResult>;
@@ -63,6 +103,18 @@ export function validateReadOnlyReviewFixes(input: {
       (task.outputPaths?.length ?? 0) > 0 ||
       (task.testOutputPaths?.length ?? 0) > 0
     ) {
+      if (!task) continue;
+      const outOfScopePaths = outOfScopeMutationPaths(
+        task,
+        result.fixInstructions ?? ""
+      );
+      if (outOfScopePaths.length > 0) {
+        errors.push({
+          code: "out_of_scope_task_fix",
+          taskId: task.id,
+          message: `Task ${task.id} review instructions attempt to modify paths outside its immutable output contract: ${outOfScopePaths.join(", ")}. Keep fixes within declared outputPaths/testOutputPaths; create a separate modify task for other files.`,
+        });
+      }
       continue;
     }
     if (!requestsReadOnlyTaskMutation(result.fixInstructions ?? "")) continue;
