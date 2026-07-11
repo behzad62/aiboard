@@ -6,6 +6,8 @@ import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createChangeSet, type ChangeSet } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
+import { createEvidenceTools } from "./evidence-tools.js";
+import type { EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
@@ -35,6 +37,7 @@ export interface RunWorkerTaskOptions {
   ledger: ToolInvocationLedger;
   sessions: SqliteAgentSessionStore;
   schedulerStore?: SchedulerStore;
+  evidenceStore?: EvidenceStore;
   initialMessages: readonly AgentMessage[];
   clock?: () => string;
 }
@@ -83,6 +86,14 @@ export async function runWorkerTask(
   }
   for (const tool of createProcessTools()) broker.register(tool);
   for (const tool of createGitTools()) broker.register(tool);
+  if (options.evidenceStore) {
+    for (const tool of createEvidenceTools({
+      store: options.evidenceStore,
+      artifacts: options.artifacts,
+      taskId: options.taskId,
+      clock,
+    })) broker.register(tool);
+  }
   if (options.schedulerStore) {
     for (const tool of createWorkerLifecycleTools({
       store: options.schedulerStore,
@@ -101,6 +112,15 @@ export async function runWorkerTask(
       workspacePath: options.workspace.path,
       taskCommit: commit,
       artifacts: options.artifacts,
+      evidenceArtifactHashes: options.evidenceStore
+        ? evidenceArtifactHashes(
+            options.evidenceStore.list({
+              runId: options.runId,
+              taskId: options.taskId,
+              limit: 1_000,
+            })
+          )
+        : [],
     });
     return producedChangeSet;
   }));
@@ -142,6 +162,19 @@ export async function runWorkerTask(
     );
   }
   return { loop, ...(producedChangeSet ? { changeSet: producedChangeSet } : {}) };
+}
+
+function evidenceArtifactHashes(
+  records: ReturnType<EvidenceStore["list"]>
+): string[] {
+  return [
+    ...new Set(
+      records.flatMap((record) => [
+        record.fact.stdoutArtifactHash,
+        record.fact.stderrArtifactHash,
+      ])
+    ),
+  ];
 }
 
 function changeSetFromMessages(

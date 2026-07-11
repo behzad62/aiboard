@@ -14,6 +14,7 @@ import type {
 import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
@@ -41,6 +42,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
   let firstLedger: SqliteToolLedger | undefined;
   let recoveredSessions: SqliteAgentSessionStore | undefined;
   let recoveredLedger: SqliteToolLedger | undefined;
+  let evidenceStore: SqliteEvidenceStore | undefined;
   try {
     const baseline = await captureGitBaseline({
       projectPath: project,
@@ -55,6 +57,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     });
     const workspace = await workspaces.createTaskWorkspace("task_worker");
     const artifacts = new ArtifactStore(join(state, "artifacts"));
+    evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
     const messages: AgentMessage[] = [
       { id: "system", role: "system", content: "Use native tools and submit_task." },
       { id: "user", role: "user", content: "Change one to two and verify it." },
@@ -89,6 +92,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       artifacts,
       ledger: firstLedger,
       sessions: firstSessions,
+      evidenceStore,
       initialMessages: messages,
     });
     assert.equal(first.loop.status, "suspended");
@@ -105,11 +109,13 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     );
     recoveredLedger = new SqliteToolLedger(join(state, "tools.sqlite"));
     const checkScript =
-      "const fs=require('node:fs');process.exit(fs.readFileSync('value.txt','utf8').trim()==='two'?0:1)";
+      "const fs=require('node:fs');const ok=fs.readFileSync('value.txt','utf8').trim()==='two';if(ok)process.stdout.write('checked');process.exit(ok?0:1)";
     const recoveredModel = new ScriptedModel([
-      toolTurn("test", "process.run", {
+      toolTurn("test", "run_evidence_command", {
+        label: "focused value check",
         command: process.execPath,
         args: ["-e", checkScript],
+        cwd: ".",
       }),
       toolTurn("diff", "git.diff", {}),
       toolTurn("submit", "submit_task", { summary: "Change value to two" }),
@@ -126,11 +132,13 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       artifacts,
       ledger: recoveredLedger,
       sessions: recoveredSessions,
+      evidenceStore,
       initialMessages: messages,
     });
     assert.equal(finished.loop.status, "submitted");
     assert.ok(finished.changeSet);
     assert.equal(finished.changeSet.taskId, "task_worker");
+    assert.equal(finished.changeSet.evidenceArtifactHashes.length, 2);
     assert.match(
       (await artifacts.get(finished.changeSet.diffArtifactHash)).toString(),
       /-one[\s\S]*\+two/
@@ -152,11 +160,14 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     recoveredSessions = undefined;
     recoveredLedger.close();
     recoveredLedger = undefined;
+    evidenceStore.close();
+    evidenceStore = undefined;
   } finally {
     firstSessions?.close();
     firstLedger?.close();
     recoveredSessions?.close();
     recoveredLedger?.close();
+    evidenceStore?.close();
     rmSync(root, {
       recursive: true,
       force: true,
