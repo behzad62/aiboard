@@ -5137,6 +5137,26 @@ const WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION = [
   "Verify expected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If you cannot run browser acceptance, say exactly what was not verified and do not claim it passed.",
 ].join(" ");
 
+const TASK_LOCAL_BROWSER_ACCEPTANCE_INSTRUCTION = [
+  "For web apps or UI-affecting implementation tasks, gather task-local browser acceptance proof when a local server and browser/MCP tools are available.",
+  "Exercise only the workflow directly affected by this task and verify the changed visible state; do not perform phase-wide verification or controls assigned to an outstanding or future verification task.",
+  "Architect review guidance may clarify how to correct this task, but it does not expand the immutable task requiredEvidence, requiredToolActions, outputs, or file ownership into future-task work.",
+  "Report only applicable evidence, such as the exact URL, settled visible state, screenshotTaken, visibleOutputMatchesRequest, requestedVisualCriteriaMet, and consoleErrors.",
+  "For visual, layout, media, animation, or interactive output, use visibleOutputMatchesRequest and requestedVisualCriteriaMet only for the appearance or behavior owned by this task.",
+  "Verify the affected content is visible and there are no console errors, visible stuck loading indicators, error banners, blank screens, or blocking overlays. If task-local browser proof cannot be gathered, say exactly what was not verified and do not claim it passed.",
+].join(" ");
+
+function workerBrowserAcceptanceInstruction(task: BuildTask): string {
+  const contract = normalizeBuildTaskContract(task);
+  const isDedicatedVerificationTask =
+    contract.kind === "verify" &&
+    contract.completionMode === "evidence" &&
+    outputPathsForTask(task).length === 0;
+  return isDedicatedVerificationTask
+    ? WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION
+    : TASK_LOCAL_BROWSER_ACCEPTANCE_INSTRUCTION;
+}
+
 const WORKER_SKILL_EVIDENCE_INSTRUCTION = [
   "If the active skills require evidence, include a brief `Skill evidence:` section in your final prose. Use the exact gate wording that applies; do not invent evidence you did not actually gather.",
   "Skill evidence:",
@@ -5890,7 +5910,7 @@ export function buildWorkerTaskPrompt(input: BuildPromptContextInput & {
       ? WORKER_SKILL_EVIDENCE_INSTRUCTION
       : "",
     "Do not add or import a new test framework, browser automation package, or config file unless this task explicitly includes updating dependency files such as package.json and the lockfile. For browser verification, prefer MCP browser tools when available instead of creating Playwright/Cypress test files; if you must create tests that import a package, add the dependency and keep the verify command passing.",
-    WEB_APP_BROWSER_ACCEPTANCE_INSTRUCTION,
+    workerBrowserAcceptanceInstruction(input.task),
     input.task.status === "fixing"
       ? "This is a FIX round: the Architect reviewed previous output and the instructions above tell you what to correct. Use read_range/search plus patch for existing files. If a file is missing or too large for one response, use append chunks. Do not emit full-file blocks for existing files."
       : "",

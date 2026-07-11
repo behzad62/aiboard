@@ -102,10 +102,13 @@ check(
   prompt
 );
 check(
-  "worker prompt requires browser acceptance for web apps",
+  "implementation worker prompt keeps browser acceptance task-scoped",
   /browser acceptance/i.test(prompt) &&
+    /task-local browser proof/i.test(prompt) &&
+    /do not perform phase-wide verification/i.test(prompt) &&
     /visible stuck loading/i.test(prompt) &&
-    /console errors/i.test(prompt),
+    /console errors/i.test(prompt) &&
+    !/Exercise the main user workflow/i.test(prompt),
   prompt
 );
 const browserEvidenceFields = [
@@ -125,8 +128,8 @@ const browserEvidenceFields = [
   "consoleErrors",
 ];
 check(
-  "worker prompt gives a structured browser acceptance evidence schema",
-  browserEvidenceFields.every((field) => prompt.includes(field)),
+  "implementation worker prompt does not demand the full workflow evidence schema",
+  !browserEvidenceFields.every((field) => prompt.includes(field)),
   prompt
 );
 check(
@@ -145,6 +148,37 @@ check(
     /requestedVisualCriteriaMet/i.test(prompt) &&
     /visual, layout, media, animation, or interactive output/i.test(prompt),
   prompt
+);
+
+const fullAcceptancePrompt = buildWorkerTaskPrompt({
+  request: "Verify a browser paintball game.",
+  treeText: "index.html\nsrc/main.js",
+  task: {
+    id: "T9",
+    title: "Run full browser acceptance",
+    instructions: "Exercise the complete browser workflow and record the results.",
+    kind: "verify",
+    completionMode: "evidence",
+    verificationPolicy: "tool",
+    requiredToolActions: [
+      "playwright.browser_navigate",
+      "playwright.browser_take_screenshot",
+      "playwright.browser_console_messages",
+    ],
+    contextFiles: ["index.html", "src/main.js"],
+    outputPaths: [],
+    status: "planned",
+  },
+  contextFileText: "",
+  architectNotes: "",
+  toolInstructions: "",
+  verbosityInstruction: "Keep prose brief.",
+});
+check(
+  "explicit verification worker prompt requires full workflow browser acceptance",
+  /Exercise the main user workflow/i.test(fullAcceptancePrompt) &&
+    browserEvidenceFields.every((field) => fullAcceptancePrompt.includes(field)),
+  fullAcceptancePrompt
 );
 check(
   "worker prompt separates pending Architect guidance requests",
