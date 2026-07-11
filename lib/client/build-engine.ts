@@ -7243,6 +7243,8 @@ export async function runBuildDiscussion(
       const preToolArtifactWarnings: string[] = [];
       const preToolArtifactOutputs = new Set<string>();
       const toolIssues: string[] = [];
+      const tracker = createToolCallTracker();
+      const replayCache = createToolReplayCache();
       const recordTaskLandedWrite = (written: ReadonlyArray<string>): void => {
         if (written.length === 0) return;
         task.writeGeneration = (task.writeGeneration ?? 0) + 1;
@@ -7251,6 +7253,9 @@ export async function runBuildDiscussion(
           task.id,
           cycle
         );
+        tracker.exact.clear();
+        tracker.ranges.clear();
+        replayCache.clear();
       };
       try {
         await answerPendingGuidanceForTask(task, cycle);
@@ -7280,8 +7285,6 @@ export async function runBuildDiscussion(
             }),
           },
         ];
-        const tracker = createToolCallTracker();
-        const replayCache = createToolReplayCache();
         const readRangeLoopGuard = createReadRangeLoopGuard();
         let badToolCalls = 0;
         let skippedOnlyToolBatches = 0;

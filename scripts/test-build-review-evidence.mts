@@ -850,6 +850,13 @@ check(
   "file tasks can finish without the structured evidence required by their active skills"
 );
 check(
+  "landed worker writes invalidate same-attempt tool dedup state",
+  /recordTaskLandedWrite[\s\S]{0,500}tracker\.exact\.clear\(\)[\s\S]{0,120}tracker\.ranges\.clear\(\)[\s\S]{0,120}replayCache\.clear\(\)/.test(
+    buildEngineSource
+  ),
+  "post-patch verification can replay stale pre-patch tool results"
+);
+check(
   "Architect review commands are disabled when the reviewed wave has no tool-policy tasks",
   /allowRun:\s*reviewRequiresToolVerification/.test(buildEngineSource) &&
     /runsLeft:\s*reviewRequiresToolVerification\s*\?\s*runsLeftThisPhase\(\)\s*:\s*0/.test(

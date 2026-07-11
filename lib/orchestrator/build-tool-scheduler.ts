@@ -444,6 +444,7 @@ export interface ToolReplayCache {
   ) => void;
   replay: (action: ArchitectAction) => string | null;
   summary: (maxEntries?: number) => string[];
+  clear: () => void;
 }
 
 export interface ReplayedDuplicateToolAction {
@@ -522,6 +523,12 @@ export function createToolReplayCache(): ToolReplayCache {
     },
     summary(maxEntries = 20) {
       return memory.slice(-Math.max(1, Math.floor(maxEntries)));
+    },
+    clear() {
+      exact.clear();
+      ranges.splice(0, ranges.length);
+      memory.splice(0, memory.length);
+      memoryKeys.clear();
     },
   };
 }

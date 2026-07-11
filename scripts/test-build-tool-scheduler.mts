@@ -202,6 +202,12 @@ check(
     replayedRunDuplicate.skipped === null,
   replayedRunDuplicate
 );
+replayCache.clear();
+check(
+  "replay cache invalidation removes stale command and inspection results after writes",
+  replayCache.replay(runAction) === null && replayCache.summary().length === 0,
+  { replay: replayCache.replay(runAction), summary: replayCache.summary() }
+);
 
 check("fetch action is batch safe",
   classifyBuildToolActionForScheduling({ action: "fetch", url: "https://x.dev/docs", reason: "docs" }) === "batch_read");
