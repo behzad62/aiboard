@@ -8,7 +8,7 @@ export type GitCommandErrorCode =
 export interface GitCommandOptions {
   cwd: string;
   args: readonly string[];
-  env?: NodeJS.ProcessEnv;
+  env?: Readonly<Record<string, string | undefined>>;
   maxOutputBytes?: number;
   allowFailure?: boolean;
 }

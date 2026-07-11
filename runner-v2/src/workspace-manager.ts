@@ -5,7 +5,7 @@ import { relative, resolve } from "node:path";
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 
-const RUNNER_IDENTITY: NodeJS.ProcessEnv = {
+const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Worker",
   GIT_AUTHOR_EMAIL: "worker@aiboard.local",
   GIT_COMMITTER_NAME: "AIBoard Worker",

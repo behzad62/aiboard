@@ -57,6 +57,18 @@ export class RunSupervisor {
     return this.command(runId, "run.started", idempotencyKey);
   }
 
+  captureBaseline(
+    runId: string,
+    idempotencyKey: string,
+    baselineRevision: string,
+    baselineRef: string
+  ): RunProjection {
+    return this.command(runId, "run.baseline_captured", idempotencyKey, {
+      baselineRevision,
+      baselineRef,
+    });
+  }
+
   pause(runId: string, idempotencyKey: string, reason: string): RunProjection {
     return this.command(runId, "run.paused", idempotencyKey, { reason });
   }

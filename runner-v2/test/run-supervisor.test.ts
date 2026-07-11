@@ -24,6 +24,12 @@ test("restart rebuilds state and commands remain idempotent", () => {
     permissionProfile: "project",
     idempotencyKey: "create:run_1",
   });
+  supervisor.captureBaseline(
+    "run_1",
+    "baseline:run_1",
+    "a".repeat(40),
+    "refs/aiboard/runs/run-1/baseline"
+  );
   supervisor.start("run_1", "start:run_1");
   supervisor.pause("run_1", "pause:run_1", "user");
   assert.equal(
@@ -38,6 +44,7 @@ test("restart rebuilds state and commands remain idempotent", () => {
   });
   try {
     assert.equal(recovered.getRun("run_1").state, "paused");
+    assert.equal(recovered.getRun("run_1").baselineRevision, "a".repeat(40));
     recovered.resume("run_1", "resume:run_1");
     recovered.resume("run_1", "resume:run_1");
     assert.equal(recovered.getRun("run_1").state, "running");
@@ -67,6 +74,16 @@ test("stop is two-stage and terminal runs reject new lifecycle commands", () => 
       permissionProfile: "full",
       idempotencyKey: "create:run_1",
     });
+    assert.throws(
+      () => supervisor.start("run_1", "start-without-baseline:run_1"),
+      /baseline/i
+    );
+    supervisor.captureBaseline(
+      "run_1",
+      "baseline:run_1",
+      "b".repeat(40),
+      "refs/aiboard/runs/run-1/baseline"
+    );
     supervisor.start("run_1", "start:run_1");
     supervisor.requestStop("run_1", "stop-request:run_1", "user requested");
     assert.equal(supervisor.getRun("run_1").state, "stopping");
@@ -78,7 +95,7 @@ test("stop is two-stage and terminal runs reject new lifecycle commands", () => 
     );
     assert.equal(
       supervisor.events("run_1").length,
-      4,
+      5,
       "rejected transitions must not enter the durable event log"
     );
   } finally {

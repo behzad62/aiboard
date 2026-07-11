@@ -6,7 +6,7 @@ import type { ChangeSet } from "./change-set.js";
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 
-const RUNNER_IDENTITY: NodeJS.ProcessEnv = {
+const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_COMMITTER_NAME: "AIBoard Integrator",
   GIT_COMMITTER_EMAIL: "integrator@aiboard.local",
 };

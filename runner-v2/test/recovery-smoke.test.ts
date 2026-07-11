@@ -8,6 +8,8 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { runGit } from "../src/git-command.js";
+
 interface Readiness {
   protocolVersion: number;
   url: string;
@@ -38,7 +40,17 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
     assert.equal(firstStart.readiness.projectPath, projectPath);
     assert.equal(firstStart.readiness.stateDirectory, stateDirectory);
 
-    await createRun(firstStart.readiness.url, projectPath);
+    const created = await createRun(firstStart.readiness.url, projectPath);
+    assert.match(String(created.baselineRevision), /^[a-f0-9]{40,64}$/);
+    assert.equal(
+      (
+        await runGit({
+          cwd: projectPath,
+          args: ["rev-parse", String(created.baselineRef)],
+        })
+      ).stdout.trim(),
+      created.baselineRevision
+    );
     await command(firstStart.readiness.url, "start", "start:run_1");
     const paused = await command(
       firstStart.readiness.url,
@@ -53,14 +65,14 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
     second = secondStart.child;
     const recovered = await api(secondStart.readiness.url, "/v2/runs/run_1");
     assert.equal(recovered.state, "paused");
-    assert.equal(recovered.lastSequence, 3);
+    assert.equal(recovered.lastSequence, 4);
     const before = (await api(
       secondStart.readiness.url,
       "/v2/runs/run_1/events?after=0"
     )) as unknown as Array<{ sequence: number; idempotencyKey: string }>;
     assert.deepEqual(
       before.map((event) => event.sequence),
-      [1, 2, 3]
+      [1, 2, 3, 4]
     );
 
     await command(secondStart.readiness.url, "resume", "resume:run_1");
@@ -77,7 +89,7 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
     )) as unknown as Array<{ sequence: number; idempotencyKey: string }>;
     assert.deepEqual(
       after.map((event) => event.sequence),
-      [1, 2, 3, 4, 5]
+      [1, 2, 3, 4, 5, 6]
     );
     assert.equal(
       new Set(after.map((event) => event.idempotencyKey)).size,
@@ -144,7 +156,10 @@ async function startRunner(
   return { child, readiness };
 }
 
-async function createRun(url: string, projectPath: string): Promise<void> {
+async function createRun(
+  url: string,
+  projectPath: string
+): Promise<Record<string, unknown>> {
   const response = await fetch(`${url}/v2/runs`, {
     method: "POST",
     headers: headers(),
@@ -155,7 +170,9 @@ async function createRun(url: string, projectPath: string): Promise<void> {
       idempotencyKey: "create:run_1",
     }),
   });
-  assert.equal(response.status, 201, await response.text());
+  const text = await response.text();
+  assert.equal(response.status, 201, text);
+  return JSON.parse(text) as Record<string, unknown>;
 }
 
 async function command(

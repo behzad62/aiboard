@@ -81,6 +81,30 @@ export function reduceRunEvent(
       `Run ${event.runId} expected sequence ${current.lastSequence + 1}, received ${event.sequence}.`
     );
   }
+  if (event.type === "run.baseline_captured") {
+    if (current.state !== "created") {
+      throw new Error(
+        `Run ${event.runId} cannot capture its baseline in state ${current.state}.`
+      );
+    }
+    if (current.baselineRevision) {
+      throw new Error(`Run ${event.runId} already has a baseline.`);
+    }
+    return {
+      ...current,
+      baselineRevision: requiredString(
+        event.payload,
+        "baselineRevision",
+        event.eventId
+      ),
+      baselineRef: requiredString(event.payload, "baselineRef", event.eventId),
+      updatedAt: event.occurredAt,
+      lastSequence: event.sequence,
+    };
+  }
+  if (event.type === "run.started" && !current.baselineRevision) {
+    throw new Error(`Run ${event.runId} cannot start before its Git baseline exists.`);
+  }
   const nextState = TRANSITIONS[current.state]?.[event.type];
   if (!nextState) {
     throw new Error(

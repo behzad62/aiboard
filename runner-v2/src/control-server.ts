@@ -20,7 +20,20 @@ export interface ControlServerOptions {
   supervisor: RunSupervisor;
   token: string;
   checkGit?: () => Promise<GitPreflightResult>;
+  bootstrapRun: (input: RunBootstrapInput) => Promise<RunBootstrapResult>;
   heartbeatMs?: number;
+}
+
+export interface RunBootstrapInput {
+  runId: string;
+  projectPath: string;
+  permissionProfile: PermissionProfile;
+  idempotencyKey: string;
+}
+
+export interface RunBootstrapResult {
+  baselineRevision: string;
+  baselineRef: string;
 }
 
 export interface ControlServerAddress {
@@ -56,6 +69,7 @@ export class ControlServer {
   private readonly supervisor: RunSupervisor;
   private readonly token: string;
   private readonly gitPreflight: () => Promise<GitPreflightResult>;
+  private readonly bootstrapRun: ControlServerOptions["bootstrapRun"];
   private readonly heartbeatMs: number;
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
@@ -65,6 +79,7 @@ export class ControlServer {
     this.supervisor = options.supervisor;
     this.token = options.token;
     this.gitPreflight = options.checkGit ?? (() => checkGit());
+    this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
   }
 
@@ -159,7 +174,27 @@ export class ControlServer {
         if (!git.available) {
           throw new HttpError(412, git.code, git.reason);
         }
-        const projection = this.supervisor.createRun(body);
+        let projection = this.supervisor.createRun(body);
+        if (!projection.baselineRevision) {
+          try {
+            const baseline = await this.bootstrapRun(body);
+            projection = this.supervisor.captureBaseline(
+              body.runId,
+              `baseline:${body.idempotencyKey}`,
+              baseline.baselineRevision,
+              baseline.baselineRef
+            );
+          } catch (error) {
+            const reason =
+              error instanceof Error ? error.message : "Git bootstrap failed.";
+            this.supervisor.fail(
+              body.runId,
+              `bootstrap-failed:${body.idempotencyKey}`,
+              reason
+            );
+            throw error;
+          }
+        }
         sendJson(response, 201, projection);
         return;
       }

@@ -16,6 +16,10 @@ const gitReady: GitPreflightResult = {
   code: "git_ready",
   reason: null,
 };
+const bootstrapRun = async () => ({
+  baselineRevision: "a".repeat(40),
+  baselineRef: "refs/aiboard/runs/test/baseline",
+});
 
 function authorized(init: RequestInit = {}): RequestInit {
   return {
@@ -46,6 +50,7 @@ test("control API authenticates every route and drives durable lifecycle", async
       preflightCalls += 1;
       return gitReady;
     },
+    bootstrapRun,
     heartbeatMs: 50,
   });
 
@@ -96,7 +101,7 @@ test("control API authenticates every route and drives durable lifecycle", async
       authorized()
     );
     assert.equal(projection.status, 200);
-    assert.equal((await json(projection)).lastSequence, 2);
+    assert.equal((await json(projection)).lastSequence, 3);
 
     const events = await fetch(
       `${base}/v2/runs/run_1/events?after=0`,
@@ -105,7 +110,7 @@ test("control API authenticates every route and drives durable lifecycle", async
     const history = (await events.json()) as Array<{ sequence: number }>;
     assert.deepEqual(
       history.map((event) => event.sequence),
-      [1, 2]
+      [1, 2, 3]
     );
     assert.equal(events.headers.get("cache-control"), "no-store");
   } finally {
@@ -129,6 +134,7 @@ test("run creation stops before persistence when Git is unavailable", async () =
       code: "git_missing",
       reason: "Git is required for Build V2.",
     }),
+    bootstrapRun,
   });
 
   try {
@@ -155,6 +161,47 @@ test("run creation stops before persistence when Git is unavailable", async () =
   }
 });
 
+test("Git bootstrap failure becomes a durable failed run before model work", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-bootstrap-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite"))
+  );
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun: async () => {
+      throw new Error("baseline capture failed");
+    },
+  });
+  try {
+    const { url } = await server.start(0);
+    const response = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_failed",
+          projectPath: directory,
+          permissionProfile: "project",
+          idempotencyKey: "create:run_failed",
+        }),
+      })
+    );
+    assert.equal(response.status, 500);
+    assert.equal(supervisor.getRun("run_failed").state, "failed");
+    assert.match(supervisor.getRun("run_failed").stopReason ?? "", /baseline capture/);
+    assert.deepEqual(
+      supervisor.events("run_failed").map((event) => event.type),
+      ["run.created", "run.failed"]
+    );
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("SSE reconnect replays only events after the acknowledged sequence", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-control-sse-"));
   const supervisor = new RunSupervisor(
@@ -167,11 +214,18 @@ test("SSE reconnect replays only events after the acknowledged sequence", async 
     permissionProfile: "project",
     idempotencyKey: "create:run_1",
   });
+  supervisor.captureBaseline(
+    "run_1",
+    "baseline:run_1",
+    "b".repeat(40),
+    "refs/aiboard/runs/test/baseline"
+  );
   supervisor.start("run_1", "start:run_1");
   const server = new ControlServer({
     supervisor,
     token,
     checkGit: async () => gitReady,
+    bootstrapRun,
     heartbeatMs: 50,
   });
 
@@ -184,24 +238,24 @@ test("SSE reconnect replays only events after the acknowledged sequence", async 
     assert.equal(firstResponse.status, 200);
     const firstReader = firstResponse.body?.getReader();
     assert.ok(firstReader);
-    const firstText = await readThroughEvent(firstReader, 2);
+    const firstText = await readThroughEvent(firstReader, 3);
     await firstReader.cancel();
-    assert.deepEqual(eventIds(firstText), [1, 2]);
+    assert.deepEqual(eventIds(firstText), [1, 2, 3]);
 
     supervisor.pause("run_1", "pause:run_1", "test");
     supervisor.resume("run_1", "resume:run_1");
 
     const response = await fetch(
-      `${url}/v2/runs/run_1/stream?after=2`,
+      `${url}/v2/runs/run_1/stream?after=3`,
       authorized({ headers: { Accept: "text/event-stream" } })
     );
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "text/event-stream");
     const reader = response.body?.getReader();
     assert.ok(reader);
-    const text = await readThroughEvent(reader, 4);
+    const text = await readThroughEvent(reader, 5);
     await reader.cancel();
-    assert.deepEqual(eventIds(text), [3, 4]);
+    assert.deepEqual(eventIds(text), [4, 5]);
   } finally {
     await server.close();
     supervisor.close();
@@ -236,6 +290,7 @@ test("control API rejects request bodies larger than one MiB", async () => {
     supervisor,
     token,
     checkGit: async () => gitReady,
+    bootstrapRun,
   });
   try {
     const { url } = await server.start(0);

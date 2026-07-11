@@ -18,6 +18,7 @@ export interface RunActor {
 
 export type RunEventType =
   | "run.created"
+  | "run.baseline_captured"
   | "run.started"
   | "run.paused"
   | "run.resumed"
@@ -51,6 +52,8 @@ export interface RunProjection {
   createdAt: string;
   updatedAt: string;
   lastSequence: number;
+  baselineRevision?: string;
+  baselineRef?: string;
   stopReason?: string;
 }
 

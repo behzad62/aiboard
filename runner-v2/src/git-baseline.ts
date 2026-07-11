@@ -12,7 +12,7 @@ import { runGit } from "./git-command.js";
 import { inspectRepository, type GitRunner } from "./git-repository.js";
 
 const DEFAULT_MAX_UNTRACKED_BYTES = 100 * 1024 * 1024;
-const RUNNER_IDENTITY: NodeJS.ProcessEnv = {
+const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Runner",
   GIT_AUTHOR_EMAIL: "runner@aiboard.local",
   GIT_COMMITTER_NAME: "AIBoard Runner",

@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
@@ -30,6 +31,11 @@ async function main(): Promise<void> {
     assertCertifiedNodeVersion();
     const options = parseArguments(process.argv.slice(2));
     await assertDirectory(options.projectPath, "project");
+    if (isInside(options.projectPath, options.stateDirectory)) {
+      throw new Error(
+        "invalid_state_directory: Runner state must be outside the project directory."
+      );
+    }
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
@@ -47,6 +53,22 @@ async function main(): Promise<void> {
       supervisor,
       token: options.token,
       checkGit: async () => git,
+      bootstrapRun: async (input) => {
+        if (resolve(input.projectPath) !== options.projectPath) {
+          throw new Error(
+            `project_mismatch: Runner is bound to ${options.projectPath}.`
+          );
+        }
+        const baseline = await captureGitBaseline({
+          projectPath: options.projectPath,
+          stateDirectory: options.stateDirectory,
+          runId: input.runId,
+        });
+        return {
+          baselineRevision: baseline.revision,
+          baselineRef: baseline.ref,
+        };
+      },
     });
     resources = { server, supervisor };
     const address = await server.start(options.port);
@@ -132,7 +154,12 @@ function requiredAbsolutePath(values: Map<string, string>, flag: string): string
   if (!isAbsolute(value)) {
     throw new Error(`invalid_arguments: ${flag} must be an absolute path.`);
   }
-  return value;
+  return resolve(value);
+}
+
+function isInside(parent: string, candidate: string): boolean {
+  const traversal = relative(parent, candidate);
+  return traversal === "" || (!traversal.startsWith("..") && !isAbsolute(traversal));
 }
 
 async function assertDirectory(path: string, label: string): Promise<void> {
