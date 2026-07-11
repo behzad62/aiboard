@@ -244,30 +244,42 @@ function defaultVerificationPolicyForTask(
 export function normalizeBuildTaskContract<T extends BuildTask>(task: T): T {
   const migratedTask = migrateDynamicTaskInstructions(task);
   const kind = cleanTaskKind(migratedTask.kind) ?? inferBuildTaskKind(migratedTask);
+  const declaredCompletionMode = cleanTaskCompletionMode(
+    migratedTask.completionMode
+  );
+  const readOnly =
+    kind === "audit" ||
+    kind === "repo" ||
+    (kind === "verify" && declaredCompletionMode === "evidence");
+  const scopedTask = readOnly
+    ? { ...migratedTask, outputPaths: [], testOutputPaths: [] }
+    : migratedTask;
   const completionMode =
-    cleanTaskCompletionMode(migratedTask.completionMode) ??
-    defaultCompletionModeForTask({ ...migratedTask, kind });
+    readOnly
+      ? "evidence"
+      : declaredCompletionMode ??
+        defaultCompletionModeForTask({ ...scopedTask, kind });
   const verificationPolicy =
-    cleanTaskVerificationPolicy(migratedTask.verificationPolicy) ??
-    defaultVerificationPolicyForTask({ ...migratedTask, kind, completionMode });
-  const requiredEvidence = stringArrayFromUnknown(migratedTask.requiredEvidence);
+    cleanTaskVerificationPolicy(scopedTask.verificationPolicy) ??
+    defaultVerificationPolicyForTask({ ...scopedTask, kind, completionMode });
+  const requiredEvidence = stringArrayFromUnknown(scopedTask.requiredEvidence);
   const requiredToolActions = [
     ...new Set(
-      stringArrayFromUnknown(migratedTask.requiredToolActions)
+      stringArrayFromUnknown(scopedTask.requiredToolActions)
         .map((action) => action.trim())
         .filter(Boolean)
     ),
   ];
-  const writeGeneration = Number.isFinite(migratedTask.writeGeneration)
-    ? Math.max(0, Math.floor(Number(migratedTask.writeGeneration)))
+  const writeGeneration = Number.isFinite(scopedTask.writeGeneration)
+    ? Math.max(0, Math.floor(Number(scopedTask.writeGeneration)))
     : 0;
   return {
-    ...migratedTask,
+    ...scopedTask,
     kind,
     completionMode,
     verificationPolicy,
     ...(requiredEvidence.length > 0 ? { requiredEvidence } : {}),
-    ...(migratedTask.requiredToolActions !== undefined
+    ...(scopedTask.requiredToolActions !== undefined
       ? { requiredToolActions }
       : {}),
     writeGeneration,
@@ -3029,13 +3041,15 @@ export function outputPathsForTask(task: {
     ? task.testOutputPaths.filter((p): p is string => typeof p === "string")
     : [];
   const explicit = [...explicitOutputs, ...explicitTests];
+  const hasExplicitPaths =
+    Array.isArray(task.outputPaths) || Array.isArray(task.testOutputPaths);
   const candidates =
-    explicit.length > 0 ? explicit : pathsFromExpectedOutputs(task.expectedOutputs);
+    hasExplicitPaths ? explicit : pathsFromExpectedOutputs(task.expectedOutputs);
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const raw of candidates) {
     const path =
-      explicit.length > 0
+      hasExplicitPaths
         ? normalizeExplicitOutputPath(raw)
         : normalizeOutputPath(raw);
     if (!path) continue;

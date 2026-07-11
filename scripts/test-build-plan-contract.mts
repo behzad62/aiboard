@@ -376,36 +376,34 @@ const phaseVerified = validateBuildPlanContract(
 );
 check("phase verification covers a tool-policy task", phaseVerified.valid, phaseVerified);
 
-const evidenceTaskWithFakeOutput = validateBuildPlanContract([
+const normalizedEvidenceTask = normalizeBuildTaskContract(
   task({
     id: "T1",
     kind: "verify",
     completionMode: "evidence",
     outputPaths: ["checks/tests"],
-  }),
-]);
+  })
+);
 check(
-  "evidence-only verification tasks cannot claim fake writable output paths",
-  evidenceTaskWithFakeOutput.errors.some(
-    (issue) => issue.code === "read_only_task_owns_output"
-  ),
-  evidenceTaskWithFakeOutput
+  "evidence-only verification tasks normalize fake writable paths away",
+  normalizedEvidenceTask.outputPaths?.length === 0 &&
+    validateBuildPlanContract([normalizedEvidenceTask]).valid,
+  normalizedEvidenceTask
 );
 
-const repoTaskWithFakeOutput = validateBuildPlanContract([
+const normalizedRepoTask = normalizeBuildTaskContract(
   task({
     id: "T1",
     kind: "repo",
     completionMode: "evidence",
     outputPaths: ["status/diff/commit"],
-  }),
-]);
+  })
+);
 check(
-  "repository evidence tasks cannot claim typed actions as writable paths",
-  repoTaskWithFakeOutput.errors.some(
-    (issue) => issue.code === "read_only_task_owns_output"
-  ),
-  repoTaskWithFakeOutput
+  "repository evidence tasks normalize typed actions out of writable paths",
+  normalizedRepoTask.outputPaths?.length === 0 &&
+    validateBuildPlanContract([normalizedRepoTask]).valid,
+  normalizedRepoTask
 );
 
 const repoWarning = validateBuildPlanContract([
