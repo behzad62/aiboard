@@ -272,6 +272,50 @@ check(
     wave: 2,
   }).errors[0]?.code === "missing_task_verification"
 );
+const taskScopedVerifierTask: BuildTask = {
+  ...toolTask,
+  id: "T-scoped",
+  title: "Repair game import",
+  outputPaths: ["src/game.js"],
+  requiredEvidence: [
+    "GREEN: `node --check src/game.js` passes after the fix.",
+    "GREEN: `node --test tests/game.test.mjs` passes after the fix.",
+  ],
+  phaseSpec: {
+    ...toolTask.phaseSpec!,
+    verification: [
+      "node --check src/game.js",
+      "node --test tests/game.test.mjs",
+      "node --test tests/future-renderer.test.mjs",
+      "Playwright browser acceptance assigned to a future task",
+    ],
+  },
+};
+check(
+  "task-specific verifier evidence does not inherit unrelated whole-phase checks",
+  validateBuildReviewApprovals({
+    tasks: [taskScopedVerifierTask],
+    results: [{ ...approved, taskId: "T-scoped" }],
+    facts: [
+      fact({
+        taskId: "T-scoped",
+        wave: 2,
+        status: "passed",
+        verifierIdentity: "node --check src/game.js",
+        coveredPaths: ["src/game.js"],
+      }),
+      fact({
+        taskId: "T-scoped",
+        wave: 2,
+        status: "passed",
+        verifierIdentity: "node --test tests/game.test.mjs",
+        coveredPaths: ["src/game.js"],
+      }),
+    ],
+    wave: 2,
+  }).valid,
+  taskScopedVerifierTask
+);
 check(
   "accepted project verifier requires its own passing fact",
   validateBuildReviewApprovals({

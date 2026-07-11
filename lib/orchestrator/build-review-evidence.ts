@@ -203,7 +203,7 @@ export function compileBuildTaskVerificationRequirements(input: {
   const declared = [...new Set((task.requiredToolActions ?? [])
     .map((action) => action.trim())
     .filter(Boolean))];
-  const phaseChecks = (redPhase
+  const declaredPhaseChecks = (redPhase
     ? []
     : input.phaseVerification ?? task.phaseSpec?.verification ?? [])
     .map((item) => item.trim())
@@ -214,6 +214,12 @@ export function compileBuildTaskVerificationRequirements(input: {
     const trimmed = item.trim();
     return isTypedToolIdentity(trimmed) ? [trimmed] : [];
   });
+  // Exact verifier identities in requiredEvidence are the task-scoped contract.
+  // A phase can intentionally span several serialized tasks, so inheriting every
+  // phase verifier here would make an early task depend on checks assigned to
+  // future tasks. Fall back to phase verification only when the task does not
+  // declare any concrete verifier of its own.
+  const phaseChecks = evidenceChecks.length > 0 ? [] : declaredPhaseChecks;
   const requirements: BuildTaskVerificationRequirement[] = [];
   for (const verifierIdentity of phaseChecks) {
     const action = requirementAction(verifierIdentity);
@@ -224,10 +230,15 @@ export function compileBuildTaskVerificationRequirements(input: {
     });
   }
   for (const verifierIdentity of evidenceChecks) {
+    const action = requirementAction(verifierIdentity);
     requirements.push({
-      action: requirementAction(verifierIdentity),
+      action,
       verifierIdentity: verifierIdentity === "run" ? null : verifierIdentity,
-      coveredPaths: [],
+      // A concrete command declared in this task's requiredEvidence is the
+      // Architect's task-scoped verifier. Attribute its result to the task's
+      // owned files so the compiler does not add a second anonymous project
+      // verifier merely to prove the same landed generation again.
+      coveredPaths: action === "run" && !redPhase ? coveredPaths : [],
       expectedStatus: redPhase ? "failed" : "passed",
     });
   }
