@@ -1,0 +1,255 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { ControlServer } from "../src/control-server.js";
+import type { GitPreflightResult } from "../src/git-preflight.js";
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
+
+const token = "test-control-token";
+const gitReady: GitPreflightResult = {
+  available: true,
+  version: "2.45.1.windows.1",
+  code: "git_ready",
+  reason: null,
+};
+
+function authorized(init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  };
+}
+
+async function json(response: Response): Promise<Record<string, unknown>> {
+  return (await response.json()) as Record<string, unknown>;
+}
+
+test("control API authenticates every route and drives durable lifecycle", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-api-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite")),
+    { clock: () => "2026-07-11T00:00:00.000Z" }
+  );
+  let preflightCalls = 0;
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => {
+      preflightCalls += 1;
+      return gitReady;
+    },
+    heartbeatMs: 50,
+  });
+
+  try {
+    const address = await server.start(0);
+    const base = address.url;
+    assert.equal((await fetch(`${base}/v2/runs`)).status, 401);
+    assert.equal(
+      (
+        await fetch(`${base}/v2/runs`, {
+          headers: { Authorization: "Bearer wrong" },
+        })
+      ).status,
+      401
+    );
+
+    const create = await fetch(
+      `${base}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_1",
+          projectPath: join(directory, "project"),
+          permissionProfile: "project",
+          idempotencyKey: "create:run_1",
+        }),
+      })
+    );
+    assert.equal(create.status, 201);
+    assert.equal(preflightCalls, 1);
+    assert.equal((await json(create)).state, "created");
+
+    const started = await fetch(
+      `${base}/v2/runs/run_1/commands`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          command: "start",
+          idempotencyKey: "start:run_1",
+        }),
+      })
+    );
+    assert.equal(started.status, 200);
+    assert.equal((await json(started)).state, "running");
+
+    const projection = await fetch(
+      `${base}/v2/runs/run_1`,
+      authorized()
+    );
+    assert.equal(projection.status, 200);
+    assert.equal((await json(projection)).lastSequence, 2);
+
+    const events = await fetch(
+      `${base}/v2/runs/run_1/events?after=0`,
+      authorized()
+    );
+    const history = (await events.json()) as Array<{ sequence: number }>;
+    assert.deepEqual(
+      history.map((event) => event.sequence),
+      [1, 2]
+    );
+    assert.equal(events.headers.get("cache-control"), "no-store");
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("run creation stops before persistence when Git is unavailable", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-git-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite"))
+  );
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => ({
+      available: false,
+      version: null,
+      code: "git_missing",
+      reason: "Git is required for Build V2.",
+    }),
+  });
+
+  try {
+    const { url } = await server.start(0);
+    const response = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_blocked",
+          projectPath: directory,
+          permissionProfile: "project",
+          idempotencyKey: "create:run_blocked",
+        }),
+      })
+    );
+    assert.equal(response.status, 412);
+    assert.equal((await json(response)).code, "git_missing");
+    assert.deepEqual(supervisor.listRuns(), []);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SSE reconnect replays only events after the acknowledged sequence", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-sse-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite")),
+    { clock: () => "2026-07-11T00:00:00.000Z" }
+  );
+  supervisor.createRun({
+    runId: "run_1",
+    projectPath: directory,
+    permissionProfile: "project",
+    idempotencyKey: "create:run_1",
+  });
+  supervisor.start("run_1", "start:run_1");
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    heartbeatMs: 50,
+  });
+
+  try {
+    const { url } = await server.start(0);
+    const firstResponse = await fetch(
+      `${url}/v2/runs/run_1/stream?after=0`,
+      authorized({ headers: { Accept: "text/event-stream" } })
+    );
+    assert.equal(firstResponse.status, 200);
+    const firstReader = firstResponse.body?.getReader();
+    assert.ok(firstReader);
+    const firstText = await readThroughEvent(firstReader, 2);
+    await firstReader.cancel();
+    assert.deepEqual(eventIds(firstText), [1, 2]);
+
+    supervisor.pause("run_1", "pause:run_1", "test");
+    supervisor.resume("run_1", "resume:run_1");
+
+    const response = await fetch(
+      `${url}/v2/runs/run_1/stream?after=2`,
+      authorized({ headers: { Accept: "text/event-stream" } })
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+    const reader = response.body?.getReader();
+    assert.ok(reader);
+    const text = await readThroughEvent(reader, 4);
+    await reader.cancel();
+    assert.deepEqual(eventIds(text), [3, 4]);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+async function readThroughEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  sequence: number
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  while (!text.includes(`id: ${sequence}`)) {
+    const result = await reader.read();
+    assert.equal(result.done, false);
+    text += decoder.decode(result.value, { stream: true });
+  }
+  return text;
+}
+
+function eventIds(text: string): number[] {
+  return [...text.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+}
+
+test("control API rejects request bodies larger than one MiB", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-limit-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite"))
+  );
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+  });
+  try {
+    const { url } = await server.start(0);
+    const response = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ padding: "x".repeat(1024 * 1024) }),
+      })
+    );
+    assert.equal(response.status, 413);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
