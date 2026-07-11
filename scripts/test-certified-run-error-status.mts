@@ -51,6 +51,27 @@ checkStatus(
   "provider_unavailable"
 );
 
+// --- 2026-07 fresh-run fix: OpenRouter's 402 credits error (killed the
+// GLM/MiniMax GameIQ runs) matched neither isProviderFailureMessage nor
+// FATAL_PATTERN, so it fell through to invalid_harness. The verbatim message
+// contains "max_tokens" — it must classify provider_unavailable via the fatal
+// class, NOT failed_budget (the budget regex wants "token limit", which
+// "max_tokens" does not match). Also seen without the leading "402". ---
+checkStatus(
+  "402 This request requires more credits, or fewer max_tokens. You requested up to 16384 tokens, but can only afford 8865. To increase, visit https://openrouter.ai/workspaces/default/keys",
+  "provider_unavailable"
+);
+checkStatus(
+  "This request requires more credits, or fewer max_tokens. You requested up to 16384 tokens, but can only afford 9914. To increase, visit https://openrouter.ai/workspaces/default/keys",
+  "provider_unavailable"
+);
+// Gemini quota phrasing: previously only caught via the incidental "billing"
+// token; now pinned by the explicit "exceeded your current quota" pattern.
+checkStatus(
+  "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+  "provider_unavailable"
+);
+
 // --- REGRESSION GUARDS: the fix must NOT reclassify budget or genuine-harness
 // errors. classifyProviderFailure is only consulted AFTER the budget branch,
 // so budget messages (which classify as "other" under classifyProviderFailure)

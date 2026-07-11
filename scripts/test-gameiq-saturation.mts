@@ -1,17 +1,21 @@
 /* Guard test for the generated GameIQ saturation registry
  * (run: npx tsx scripts/test-gameiq-saturation.mts).
  *
- * lib/benchmark/gameiq/saturation.ts is AUTO-GENERATED (from the four 2026-07
- * reference runs) and committed as code. This test pins the invariants a future
- * pack regeneration must not silently break:
+ * lib/benchmark/gameiq/saturation.ts is AUTO-GENERATED (originally clean-slate
+ * from the four 2026-07 reference runs, then refined by evidence-cumulative
+ * pruning against fresh runs via --prior) and committed as code. This test
+ * pins the invariants a future regeneration must not silently break:
  *  - every id in the set is a REAL scenario id (exists in listGameIqScenarios),
  *    so renaming/removing a scenario surfaces a stale saturation entry here
  *    instead of leaking a dead id into the C2 frontier report;
  *  - the set is non-empty and within a sane bound (the C1 collection produced
- *    108; anything outside 50-140 means the verdict collection or the registry
+ *    108; the E3 fresh-run refresh pruned it to 44 — weaker fresh models like
+ *    DeepSeek V4 Flash / MiniMax M3 / GLM 5.2 de-saturated 64 scenarios;
+ *    anything outside 20-140 means the verdict collection or the registry
  *    drifted);
  *  - battleship is FULLY saturated (all 11 ids present) — the documented C2
- *    rationale for dropping battleship from the default bundle.
+ *    rationale for dropping battleship from the default bundle; battleship has
+ *    no fresh traces (it left the default bundle), so its prior status stands.
  */
 import {
   GAMEIQ_SATURATED_SCENARIO_IDS,
@@ -44,9 +48,13 @@ check("saturation set is non-empty", saturatedIds.length > 0, {
   size: saturatedIds.length,
 });
 
+// Lower bound honestly relaxed 50 -> 20 with the E3 fresh-evidence pruning:
+// the refresh removes saturation for every scenario ANY fresh model failed,
+// and the fresh cohort includes much weaker models than the four reference
+// models, so 108 dropped to 44. The registry is NOT padded to meet a bound.
 check(
-  "saturation count within sane bound (50-140)",
-  saturatedIds.length >= 50 && saturatedIds.length <= 140,
+  "saturation count within sane bound (20-140)",
+  saturatedIds.length >= 20 && saturatedIds.length <= 140,
   { size: saturatedIds.length }
 );
 
