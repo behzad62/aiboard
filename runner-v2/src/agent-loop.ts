@@ -18,7 +18,8 @@ export type AgentSuspensionReason =
   | "protocol_error"
   | "turn_limit"
   | "cancelled"
-  | "max_tokens";
+  | "max_tokens"
+  | "checkpoint_error";
 
 export type AgentLoopResult =
   | {
@@ -56,6 +57,13 @@ export interface RunAgentLoopOptions {
   maxTurns?: number;
   signal?: AbortSignal;
   idFactory?: () => string;
+  onCheckpoint?: (checkpoint: AgentLoopCheckpoint) => Promise<void>;
+}
+
+export interface AgentLoopCheckpoint {
+  messages: readonly AgentMessage[];
+  turns: number;
+  seenCallIds: readonly string[];
 }
 
 export async function runAgentLoop(
@@ -66,10 +74,69 @@ export async function runAgentLoop(
     throw new Error("maxTurns must be a positive integer.");
   }
   const messages = [...options.initialMessages];
-  const seenCallIds = new Set<string>();
+  const seenCallIds = new Set<string>(
+    messages
+      .filter(
+        (message) =>
+          message.role === "tool" &&
+          typeof message.content === "object" &&
+          !Array.isArray(message.content) &&
+          "callId" in message.content
+      )
+      .map((message) => (message.content as { callId: string }).callId)
+  );
   const nextId = options.idFactory ?? (() => randomUUID());
+  const initialTurns = messages.filter((message) => message.role === "assistant").length;
 
-  for (let turnNumber = 1; turnNumber <= maxTurns; turnNumber += 1) {
+  const pendingCalls = messages.flatMap((message) =>
+    message.role === "assistant" && Array.isArray(message.content)
+      ? message.content.filter(
+          (block): block is ToolCallBlock =>
+            block.type === "tool_call" && !seenCallIds.has(block.callId)
+        )
+      : []
+  );
+  if (pendingCalls.length > 0) {
+    try {
+      options.registry.assertUniqueCallIds(pendingCalls, seenCallIds);
+      assertLifecycleBatch(pendingCalls, options.registry);
+    } catch (error) {
+      return suspended(
+        "protocol_error",
+        initialTurns,
+        messages,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    for (const call of pendingCalls) {
+      seenCallIds.add(call.callId);
+      const result = await options.registry.invoke(call, {
+        ...options.context,
+        signal: options.signal ?? options.context.signal,
+      });
+      messages.push({
+        id: `tool_${nextId()}`,
+        role: "tool",
+        content: result,
+      });
+      const checkpointError = await checkpoint(
+        options,
+        messages,
+        initialTurns,
+        seenCallIds
+      );
+      if (checkpointError) return checkpointError;
+      if (!result.isError && result.lifecycle) {
+        return lifecycleResult(result.lifecycle, initialTurns, messages);
+      }
+    }
+  }
+
+  for (
+    let turnNumber = initialTurns + 1;
+    turnNumber <= maxTurns;
+    turnNumber += 1
+  ) {
     if (options.signal?.aborted) {
       return suspended("cancelled", turnNumber - 1, messages);
     }
@@ -103,6 +170,13 @@ export async function runAgentLoop(
       role: "assistant",
       content: [...turn.blocks],
     });
+    const assistantCheckpointError = await checkpoint(
+      options,
+      messages,
+      turnNumber,
+      seenCallIds
+    );
+    if (assistantCheckpointError) return assistantCheckpointError;
     const calls = turn.blocks.filter(
       (block): block is ToolCallBlock => block.type === "tool_call"
     );
@@ -142,12 +216,43 @@ export async function runAgentLoop(
         role: "tool",
         content: result,
       });
+      const toolCheckpointError = await checkpoint(
+        options,
+        messages,
+        turnNumber,
+        seenCallIds
+      );
+      if (toolCheckpointError) return toolCheckpointError;
       if (!result.isError && result.lifecycle) {
         return lifecycleResult(result.lifecycle, turnNumber, messages);
       }
     }
   }
   return suspended("turn_limit", maxTurns, messages);
+}
+
+async function checkpoint(
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  seenCallIds: ReadonlySet<string>
+): Promise<AgentLoopResult | null> {
+  if (!options.onCheckpoint) return null;
+  try {
+    await options.onCheckpoint({
+      messages: [...messages],
+      turns,
+      seenCallIds: [...seenCallIds],
+    });
+    return null;
+  } catch (error) {
+    return suspended(
+      "checkpoint_error",
+      turns,
+      messages,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 function assertLifecycleBatch(

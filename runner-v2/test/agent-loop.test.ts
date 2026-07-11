@@ -146,6 +146,90 @@ test("provider errors and hard turn limits suspend with resumable messages", asy
   assert.equal(limited.reason, "turn_limit");
 });
 
+test("restart executes a persisted pending tool call before another model turn", async () => {
+  let executions = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "recovered content", () => executions++));
+  registry.register(submitTool());
+  const resumedMessages: AgentMessage[] = [
+    ...initialMessages,
+    {
+      id: "assistant_pending",
+      role: "assistant",
+      content: [
+        {
+          type: "tool_call",
+          callId: "pending_read",
+          name: "read_file",
+          arguments: {},
+        },
+      ],
+    },
+  ];
+  const model = new ScriptedModel([
+    {
+      blocks: [
+        {
+          type: "tool_call",
+          callId: "submit_after_recovery",
+          name: "submit_task",
+          arguments: { changeSetId: "changeset_recovered" },
+        },
+      ],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages: resumedMessages,
+  });
+  assert.equal(executions, 1);
+  assert.equal(result.status, "submitted");
+  assert.equal(model.requests.length, 1);
+  assert.equal(
+    model.requests[0].messages.some(
+      (message) =>
+        message.role === "tool" &&
+        typeof message.content === "object" &&
+        !Array.isArray(message.content) &&
+        message.content.callId === "pending_read"
+    ),
+    true
+  );
+});
+
+test("checkpoint failure suspends before a newly proposed tool side effect", async () => {
+  let executions = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("write_file", "written", () => executions++));
+  const result = await runAgentLoop({
+    model: new ScriptedModel([
+      {
+        blocks: [
+          {
+            type: "tool_call",
+            callId: "write_1",
+            name: "write_file",
+            arguments: {},
+          },
+        ],
+        stopReason: "tool_calls",
+      },
+    ]),
+    registry,
+    context: context(),
+    initialMessages,
+    onCheckpoint: async () => {
+      throw new Error("disk unavailable");
+    },
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "checkpoint_error");
+  assert.equal(executions, 0);
+});
+
 function context() {
   return {
     runId: "run_1",
