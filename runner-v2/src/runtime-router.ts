@@ -137,12 +137,15 @@ export class RuntimeRouter {
   }
 
   selectArchitectHandoff(
-    requiredCapabilities: readonly string[]
+    requiredCapabilities: readonly string[],
+    excludedRuntimeIds: ReadonlySet<string> = new Set()
   ): ArchitectHandoffRequired {
     const required = unique(requiredCapabilities);
     return {
       status: "user_selection_required",
-      candidates: this.eligible(required).map(cloneCandidate),
+      candidates: this.eligible(required)
+        .filter((candidate) => !excludedRuntimeIds.has(candidate.runtimeId))
+        .map(cloneCandidate),
       requiredCapabilities: required,
     };
   }

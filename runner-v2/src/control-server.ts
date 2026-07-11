@@ -61,6 +61,11 @@ interface RunBuildBody {
   maxSteps?: number;
 }
 
+interface ArchitectHandoffBody {
+  runtimeId: string;
+  idempotencyKey: string;
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -220,6 +225,28 @@ export class ControlServer {
         request.method === "GET"
       ) {
         sendJson(response, 200, this.requireBuilds().projection(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "architect-handoff" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ArchitectHandoffBody>(request);
+        if (
+          !isNonEmptyString(body.runtimeId) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        sendJson(
+          response,
+          200,
+          this.requireBuilds().selectArchitectHandoff(
+            runId,
+            body.runtimeId,
+            body.idempotencyKey
+          )
+        );
         return;
       }
       if (

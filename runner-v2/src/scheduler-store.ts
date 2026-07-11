@@ -13,6 +13,7 @@ export interface SchedulerActor {
 }
 
 export type SchedulerEventType =
+  | "run.initialized"
   | "plan.created"
   | "task.revised"
   | "task.transitioned"
@@ -127,8 +128,17 @@ export function reduceSchedulerEvent(
   event: SchedulerEvent
 ): SchedulerProjection {
   if (!current) {
-    if (event.sequence !== 1 || event.type !== "plan.created") {
-      throw new Error(`Scheduler run ${event.runId} must begin with plan.created.`);
+    if (event.sequence !== 1) {
+      throw new Error(`Scheduler run ${event.runId} must begin at sequence 1.`);
+    }
+    if (event.type === "run.initialized") {
+      if (event.actor.role !== "runner" && event.actor.role !== "user") {
+        throw new Error("Only the runner or user may initialize a scheduler run.");
+      }
+      return emptySchedulerProjection(event);
+    }
+    if (event.type !== "plan.created") {
+      throw new Error(`Scheduler run ${event.runId} must begin with run.initialized or plan.created.`);
     }
     if (event.actor.role !== "architect") {
       throw new Error("Only the Architect may create a plan.");
@@ -140,20 +150,7 @@ export function reduceSchedulerEvent(
         `Plan has mechanical issues: ${validation.issues.map((issue) => issue.code).join(", ")}.`
       );
     }
-    return {
-      runId: event.runId,
-      status: "running",
-      planRevision: requiredNumber(event.payload, "revision"),
-      tasks: Object.fromEntries(tasks.map((task) => [task.id, { ...task }])),
-      guidance: {},
-      reviews: {},
-      runtime: {
-        providerHealth: {},
-        workerAssignments: {},
-        architect: {},
-      },
-      lastSequence: event.sequence,
-    };
+    return planProjection(event, tasks);
   }
   if (event.runId !== current.runId || event.sequence !== current.lastSequence + 1) {
     throw new Error(`Scheduler event ${event.eventId} has invalid run ordering.`);
@@ -171,6 +168,26 @@ export function reduceSchedulerEvent(
     lastSequence: event.sequence,
   };
   switch (event.type) {
+    case "run.initialized":
+      throw new Error("A scheduler run cannot be initialized twice.");
+    case "plan.created": {
+      if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
+        throw new Error("A scheduler run cannot create a second initial plan.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may create a plan.");
+      }
+      const tasks = event.payload.tasks as BuildTask[];
+      const validation = validateTaskGraph(tasks);
+      if (!validation.valid) {
+        throw new Error(
+          `Plan has mechanical issues: ${validation.issues.map((issue) => issue.code).join(", ")}.`
+        );
+      }
+      next.planRevision = requiredNumber(event.payload, "revision");
+      next.tasks = Object.fromEntries(tasks.map((task) => [task.id, { ...task }]));
+      break;
+    }
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
@@ -444,10 +461,32 @@ export function reduceSchedulerEvent(
       next.status = "running";
       break;
     }
-    case "plan.created":
-      throw new Error("A scheduler run cannot create a second initial plan.");
   }
   return next;
+}
+
+function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {
+  return {
+    runId: event.runId,
+    status: "running",
+    planRevision: 0,
+    tasks: {},
+    guidance: {},
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: event.sequence,
+  };
+}
+
+function planProjection(
+  event: SchedulerEvent,
+  tasks: BuildTask[]
+): SchedulerProjection {
+  return {
+    ...emptySchedulerProjection(event),
+    planRevision: requiredNumber(event.payload, "revision"),
+    tasks: Object.fromEntries(tasks.map((task) => [task.id, { ...task }])),
+  };
 }
 
 function assertTransitionAuthority(

@@ -239,6 +239,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       status: "idle",
       action: `max:${maxSteps ?? 100}`,
     }),
+    selectArchitectHandoff: () => projection,
   };
   const server = new ControlServer({
     supervisor,

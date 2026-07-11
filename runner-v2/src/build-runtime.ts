@@ -107,6 +107,21 @@ export class BuildRuntime {
     return this.store.readRun(this.runId, afterSequence);
   }
 
+  selectArchitectHandoff(
+    runtimeId: string,
+    idempotencyKey: string
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "architect.handoff_selected",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
   async step(): Promise<BuildStepResult> {
     const previous = this.stepQueue;
     let release!: () => void;
@@ -153,6 +168,10 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    if (projection.planRevision === 0) {
+      await this.runArchitect({ type: "plan_required" }, projection);
+      return this.afterArchitect("plan_required");
+    }
 
     const openGuidance = Object.values(projection.guidance)
       .filter((guidance) => guidance.status === "open")
