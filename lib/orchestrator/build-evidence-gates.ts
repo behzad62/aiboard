@@ -126,6 +126,30 @@ export function evidenceOnlyRetryFiles(input: {
   );
 }
 
+export function historicalSkillEvidenceForTask(
+  records: ReadonlyArray<SkillEvidence>,
+  taskId: string
+): string[] {
+  const observedRedFailure =
+    /\bred\b[\s\S]{0,240}\b(?:failed|failure|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?[1-9]\d*|non[- ]zero)\b/i;
+  const negatedRed =
+    /\b(?:no red|red (?:was )?not|without (?:an? )?red|not reproducible)\b/i;
+  return [
+    ...new Set(
+      records
+        .filter((record) => record.taskId === taskId)
+        .flatMap((record) => record.reportedEvidence)
+        .map((line) => line.trim())
+        .filter(
+          (line) =>
+            line.length > 0 &&
+            observedRedFailure.test(line) &&
+            !negatedRed.test(line)
+        )
+    ),
+  ];
+}
+
 export function isWorkerOutputBlockedByToolBudget(workerOutput: string): boolean {
   const text = workerOutput.toLowerCase();
   if (!text.trim()) return false;

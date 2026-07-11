@@ -4,6 +4,7 @@ import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
   hasBlockingSkillEvidence,
+  historicalSkillEvidenceForTask,
   isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
   restoredLandedTaskFiles,
@@ -192,6 +193,35 @@ check("unrelated task evidence does not block", !hasBlockingSkillEvidence([missi
 
 const latestWins = getBlockingSkillEvidence([missingTdd, completeTdd], "T1");
 check("latest complete evidence clears older missing evidence", latestWins.length === 0, latestWins);
+
+const priorRedOnly: SkillEvidence = {
+  ...missingTdd,
+  wave: 4,
+  reportedEvidence: [
+    "RED failure observed for the expected reason: node --test tests/game.test.mjs failed before implementation.",
+    "GREEN pass observed after minimal implementation: not yet obtained.",
+  ],
+  missingEvidence: ["GREEN test/check pass after implementation"],
+};
+const priorGreenAndSecurity: SkillEvidence = {
+  ...completeTdd,
+  wave: 5,
+  reportedEvidence: [
+    "GREEN pass observed after minimal implementation: node --test tests/game.test.mjs passed.",
+    "Trust boundary reviewed and unsafe case considered.",
+  ],
+};
+const historicalEvidence = historicalSkillEvidenceForTask(
+  [priorRedOnly, priorGreenAndSecurity],
+  "T1"
+);
+check(
+  "cross-wave evidence carries historical RED but not stale GREEN or unrelated claims",
+  historicalEvidence.length === 1 &&
+    /RED failure observed/.test(historicalEvidence[0]) &&
+    !/GREEN|Trust boundary/.test(historicalEvidence[0]),
+  historicalEvidence
+);
 
 const fix = buildSkillEvidenceFixInstructions([missingTdd, missingDebugging], "T1");
 check("fix instructions name missing RED evidence", fix.includes("RED test/check failure"), fix);

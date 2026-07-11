@@ -112,6 +112,7 @@ import { isRedBuildTask } from "@/lib/orchestrator/build-task-phase";
 import {
   evidenceOnlyRetryFiles,
   getBlockingSkillEvidence,
+  historicalSkillEvidenceForTask,
   isEvidenceArtifactWritePath,
   isScopedVerificationGapReport,
   isWorkerOutputBlockedByToolBudget,
@@ -8419,7 +8420,10 @@ export async function runBuildDiscussion(
           landedPaths: [...new Set([...files, ...durableTaskFiles])],
           declaredOutputPaths,
           tddPhase: isRedBuildTask(task) ? "red" : "full",
-          engineReportedEvidence,
+          engineReportedEvidence: [
+            ...historicalSkillEvidenceForTask(skillEvidenceRecords, task.id),
+            ...engineReportedEvidence,
+          ],
           allowVerificationOnlyExemptions: shouldAllowEvidenceOnlySkillExemptions({
             emittedFiles: files,
             declaredOutputPaths,
