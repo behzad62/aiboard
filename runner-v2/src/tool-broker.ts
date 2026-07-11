@@ -16,6 +16,11 @@ import {
   ToolRegistry,
   type AgentToolRuntime,
 } from "./tool-registry.js";
+import {
+  toolInvocationFingerprint,
+  toolInvocationKey,
+  type ToolInvocationLedger,
+} from "./tool-ledger.js";
 
 export interface ToolApprovalRequest {
   callId: string;
@@ -49,6 +54,7 @@ export interface ToolBrokerOptions {
   maxInlineOutputBytes?: number;
   toolTimeoutMs?: number;
   clock?: () => string;
+  ledger?: ToolInvocationLedger;
 }
 
 interface InvocationCacheEntry {
@@ -73,6 +79,8 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly maxInlineOutputBytes: number;
   private readonly toolTimeoutMs: number;
   private readonly clock: () => string;
+  private readonly ledger?: ToolInvocationLedger;
+  private readonly toolDefinitions = new Map<string, ToolDefinition>();
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -85,6 +93,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.maxInlineOutputBytes = options.maxInlineOutputBytes ?? 64 * 1024;
     this.toolTimeoutMs = options.toolTimeoutMs ?? 120_000;
     this.clock = options.clock ?? (() => new Date().toISOString());
+    this.ledger = options.ledger;
     if (!Number.isSafeInteger(this.maxInlineOutputBytes) || this.maxInlineOutputBytes < 1) {
       throw new Error("maxInlineOutputBytes must be a positive integer.");
     }
@@ -94,6 +103,7 @@ export class ToolBroker implements AgentToolRuntime {
   }
 
   register<TInput>(tool: NativeTool<TInput>): void {
+    this.toolDefinitions.set(tool.definition.name, tool.definition);
     this.registry.register({
       definition: tool.definition,
       validate: tool.validate,
@@ -121,8 +131,8 @@ export class ToolBroker implements AgentToolRuntime {
     call: ToolCallBlock,
     context: ToolExecutionContext
   ): Promise<ToolResult> {
-    const key = `${context.runId}\0${context.sessionId}\0${call.callId}`;
-    const fingerprint = canonicalJson([call.name, call.arguments]);
+    const key = toolInvocationKey(context, call.callId);
+    const fingerprint = toolInvocationFingerprint(call);
     const existing = this.invocationCache.get(key);
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
@@ -130,7 +140,36 @@ export class ToolBroker implements AgentToolRuntime {
       }
       return await existing.result;
     }
-    const result = this.invokeAudited(call, context);
+    const definition = this.toolDefinitions.get(call.name);
+    const ledgerDecision = this.ledger?.begin({
+      key,
+      fingerprint,
+      callId: call.callId,
+      toolName: call.name,
+      runId: context.runId,
+      sessionId: context.sessionId,
+      replaySafe: definition?.readOnly === true && definition.effect === "none",
+      occurredAt: this.clock(),
+    });
+    if (ledgerDecision?.state === "completed") {
+      const completed = Promise.resolve(ledgerDecision.result);
+      this.invocationCache.set(key, { fingerprint, result: completed });
+      return ledgerDecision.result;
+    }
+    if (ledgerDecision?.state === "conflict") {
+      return failure(call, "idempotency_conflict", "Call ID was reused with different input.");
+    }
+    if (ledgerDecision?.state === "in_doubt") {
+      return failure(
+        call,
+        "reconciliation_required",
+        "A prior side-effecting tool attempt has no durable completion record."
+      );
+    }
+    const result = this.invokeAudited(call, context).then((value) => {
+      this.ledger?.complete(key, fingerprint, value, this.clock());
+      return value;
+    });
     this.invocationCache.set(key, { fingerprint, result });
     return await result;
   }
@@ -336,17 +375,6 @@ async function canonicalTarget(target: string): Promise<string> {
       current = parent;
     }
   }
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }
 
 function outputFailure(code: string, message: string): ToolExecutionOutput {
