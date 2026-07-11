@@ -124,7 +124,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               "You are an AIBoard native worker. Use tools and finish with submit_task.",
               "Batch independent read-only tool calls in one turn when that reduces model round trips.",
               "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
-              "For a valid no-change result, record durable command evidence with run_evidence_command before submit_task.",
+              "Before every submit_task, record task-relevant durable command evidence with run_evidence_command; the Architect decides whether that evidence is sufficient.",
             ].join("\n"),
           },
         ],

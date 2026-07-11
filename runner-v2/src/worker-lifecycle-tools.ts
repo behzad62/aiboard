@@ -43,7 +43,8 @@ export function createSubmitTaskTool(
   return {
     definition: {
       name: "submit_task",
-      description: "Commit the task workspace and submit a typed change set",
+      description:
+        "Commit the task workspace and submit a typed change set after durable command evidence has been recorded",
       inputSchema: {
         type: "object",
         properties: { summary: { type: "string" } },

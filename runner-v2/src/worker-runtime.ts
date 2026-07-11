@@ -143,6 +143,11 @@ export async function runWorkerTask(
           })
         )
       : [];
+    if (evidenceHashes.length === 0) {
+      throw new Error(
+        "Task submission requires durable evidence; run run_evidence_command first."
+      );
+    }
     let commit: TaskCommit;
     try {
       commit = await options.workspaceManager.commitTask(
@@ -151,11 +156,6 @@ export async function runWorkerTask(
       );
     } catch (error) {
       if (!(error instanceof NoTaskChangesError)) throw error;
-      if (evidenceHashes.length === 0) {
-        throw new Error(
-          "No-change submission requires durable evidence; run run_evidence_command first."
-        );
-      }
       commit = {
         runId: options.runId,
         taskId: options.taskId,

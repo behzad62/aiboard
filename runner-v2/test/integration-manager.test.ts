@@ -20,16 +20,25 @@ test("change sets integrate serially and retries do not duplicate commits", asyn
     writeFileSync(join(betaWorkspace.path, "beta.txt"), "beta\n");
     const alphaCommit = await fixture.workspaces.commitTask("alpha", "Add alpha");
     const betaCommit = await fixture.workspaces.commitTask("beta", "Add beta");
+    await assert.rejects(
+      () => createChangeSet({
+        workspacePath: alphaWorkspace.path,
+        taskCommit: alphaCommit,
+        artifacts: fixture.artifacts,
+      }),
+      /durable evidence/i
+    );
     const alpha = await createChangeSet({
       workspacePath: alphaWorkspace.path,
       taskCommit: alphaCommit,
       artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
     });
     const beta = await createChangeSet({
       workspacePath: betaWorkspace.path,
       taskCommit: betaCommit,
       artifacts: fixture.artifacts,
-      evidenceArtifactHashes: [alpha.diffArtifactHash],
+      evidenceArtifactHashes: [fixture.evidence.hash],
       unresolvedConcerns: ["None"],
     });
     assert.match((await fixture.artifacts.get(alpha.diffArtifactHash)).toString(), /alpha\.txt/);
@@ -101,11 +110,13 @@ test("integration conflicts are mechanical results and leave canonical integrati
       workspacePath: firstWorkspace.path,
       taskCommit: firstCommit,
       artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
     });
     const second = await createChangeSet({
       workspacePath: secondWorkspace.path,
       taskCommit: secondCommit,
       artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
     });
     const integrated = await fixture.integration.integrate(first);
     assert.equal(integrated.status, "integrated");
@@ -184,6 +195,11 @@ async function createFixture(label: string) {
     baselineRevision: baseline.revision,
   });
   const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const evidence = await artifacts.put(
+    Buffer.from("mechanical verification evidence"),
+    "text/plain",
+    "Fixture evidence"
+  );
   const integration = new IntegrationManager({
     repositoryRoot: project,
     stateDirectory: state,
@@ -191,7 +207,16 @@ async function createFixture(label: string) {
     baselineRevision: baseline.revision,
   });
   await integration.initialize();
-  return { root, project, state, baseline, workspaces, artifacts, integration };
+  return {
+    root,
+    project,
+    state,
+    baseline,
+    workspaces,
+    artifacts,
+    evidence,
+    integration,
+  };
 }
 
 async function gitText(cwd: string, args: string[]): Promise<string> {

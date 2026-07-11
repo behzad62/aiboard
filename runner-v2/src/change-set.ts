@@ -42,9 +42,9 @@ export async function createChangeSet(
 ): Promise<ChangeSet> {
   const commit = options.taskCommit;
   const evidence = unique(options.evidenceArtifactHashes ?? []);
-  if (commit.commits.length === 0 && evidence.length === 0) {
+  if (evidence.length === 0) {
     throw new Error(
-      `No-change task ${commit.taskId} requires durable evidence before submission.`
+      `Task ${commit.taskId} requires durable evidence before submission.`
     );
   }
   for (const hash of evidence) assertArtifactHash(hash);
