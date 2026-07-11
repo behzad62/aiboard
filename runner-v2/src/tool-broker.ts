@@ -323,41 +323,45 @@ export class ToolBroker implements AgentToolRuntime {
     toolName: string,
     output: ToolExecutionOutput
   ): Promise<ToolExecutionOutput> {
-    const text = output.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-    if (Buffer.byteLength(text) <= this.maxInlineOutputBytes) return output;
-    const artifact = this.artifacts
-      ? await this.artifacts.put(
-          Buffer.from(text),
-          "text/plain",
-          `${toolName} output`
-        )
-      : undefined;
-    const preview = previewText(text, this.maxInlineOutputBytes);
-    return {
-      ...output,
-      content: [
-        ...output.content.filter((block) => block.type !== "text"),
-        {
-          type: "text",
-          text: artifact
-            ? `Output exceeded ${this.maxInlineOutputBytes} inline bytes and was stored as an artifact.\n\n${preview}`
-            : preview,
-        },
-        ...(artifact
-          ? [
-              {
-                type: "artifact" as const,
-                hash: artifact.hash,
-                mediaType: artifact.mediaType,
-                label: artifact.label,
-              },
-            ]
-          : []),
-      ],
-    };
+    let changed = false;
+    const content: ToolExecutionOutput["content"] = [];
+    for (const block of output.content) {
+      if (block.type !== "text" && block.type !== "json") {
+        content.push(block);
+        continue;
+      }
+      const serialized = block.type === "text"
+        ? block.text
+        : (JSON.stringify(block.value) ?? "null");
+      if (Buffer.byteLength(serialized) <= this.maxInlineOutputBytes) {
+        content.push(block);
+        continue;
+      }
+      changed = true;
+      const structured = block.type === "json";
+      const artifact = this.artifacts
+        ? await this.artifacts.put(
+            Buffer.from(serialized),
+            structured ? "application/json" : "text/plain",
+            `${toolName}${structured ? " structured" : ""} output`
+          )
+        : undefined;
+      content.push({
+        type: "text",
+        text: artifact
+          ? `${structured ? "Structured output" : "Output"} exceeded ${this.maxInlineOutputBytes} inline bytes and was stored as an artifact.\n\n${previewText(serialized, this.maxInlineOutputBytes)}`
+          : previewText(serialized, this.maxInlineOutputBytes),
+      });
+      if (artifact) {
+        content.push({
+          type: "artifact",
+          hash: artifact.hash,
+          mediaType: artifact.mediaType,
+          label: artifact.label,
+        });
+      }
+    }
+    return changed ? { ...output, content } : output;
   }
 }
 

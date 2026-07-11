@@ -227,6 +227,49 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
       true
     );
 
+    broker.register({
+      definition: {
+        name: "large_json_read",
+        description: "Return large structured output",
+        inputSchema: { type: "object" },
+        readOnly: true,
+        effect: "none",
+      },
+      validate: () => ({ ok: true, value: {} }),
+      execute: async () => ({
+        content: [{
+          type: "json",
+          value: { matches: Array.from({ length: 20 }, (_, index) => ({ index })) },
+        }],
+        isError: false,
+      }),
+    });
+    const largeJson = await broker.invoke(
+      {
+        type: "tool_call",
+        callId: "large-json",
+        name: "large_json_read",
+        arguments: {},
+      },
+      context()
+    );
+    assert.equal(
+      largeJson.content.some((block) => block.type === "json"),
+      false,
+      "oversized structured output must not remain inline"
+    );
+    const jsonArtifact = largeJson.content.find(
+      (block) => block.type === "artifact"
+    );
+    assert.ok(jsonArtifact && jsonArtifact.type === "artifact");
+    assert.deepEqual(
+      JSON.parse((await artifacts.get(jsonArtifact.hash)).toString()),
+      { matches: Array.from({ length: 20 }, (_, index) => ({ index })) }
+    );
+    const jsonPreview = largeJson.content.find((block) => block.type === "text");
+    assert.ok(jsonPreview && jsonPreview.type === "text");
+    assert.match(jsonPreview.text, /structured output exceeded/i);
+
     const slow = await broker.invoke(
       { type: "tool_call", callId: "slow", name: "slow_read", arguments: {} },
       context()
