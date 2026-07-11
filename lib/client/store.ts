@@ -611,6 +611,37 @@ function mergeBuildFiles(
   return Array.from(records.values());
 }
 
+function buildCheckpointRecency(checkpoint: BuildCheckpoint): {
+  timestamp: number;
+  wave: number;
+} {
+  const parsedTimestamp = Date.parse(checkpoint.updatedAt);
+  return {
+    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : 0,
+    wave: Number.isFinite(checkpoint.wave) ? checkpoint.wave : 0,
+  };
+}
+
+function newerBuildCheckpoint(
+  local: BuildCheckpoint | null,
+  persisted: BuildCheckpoint | null
+): BuildCheckpoint | null {
+  if (!local) return persisted;
+  if (!persisted) return local;
+  const localRecency = buildCheckpointRecency(local);
+  const persistedRecency = buildCheckpointRecency(persisted);
+  if (localRecency.timestamp !== persistedRecency.timestamp) {
+    return localRecency.timestamp > persistedRecency.timestamp ? local : persisted;
+  }
+  if (localRecency.wave !== persistedRecency.wave) {
+    return localRecency.wave > persistedRecency.wave ? local : persisted;
+  }
+  // Equal revisions are not permission for a stale tab to rewrite another
+  // writer's checkpoint. Keep the durable copy until this tab advances the
+  // checkpoint's updatedAt or wave.
+  return persisted;
+}
+
 async function loadBenchmarkStoreFields(): Promise<BenchmarkStoreFields> {
   const fields = emptyBenchmarkStoreFields();
   mergedBenchmarkRunIds.clear();
@@ -923,13 +954,45 @@ async function persistDiscussionBundle(
       JSON.stringify(bundle.buildFiles, null, 2)
     )
   );
-  await serializeAdapterWrite(() =>
-    currentAdapter.saveDiscussionFile(
+  let checkpointToPersist = bundle.buildCheckpoint;
+  await serializeAdapterWrite(async () => {
+    const persistedRaw = await currentAdapter.loadDiscussionFile(
+      bundle.discussionId,
+      "build/checkpoint.json"
+    );
+    let persistedCheckpoint: BuildCheckpoint | null = null;
+    if (persistedRaw) {
+      try {
+        const parsed = JSON.parse(persistedRaw) as BuildCheckpoint;
+        if (parsed.discussionId === bundle.discussionId) {
+          persistedCheckpoint = parsed;
+        }
+      } catch {
+        // A malformed checkpoint is replaced by the valid in-memory copy.
+      }
+    }
+    checkpointToPersist = newerBuildCheckpoint(
+      bundle.buildCheckpoint,
+      persistedCheckpoint
+    );
+    await currentAdapter.saveDiscussionFile(
       bundle.discussionId,
       "build/checkpoint.json",
-      JSON.stringify(bundle.buildCheckpoint, null, 2)
-    )
-  );
+      JSON.stringify(checkpointToPersist, null, 2)
+    );
+  });
+  if (
+    memory &&
+    checkpointToPersist &&
+    checkpointToPersist !== bundle.buildCheckpoint
+  ) {
+    memory.buildCheckpoints = [
+      ...(memory.buildCheckpoints ?? []).filter(
+        (checkpoint) => checkpoint.discussionId !== bundle.discussionId
+      ),
+      checkpointToPersist,
+    ];
+  }
   await serializeAdapterWrite(() =>
     currentAdapter.saveDiscussionFile(
       bundle.discussionId,

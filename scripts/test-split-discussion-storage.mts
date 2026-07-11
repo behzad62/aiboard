@@ -232,6 +232,29 @@ check(
   )[0]?.id === contextBlob.id
 );
 
+const newerExternalCheckpoint: BuildCheckpoint = {
+  ...checkpoint,
+  status: "blocked",
+  updatedAt: "2026-07-07T00:05:00.000Z",
+  wave: 125,
+  architectNotes: "newer external writer",
+};
+adapter.discussionFiles.set(
+  "disc-split/build/checkpoint.json",
+  JSON.stringify(newerExternalCheckpoint)
+);
+await flush();
+const checkpointAfterStaleFlush = JSON.parse(
+  adapter.discussionFiles.get("disc-split/build/checkpoint.json") ?? "{}"
+) as BuildCheckpoint;
+check(
+  "stale tab flush cannot overwrite a newer durable build checkpoint",
+  checkpointAfterStaleFlush.wave === 125 &&
+    checkpointAfterStaleFlush.updatedAt === newerExternalCheckpoint.updatedAt &&
+    checkpointAfterStaleFlush.architectNotes === "newer external writer",
+  checkpointAfterStaleFlush
+);
+
 __clearClientStoreForTests();
 await __loadClientStoreFromAdapterForTests(adapter);
 const reloaded = exportStore();
