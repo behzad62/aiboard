@@ -55,8 +55,11 @@ export function classifyProviderFailure(error: unknown): ProviderFailure {
   } else if (details.status === 401 || details.status === 403) {
     kind = "authentication";
   } else if (
-    details.status === 429 &&
-    (/usage|quota|insufficient/.test(code) || /usage limit|quota/i.test(message))
+    /usage[_ -]?limit|insufficient[_ -]?quota|quota[_ -]?exceeded/.test(code) ||
+    /usage limit(?: has been)? (?:reached|exceeded)|quota (?:has been )?(?:reached|exceeded)/i.test(
+      message
+    ) ||
+    (details.status === 429 && /quota|insufficient/.test(code))
   ) {
     kind = "usage_limit";
   } else if (details.status === 429) {

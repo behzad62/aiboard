@@ -172,6 +172,15 @@ test("provider failures are classified from transport metadata before routing", 
     "usage_limit"
   );
   assert.equal(
+    classifyProviderFailure({
+      status: 200,
+      message: "The usage limit has been reached",
+      name: "ProviderTransportError",
+    }).kind,
+    "usage_limit",
+    "stream errors arrive after an HTTP 200 response but must still enter cooldown"
+  );
+  assert.equal(
     classifyProviderFailure({ status: 429, code: "rate_limit", message: "slow down" }).kind,
     "rate_limit"
   );
