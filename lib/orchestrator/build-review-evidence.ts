@@ -175,7 +175,7 @@ function extractQuotedVerifierIdentities(text: string): string[] {
   if (!trimmed) return [];
   return [...trimmed.matchAll(/`([^`]+)`/g)]
     .map((match) => match[1]?.trim())
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => !!value && isConcreteVerifierIdentity(value));
 }
 
 function requirementAction(verifierIdentity: string): string {
@@ -186,6 +186,14 @@ function requirementAction(verifierIdentity: string): string {
 
 function isTypedToolIdentity(value: string): boolean {
   return /^(?:run|[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*)$/.test(value);
+}
+
+function isConcreteVerifierIdentity(value: string): boolean {
+  if (isTypedToolIdentity(value)) return true;
+  const executable = value.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  return /^(?:node|npm|npx|pnpm|yarn|bun|deno|python(?:3)?|py|pytest|cargo|go|dotnet|gradle|gradlew|\.\/gradlew|mvn|mvnw|\.\/mvnw|cmake|ctest|make|php|ruby|java|javac|powershell|pwsh|cmd|git)(?:\.exe)?$/.test(
+    executable
+  );
 }
 
 export function compileBuildTaskVerificationRequirements(input: {

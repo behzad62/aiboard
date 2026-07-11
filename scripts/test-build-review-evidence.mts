@@ -280,6 +280,7 @@ const taskScopedVerifierTask: BuildTask = {
   requiredEvidence: [
     "GREEN: `node --check src/game.js` passes after the fix.",
     "GREEN: `node --test tests/game.test.mjs` passes after the fix.",
+    "Confirm `ENGAGEMENT_DEFAULTS` is initialized after its dependencies.",
   ],
   phaseSpec: {
     ...toolTask.phaseSpec!,
