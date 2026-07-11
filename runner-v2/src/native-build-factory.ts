@@ -52,8 +52,13 @@ export class NativeBuildFactory {
     if (this.closed) throw new Error("Native Build factory is closed.");
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     const baselineRevision = this.options.baselineFor(spec.runId);
-    const selectedConfigs = selectConfigs(this.options.providerConfigs.load(), spec);
-    const candidates = selectedConfigs.map(toCandidate);
+    const selected = selectRuntimeCandidates(
+      this.options.providerConfigs.load(),
+      spec
+    );
+    const selectedConfigs = selected.configs;
+    const candidates = selected.all;
+    const workerCandidates = selected.workers;
     const models = new Map<string, AgentModel>(
       selectedConfigs.map((config) => [config.runtimeId, createModel(config)])
     );
@@ -87,13 +92,17 @@ export class NativeBuildFactory {
       schedulerStore.readRun(spec.runId)
     );
     const health = new ProviderHealthRegistry({ initial: initialHealth });
-    const router = new RuntimeRouter({ candidates, health });
+    const workerRouter = new RuntimeRouter({
+      candidates: workerCandidates,
+      health,
+    });
+    const architectRouter = new RuntimeRouter({ candidates, health });
     const skillCatalog = new SkillCatalog({ projectRoot: this.options.projectRoot });
     const workerDriver = new NativeWorkerDriver({
       schedulerStore,
-      router,
+      router: workerRouter,
       health,
-      candidates,
+      candidates: workerCandidates,
       models,
       permissionProfile: spec.permissionProfile,
       workspaceManager,
@@ -109,7 +118,7 @@ export class NativeBuildFactory {
     });
     const architectDriver = new NativeArchitectRuntime({
       schedulerStore,
-      router,
+      router: architectRouter,
       health,
       candidates,
       models,
@@ -200,6 +209,24 @@ function selectConfigs(
     }
   }
   return selected;
+}
+
+export function selectRuntimeCandidates(
+  configs: readonly RunnerProviderConfig[],
+  spec: NativeBuildSpec
+): {
+  configs: RunnerProviderConfig[];
+  all: AgentRuntimeCandidate[];
+  workers: AgentRuntimeCandidate[];
+} {
+  const selected = selectConfigs(configs, spec);
+  const all = selected.map(toCandidate);
+  const workerIds = new Set(spec.workerRuntimeIds);
+  return {
+    configs: selected,
+    all,
+    workers: all.filter((candidate) => workerIds.has(candidate.runtimeId)),
+  };
 }
 
 function toCandidate(config: RunnerProviderConfig): AgentRuntimeCandidate {

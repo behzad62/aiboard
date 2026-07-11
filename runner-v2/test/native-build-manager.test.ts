@@ -7,7 +7,11 @@ import test from "node:test";
 import type { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import { providerHealthFromSchedulerEvents } from "../src/native-build-factory.js";
+import {
+  providerHealthFromSchedulerEvents,
+  selectRuntimeCandidates,
+} from "../src/native-build-factory.js";
+import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 
 const spec: NativeBuildSpec = {
@@ -62,6 +66,38 @@ test("native Build manager recreates persisted runtimes and closes resources", a
 
 test("a brand-new native Build starts with no recovered provider cooldowns", () => {
   assert.deepEqual(providerHealthFromSchedulerEvents([]), []);
+});
+
+test("worker routing excludes Architect-only runtimes from the worker pool", () => {
+  const configs: RunnerProviderConfig[] = [
+    {
+      runtimeId: "chatgpt:gpt-5.5",
+      providerId: "chatgpt",
+      modelId: "gpt-5.5",
+      transport: "account-runner",
+      secret: "architect-secret",
+      capabilities: ["*"],
+      priority: 0,
+    },
+    {
+      runtimeId: "chatgpt:gpt-5.4",
+      providerId: "chatgpt",
+      modelId: "gpt-5.4",
+      transport: "account-runner",
+      secret: "worker-secret",
+      capabilities: ["*"],
+      priority: 1,
+    },
+  ];
+  const selected = selectRuntimeCandidates(configs, spec);
+  assert.deepEqual(
+    selected.all.map((candidate) => candidate.runtimeId),
+    ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"]
+  );
+  assert.deepEqual(
+    selected.workers.map((candidate) => candidate.runtimeId),
+    ["chatgpt:gpt-5.4"]
+  );
 });
 
 function fakeRuntime(runId: string): BuildRuntime {
