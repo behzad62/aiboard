@@ -16,7 +16,10 @@ import type {
 } from "./provider-config-store.js";
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import {
+  rebuildSchedulerProjection,
+  type SchedulerEvent,
+} from "./scheduler-store.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
@@ -80,9 +83,9 @@ export class NativeBuildFactory {
       baselineRevision,
     });
     await integrationManager.initialize();
-    const initialHealth = Object.values(
-      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).runtime.providerHealth
-    ).filter(isProviderHealthState);
+    const initialHealth = providerHealthFromSchedulerEvents(
+      schedulerStore.readRun(spec.runId)
+    );
     const health = new ProviderHealthRegistry({ initial: initialHealth });
     const router = new RuntimeRouter({ candidates, health });
     const skillCatalog = new SkillCatalog({ projectRoot: this.options.projectRoot });
@@ -174,6 +177,15 @@ export class NativeBuildFactory {
     this.memoryStore.close();
     this.options.providerConfigs.close();
   }
+}
+
+export function providerHealthFromSchedulerEvents(
+  events: readonly SchedulerEvent[]
+): ProviderHealthState[] {
+  if (events.length === 0) return [];
+  return Object.values(
+    rebuildSchedulerProjection(events).runtime.providerHealth
+  ).filter(isProviderHealthState);
 }
 
 function selectConfigs(

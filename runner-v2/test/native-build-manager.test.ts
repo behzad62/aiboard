@@ -7,6 +7,7 @@ import test from "node:test";
 import type { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
+import { providerHealthFromSchedulerEvents } from "../src/native-build-factory.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 
 const spec: NativeBuildSpec = {
@@ -57,6 +58,10 @@ test("native Build manager recreates persisted runtimes and closes resources", a
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a brand-new native Build starts with no recovered provider cooldowns", () => {
+  assert.deepEqual(providerHealthFromSchedulerEvents([]), []);
 });
 
 function fakeRuntime(runId: string): BuildRuntime {
