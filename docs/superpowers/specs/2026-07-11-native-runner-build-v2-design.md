@@ -60,6 +60,8 @@ Canonical Git repository + isolated task workspaces
 
 The runner exposes a versioned localhost HTTP/WebSocket API authenticated with a runner token. The UI may connect, disconnect, refresh, or be replaced without changing execution. A second UI observes the same runner state rather than becoming another writer.
 
+The native runner targets Node.js **24.18.0** exactly for the initial implementation. Startup rejects older or different major/minor runtime lines until that compatibility policy is deliberately revised and certified.
+
 ### Durable stores
 
 - **Git** is the canonical project state and records baseline, task, integration, and delivery commits.
@@ -273,4 +275,3 @@ No CI test should require paid provider access.
 - Full Access completes authorized external workflows without permission interruptions.
 - Hard budgets pause exactly at the configured boundary.
 - A representative repository task completes with materially fewer wasted calls than legacy Build and produces a clear Git/evidence audit trail.
-
