@@ -144,7 +144,10 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
     },
     validate: () => ({ ok: true, value: {} }),
     execute: async () => ({
-      content: [{ type: "text", text: "x".repeat(100) }],
+      content: [
+        { type: "json", value: { exitCode: 0 } },
+        { type: "text", text: `START-${"x".repeat(88)}-END` },
+      ],
       isError: false,
     }),
   });
@@ -177,7 +180,52 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
     );
     const artifact = large.content.find((block) => block.type === "artifact");
     assert.ok(artifact && artifact.type === "artifact");
-    assert.equal((await artifacts.get(artifact.hash)).toString(), "x".repeat(100));
+    assert.equal(
+      (await artifacts.get(artifact.hash)).toString(),
+      `START-${"x".repeat(88)}-END`
+    );
+    assert.deepEqual(
+      large.content.find((block) => block.type === "json"),
+      { type: "json", value: { exitCode: 0 } }
+    );
+    const preview = large.content.find((block) => block.type === "text");
+    assert.ok(preview && preview.type === "text");
+    assert.match(preview.text, /START-/);
+    assert.match(preview.text, /-END/);
+    assert.match(preview.text, /stored as an artifact/i);
+
+    const defaultBroker = new ToolBroker({
+      permissionProfile: "project",
+      workspacePath: root,
+      artifacts,
+    });
+    defaultBroker.register({
+      definition: {
+        name: "default_large_read",
+        description: "Return output above the default inline budget",
+        inputSchema: { type: "object" },
+        readOnly: true,
+        effect: "none",
+      },
+      validate: () => ({ ok: true, value: {} }),
+      execute: async () => ({
+        content: [{ type: "text", text: "y".repeat(9 * 1024) }],
+        isError: false,
+      }),
+    });
+    const boundedByDefault = await defaultBroker.invoke(
+      {
+        type: "tool_call",
+        callId: "default-large",
+        name: "default_large_read",
+        arguments: {},
+      },
+      context()
+    );
+    assert.equal(
+      boundedByDefault.content.some((block) => block.type === "artifact"),
+      true
+    );
 
     const slow = await broker.invoke(
       { type: "tool_call", callId: "slow", name: "slow_read", arguments: {} },

@@ -162,6 +162,8 @@ test("native worker fails over with the same session, context, tools, and eviden
     const contextText = fallback.requests[0].messages.map((message) =>
       typeof message.content === "string" ? message.content : ""
     ).join("\n");
+    assert.match(contextText, /Batch independent read-only tool calls/i);
+    assert.match(contextText, /Keep command output narrow/i);
     assert.match(contextText, /Run focused tests first/);
     assert.match(contextText, /focused testing evidence/);
     assert.match(contextText, /newline-terminated text/);

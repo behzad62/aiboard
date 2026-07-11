@@ -90,7 +90,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.workspacePath = resolve(options.workspacePath);
     this.approve = options.approve;
     this.artifacts = options.artifacts;
-    this.maxInlineOutputBytes = options.maxInlineOutputBytes ?? 64 * 1024;
+    this.maxInlineOutputBytes = options.maxInlineOutputBytes ?? 8 * 1024;
     this.toolTimeoutMs = options.toolTimeoutMs ?? 120_000;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.ledger = options.ledger;
@@ -335,14 +335,16 @@ export class ToolBroker implements AgentToolRuntime {
           `${toolName} output`
         )
       : undefined;
+    const preview = previewText(text, this.maxInlineOutputBytes);
     return {
       ...output,
       content: [
+        ...output.content.filter((block) => block.type !== "text"),
         {
           type: "text",
           text: artifact
-            ? `Output exceeded ${this.maxInlineOutputBytes} bytes and was stored as an artifact.`
-            : text.slice(0, this.maxInlineOutputBytes),
+            ? `Output exceeded ${this.maxInlineOutputBytes} inline bytes and was stored as an artifact.\n\n${preview}`
+            : preview,
         },
         ...(artifact
           ? [
@@ -357,6 +359,16 @@ export class ToolBroker implements AgentToolRuntime {
       ],
     };
   }
+}
+
+function previewText(text: string, maximumBytes: number): string {
+  const bytes = Buffer.from(text);
+  if (bytes.byteLength <= maximumBytes) return text;
+  const headLength = Math.ceil(maximumBytes * 0.75);
+  const tailLength = maximumBytes - headLength;
+  const head = bytes.subarray(0, headLength).toString("utf8");
+  const tail = bytes.subarray(bytes.byteLength - tailLength).toString("utf8");
+  return `${head}\n\n… ${bytes.byteLength - maximumBytes} bytes omitted …\n\n${tail}`;
 }
 
 async function canonicalTarget(target: string): Promise<string> {
