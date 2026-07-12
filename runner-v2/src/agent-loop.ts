@@ -122,6 +122,7 @@ export async function runAgentLoop(
   );
   const nextId = options.idFactory ?? (() => randomUUID());
   const initialTurns = messages.filter((message) => message.role === "assistant").length;
+  const finalTurn = initialTurns + maxTurns;
 
   const pendingCalls = messages.flatMap((message) =>
     message.role === "assistant" && Array.isArray(message.content)
@@ -157,7 +158,7 @@ export async function runAgentLoop(
 
   for (
     let turnNumber = initialTurns + 1;
-    turnNumber <= maxTurns;
+    turnNumber <= finalTurn;
     turnNumber += 1
   ) {
     if (options.signal?.aborted) {
@@ -241,7 +242,7 @@ export async function runAgentLoop(
     );
     if (toolResult) return toolResult;
   }
-  return suspended("turn_limit", maxTurns, messages);
+  return suspended("turn_limit", finalTurn, messages);
 }
 
 async function executeToolCalls(

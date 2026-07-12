@@ -225,6 +225,37 @@ test("provider errors and hard turn limits suspend with resumable messages", asy
   assert.equal(limited.reason, "turn_limit");
 });
 
+test("a resumed checkpoint receives a fresh per-invocation turn allowance", async () => {
+  const registry = new ToolRegistry();
+  registry.register(submitTool());
+  const history: AgentMessage[] = [
+    ...initialMessages,
+    ...Array.from({ length: 50 }, (_, index): AgentMessage => ({
+      id: `assistant_history_${index}`,
+      role: "assistant",
+      content: [{ type: "text", text: `Prior turn ${index}` }],
+    })),
+  ];
+  const model = new ScriptedModel([{
+    blocks: [{
+      type: "tool_call",
+      callId: "submit_after_resume",
+      name: "submit_task",
+      arguments: { changeSetId: "changeset_resumed" },
+    }],
+    stopReason: "tool_calls",
+  }]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages: history,
+    maxTurns: 1,
+  });
+  assert.equal(result.status, "submitted");
+  assert.equal(model.requests.length, 1);
+});
+
 test("a hard tool budget error suspends before another model call", async () => {
   const registry = new ToolRegistry();
   registry.register({
