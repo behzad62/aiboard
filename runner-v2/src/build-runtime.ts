@@ -352,6 +352,23 @@ export class BuildRuntime {
       return { status: "progressed", action: "task_retry_planned" };
     }
 
+    const exhaustedPlanned = [...Object.values(projection.tasks)]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .find(
+        (task) =>
+          task.status === "planned" &&
+          task.attempt >= (task.attemptLimit ?? this.maxTaskAttempts)
+      );
+    if (exhaustedPlanned) {
+      await this.runArchitect({
+        type: "task_failure_resolution_required",
+        taskId: exhaustedPlanned.id,
+        attempt: exhaustedPlanned.attempt,
+        failureReason: "task_attempt_budget_exhausted",
+      }, projection);
+      return this.afterArchitect("planned_task_resolution_required");
+    }
+
     projection = this.projection();
     const tasks = Object.values(projection.tasks);
     if (

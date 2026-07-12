@@ -228,7 +228,11 @@ export function reduceSchedulerEvent(
         throw new Error(`Task ${taskId} must be planned, failed, or rejected before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
-      const revised: BuildTask = task.status === "failed" || task.status === "rejected"
+      const grantsFreshAttempt =
+        task.status === "failed" ||
+        task.status === "rejected" ||
+        (task.status === "planned" && task.attempt > 0);
+      const revised: BuildTask = grantsFreshAttempt
         ? {
             ...task,
             ...patch,
