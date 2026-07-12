@@ -16,6 +16,7 @@ import { captureGitBaseline } from "../src/git-baseline.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
+import { ManagedProcessService } from "../src/managed-process.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
 
@@ -281,6 +282,9 @@ test("worker subagent edits the shared task workspace and returns without parent
     ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
     evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
     const requests: AgentModelRequest[] = [];
+    const managedProcesses = new ManagedProcessService({
+      stateDirectory: join(state, "managed-processes"),
+    });
     let parentTurn = 0;
     let subagentTurn = 0;
     const model: AgentModel = {
@@ -333,6 +337,7 @@ test("worker subagent edits the shared task workspace and returns without parent
       ledger,
       sessions,
       evidenceStore,
+      managedProcesses,
       initialMessages: [
         { id: "system", role: "system", content: "Delegate, verify, and submit." },
       ],
@@ -344,6 +349,7 @@ test("worker subagent edits the shared task workspace and returns without parent
     const childTools = new Set(childRequest.tools.map((tool) => tool.name));
     assert.equal(childTools.has("fs.patch"), true);
     assert.equal(childTools.has("return_to_parent"), true);
+    assert.equal(childTools.has("process.start"), true);
     assert.equal(childTools.has("submit_task"), false);
     assert.equal(childTools.has("git.commit"), false);
     assert.equal(childTools.has("spawn_subagent"), false, "subagent depth is bounded to one");

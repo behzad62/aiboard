@@ -16,6 +16,8 @@ import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
+import type { ManagedProcessService } from "./managed-process.js";
+import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
@@ -54,6 +56,7 @@ export interface SubagentToolsOptions {
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
+  managedProcesses?: ManagedProcessService;
 }
 
 export function createSubagentTools(
@@ -129,6 +132,11 @@ export function createSubagentTools(
         broker.register(tool);
       }
       for (const tool of createProcessTools()) broker.register(tool);
+      if (options.managedProcesses) {
+        for (const tool of createManagedProcessTools(options.managedProcesses)) {
+          broker.register(tool);
+        }
+      }
       for (const tool of createResearchTools({ artifacts: options.artifacts })) {
         broker.register(tool);
       }

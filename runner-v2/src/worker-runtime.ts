@@ -22,6 +22,8 @@ import type { ProjectMemoryStore } from "./project-memory.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
+import type { ManagedProcessService } from "./managed-process.js";
+import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
@@ -58,6 +60,7 @@ export interface RunWorkerTaskOptions {
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
+  managedProcesses?: ManagedProcessService;
 }
 
 export interface WorkerTaskResult {
@@ -114,6 +117,11 @@ export async function runWorkerTask(
     broker.register(tool);
   }
   for (const tool of createProcessTools()) broker.register(tool);
+  if (options.managedProcesses) {
+    for (const tool of createManagedProcessTools(options.managedProcesses)) {
+      broker.register(tool);
+    }
+  }
   for (const tool of createResearchTools({ artifacts: options.artifacts })) {
     broker.register(tool);
   }
@@ -176,6 +184,9 @@ export async function runWorkerTask(
     ...(options.browserBackend ? { browserBackend: options.browserBackend } : {}),
     ...(options.mcpManager ? { mcpManager: options.mcpManager } : {}),
     ...(options.permissions ? { permissions: options.permissions } : {}),
+    ...(options.managedProcesses
+      ? { managedProcesses: options.managedProcesses }
+      : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

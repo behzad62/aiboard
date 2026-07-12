@@ -10,6 +10,7 @@ import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { GoogleModel } from "./google-model.js";
+import { ManagedProcessService } from "./managed-process.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
@@ -48,6 +49,7 @@ export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly memoryStore: SqliteProjectMemoryStore;
   private readonly browserBackend = new PlaywrightBrowserBackend();
+  private readonly managedProcesses: ManagedProcessService;
   private closed = false;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
@@ -55,6 +57,9 @@ export class NativeBuildFactory {
     this.memoryStore = new SqliteProjectMemoryStore(
       join(options.stateDirectory, "project-memory.sqlite")
     );
+    this.managedProcesses = new ManagedProcessService({
+      stateDirectory: join(options.stateDirectory, "managed-processes"),
+    });
   }
 
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
@@ -127,6 +132,7 @@ export class NativeBuildFactory {
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      managedProcesses: this.managedProcesses,
     });
     const architectDriver = new NativeArchitectRuntime({
       schedulerStore,
@@ -201,6 +207,7 @@ export class NativeBuildFactory {
     this.closed = true;
     this.memoryStore.close();
     this.options.providerConfigs.close();
+    this.managedProcesses.close();
     await this.browserBackend.closeAll();
   }
 }
