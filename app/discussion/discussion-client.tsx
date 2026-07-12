@@ -86,6 +86,7 @@ import { saveAttachmentFile } from "@/lib/client/settings-api";
 import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
+  shouldShowBuildStopFallback,
 } from "@/lib/client/discussion-live-state";
 import {
   getProjectHandle,
@@ -1716,9 +1717,14 @@ function DiscussionPageInner() {
       )}
 
       {discussion.mode === "build" &&
-        discussion.buildStopReason &&
-        !buildStopReport &&
-        status === "stopped" && (
+        shouldShowBuildStopFallback({
+          stopReason: discussion.buildStopReason,
+          status,
+          hasStopReport: Boolean(buildStopReport),
+          hasArchitectHandoff: Boolean(architectHandoff),
+          hasProjectHandoff: Boolean(projectHandoff),
+        }) &&
+        discussion.buildStopReason && (
           <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
             {buildStopFallbackMessage(discussion.buildStopReason)}{" "}
             Resume starts a fresh budget window and keeps the current checkpoint

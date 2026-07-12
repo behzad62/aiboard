@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
+  shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
 
 const stopped = {
@@ -29,5 +30,25 @@ assert.equal(
   "Build paused at its durable checkpoint after a recoverable blocker."
 );
 assert.doesNotMatch(buildStopFallbackMessage("blocked"), /repeated|budget/i);
+assert.equal(
+  shouldShowBuildStopFallback({
+    stopReason: "blocked",
+    status: "stopped",
+    hasStopReport: false,
+    hasArchitectHandoff: false,
+    hasProjectHandoff: true,
+  }),
+  false
+);
+assert.equal(
+  shouldShowBuildStopFallback({
+    stopReason: "blocked",
+    status: "stopped",
+    hasStopReport: false,
+    hasArchitectHandoff: false,
+    hasProjectHandoff: false,
+  }),
+  true
+);
 
 console.log("PASS Build live discussion state");

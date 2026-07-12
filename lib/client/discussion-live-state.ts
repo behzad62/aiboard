@@ -31,3 +31,19 @@ export function buildStopFallbackMessage(reason: BuildStopReason): string {
   }
   return `Build stopped because the ${reason} guardrail was reached.`;
 }
+
+export function shouldShowBuildStopFallback(input: {
+  stopReason: BuildStopReason | null | undefined;
+  status: string;
+  hasStopReport: boolean;
+  hasArchitectHandoff: boolean;
+  hasProjectHandoff: boolean;
+}): boolean {
+  return Boolean(
+    input.stopReason &&
+      input.status === "stopped" &&
+      !input.hasStopReport &&
+      !input.hasArchitectHandoff &&
+      !input.hasProjectHandoff
+  );
+}
