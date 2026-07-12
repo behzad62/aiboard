@@ -27,6 +27,32 @@ import {
 
 type Emit = (event: OrchestratorEvent) => void;
 
+export type NativeBuildPauseGate =
+  | { kind: "resume" }
+  | { kind: "project_handoff" }
+  | {
+      kind: "architect_handoff";
+      reason: string;
+      candidateRuntimeIds: string[];
+    };
+
+export function nativeBuildPauseGate(
+  projection: NativeBuildProjection
+): NativeBuildPauseGate {
+  if (projection.projectHandoff?.status === "requested") {
+    return { kind: "project_handoff" };
+  }
+  const handoff = projection.runtime.architect.handoff;
+  if (handoff) {
+    return {
+      kind: "architect_handoff",
+      reason: handoff.reason,
+      candidateRuntimeIds: [...handoff.candidateRuntimeIds],
+    };
+  }
+  return { kind: "resume" };
+}
+
 export async function runNativeBuildDiscussion(
   discussion: Discussion,
   emit: Emit,
@@ -94,8 +120,13 @@ export async function runNativeBuildDiscussion(
     await commandNativeRun(connection, runId, "start", `start:${runId}`);
   } else if (run.state === "paused") {
     const pausedProjection = await getNativeBuild(connection, runId);
-    if (pausedProjection.projectHandoff?.status === "requested") {
+    const pauseGate = nativeBuildPauseGate(pausedProjection);
+    if (pauseGate.kind === "project_handoff") {
       emitProjectHandoffPause(discussion, pausedProjection, emit);
+      return;
+    }
+    if (pauseGate.kind === "architect_handoff") {
+      emitArchitectHandoffPause(discussion, pauseGate, emit);
       return;
     }
     await commandNativeRun(connection, runId, "resume", `resume:${Date.now()}`);
@@ -154,20 +185,14 @@ export async function runNativeBuildDiscussion(
         return;
       }
       if (projection.status === "paused") {
-        if (projection.projectHandoff?.status === "requested") {
+        const pauseGate = nativeBuildPauseGate(projection);
+        if (pauseGate.kind === "project_handoff") {
           emitProjectHandoffPause(discussion, projection, emit);
           return;
         }
-        const handoff = projection.runtime.architect.handoff;
-        const message = handoff
-          ? `Architect provider handoff requires your selection: ${handoff.candidateRuntimeIds.join(", ")}`
-          : "Native Build paused safely; resume after resolving the reported blocker.";
-        if (handoff) {
-          emit({
-            type: "architect_handoff_required",
-            reason: handoff.reason,
-            candidateRuntimeIds: [...handoff.candidateRuntimeIds],
-          });
+        if (pauseGate.kind === "architect_handoff") {
+          emitArchitectHandoffPause(discussion, pauseGate, emit);
+          return;
         }
         const now = new Date().toISOString();
         updateDiscussion(discussion.id, {
@@ -176,7 +201,11 @@ export async function runNativeBuildDiscussion(
           buildStoppedAt: now,
           updatedAt: now,
         });
-        emit({ type: "build_stopped", reason: "blocked", message });
+        emit({
+          type: "build_stopped",
+          reason: "blocked",
+          message: "Native Build paused safely; resume after resolving the reported blocker.",
+        });
         return;
       }
       await delay(750, signal);
@@ -208,6 +237,30 @@ export async function runNativeBuildDiscussion(
     });
     return;
   }
+}
+
+function emitArchitectHandoffPause(
+  discussion: Discussion,
+  handoff: Extract<NativeBuildPauseGate, { kind: "architect_handoff" }>,
+  emit: Emit
+): void {
+  emit({
+    type: "architect_handoff_required",
+    reason: handoff.reason,
+    candidateRuntimeIds: [...handoff.candidateRuntimeIds],
+  });
+  const now = new Date().toISOString();
+  updateDiscussion(discussion.id, {
+    status: "stopped",
+    buildStopReason: "blocked",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({
+    type: "build_stopped",
+    reason: "blocked",
+    message: `Architect provider handoff requires your selection: ${handoff.candidateRuntimeIds.join(", ")}`,
+  });
 }
 
 export function selectNativeBuildRuntimes(
