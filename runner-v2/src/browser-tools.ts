@@ -76,6 +76,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     this.observe(session);
     this.sessions.set(sessionId, session);
     await page.goto(input.url, { waitUntil: "domcontentloaded" });
+    await settlePage(page);
     await this.persist(sessionId, session);
     return { url: page.url(), title: await page.title() };
   }
@@ -84,6 +85,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     const session = await this.require(sessionId);
     const page = session.page;
     await page.goto(url, { waitUntil: "domcontentloaded" });
+    await settlePage(page);
     await this.persist(sessionId, session);
     return { url: page.url(), title: await page.title() };
   }
@@ -193,6 +195,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     this.observe(session);
     this.sessions.set(sessionId, session);
     await page.goto(metadata.url, { waitUntil: "domcontentloaded" });
+    await settlePage(page);
     return session;
   }
 
@@ -245,6 +248,14 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         occurredAt: new Date().toISOString(),
       });
     });
+  }
+}
+
+async function settlePage(page: Page): Promise<void> {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 10_000 });
+  } catch {
+    // A bounded timeout is a mechanical observation boundary, not a page verdict.
   }
 }
 
