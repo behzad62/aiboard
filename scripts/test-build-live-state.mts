@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
-import { applyDiscussionLiveStatus } from "../lib/client/discussion-live-state";
+import {
+  applyDiscussionLiveStatus,
+  buildStopFallbackMessage,
+} from "../lib/client/discussion-live-state";
 
 const stopped = {
   id: "discussion_1",
@@ -20,5 +23,11 @@ assert.deepEqual(
     buildStoppedAt: null,
   }
 );
+
+assert.equal(
+  buildStopFallbackMessage("blocked"),
+  "Build paused at its durable checkpoint after a recoverable blocker."
+);
+assert.doesNotMatch(buildStopFallbackMessage("blocked"), /repeated|budget/i);
 
 console.log("PASS Build live discussion state");

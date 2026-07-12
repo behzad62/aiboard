@@ -83,7 +83,10 @@ import {
   updateDiscussionConfig,
 } from "@/lib/client/api";
 import { saveAttachmentFile } from "@/lib/client/settings-api";
-import { applyDiscussionLiveStatus } from "@/lib/client/discussion-live-state";
+import {
+  applyDiscussionLiveStatus,
+  buildStopFallbackMessage,
+} from "@/lib/client/discussion-live-state";
 import {
   getProjectHandle,
   queryProjectPermission,
@@ -1717,11 +1720,7 @@ function DiscussionPageInner() {
         !buildStopReport &&
         status === "stopped" && (
           <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-            {discussion.buildStopReason === "blocked"
-              ? "Build stopped after repeated no-progress recovery attempts."
-              : discussion.buildStopReason === "user"
-                ? "Build was interrupted or stopped before it could finish."
-              : `Build stopped because the ${discussion.buildStopReason} guardrail was reached.`}{" "}
+            {buildStopFallbackMessage(discussion.buildStopReason)}{" "}
             Resume starts a fresh budget window and keeps the current checkpoint
             (task graph, files, and repo/GitHub refs).
           </p>
