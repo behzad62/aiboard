@@ -103,6 +103,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       const context = await this.workerContext(assignment, workspace.path);
       const sessionId = `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`;
       const sessionEventCount = this.options.sessions.events(sessionId).length;
+      const toolEventCountBefore = this.options.ledger
+        .listRun(assignment.runId)
+        .filter((entry) => entry.sessionId === sessionId).length;
       const budgetedModel = this.options.budgetLedger
         ? new BudgetedAgentModel({
             model,
@@ -216,7 +219,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         if (
           shouldAutoContinueWorker(
             result.loop.reason,
-            lifecycleContinuations
+            lifecycleContinuations,
+            this.options.ledger
+              .listRun(assignment.runId)
+              .filter((entry) => entry.sessionId === sessionId).length >
+              toolEventCountBefore
           )
         ) {
           lifecycleContinuations += 1;
@@ -363,9 +370,11 @@ export function recoverableWorkerSuspension(
 
 export function shouldAutoContinueWorker(
   reason: AgentSuspensionReason,
-  continuations: number
+  continuations: number,
+  madeToolProgress: boolean
 ): boolean {
-  return reason === "model_ended_without_lifecycle" && continuations < 1;
+  if (reason !== "model_ended_without_lifecycle") return false;
+  return continuations < (madeToolProgress ? 5 : 1);
 }
 
 export function workerContinuationMessages(

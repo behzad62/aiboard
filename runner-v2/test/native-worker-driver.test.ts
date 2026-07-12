@@ -56,9 +56,12 @@ test("invalid worker requests fail once instead of cycling through runtimes", ()
 });
 
 test("worker lifecycle no-ops preserve the attempt and receive a fresh resume reminder", () => {
-  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 0), true);
-  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 1), false);
-  assert.equal(shouldAutoContinueWorker("budget_exhausted", 0), false);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 0, true), true);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 4, true), true);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 5, true), false);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 0, false), true);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 1, false), false);
+  assert.equal(shouldAutoContinueWorker("budget_exhausted", 0, true), false);
   assert.deepEqual(
     recoverableWorkerSuspension("model_ended_without_lifecycle", ""),
     { type: "paused", reason: "worker_model_ended_without_lifecycle" }
