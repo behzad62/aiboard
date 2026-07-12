@@ -381,6 +381,25 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "audit" &&
+        request.method === "GET"
+      ) {
+        const builds = this.requireBuilds();
+        const observability = await builds.observability(runId);
+        sendJson(response, 200, {
+          protocolVersion: 2,
+          run: this.supervisor.getRun(runId),
+          build: builds.projection(runId),
+          usage: builds.usage(runId),
+          observability,
+          runEvents: this.supervisor.events(runId),
+          buildEvents: builds.events(runId),
+        });
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "architect-handoff" &&
         request.method === "POST"
       ) {

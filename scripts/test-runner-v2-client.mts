@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   configureNativeProviders,
   createNativeBuild,
+  getNativeBuildAudit,
   getNativeBuildUsage,
   getNativeBuildObservability,
   getNativeRunnerHealth,
@@ -103,6 +104,17 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       processes: [],
     });
   }
+  if (String(input).endsWith("/build/audit")) {
+    return Response.json({
+      protocolVersion: 2,
+      run: { runId: "run_1" },
+      build: { runId: "run_1" },
+      usage: { effective: { modelCalls: 9 } },
+      observability: { runId: "run_1", toolCallCount: 1 },
+      runEvents: [{ sequence: 1 }],
+      buildEvents: [{ sequence: 1 }],
+    });
+  }
   return Response.json({ runId: "run_1", state: "created" }, { status: 201 });
 };
 
@@ -146,6 +158,9 @@ const observed = await getNativeBuildObservability(connection, "run_1", fetchImp
 assert.equal(observed.agents.length, 1);
 assert.equal(observed.toolCallCount, 1);
 assert.equal(observed.tools[0].toolName, "fs.read");
+const audit = await getNativeBuildAudit(connection, "run_1", fetchImpl);
+assert.equal(audit.protocolVersion, 2);
+assert.equal(audit.runEvents.length, 1);
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
@@ -155,4 +170,5 @@ assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-ha
 assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
 assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
 assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
+assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
 console.log("PASS runner-v2 client");

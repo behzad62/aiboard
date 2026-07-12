@@ -400,6 +400,19 @@ test("native Build projections and pump controls are runner-owned API routes", a
   const supervisor = new RunSupervisor(
     new SqliteEventStore(join(directory, "events.sqlite"))
   );
+  supervisor.createRun({
+    runId: "run_1",
+    projectPath: directory,
+    permissionProfile: "project",
+    idempotencyKey: "create:run_1",
+  });
+  supervisor.captureBaseline(
+    "run_1",
+    "baseline:run_1",
+    "b".repeat(40),
+    "refs/aiboard/runs/run_1/baseline"
+  );
+  supervisor.start("run_1", "start:run_1");
   let steps = 0;
   const projection = {
     runId: "run_1",
@@ -544,6 +557,21 @@ test("native Build projections and pump controls are runner-owned API routes", a
     const observed = await json(observability);
     assert.equal((observed.agents as unknown[]).length, 1);
     assert.equal((observed.tools as unknown[]).length, 1);
+
+    const auditResponse = await fetch(
+      `${url}/v2/runs/run_1/build/audit`,
+      authorized()
+    );
+    assert.equal(auditResponse.status, 200);
+    const audit = await json(auditResponse);
+    assert.equal(audit.protocolVersion, 2);
+    assert.equal((audit.run as { runId: string }).runId, "run_1");
+    assert.equal((audit.build as { planRevision: number }).planRevision, 1);
+    assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
+    assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.equal((audit.runEvents as unknown[]).length, 3);
+    assert.deepEqual(audit.buildEvents, []);
+    assert.equal(JSON.stringify(audit).includes("provider-secret"), false);
 
     const tasks = await fetch(
       `${url}/v2/runs/run_1/build/tasks`,

@@ -1,10 +1,11 @@
 "use client";
 
-import { Activity, Bot, Database, Hammer, ListChecks, Wrench } from "lucide-react";
+import { Activity, Bot, Database, Download, Hammer, ListChecks, Wrench } from "lucide-react";
 
 import type { NativeBuildObservability } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
   return {
@@ -25,8 +26,10 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
 
 export function RunnerV2ObservabilityPanel({
   snapshot,
+  onDownloadAudit,
 }: {
   snapshot: NativeBuildObservability | null;
+  onDownloadAudit?: () => void;
 }) {
   if (!snapshot) return null;
   const summary = runnerObservabilitySummary(snapshot);
@@ -42,9 +45,17 @@ export function RunnerV2ObservabilityPanel({
             </p>
           </div>
         </div>
-        <Badge variant={summary.toolErrors > 0 ? "warning" : "secondary"}>
-          {summary.toolErrors} tool error{summary.toolErrors === 1 ? "" : "s"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {onDownloadAudit && (
+            <Button type="button" size="sm" variant="outline" onClick={onDownloadAudit}>
+              <Download className="mr-1 h-3.5 w-3.5" />
+              Download audit
+            </Button>
+          )}
+          <Badge variant={summary.toolErrors > 0 ? "warning" : "secondary"}>
+            {summary.toolErrors} tool error{summary.toolErrors === 1 ? "" : "s"}
+          </Badge>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 lg:grid-cols-6">

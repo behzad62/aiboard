@@ -10,6 +10,18 @@ export function downloadMarkdown(filename: string, content: string): void {
   URL.revokeObjectURL(url);
 }
 
+export function downloadJson(filename: string, value: unknown): void {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: "application/json;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Filesystem-safe slug for filenames, e.g. "GPT-5.5 Pro" -> "gpt-5-5-pro". */
 export function fileSlug(text: string, maxLength = 60): string {
   return (

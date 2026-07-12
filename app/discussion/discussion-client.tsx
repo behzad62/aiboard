@@ -101,6 +101,7 @@ import {
   commandNativeRun,
   decideNativePermission,
   getNativeBuild,
+  getNativeBuildAudit,
   getNativeBuildObservability,
   getNativeBuildUsage,
   getNativeRun,
@@ -128,7 +129,7 @@ import {
   buildAccentMap,
   modelMonogram,
 } from "@/lib/ui/model-accent";
-import { downloadMarkdown, fileSlug } from "@/lib/ui/download";
+import { downloadJson, downloadMarkdown, fileSlug } from "@/lib/ui/download";
 
 interface DiscussionData {
   discussion: Discussion;
@@ -1256,6 +1257,27 @@ function DiscussionPageInner() {
     );
   };
 
+  const downloadNativeAudit = async () => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      const audit = await getNativeBuildAudit(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId
+      );
+      downloadJson(`${fileSlug(discussion.topic)}-runner-v2-audit.json`, audit);
+    } catch (auditError) {
+      setError(
+        auditError instanceof Error
+          ? auditError.message
+          : "Could not export the Runner V2 audit."
+      );
+    }
+  };
+
   const participantIds = useMemo<string[]>(() => {
     if (!discussion) return [];
     try {
@@ -1719,7 +1741,12 @@ function DiscussionPageInner() {
       )}
 
       {discussion.mode === "build" && (
-        <RunnerV2ObservabilityPanel snapshot={nativeObservability} />
+        <RunnerV2ObservabilityPanel
+          snapshot={nativeObservability}
+          onDownloadAudit={
+            discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
+          }
+        />
       )}
 
       {discussion.mode === "build" && architectHandoff && (

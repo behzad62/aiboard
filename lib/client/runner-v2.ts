@@ -191,6 +191,16 @@ export interface NativeBuildObservability {
   }>;
 }
 
+export interface NativeBuildAuditExport {
+  protocolVersion: 2;
+  run: NativeRunProjection;
+  build: NativeBuildProjection;
+  usage: NativeBuildUsageProjection;
+  observability: NativeBuildObservability;
+  runEvents: Array<Record<string, unknown>>;
+  buildEvents: NativeBuildEvent[];
+}
+
 export interface NativeBuildStepResult {
   status: "progressed" | "paused" | "completed" | "idle";
   action?: string;
@@ -308,6 +318,19 @@ export async function getNativeBuildObservability(
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/observability`,
+    {},
+    fetchImpl
+  );
+}
+
+export async function getNativeBuildAudit(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildAuditExport> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/audit`,
     {},
     fetchImpl
   );
