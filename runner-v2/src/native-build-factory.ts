@@ -111,6 +111,10 @@ export class NativeBuildFactory {
         return { ...spec.budgetLimits };
       },
     });
+    budgetLedger.recoverInterruptedActive(
+      spec.runId,
+      `startup-recovery:${spec.runId}`,
+    );
     const workspaceManager = new WorkspaceManager({
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,

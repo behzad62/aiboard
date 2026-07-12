@@ -192,6 +192,41 @@ test("active-time accounting excludes waiting intervals", () => {
   }
 });
 
+test("startup recovery closes orphaned active segments before a new window", () => {
+  const fixture = budgetFixture();
+  let ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });
+  try {
+    ledger.startActive({
+      scopeId: "run_1",
+      segmentId: "active_interrupted",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: "active:start:interrupted",
+    });
+    ledger.close();
+
+    ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });
+    assert.equal(
+      ledger.recoverInterruptedActive("run_1", "startup:run_1").length,
+      1,
+    );
+    assert.equal(
+      ledger.recoverInterruptedActive("run_1", "startup:run_1").length,
+      0,
+    );
+    ledger.startWindow({
+      scopeId: "run_1",
+      occurredAt: "2026-07-12T00:10:00.000Z",
+      idempotencyKey: "window:after-recovery",
+    });
+    const snapshot = ledger.snapshot("run_1");
+    assert.equal(snapshot.activeSegments.active_interrupted.durationMs, 0);
+    assert.equal(snapshot.window.index, 2);
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
 function budgetFixture() {
   const root = mkdtempSync(join(tmpdir(), "aiboard-budget-ledger-"));
   return {

@@ -133,6 +133,20 @@ export class SqliteBudgetLedger implements BudgetLedger {
     );
   }
 
+  recoverInterruptedActive(scopeId: string, idempotencyPrefix: string): BudgetEvent[] {
+    const open = Object.values(this.snapshot(scopeId).activeSegments).filter(
+      (segment) => segment.durationMs === undefined,
+    );
+    return open.map((segment) =>
+      this.stopActive({
+        scopeId,
+        segmentId: segment.segmentId,
+        occurredAt: segment.startedAt,
+        idempotencyKey: `${idempotencyPrefix}:${segment.segmentId}`,
+      }),
+    );
+  }
+
   startWindow(input: StartBudgetWindowInput): BudgetEvent {
     return this.append(
       input.scopeId,
