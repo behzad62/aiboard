@@ -134,6 +134,29 @@ test("evidence command cannot escape the task workspace", async () => {
   }
 });
 
+test("evidence commands declare arbitrary process execution as an external effect", () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  try {
+    const tool = createEvidenceTools({
+      store,
+      artifacts: new ArtifactStore(fixture.artifacts),
+      taskId: "task_1",
+    }).find((candidate) => candidate.definition.name === "run_evidence_command");
+    assert.equal(tool?.definition.effect, "external");
+    assert.equal(tool?.assessAccess?.({
+      label: "test",
+      command: "node",
+      args: ["--version"],
+      cwd: ".",
+      timeoutMs: 1_000,
+    }, workerContext(fixture.workspace)).external, true);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
 function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
   const registry = new ToolRegistry();
   for (const tool of createEvidenceTools({

@@ -16,6 +16,10 @@ export interface RunnerProviderConfig {
   priority: number;
   reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";
+  inputCostMicrosPerMillion?: number;
+  outputCostMicrosPerMillion?: number;
+  cachedInputCostMicrosPerMillion?: number;
+  cacheWriteInputCostMicrosPerMillion?: number;
 }
 
 export interface ProviderConfigStore {
@@ -56,6 +60,9 @@ export function validateProviderConfigs(
     if (!Array.isArray(config.capabilities) || config.capabilities.some((item) => !item)) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid capabilities.`);
     }
+    if (PRICING_FIELDS.some((field) => !isOptionalNonNegativeInteger(config[field]))) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid pricing.`);
+    }
     ids.add(config.runtimeId);
   }
 }
@@ -68,6 +75,17 @@ const TRANSPORTS = [
 ] as const;
 
 const OPENAI_PROTOCOLS = ["chat-completions", "responses"] as const;
+
+const PRICING_FIELDS = [
+  "inputCostMicrosPerMillion",
+  "outputCostMicrosPerMillion",
+  "cachedInputCostMicrosPerMillion",
+  "cacheWriteInputCostMicrosPerMillion",
+] as const;
+
+function isOptionalNonNegativeInteger(value: number | undefined): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && value >= 0);
+}
 
 export function cloneProviderConfigs(
   configs: readonly RunnerProviderConfig[]

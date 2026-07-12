@@ -52,6 +52,39 @@ test("budgeted model reserves before provider call and settles actual usage", as
   }
 });
 
+test("budgeted model prices uncached, cached, cache-write, and output tokens separately", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 1, maxEstimatedCostMicros: 1_000_000 }),
+  });
+  try {
+    const budgeted = new BudgetedAgentModel({
+      model: {
+        complete: async () => ({
+          blocks: [],
+          stopReason: "end_turn",
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 60,
+            cacheWriteInputTokens: 10,
+            outputTokens: 20,
+          },
+        }),
+      },
+      ledger,
+      scopeId: "run_1",
+      outputTokenReserve: 20,
+      estimateCostMicros: (input, output, cached = 0, cacheWrite = 0) =>
+        (input - cached - cacheWrite) * 10 + cached * 2 + cacheWrite * 12 + output * 30,
+    });
+    await budgeted.complete(request("session_1"));
+    assert.equal(ledger.snapshot("run_1").effective.estimatedCostMicros, 1_140);
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
 test("provider errors settle the conservative reservation and restart advances call identity", async () => {
   const fixture = budgetFixture();
   let ledger = new SqliteBudgetLedger(fixture.database, {

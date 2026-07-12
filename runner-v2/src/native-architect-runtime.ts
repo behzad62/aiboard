@@ -11,7 +11,7 @@ import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
-import { BudgetedAgentModel } from "./budgeted-model.js";
+import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import type {
   ArchitectActionRequest,
@@ -64,6 +64,7 @@ export interface NativeArchitectRuntimeOptions {
   budgetLedger?: BudgetLedger;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
+  modelCostEstimators?: ReadonlyMap<string, ModelCostEstimator>;
   clock?: () => string;
   permissionProfile?: PermissionProfile;
   ledger?: ToolInvocationLedger;
@@ -220,6 +221,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           ledger: this.options.budgetLedger,
           scopeId: request.runId,
           outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
+          estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
           clock: this.clock,
         })
       : model;

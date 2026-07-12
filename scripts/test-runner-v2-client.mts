@@ -11,10 +11,25 @@ import {
   type NativeRunnerConnection,
 } from "../lib/client/runner-v2";
 import {
+  nativePricingMicros,
   resolveNativeProviderTransport,
   nativeProviderProtocol,
   selectNativeBuildRuntimes,
 } from "../lib/client/native-build-engine";
+
+assert.deepEqual(nativePricingMicros({
+  inputUsdPer1M: 2.5,
+  cachedInputUsdPer1M: 0.25,
+  outputUsdPer1M: 15,
+  sourceLabel: "test",
+  sourceUrl: "",
+  verifiedAt: "2026-07-12",
+}), {
+  inputCostMicrosPerMillion: 2_500_000,
+  cachedInputCostMicrosPerMillion: 250_000,
+  cacheWriteInputCostMicrosPerMillion: 2_500_000,
+  outputCostMicrosPerMillion: 15_000_000,
+});
 
 assert.deepEqual(
   selectNativeBuildRuntimes(
@@ -131,6 +146,9 @@ await configureNativeProviders(connection, [{
   secret: "provider-secret",
   capabilities: ["code"],
   priority: 1,
+  inputCostMicrosPerMillion: 2_500_000,
+  cachedInputCostMicrosPerMillion: 250_000,
+  outputCostMicrosPerMillion: 15_000_000,
 }], fetchImpl);
 await createNativeBuild(connection, {
   runId: "run_1",

@@ -7,7 +7,7 @@ import type { BrowserBackend } from "./browser-tools.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
-import { BudgetedAgentModel } from "./budgeted-model.js";
+import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import type { ContextLimits } from "./context-assembler.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -56,6 +56,7 @@ export interface NativeWorkerDriverOptions {
   managedProcesses?: ManagedProcessService;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
+  modelCostEstimators?: ReadonlyMap<string, ModelCostEstimator>;
   clock?: () => string;
 }
 
@@ -106,6 +107,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             ledger: this.options.budgetLedger,
             scopeId: assignment.runId,
             outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
+            estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
             clock: this.clock,
           })
         : model;

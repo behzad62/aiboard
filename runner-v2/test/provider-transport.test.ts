@@ -9,7 +9,7 @@ import { AccountRunnerModel, ProviderTransportError } from "../src/account-runne
 import { AnthropicModel } from "../src/anthropic-model.js";
 import { EncryptedProviderConfigStore } from "../src/encrypted-provider-config-store.js";
 import { GoogleModel } from "../src/google-model.js";
-import { createProviderModel } from "../src/native-build-factory.js";
+import { createProviderModel, providerCostEstimator } from "../src/native-build-factory.js";
 import { OpenAICompatibleModel } from "../src/openai-compatible-model.js";
 import { validateProviderConfigs } from "../src/provider-config-store.js";
 
@@ -68,6 +68,32 @@ test("provider configuration rejects unknown transports and protocols before per
     }]),
     /invalid protocol/i
   );
+  assert.throws(
+    () => validateProviderConfigs([{
+      ...base,
+      transport: "openai-compatible",
+      inputCostMicrosPerMillion: -1,
+    }]),
+    /invalid pricing/i
+  );
+});
+
+test("provider pricing converts token classes to integer microdollars", () => {
+  const estimate = providerCostEstimator({
+    runtimeId: "provider:model",
+    providerId: "provider",
+    modelId: "model",
+    transport: "openai-compatible",
+    baseUrl: "https://example.test/v1",
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+    inputCostMicrosPerMillion: 2_500_000,
+    cachedInputCostMicrosPerMillion: 250_000,
+    cacheWriteInputCostMicrosPerMillion: 2_500_000,
+    outputCostMicrosPerMillion: 15_000_000,
+  });
+  assert.equal(estimate(1_000_000, 100_000, 600_000, 100_000), 2_650_000);
 });
 
 test("account runner transport maps native tool calls, usage, and tool results", async () => {

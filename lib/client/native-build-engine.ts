@@ -2,11 +2,13 @@ import type { Discussion, EffortLevel } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
+import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import {
   getMessagesForDiscussion,
   getCustomModelById,
   getProviderKey,
+  getUserSettings,
   insertFinalResult,
   updateDiscussion,
 } from "./store";
@@ -321,6 +323,9 @@ function providerConfig(
   priority: number
 ): NativeProviderConfig {
   const { providerId, model } = parseModelId(runtimeId);
+  const pricing = nativePricingMicros(
+    getModelPricing(runtimeId, getUserSettings().modelPricingOverrides)
+  );
   if (providerId === "custom") {
     const custom = getCustomModelById(model);
     if (!custom) throw new Error(`Custom model ${model} is not configured.`);
@@ -333,6 +338,7 @@ function providerConfig(
       secret: custom.apiKey || "aiboard-local-endpoint",
       capabilities: ["*"],
       priority,
+      ...pricing,
     };
   }
   const saved = getProviderKey(providerId);
@@ -360,6 +366,7 @@ function providerConfig(
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],
     priority,
+    ...pricing,
     ...(discussion.reasoningEffort && discussion.reasoningEffort !== "default"
       ? { reasoningEffort: discussion.reasoningEffort }
       : {}),
@@ -367,6 +374,33 @@ function providerConfig(
       ? { protocol: nativeProviderProtocol(providerId, model) }
       : {}),
   };
+}
+
+export function nativePricingMicros(
+  pricing: ModelPricing | null
+): Pick<
+  NativeProviderConfig,
+  | "inputCostMicrosPerMillion"
+  | "outputCostMicrosPerMillion"
+  | "cachedInputCostMicrosPerMillion"
+  | "cacheWriteInputCostMicrosPerMillion"
+> {
+  if (!pricing) return {};
+  const input = usdToMicros(pricing.inputUsdPer1M);
+  return {
+    inputCostMicrosPerMillion: input,
+    outputCostMicrosPerMillion: usdToMicros(pricing.outputUsdPer1M),
+    ...(pricing.cachedInputUsdPer1M === undefined
+      ? {}
+      : { cachedInputCostMicrosPerMillion: usdToMicros(pricing.cachedInputUsdPer1M) }),
+    // The pricing catalog currently has no separate cache-write field. Use
+    // normal input pricing instead of pretending cache creation is free.
+    cacheWriteInputCostMicrosPerMillion: input,
+  };
+}
+
+function usdToMicros(usd: number): number {
+  return Math.round(usd * 1_000_000);
 }
 
 export function nativeProviderProtocol(

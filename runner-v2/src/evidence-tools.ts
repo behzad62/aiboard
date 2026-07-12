@@ -55,12 +55,13 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         additionalProperties: false,
       },
       readOnly: false,
-      effect: "workspace",
+      effect: "external",
     },
     validate: (input) => validateRun(input, defaultTimeoutMs, maximumTimeoutMs),
     assessAccess: (input) => ({
       capability: "evidence.command",
       paths: [{ path: input.cwd, access: "write" }],
+      external: true,
     }),
     execute: async (input, context) => {
       if (!context.workspacePath) return failure("workspace_required", "Evidence command requires a workspace.");

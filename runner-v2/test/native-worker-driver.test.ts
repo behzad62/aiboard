@@ -165,7 +165,7 @@ test("native worker fails over with the same session, context, tools, and eviden
         ["primary:code", new ScriptedModel([new Error("provider down")])],
         ["fallback:code", fallback],
       ]),
-      permissionProfile: "project",
+      permissionProfile: "full",
       workspaceManager: workspaces,
       artifacts,
       ledger,

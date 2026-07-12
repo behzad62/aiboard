@@ -9,6 +9,7 @@ import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import type { ModelCostEstimator } from "./budgeted-model.js";
 import type {
   BuildObservabilitySnapshot,
   BuildToolObservation,
@@ -91,6 +92,9 @@ export class NativeBuildFactory {
     const models = new Map<string, AgentModel>(
       selectedConfigs.map((config) => [config.runtimeId, createProviderModel(config)])
     );
+    const modelCostEstimators = new Map<string, ModelCostEstimator>(
+      selectedConfigs.map((config) => [config.runtimeId, providerCostEstimator(config)])
+    );
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
@@ -147,6 +151,7 @@ export class NativeBuildFactory {
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
       budgetLedger,
+      modelCostEstimators,
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
@@ -168,6 +173,7 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       objective: spec.objective,
       budgetLedger,
+      modelCostEstimators,
       permissionProfile: spec.permissionProfile,
       ledger,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
@@ -405,6 +411,24 @@ export function createProviderModel(config: RunnerProviderConfig): AgentModel {
     ...(config.protocol ? { protocol: config.protocol } : {}),
     ...(config.providerId === "openai" ? { promptCaching: true } : {}),
   });
+}
+
+export function providerCostEstimator(config: RunnerProviderConfig): ModelCostEstimator {
+  const inputRate = config.inputCostMicrosPerMillion ?? 0;
+  const outputRate = config.outputCostMicrosPerMillion ?? 0;
+  const cachedRate = config.cachedInputCostMicrosPerMillion ?? inputRate;
+  const cacheWriteRate = config.cacheWriteInputCostMicrosPerMillion ?? inputRate;
+  return (inputTokens, outputTokens, cachedInputTokens = 0, cacheWriteInputTokens = 0) => {
+    const cached = Math.min(inputTokens, cachedInputTokens);
+    const cacheWrite = Math.min(inputTokens - cached, cacheWriteInputTokens);
+    const uncached = inputTokens - cached - cacheWrite;
+    return Math.round((
+      uncached * inputRate +
+      cached * cachedRate +
+      cacheWrite * cacheWriteRate +
+      outputTokens * outputRate
+    ) / 1_000_000);
+  };
 }
 
 function isProviderHealthState(value: unknown): value is ProviderHealthState {

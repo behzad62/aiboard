@@ -24,6 +24,10 @@ export interface NativeProviderConfig {
   priority: number;
   reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";
+  inputCostMicrosPerMillion?: number;
+  outputCostMicrosPerMillion?: number;
+  cachedInputCostMicrosPerMillion?: number;
+  cacheWriteInputCostMicrosPerMillion?: number;
 }
 
 export interface NativePermissionRequest {

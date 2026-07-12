@@ -10,19 +10,23 @@ export interface BudgetedAgentModelOptions {
   ledger: BudgetLedger;
   scopeId: string;
   outputTokenReserve: number;
-  estimateCostMicros?: (inputTokens: number, outputTokens: number) => number;
+  estimateCostMicros?: ModelCostEstimator;
   clock?: () => string;
 }
+
+export type ModelCostEstimator = (
+  inputTokens: number,
+  outputTokens: number,
+  cachedInputTokens?: number,
+  cacheWriteInputTokens?: number
+) => number;
 
 export class BudgetedAgentModel implements AgentModel {
   private readonly model: AgentModel;
   private readonly ledger: BudgetLedger;
   private readonly scopeId: string;
   private readonly outputTokenReserve: number;
-  private readonly estimateCostMicros: (
-    inputTokens: number,
-    outputTokens: number
-  ) => number;
+  private readonly estimateCostMicros: ModelCostEstimator;
   private readonly clock: () => string;
 
   constructor(options: BudgetedAgentModelOptions) {
@@ -72,13 +76,20 @@ export class BudgetedAgentModel implements AgentModel {
         turn.usage?.outputTokens,
         this.outputTokenReserve
       );
+      const cachedInput = nonNegative(turn.usage?.cachedInputTokens, 0);
+      const cacheWriteInput = nonNegative(turn.usage?.cacheWriteInputTokens, 0);
       this.settle(
         reservationId,
         actualInput,
         actualOutput,
-        checkedCost(this.estimateCostMicros(actualInput, actualOutput)),
-        nonNegative(turn.usage?.cachedInputTokens, 0),
-        nonNegative(turn.usage?.cacheWriteInputTokens, 0)
+        checkedCost(this.estimateCostMicros(
+          actualInput,
+          actualOutput,
+          cachedInput,
+          cacheWriteInput
+        )),
+        cachedInput,
+        cacheWriteInput
       );
       return turn;
     } catch (error) {
