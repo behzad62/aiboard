@@ -45,11 +45,21 @@ test("scheduler bounds concurrency, respects dependencies, and releases guidance
       store,
       driver,
       maxConcurrency: 2,
-      workspaceFor: async (taskValue) => `C:/work/${taskValue.id}`,
+      workspaceFor: async (taskValue, attempt) => ({
+        path: `C:/work/${taskValue.id}/${attempt}`,
+        workspaceId: `${taskValue.id}:attempt:${attempt}`,
+        baselineRevision: `integration-${attempt}`,
+      }),
       clock: () => "2026-07-12T00:00:00.000Z",
     });
     await scheduler.tick();
     assert.deepEqual(driver.assignments.map((item) => item.task.id), ["a", "b"]);
+    assert.equal(driver.assignments[0].workspacePath, "C:/work/a/1");
+    assert.equal(driver.assignments[0].task.workspaceId, "a:attempt:1");
+    assert.equal(
+      driver.assignments[0].task.workspaceBaselineRevision,
+      "integration-1"
+    );
     await scheduler.tick();
     assert.equal(driver.assignments.length, 2, "active attempts are not duplicated");
 

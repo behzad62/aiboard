@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -107,6 +108,67 @@ test("committing an unchanged task produces a typed mechanical error", async () 
       (error: unknown) => error instanceof NoTaskChangesError
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retries use fresh worktrees based on the current integration revision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-retries-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "shared.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_retry",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_retry",
+      baselineRevision: baseline.revision,
+    });
+    const first = await manager.createTaskWorkspace("task_a", {
+      workspaceId: "task_a:attempt:1",
+      baselineRevision: baseline.revision,
+    });
+    writeFileSync(join(first.path, "rejected.txt"), "do not inherit\n");
+    await manager.commitWorkspace(first, "Rejected experiment");
+
+    writeFileSync(join(project, "integrated.txt"), "accepted dependency\n");
+    await runGit({ cwd: project, args: ["add", "integrated.txt"] });
+    await runGit({
+      cwd: project,
+      args: ["commit", "-m", "Integrate dependency"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const integrationRevision = await gitText(project, ["rev-parse", "HEAD"]);
+    const second = await manager.createTaskWorkspace("task_a", {
+      workspaceId: "task_a:attempt:2",
+      baselineRevision: integrationRevision,
+    });
+
+    assert.notEqual(second.path, first.path);
+    assert.equal(second.baselineRevision, integrationRevision);
+    assert.equal(existsSync(join(second.path, "rejected.txt")), false);
+    assert.equal(
+      readFileSync(join(second.path, "integrated.txt"), "utf8").trim(),
+      "accepted dependency"
+    );
+  } finally {
+    await runGit({
+      cwd: project,
+      args: ["worktree", "prune", "--expire", "now"],
+      allowFailure: true,
+    }).catch(() => undefined);
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -98,7 +98,14 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         return { type: "paused", reason: `runtime_unavailable:${runtimeId}` };
       }
       const workspace = await this.options.workspaceManager.createTaskWorkspace(
-        assignment.task.id
+        assignment.task.id,
+        {
+          workspaceId:
+            assignment.task.workspaceId ?? assignment.task.id,
+          ...(assignment.task.workspaceBaselineRevision
+            ? { baselineRevision: assignment.task.workspaceBaselineRevision }
+            : {}),
+        }
       );
       const context = await this.workerContext(assignment, workspace.path);
       const sessionId = `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`;

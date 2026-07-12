@@ -138,6 +138,51 @@ test("integration conflicts are mechanical results and leave canonical integrati
   }
 });
 
+test("a later attempt can integrate from the current integration revision", async () => {
+  const fixture = await createFixture("attempt-base");
+  try {
+    const firstWorkspace = await fixture.workspaces.createTaskWorkspace("first");
+    writeFileSync(join(firstWorkspace.path, "first.txt"), "integrated first\n");
+    const firstCommit = await fixture.workspaces.commitTask("first", "Add first");
+    const firstChangeSet = await createChangeSet({
+      workspacePath: firstWorkspace.path,
+      taskCommit: firstCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    const first = await fixture.integration.integrate(firstChangeSet);
+    assert.equal(first.status, "integrated");
+
+    const retryWorkspace = await fixture.workspaces.createTaskWorkspace("retry", {
+      workspaceId: "retry:attempt:2",
+      baselineRevision: first.integrationRevision,
+    });
+    assert.equal(
+      readFileSync(join(retryWorkspace.path, "first.txt"), "utf8").trim(),
+      "integrated first"
+    );
+    writeFileSync(join(retryWorkspace.path, "retry.txt"), "fresh retry\n");
+    const retryCommit = await fixture.workspaces.commitWorkspace(
+      retryWorkspace,
+      "Add retry"
+    );
+    const retryChangeSet = await createChangeSet({
+      workspacePath: retryWorkspace.path,
+      taskCommit: retryCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    const integrated = await fixture.integration.integrate(retryChangeSet);
+    assert.equal(integrated.status, "integrated");
+    assert.equal(
+      readFileSync(join(fixture.integration.path, "retry.txt"), "utf8").trim(),
+      "fresh retry"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("evidence-backed no-change tasks integrate without fabricating commits", async () => {
   const fixture = await createFixture("no-change");
   try {

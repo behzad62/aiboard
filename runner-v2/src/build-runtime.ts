@@ -12,6 +12,7 @@ import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import {
   TaskScheduler,
+  type TaskSchedulerOptions,
   type WorkerRuntimeDriver,
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -65,7 +66,7 @@ export interface BuildRuntimeOptions {
   architectDriver: ArchitectRuntimeDriver;
   integrationDriver: IntegrationRuntimeDriver;
   maxConcurrency: number;
-  workspaceFor: (task: BuildTask) => Promise<string>;
+  workspaceFor: TaskSchedulerOptions["workspaceFor"];
   maxTaskAttempts?: number;
   architectId?: string;
   clock?: () => string;

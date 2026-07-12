@@ -23,9 +23,15 @@ export interface WorkspaceManagerOptions {
 export interface TaskWorkspace {
   runId: string;
   taskId: string;
+  workspaceId: string;
   path: string;
   branch: string;
   baselineRevision: string;
+}
+
+export interface TaskWorkspaceOptions {
+  workspaceId?: string;
+  baselineRevision?: string;
 }
 
 export interface TaskCommit {
@@ -66,9 +72,16 @@ export class WorkspaceManager {
     this.execute = options.execute ?? runGit;
   }
 
-  async createTaskWorkspace(taskId: string): Promise<TaskWorkspace> {
+  async createTaskWorkspace(
+    taskId: string,
+    options: TaskWorkspaceOptions = {}
+  ): Promise<TaskWorkspace> {
     return await this.serialized(async () => {
-      const descriptor = this.describe(taskId);
+      const descriptor = this.describe(
+        taskId,
+        options.workspaceId ?? taskId,
+        options.baselineRevision ?? this.baselineRevision
+      );
       await mkdir(this.workspaceRoot, { recursive: true });
       if (await pathExists(descriptor.path)) {
         await this.assertOwnedWorkspace(descriptor);
@@ -95,7 +108,7 @@ export class WorkspaceManager {
           "-b",
           shortBranch,
           descriptor.path,
-          this.baselineRevision,
+          descriptor.baselineRevision,
         ]);
       }
       await this.assertOwnedWorkspace(descriptor);
@@ -106,6 +119,27 @@ export class WorkspaceManager {
   async commitTask(taskId: string, summary: string): Promise<TaskCommit> {
     return await this.serialized(async () => {
       const workspace = await this.ensureWorkspace(taskId);
+      return await this.commitWorkspaceUnlocked(workspace, summary);
+    });
+  }
+
+  async commitWorkspace(
+    workspace: TaskWorkspace,
+    summary: string
+  ): Promise<TaskCommit> {
+    return await this.serialized(async () => {
+      if (workspace.runId !== this.runId) {
+        throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+      }
+      await this.assertOwnedWorkspace(workspace);
+      return await this.commitWorkspaceUnlocked(workspace, summary);
+    });
+  }
+
+  private async commitWorkspaceUnlocked(
+    workspace: TaskWorkspace,
+    summary: string
+  ): Promise<TaskCommit> {
       const status = await this.git(workspace.path, [
         "status",
         "--porcelain=v1",
@@ -114,7 +148,9 @@ export class WorkspaceManager {
       ]);
       if (status.stdout.length === 0) {
         const head = await this.head(workspace.path);
-        if (head === this.baselineRevision) throw new NoTaskChangesError(taskId);
+        if (head === workspace.baselineRevision) {
+          throw new NoTaskChangesError(workspace.taskId);
+        }
         return await this.taskCommit(workspace, head);
       }
       const subject = summary.trim();
@@ -127,7 +163,9 @@ export class WorkspaceManager {
       );
       if (staged.exitCode === 0) {
         const head = await this.head(workspace.path);
-        if (head === this.baselineRevision) throw new NoTaskChangesError(taskId);
+        if (head === workspace.baselineRevision) {
+          throw new NoTaskChangesError(workspace.taskId);
+        }
         return await this.taskCommit(workspace, head);
       }
       if (staged.exitCode !== 1) {
@@ -140,16 +178,15 @@ export class WorkspaceManager {
           "-m",
           subject,
           "-m",
-          `AIBoard-Run: ${this.runId}\nAIBoard-Task: ${taskId}`,
+          `AIBoard-Run: ${this.runId}\nAIBoard-Task: ${workspace.taskId}`,
         ],
         env: RUNNER_IDENTITY,
       });
       return await this.taskCommit(workspace, await this.head(workspace.path));
-    });
   }
 
   private async ensureWorkspace(taskId: string): Promise<TaskWorkspace> {
-    const descriptor = this.describe(taskId);
+    const descriptor = this.describe(taskId, taskId, this.baselineRevision);
     if (!(await pathExists(descriptor.path))) {
       throw new Error(`Task workspace ${taskId} has not been created.`);
     }
@@ -157,9 +194,13 @@ export class WorkspaceManager {
     return descriptor;
   }
 
-  private describe(taskId: string): TaskWorkspace {
-    const taskSegment = safeName(taskId);
-    const path = resolve(this.workspaceRoot, taskSegment);
+  private describe(
+    taskId: string,
+    workspaceId: string,
+    baselineRevision: string
+  ): TaskWorkspace {
+    const workspaceSegment = safeName(workspaceId);
+    const path = resolve(this.workspaceRoot, workspaceSegment);
     const traversal = relative(this.workspaceRoot, path);
     if (traversal.startsWith("..") || traversal === "") {
       throw new Error(`Task ${taskId} produced an invalid workspace path.`);
@@ -167,9 +208,10 @@ export class WorkspaceManager {
     return {
       runId: this.runId,
       taskId,
+      workspaceId,
       path,
-      branch: `refs/heads/aiboard/${this.runSegment}/tasks/${taskSegment}`,
-      baselineRevision: this.baselineRevision,
+      branch: `refs/heads/aiboard/${this.runSegment}/tasks/${workspaceSegment}`,
+      baselineRevision,
     };
   }
 
@@ -179,7 +221,7 @@ export class WorkspaceManager {
       this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"]),
       this.git(
         workspace.path,
-        ["merge-base", "--is-ancestor", this.baselineRevision, "HEAD"],
+        ["merge-base", "--is-ancestor", workspace.baselineRevision, "HEAD"],
         true
       ),
     ]);
@@ -202,13 +244,13 @@ export class WorkspaceManager {
       this.git(workspace.path, [
         "rev-list",
         "--reverse",
-        `${this.baselineRevision}..${revision}`,
+        `${workspace.baselineRevision}..${revision}`,
       ]),
       this.git(workspace.path, [
         "diff",
         "--name-only",
         "-z",
-        this.baselineRevision,
+        workspace.baselineRevision,
         revision,
       ]),
     ]);
@@ -216,7 +258,7 @@ export class WorkspaceManager {
       runId: this.runId,
       taskId: workspace.taskId,
       revision,
-      baselineRevision: this.baselineRevision,
+      baselineRevision: workspace.baselineRevision,
       commits: commits.stdout.split(/\r?\n/).filter(Boolean),
       changedPaths: changedPaths.stdout.split("\0").filter(Boolean),
     };

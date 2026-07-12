@@ -35,9 +35,18 @@ export interface TaskSchedulerOptions {
   store: SchedulerStore;
   driver: WorkerRuntimeDriver;
   maxConcurrency: number;
-  workspaceFor: (task: BuildTask) => Promise<string>;
+  workspaceFor: (
+    task: BuildTask,
+    attempt: number
+  ) => Promise<string | WorkspaceAllocation>;
   maxTaskAttempts?: number;
   clock?: () => string;
+}
+
+export interface WorkspaceAllocation {
+  path: string;
+  workspaceId: string;
+  baselineRevision: string;
 }
 
 export class TaskScheduler {
@@ -95,11 +104,13 @@ export class TaskScheduler {
           (task.status === "assigned" || task.status === "running") &&
           !this.active.has(task.id)
         ) {
-          const workspacePath =
-            task.workspacePath ?? (await this.workspaceFor(task));
+          const allocation = task.workspacePath
+            ? { path: task.workspacePath }
+            : normalizeWorkspace(await this.workspaceFor(task, task.attempt));
+          const workspacePath = allocation.path;
           if (task.status === "assigned") {
             this.transition(task.id, "running", task.attempt, {
-              workspacePath,
+              ...workspacePatch(allocation),
             });
             projection = this.projection();
           }
@@ -123,14 +134,17 @@ export class TaskScheduler {
           break;
         }
         const attempt = task.attempt + 1;
-        const workspacePath = await this.workspaceFor(task);
+        const allocation = normalizeWorkspace(
+          await this.workspaceFor(task, attempt)
+        );
+        const workspacePath = allocation.path;
         const workerId = `worker_${taskId}_${attempt}`;
         this.transition(taskId, "assigned", attempt, {
           attempt,
           assignedWorkerId: workerId,
-          workspacePath,
+          ...workspacePatch(allocation),
         });
-        this.transition(taskId, "running", attempt, { workspacePath });
+        this.transition(taskId, "running", attempt, workspacePatch(allocation));
         this.dispatch(this.projection().tasks[taskId], workspacePath);
       }
     } finally {
@@ -243,4 +257,22 @@ export class TaskScheduler {
       payload: { taskId, status, patch },
     });
   }
+}
+
+function normalizeWorkspace(
+  allocation: string | WorkspaceAllocation
+): { path: string; workspaceId?: string; baselineRevision?: string } {
+  return typeof allocation === "string" ? { path: allocation } : allocation;
+}
+
+function workspacePatch(
+  allocation: { path: string; workspaceId?: string; baselineRevision?: string }
+): Record<string, string> {
+  return {
+    workspacePath: allocation.path,
+    ...(allocation.workspaceId ? { workspaceId: allocation.workspaceId } : {}),
+    ...(allocation.baselineRevision
+      ? { workspaceBaselineRevision: allocation.baselineRevision }
+      : {}),
+  };
 }

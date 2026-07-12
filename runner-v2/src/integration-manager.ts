@@ -129,7 +129,7 @@ export class IntegrationManager {
   async integrate(changeSet: ChangeSet): Promise<IntegrationResult> {
     return await this.serialized(async () => {
       await this.ensureIntegrationWorkspace();
-      this.assertCompatible(changeSet);
+      await this.assertCompatible(changeSet);
       await this.assertTaskHistory(changeSet);
       if (changeSet.commits.length === 0) {
         return {
@@ -333,12 +333,36 @@ export class IntegrationManager {
     }
   }
 
-  private assertCompatible(changeSet: ChangeSet): void {
+  private async assertCompatible(changeSet: ChangeSet): Promise<void> {
     if (changeSet.runId !== this.runId) {
       throw new Error(`Change set ${changeSet.id} belongs to another run.`);
     }
-    if (changeSet.baselineRevision !== this.baselineRevision) {
-      throw new Error(`Change set ${changeSet.id} has a different baseline.`);
+    const [belongsToRun, basedOnIntegration] = await Promise.all([
+      this.git(
+        this.repositoryRoot,
+        [
+          "merge-base",
+          "--is-ancestor",
+          this.baselineRevision,
+          changeSet.baselineRevision,
+        ],
+        true
+      ),
+      this.git(
+        this.repositoryRoot,
+        [
+          "merge-base",
+          "--is-ancestor",
+          changeSet.baselineRevision,
+          this.revision,
+        ],
+        true
+      ),
+    ]);
+    if (belongsToRun.exitCode !== 0 || basedOnIntegration.exitCode !== 0) {
+      throw new Error(
+        `Change set ${changeSet.id} is not based on this run's integration history.`
+      );
     }
     if (changeSet.commits.at(-1) !== changeSet.taskRevision) {
       if (
@@ -356,7 +380,7 @@ export class IntegrationManager {
       [
         "merge-base",
         "--is-ancestor",
-        this.baselineRevision,
+        changeSet.baselineRevision,
         changeSet.taskRevision,
       ],
       true
@@ -367,7 +391,7 @@ export class IntegrationManager {
     const history = await this.git(this.repositoryRoot, [
       "rev-list",
       "--reverse",
-      `${this.baselineRevision}..${changeSet.taskRevision}`,
+      `${changeSet.baselineRevision}..${changeSet.taskRevision}`,
     ]);
     const actual = history.stdout.split(/\r?\n/).filter(Boolean);
     if (

@@ -209,8 +209,17 @@ export class NativeBuildFactory {
       architectDriver,
       integrationDriver,
       maxConcurrency: spec.maxConcurrency,
-      workspaceFor: async (task) =>
-        (await workspaceManager.createTaskWorkspace(task.id)).path,
+      workspaceFor: async (task, attempt) => {
+        const workspace = await workspaceManager.createTaskWorkspace(task.id, {
+          workspaceId: `${task.id}:attempt:${attempt}`,
+          baselineRevision: integrationManager.revision,
+        });
+        return {
+          path: workspace.path,
+          workspaceId: workspace.workspaceId,
+          baselineRevision: workspace.baselineRevision,
+        };
+      },
       renewBudgetWindow: (idempotencyKey, occurredAt) => {
         budgetLedger.startWindow({
           scopeId: spec.runId,

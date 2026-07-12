@@ -226,8 +226,8 @@ export async function runWorkerTask(
     }
     let commit: TaskCommit;
     try {
-      commit = await options.workspaceManager.commitTask(
-        options.taskId,
+      commit = await options.workspaceManager.commitWorkspace(
+        options.workspace,
         summary
       );
     } catch (error) {

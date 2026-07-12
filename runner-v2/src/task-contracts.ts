@@ -24,6 +24,8 @@ export interface BuildTask {
   attemptLimit?: number;
   assignedWorkerId?: string;
   workspacePath?: string;
+  workspaceId?: string;
+  workspaceBaselineRevision?: string;
   changeSetId?: string;
   guidanceRequestId?: string;
   failureReason?: string;
