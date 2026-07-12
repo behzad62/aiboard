@@ -86,6 +86,7 @@ import { saveAttachmentFile } from "@/lib/client/settings-api";
 import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
+  durableBuildHandoffPanels,
   shouldShowBuildStopFallback,
 } from "@/lib/client/discussion-live-state";
 import {
@@ -96,6 +97,7 @@ import {
 import {
   commandNativeRun,
   decideNativePermission,
+  getNativeBuild,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
   selectNativeProjectHandoff,
@@ -860,6 +862,46 @@ function DiscussionPageInner() {
       { requestCommandApproval }
     ).finally(() => setStreamConnected(false));
   }, [id, discussion, status, folderGrant]);
+
+  useEffect(() => {
+    if (
+      discussion?.mode !== "build" ||
+      status !== "stopped" ||
+      !discussion.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    let cancelled = false;
+    void getNativeBuild(
+      { url: discussion.runnerUrl, token: discussion.runnerToken },
+      discussion.nativeBuildRunId
+    ).then((projection) => {
+      if (cancelled) return;
+      const handoffs = durableBuildHandoffPanels(projection);
+      setArchitectHandoff(handoffs.architect);
+      setProjectHandoff(handoffs.project);
+      setBuildTasks(
+        Object.values(projection.tasks).map((task) => ({
+          id: task.id,
+          title: task.objective,
+          status: task.status as BuildTaskView["status"],
+          worker: task.assignedWorkerId,
+        }))
+      );
+    }).catch(() => {
+      // Runner availability is already represented by the connection control;
+      // retain the last durable UI state and retry on the next page lifecycle.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    discussion?.mode,
+    discussion?.runnerUrl,
+    discussion?.runnerToken,
+    discussion?.nativeBuildRunId,
+    status,
+  ]);
 
   // Stop: abort the engine (it winds down at the next streamed token). If a
   // command approval is pending, deny it so the engine isn't stuck awaiting.

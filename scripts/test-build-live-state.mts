@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
+  durableBuildHandoffPanels,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
 
@@ -49,6 +50,23 @@ assert.equal(
     hasProjectHandoff: false,
   }),
   true
+);
+assert.deepEqual(
+  durableBuildHandoffPanels({
+    projectHandoff: {
+      status: "requested",
+      summary: "Ready",
+      options: ["keep_integration_branch", "apply_to_project"],
+    },
+    runtime: { architect: {} },
+  } as never),
+  {
+    architect: null,
+    project: {
+      summary: "Ready",
+      options: ["keep_integration_branch", "apply_to_project"],
+    },
+  }
 );
 
 console.log("PASS Build live discussion state");

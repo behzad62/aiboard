@@ -3,6 +3,10 @@ import type {
   Discussion,
   DiscussionStatus,
 } from "@/lib/db/schema";
+import type {
+  NativeBuildProjection,
+  NativeProjectHandoffChoice,
+} from "@/lib/client/runner-v2";
 
 export function applyDiscussionLiveStatus(
   discussion: Discussion,
@@ -46,4 +50,35 @@ export function shouldShowBuildStopFallback(input: {
       !input.hasArchitectHandoff &&
       !input.hasProjectHandoff
   );
+}
+
+export function durableBuildHandoffPanels(
+  projection: NativeBuildProjection
+): {
+  architect: { reason: string; candidateRuntimeIds: string[] } | null;
+  project: {
+    summary: string;
+    options: NativeProjectHandoffChoice[];
+  } | null;
+} {
+  const projectHandoff = projection.projectHandoff;
+  if (projectHandoff?.status === "requested") {
+    return {
+      architect: null,
+      project: {
+        summary: projectHandoff.summary,
+        options: [...projectHandoff.options],
+      },
+    };
+  }
+  const architectHandoff = projection.runtime.architect.handoff;
+  return {
+    architect: architectHandoff
+      ? {
+          reason: architectHandoff.reason,
+          candidateRuntimeIds: [...architectHandoff.candidateRuntimeIds],
+        }
+      : null,
+    project: null,
+  };
 }
