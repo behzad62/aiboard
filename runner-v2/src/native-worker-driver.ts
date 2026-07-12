@@ -1,6 +1,7 @@
 import type { AgentMessage, AgentModel } from "./agent-contracts.js";
 import type { AgentSuspensionReason } from "./agent-loop.js";
 import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
+import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import type { BrowserBackend } from "./browser-tools.js";
@@ -77,6 +78,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
   }
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
+    let lifecycleContinuations = 0;
     let runtimeId = this.persistedRuntime(assignment);
     if (!runtimeId) {
       const selection = this.options.router.selectWorker(
@@ -139,7 +141,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               "You are an AIBoard native worker. Use tools and finish with submit_task.",
               "Batch independent read-only tool calls in one turn when that reduces model round trips.",
               "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
-              "Before every submit_task, record task-relevant durable command evidence with run_evidence_command; the Architect decides whether that evidence is sufficient.",
+              "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
             ].join("\n"),
           },
         ],
@@ -211,6 +213,15 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         continue;
       }
       if (result.loop.status === "suspended") {
+        if (
+          shouldAutoContinueWorker(
+            result.loop.reason,
+            lifecycleContinuations
+          )
+        ) {
+          lifecycleContinuations += 1;
+          continue;
+        }
         const recoverable = recoverableWorkerSuspension(
           result.loop.reason,
           result.loop.error
@@ -314,11 +325,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       .list({ runId: assignment.runId, taskId: assignment.task.id })
       .map((record) => ({
         id: record.id,
-        summary: `${record.fact.command} exited ${record.fact.exitCode}`,
-        artifactHashes: [
-          record.fact.stdoutArtifactHash,
-          record.fact.stderrArtifactHash,
-        ],
+        summary: evidenceFactSummary(record.fact),
+        artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
     return buildWorkerContext({
       limits: this.contextLimits,
@@ -351,6 +359,13 @@ export function recoverableWorkerSuspension(
     };
   }
   return undefined;
+}
+
+export function shouldAutoContinueWorker(
+  reason: AgentSuspensionReason,
+  continuations: number
+): boolean {
+  return reason === "model_ended_without_lifecycle" && continuations < 1;
 }
 
 export function workerContinuationMessages(

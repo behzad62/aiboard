@@ -44,7 +44,7 @@ export function createSubmitTaskTool(
     definition: {
       name: "submit_task",
       description:
-        "Commit the task workspace and submit a typed change set after durable command evidence has been recorded",
+        "Commit the task workspace and submit a typed change set after task-relevant durable evidence has been recorded",
       inputSchema: {
         type: "object",
         properties: {

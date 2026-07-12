@@ -18,7 +18,68 @@ export interface CommandEvidenceFact {
   repositoryRevision?: string;
 }
 
-export type EvidenceFact = CommandEvidenceFact;
+export interface BrowserSnapshotEvidenceFact {
+  kind: "browser_snapshot";
+  label: string;
+  url: string;
+  title: string;
+  capturedAt: string;
+  htmlArtifactHash: string;
+  htmlBytes: number;
+  truncated: boolean;
+}
+
+export interface BrowserScreenshotEvidenceFact {
+  kind: "browser_screenshot";
+  label: string;
+  capturedAt: string;
+  screenshotArtifactHash: string;
+  mediaType: "image/png";
+  byteLength: number;
+}
+
+export interface BrowserEventsEvidenceFact {
+  kind: "browser_events";
+  label: string;
+  capturedAt: string;
+  eventsArtifactHash: string;
+  consoleEventCount: number;
+  consoleErrorCount: number;
+  networkEventCount: number;
+  networkFailureCount: number;
+}
+
+export type EvidenceFact =
+  | CommandEvidenceFact
+  | BrowserSnapshotEvidenceFact
+  | BrowserScreenshotEvidenceFact
+  | BrowserEventsEvidenceFact;
+
+export function evidenceFactArtifactHashes(fact: EvidenceFact): string[] {
+  switch (fact.kind) {
+    case "command":
+      return [fact.stdoutArtifactHash, fact.stderrArtifactHash];
+    case "browser_snapshot":
+      return [fact.htmlArtifactHash];
+    case "browser_screenshot":
+      return [fact.screenshotArtifactHash];
+    case "browser_events":
+      return [fact.eventsArtifactHash];
+  }
+}
+
+export function evidenceFactSummary(fact: EvidenceFact): string {
+  switch (fact.kind) {
+    case "command":
+      return `${fact.command} exited ${fact.exitCode}`;
+    case "browser_snapshot":
+      return `browser snapshot "${fact.title}" at ${fact.url}`;
+    case "browser_screenshot":
+      return `browser screenshot (${fact.byteLength} bytes)`;
+    case "browser_events":
+      return `browser events: ${fact.consoleErrorCount} console errors, ${fact.networkFailureCount} network failures`;
+  }
+}
 
 export interface EvidenceRecord {
   id: string;

@@ -7,6 +7,7 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import { buildArchitectContext, type PromptEvidence } from "./agent-prompts.js";
+import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
@@ -200,7 +201,9 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       for (const tool of createBrowserTools({
         backend: this.options.browserBackend,
         artifacts: this.options.artifacts,
+        evidenceStore: this.options.evidenceStore,
         taskId: "architect",
+        clock: this.clock,
       })) extras.register(tool);
     }
     if (this.options.mcpManager) {
@@ -356,8 +359,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       .list({ runId: request.runId, limit: 1_000 })
       .map((record) => ({
         id: record.id,
-        summary: `${record.taskId}: ${record.fact.command} exited ${record.fact.exitCode}`,
-        artifactHashes: [record.fact.stdoutArtifactHash, record.fact.stderrArtifactHash],
+        summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
+        artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
     return buildArchitectContext({
       limits: this.options.contextLimits ?? {

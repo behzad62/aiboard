@@ -171,7 +171,9 @@ function spawnSubagentTool(
         for (const tool of createBrowserTools({
           backend: options.browserBackend,
           artifacts: options.artifacts,
+          ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
           taskId: options.taskId,
+          clock,
         })) broker.register(tool);
       }
       if (!readOnly && options.mcpManager) {

@@ -4,12 +4,13 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { AgentActor } from "./agent-contracts.js";
-import type {
-  EvidenceFact,
-  EvidenceRecord,
-  EvidenceStore,
-  ListEvidenceInput,
-  RecordEvidenceInput,
+import {
+  evidenceFactArtifactHashes,
+  type EvidenceFact,
+  type EvidenceRecord,
+  type EvidenceStore,
+  type ListEvidenceInput,
+  type RecordEvidenceInput,
 } from "./evidence-store.js";
 
 interface EvidenceRow {
@@ -151,15 +152,18 @@ function validate(input: RecordEvidenceInput): void {
   if (!input.runId || !input.taskId || !input.idempotencyKey) {
     throw new Error("Evidence run, task, and idempotency key are required.");
   }
-  if (input.fact.kind !== "command") throw new Error("Unsupported evidence fact.");
-  for (const hash of [input.fact.stdoutArtifactHash, input.fact.stderrArtifactHash]) {
+  const hashes = evidenceFactArtifactHashes(input.fact);
+  for (const hash of hashes) {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error(`Invalid evidence artifact ${hash}.`);
   }
 }
 
 function cloneFact(fact: EvidenceFact): EvidenceFact {
-  return { ...fact, args: [...fact.args] };
+  return fact.kind === "command"
+    ? { ...fact, args: [...fact.args] }
+    : { ...fact };
 }
+
 function cloneRecord(record: EvidenceRecord): EvidenceRecord {
   return { ...record, actor: { ...record.actor }, fact: cloneFact(record.fact) };
 }

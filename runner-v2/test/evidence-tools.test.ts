@@ -59,7 +59,10 @@ test("evidence command records mechanical facts and artifacts without a verdict"
     const recovered = store.list({ runId: "run_1", taskId: "task_a" });
     assert.equal(recovered.length, 1);
     assert.equal(recovered[0].id, record.id);
-    assert.equal(recovered[0].fact.exitCode, 3);
+    assert.equal(recovered[0].fact.kind, "command");
+    if (recovered[0].fact.kind === "command") {
+      assert.equal(recovered[0].fact.exitCode, 3);
+    }
   } finally {
     store.close();
     fixture.cleanup();

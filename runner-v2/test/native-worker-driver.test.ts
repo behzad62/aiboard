@@ -13,6 +13,7 @@ import {
   recoverableWorkerSuspension,
   workerContinuationMessages,
   shouldFailoverWorkerFailure,
+  shouldAutoContinueWorker,
 } from "../src/native-worker-driver.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
@@ -55,6 +56,9 @@ test("invalid worker requests fail once instead of cycling through runtimes", ()
 });
 
 test("worker lifecycle no-ops preserve the attempt and receive a fresh resume reminder", () => {
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 0), true);
+  assert.equal(shouldAutoContinueWorker("model_ended_without_lifecycle", 1), false);
+  assert.equal(shouldAutoContinueWorker("budget_exhausted", 0), false);
   assert.deepEqual(
     recoverableWorkerSuspension("model_ended_without_lifecycle", ""),
     { type: "paused", reason: "worker_model_ended_without_lifecycle" }

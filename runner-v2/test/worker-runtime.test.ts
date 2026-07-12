@@ -12,6 +12,7 @@ import type {
   ModelTurn,
 } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import type { BrowserBackend } from "../src/browser-tools.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -31,6 +32,25 @@ class ScriptedModel implements AgentModel {
     return turn;
   }
 }
+
+const browserEvidenceBackend: BrowserBackend = {
+  async open(_sessionId, input) { return { url: input.url, title: "Arena" }; },
+  async navigate(_sessionId, url) { return { url, title: "Arena" }; },
+  async snapshot() {
+    return {
+      url: "http://127.0.0.1:8000",
+      title: "Arena",
+      text: "Blue 0 Orange 0",
+      html: "<main>Blue 0 Orange 0</main>",
+    };
+  },
+  async click() {},
+  async fill() {},
+  async screenshot() { return Buffer.from("arena-png"); },
+  async events() { return { console: [], network: [] }; },
+  async close() {},
+  async closeAll() {},
+};
 
 test("worker inspects, edits, tests, diffs, restarts, and submits a typed change set", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-runtime-"));
@@ -181,6 +201,75 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       maxRetries: 10,
       retryDelay: 50,
     });
+  }
+});
+
+test("worker submits automatically recorded browser facts as durable review evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-browser-evidence-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "index.html"), "<main>Arena</main>\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let evidenceStore: SqliteEvidenceStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_browser_evidence",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_browser_evidence",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_browser");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const result = await runWorkerTask({
+      model: new ScriptedModel([
+        toolTurn("snapshot", "browser.snapshot", {}),
+        toolTurn("screenshot", "browser.screenshot", {}),
+        toolTurn("events", "browser.events", {}),
+        toolTurn("submit", "submit_task", {
+          summary: "Record browser acceptance",
+          unresolvedConcerns: [],
+        }),
+      ]),
+      runId: "run_browser_evidence",
+      sessionId: "session_browser",
+      taskId: "task_browser",
+      actorId: "worker_browser",
+      permissionProfile: "full",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore,
+      browserBackend: browserEvidenceBackend,
+      initialMessages: [
+        { id: "system", role: "system", content: "Record browser evidence." },
+        { id: "user", role: "user", content: "Inspect the arena and submit." },
+      ],
+    });
+    assert.equal(result.loop.status, "submitted");
+    assert.deepEqual(
+      evidenceStore.list({ runId: "run_browser_evidence", taskId: "task_browser" })
+        .map((record) => record.fact.kind),
+      ["browser_snapshot", "browser_screenshot", "browser_events"]
+    );
+    assert.equal(result.changeSet?.evidenceArtifactHashes.length, 3);
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    evidenceStore?.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

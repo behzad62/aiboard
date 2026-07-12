@@ -9,6 +9,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import type { EvidenceStore } from "./evidence-store.js";
 
 export interface BrowserConsoleEvent {
   type: string;
@@ -250,13 +251,16 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
 export interface BrowserToolsOptions {
   backend: BrowserBackend;
   artifacts: ArtifactStore;
+  evidenceStore?: EvidenceStore;
   taskId: string;
   maximumDomBytes?: number;
+  clock?: () => string;
 }
 
 export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unknown>[] {
   const sessionFor = (runId: string) => `${runId}:${options.taskId}`;
   const external = (capability: string) => () => ({ capability, external: true });
+  const clock = options.clock ?? (() => new Date().toISOString());
   return [
     tool("browser.open", "Open a runner-managed browser session", openSchema(), validateOpen, async (input, context) =>
       json(await options.backend.open(sessionFor(context.runId), input)), external("browser.open")),
@@ -268,6 +272,24 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
       const maximum = options.maximumDomBytes ?? 8 * 1024 * 1024;
       const bytes = encoded.subarray(0, maximum);
       const artifact = await options.artifacts.put(bytes, "text/html", `Browser DOM ${options.taskId}`);
+      const capturedAt = clock();
+      options.evidenceStore?.record({
+        runId: context.runId,
+        taskId: options.taskId,
+        actor: context.actor,
+        fact: {
+          kind: "browser_snapshot",
+          label: `Browser snapshot ${options.taskId}`,
+          url: snapshot.url,
+          title: snapshot.title,
+          capturedAt,
+          htmlArtifactHash: artifact.hash,
+          htmlBytes: encoded.byteLength,
+          truncated: encoded.byteLength > bytes.byteLength,
+        },
+        createdAt: capturedAt,
+        idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+      });
       return json({
         url: snapshot.url,
         title: snapshot.title,
@@ -288,10 +310,53 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
     tool("browser.screenshot", "Capture a full-page PNG from the managed browser", emptySchema(), validateEmpty, async (_input, context) => {
       const bytes = await options.backend.screenshot(sessionFor(context.runId));
       const artifact = await options.artifacts.put(bytes, "image/png", `Browser screenshot ${options.taskId}`);
+      const capturedAt = clock();
+      options.evidenceStore?.record({
+        runId: context.runId,
+        taskId: options.taskId,
+        actor: context.actor,
+        fact: {
+          kind: "browser_screenshot",
+          label: `Browser screenshot ${options.taskId}`,
+          capturedAt,
+          screenshotArtifactHash: artifact.hash,
+          mediaType: "image/png",
+          byteLength: bytes.byteLength,
+        },
+        createdAt: capturedAt,
+        idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+      });
       return json({ artifactHash: artifact.hash, mediaType: "image/png", byteLength: bytes.byteLength });
     }, external("browser.screenshot")),
-    tool("browser.events", "Read bounded console and network observations", emptySchema(), validateEmpty, async (_input, context) =>
-      json(await options.backend.events(sessionFor(context.runId))), external("browser.events")),
+    tool("browser.events", "Read bounded console and network observations", emptySchema(), validateEmpty, async (_input, context) => {
+      const events = await options.backend.events(sessionFor(context.runId));
+      const artifact = await options.artifacts.put(
+        Buffer.from(JSON.stringify(events)),
+        "application/json",
+        `Browser events ${options.taskId}`
+      );
+      const capturedAt = clock();
+      options.evidenceStore?.record({
+        runId: context.runId,
+        taskId: options.taskId,
+        actor: context.actor,
+        fact: {
+          kind: "browser_events",
+          label: `Browser events ${options.taskId}`,
+          capturedAt,
+          eventsArtifactHash: artifact.hash,
+          consoleEventCount: events.console.length,
+          consoleErrorCount: events.console.filter((event) => event.type === "error").length,
+          networkEventCount: events.network.length,
+          networkFailureCount: events.network.filter(
+            (event) => Boolean(event.failure) || (event.status !== undefined && event.status >= 400)
+          ).length,
+        },
+        createdAt: capturedAt,
+        idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+      });
+      return json(events);
+    }, external("browser.events")),
     tool("browser.close", "Close the managed task browser session", emptySchema(), validateEmpty, async (_input, context) => {
       await options.backend.close(sessionFor(context.runId));
       return json({ closed: true });

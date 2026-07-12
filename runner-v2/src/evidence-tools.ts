@@ -115,7 +115,7 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
   return {
     definition: {
       name: "inspect_evidence",
-      description: "Inspect immutable command evidence facts; no semantic verdict is provided",
+      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided",
       inputSchema: {
         type: "object",
         properties: { taskId: { type: "string", minLength: 1 } },

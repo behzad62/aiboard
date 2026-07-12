@@ -15,7 +15,7 @@ import {
 } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
-import type { EvidenceStore } from "./evidence-store.js";
+import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
@@ -145,7 +145,9 @@ export async function runWorkerTask(
     for (const tool of createBrowserTools({
       backend: options.browserBackend,
       artifacts: options.artifacts,
+      ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
       taskId: options.taskId,
+      clock,
     })) broker.register(tool);
   }
   if (options.mcpManager) {
@@ -219,7 +221,7 @@ export async function runWorkerTask(
       : [];
     if (evidenceHashes.length === 0) {
       throw new Error(
-        "Task submission requires durable evidence; run run_evidence_command first."
+        "Task submission requires durable evidence; record command or browser facts first."
       );
     }
     let commit: TaskCommit;
@@ -364,10 +366,7 @@ function evidenceArtifactHashes(
 ): string[] {
   return [
     ...new Set(
-      records.flatMap((record) => [
-        record.fact.stdoutArtifactHash,
-        record.fact.stderrArtifactHash,
-      ])
+      records.flatMap((record) => evidenceFactArtifactHashes(record.fact))
     ),
   ];
 }

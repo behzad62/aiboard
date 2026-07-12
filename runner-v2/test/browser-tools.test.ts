@@ -12,6 +12,7 @@ import {
   type BrowserBackend,
 } from "../src/browser-tools.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { ToolBroker } from "../src/tool-broker.js";
 
 class FakeBrowserBackend implements BrowserBackend {
@@ -55,6 +56,7 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
   const root = mkdtempSync(join(tmpdir(), "aiboard-browser-tools-"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const backend = new FakeBrowserBackend();
   try {
     const broker = new ToolBroker({
@@ -63,7 +65,12 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
       artifacts,
       ledger,
     });
-    for (const tool of createBrowserTools({ backend, artifacts, taskId: "task_ui" })) {
+    for (const tool of createBrowserTools({
+      backend,
+      artifacts,
+      evidenceStore: evidence,
+      taskId: "task_ui",
+    })) {
       broker.register(tool);
     }
     const context = {
@@ -88,9 +95,31 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
     assert.equal((await artifacts.get(shot.artifactHash)).toString(), "png-bytes");
     const events = await broker.invoke(call("events", "browser.events", {}), context);
     assert.equal((jsonValue(events) as { console: unknown[] }).console.length, 1);
+    const records = evidence.list({ runId: "run_ui", taskId: "task_ui" });
+    assert.deepEqual(records.map((record) => record.fact.kind), [
+      "browser_snapshot",
+      "browser_screenshot",
+      "browser_events",
+    ]);
+    assert.equal(records[0].fact.kind, "browser_snapshot");
+    if (records[0].fact.kind === "browser_snapshot") {
+      assert.equal(records[0].fact.url, "http://localhost:3000");
+      assert.equal(records[0].fact.htmlArtifactHash, snap.htmlArtifactHash);
+    }
+    assert.equal(records[1].fact.kind, "browser_screenshot");
+    if (records[1].fact.kind === "browser_screenshot") {
+      assert.equal(records[1].fact.screenshotArtifactHash, shot.artifactHash);
+    }
+    assert.equal(records[2].fact.kind, "browser_events");
+    if (records[2].fact.kind === "browser_events") {
+      assert.equal(records[2].fact.consoleErrorCount, 1);
+      assert.equal(records[2].fact.networkFailureCount, 1);
+      assert.equal((await artifacts.get(records[2].fact.eventsArtifactHash)).toString(), JSON.stringify(jsonValue(events)));
+    }
     assert.equal(new Set(backend.calls.map((entry) => entry.sessionId)).size, 1);
     assert.equal(backend.calls[0].sessionId, "run_ui:task_ui");
   } finally {
+    evidence.close();
     ledger.close();
     rmSync(root, { recursive: true, force: true });
   }
