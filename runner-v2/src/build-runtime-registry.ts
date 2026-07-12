@@ -72,6 +72,7 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       processes: [],
       providers: [],
       events: [],
+      git: { integrationBranch: "", integrationRevision: "", commits: [] },
     };
   }
 

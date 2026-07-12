@@ -76,6 +76,29 @@ export interface NativeBuildTask {
   assignedWorkerId?: string;
   changeSetId?: string;
   failureReason?: string;
+  integrationRevision?: string;
+  conflictPaths?: string[];
+}
+
+export interface NativeGuidanceProjection {
+  requestId: string;
+  taskId: string;
+  blocking: boolean;
+  question: string;
+  evidenceSequence: number;
+  version: number;
+  status: "open" | "answered";
+  answer?: string;
+  challengeEvidenceSequence?: number;
+  challengedVersion?: number;
+  challengeReason?: string;
+}
+
+export interface NativeReviewProjection {
+  taskId: string;
+  status: "requested" | "approved" | "rejected";
+  summary?: string;
+  evidenceArtifactHashes: string[];
 }
 
 export interface NativeBuildProjection {
@@ -83,8 +106,8 @@ export interface NativeBuildProjection {
   status: "running" | "paused" | "completed";
   planRevision: number;
   tasks: Record<string, NativeBuildTask>;
-  guidance: Record<string, unknown>;
-  reviews: Record<string, unknown>;
+  guidance: Record<string, NativeGuidanceProjection>;
+  reviews: Record<string, NativeReviewProjection>;
   runtime: {
     providerHealth: Record<string, unknown>;
     workerAssignments: Record<string, { runtimeId: string }>;
@@ -211,6 +234,11 @@ export interface NativeBuildObservability {
     actor: { role: string; id: string };
     payload: Record<string, unknown>;
   }>;
+  git: {
+    integrationBranch: string;
+    integrationRevision: string;
+    commits: Array<{ revision: string; parents: string[]; subject: string }>;
+  };
 }
 
 export interface NativeBuildAuditExport {

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Bot, Database, Download, Hammer, ListChecks, Search, Server, Wrench } from "lucide-react";
+import { Activity, Bot, Database, Download, GitBranch, Hammer, ListChecks, MessageSquareText, Search, Server, Wrench } from "lucide-react";
 
-import type { NativeBuildObservability } from "@/lib/client/runner-v2";
+import type { NativeBuildObservability, NativeBuildProjection } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,17 +63,53 @@ export function filterRunnerObservability<T extends SearchableObservability>(
   };
 }
 
+export function runnerBuildControlSummary(projection: NativeBuildProjection | null) {
+  if (!projection) return { guidance: [], integration: [], branch: undefined, revision: undefined };
+  return {
+    guidance: Object.values(projection.guidance),
+    integration: Object.values(projection.tasks)
+      .filter((task) => task.changeSetId || task.integrationRevision || [
+        "submitted",
+        "architect_review",
+        "approved",
+        "integrating",
+        "integration_resolution",
+        "integrated",
+      ].includes(task.status))
+      .map((task) => ({
+        taskId: task.id,
+        objective: task.objective,
+        status: task.status,
+        changeSetId: task.changeSetId,
+        revision: task.integrationRevision,
+        conflictPaths: task.conflictPaths ?? [],
+      })),
+    branch: projection.projectHandoff?.integrationBranch,
+    revision: projection.projectHandoff?.integrationRevision,
+  };
+}
+
 export function RunnerV2ObservabilityPanel({
   snapshot,
+  projection,
   onDownloadAudit,
 }: {
   snapshot: NativeBuildObservability | null;
+  projection?: NativeBuildProjection | null;
   onDownloadAudit?: () => void;
 }) {
   const [query, setQuery] = useState("");
   if (!snapshot) return null;
   const summary = runnerObservabilitySummary(snapshot);
   const filtered = filterRunnerObservability(snapshot, query);
+  const control = runnerBuildControlSummary(projection ?? null);
+  const matches = <T,>(value: T) =>
+    !query.trim() || JSON.stringify(value).toLowerCase().includes(query.trim().toLowerCase());
+  const visibleGuidance = control.guidance.filter(matches);
+  const visibleIntegration = control.integration.filter(matches);
+  const integrationBranch = snapshot.git.integrationBranch || control.branch;
+  const integrationRevision = snapshot.git.integrationRevision || control.revision;
+  const visibleCommits = snapshot.git.commits.filter(matches);
   return (
     <section className="rounded-lg border bg-card shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
@@ -194,6 +230,38 @@ export function RunnerV2ObservabilityPanel({
             title: event.type,
             detail: `${event.actor.role}: ${event.actor.id} · #${event.sequence}`,
           }))}
+        />
+        <ObservationList
+          icon={<MessageSquareText className="h-3.5 w-3.5" />}
+          title="Architect guidance"
+          empty="No matching guidance exchanges."
+          items={visibleGuidance.slice(-10).reverse().map((guidance) => ({
+            key: guidance.requestId,
+            title: `${guidance.taskId}: ${guidance.question}`,
+            detail: `${guidance.status}${guidance.blocking ? " · blocking" : " · advisory"}${guidance.answer ? ` · ${guidance.answer}` : ""}`,
+          }))}
+        />
+        <ObservationList
+          icon={<GitBranch className="h-3.5 w-3.5" />}
+          title="Integration queue and Git"
+          empty="No change sets have entered integration."
+          items={[
+            ...(integrationBranch && matches(integrationBranch) ? [{
+              key: `branch:${integrationBranch}`,
+              title: integrationBranch,
+              detail: `integration branch${integrationRevision ? ` · ${integrationRevision.slice(0, 12)}` : ""}`,
+            }] : []),
+            ...visibleCommits.slice(0, 10).map((commit) => ({
+              key: `commit:${commit.revision}`,
+              title: commit.subject,
+              detail: `${commit.revision.slice(0, 12)} · ${commit.parents.length} parent${commit.parents.length === 1 ? "" : "s"}`,
+            })),
+            ...visibleIntegration.slice(-10).reverse().map((item) => ({
+              key: `integration:${item.taskId}`,
+              title: `${item.taskId}: ${item.objective}`,
+              detail: `${item.status}${item.revision ? ` · ${item.revision.slice(0, 12)}` : ""}${item.conflictPaths.length ? ` · conflicts: ${item.conflictPaths.join(", ")}` : ""}`,
+            })),
+          ]}
         />
       </div>
 

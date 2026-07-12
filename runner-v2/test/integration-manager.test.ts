@@ -83,6 +83,10 @@ test("change sets integrate serially and retries do not duplicate commits", asyn
     const second = await fixture.integration.integrate(beta);
     assert.equal(second.status, "integrated");
     assert.notEqual(second.integrationRevision, first.integrationRevision);
+    const history = await fixture.integration.history(10);
+    assert.equal(history[0].revision, second.integrationRevision);
+    assert.match(history[0].subject, /Add beta/);
+    assert.equal(history.some((commit) => commit.revision === first.integrationRevision), true);
     assert.equal(
       readFileSync(join(fixture.integration.path, "alpha.txt"), "utf8").trim(),
       "alpha"

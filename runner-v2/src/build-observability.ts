@@ -2,6 +2,7 @@ import type { AgentActor } from "./agent-contracts.js";
 import type { BudgetProjection } from "./budget-ledger.js";
 import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
+import type { IntegrationCommit } from "./integration-manager.js";
 import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SkillMetadata } from "./skill-catalog.js";
 import type {
@@ -43,4 +44,9 @@ export interface BuildObservabilitySnapshot {
   processes: ManagedProcessObservation[];
   providers: ProviderHealthProjection[];
   events: SchedulerEvent[];
+  git: {
+    integrationBranch: string;
+    integrationRevision: string;
+    commits: IntegrationCommit[];
+  };
 }

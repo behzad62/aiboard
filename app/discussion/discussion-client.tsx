@@ -110,6 +110,7 @@ import {
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
+  type NativeBuildProjection,
 } from "@/lib/client/runner-v2";
 import {
   BuildTaskBoard,
@@ -229,6 +230,8 @@ function DiscussionPageInner() {
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [nativeObservability, setNativeObservability] =
     useState<NativeBuildObservability | null>(null);
+  const [nativeProjection, setNativeProjection] =
+    useState<NativeBuildProjection | null>(null);
   const [buildStopReport, setBuildStopReport] =
     useState<BuildStopReport | null>(null);
   const [buildToolReviewReport, setBuildToolReviewReport] =
@@ -890,6 +893,7 @@ function DiscussionPageInner() {
     ]).then(([projection, usage, run]) => {
       if (cancelled) return;
       const handoffs = durableBuildHandoffPanels(projection);
+      setNativeProjection(projection);
       setArchitectHandoff(handoffs.architect);
       setProjectHandoff(handoffs.project);
       setBuildTasks(
@@ -929,11 +933,14 @@ function DiscussionPageInner() {
       token: discussion.runnerToken,
     };
     const refresh = () => {
-      void getNativeBuildObservability(
-        connection,
-        discussion.nativeBuildRunId!
-      ).then((snapshot) => {
-        if (!cancelled) setNativeObservability(snapshot);
+      void Promise.all([
+        getNativeBuildObservability(connection, discussion.nativeBuildRunId!),
+        getNativeBuild(connection, discussion.nativeBuildRunId!),
+      ]).then(([snapshot, projection]) => {
+        if (!cancelled) {
+          setNativeObservability(snapshot);
+          setNativeProjection(projection);
+        }
       }).catch(() => {
         // The runner connection control represents reachability. Keep the
         // latest durable snapshot during transient observer disconnects.
@@ -1743,6 +1750,7 @@ function DiscussionPageInner() {
       {discussion.mode === "build" && (
         <RunnerV2ObservabilityPanel
           snapshot={nativeObservability}
+          projection={nativeProjection}
           onDownloadAudit={
             discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
           }

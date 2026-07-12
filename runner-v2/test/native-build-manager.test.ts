@@ -214,6 +214,7 @@ function emptyObservability(runId: string) {
     processes: [],
     providers: [],
     events: [],
+    git: { integrationBranch: "", integrationRevision: "", commits: [] },
   };
 }
 

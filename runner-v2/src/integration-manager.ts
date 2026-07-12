@@ -41,6 +41,12 @@ export interface ProjectHandoffResult {
   appliedToProject: boolean;
 }
 
+export interface IntegrationCommit {
+  revision: string;
+  parents: string[];
+  subject: string;
+}
+
 export class IntegrationManager {
   readonly path: string;
   private readonly repositoryRoot: string;
@@ -85,6 +91,33 @@ export class IntegrationManager {
       integrationBranch: this.integrationBranch,
       appliedToProject,
     };
+  }
+
+  async history(limit = 50): Promise<IntegrationCommit[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("Integration history limit must be an integer from 1 to 100.");
+    }
+    return await this.serialized(async () => {
+      await this.ensureIntegrationWorkspace();
+      const result = await this.git(this.path, [
+        "log",
+        "-n",
+        String(limit),
+        "--format=%H%x1f%P%x1f%s%x1e",
+        `${this.baselineRevision}..HEAD`,
+      ]);
+      const commits: IntegrationCommit[] = [];
+      for (const record of result.stdout.split("\x1e").map((item) => item.trim()).filter(Boolean)) {
+        const [revision = "", parents = "", subject = ""] = record.split("\x1f");
+        if (!revision) continue;
+        commits.push({
+          revision,
+          parents: parents ? parents.split(/\s+/) : [],
+          subject,
+        });
+      }
+      return commits;
+    });
   }
 
   async initialize(): Promise<void> {

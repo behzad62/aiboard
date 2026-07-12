@@ -119,6 +119,7 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       processes: [],
       providers: [],
       events: [],
+      git: { integrationBranch: "aiboard/run/integration", integrationRevision: "abc123", commits: [] },
     });
   }
   if (String(input).endsWith("/build/audit")) {

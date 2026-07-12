@@ -2,8 +2,52 @@ import assert from "node:assert/strict";
 
 import {
   filterRunnerObservability,
+  runnerBuildControlSummary,
   runnerObservabilitySummary,
 } from "../components/RunnerV2ObservabilityPanel";
+
+const control = runnerBuildControlSummary({
+  runId: "run_1",
+  status: "paused",
+  planRevision: 2,
+  tasks: {
+    T1: {
+      id: "T1",
+      objective: "Implement feature",
+      dependencies: [],
+      status: "integrated",
+      requiredCapabilities: ["code"],
+      attempt: 1,
+      changeSetId: "change_1",
+      integrationRevision: "abc123",
+    },
+  },
+  guidance: {
+    guide_1: {
+      requestId: "guide_1",
+      taskId: "T1",
+      blocking: true,
+      question: "Which API shape?",
+      evidenceSequence: 4,
+      version: 1,
+      status: "answered",
+      answer: "Preserve the public interface.",
+    },
+  },
+  reviews: {},
+  runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+  projectHandoff: {
+    status: "requested",
+    summary: "Ready",
+    options: ["keep_integration_branch", "apply_to_project"],
+    integrationRevision: "abc123",
+    integrationBranch: "aiboard/run/integration",
+  },
+  lastSequence: 12,
+});
+assert.equal(control.guidance[0].question, "Which API shape?");
+assert.equal(control.integration[0].revision, "abc123");
+assert.equal(control.branch, "aiboard/run/integration");
 
 const summary = runnerObservabilitySummary({
   runId: "run_1",
@@ -64,6 +108,11 @@ const summary = runnerObservabilitySummary({
     actor: { role: "runner", id: "scheduler" },
     payload: { taskId: "T1", to: "running" },
   }],
+  git: {
+    integrationBranch: "aiboard/run/integration",
+    integrationRevision: "abc123",
+    commits: [{ revision: "abc123", parents: [], subject: "Integrate T1" }],
+  },
 });
 
 assert.deepEqual(summary, {

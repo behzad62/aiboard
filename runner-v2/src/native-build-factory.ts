@@ -252,6 +252,11 @@ export class NativeBuildFactory {
           ),
           providers: Object.values(schedulerProjection.runtime.providerHealth),
           events: schedulerEvents.slice(-1_000),
+          git: {
+            integrationBranch: integrationManager.integrationBranch,
+            integrationRevision: integrationManager.revision,
+            commits: await integrationManager.history(50),
+          },
         };
       },
       projectHandoff: async (choice) =>
