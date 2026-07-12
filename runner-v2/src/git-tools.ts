@@ -102,6 +102,51 @@ export function createGitTools(): NativeTool<unknown>[] {
       },
     },
     {
+      definition: definition("git.remotes", "Inspect configured Git remotes", true),
+      validate: objectInput,
+      assessAccess: () => readAccess("git.remotes"),
+      execute: async (_input, context) => {
+        const names = (await git(context, ["remote"]))
+          .stdout.split(/\r?\n/)
+          .map((name) => name.trim())
+          .filter(Boolean);
+        const remotes = await Promise.all(names.map(async (name) => ({
+          name,
+          fetchUrl: (await git(context, ["remote", "get-url", name])).stdout.trim(),
+          pushUrl: (
+            await git(context, ["remote", "get-url", "--push", name])
+          ).stdout.trim(),
+        })));
+        return okJson({ remotes });
+      },
+    },
+    {
+      definition: {
+        ...definition("git.push", "Push one explicit revision to a remote branch", false),
+        effect: "external",
+      },
+      validate: validatePush,
+      assessAccess: () => ({ capability: "git.push", external: true }),
+      execute: async (input, context) => {
+        const remote = (input.remote as string | undefined) ?? "origin";
+        const source = (input.source as string | undefined) ?? "HEAD";
+        const destination = input.destination as string;
+        const args = ["push"];
+        if (input.forceWithLease === true) args.push("--force-with-lease");
+        if (input.setUpstream === true) args.push("--set-upstream");
+        args.push(remote, `${source}:${destination}`);
+        const output = await git(context, args);
+        const revision = (await git(context, ["rev-parse", source])).stdout.trim();
+        return okJson({
+          remote,
+          source,
+          destination,
+          revision,
+          output: [output.stdout, output.stderr].filter(Boolean).join("\n").trim(),
+        });
+      },
+    },
+    {
       definition: {
         ...definition("git.commit", "Commit all task-workspace changes", false),
         effect: "workspace",
@@ -184,6 +229,19 @@ function gitSchema(name: string): Record<string, unknown> {
         { revision: { type: "string", minLength: 1 } },
         []
       );
+    case "git.remotes":
+      return objectSchema({}, []);
+    case "git.push":
+      return objectSchema(
+        {
+          remote: { type: "string", minLength: 1 },
+          source: { type: "string", minLength: 1 },
+          destination: { type: "string", minLength: 1 },
+          forceWithLease: { type: "boolean" },
+          setUpstream: { type: "boolean" },
+        },
+        ["destination"]
+      );
     case "git.commit":
       return objectSchema(
         { message: { type: "string", minLength: 1 } },
@@ -205,6 +263,29 @@ function objectInput(input: unknown): ValidationResult<Input> {
   return isObject(input)
     ? { ok: true, value: input }
     : { ok: false, issues: ["input must be an object"] };
+}
+
+function validatePush(input: unknown): ValidationResult<Input> {
+  if (!isObject(input)) return { ok: false, issues: ["input must be an object"] };
+  const remote = input.remote ?? "origin";
+  const source = input.source ?? "HEAD";
+  if (typeof remote !== "string" || !/^[A-Za-z0-9._-]+$/.test(remote)) {
+    return { ok: false, issues: ["remote name is invalid"] };
+  }
+  if (!validRevision(source)) {
+    return { ok: false, issues: ["source revision is invalid"] };
+  }
+  if (!validDestination(input.destination)) {
+    return { ok: false, issues: ["destination branch is invalid"] };
+  }
+  if (
+    input.forceWithLease !== undefined &&
+    typeof input.forceWithLease !== "boolean"
+  ) return { ok: false, issues: ["forceWithLease must be boolean"] };
+  if (input.setUpstream !== undefined && typeof input.setUpstream !== "boolean") {
+    return { ok: false, issues: ["setUpstream must be boolean"] };
+  }
+  return { ok: true, value: input };
 }
 
 function isObject(input: unknown): input is Input {
@@ -242,6 +323,17 @@ function validRevision(value: unknown): value is string {
     typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._~^/-]*$/.test(value) &&
     !value.includes("..")
+  );
+}
+
+function validDestination(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^(?:refs\/heads\/)?[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".lock")
   );
 }
 

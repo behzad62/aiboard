@@ -8,6 +8,7 @@ import type {
 import { runAgentLoop } from "./agent-loop.js";
 import { buildArchitectContext, type PromptEvidence } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createArtifactTools } from "./artifact-tools.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
@@ -170,6 +171,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     for (const tool of createFilesystemTools({ artifacts: this.options.artifacts })) {
       if (tool.definition.readOnly) extras.register(tool);
     }
+    for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
     for (const tool of createGitTools()) {
       if (tool.definition.readOnly) extras.register(tool);
     }

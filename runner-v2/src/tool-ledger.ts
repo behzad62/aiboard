@@ -1,5 +1,7 @@
 import type {
+  ToolAccessRequest,
   ToolCallBlock,
+  ToolEffect,
   ToolExecutionContext,
   ToolResult,
 } from "./agent-contracts.js";
@@ -20,6 +22,9 @@ export interface ToolLedgerEvent {
   sessionId?: string;
   callId?: string;
   toolName?: string;
+  effect?: ToolEffect;
+  access?: ToolAccessRequest;
+  outsideWorkspace?: boolean;
 }
 
 export interface BeginToolInvocation {
@@ -30,6 +35,9 @@ export interface BeginToolInvocation {
   runId: string;
   sessionId: string;
   replaySafe: boolean;
+  effect: ToolEffect;
+  access: ToolAccessRequest;
+  outsideWorkspace: boolean;
   occurredAt: string;
 }
 

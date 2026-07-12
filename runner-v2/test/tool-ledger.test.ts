@@ -7,6 +7,7 @@ import test from "node:test";
 import type { NativeTool, ToolCallBlock } from "../src/agent-contracts.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { ToolBroker } from "../src/tool-broker.js";
+import { externalEffectReferences } from "../src/worker-runtime.js";
 import {
   toolInvocationFingerprint,
   toolInvocationKey,
@@ -38,6 +39,15 @@ test("completed side effects replay their durable result after broker restart", 
     assert.equal(runEvents[0].sessionId, "session_1");
     assert.equal(runEvents[0].callId, "write_1");
     assert.equal(runEvents[0].toolName, "write_value");
+    assert.equal(runEvents[0].effect, "external");
+    assert.equal(runEvents[0].access?.capability, "external");
+    assert.equal(runEvents[0].outsideWorkspace, false);
+    assert.deepEqual(externalEffectReferences(runEvents, "session_1"), [
+      {
+        kind: "external",
+        idempotencyKey: toolInvocationKey(context(), "write_1"),
+      },
+    ]);
   } finally {
     recoveredLedger?.close();
     rmSync(root, { recursive: true, force: true });
@@ -58,6 +68,9 @@ test("in-doubt mutation is not repeated and conflicting reuse is rejected", asyn
       runId: "run_1",
       sessionId: "session_1",
       replaySafe: false,
+      effect: "workspace",
+      access: { capability: "workspace" },
+      outsideWorkspace: false,
       occurredAt: "2026-07-11T00:00:00.000Z",
     });
     const recovered = broker(root, ledger, () => executions++);
@@ -83,7 +96,7 @@ function broker(
       description: "Perform one side effect",
       inputSchema: { type: "object" },
       readOnly: false,
-      effect: "workspace",
+      effect: "external",
     },
     validate: (input) =>
       typeof input === "object" &&
@@ -100,7 +113,7 @@ function broker(
     },
   };
   const result = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath,
     ledger,
   });

@@ -301,6 +301,9 @@ export class ToolBroker implements AgentToolRuntime {
       runId: context.runId,
       sessionId: context.sessionId,
       replaySafe: tool.definition.readOnly === true && tool.definition.effect === "none",
+      effect: tool.definition.effect,
+      access,
+      outsideWorkspace,
       occurredAt: this.clock(),
     });
     if (ledgerDecision?.state === "completed") {

@@ -7,6 +7,7 @@ import test from "node:test";
 import type { ToolResult } from "../src/agent-contracts.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { createGitTools } from "../src/git-tools.js";
+import { runGit } from "../src/git-command.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 
@@ -51,6 +52,36 @@ test("task-safe Git tools inspect and commit only the worker branch", async () =
     const show = await invoke(broker, "show", "git.show", { revision: "HEAD" });
     assert.match(text(show), /changed/);
 
+    const remote = join(root, "remote.git");
+    mkdirSync(remote);
+    await runGit({ cwd: remote, args: ["init", "--bare"] });
+    await runGit({ cwd: workspace.path, args: ["remote", "add", "origin", remote] });
+    const remotes = await invoke(broker, "remotes", "git.remotes", {});
+    assert.deepEqual((json(remotes) as { remotes: unknown[] }).remotes, [
+      { name: "origin", fetchUrl: remote, pushUrl: remote },
+    ]);
+    const deniedPush = await invoke(broker, "push_denied", "git.push", {
+      remote: "origin",
+      source: "HEAD",
+      destination: "refs/heads/task-result",
+    });
+    assert.equal(deniedPush.error?.code, "approval_required");
+    const fullBroker = brokerWithGit(workspace.path, "full");
+    const pushed = await invoke(fullBroker, "push", "git.push", {
+      remote: "origin",
+      source: "HEAD",
+      destination: "refs/heads/task-result",
+    });
+    assert.equal(pushed.isError, false);
+    const remoteRevision = await runGit({
+      cwd: remote,
+      args: ["rev-parse", "refs/heads/task-result"],
+    });
+    assert.equal(
+      remoteRevision.stdout.trim(),
+      (json(commit) as { revision: string }).revision
+    );
+
     const canonicalBroker = brokerWithGit(project);
     writeFileSync(join(project, "app.txt"), "unsafe\n");
     const protectedCommit = await invoke(
@@ -65,9 +96,12 @@ test("task-safe Git tools inspect and commit only the worker branch", async () =
   }
 });
 
-function brokerWithGit(workspace: string): ToolBroker {
+function brokerWithGit(
+  workspace: string,
+  permissionProfile: "project" | "full" = "project"
+): ToolBroker {
   const broker = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile,
     workspacePath: workspace,
   });
   for (const tool of createGitTools()) broker.register(tool);

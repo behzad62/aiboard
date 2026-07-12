@@ -7,6 +7,7 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
@@ -134,6 +135,7 @@ export function createSubagentTools(
       for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
         broker.register(tool);
       }
+      for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
       for (const tool of createProcessTools()) broker.register(tool);
       if (options.managedProcesses) {
         for (const tool of createManagedProcessTools(options.managedProcesses)) {

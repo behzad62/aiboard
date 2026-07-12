@@ -4,10 +4,15 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
-import { createChangeSet, type ChangeSet } from "./change-set.js";
+import {
+  createChangeSet,
+  type ChangeSet,
+  type ExternalEffectReference,
+} from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -29,7 +34,10 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
-import type { ToolInvocationLedger } from "./tool-ledger.js";
+import type {
+  ToolInvocationLedger,
+  ToolLedgerEvent,
+} from "./tool-ledger.js";
 import type {
   TaskWorkspace,
   TaskCommit,
@@ -121,6 +129,7 @@ export async function runWorkerTask(
   for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
     broker.register(tool);
   }
+  for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
   for (const tool of createProcessTools()) broker.register(tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {
@@ -233,6 +242,10 @@ export async function runWorkerTask(
       taskCommit: commit,
       artifacts: options.artifacts,
       evidenceArtifactHashes: evidenceHashes,
+      externalEffects: externalEffectReferences(
+        options.ledger.listRun(options.runId),
+        options.sessionId
+      ),
       guidanceIds: taskGuidanceIds(options),
       memoryIds: taskMemoryIds(options),
       unresolvedConcerns,
@@ -285,6 +298,40 @@ export async function runWorkerTask(
     );
   }
   return { loop, ...(producedChangeSet ? { changeSet: producedChangeSet } : {}) };
+}
+
+export function externalEffectReferences(
+  events: readonly ToolLedgerEvent[],
+  sessionId: string
+): ExternalEffectReference[] {
+  const started = new Map<string, ToolLedgerEvent>();
+  const effects: ExternalEffectReference[] = [];
+  for (const event of events) {
+    if (event.sessionId !== sessionId) continue;
+    if (event.type === "tool.started" || event.type === "tool.retry_started") {
+      started.set(event.key, event);
+      continue;
+    }
+    const origin = started.get(event.key);
+    if (!origin) continue;
+    const external =
+      origin.effect === "external" ||
+      origin.access?.external === true ||
+      origin.access?.credentialChange === true ||
+      origin.outsideWorkspace === true;
+    if (!external) continue;
+    const artifactHash = event.result?.content.find(
+      (block) => block.type === "artifact"
+    );
+    effects.push({
+      kind: origin.access?.capability ?? origin.toolName ?? "external",
+      idempotencyKey: origin.key,
+      ...(artifactHash?.type === "artifact"
+        ? { artifactHash: artifactHash.hash }
+        : {}),
+    });
+  }
+  return effects;
 }
 
 function taskGuidanceIds(options: RunWorkerTaskOptions): string[] {

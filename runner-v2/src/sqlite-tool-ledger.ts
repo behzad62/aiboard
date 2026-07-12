@@ -71,6 +71,9 @@ export class SqliteToolLedger implements ToolInvocationLedger {
           sessionId: input.sessionId,
           callId: input.callId,
           toolName: input.toolName,
+          effect: input.effect,
+          access: input.access,
+          outsideWorkspace: input.outsideWorkspace,
         })
       );
       this.database.exec("COMMIT");
@@ -161,11 +164,13 @@ export class SqliteToolLedger implements ToolInvocationLedger {
 function decodeEvent(row: EventRow): ToolLedgerEvent {
   const [runId, sessionId, callId] = row.invocation_key.split("\0");
   let toolName: string | undefined;
+  let metadata: Record<string, unknown> | undefined;
   if (row.event_type === "tool.completed") {
     toolName = decodeResult(row).toolName;
   } else if (row.payload_json) {
     try {
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      metadata = payload;
       toolName = typeof payload.toolName === "string" ? payload.toolName : undefined;
     } catch {
       toolName = undefined;
@@ -181,10 +186,30 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
     ...(sessionId ? { sessionId } : {}),
     ...(callId ? { callId } : {}),
     ...(toolName ? { toolName } : {}),
+    ...(metadata?.effect === "none" ||
+    metadata?.effect === "workspace" ||
+    metadata?.effect === "external"
+      ? { effect: metadata.effect }
+      : {}),
+    ...(isAccessRequest(metadata?.access)
+      ? { access: metadata.access }
+      : {}),
+    ...(typeof metadata?.outsideWorkspace === "boolean"
+      ? { outsideWorkspace: metadata.outsideWorkspace }
+      : {}),
     ...(row.event_type === "tool.completed"
       ? { result: decodeResult(row) }
       : {}),
   };
+}
+
+function isAccessRequest(value: unknown): value is import("./agent-contracts.js").ToolAccessRequest {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { capability?: unknown }).capability === "string"
+  );
 }
 
 function decodeResult(row: EventRow): ToolResult {
