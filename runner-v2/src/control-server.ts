@@ -712,12 +712,18 @@ function mergeProviderConfigs(
     current.map((config) => [config.runtimeId, {
       ...config,
       capabilities: [...config.capabilities],
+      ...(config.inputCapabilities
+        ? { inputCapabilities: { ...config.inputCapabilities } }
+        : {}),
     }])
   );
   for (const config of incoming) {
     merged.set(config.runtimeId, {
       ...config,
       capabilities: [...config.capabilities],
+      ...(config.inputCapabilities
+        ? { inputCapabilities: { ...config.inputCapabilities } }
+        : {}),
     });
   }
   return [...merged.values()].sort((left, right) =>
@@ -837,6 +843,9 @@ function redactProviderConfig(config: RunnerProviderConfig) {
     transport: config.transport,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     capabilities: [...config.capabilities],
+    ...(config.inputCapabilities
+      ? { inputCapabilities: { ...config.inputCapabilities } }
+      : {}),
     priority: config.priority,
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.protocol ? { protocol: config.protocol } : {}),

@@ -13,6 +13,12 @@ export interface RunnerProviderConfig {
   secret: string;
   runnerToken?: string;
   capabilities: string[];
+  inputCapabilities?: {
+    image: boolean;
+    document: boolean;
+    audio: boolean;
+    video: boolean;
+  };
   priority: number;
   reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";
@@ -60,6 +66,14 @@ export function validateProviderConfigs(
     if (!Array.isArray(config.capabilities) || config.capabilities.some((item) => !item)) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid capabilities.`);
     }
+    if (
+      config.inputCapabilities !== undefined &&
+      ["image", "document", "audio", "video"].some(
+        (key) => typeof config.inputCapabilities?.[key as keyof typeof config.inputCapabilities] !== "boolean"
+      )
+    ) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid input capabilities.`);
+    }
     if (PRICING_FIELDS.some((field) => !isOptionalNonNegativeInteger(config[field]))) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid pricing.`);
     }
@@ -93,5 +107,8 @@ export function cloneProviderConfigs(
   return configs.map((config) => ({
     ...config,
     capabilities: [...config.capabilities],
+    ...(config.inputCapabilities
+      ? { inputCapabilities: { ...config.inputCapabilities } }
+      : {}),
   }));
 }

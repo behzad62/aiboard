@@ -21,6 +21,12 @@ export interface NativeProviderConfig {
   secret: string;
   runnerToken?: string;
   capabilities: string[];
+  inputCapabilities?: {
+    image: boolean;
+    document: boolean;
+    audio: boolean;
+    video: boolean;
+  };
   priority: number;
   reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";

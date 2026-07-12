@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { ToolResult } from "../src/agent-contracts.js";
 import { AccountRunnerModel, ProviderTransportError } from "../src/account-runner-model.js";
 import { AnthropicModel } from "../src/anthropic-model.js";
 import { EncryptedProviderConfigStore } from "../src/encrypted-provider-config-store.js";
@@ -162,6 +163,82 @@ test("account runner transport maps native tool calls, usage, and tool results",
       (requests[0].nativeTools as Array<{ name: string }>)[0].name,
       "fs_read"
     );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("account runner sends only current-round image artifacts to image-capable models", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const recentHash = "b".repeat(64);
+    const model = new AccountRunnerModel({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      runnerPath: "chatgpt",
+      runnerToken: "local-token",
+      modelId: "gpt-5.3-codex-spark",
+      inputCapabilities: { image: true, document: true, audio: false, video: false },
+      readArtifact: async (hash) => {
+        assert.equal(hash, recentHash);
+        return Buffer.from("recent-png");
+      },
+    });
+    await model.complete({
+      sessionId: "session_image",
+      messages: [
+        {
+          id: "old_tool",
+          role: "tool",
+          content: toolResult("old", "a".repeat(64)),
+        },
+        { id: "assistant", role: "assistant", content: "Capture a fresh screenshot." },
+        {
+          id: "recent_tool",
+          role: "tool",
+          content: toolResult("recent", recentHash),
+        },
+      ],
+      tools: [],
+    });
+
+    assert.deepEqual(requests[0].attachments, [
+      {
+        category: "image",
+        filename: "recent screenshot.png",
+        mimeType: "image/png",
+        base64Data: Buffer.from("recent-png").toString("base64"),
+      },
+    ]);
+
+    const textOnly = new AccountRunnerModel({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      runnerPath: "chatgpt",
+      runnerToken: "local-token",
+      modelId: "text-only",
+      inputCapabilities: { image: false, document: true, audio: false, video: false },
+      readArtifact: async () => {
+        throw new Error("text-only models must not resolve image bytes");
+      },
+    });
+    await textOnly.complete({
+      sessionId: "session_text",
+      messages: [
+        { id: "assistant_2", role: "assistant", content: "Capture." },
+        { id: "tool_2", role: "tool", content: toolResult("recent", recentHash) },
+      ],
+      tools: [],
+    });
+    assert.deepEqual(requests[1].attachments, []);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -559,3 +636,19 @@ test("native Build factory instantiates every provider-neutral transport", () =>
     transport: "google",
   }) instanceof GoogleModel);
 });
+
+function toolResult(callId: string, hash: string): ToolResult {
+  return {
+    callId,
+    toolName: "browser.screenshot",
+    content: [
+      {
+        type: "artifact",
+        hash,
+        mediaType: "image/png",
+        label: `${callId} screenshot`,
+      },
+    ],
+    isError: false,
+  };
+}

@@ -15,6 +15,13 @@ export interface AccountRunnerModelOptions {
   modelId: string;
   providerApiKey?: string;
   reasoningEffort?: string;
+  inputCapabilities?: {
+    image: boolean;
+    document: boolean;
+    audio: boolean;
+    video: boolean;
+  };
+  readArtifact?: (hash: string) => Promise<Buffer>;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -60,6 +67,10 @@ export class AccountRunnerModel implements AgentModel {
 
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     const wireNames = buildWireToolNames(request.tools);
+    const attachments = await currentImageAttachments(
+      request.messages,
+      this.options
+    );
     const originalNameFor = new Map(
       [...wireNames].map(([original, wire]) => [wire, original])
     );
@@ -83,7 +94,7 @@ export class AccountRunnerModel implements AgentModel {
             toRunnerTool(tool, wireNames.get(tool.name)!)
           ),
           reasoningEffort: this.options.reasoningEffort,
-          attachments: [],
+          attachments,
           sessionId: request.sessionId,
           stream: true,
         }),
@@ -161,6 +172,71 @@ export class AccountRunnerModel implements AgentModel {
       ...(usage ? { usage } : {}),
     };
   }
+}
+
+async function currentImageAttachments(
+  messages: readonly AgentMessage[],
+  options: Pick<
+    AccountRunnerModelOptions,
+    "inputCapabilities" | "readArtifact"
+  >
+): Promise<Array<{
+  category: "image";
+  filename: string;
+  mimeType: string;
+  base64Data: string;
+}>> {
+  if (options.inputCapabilities?.image !== true) return [];
+  let latestAssistant = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant") {
+      latestAssistant = index;
+      break;
+    }
+  }
+  const images = new Map<
+    string,
+    { hash: string; mediaType: string; label?: string }
+  >();
+  for (const message of messages.slice(latestAssistant + 1)) {
+    if (message.role !== "tool" || Array.isArray(message.content)) continue;
+    const result = message.content as ToolResult;
+    for (const block of result.content ?? []) {
+      if (block.type !== "artifact" || !block.mediaType.startsWith("image/")) {
+        continue;
+      }
+      images.set(block.hash, block);
+    }
+  }
+  if (images.size === 0) return [];
+  if (!options.readArtifact) {
+    throw new Error("Image-capable account runtime has no artifact reader.");
+  }
+  return await Promise.all(
+    [...images.values()].map(async (image) => {
+      const bytes = await options.readArtifact!(image.hash);
+      return {
+        category: "image" as const,
+        filename: imageFilename(image.label, image.mediaType, image.hash),
+        mimeType: image.mediaType,
+        base64Data: bytes.toString("base64"),
+      };
+    })
+  );
+}
+
+function imageFilename(
+  label: string | undefined,
+  mediaType: string,
+  hash: string
+): string {
+  const extension = mediaType === "image/jpeg"
+    ? ".jpg"
+    : mediaType === "image/webp"
+      ? ".webp"
+      : ".png";
+  const base = label?.trim() || `artifact-${hash.slice(0, 12)}`;
+  return base.toLowerCase().endsWith(extension) ? base : `${base}${extension}`;
 }
 
 function toRunnerMessage(message: AgentMessage): {

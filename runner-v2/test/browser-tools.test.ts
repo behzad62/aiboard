@@ -93,6 +93,15 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
     const shot = jsonValue(screenshot) as { artifactHash: string; mediaType: string };
     assert.equal(shot.mediaType, "image/png");
     assert.equal((await artifacts.get(shot.artifactHash)).toString(), "png-bytes");
+    assert.deepEqual(
+      screenshot.content.find((block) => block.type === "artifact"),
+      {
+        type: "artifact",
+        hash: shot.artifactHash,
+        mediaType: "image/png",
+        label: "Browser screenshot task_ui",
+      }
+    );
     const events = await broker.invoke(call("events", "browser.events", {}), context);
     assert.equal((jsonValue(events) as { console: unknown[] }).console.length, 1);
     const records = evidence.list({ runId: "run_ui", taskId: "task_ui" });

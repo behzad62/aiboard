@@ -337,7 +337,25 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
       });
-      return json({ artifactHash: artifact.hash, mediaType: "image/png", byteLength: bytes.byteLength });
+      return {
+        content: [
+          {
+            type: "json",
+            value: {
+              artifactHash: artifact.hash,
+              mediaType: "image/png",
+              byteLength: bytes.byteLength,
+            },
+          },
+          {
+            type: "artifact",
+            hash: artifact.hash,
+            mediaType: "image/png",
+            label: `Browser screenshot ${options.taskId}`,
+          },
+        ],
+        isError: false,
+      };
     }, external("browser.screenshot")),
     tool("browser.events", "Read bounded console and network observations", emptySchema(), validateEmpty, async (_input, context) => {
       const events = await options.backend.events(sessionFor(context.runId));

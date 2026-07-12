@@ -337,6 +337,7 @@ function providerConfig(
       baseUrl: custom.baseURL,
       secret: custom.apiKey || "aiboard-local-endpoint",
       capabilities: ["*"],
+      inputCapabilities: nativeInputCapabilities(custom.capabilities),
       priority,
       ...pricing,
     };
@@ -352,6 +353,14 @@ function providerConfig(
     saved.runnerToken ?? undefined,
     Boolean(definition?.accountRunner)
   );
+  const inputCapabilities = MODEL_CATALOG.find(
+    (candidate) => candidate.providerId === providerId && candidate.id === model
+  )?.capabilities ?? {
+    image: false,
+    document: false,
+    audio: false,
+    video: false,
+  };
   return {
     runtimeId,
     providerId,
@@ -365,6 +374,7 @@ function providerConfig(
     // Native coding agents can use the task-scoped tool registry regardless of
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],
+    inputCapabilities: nativeInputCapabilities(inputCapabilities),
     priority,
     ...pricing,
     ...(discussion.reasoningEffort && discussion.reasoningEffort !== "default"
@@ -373,6 +383,20 @@ function providerConfig(
     ...(native.transport === "openai-compatible"
       ? { protocol: nativeProviderProtocol(providerId, model) }
       : {}),
+  };
+}
+
+function nativeInputCapabilities(capabilities: {
+  image?: boolean;
+  document?: boolean;
+  audio?: boolean;
+  video?: boolean;
+} | undefined): NonNullable<NativeProviderConfig["inputCapabilities"]> {
+  return {
+    image: capabilities?.image === true,
+    document: capabilities?.document === true,
+    audio: capabilities?.audio === true,
+    video: capabilities?.video === true,
   };
 }
 

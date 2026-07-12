@@ -90,7 +90,10 @@ export class NativeBuildFactory {
     const candidates = selected.all;
     const workerCandidates = selected.workers;
     const models = new Map<string, AgentModel>(
-      selectedConfigs.map((config) => [config.runtimeId, createProviderModel(config)])
+      selectedConfigs.map((config) => [
+        config.runtimeId,
+        createProviderModel(config, this.artifacts),
+      ])
     );
     const modelCostEstimators = new Map<string, ModelCostEstimator>(
       selectedConfigs.map((config) => [config.runtimeId, providerCostEstimator(config)])
@@ -394,7 +397,10 @@ function toCandidate(config: RunnerProviderConfig): AgentRuntimeCandidate {
   };
 }
 
-export function createProviderModel(config: RunnerProviderConfig): AgentModel {
+export function createProviderModel(
+  config: RunnerProviderConfig,
+  artifacts?: ArtifactStore
+): AgentModel {
   if (config.transport === "account-runner") {
     if (!config.baseUrl) {
       throw new Error(`Account runtime ${config.runtimeId} requires a baseUrl.`);
@@ -406,6 +412,12 @@ export function createProviderModel(config: RunnerProviderConfig): AgentModel {
       modelId: config.modelId,
       ...(config.runnerToken ? { providerApiKey: config.secret } : {}),
       ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+      ...(config.inputCapabilities
+        ? { inputCapabilities: { ...config.inputCapabilities } }
+        : {}),
+      ...(artifacts
+        ? { readArtifact: (hash: string) => artifacts.get(hash) }
+        : {}),
     });
   }
   if (config.transport === "anthropic") {
