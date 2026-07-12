@@ -4,6 +4,8 @@ export interface BudgetUsage {
   modelCalls: number;
   toolCalls: number;
   inputTokens: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
   outputTokens: number;
   estimatedCostMicros: number;
   activeMs: number;
@@ -22,7 +24,10 @@ export interface BudgetLimits {
   maxArtifactBytes?: number;
 }
 
-export type BudgetDimension = keyof BudgetUsage;
+export type BudgetDimension = Exclude<
+  keyof BudgetUsage,
+  "cachedInputTokens" | "cacheWriteInputTokens"
+>;
 
 export class BudgetExceededError extends Error {
   constructor(
@@ -206,6 +211,10 @@ function effectiveUsage(projection: BudgetProjection): BudgetUsage {
 
 function addAmount(target: BudgetUsage, amount: BudgetAmount): void {
   target.inputTokens += amount.inputTokens ?? 0;
+  target.cachedInputTokens =
+    (target.cachedInputTokens ?? 0) + (amount.cachedInputTokens ?? 0);
+  target.cacheWriteInputTokens =
+    (target.cacheWriteInputTokens ?? 0) + (amount.cacheWriteInputTokens ?? 0);
   target.outputTokens += amount.outputTokens ?? 0;
   target.estimatedCostMicros += amount.estimatedCostMicros ?? 0;
   target.artifactBytes += amount.artifactBytes ?? 0;
@@ -216,6 +225,8 @@ export function emptyUsage(): BudgetUsage {
     modelCalls: 0,
     toolCalls: 0,
     inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
     outputTokens: 0,
     estimatedCostMicros: 0,
     activeMs: 0,
@@ -231,6 +242,8 @@ export function usageAmount(value: unknown): BudgetAmount {
   const result: BudgetAmount = {};
   for (const key of [
     "inputTokens",
+    "cachedInputTokens",
+    "cacheWriteInputTokens",
     "outputTokens",
     "estimatedCostMicros",
     "artifactBytes",

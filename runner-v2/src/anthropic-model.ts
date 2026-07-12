@@ -30,7 +30,12 @@ interface AnthropicResponse {
     | { type: "text"; text?: string }
     | { type: "tool_use"; id?: string; name?: string; input?: unknown }
   >;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    output_tokens?: number;
+  };
 }
 
 export class AnthropicModel implements AgentModel {
@@ -63,6 +68,7 @@ export class AnthropicModel implements AgentModel {
         body: JSON.stringify({
           model: this.options.modelId,
           max_tokens: this.options.maxTokens ?? 16_384,
+          cache_control: { type: "ephemeral" },
           ...(system ? { system } : {}),
           messages: request.messages
             .filter((message) => message.role !== "system")
@@ -98,9 +104,7 @@ export class AnthropicModel implements AgentModel {
       ...(response.usage
         ? {
             usage: {
-              ...(response.usage.input_tokens !== undefined
-                ? { inputTokens: response.usage.input_tokens }
-                : {}),
+              ...anthropicInputUsage(response.usage),
               ...(response.usage.output_tokens !== undefined
                 ? { outputTokens: response.usage.output_tokens }
                 : {}),
@@ -109,6 +113,29 @@ export class AnthropicModel implements AgentModel {
         : {}),
     };
   }
+}
+
+function anthropicInputUsage(
+  usage: NonNullable<AnthropicResponse["usage"]>
+): {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+} {
+  const hasInput = usage.input_tokens !== undefined;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  return {
+    ...(hasInput || cacheRead > 0 || cacheWrite > 0
+      ? { inputTokens: (usage.input_tokens ?? 0) + cacheRead + cacheWrite }
+      : {}),
+    ...(usage.cache_read_input_tokens !== undefined
+      ? { cachedInputTokens: usage.cache_read_input_tokens }
+      : {}),
+    ...(usage.cache_creation_input_tokens !== undefined
+      ? { cacheWriteInputTokens: usage.cache_creation_input_tokens }
+      : {}),
+  };
 }
 
 function messageText(message: AgentMessage): string {

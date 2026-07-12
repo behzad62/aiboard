@@ -48,7 +48,12 @@ export interface ModelTurn {
   blocks: AssistantBlock[];
   stopReason: ModelStopReason;
   providerRequestId?: string;
-  usage?: { inputTokens?: number; outputTokens?: number };
+  usage?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    outputTokens?: number;
+  };
 }
 
 export interface AgentModelRequest {

@@ -20,7 +20,12 @@ test("budgeted model reserves before provider call and settles actual usage", as
       return {
         blocks: [{ type: "text", text: "result" }],
         stopReason: "end_turn",
-        usage: { inputTokens: 12, outputTokens: 4 },
+        usage: {
+          inputTokens: 12,
+          cachedInputTokens: 8,
+          cacheWriteInputTokens: 2,
+          outputTokens: 4,
+        },
       };
     },
   };
@@ -37,6 +42,8 @@ test("budgeted model reserves before provider call and settles actual usage", as
     assert.equal(ledger.snapshot("run_1").effective.modelCalls, 1);
     assert.equal(ledger.snapshot("run_1").effective.inputTokens, 12);
     assert.equal(ledger.snapshot("run_1").effective.outputTokens, 4);
+    assert.equal(ledger.snapshot("run_1").effective.cachedInputTokens, 8);
+    assert.equal(ledger.snapshot("run_1").effective.cacheWriteInputTokens, 2);
     await assert.rejects(() => budgeted.complete(request("session_1")), /modelCalls/i);
     assert.equal(calls, 1, "provider is not called after budget rejection");
   } finally {

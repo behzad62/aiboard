@@ -20,6 +20,7 @@ export interface OpenAICompatibleModelOptions {
   apiKey: string;
   modelId: string;
   protocol?: "chat-completions" | "responses";
+  promptCaching?: boolean;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -35,7 +36,11 @@ interface OpenAIResponse {
       }>;
     };
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+    completion_tokens?: number;
+  };
 }
 
 interface OpenAIResponsesResponse {
@@ -51,7 +56,11 @@ interface OpenAIResponsesResponse {
         arguments?: string;
       }
   >;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    input_tokens_details?: { cached_tokens?: number };
+    output_tokens?: number;
+  };
 }
 
 export class OpenAICompatibleModel implements AgentModel {
@@ -80,6 +89,12 @@ export class OpenAICompatibleModel implements AgentModel {
         },
         body: JSON.stringify({
           model: this.options.modelId,
+          ...(this.options.promptCaching
+            ? {
+                prompt_cache_key: request.sessionId,
+                prompt_cache_retention: "24h",
+              }
+            : {}),
           messages: request.messages.map((message) => toOpenAIMessage(message, toolNames)),
           ...(request.tools.length > 0
             ? { tools: request.tools.map((tool) => toOpenAITool(tool, toolNames)), tool_choice: "auto" }
@@ -116,6 +131,9 @@ export class OpenAICompatibleModel implements AgentModel {
               ...(response.usage.prompt_tokens !== undefined
                 ? { inputTokens: response.usage.prompt_tokens }
                 : {}),
+              ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
+                ? { cachedInputTokens: response.usage.prompt_tokens_details.cached_tokens }
+                : {}),
               ...(response.usage.completion_tokens !== undefined
                 ? { outputTokens: response.usage.completion_tokens }
                 : {}),
@@ -140,6 +158,12 @@ export class OpenAICompatibleModel implements AgentModel {
         },
         body: JSON.stringify({
           model: this.options.modelId,
+          ...(this.options.promptCaching
+            ? {
+                prompt_cache_key: request.sessionId,
+                prompt_cache_retention: "24h",
+              }
+            : {}),
           input: request.messages.flatMap((message) =>
             toResponsesInput(message, toolNames)
           ),
@@ -180,6 +204,9 @@ export class OpenAICompatibleModel implements AgentModel {
             usage: {
               ...(response.usage.input_tokens !== undefined
                 ? { inputTokens: response.usage.input_tokens }
+                : {}),
+              ...(response.usage.input_tokens_details?.cached_tokens !== undefined
+                ? { cachedInputTokens: response.usage.input_tokens_details.cached_tokens }
                 : {}),
               ...(response.usage.output_tokens !== undefined
                 ? { outputTokens: response.usage.output_tokens }

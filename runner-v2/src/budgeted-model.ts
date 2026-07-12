@@ -76,7 +76,9 @@ export class BudgetedAgentModel implements AgentModel {
         reservationId,
         actualInput,
         actualOutput,
-        checkedCost(this.estimateCostMicros(actualInput, actualOutput))
+        checkedCost(this.estimateCostMicros(actualInput, actualOutput)),
+        nonNegative(turn.usage?.cachedInputTokens, 0),
+        nonNegative(turn.usage?.cacheWriteInputTokens, 0)
       );
       return turn;
     } catch (error) {
@@ -84,7 +86,9 @@ export class BudgetedAgentModel implements AgentModel {
         reservationId,
         inputTokens,
         this.outputTokenReserve,
-        estimatedCostMicros
+        estimatedCostMicros,
+        0,
+        0
       );
       throw error;
     } finally {
@@ -101,12 +105,20 @@ export class BudgetedAgentModel implements AgentModel {
     reservationId: string,
     inputTokens: number,
     outputTokens: number,
-    estimatedCostMicros: number
+    estimatedCostMicros: number,
+    cachedInputTokens: number,
+    cacheWriteInputTokens: number
   ): void {
     this.ledger.settle({
       scopeId: this.scopeId,
       reservationId,
-      actual: { inputTokens, outputTokens, estimatedCostMicros },
+      actual: {
+        inputTokens,
+        cachedInputTokens,
+        cacheWriteInputTokens,
+        outputTokens,
+        estimatedCostMicros,
+      },
       occurredAt: this.clock(),
       idempotencyKey: `settle:${reservationId}`,
     });

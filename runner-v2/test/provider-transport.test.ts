@@ -253,6 +253,7 @@ test("OpenAI Responses transport preserves function-call history for Codex model
     apiKey: "secret",
     modelId: "gpt-codex",
     protocol: "responses",
+    promptCaching: true,
     fetch: async (input, init) => {
       captured = { url: String(input), init };
       return Response.json({
@@ -267,7 +268,11 @@ test("OpenAI Responses transport preserves function-call history for Codex model
             arguments: '{"path":"tsconfig.json"}',
           },
         ],
-        usage: { input_tokens: 51, output_tokens: 13 },
+        usage: {
+          input_tokens: 51,
+          input_tokens_details: { cached_tokens: 40 },
+          output_tokens: 13,
+        },
       });
     },
   });
@@ -308,12 +313,20 @@ test("OpenAI Responses transport preserves function-call history for Codex model
   const body = JSON.parse(String(captured?.init?.body)) as {
     input: Array<{ type?: string; call_id?: string; name?: string }>;
     tools: Array<{ name: string }>;
+    prompt_cache_key: string;
+    prompt_cache_retention: string;
   };
   assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "fs_read"), true);
   assert.equal(body.input.some((item) => item.type === "function_call_output" && item.call_id === "prior_responses"), true);
   assert.equal(body.tools[0].name, "fs_read");
+  assert.equal(body.prompt_cache_key, "responses_session");
+  assert.equal(body.prompt_cache_retention, "24h");
   assert.equal(turn.providerRequestId, "resp_1");
-  assert.deepEqual(turn.usage, { inputTokens: 51, outputTokens: 13 });
+  assert.deepEqual(turn.usage, {
+    inputTokens: 51,
+    cachedInputTokens: 40,
+    outputTokens: 13,
+  });
   assert.deepEqual(turn.blocks.at(-1), {
     type: "tool_call",
     callId: "call_responses",
@@ -337,7 +350,12 @@ test("Anthropic transport maps system context, tool results, tool use, and usage
           { type: "text", text: "Checking." },
           { type: "tool_use", id: "call_3", name: "shell_run", input: { command: "npm test" } },
         ],
-        usage: { input_tokens: 31, output_tokens: 9 },
+        usage: {
+          input_tokens: 31,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 10,
+          output_tokens: 9,
+        },
       });
     },
   });
@@ -371,10 +389,12 @@ test("Anthropic transport maps system context, tool results, tool use, and usage
   assert.equal(headers.get("x-api-key"), "anthropic-secret");
   const body = JSON.parse(String(captured?.init?.body)) as {
     system: string;
+    cache_control: { type: string };
     messages: Array<{ role: string; content: string | Array<{ type: string; tool_use_id?: string }> }>;
     tools: Array<{ name: string }>;
   };
   assert.equal(body.system, "Architect instructions.");
+  assert.deepEqual(body.cache_control, { type: "ephemeral" });
   assert.equal(body.messages.some((message) =>
     Array.isArray(message.content) &&
     message.content.some((part) => part.type === "tool_result" && part.tool_use_id === "prior")
@@ -389,7 +409,12 @@ test("Anthropic transport maps system context, tool results, tool use, and usage
     name: "shell.run",
     arguments: { command: "npm test" },
   });
-  assert.deepEqual(turn.usage, { inputTokens: 31, outputTokens: 9 });
+  assert.deepEqual(turn.usage, {
+    inputTokens: 61,
+    cachedInputTokens: 20,
+    cacheWriteInputTokens: 10,
+    outputTokens: 9,
+  });
 });
 
 test("Google transport maps function declarations, function responses, calls, and usage", async () => {

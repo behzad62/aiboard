@@ -399,6 +399,7 @@ export function createProviderModel(config: RunnerProviderConfig): AgentModel {
     apiKey: config.secret,
     modelId: config.modelId,
     ...(config.protocol ? { protocol: config.protocol } : {}),
+    ...(config.providerId === "openai" ? { promptCaching: true } : {}),
   });
 }
 

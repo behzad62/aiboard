@@ -125,6 +125,8 @@ export interface NativeBuildUsageProjection {
     modelCalls: number;
     toolCalls: number;
     inputTokens: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
     outputTokens: number;
     estimatedCostMicros: number;
     activeMs: number;

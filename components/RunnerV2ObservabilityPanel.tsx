@@ -14,6 +14,9 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
     totalTokens:
       snapshot.budget.effective.inputTokens +
       snapshot.budget.effective.outputTokens,
+    cachedInputTokens: snapshot.budget.effective.cachedInputTokens ?? 0,
+    cacheWriteInputTokens:
+      snapshot.budget.effective.cacheWriteInputTokens ?? 0,
     agents: snapshot.agents.length,
     suspendedAgents: snapshot.agents.filter((agent) => agent.status === "suspended").length,
     toolErrors: snapshot.tools.filter((tool) => tool.isError).length,
@@ -62,6 +65,10 @@ export function RunnerV2ObservabilityPanel({
         <Stat label="Model calls" value={String(summary.modelCalls)} />
         <Stat label="Tool calls" value={String(summary.toolCalls)} />
         <Stat label="Tokens" value={formatTokenCount(summary.totalTokens)} />
+        <Stat
+          label="Cache read / write"
+          value={`${formatTokenCount(summary.cachedInputTokens)} / ${formatTokenCount(summary.cacheWriteInputTokens)}`}
+        />
         <Stat label="Agents" value={String(summary.agents)} />
         <Stat label="Evidence" value={String(summary.evidence)} />
         <Stat label="Active processes" value={String(summary.runningProcesses)} />
