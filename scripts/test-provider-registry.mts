@@ -71,8 +71,8 @@ const chatGptCodexSpark = MODEL_CATALOG.find(
     model.providerId === "chatgpt" && model.id === "gpt-5.3-codex-spark"
 );
 check(
-  "ChatGPT GPT-5.3 Codex Spark does not claim image input support",
-  chatGptCodexSpark?.capabilities.image === false,
+  "ChatGPT GPT-5.3 Codex Spark claims image input support",
+  chatGptCodexSpark?.capabilities.image === true,
   chatGptCodexSpark?.capabilities
 );
 check(
