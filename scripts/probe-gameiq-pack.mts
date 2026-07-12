@@ -14,11 +14,16 @@
  * probed model id, matching what those tools read (run.runs[0].modelIds,
  * traces filtered by caseId/scenarioId).
  *
- * Reads provider keys from the user's store.json AT RUNTIME, from --store.
- * Key values are NEVER printed or logged, on any code path, including
- * errors — only provider ids and file paths appear in output. An encrypted
- * store is refused outright (exit 2); this tool never attempts to decrypt
- * one.
+ * Reads provider credentials from the user's store.json AT RUNTIME, from
+ * --store: the apiKey plus, for account-runner providers (nvidia), the row's
+ * baseURL + runnerToken, threaded into ChatParams exactly as the app does
+ * (lib/client/engine.ts passes getProviderBaseURL/getProviderRunnerToken —
+ * both `row.X ?? undefined` — for every provider). Credential values are
+ * NEVER printed or logged, on any code path: only provider ids and file
+ * paths appear in output, and every caught error message is scrubbed of
+ * known credential values before it is printed or recorded (a provider 4xx
+ * body can echo a key back). An encrypted store is refused outright (exit
+ * 2); this tool never attempts to decrypt one.
  *
  * Run:
  *   npx tsx scripts/probe-gameiq-pack.mts --pack <packId> --models <id,id,...> \
@@ -34,8 +39,9 @@
  * first keyed expected action (scenario.expectedActions[0], which for every
  * GameIQ pack is constructed to be >= GAMEIQ_CORRECT_QUALITY_BAR — see
  * lib/benchmark/gameiq/battleship-v2.ts's makeV2Scenario), asserts every
- * scenario replays correct, and prints PASS/FAIL. Zero network calls; no
- * --store needed.
+ * scenario replays correct, then drives the error path with a throwing stub
+ * to assert credential scrubbing, and prints PASS/FAIL. Zero network calls;
+ * no --store needed.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -81,6 +87,37 @@ const SUPPORTED_PROVIDERS: Record<string, AIProvider> = {
   xai: xaiProvider,
   nvidia: nvidiaProvider,
 };
+
+// ─── secret scrubbing ───────────────────────────────────────────────────────
+// Every credential value read from --store (apiKey, runnerToken) is
+// registered here; scrubSecrets replaces each occurrence in error text with
+// "[redacted]" at the single choke point where a caught error becomes
+// output (callScenario's catch and the top-level main().catch). A provider
+// can echo part of a credential back in a 401/4xx body, and that text lands
+// verbatim in console output and the trace's rawResponse without this.
+
+const KNOWN_SECRETS: string[] = [];
+
+function registerSecrets(values: Array<string | undefined>): void {
+  for (const value of values) {
+    // Skip degenerate short values: scrubbing a 1-3 char "secret" would
+    // garble ordinary words in error messages. Real keys/tokens are long.
+    if (value && value.length >= 4 && !KNOWN_SECRETS.includes(value)) {
+      KNOWN_SECRETS.push(value);
+    }
+  }
+  // Longest first, so when one secret contains another the longer match is
+  // redacted whole instead of being split by the shorter replacement.
+  KNOWN_SECRETS.sort((a, b) => b.length - a.length);
+}
+
+function scrubSecrets(text: string): string {
+  let scrubbed = text;
+  for (const secret of KNOWN_SECRETS) {
+    scrubbed = scrubbed.split(secret).join("[redacted]");
+  }
+  return scrubbed;
+}
 
 // ─── run-file shape (must satisfy the consumer scripts above unchanged) ────
 
@@ -196,10 +233,20 @@ interface StoreEnvelope {
 interface StoreProviderKeyRow {
   providerId: string;
   apiKey?: string;
+  /** Endpoint override (account-runner providers) — lib/db/schema.ts. */
+  baseURL?: string | null;
+  /** Local account-provider runner token — lib/db/schema.ts. */
+  runnerToken?: string | null;
 }
 
 interface StoreData {
   providerKeys?: StoreProviderKeyRow[];
+}
+
+interface ProviderCredentials {
+  apiKey: string;
+  baseURL?: string;
+  runnerToken?: string;
 }
 
 function readFileOrExit(path: string, label: string): string {
@@ -223,12 +270,15 @@ function parseJsonOrExit<T>(raw: string, label: string): T {
 /**
  * Reads --store (an app store.json envelope — see lib/client/crypto-box.ts's
  * Envelope: { v, encrypted, salt?, iv?, data }), refuses an encrypted store,
- * and returns providerId -> apiKey from the plaintext data's providerKeys
- * array (lib/db/schema.ts's ProviderKey[] — an array of rows, not a plain
- * object). Never logs raw/envelope/data contents; only the file path and
- * provider ids ever reach console output.
+ * and returns providerId -> credentials from the plaintext data's
+ * providerKeys array (lib/db/schema.ts's ProviderKey[] — an array of rows,
+ * not a plain object): apiKey plus the row's optional baseURL/runnerToken
+ * (`?? undefined`, mirroring lib/client/providers.ts's getProviderBaseURL /
+ * getProviderRunnerToken). Every apiKey/runnerToken value is registered with
+ * the secret scrubber. Never logs raw/envelope/data contents; only the file
+ * path and provider ids ever reach console output.
  */
-function loadProviderKeyMap(storePath: string): Map<string, string> {
+function loadProviderCredentials(storePath: string): Map<string, ProviderCredentials> {
   const raw = readFileOrExit(storePath, "--store file");
   const envelope = parseJsonOrExit<StoreEnvelope>(raw, "--store file");
   if (
@@ -250,7 +300,7 @@ function loadProviderKeyMap(storePath: string): Map<string, string> {
   }
   const data = parseJsonOrExit<StoreData>(envelope.data, "--store envelope's data field");
   const rows = Array.isArray(data.providerKeys) ? data.providerKeys : [];
-  const map = new Map<string, string>();
+  const map = new Map<string, ProviderCredentials>();
   for (const row of rows) {
     if (
       row &&
@@ -258,7 +308,16 @@ function loadProviderKeyMap(storePath: string): Map<string, string> {
       typeof row.apiKey === "string" &&
       row.apiKey.length > 0
     ) {
-      map.set(row.providerId, row.apiKey);
+      const credentials: ProviderCredentials = {
+        apiKey: row.apiKey,
+        baseURL: typeof row.baseURL === "string" && row.baseURL ? row.baseURL : undefined,
+        runnerToken:
+          typeof row.runnerToken === "string" && row.runnerToken
+            ? row.runnerToken
+            : undefined,
+      };
+      map.set(row.providerId, credentials);
+      registerSecrets([credentials.apiKey, credentials.runnerToken]);
     }
   }
   return map;
@@ -379,6 +438,10 @@ async function callModelWithRetry(
 async function callScenario(input: {
   provider: AIProvider;
   apiKey: string;
+  /** Endpoint override from the store row (account-runner providers). */
+  baseURL?: string;
+  /** Local account-provider runner token from the store row. */
+  runnerToken?: string;
   bareModel: string;
   fullModelId: string;
   providerId: string;
@@ -386,6 +449,9 @@ async function callScenario(input: {
   scenario: GameIqScenario;
   scenarioIndex: number;
   totalScenarios: number;
+  /** Override the retry backoff (self-test's throwing scrub check passes []
+   * so it doesn't sleep out the real 2s/8s delays). */
+  retryDelaysMs?: number[];
 }): Promise<ProbeTraceRow> {
   const startedAt = new Date().toISOString();
   const messages: ChatMessage[] = [
@@ -397,6 +463,11 @@ async function callScenario(input: {
   ];
   const params: ChatParams = {
     apiKey: input.apiKey,
+    // Passed for every provider, undefined when the row has none — exactly
+    // how lib/client/engine.ts builds ChatParams (harmless for anthropic/xai;
+    // required by nvidia's account-runner transport).
+    baseURL: input.baseURL,
+    runnerToken: input.runnerToken,
     model: input.bareModel,
     messages,
     maxTokens: GAMEIQ_PROBE_MAX_TOKENS,
@@ -410,11 +481,14 @@ async function callScenario(input: {
     rawResponse = await callModelWithRetry(
       input.provider,
       params,
-      GAMEIQ_PROBE_RETRY_DELAYS_MS,
+      input.retryDelaysMs ?? GAMEIQ_PROBE_RETRY_DELAYS_MS,
       GAMEIQ_PROBE_TIMEOUT_MS
     );
   } catch (error) {
-    callError = error instanceof Error ? error.message : String(error);
+    // The single choke point where a caught provider error becomes output
+    // (recorded rawResponse below + the console line in probeModel): scrub
+    // known credential values before anything downstream sees the text.
+    callError = scrubSecrets(error instanceof Error ? error.message : String(error));
   }
   const completedAt = new Date().toISOString();
 
@@ -450,6 +524,8 @@ async function callScenario(input: {
 async function probeModel(input: {
   provider: AIProvider;
   apiKey: string;
+  baseURL?: string;
+  runnerToken?: string;
   bareModel: string;
   fullModelId: string;
   providerId: string;
@@ -465,6 +541,8 @@ async function probeModel(input: {
     const trace = await callScenario({
       provider: input.provider,
       apiKey: input.apiKey,
+      baseURL: input.baseURL,
+      runnerToken: input.runnerToken,
       bareModel: input.bareModel,
       fullModelId: input.fullModelId,
       providerId: input.providerId,
@@ -631,6 +709,45 @@ async function runSelfTest(packId: string, outDir: string): Promise<void> {
     );
     process.exit(1);
   }
+
+  // Secret-scrub check: drive the REAL callScenario error choke point with a
+  // provider that throws an error message containing a registered fake
+  // secret, and assert the recorded trace (the exact string probeModel also
+  // prints) comes out redacted. retryDelaysMs [] skips the 2s/8s backoff.
+  const fakeSecret = "sk-probe-scrub-check-secret-0000";
+  registerSecrets([fakeSecret]);
+  const throwingProvider: AIProvider = {
+    id: "self-test-throwing-stub",
+    name: "Self-test throwing stub (no network)",
+    listModels: () => [],
+    async validateApiKey() {
+      return true;
+    },
+    async *streamChat(): AsyncIterable<StreamChunk> {
+      throw new Error(`401 unauthorized for key ${fakeSecret}`);
+    },
+  };
+  const scrubTrace = await callScenario({
+    provider: throwingProvider,
+    apiKey: "stub",
+    bareModel: "stub-model",
+    fullModelId,
+    providerId: "self-test",
+    pack,
+    scenario: pack.scenarios[0],
+    scenarioIndex: 0,
+    totalScenarios: 1,
+    retryDelaysMs: [],
+  });
+  const scrubbedRaw = scrubTrace.rawResponse ?? "";
+  if (scrubbedRaw.includes(fakeSecret) || !scrubbedRaw.includes("[redacted]")) {
+    console.log(
+      `\nFAIL self-test: thrown-error secret was not scrubbed from the recorded trace.`
+    );
+    process.exit(1);
+  }
+  console.log(`\nPASS self-test scrub: thrown error recorded as "${scrubbedRaw}"`);
+
   console.log(`\nPASS self-test: all ${total} scenarios replayed correct for pack ${packId}.`);
   process.exit(0);
 }
@@ -663,20 +780,30 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const scenarioFilter = args.scenarios
-    ? new Set(
-        args.scenarios
-          .split(",")
-          .map((id) => id.trim())
-          .filter(Boolean)
-      )
-    : null;
-  const scenarios = scenarioFilter
-    ? pack.scenarios.filter((scenario) => scenarioFilter.has(scenario.id))
-    : pack.scenarios;
-  if (scenarios.length === 0) {
-    console.error(`--scenarios filter matched zero scenarios in pack ${pack.id}.`);
-    process.exit(2);
+  // Strict --scenarios validation: EVERY requested id must exist in the pack.
+  // A silently-dropped typo would probe fewer scenarios than intended and
+  // burn a paid delta-probe iteration on partial data, so any unmatched id is
+  // a hard exit 2 (which also covers the all-typos case).
+  let scenarios = pack.scenarios;
+  if (args.scenarios !== undefined) {
+    const requested = args.scenarios
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (requested.length === 0) {
+      console.error("--scenarios must list at least one scenario id.");
+      process.exit(2);
+    }
+    const knownIds = new Set(pack.scenarios.map((scenario) => scenario.id));
+    const unmatched = requested.filter((id) => !knownIds.has(id));
+    if (unmatched.length > 0) {
+      console.error(
+        `--scenarios ids not found in pack ${pack.id}: ${unmatched.join(", ")}`
+      );
+      process.exit(2);
+    }
+    const requestedIds = new Set(requested);
+    scenarios = pack.scenarios.filter((scenario) => requestedIds.has(scenario.id));
   }
 
   if (!args.models) {
@@ -699,13 +826,33 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const keyMap = loadProviderKeyMap(args.store);
-  // Validate every model has a key BEFORE making any calls, so a later
+  const credentialsByProvider = loadProviderCredentials(args.store);
+  // Validate every model's credentials BEFORE making any calls, so a later
   // missing key never wastes an earlier model's real API spend.
   for (const model of models) {
-    if (!keyMap.has(model.providerId)) {
+    const credentials = credentialsByProvider.get(model.providerId);
+    if (!credentials) {
       console.error(
         `No API key found for provider "${model.providerId}" in --store. Configure it in Settings first.`
+      );
+      process.exit(2);
+    }
+    // nvidia is an account-runner provider (lib/providers/nvidia.ts,
+    // credentialMode "provider-api-key-with-runner-token"): its streamChat
+    // errors immediately without a runner baseURL + runnerToken, so failing
+    // the preflight here beats burning the 2s/8s retry sleeps per scenario
+    // on a guaranteed error.
+    if (model.providerId === "nvidia" && (!credentials.baseURL || !credentials.runnerToken)) {
+      const missing = [
+        !credentials.baseURL ? "runner URL (baseURL)" : null,
+        !credentials.runnerToken ? "runner token" : null,
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      console.error(
+        `nvidia models call through the local account-provider runner, and the store's nvidia row is missing its ${missing}. ` +
+          "Start the runner (node lib/account-provider-runner.mjs, or the copy served at /account-provider-runner.mjs), " +
+          "save its URL + token on the Settings page's NVIDIA provider tab, then re-export store.json."
       );
       process.exit(2);
     }
@@ -713,11 +860,13 @@ async function main(): Promise<void> {
 
   mkdirSync(args.out, { recursive: true });
   for (const model of models) {
-    const apiKey = keyMap.get(model.providerId) as string;
+    const credentials = credentialsByProvider.get(model.providerId) as ProviderCredentials;
     console.log(`\n=== ${model.fullModelId}: probing ${scenarios.length} scenario(s) ===`);
     const runFile = await probeModel({
       provider: model.provider,
-      apiKey,
+      apiKey: credentials.apiKey,
+      baseURL: credentials.baseURL,
+      runnerToken: credentials.runnerToken,
       bareModel: model.bareModel,
       fullModelId: model.fullModelId,
       providerId: model.providerId,
@@ -731,7 +880,17 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Explicit exit: an abandoned timed-out provider stream can keep a socket
+    // handle alive and delay natural process exit long after the work is done.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(
+      scrubSecrets(
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      )
+    );
+    process.exit(1);
+  });
