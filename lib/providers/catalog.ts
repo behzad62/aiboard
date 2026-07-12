@@ -118,7 +118,7 @@ export const MODEL_CATALOG: CatalogModel[] = [
     providerId: "chatgpt",
     description:
       "Codex-style ChatGPT account model through the local account-provider runner",
-    capabilities: { image: true, document: true, audio: false, video: false },
+    capabilities: { image: false, document: true, audio: false, video: false },
   },
 
   // GitHub Copilot account-backed models - served through the local

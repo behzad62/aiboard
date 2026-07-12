@@ -66,6 +66,15 @@ check(
   !chatGptAccountModelIds.some((modelId) => modelId.startsWith("gpt-5.6")),
   chatGptAccountModelIds
 );
+const chatGptCodexSpark = MODEL_CATALOG.find(
+  (model) =>
+    model.providerId === "chatgpt" && model.id === "gpt-5.3-codex-spark"
+);
+check(
+  "ChatGPT GPT-5.3 Codex Spark does not claim image input support",
+  chatGptCodexSpark?.capabilities.image === false,
+  chatGptCodexSpark?.capabilities
+);
 check(
   "model context excludes stale ChatGPT 5.6 entries rejected by the account runner",
   !Object.keys(MODEL_CONTEXT_PROFILES).some((modelId) => modelId.startsWith("chatgpt:gpt-5.6")),
