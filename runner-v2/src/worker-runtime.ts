@@ -4,6 +4,7 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import { createChangeSet, type ChangeSet } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
@@ -52,6 +53,7 @@ export interface RunWorkerTaskOptions {
   continuationMessages?: readonly AgentMessage[];
   initialMessages: readonly AgentMessage[];
   clock?: () => string;
+  browserBackend?: BrowserBackend;
 }
 
 export interface WorkerTaskResult {
@@ -108,6 +110,13 @@ export async function runWorkerTask(
   for (const tool of createResearchTools({ artifacts: options.artifacts })) {
     broker.register(tool);
   }
+  if (options.browserBackend) {
+    for (const tool of createBrowserTools({
+      backend: options.browserBackend,
+      artifacts: options.artifacts,
+      taskId: options.taskId,
+    })) broker.register(tool);
+  }
   for (const tool of createGitTools()) broker.register(tool);
   if (options.evidenceStore) {
     for (const tool of createEvidenceTools({
@@ -152,6 +161,7 @@ export async function runWorkerTask(
     ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
     ...(options.projectId ? { projectId: options.projectId } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
+    ...(options.browserBackend ? { browserBackend: options.browserBackend } : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

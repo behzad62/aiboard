@@ -2,6 +2,7 @@ import type { AgentModel } from "./agent-contracts.js";
 import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
+import type { BrowserBackend } from "./browser-tools.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
 import type { ContextLimits } from "./context-assembler.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -45,6 +46,7 @@ export interface NativeWorkerDriverOptions {
   projectId: string;
   projectRoot: string;
   budgetLedger?: BudgetLedger;
+  browserBackend?: BrowserBackend;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   clock?: () => string;
@@ -136,6 +138,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           },
         ],
         clock: this.clock,
+        ...(this.options.browserBackend
+          ? { browserBackend: this.options.browserBackend }
+          : {}),
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);

@@ -6,6 +6,7 @@ import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { GoogleModel } from "./google-model.js";
@@ -42,6 +43,7 @@ export interface NativeBuildFactoryOptions {
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly memoryStore: SqliteProjectMemoryStore;
+  private readonly browserBackend = new PlaywrightBrowserBackend();
   private closed = false;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
@@ -118,6 +120,7 @@ export class NativeBuildFactory {
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
       budgetLedger,
+      browserBackend: this.browserBackend,
     });
     const architectDriver = new NativeArchitectRuntime({
       schedulerStore,
@@ -187,11 +190,12 @@ export class NativeBuildFactory {
     };
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.memoryStore.close();
     this.options.providerConfigs.close();
+    await this.browserBackend.closeAll();
   }
 }
 

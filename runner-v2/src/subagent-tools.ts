@@ -7,6 +7,7 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -48,6 +49,7 @@ export interface SubagentToolsOptions {
   memoryStore?: ProjectMemoryStore;
   projectId?: string;
   clock?: () => string;
+  browserBackend?: BrowserBackend;
 }
 
 export function createSubagentTools(
@@ -122,6 +124,13 @@ export function createSubagentTools(
       for (const tool of createProcessTools()) broker.register(tool);
       for (const tool of createResearchTools({ artifacts: options.artifacts })) {
         broker.register(tool);
+      }
+      if (options.browserBackend) {
+        for (const tool of createBrowserTools({
+          backend: options.browserBackend,
+          artifacts: options.artifacts,
+          taskId: options.taskId,
+        })) broker.register(tool);
       }
       for (const tool of createGitTools()) {
         if (tool.definition.name !== "git.commit") broker.register(tool);

@@ -228,7 +228,7 @@ async function closeResources(resources: RunnerResources | undefined): Promise<v
   if (!resources) return;
   await resources.server.close();
   await resources.builds.close();
-  resources.buildFactory.close();
+  await resources.buildFactory.close();
   resources.supervisor.close();
 }
 
