@@ -81,7 +81,9 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   );
   assert.equal(resumed.length, 2);
   assert.match(String(resumed[1].content), /same durable task attempt/i);
-  assert.match(String(resumed[1].content), /submit_task|request_guidance/i);
+  assert.match(String(resumed[1].content), /submit_task/);
+  assert.match(String(resumed[1].content), /ask_architect/);
+  assert.doesNotMatch(String(resumed[1].content), /request_guidance/);
 });
 
 test("native worker fails over with the same session, context, tools, and evidence", async () => {

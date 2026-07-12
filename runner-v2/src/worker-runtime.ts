@@ -20,6 +20,7 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
+import { createSessionTools } from "./session-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
@@ -130,6 +131,7 @@ export async function runWorkerTask(
     broker.register(tool);
   }
   for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
+  for (const tool of createSessionTools(options.sessions)) broker.register(tool);
   for (const tool of createProcessTools()) broker.register(tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {

@@ -368,7 +368,7 @@ export function workerContinuationMessages(
       content: [
         "Resume the same durable task attempt with its existing workspace, tool results, and evidence.",
         "Do not repeat completed work. Inspect current state only as needed.",
-        "Finish with submit_task when the task is ready; use request_guidance when an Architect decision is genuinely required.",
+        "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required.",
       ].join("\n"),
     },
   ];

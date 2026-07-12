@@ -39,6 +39,7 @@ import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
 import { createResearchTools } from "./research-tools.js";
+import { createSessionTools } from "./session-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
@@ -173,6 +174,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       if (tool.definition.readOnly) extras.register(tool);
     }
     for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
+    for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);
     for (const tool of createGitTools()) {
       if (tool.definition.readOnly) extras.register(tool);
     }
