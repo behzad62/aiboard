@@ -6,7 +6,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { AccountRunnerModel, ProviderTransportError } from "../src/account-runner-model.js";
+import { AnthropicModel } from "../src/anthropic-model.js";
 import { EncryptedProviderConfigStore } from "../src/encrypted-provider-config-store.js";
+import { GoogleModel } from "../src/google-model.js";
+import { createProviderModel } from "../src/native-build-factory.js";
+import { OpenAICompatibleModel } from "../src/openai-compatible-model.js";
+import { validateProviderConfigs } from "../src/provider-config-store.js";
 
 test("provider configuration is encrypted at rest and rejects the wrong runner token", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-provider-config-"));
@@ -40,6 +45,29 @@ test("provider configuration is encrypted at rest and rejects the wrong runner t
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("provider configuration rejects unknown transports and protocols before persistence", () => {
+  const base = {
+    runtimeId: "provider:model",
+    providerId: "provider",
+    modelId: "model",
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+  };
+  assert.throws(
+    () => validateProviderConfigs([{ ...base, transport: "mystery" as "google" }]),
+    /invalid transport/i
+  );
+  assert.throws(
+    () => validateProviderConfigs([{
+      ...base,
+      transport: "openai-compatible",
+      protocol: "legacy" as "responses",
+    }]),
+    /invalid protocol/i
+  );
 });
 
 test("account runner transport maps native tool calls, usage, and tool results", async () => {
@@ -138,4 +166,345 @@ test("account runner HTTP failures preserve status for provider routing", async 
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("OpenAI-compatible transport preserves native tool conversations and usage", async () => {
+  let captured: { url: string; init?: RequestInit } | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://gateway.example/v1/",
+    apiKey: "secret",
+    modelId: "coding-model",
+    fetch: async (input, init) => {
+      captured = { url: String(input), init };
+      return Response.json({
+        id: "req_openai",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: "I will inspect it.",
+            tool_calls: [{
+              id: "call_2",
+              type: "function",
+              function: { name: "fs_read", arguments: '{"path":"src/a.ts"}' },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 21, completion_tokens: 7 },
+      });
+    },
+  });
+  const turn = await model.complete({
+    sessionId: "session_openai",
+    messages: [
+      { id: "s", role: "system", content: "Use tools." },
+      {
+        id: "a",
+        role: "assistant",
+        content: [{
+          type: "tool_call",
+          callId: "prior_call",
+          name: "fs.read",
+          arguments: { path: "README.md" },
+        }],
+      },
+      {
+        id: "t",
+        role: "tool",
+        content: {
+          callId: "prior_call",
+          toolName: "fs.read",
+          isError: false,
+          content: [{ type: "text", text: "contents" }],
+        },
+      },
+    ],
+    tools: [{
+      name: "fs.read",
+      description: "Read a file",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+  assert.equal(captured?.url, "https://gateway.example/v1/chat/completions");
+  assert.equal(new Headers(captured?.init?.headers).get("authorization"), "Bearer secret");
+  const body = JSON.parse(String(captured?.init?.body)) as {
+    messages: Array<{ role: string; tool_call_id?: string; tool_calls?: unknown[] }>;
+    tools: Array<{ function: { name: string } }>;
+  };
+  assert.equal(body.messages.some((message) => message.role === "tool" && message.tool_call_id === "prior_call"), true);
+  assert.equal(body.messages.some((message) => message.role === "assistant" && message.tool_calls?.length === 1), true);
+  assert.equal(body.tools.length, 1);
+  assert.equal(body.tools[0].function.name, "fs_read");
+  assert.equal(turn.providerRequestId, "req_openai");
+  assert.deepEqual(turn.usage, { inputTokens: 21, outputTokens: 7 });
+  assert.deepEqual(turn.blocks.at(-1), {
+    type: "tool_call",
+    callId: "call_2",
+    name: "fs.read",
+    arguments: { path: "src/a.ts" },
+  });
+});
+
+test("OpenAI Responses transport preserves function-call history for Codex models", async () => {
+  let captured: { url: string; init?: RequestInit } | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://api.openai.example/v1",
+    apiKey: "secret",
+    modelId: "gpt-codex",
+    protocol: "responses",
+    fetch: async (input, init) => {
+      captured = { url: String(input), init };
+      return Response.json({
+        id: "resp_1",
+        status: "completed",
+        output: [
+          { type: "message", content: [{ type: "output_text", text: "Done." }] },
+          {
+            type: "function_call",
+            call_id: "call_responses",
+            name: "fs_read",
+            arguments: '{"path":"tsconfig.json"}',
+          },
+        ],
+        usage: { input_tokens: 51, output_tokens: 13 },
+      });
+    },
+  });
+  const turn = await model.complete({
+    sessionId: "responses_session",
+    messages: [
+      { id: "s", role: "system", content: "Use tools." },
+      {
+        id: "a",
+        role: "assistant",
+        content: [{
+          type: "tool_call",
+          callId: "prior_responses",
+          name: "fs.read",
+          arguments: { path: "package.json" },
+        }],
+      },
+      {
+        id: "t",
+        role: "tool",
+        content: {
+          callId: "prior_responses",
+          toolName: "fs.read",
+          isError: false,
+          content: [{ type: "text", text: "{}" }],
+        },
+      },
+    ],
+    tools: [{
+      name: "fs.read",
+      description: "Read",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+  assert.equal(captured?.url, "https://api.openai.example/v1/responses");
+  const body = JSON.parse(String(captured?.init?.body)) as {
+    input: Array<{ type?: string; call_id?: string; name?: string }>;
+    tools: Array<{ name: string }>;
+  };
+  assert.equal(body.input.some((item) => item.type === "function_call" && item.name === "fs_read"), true);
+  assert.equal(body.input.some((item) => item.type === "function_call_output" && item.call_id === "prior_responses"), true);
+  assert.equal(body.tools[0].name, "fs_read");
+  assert.equal(turn.providerRequestId, "resp_1");
+  assert.deepEqual(turn.usage, { inputTokens: 51, outputTokens: 13 });
+  assert.deepEqual(turn.blocks.at(-1), {
+    type: "tool_call",
+    callId: "call_responses",
+    name: "fs.read",
+    arguments: { path: "tsconfig.json" },
+  });
+});
+
+test("Anthropic transport maps system context, tool results, tool use, and usage", async () => {
+  let captured: { url: string; init?: RequestInit } | undefined;
+  const model = new AnthropicModel({
+    baseUrl: "https://anthropic.example",
+    apiKey: "anthropic-secret",
+    modelId: "claude-code",
+    fetch: async (input, init) => {
+      captured = { url: String(input), init };
+      return Response.json({
+        id: "req_anthropic",
+        stop_reason: "tool_use",
+        content: [
+          { type: "text", text: "Checking." },
+          { type: "tool_use", id: "call_3", name: "shell_run", input: { command: "npm test" } },
+        ],
+        usage: { input_tokens: 31, output_tokens: 9 },
+      });
+    },
+  });
+  const turn = await model.complete({
+    sessionId: "session_anthropic",
+    messages: [
+      { id: "s", role: "system", content: "Architect instructions." },
+      { id: "u", role: "user", content: "Verify it." },
+      {
+        id: "t",
+        role: "tool",
+        content: {
+          callId: "prior",
+          toolName: "shell.run",
+          isError: true,
+          error: { code: "exit_1", message: "failed" },
+          content: [{ type: "text", text: "test failed" }],
+        },
+      },
+    ],
+    tools: [{
+      name: "shell.run",
+      description: "Run a command",
+      inputSchema: { type: "object" },
+      readOnly: false,
+      effect: "workspace",
+    }],
+  });
+  assert.equal(captured?.url, "https://anthropic.example/v1/messages");
+  const headers = new Headers(captured?.init?.headers);
+  assert.equal(headers.get("x-api-key"), "anthropic-secret");
+  const body = JSON.parse(String(captured?.init?.body)) as {
+    system: string;
+    messages: Array<{ role: string; content: string | Array<{ type: string; tool_use_id?: string }> }>;
+    tools: Array<{ name: string }>;
+  };
+  assert.equal(body.system, "Architect instructions.");
+  assert.equal(body.messages.some((message) =>
+    Array.isArray(message.content) &&
+    message.content.some((part) => part.type === "tool_result" && part.tool_use_id === "prior")
+  ), true);
+  assert.equal(body.tools.length, 1);
+  assert.equal(body.tools[0].name, "shell_run");
+  assert.equal(turn.providerRequestId, "req_anthropic");
+  assert.equal(turn.stopReason, "tool_calls");
+  assert.deepEqual(turn.blocks.at(-1), {
+    type: "tool_call",
+    callId: "call_3",
+    name: "shell.run",
+    arguments: { command: "npm test" },
+  });
+  assert.deepEqual(turn.usage, { inputTokens: 31, outputTokens: 9 });
+});
+
+test("Google transport maps function declarations, function responses, calls, and usage", async () => {
+  let captured: { url: string; init?: RequestInit } | undefined;
+  const model = new GoogleModel({
+    baseUrl: "https://generativelanguage.example/v1beta",
+    apiKey: "google-secret",
+    modelId: "gemini-code",
+    fetch: async (input, init) => {
+      captured = { url: String(input), init };
+      return Response.json({
+        responseId: "req_google",
+        candidates: [{
+          finishReason: "STOP",
+          content: { role: "model", parts: [
+            { text: "Inspecting." },
+            { functionCall: { name: "fs_read", args: { path: "package.json" }, id: "call_4" } },
+          ] },
+        }],
+        usageMetadata: { promptTokenCount: 41, candidatesTokenCount: 11 },
+      });
+    },
+  });
+  const turn = await model.complete({
+    sessionId: "session_google",
+    messages: [
+      { id: "s", role: "system", content: "Use the repository." },
+      {
+        id: "t",
+        role: "tool",
+        content: {
+          callId: "prior_google",
+          toolName: "fs.read",
+          isError: false,
+          content: [{ type: "json", value: { ok: true } }],
+        },
+      },
+    ],
+    tools: [{
+      name: "fs.read",
+      description: "Read a file",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+  assert.equal(captured?.url, "https://generativelanguage.example/v1beta/models/gemini-code:generateContent?key=google-secret");
+  const body = JSON.parse(String(captured?.init?.body)) as {
+    systemInstruction: { parts: Array<{ text: string }> };
+    contents: Array<{ parts: Array<{ functionResponse?: unknown }> }>;
+    tools: Array<{ functionDeclarations: Array<{ name: string }> }>;
+  };
+  assert.equal(body.systemInstruction.parts[0].text, "Use the repository.");
+  assert.equal(body.contents.some((content) => content.parts.some((part) => part.functionResponse)), true);
+  assert.equal(body.tools[0].functionDeclarations.length, 1);
+  assert.equal(body.tools[0].functionDeclarations[0].name, "fs_read");
+  assert.equal(turn.providerRequestId, "req_google");
+  assert.equal(turn.stopReason, "tool_calls", "a function call controls the stop reason even if Gemini says STOP");
+  assert.deepEqual(turn.blocks.at(-1), {
+    type: "tool_call",
+    callId: "call_4",
+    name: "fs.read",
+    arguments: { path: "package.json" },
+  });
+  assert.deepEqual(turn.usage, { inputTokens: 41, outputTokens: 11 });
+});
+
+test("native HTTP provider failures preserve routing metadata without leaking secrets", async () => {
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://gateway.example/v1",
+    apiKey: "do-not-leak",
+    modelId: "coding-model",
+    fetch: async () => new Response(JSON.stringify({
+      error: { message: "rate limited", code: "rate_limit_exceeded" },
+    }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "12" },
+    }),
+  });
+  await assert.rejects(
+    () => model.complete({ sessionId: "s", messages: [], tools: [] }),
+    (error: unknown) =>
+      error instanceof ProviderTransportError &&
+      error.status === 429 &&
+      error.code === "rate_limit_exceeded" &&
+      error.retryAfterMs === 12_000 &&
+      !error.message.includes("do-not-leak")
+  );
+});
+
+test("native Build factory instantiates every provider-neutral transport", () => {
+  const common = {
+    runtimeId: "provider:model",
+    providerId: "provider",
+    modelId: "model",
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+  };
+  assert.ok(createProviderModel({
+    ...common,
+    transport: "account-runner",
+    baseUrl: "http://127.0.0.1:1455",
+  }) instanceof AccountRunnerModel);
+  assert.ok(createProviderModel({
+    ...common,
+    transport: "openai-compatible",
+    baseUrl: "https://gateway.example/v1",
+  }) instanceof OpenAICompatibleModel);
+  assert.ok(createProviderModel({
+    ...common,
+    transport: "anthropic",
+  }) instanceof AnthropicModel);
+  assert.ok(createProviderModel({
+    ...common,
+    transport: "google",
+  }) instanceof GoogleModel);
 });

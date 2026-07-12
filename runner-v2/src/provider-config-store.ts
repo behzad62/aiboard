@@ -15,6 +15,7 @@ export interface RunnerProviderConfig {
   capabilities: string[];
   priority: number;
   reasoningEffort?: string;
+  protocol?: "chat-completions" | "responses";
 }
 
 export interface ProviderConfigStore {
@@ -39,6 +40,16 @@ export function validateProviderConfigs(
     if (ids.has(config.runtimeId)) {
       throw new Error(`Duplicate provider runtime ${config.runtimeId}.`);
     }
+    if (!(TRANSPORTS as readonly unknown[]).includes(config.transport)) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid transport.`);
+    }
+    if (
+      config.protocol !== undefined &&
+      (!(OPENAI_PROTOCOLS as readonly unknown[]).includes(config.protocol) ||
+        config.transport !== "openai-compatible")
+    ) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid protocol.`);
+    }
     if (!Number.isSafeInteger(config.priority) || config.priority < 0) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid priority.`);
     }
@@ -48,6 +59,15 @@ export function validateProviderConfigs(
     ids.add(config.runtimeId);
   }
 }
+
+const TRANSPORTS = [
+  "account-runner",
+  "openai-compatible",
+  "anthropic",
+  "google",
+] as const;
+
+const OPENAI_PROTOCOLS = ["chat-completions", "responses"] as const;
 
 export function cloneProviderConfigs(
   configs: readonly RunnerProviderConfig[]

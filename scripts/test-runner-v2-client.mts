@@ -7,7 +7,11 @@ import {
   selectNativeProjectHandoff,
   type NativeRunnerConnection,
 } from "../lib/client/runner-v2";
-import { selectNativeBuildRuntimes } from "../lib/client/native-build-engine";
+import {
+  resolveNativeProviderTransport,
+  nativeProviderProtocol,
+  selectNativeBuildRuntimes,
+} from "../lib/client/native-build-engine";
 
 assert.deepEqual(
   selectNativeBuildRuntimes(
@@ -19,6 +23,31 @@ assert.deepEqual(
     workerRuntimeIds: ["chatgpt:gpt-5.4"],
   }
 );
+assert.deepEqual(resolveNativeProviderTransport("openai"), {
+  transport: "openai-compatible",
+  baseUrl: "https://api.openai.com/v1",
+});
+assert.equal(nativeProviderProtocol("openai", "gpt-5.3-codex"), "responses");
+assert.equal(nativeProviderProtocol("openai", "gpt-5.6"), "chat-completions");
+assert.equal(nativeProviderProtocol("openrouter", "openai/gpt-5.3-codex"), "chat-completions");
+assert.deepEqual(resolveNativeProviderTransport("anthropic"), {
+  transport: "anthropic",
+});
+assert.deepEqual(resolveNativeProviderTransport("foundry", "https://azure.example/anthropic"), {
+  transport: "anthropic",
+  baseUrl: "https://azure.example/anthropic",
+});
+assert.deepEqual(resolveNativeProviderTransport("google"), {
+  transport: "google",
+});
+assert.deepEqual(resolveNativeProviderTransport(
+  "nvidia",
+  "http://127.0.0.1:1455",
+  "runner-token"
+), {
+  transport: "account-runner",
+  baseUrl: "http://127.0.0.1:1455",
+});
 assert.deepEqual(
   selectNativeBuildRuntimes(["chatgpt:gpt-5.5"], "chatgpt:gpt-5.5"),
   {

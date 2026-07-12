@@ -1,9 +1,11 @@
 import type { Discussion, EffortLevel } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import { parseModelId } from "@/lib/providers/base";
+import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import {
   getMessagesForDiscussion,
+  getCustomModelById,
   getProviderKey,
   insertFinalResult,
   updateDiscussion,
@@ -222,25 +224,41 @@ function providerConfig(
   priority: number
 ): NativeProviderConfig {
   const { providerId, model } = parseModelId(runtimeId);
+  if (providerId === "custom") {
+    const custom = getCustomModelById(model);
+    if (!custom) throw new Error(`Custom model ${model} is not configured.`);
+    return {
+      runtimeId,
+      providerId,
+      modelId: custom.model,
+      transport: "openai-compatible",
+      baseUrl: custom.baseURL,
+      secret: custom.apiKey || "aiboard-local-endpoint",
+      capabilities: ["*"],
+      priority,
+    };
+  }
   const saved = getProviderKey(providerId);
   const definition = getProviderDefinition(providerId);
   if (!saved?.enabled || !saved.apiKey) {
     throw new Error(`Provider ${providerId} is not configured.`);
   }
-  if (!definition?.accountRunner) {
-    throw new Error(
-      `Runner V2 currently requires an account-backed model; ${providerId}:${model} is not yet available in the native kernel.`
-    );
-  }
-  if (!saved.baseURL) throw new Error(`Provider ${providerId} has no account-runner URL.`);
+  const native = resolveNativeProviderTransport(
+    providerId,
+    saved.baseURL ?? undefined,
+    saved.runnerToken ?? undefined,
+    Boolean(definition?.accountRunner)
+  );
   return {
     runtimeId,
     providerId,
     modelId: model,
-    transport: "account-runner",
-    baseUrl: saved.baseURL,
+    transport: native.transport,
+    ...(native.baseUrl ? { baseUrl: native.baseUrl } : {}),
     secret: saved.apiKey,
-    ...(saved.runnerToken ? { runnerToken: saved.runnerToken } : {}),
+    ...(native.transport === "account-runner" && saved.runnerToken
+      ? { runnerToken: saved.runnerToken }
+      : {}),
     // Native coding agents can use the task-scoped tool registry regardless of
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],
@@ -248,7 +266,49 @@ function providerConfig(
     ...(discussion.reasoningEffort && discussion.reasoningEffort !== "default"
       ? { reasoningEffort: discussion.reasoningEffort }
       : {}),
+    ...(native.transport === "openai-compatible"
+      ? { protocol: nativeProviderProtocol(providerId, model) }
+      : {}),
   };
+}
+
+export function nativeProviderProtocol(
+  providerId: string,
+  modelId: string
+): "chat-completions" | "responses" {
+  return providerId === "openai" &&
+    MODEL_CATALOG.some((model) =>
+      model.providerId === "openai" && model.id === modelId && model.api === "responses"
+    )
+    ? "responses"
+    : "chat-completions";
+}
+
+export function resolveNativeProviderTransport(
+  providerId: string,
+  baseUrl?: string,
+  runnerToken?: string,
+  accountRunner = false
+): Pick<NativeProviderConfig, "transport" | "baseUrl"> {
+  if (accountRunner || runnerToken) {
+    if (!baseUrl) throw new Error(`Provider ${providerId} has no account-runner URL.`);
+    return { transport: "account-runner", baseUrl };
+  }
+  if (providerId === "anthropic" || providerId === "foundry") {
+    return { transport: "anthropic", ...(baseUrl ? { baseUrl } : {}) };
+  }
+  if (providerId === "google") {
+    return { transport: "google", ...(baseUrl ? { baseUrl } : {}) };
+  }
+  const resolvedBaseUrl = baseUrl ?? ({
+    openai: "https://api.openai.com/v1",
+    openrouter: "https://openrouter.ai/api/v1",
+    xai: "https://api.x.ai/v1",
+  } as Record<string, string>)[providerId];
+  if (!resolvedBaseUrl) {
+    throw new Error(`Provider ${providerId} needs an OpenAI-compatible base URL.`);
+  }
+  return { transport: "openai-compatible", baseUrl: resolvedBaseUrl };
 }
 
 function buildObjective(discussion: Discussion): string {

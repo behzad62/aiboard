@@ -23,6 +23,7 @@ export interface NativeProviderConfig {
   capabilities: string[];
   priority: number;
   reasoningEffort?: string;
+  protocol?: "chat-completions" | "responses";
 }
 
 export interface CreateNativeBuildInput {

@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { AccountRunnerModel } from "./account-runner-model.js";
+import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
+import { GoogleModel } from "./google-model.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
+import { OpenAICompatibleModel } from "./openai-compatible-model.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
@@ -60,7 +63,7 @@ export class NativeBuildFactory {
     const candidates = selected.all;
     const workerCandidates = selected.workers;
     const models = new Map<string, AgentModel>(
-      selectedConfigs.map((config) => [config.runtimeId, createModel(config)])
+      selectedConfigs.map((config) => [config.runtimeId, createProviderModel(config)])
     );
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
     const sessions = new SqliteAgentSessionStore(
@@ -243,20 +246,42 @@ function toCandidate(config: RunnerProviderConfig): AgentRuntimeCandidate {
   };
 }
 
-function createModel(config: RunnerProviderConfig): AgentModel {
-  if (config.transport !== "account-runner") {
-    throw new Error(`Provider transport ${config.transport} is not implemented yet.`);
+export function createProviderModel(config: RunnerProviderConfig): AgentModel {
+  if (config.transport === "account-runner") {
+    if (!config.baseUrl) {
+      throw new Error(`Account runtime ${config.runtimeId} requires a baseUrl.`);
+    }
+    return new AccountRunnerModel({
+      baseUrl: config.baseUrl,
+      runnerPath: config.providerId,
+      runnerToken: config.runnerToken ?? config.secret,
+      modelId: config.modelId,
+      ...(config.runnerToken ? { providerApiKey: config.secret } : {}),
+      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    });
+  }
+  if (config.transport === "anthropic") {
+    return new AnthropicModel({
+      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+      apiKey: config.secret,
+      modelId: config.modelId,
+    });
+  }
+  if (config.transport === "google") {
+    return new GoogleModel({
+      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+      apiKey: config.secret,
+      modelId: config.modelId,
+    });
   }
   if (!config.baseUrl) {
-    throw new Error(`Account runtime ${config.runtimeId} requires a baseUrl.`);
+    throw new Error(`OpenAI-compatible runtime ${config.runtimeId} requires a baseUrl.`);
   }
-  return new AccountRunnerModel({
+  return new OpenAICompatibleModel({
     baseUrl: config.baseUrl,
-    runnerPath: config.providerId,
-    runnerToken: config.runnerToken ?? config.secret,
+    apiKey: config.secret,
     modelId: config.modelId,
-    ...(config.runnerToken ? { providerApiKey: config.secret } : {}),
-    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    ...(config.protocol ? { protocol: config.protocol } : {}),
   });
 }
 

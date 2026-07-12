@@ -706,6 +706,7 @@ function redactProviderConfig(config: RunnerProviderConfig) {
     capabilities: [...config.capabilities],
     priority: config.priority,
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    ...(config.protocol ? { protocol: config.protocol } : {}),
     configured: true,
   };
 }
