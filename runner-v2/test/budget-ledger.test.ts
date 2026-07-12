@@ -213,6 +213,15 @@ test("startup recovery closes orphaned active segments before a new window", () 
       ledger.recoverInterruptedActive("run_1", "startup:run_1").length,
       0,
     );
+    assert.equal(
+      ledger.stopActive({
+        scopeId: "run_1",
+        segmentId: "active_interrupted",
+        occurredAt: "2026-07-12T00:10:00.000Z",
+        idempotencyKey: "active:stop:replayed-after-recovery",
+      }).type,
+      "active.stopped",
+    );
     ledger.startWindow({
       scopeId: "run_1",
       occurredAt: "2026-07-12T00:10:00.000Z",

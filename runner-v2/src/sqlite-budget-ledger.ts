@@ -117,7 +117,15 @@ export class SqliteBudgetLedger implements BudgetLedger {
   stopActive(input: StopActiveInput): BudgetEvent {
     const projection = this.snapshot(input.scopeId);
     const segment = projection.activeSegments[input.segmentId];
-    if (!segment || segment.durationMs !== undefined) {
+    if (segment?.durationMs !== undefined) {
+      const existing = this.events(input.scopeId).findLast(
+        (event) =>
+          event.type === "active.stopped" &&
+          event.payload.segmentId === input.segmentId,
+      );
+      if (existing) return existing;
+    }
+    if (!segment) {
       throw new Error(`Active segment ${input.segmentId} is not open.`);
     }
     const durationMs = Date.parse(input.occurredAt) - Date.parse(segment.startedAt);
