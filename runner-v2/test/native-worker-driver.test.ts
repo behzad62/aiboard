@@ -10,6 +10,8 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import {
   NativeWorkerDriver,
+  recoverableWorkerSuspension,
+  workerContinuationMessages,
   shouldFailoverWorkerFailure,
 } from "../src/native-worker-driver.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -50,6 +52,32 @@ test("invalid worker requests fail once instead of cycling through runtimes", ()
     }),
     true
   );
+});
+
+test("worker lifecycle no-ops preserve the attempt and receive a fresh resume reminder", () => {
+  assert.deepEqual(
+    recoverableWorkerSuspension("model_ended_without_lifecycle", ""),
+    { type: "paused", reason: "worker_model_ended_without_lifecycle" }
+  );
+  assert.equal(recoverableWorkerSuspension("checkpoint_error", "write failed"), undefined);
+
+  const first = workerContinuationMessages(
+    { id: "context:abc", role: "user", content: "Task context" },
+    false,
+    "task_a",
+    0
+  );
+  assert.equal(first.length, 1);
+
+  const resumed = workerContinuationMessages(
+    { id: "context:abc", role: "user", content: "Task context" },
+    true,
+    "task_a",
+    4
+  );
+  assert.equal(resumed.length, 2);
+  assert.match(String(resumed[1].content), /same durable task attempt/i);
+  assert.match(String(resumed[1].content), /submit_task|request_guidance/i);
 });
 
 test("native worker fails over with the same session, context, tools, and evidence", async () => {

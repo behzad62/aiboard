@@ -1,4 +1,5 @@
-import type { AgentModel } from "./agent-contracts.js";
+import type { AgentMessage, AgentModel } from "./agent-contracts.js";
+import type { AgentSuspensionReason } from "./agent-loop.js";
 import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
@@ -98,6 +99,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       );
       const context = await this.workerContext(assignment, workspace.path);
       const sessionId = `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`;
+      const sessionEventCount = this.options.sessions.events(sessionId).length;
       const budgetedModel = this.options.budgetLedger
         ? new BudgetedAgentModel({
             model,
@@ -136,13 +138,16 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             ].join("\n"),
           },
         ],
-        continuationMessages: [
+        continuationMessages: workerContinuationMessages(
           {
             id: `context:${context.digest}`,
             role: "user",
             content: context.text,
           },
-        ],
+          sessionEventCount > 0,
+          assignment.task.id,
+          sessionEventCount
+        ),
         clock: this.clock,
         ...(this.options.browserBackend
           ? { browserBackend: this.options.browserBackend }
@@ -199,6 +204,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         runtimeId = selection.runtime.runtimeId;
         this.assignRuntime(assignment, runtimeId);
         continue;
+      }
+      if (result.loop.status === "suspended") {
+        const recoverable = recoverableWorkerSuspension(
+          result.loop.reason,
+          result.loop.error
+        );
+        if (recoverable) return recoverable;
       }
       return {
         type: "failed",
@@ -315,6 +327,40 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       recentHistory: [],
     });
   }
+}
+
+export function recoverableWorkerSuspension(
+  reason: AgentSuspensionReason,
+  _error?: string
+): WorkerOutcome | undefined {
+  if (reason === "model_ended_without_lifecycle") {
+    return {
+      type: "paused",
+      reason: "worker_model_ended_without_lifecycle",
+    };
+  }
+  return undefined;
+}
+
+export function workerContinuationMessages(
+  context: AgentMessage,
+  resumed: boolean,
+  taskId: string,
+  resumeSequence: number
+): AgentMessage[] {
+  if (!resumed) return [context];
+  return [
+    context,
+    {
+      id: `worker-resume:${taskId}:${resumeSequence}`,
+      role: "user",
+      content: [
+        "Resume the same durable task attempt with its existing workspace, tool results, and evidence.",
+        "Do not repeat completed work. Inspect current state only as needed.",
+        "Finish with submit_task when the task is ready; use request_guidance when an Architect decision is genuinely required.",
+      ].join("\n"),
+    },
+  ];
 }
 
 export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
