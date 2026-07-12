@@ -15,6 +15,7 @@ import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SchedulerStore } from "./scheduler-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
+import { createSubagentTools } from "./subagent-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { ToolBroker } from "./tool-broker.js";
@@ -131,6 +132,23 @@ export async function runWorkerTask(
       clock,
     })) broker.register(tool);
   }
+  for (const tool of createSubagentTools({
+    model: options.model,
+    runId: options.runId,
+    parentSessionId: options.sessionId,
+    taskId: options.taskId,
+    parentActorId: options.actorId,
+    permissionProfile: options.permissionProfile,
+    workspacePath: options.workspace.path,
+    artifacts: options.artifacts,
+    ledger: options.ledger,
+    sessions: options.sessions,
+    ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
+    ...(options.skillCatalog ? { skillCatalog: options.skillCatalog } : {}),
+    ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
+    ...(options.projectId ? { projectId: options.projectId } : {}),
+    ...(options.clock ? { clock: options.clock } : {}),
+  })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;
   broker.register(createSubmitTaskTool(async (summary) => {

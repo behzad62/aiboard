@@ -250,6 +250,119 @@ test("worker can submit an evidence-backed inspection task without fabricating a
   }
 });
 
+test("worker subagent edits the shared task workspace and returns without parent lifecycle authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-subagent-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let evidenceStore: SqliteEvidenceStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_subagent",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_subagent",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_subagent");
+    const expectedHash = createHash("sha256")
+      .update(readFileSync(join(workspace.path, "value.txt")))
+      .digest("hex");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const requests: AgentModelRequest[] = [];
+    let parentTurn = 0;
+    let subagentTurn = 0;
+    const model: AgentModel = {
+      complete: async (request) => {
+        requests.push(request);
+        if (request.sessionId.includes(":subagent:")) {
+          subagentTurn += 1;
+          return subagentTurn === 1
+            ? toolTurn("subagent-edit", "fs.patch", {
+                path: "value.txt",
+                expectedSha256: expectedHash,
+                search: "one",
+                replace: "two",
+              })
+            : toolTurn("subagent-return", "return_to_parent", {
+                summary: "Changed value.txt from one to two.",
+                artifactHashes: [],
+              });
+        }
+        parentTurn += 1;
+        if (parentTurn === 1) {
+          return toolTurn("delegate", "spawn_subagent", {
+            assignment: "Change value.txt from one to two.",
+            maxTurns: 4,
+          });
+        }
+        if (parentTurn === 2) {
+          return toolTurn("verify", "run_evidence_command", {
+            label: "verify delegated edit",
+            command: process.execPath,
+            args: ["-e", "const fs=require('node:fs');process.exit(fs.readFileSync('value.txt','utf8').trim()==='two'?0:1)"],
+            cwd: ".",
+          });
+        }
+        return toolTurn("submit", "submit_task", {
+          summary: "Accept delegated value edit",
+        });
+      },
+    };
+    const result = await runWorkerTask({
+      model,
+      runId: "run_subagent",
+      sessionId: "session_subagent_parent",
+      taskId: "task_subagent",
+      actorId: "worker_1",
+      permissionProfile: "project",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore,
+      initialMessages: [
+        { id: "system", role: "system", content: "Delegate, verify, and submit." },
+      ],
+    });
+    assert.equal(result.loop.status, "submitted");
+    assert.equal(readFileSync(join(workspace.path, "value.txt"), "utf8").trim(), "two");
+    const childRequest = requests.find((request) => request.sessionId.includes(":subagent:"));
+    assert.ok(childRequest);
+    const childTools = new Set(childRequest.tools.map((tool) => tool.name));
+    assert.equal(childTools.has("fs.patch"), true);
+    assert.equal(childTools.has("return_to_parent"), true);
+    assert.equal(childTools.has("submit_task"), false);
+    assert.equal(childTools.has("git.commit"), false);
+    assert.equal(childTools.has("spawn_subagent"), false, "subagent depth is bounded to one");
+    const parentSession = await sessions.load("session_subagent_parent");
+    const spawnResult = parentSession.checkpoint?.messages.find((message) =>
+      message.role === "tool" &&
+      typeof message.content === "object" &&
+      !Array.isArray(message.content) &&
+      message.content.toolName === "spawn_subagent"
+    );
+    assert.ok(spawnResult, "structured subagent findings are durable in the parent checkpoint");
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    evidenceStore?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return {
     blocks: [{ type: "tool_call", callId, name, arguments: args }],

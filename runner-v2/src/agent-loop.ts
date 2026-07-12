@@ -29,6 +29,13 @@ export type AgentLoopResult =
       messages: AgentMessage[];
     }
   | {
+      status: "subagent_returned";
+      summary: string;
+      artifactHashes: string[];
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
       status: "waiting_for_architect";
       requestId: string;
       blocking: boolean;
@@ -315,6 +322,14 @@ function lifecycleResult(
       return {
         status: "replan_requested",
         requestId: signal.requestId,
+        turns,
+        messages,
+      };
+    case "return_subagent":
+      return {
+        status: "subagent_returned",
+        summary: signal.summary,
+        artifactHashes: [...signal.artifactHashes],
         turns,
         messages,
       };

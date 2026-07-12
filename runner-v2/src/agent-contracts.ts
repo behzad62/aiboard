@@ -78,6 +78,7 @@ export type AgentLifecycleSignal =
   | { type: "submit_task"; changeSetId: string }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
   | { type: "request_replan"; requestId: string }
+  | { type: "return_subagent"; summary: string; artifactHashes: string[] }
   | {
       type: "architect_action";
       action:
