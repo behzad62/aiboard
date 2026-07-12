@@ -65,6 +65,7 @@ const discussion: Discussion = {
   convergenceScore: null,
   buildStopReason: null,
   buildStoppedAt: null,
+  nativeBuildRunId: "native-old-run",
   createdAt: now,
   updatedAt: now,
 };
@@ -103,7 +104,7 @@ const savedNote = clientApi.addBuildNote(
   discussion.id,
   `Please use the newly attached file: ${newAttachment.filename}.`
 );
-clientApi.continueDiscussion(discussion.id);
+const continuedDiscussion = clientApi.continueDiscussion(discussion.id);
 const resumed = clientApi.getDiscussionData(discussion.id);
 const message = storeApi
   .getMessagesForDiscussion(discussion.id)
@@ -120,6 +121,14 @@ check(
         attachments: resumed.attachments.map((entry) => entry.id),
       }
     : null
+);
+check(
+  "continue returns the authoritative replacement native run identity",
+  Boolean(
+    continuedDiscussion?.nativeBuildRunId &&
+    continuedDiscussion.nativeBuildRunId !== "native-old-run"
+  ),
+  continuedDiscussion?.nativeBuildRunId
 );
 check(
   "the Architect timeline note records the follow-up file name",
@@ -195,6 +204,21 @@ check(
     normalizedStoppedCheckpoint.stopReason === "user" &&
     normalizedStoppedCheckpoint.tasks[0]?.status === "planned",
   normalizedStoppedCheckpoint
+);
+
+const nativeRunBeforeRestart = storeApi.getDiscussionById(discussion.id)?.nativeBuildRunId;
+storeApi.updateDiscussion(discussion.id, {
+  status: "stopped",
+  updatedAt: now,
+});
+const restartedDiscussion = clientApi.restartDiscussion(discussion.id);
+check(
+  "restart returns the authoritative replacement native run identity",
+  Boolean(
+    restartedDiscussion?.nativeBuildRunId &&
+    restartedDiscussion.nativeBuildRunId !== nativeRunBeforeRestart
+  ),
+  restartedDiscussion?.nativeBuildRunId
 );
 
 if (failed === 0) {

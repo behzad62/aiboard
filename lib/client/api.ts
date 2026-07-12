@@ -79,7 +79,7 @@ function summarizeAttachment(record: ReturnType<typeof getAttachments>[number]):
  * Reset a stopped/failed discussion so it can run again from the start:
  * wipes the previous run's messages and final result and re-queues it.
  */
-export function restartDiscussion(id: string): void {
+export function restartDiscussion(id: string): Discussion | undefined {
   if (isDiscussionRunning(id)) {
     throw new Error("Stop the run before restarting it.");
   }
@@ -93,6 +93,7 @@ export function restartDiscussion(id: string): void {
     nativeBuildRunId: `native-${uuidv4()}`,
     updatedAt: new Date().toISOString(),
   });
+  return getDiscussionById(id);
 }
 
 /**
@@ -162,8 +163,11 @@ export function addDiscussionAttachments(
  * transcript and final result stay; the Architect re-plans over the existing
  * files (and any queued user notes) and writes a fresh summary.
  */
-export function continueDiscussion(id: string, forceNewBuildPass = false): void {
-  if (isDiscussionRunning(id)) return;
+export function continueDiscussion(
+  id: string,
+  forceNewBuildPass = false
+): Discussion | undefined {
+  if (isDiscussionRunning(id)) return getDiscussionById(id);
   const now = new Date().toISOString();
   const discussion = getDiscussionById(id);
   if (discussion?.mode === "build") {
@@ -195,6 +199,7 @@ export function continueDiscussion(id: string, forceNewBuildPass = false): void 
       : {}),
     updatedAt: now,
   });
+  return getDiscussionById(id);
 }
 
 /**

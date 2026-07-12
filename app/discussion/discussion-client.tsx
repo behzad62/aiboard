@@ -990,12 +990,14 @@ function DiscussionPageInner() {
   // Restart: wipe the previous run's output and re-queue; the run effect
   // picks the discussion up again as soon as status returns to "pending".
   const handleRestart = () => {
+    let restarted: Discussion | undefined;
     try {
-      restartDiscussion(id);
+      restarted = restartDiscussion(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't restart");
       return;
     }
+    if (restarted) setDiscussion(restarted);
     streamingRef.current.clear();
     notifiedRef.current = false;
     // The store keeps user notes through a restart — reload what's left.
@@ -1022,6 +1024,8 @@ function DiscussionPageInner() {
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
     setNativePermissions([]);
+    setNativeObservability(null);
+    setNativeProjection(null);
     setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     setBuildSkillEvents([]);
     setWrittenFiles([]);
@@ -1042,13 +1046,16 @@ function DiscussionPageInner() {
   // (so a judge-stage network error resumes straight at the judge); a build
   // re-plans over the kept transcript and the files already on disk.
   const handleResume = () => {
-    continueDiscussion(id);
+    const continued = continueDiscussion(id);
+    if (continued) setDiscussion(continued);
     notifiedRef.current = false;
     setError(null);
     setFinalResult(null);
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
     setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
+    setNativeObservability(null);
+    setNativeProjection(null);
     startedRef.current = false;
     setStatus("pending");
   };
@@ -1191,13 +1198,16 @@ function DiscussionPageInner() {
       },
     ]);
     if (status === "completed" || status === "stopped" || status === "failed") {
-      continueDiscussion(id, true);
+      const continued = continueDiscussion(id, true);
+      if (continued) setDiscussion(continued);
       notifiedRef.current = false;
       setFinalResult(null);
       setError(null);
       setBuildStopReport(null);
       setBuildToolReviewReport(null);
       setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
+      setNativeObservability(null);
+      setNativeProjection(null);
       startedRef.current = false;
       setStatus("pending");
     }
