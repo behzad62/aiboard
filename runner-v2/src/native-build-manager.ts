@@ -1,4 +1,5 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
+import type { BudgetProjection } from "./budget-ledger.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
 import type {
@@ -10,6 +11,7 @@ import type { ProjectHandoffResult } from "./integration-manager.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
+  usage(): BudgetProjection;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   close(): void | Promise<void>;
 }
@@ -51,6 +53,10 @@ export class NativeBuildManager implements BuildControlPlane {
 
   projection(runId: string): SchedulerProjection {
     return this.require(runId).runtime.projection();
+  }
+
+  usage(runId: string): BudgetProjection {
+    return this.require(runId).usage();
   }
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {

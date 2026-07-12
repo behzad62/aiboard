@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   configureNativeProviders,
   createNativeBuild,
+  getNativeBuildUsage,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
   type NativeRunnerConnection,
@@ -71,6 +72,23 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       nodeVersion: "24.18.0",
     });
   }
+  if (String(input).endsWith("/build/usage")) {
+    return Response.json({
+      scopeId: "run_1",
+      reservations: {},
+      activeSegments: {},
+      effective: {
+        modelCalls: 9,
+        toolCalls: 27,
+        inputTokens: 12_000,
+        outputTokens: 3_000,
+        estimatedCostMicros: 125_000,
+        activeMs: 45_000,
+        artifactBytes: 1_024,
+      },
+      lastSequence: 42,
+    });
+  }
   return Response.json({ runId: "run_1", state: "created" }, { status: 201 });
 };
 
@@ -107,6 +125,9 @@ await selectNativeProjectHandoff(
   "handoff:keep",
   fetchImpl
 );
+const usage = await getNativeBuildUsage(connection, "run_1", fetchImpl);
+assert.equal(usage.effective.modelCalls, 9);
+assert.equal(usage.effective.inputTokens, 12_000);
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
@@ -114,4 +135,5 @@ assert.equal(JSON.parse(String(calls[1].init.body)).configs[0].secret, "provider
 assert.equal(JSON.parse(String(calls[2].init.body)).build.maxConcurrency, 2);
 assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
 assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
+assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
 console.log("PASS runner-v2 client");

@@ -5,6 +5,7 @@ import {
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
+  nativeBuildUsageWindow,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
 
@@ -72,5 +73,39 @@ assert.deepEqual(
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");
+assert.deepEqual(
+  nativeBuildUsageWindow({
+    scopeId: "run_1",
+    reservations: {},
+    activeSegments: {},
+    effective: {
+      modelCalls: 9,
+      toolCalls: 27,
+      inputTokens: 12_000,
+      outputTokens: 3_000,
+      estimatedCostMicros: 125_000,
+      activeMs: 45_000,
+      artifactBytes: 1_024,
+    },
+    lastSequence: 42,
+  }, "2026-07-12T00:00:00.000Z"),
+  {
+    startedAt: "2026-07-12T00:00:00.000Z",
+    elapsedMs: 45_000,
+    estimatedUsd: 0.125,
+    unknownPricedModelIds: [],
+    models: [{
+      modelId: "runner-v2:aggregate",
+      modelName: "Runner V2 models",
+      providerId: "runner-v2",
+      calls: 9,
+      inputTokens: 12_000,
+      outputTokens: 3_000,
+      totalTokens: 15_000,
+      estimatedUsd: 0.125,
+      priced: true,
+    }],
+  }
+);
 
 console.log("PASS Build live discussion state");

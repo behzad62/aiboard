@@ -88,6 +88,7 @@ import {
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
+  nativeBuildUsageWindow,
   shouldShowBuildStopFallback,
 } from "@/lib/client/discussion-live-state";
 import {
@@ -99,6 +100,8 @@ import {
   commandNativeRun,
   decideNativePermission,
   getNativeBuild,
+  getNativeBuildUsage,
+  getNativeRun,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
   selectNativeProjectHandoff,
@@ -873,10 +876,12 @@ function DiscussionPageInner() {
       !discussion.nativeBuildRunId
     ) return;
     let cancelled = false;
-    void getNativeBuild(
-      { url: discussion.runnerUrl, token: discussion.runnerToken },
-      discussion.nativeBuildRunId
-    ).then((projection) => {
+    const connection = { url: discussion.runnerUrl, token: discussion.runnerToken };
+    void Promise.all([
+      getNativeBuild(connection, discussion.nativeBuildRunId),
+      getNativeBuildUsage(connection, discussion.nativeBuildRunId),
+      getNativeRun(connection, discussion.nativeBuildRunId),
+    ]).then(([projection, usage, run]) => {
       if (cancelled) return;
       const handoffs = durableBuildHandoffPanels(projection);
       setArchitectHandoff(handoffs.architect);
@@ -889,6 +894,7 @@ function DiscussionPageInner() {
           worker: task.assignedWorkerId,
         }))
       );
+      setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
     }).catch(() => {
       // Runner availability is already represented by the connection control;
       // retain the last durable UI state and retry on the next page lifecycle.

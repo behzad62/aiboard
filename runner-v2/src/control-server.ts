@@ -359,6 +359,15 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "usage" &&
+        request.method === "GET"
+      ) {
+        sendJson(response, 200, this.requireBuilds().usage(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "architect-handoff" &&
         request.method === "POST"
       ) {

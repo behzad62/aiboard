@@ -117,6 +117,22 @@ export interface NativeBuildEvent {
   payload: Record<string, unknown>;
 }
 
+export interface NativeBuildUsageProjection {
+  scopeId: string;
+  reservations: Record<string, unknown>;
+  activeSegments: Record<string, unknown>;
+  effective: {
+    modelCalls: number;
+    toolCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCostMicros: number;
+    activeMs: number;
+    artifactBytes: number;
+  };
+  lastSequence: number;
+}
+
 export interface NativeBuildStepResult {
   status: "progressed" | "paused" | "completed" | "idle";
   action?: string;
@@ -208,6 +224,19 @@ export async function getNativeBuild(
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build`,
+    {},
+    fetchImpl
+  );
+}
+
+export async function getNativeBuildUsage(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildUsageProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/usage`,
     {},
     fetchImpl
   );

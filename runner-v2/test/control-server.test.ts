@@ -421,14 +421,29 @@ test("native Build projections and pump controls are runner-owned API routes", a
     lastSequence: 1,
   };
   let projectHandoffChoice = "";
-  const builds: BuildControlPlane = {
+  const builds = {
     projection: () => projection,
     events: () => [],
+    usage: () => ({
+      scopeId: "run_1",
+      reservations: {},
+      activeSegments: {},
+      effective: {
+        modelCalls: 9,
+        toolCalls: 27,
+        inputTokens: 12_000,
+        outputTokens: 3_000,
+        estimatedCostMicros: 125_000,
+        activeMs: 45_000,
+        artifactBytes: 1_024,
+      },
+      lastSequence: 42,
+    }),
     step: async () => {
       steps += 1;
       return { status: "progressed", action: "workers_advanced" };
     },
-    runUntilBlocked: async (_runId, maxSteps) => ({
+    runUntilBlocked: async (_runId: string, maxSteps?: number) => ({
       status: "idle",
       action: `max:${maxSteps ?? 100}`,
     }),
@@ -436,7 +451,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     pause: () => ({ ...projection, status: "paused" }),
     resume: () => projection,
     selectArchitectHandoff: () => projection,
-    selectProjectHandoff: async (_runId, choice) => {
+    selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
       return {
         ...projection,
@@ -452,7 +467,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
         },
       };
     },
-  };
+  } as unknown as BuildControlPlane;
   const server = new ControlServer({
     supervisor,
     token,
@@ -465,6 +480,21 @@ test("native Build projections and pump controls are runner-owned API routes", a
     const build = await fetch(`${url}/v2/runs/run_1/build`, authorized());
     assert.equal(build.status, 200);
     assert.equal((await json(build)).planRevision, 1);
+
+    const usage = await fetch(
+      `${url}/v2/runs/run_1/build/usage`,
+      authorized()
+    );
+    assert.equal(usage.status, 200);
+    assert.deepEqual((await json(usage)).effective, {
+      modelCalls: 9,
+      toolCalls: 27,
+      inputTokens: 12_000,
+      outputTokens: 3_000,
+      estimatedCostMicros: 125_000,
+      activeMs: 45_000,
+      artifactBytes: 1_024,
+    });
 
     const tasks = await fetch(
       `${url}/v2/runs/run_1/build/tasks`,

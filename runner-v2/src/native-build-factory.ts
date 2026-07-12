@@ -194,6 +194,7 @@ export class NativeBuildFactory {
     let closed = false;
     return {
       runtime,
+      usage: () => budgetLedger.snapshot(spec.runId),
       projectHandoff: async (choice) =>
         choice === "apply_to_project"
           ? await integrationManager.applyToProject()

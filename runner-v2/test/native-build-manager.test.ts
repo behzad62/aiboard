@@ -45,6 +45,7 @@ test("native Build manager recreates persisted runtimes and closes resources", a
         created.push(input.runId);
         return {
           runtime: fakeRuntime(input.runId),
+          usage: () => emptyBudget(input.runId),
           projectHandoff: async () => ({
             integrationRevision: "revision_final",
             integrationBranch: "aiboard/run/integration",
@@ -86,6 +87,7 @@ test("native Build manager owns one autonomous pump per active run", async () =>
             return { status: "completed" as const };
           },
         } as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
         projectHandoff: async () => ({
           integrationRevision: "revision_final",
           integrationBranch: "aiboard/run/integration",
@@ -124,6 +126,7 @@ test("recovery autonomously restarts only runs the supervisor still marks active
             return { status: "paused" as const };
           },
         } as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
         projectHandoff: async () => ({
           integrationRevision: "revision_final",
           integrationBranch: "aiboard/run/integration",
@@ -176,6 +179,24 @@ test("worker routing excludes Architect-only runtimes from the worker pool", () 
     ["chatgpt:gpt-5.4"]
   );
 });
+
+function emptyBudget(scopeId: string) {
+  return {
+    scopeId,
+    reservations: {},
+    activeSegments: {},
+    effective: {
+      modelCalls: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostMicros: 0,
+      activeMs: 0,
+      artifactBytes: 0,
+    },
+    lastSequence: 0,
+  };
+}
 
 function fakeRuntime(runId: string): BuildRuntime {
   return {

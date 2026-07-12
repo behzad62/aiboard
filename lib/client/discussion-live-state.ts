@@ -1,10 +1,12 @@
 import type {
   BuildStopReason,
+  BuildUsageWindow,
   Discussion,
   DiscussionStatus,
 } from "@/lib/db/schema";
 import type {
   NativeBuildProjection,
+  NativeBuildUsageProjection,
   NativeProjectHandoffChoice,
 } from "@/lib/client/runner-v2";
 
@@ -96,4 +98,30 @@ export function nativeBuildTaskStatus(
   if (["rejected", "integration_resolution"].includes(status)) return "fixing";
   if (["integrated", "cancelled"].includes(status)) return "done";
   return "failed";
+}
+
+export function nativeBuildUsageWindow(
+  projection: NativeBuildUsageProjection,
+  startedAt: string
+): BuildUsageWindow {
+  const usage = projection.effective;
+  const estimatedUsd = usage.estimatedCostMicros / 1_000_000;
+  const model = {
+    modelId: "runner-v2:aggregate",
+    modelName: "Runner V2 models",
+    providerId: "runner-v2",
+    calls: usage.modelCalls,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.inputTokens + usage.outputTokens,
+    estimatedUsd,
+    priced: true,
+  };
+  return {
+    startedAt,
+    elapsedMs: usage.activeMs,
+    estimatedUsd,
+    unknownPricedModelIds: [],
+    models: usage.modelCalls > 0 ? [model] : [],
+  };
 }

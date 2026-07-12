@@ -16,6 +16,7 @@ import {
   createNativeBuild,
   getNativeBuild,
   getNativeBuildEvents,
+  getNativeBuildUsage,
   getNativePermissions,
   getNativeRun,
   getNativeRunnerHealth,
@@ -24,7 +25,10 @@ import {
   type NativeProviderConfig,
   type NativeRunnerConnection,
 } from "./runner-v2";
-import { nativeBuildTaskStatus } from "./discussion-live-state";
+import {
+  nativeBuildTaskStatus,
+  nativeBuildUsageWindow,
+} from "./discussion-live-state";
 
 type Emit = (event: OrchestratorEvent) => void;
 
@@ -117,6 +121,13 @@ export async function runNativeBuildDiscussion(
     },
   });
   const run = await getNativeRun(connection, runId);
+  emit({
+    type: "build_usage",
+    usage: nativeBuildUsageWindow(
+      await getNativeBuildUsage(connection, runId),
+      run.createdAt
+    ),
+  });
   if (run.state === "created") {
     await commandNativeRun(connection, runId, "start", `start:${runId}`);
   } else if (run.state === "paused") {
@@ -155,8 +166,15 @@ export async function runNativeBuildDiscussion(
         cursor = Math.max(cursor, event.sequence);
         emitSchedulerEvent(event, emit);
       }
-      const projection = await getNativeBuild(connection, runId);
+      const [projection, usage] = await Promise.all([
+        getNativeBuild(connection, runId),
+        getNativeBuildUsage(connection, runId),
+      ]);
       emitTaskProjection(projection, emit);
+      emit({
+        type: "build_usage",
+        usage: nativeBuildUsageWindow(usage, run.createdAt),
+      });
       const permissions = await getNativePermissions(connection, runId);
       for (const permission of permissions) {
         if (permission.status !== "pending" || announcedPermissions.has(permission.requestId)) {
