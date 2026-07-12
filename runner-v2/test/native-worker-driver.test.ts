@@ -158,7 +158,10 @@ test("native worker fails over with the same session, context, tools, and eviden
         args: ["-e", "const fs=require('node:fs');process.exit(fs.readFileSync('value.txt','utf8').trim()==='two'?0:1)"],
         cwd: ".",
       }),
-      toolTurn("submit", "submit_task", { summary: "Change value to two" }),
+      toolTurn("submit", "submit_task", {
+        summary: "Change value to two",
+        readiness: "ready_for_architect_review",
+      }),
     ]);
     const candidates: AgentRuntimeCandidate[] = [
       { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 1 },

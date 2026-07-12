@@ -16,7 +16,10 @@ import { createArchitectTools } from "../src/architect-tools.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
-import { createWorkerLifecycleTools } from "../src/worker-lifecycle-tools.js";
+import {
+  createSubmitTaskTool,
+  createWorkerLifecycleTools,
+} from "../src/worker-lifecycle-tools.js";
 
 const now = () => "2026-07-12T00:00:00.000Z";
 
@@ -25,6 +28,9 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
     const tools = [
       ...createArchitectTools({ store, clock: now }),
       ...createWorkerLifecycleTools({ store, taskId: "task_a", clock: now }),
+      createSubmitTaskTool(async () => {
+        throw new Error("schema only");
+      }),
     ];
     const expectedRequired: Record<string, string[]> = {
       plan_tasks: ["revision", "tasks"],
@@ -35,6 +41,7 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
       complete_run: ["summary"],
       ask_architect: ["requestId", "question", "blocking", "evidenceSequence"],
       challenge_guidance: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+      submit_task: ["summary", "readiness"],
     };
     for (const tool of tools) {
       const schema = tool.definition.inputSchema as Record<string, unknown>;

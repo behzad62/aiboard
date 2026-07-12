@@ -44,18 +44,22 @@ export function createSubmitTaskTool(
     definition: {
       name: "submit_task",
       description:
-        "Commit the task workspace and submit a typed change set after task-relevant durable evidence has been recorded",
+        "Declare the task ready for Architect review, commit the workspace, and submit a typed change set. Do not use for a blocked state or while fresh evidence shows a known acceptance failure; use ask_architect instead.",
       inputSchema: {
         type: "object",
         properties: {
           summary: { type: "string" },
+          readiness: {
+            type: "string",
+            enum: ["ready_for_architect_review"],
+          },
           unresolvedConcerns: {
             type: "array",
             maxItems: 100,
             items: { type: "string", minLength: 1, maxLength: 2_000 },
           },
         },
-        required: ["summary"],
+        required: ["summary", "readiness"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -71,6 +75,7 @@ export function createSubmitTaskTool(
     execute: async (input) => {
       const changeSet = await submit({
         summary: input.summary.trim(),
+        readiness: input.readiness,
         unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
       });
       return {
@@ -84,12 +89,18 @@ export function createSubmitTaskTool(
 
 interface SubmitTaskInput {
   summary: string;
+  readiness: "ready_for_architect_review";
   unresolvedConcerns: string[];
 }
 
 function validateSubmit(input: unknown): ValidationResult<SubmitTaskInput> {
   if (!isRecord(input) || !nonEmpty(input.summary)) {
     return invalid("summary must be a non-empty string");
+  }
+  if (input.readiness !== "ready_for_architect_review") {
+    return invalid(
+      "readiness must explicitly declare ready_for_architect_review; use ask_architect for blocked work"
+    );
   }
   const concerns = input.unresolvedConcerns ?? [];
   if (
@@ -101,7 +112,11 @@ function validateSubmit(input: unknown): ValidationResult<SubmitTaskInput> {
   ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
   return {
     ok: true,
-    value: { summary: input.summary, unresolvedConcerns: concerns as string[] },
+    value: {
+      summary: input.summary,
+      readiness: input.readiness,
+      unresolvedConcerns: concerns as string[],
+    },
   };
 }
 

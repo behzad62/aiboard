@@ -141,6 +141,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       toolTurn("diff", "git.diff", {}),
       toolTurn("submit", "submit_task", {
         summary: "Change value to two",
+        readiness: "ready_for_architect_review",
         unresolvedConcerns: ["Windows line endings were not exercised."],
       }),
     ]);
@@ -238,6 +239,7 @@ test("worker submits automatically recorded browser facts as durable review evid
         toolTurn("events", "browser.events", {}),
         toolTurn("submit", "submit_task", {
           summary: "Record browser acceptance",
+          readiness: "ready_for_architect_review",
           unresolvedConcerns: [],
         }),
       ]),
@@ -310,6 +312,7 @@ test("worker can submit an evidence-backed inspection task without fabricating a
         }),
         toolTurn("submit", "submit_task", {
           summary: "Repository inspection found no required changes",
+          readiness: "ready_for_architect_review",
         }),
       ]),
       runId: "run_inspection",
@@ -416,6 +419,7 @@ test("worker subagent edits the shared task workspace and returns without parent
         }
         return toolTurn("submit", "submit_task", {
           summary: "Accept delegated value edit",
+          readiness: "ready_for_architect_review",
         });
       },
     };
