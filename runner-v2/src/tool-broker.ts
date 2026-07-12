@@ -23,12 +23,15 @@ import {
 } from "./tool-ledger.js";
 
 export interface ToolApprovalRequest {
+  runId: string;
+  sessionId: string;
   callId: string;
   toolName: string;
   actor: ToolExecutionContext["actor"];
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
   outsideWorkspace: boolean;
+  occurredAt: string;
 }
 
 export interface ToolAuditRecord {
@@ -80,7 +83,6 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly toolTimeoutMs: number;
   private readonly clock: () => string;
   private readonly ledger?: ToolInvocationLedger;
-  private readonly toolDefinitions = new Map<string, ToolDefinition>();
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -103,7 +105,6 @@ export class ToolBroker implements AgentToolRuntime {
   }
 
   register<TInput>(tool: NativeTool<TInput>): void {
-    this.toolDefinitions.set(tool.definition.name, tool.definition);
     this.registry.register({
       definition: tool.definition,
       validate: tool.validate,
@@ -140,34 +141,7 @@ export class ToolBroker implements AgentToolRuntime {
       }
       return await existing.result;
     }
-    const definition = this.toolDefinitions.get(call.name);
-    const ledgerDecision = this.ledger?.begin({
-      key,
-      fingerprint,
-      callId: call.callId,
-      toolName: call.name,
-      runId: context.runId,
-      sessionId: context.sessionId,
-      replaySafe: definition?.readOnly === true && definition.effect === "none",
-      occurredAt: this.clock(),
-    });
-    if (ledgerDecision?.state === "completed") {
-      const completed = Promise.resolve(ledgerDecision.result);
-      this.invocationCache.set(key, { fingerprint, result: completed });
-      return ledgerDecision.result;
-    }
-    if (ledgerDecision?.state === "conflict") {
-      return failure(call, "idempotency_conflict", "Call ID was reused with different input.");
-    }
-    if (ledgerDecision?.state === "in_doubt") {
-      return failure(
-        call,
-        "reconciliation_required",
-        "A prior side-effecting tool attempt has no durable completion record."
-      );
-    }
     const result = this.invokeAudited(call, context).then((value) => {
-      this.ledger?.complete(key, fingerprint, value, this.clock());
       return value;
     });
     this.invocationCache.set(key, { fingerprint, result });
@@ -240,12 +214,15 @@ export class ToolBroker implements AgentToolRuntime {
         );
       }
       const approved = await this.approve({
+        runId: context.runId,
+        sessionId: context.sessionId,
         callId,
         toolName: tool.definition.name,
         actor: context.actor,
         permissionProfile: this.permissionProfile,
         access,
         outsideWorkspace,
+        occurredAt: this.clock(),
       });
       if (!approved) {
         this.decisions.set(callId, {
@@ -271,6 +248,36 @@ export class ToolBroker implements AgentToolRuntime {
     if (context.signal?.aborted) {
       return outputFailure("tool_cancelled", "Tool call was cancelled.");
     }
+    const ledgerKey = toolInvocationKey(context, callId);
+    const ledgerFingerprint = toolInvocationFingerprint({
+      type: "tool_call",
+      callId,
+      name: tool.definition.name,
+      arguments: input,
+    });
+    const ledgerDecision = this.ledger?.begin({
+      key: ledgerKey,
+      fingerprint: ledgerFingerprint,
+      callId,
+      toolName: tool.definition.name,
+      runId: context.runId,
+      sessionId: context.sessionId,
+      replaySafe: tool.definition.readOnly === true && tool.definition.effect === "none",
+      occurredAt: this.clock(),
+    });
+    if (ledgerDecision?.state === "completed") {
+      const { callId: _callId, toolName: _toolName, ...output } = ledgerDecision.result;
+      return output;
+    }
+    if (ledgerDecision?.state === "conflict") {
+      return outputFailure("idempotency_conflict", "Call ID was reused with different input.");
+    }
+    if (ledgerDecision?.state === "in_doubt") {
+      return outputFailure(
+        "reconciliation_required",
+        "A prior side-effecting tool attempt has no durable completion record."
+      );
+    }
     const timeoutController = new AbortController();
     const signal = context.signal
       ? AbortSignal.any([context.signal, timeoutController.signal])
@@ -284,22 +291,45 @@ export class ToolBroker implements AgentToolRuntime {
           reject(new ToolTimeoutError());
         }, this.toolTimeoutMs);
       });
-      const output = await Promise.race([execution, timeoutResult]);
-      return await this.boundOutput(tool.definition.name, output);
+      const output = await this.boundOutput(
+        tool.definition.name,
+        await Promise.race([execution, timeoutResult])
+      );
+      this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+      return output;
     } catch (error) {
       if (error instanceof ToolTimeoutError) {
-        return outputFailure(
+        const output = outputFailure(
           "tool_timeout",
           `Tool ${tool.definition.name} exceeded ${this.toolTimeoutMs} ms.`
         );
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        return output;
       }
       if (signal.aborted) {
-        return outputFailure("tool_cancelled", "Tool call was cancelled.");
+        const output = outputFailure("tool_cancelled", "Tool call was cancelled.");
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        return output;
       }
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private completeLedger(
+    key: string,
+    fingerprint: string,
+    callId: string,
+    toolName: string,
+    output: ToolExecutionOutput
+  ): void {
+    this.ledger?.complete(
+      key,
+      fingerprint,
+      { callId, toolName, ...output },
+      this.clock()
+    );
   }
 
   private async hasOutsidePath(access: ToolAccessRequest): Promise<boolean> {

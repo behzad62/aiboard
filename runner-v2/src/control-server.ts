@@ -22,6 +22,7 @@ import type {
 } from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -36,6 +37,7 @@ export interface ControlServerOptions {
   providerConfigs?: ProviderConfigStore;
   runnerInfo?: { projectPath: string; nodeVersion: string };
   mcp?: Pick<McpManager, "status">;
+  permissions?: SqlitePermissionStore;
 }
 
 export interface RunBootstrapInput {
@@ -95,6 +97,11 @@ interface ProjectHandoffBody {
   idempotencyKey: string;
 }
 
+interface PermissionDecisionBody {
+  decision: "approved" | "denied";
+  idempotencyKey: string;
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -116,6 +123,7 @@ export class ControlServer {
   private readonly providerConfigs?: ProviderConfigStore;
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
+  private readonly permissions?: SqlitePermissionStore;
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
 
@@ -131,6 +139,7 @@ export class ControlServer {
     this.providerConfigs = options.providerConfigs;
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
+    this.permissions = options.permissions;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -182,8 +191,8 @@ export class ControlServer {
     request: IncomingMessage,
     response: ServerResponse
   ): Promise<void> {
-    setCommonHeaders(response);
     try {
+      setCommonHeaders(request, response);
       if (request.method === "OPTIONS") {
         response.statusCode = 204;
         response.end();
@@ -232,6 +241,33 @@ export class ControlServer {
     }
     if (segments.length === 2 && segments[1] === "mcp" && request.method === "GET") {
       sendJson(response, 200, { servers: this.mcp?.status() ?? [] });
+      return;
+    }
+    if (segments.length === 2 && segments[1] === "permissions" && request.method === "GET") {
+      sendJson(response, 200, {
+        permissions: this.permissions?.list(url.searchParams.get("runId") ?? undefined) ?? [],
+      });
+      return;
+    }
+    if (
+      segments.length === 3 &&
+      segments[1] === "permissions" &&
+      request.method === "POST"
+    ) {
+      if (!this.permissions) {
+        throw new HttpError(503, "permission_store_unavailable", "Permission store is unavailable.");
+      }
+      const body = await readJson<PermissionDecisionBody>(request);
+      if (
+        (body.decision !== "approved" && body.decision !== "denied") ||
+        !isNonEmptyString(body.idempotencyKey)
+      ) invalidBody();
+      sendJson(response, 200, this.permissions.decide({
+        requestId: segments[2],
+        decision: body.decision,
+        idempotencyKey: body.idempotencyKey,
+        occurredAt: new Date().toISOString(),
+      }));
       return;
     }
     if (segments.length === 2 && segments[1] === "provider-configs") {
@@ -633,12 +669,37 @@ function hasBearerToken(header: string | undefined, expected: string): boolean {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-function setCommonHeaders(response: ServerResponse): void {
+function setCommonHeaders(
+  request: IncomingMessage,
+  response: ServerResponse
+): void {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = request.headers.origin;
+  if (origin) {
+    if (!isLoopbackOrigin(origin)) {
+      throw new HttpError(403, "origin_not_allowed", "Runner V2 accepts browser requests only from loopback origins.");
+    }
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+  }
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+      url.pathname === "/" &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {

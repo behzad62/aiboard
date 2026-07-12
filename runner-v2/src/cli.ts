@@ -9,6 +9,7 @@ import { checkGit } from "./git-preflight.js";
 import { NativeBuildFactory } from "./native-build-factory.js";
 import { NativeBuildManager } from "./native-build-manager.js";
 import { McpManager, type McpServerSpec } from "./mcp-tools.js";
+import { SqlitePermissionStore } from "./permission-store.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
@@ -30,6 +31,7 @@ interface RunnerResources {
   builds: NativeBuildManager;
   buildFactory: NativeBuildFactory;
   mcpManager: McpManager;
+  permissions: SqlitePermissionStore;
 }
 
 void main();
@@ -67,11 +69,15 @@ async function main(): Promise<void> {
       servers: options.mcpServers,
     });
     await mcpManager.start();
+    const permissions = new SqlitePermissionStore(
+      join(options.stateDirectory, "permissions.sqlite")
+    );
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
       providerConfigs,
       mcpManager,
+      permissions,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
@@ -110,6 +116,7 @@ async function main(): Promise<void> {
         nodeVersion: process.versions.node,
       },
       mcp: mcpManager,
+      permissions,
       token: options.token,
       checkGit: async () => git,
       bootstrapRun: async (input) => {
@@ -129,7 +136,7 @@ async function main(): Promise<void> {
         };
       },
     });
-    resources = { server, supervisor, builds, buildFactory, mcpManager };
+    resources = { server, supervisor, builds, buildFactory, mcpManager, permissions };
     await builds.recover();
     const address = await server.start(options.port);
 
@@ -250,6 +257,7 @@ async function assertDirectory(path: string, label: string): Promise<void> {
 async function closeResources(resources: RunnerResources | undefined): Promise<void> {
   if (!resources) return;
   await resources.server.close();
+  resources.permissions.close();
   await resources.builds.close();
   await resources.buildFactory.close();
   await resources.mcpManager.close();

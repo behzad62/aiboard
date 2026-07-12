@@ -26,6 +26,20 @@ export interface NativeProviderConfig {
   protocol?: "chat-completions" | "responses";
 }
 
+export interface NativePermissionRequest {
+  requestId: string;
+  runId: string;
+  sessionId: string;
+  callId: string;
+  toolName: string;
+  actor: { role: "architect" | "worker" | "subagent"; id: string };
+  permissionProfile: "guarded" | "project" | "full";
+  access: { capability: string; external?: boolean; destructive?: boolean; credentialChange?: boolean };
+  outsideWorkspace: boolean;
+  status: "pending" | "approved" | "denied";
+  occurredAt: string;
+}
+
 export interface CreateNativeBuildInput {
   runId: string;
   projectPath: string;
@@ -277,6 +291,38 @@ export async function selectNativeProjectHandoff(
     {
       method: "POST",
       body: JSON.stringify({ choice, idempotencyKey }),
+    },
+    fetchImpl
+  );
+}
+
+export async function getNativePermissions(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativePermissionRequest[]> {
+  const result = await request<{ permissions: NativePermissionRequest[] }>(
+    connection,
+    `/v2/permissions?runId=${encodeURIComponent(runId)}`,
+    {},
+    fetchImpl
+  );
+  return result.permissions;
+}
+
+export async function decideNativePermission(
+  connection: NativeRunnerConnection,
+  requestId: string,
+  decision: "approved" | "denied",
+  idempotencyKey: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativePermissionRequest> {
+  return await request(
+    connection,
+    `/v2/permissions/${encodeURIComponent(requestId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ decision, idempotencyKey }),
     },
     fetchImpl
   );

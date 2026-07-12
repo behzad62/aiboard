@@ -90,6 +90,7 @@ import {
 } from "@/lib/client/project-fs";
 import {
   commandNativeRun,
+  decideNativePermission,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
   selectNativeProjectHandoff,
@@ -223,6 +224,16 @@ function DiscussionPageInner() {
     summary: string;
     options: NativeProjectHandoffChoice[];
   } | null>(null);
+  const [nativePermissions, setNativePermissions] = useState<Array<{
+    requestId: string;
+    toolName: string;
+    capability: string;
+    actor: string;
+    outsideWorkspace: boolean;
+    external: boolean;
+    destructive: boolean;
+    credentialChange: boolean;
+  }>>([]);
   const [writtenFiles, setWrittenFiles] = useState<WrittenFileView[]>([]);
   const [commandRuns, setCommandRuns] = useState<CommandRunView[]>([]);
   const [repoStatus, setRepoStatus] = useState<RepoStatusView | null>(null);
@@ -461,6 +472,21 @@ function DiscussionPageInner() {
             summary: event.summary,
             options: [...event.options],
           });
+          break;
+        case "native_permission_required":
+          setNativePermissions((previous) => [
+            ...previous.filter((item) => item.requestId !== event.requestId),
+            {
+              requestId: event.requestId,
+              toolName: event.toolName,
+              capability: event.capability,
+              actor: event.actor,
+              outsideWorkspace: event.outsideWorkspace,
+              external: event.external,
+              destructive: event.destructive,
+              credentialChange: event.credentialChange,
+            },
+          ]);
           break;
         case "tool_batch":
           setDiagnostics((prev) => {
@@ -886,6 +912,7 @@ function DiscussionPageInner() {
     );
     setBuildStopReport(null);
     setBuildToolReviewReport(null);
+    setNativePermissions([]);
     setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     setBuildSkillEvents([]);
     setWrittenFiles([]);
@@ -961,6 +988,30 @@ function DiscussionPageInner() {
         handoffError instanceof Error
           ? handoffError.message
           : "Could not complete the final project handoff."
+      );
+    }
+  };
+
+  const handleNativePermission = async (
+    requestId: string,
+    decision: "approved" | "denied"
+  ) => {
+    if (!discussion?.runnerUrl || !discussion.runnerToken) return;
+    try {
+      await decideNativePermission(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        requestId,
+        decision,
+        `${decision}:${requestId}`
+      );
+      setNativePermissions((previous) =>
+        previous.filter((item) => item.requestId !== requestId)
+      );
+    } catch (permissionError) {
+      setError(
+        permissionError instanceof Error
+          ? permissionError.message
+          : "Could not decide the native tool permission."
       );
     }
   };
@@ -1583,6 +1634,41 @@ function DiscussionPageInner() {
           </div>
         </div>
       )}
+
+      {discussion.mode === "build" && nativePermissions.map((permission) => (
+        <div
+          key={permission.requestId}
+          className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <div>
+            <p className="font-medium">Runner permission required</p>
+            <p className="mt-1 text-xs opacity-80">
+              {permission.actor} requests <code>{permission.toolName}</code> ({permission.capability}).
+              {permission.outsideWorkspace ? " This accesses a path outside the project." : ""}
+              {permission.external ? " This affects an external system." : ""}
+              {permission.destructive ? " This operation is destructive." : ""}
+              {permission.credentialChange ? " This changes credentials." : ""}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void handleNativePermission(permission.requestId, "approved")}
+            >
+              Approve once
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void handleNativePermission(permission.requestId, "denied")}
+            >
+              Deny
+            </Button>
+          </div>
+        </div>
+      ))}
 
       {discussion.mode === "build" && projectHandoff && (
         <div className="space-y-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">

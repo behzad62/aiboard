@@ -10,6 +10,7 @@ import type { NativeBuildSpec } from "../src/build-spec.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqlitePermissionStore } from "../src/permission-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
 
 const token = "test-control-token";
@@ -69,7 +70,16 @@ test("control API authenticates every route and drives durable lifecycle", async
       },
     });
     assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+    assert.equal(
+      preflight.headers.get("access-control-allow-origin"),
+      "http://localhost:3000"
+    );
+    const hostilePreflight = await fetch(`${base}/v2/health`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://hostile.example" },
+    });
+    assert.equal(hostilePreflight.status, 403);
+    assert.equal((await json(hostilePreflight)).code, "origin_not_allowed");
     assert.equal((await fetch(`${base}/v2/runs`)).status, 401);
     assert.equal(
       (
@@ -223,6 +233,57 @@ test("control API stores provider credentials without returning secrets and prov
     });
   } finally {
     await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("control API lists and decides durable permission requests", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-permissions-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite"))
+  );
+  const permissions = new SqlitePermissionStore(join(directory, "permissions.sqlite"));
+  const server = new ControlServer({
+    supervisor,
+    token,
+    bootstrapRun,
+    permissions,
+  });
+  try {
+    const waiting = permissions.request({
+      requestId: "perm_control",
+      runId: "run_control",
+      sessionId: "session_control",
+      callId: "call_control",
+      toolName: "deploy.release",
+      actor: { role: "worker", id: "worker_1" },
+      permissionProfile: "project",
+      access: { capability: "deploy.release", external: true },
+      outsideWorkspace: false,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { url } = await server.start(0);
+    const listed = await json(await fetch(
+      `${url}/v2/permissions?runId=run_control`,
+      authorized()
+    ));
+    assert.equal((listed.permissions as Array<{ status: string }>)[0].status, "pending");
+    const decided = await json(await fetch(
+      `${url}/v2/permissions/perm_control`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          decision: "approved",
+          idempotencyKey: "approve:perm_control",
+        }),
+      })
+    ));
+    assert.equal(decided.status, "approved");
+    assert.equal(await waiting, true);
+  } finally {
+    await server.close();
+    permissions.close();
     supervisor.close();
     rmSync(directory, { recursive: true, force: true });
   }

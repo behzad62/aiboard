@@ -229,6 +229,17 @@ export type OrchestratorEvent =
       options: Array<"keep_integration_branch" | "apply_to_project">;
     }
   | {
+      type: "native_permission_required";
+      requestId: string;
+      toolName: string;
+      capability: string;
+      actor: string;
+      outsideWorkspace: boolean;
+      external: boolean;
+      destructive: boolean;
+      credentialChange: boolean;
+    }
+  | {
       type: "tool_batch";
       actor: string;
       served: number;

@@ -15,6 +15,7 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
@@ -52,6 +53,7 @@ export interface SubagentToolsOptions {
   clock?: () => string;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  permissions?: SqlitePermissionStore;
 }
 
 export function createSubagentTools(
@@ -119,6 +121,9 @@ export function createSubagentTools(
         workspacePath: options.workspacePath,
         artifacts: options.artifacts,
         ledger: options.ledger,
+        ...(options.permissions
+          ? { approve: (request) => options.permissions!.requestTool(request) }
+          : {}),
       });
       for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
         broker.register(tool);

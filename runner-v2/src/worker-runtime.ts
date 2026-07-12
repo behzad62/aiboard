@@ -21,6 +21,7 @@ import { createSubagentTools } from "./subagent-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
@@ -56,6 +57,7 @@ export interface RunWorkerTaskOptions {
   clock?: () => string;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  permissions?: SqlitePermissionStore;
 }
 
 export interface WorkerTaskResult {
@@ -104,6 +106,9 @@ export async function runWorkerTask(
     workspacePath: options.workspace.path,
     artifacts: options.artifacts,
     ledger: options.ledger,
+    ...(options.permissions
+      ? { approve: (request) => options.permissions!.requestTool(request) }
+      : {}),
   });
   for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
     broker.register(tool);
@@ -170,6 +175,7 @@ export async function runWorkerTask(
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.browserBackend ? { browserBackend: options.browserBackend } : {}),
     ...(options.mcpManager ? { mcpManager: options.mcpManager } : {}),
+    ...(options.permissions ? { permissions: options.permissions } : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

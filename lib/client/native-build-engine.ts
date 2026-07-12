@@ -16,6 +16,7 @@ import {
   createNativeBuild,
   getNativeBuild,
   getNativeBuildEvents,
+  getNativePermissions,
   getNativeRun,
   getNativeRunnerHealth,
   type NativeBuildEvent,
@@ -108,6 +109,7 @@ export async function runNativeBuildDiscussion(
     updatedAt: new Date().toISOString(),
   });
   let cursor = 0;
+  const announcedPermissions = new Set<string>();
   try {
     for (;;) {
       if (signal.aborted) throw abortError();
@@ -118,6 +120,24 @@ export async function runNativeBuildDiscussion(
       }
       const projection = await getNativeBuild(connection, runId);
       emitTaskProjection(projection, emit);
+      const permissions = await getNativePermissions(connection, runId);
+      for (const permission of permissions) {
+        if (permission.status !== "pending" || announcedPermissions.has(permission.requestId)) {
+          continue;
+        }
+        announcedPermissions.add(permission.requestId);
+        emit({
+          type: "native_permission_required",
+          requestId: permission.requestId,
+          toolName: permission.toolName,
+          capability: permission.access.capability,
+          actor: `${permission.actor.role}:${permission.actor.id}`,
+          outsideWorkspace: permission.outsideWorkspace,
+          external: permission.access.external === true,
+          destructive: permission.access.destructive === true,
+          credentialChange: permission.access.credentialChange === true,
+        });
+      }
       if (projection.status === "completed") {
         finalizeNativeBuild(
           discussion,

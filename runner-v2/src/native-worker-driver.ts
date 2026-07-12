@@ -4,6 +4,7 @@ import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import type { BrowserBackend } from "./browser-tools.js";
 import type { McpManager } from "./mcp-tools.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
 import type { ContextLimits } from "./context-assembler.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -49,6 +50,7 @@ export interface NativeWorkerDriverOptions {
   budgetLedger?: BudgetLedger;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  permissions?: SqlitePermissionStore;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   clock?: () => string;
@@ -144,6 +146,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ? { browserBackend: this.options.browserBackend }
           : {}),
         ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+        ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
