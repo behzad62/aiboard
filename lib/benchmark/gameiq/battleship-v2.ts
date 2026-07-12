@@ -108,95 +108,108 @@ function buildHuntChain(input: {
 //   model, and the ~6x-oversized shot history dominated the pack's prompt
 //   payload on every certified attempt.
 // The partial patterns are the honest middle: realistic hunt histories
-// (57 / 39 shots), boards whose structure makes most open cells provably
+// (54 / 39 shots), boards whose structure makes most open cells provably
 // placement-dead -- recognizing THAT is the measured skill -- and the same
 // oracle-computed keys.
 //
-// Gate-iteration note (round 1): the live difficulty gate showed the frontier
-// model computes PLAIN open-region density perfectly (it aced both original
-// lattice boards) but systematically under-counts placement families pinned
-// against board EDGES and misjudges mixed remaining-size multisets near
-// walls / sunk wrecks (its three failures: edge-gap 0.20, edge-pinned 0.417,
-// hunt2-s1 0.364). Every reworked board below therefore keys its argmax on
-// wall-pinned / wreck-pinned counting, and parks the plausible open-water or
-// gap-fill heuristic picks in the sub-bar 0.4-0.7 band. Multi-region
-// dead-water structure is preserved so the boards keep discriminating
-// mid-tier models (which failed region-finding outright at 0.0).
+// Gate-iteration note (rounds 1-2): the live difficulty gate showed the
+// frontier model computes PLAIN open-region density perfectly, and -- per
+// the round-1 delta probe -- ALSO counts single-region pinned families
+// correctly every time (all four round-1 boards whose argmax rested on one
+// wall-pinned corridor/junction were re-aced at 1.0). What it demonstrably
+// gets wrong is CROSS-REGION comparison and quiet constraint propagation:
+// it lost late-game-density (0.667) by mispricing two visually similar wall
+// corridors against the {4,3} multiset, orientation-disambiguation (0.5) by
+// failing to propagate a distant miss that starved a whole axis, hunt2-s1
+// (0.364) on wreck-flank direction bias, and edge-gap (0.20) on
+// mixed-multiset edge-gap arithmetic. Every round-2 rework below therefore
+// makes the argmax hinge on comparing TWO live regions/axes (with the
+// visually richer one losing) and/or on propagating an unassuming miss,
+// parks the heuristic picks (center-bias, hit-adjacency, flee-the-wreck,
+// gap-fill) in the sub-bar 0.4-0.7 band, and avoids ratio-1 keyed ties
+// everywhere -- the probe showed a tie state (old hunt1-s3) stalling a
+// reasoning model into timeouts. Multi-region dead-water structure is
+// preserved so the boards keep discriminating mid-tier models (which failed
+// region-finding at 0.0).
 
 // -----------------------------------------------------------------------------
-// Standalone: miss-pruned line end (gate rework: the original interior
-// two-hit corridor was 1-D counting the frontier model aced at 1.0). Now a
-// single hit on the LEFT WALL at B1 with two pruning misses: E1 caps the
-// column line's lower end and B3 kills the row line beyond B2. The full
-// 5-ship multiset remains. Wall-pinned vertical placements along column 1
-// funnel through the corridor's interior cell, not the corner. Oracle
-// result: keyed = {C1} only (ratio 1.0); A1 -- corner-fill, the "safe" read
-// -- is a sub-bar decoy at 0.667, D1 (hug the pruning miss) 0.5, and B2 --
-// the gap-fill between hit and miss that the gate showed the frontier model
-// overweights near edges -- just 0.167.
+// Standalone: miss-pruned line end (round-2 rework: the round-1 wall-corridor
+// version was a single-region pinning argument the frontier model re-aced at
+// 1.0). Now a CROSS-AXIS propagation trap: a hit at B4 with the full 5-ship
+// multiset. The row axis is capped by the wall (west) and a B6 miss (east);
+// the column axis is quietly starved by TWO propagating misses -- A4
+// directly above kills every up-start, and F4 four cells below kills the
+// vertical carrier family entirely, so the visible three-cell southward gap
+// (C4,D4,E4) carries only 4 hit-covering placements while the horizontal
+// corridor carries 9. Oracle result: keyed = {B3} alone (1.0, count 8);
+// sub-bar decoys B5=0.625 (gap-fill between hit and miss -- the proven
+// edge-gap bias), B2=0.625, C4=0.5 (the roomiest-LOOKING run, the flee-south
+// pick), D4=0.375, B1=0.25, E4=0.125 -- six distinct ratio tiers.
 // -----------------------------------------------------------------------------
 const PRUNED_END_SCENARIO = makeV2Scenario({
   id: "gameiq-v0.2-battleship-pruned-end",
   title: "Battleship v2: miss-pruned line end",
   difficulty: "medium",
   orangeShips: [
-    shipFor("submarine", { row: 1, column: 0 }, "vertical"), // B1,C1,D1 -- hit at B1
-    shipFor("carrier", { row: 0, column: 3 }, "horizontal"),
-    shipFor("battleship", { row: 6, column: 4 }, "horizontal"),
-    shipFor("cruiser", { row: 9, column: 5 }, "horizontal"),
-    shipFor("destroyer", { row: 7, column: 8 }, "horizontal"),
+    shipFor("battleship", { row: 1, column: 0 }, "horizontal"), // B1..B4 -- hit at B4
+    shipFor("carrier", { row: 7, column: 0 }, "horizontal"),
+    shipFor("cruiser", { row: 3, column: 6 }, "horizontal"),
+    shipFor("submarine", { row: 9, column: 7 }, "horizontal"),
+    shipFor("destroyer", { row: 5, column: 6 }, "horizontal"),
   ],
-  shots: ["B3", "E1", "B1"],
+  shots: ["A4", "B6", "F4", "B4"],
   tags: ["target-mode", "pruned-end"],
 });
 
 // -----------------------------------------------------------------------------
-// Recipe 1: parity hunt. Carrier/battleship/cruiser sunk mid-pattern, leaving
-// destroyer(2) + submarine(3) afloat (pure hunt mode, zero unresolved hits).
-// Blue has laid a partial period-2 checkerboard: every (row+col)-EVEN cell is
-// fired EXCEPT three hole cells -- E1 and E3 on/near the LEFT WALL (where the
-// submarine actually hides at D1..F1) and C7 interior (destroyer at B7,C7) --
-// plus four off-parity probe misses (C8, D7, E4, F3) woven into the sweep.
-// Because orthogonal neighbours alternate parity, every odd cell outside the
-// hole neighbourhoods is placement-dead for any 2+ ship even though it was
-// never shot; recognizing THAT is still the scenario's core skill. The gate
-// rework moves the argmax onto the wall: the surviving mass crosses at the
-// wall junction E1 (the column-1 sub line D1..F1 plus the row-E sub line
-// E1..E3 plus three destroyer edges), which frontier-model edge
-// under-counting misprices. Oracle result: keyed = {E1=1.0} alone; sub-bar
-// decoys E2/E3=0.6 (the interior comb cells an away-from-the-wall counter
-// prefers), D1/F1/C7=0.4 (the interior pocket), then a 0.2 tail -- four
-// distinct ratio tiers.
+// Recipe 1: parity hunt (round-2 rework: the round-1 wall-junction version
+// was a single-region argument the frontier model re-aced at 1.0). Carrier/
+// battleship/cruiser sunk mid-pattern, leaving destroyer(2) + submarine(3)
+// afloat (pure hunt mode). Blue's period-2 checkerboard omits four even
+// cells forming TWO rival regions: a skinny column-2 pocket in the top-left
+// (omitted B2 and D2, hosting the destroyer at B2,C2) and a fat central
+// row-F blob (omitted F6 and F8, hosting the submarine at F6..F8), with
+// probe misses D1, F5, F9 woven in. The blob LOOKS richer -- wider, central,
+// symmetric, more unfired cells -- but the probes and the battleship wreck
+// clip each blob junction to one sub line per axis (count 5), while the
+// paired column omissions DOUBLE the vertical sub family through B2 (rows
+// 0-2 AND 1-3 live via the edge odd cell A2) on top of four destroyer
+// edges: count 7. Pricing the {3,2} multiset across two regions is exactly
+// what the round-1 probe showed the frontier model getting wrong. Oracle
+// result: keyed = {B2=1.0} alone; sub-bar decoys F6/F8/C2/D2=0.714,
+// F7=0.429, then a 0.286 tail -- five distinct ratio tiers.
 // -----------------------------------------------------------------------------
 const PARITY_HUNT_SCENARIO = makeV2Scenario({
   id: "gameiq-v0.2-battleship-parity-hunt",
   title: "Battleship v2: parity hunt with two ships left",
   difficulty: "hard",
   orangeShips: [
-    shipFor("carrier", { row: 1, column: 1 }, "horizontal"), // B2..B6, sunk
-    shipFor("battleship", { row: 7, column: 2 }, "horizontal"), // H3..H6, sunk
-    shipFor("cruiser", { row: 3, column: 8 }, "vertical"), // D9,E9,F9, sunk
-    shipFor("submarine", { row: 3, column: 0 }, "vertical"), // D1,E1,F1 -- live
-    shipFor("destroyer", { row: 1, column: 6 }, "vertical"), // B7,C7 -- live
+    shipFor("carrier", { row: 7, column: 1 }, "horizontal"), // H2..H6, sunk
+    shipFor("battleship", { row: 3, column: 4 }, "horizontal"), // D5..D8, sunk
+    shipFor("cruiser", { row: 3, column: 9 }, "vertical"), // D10,E10,F10, sunk
+    shipFor("submarine", { row: 5, column: 5 }, "horizontal"), // F6,F7,F8 -- live
+    shipFor("destroyer", { row: 1, column: 1 }, "vertical"), // B2,C2 -- live
   ],
   shots: [
     // Checkerboard sweep, row A (even-parity cells; all misses).
     "A1", "A3", "A5", "A7", "A9",
-    // Row B: B2 finds the carrier; kill B3..B6, then resume the pattern.
-    "B2", "B3", "B4", "B5", "B6", "B8", "B10",
-    // Row C: C7 left unfired (hole); C8 off-parity probe.
-    "C1", "C3", "C5", "C8", "C9",
-    // Row D: D7 off-parity probe.
-    "D2", "D4", "D6", "D7", "D8", "D10",
-    // Row E: E1 and E3 left unfired (hole); E4 off-parity probe;
-    // E9 finds the cruiser; kill D9, F9.
-    "E4", "E5", "E7", "E9", "D9", "F9",
-    // Row F: F3 off-parity probe.
-    "F2", "F3", "F4", "F6", "F8", "F10",
+    // Row B: B2 left unfired (top-left pocket).
+    "B4", "B6", "B8", "B10",
+    // Row C.
+    "C1", "C3", "C5", "C7", "C9",
+    // Row D: D1 off-parity probe; D2 left unfired (top-left pocket);
+    // D6 finds the battleship (kill D5, D7, D8); D10 finds the cruiser
+    // (kill E10, F10).
+    "D1", "D4", "D6", "D5", "D7", "D8", "D10", "E10", "F10",
+    // Row E.
+    "E1", "E3", "E5", "E7", "E9",
+    // Row F: F6 and F8 left unfired (central blob); F5 and F9 off-parity
+    // probes.
+    "F2", "F4", "F5", "F9",
     // Row G.
     "G1", "G3", "G5", "G7", "G9",
-    // Row H: H2, then H4 finds the battleship; kill H3, H5, H6, then resume.
-    "H2", "H4", "H3", "H5", "H6", "H8", "H10",
+    // Row H: H2 finds the carrier; kill H3..H6, then resume the pattern.
+    "H2", "H3", "H4", "H5", "H6", "H8", "H10",
     // Row I.
     "I1", "I3", "I5", "I7", "I9",
     // Row J.
@@ -234,30 +247,33 @@ const ORIENTATION_SCENARIO = makeV2Scenario({
 });
 
 // -----------------------------------------------------------------------------
-// Recipe 3: sunk-neighbor confusion (gate rework: the original wreck-left
-// corridor was aced at 1.0; this rebuild layers the wreck on the axis the
-// gate showed the frontier model mis-prices). The destroyer wreck at H2,H3
-// sits directly ABOVE a fresh hit at I2 near the bottom-left corner; with
-// the destroyer gone the remaining multiset is {5,4,3,3}, so the two-row
-// south pocket (J2) cannot fit ANY remaining ship and the whole vertical
-// axis is dead -- yet "retreat from the wreck" points straight at it. A
-// distant miss at I6 caps the east corridor. Oracle result: keyed = {I3}
-// alone (1.0); sub-bar decoys I4=0.714 (extend deeper east), I1=0.571 (fill
-// toward the corner -- the gate's demonstrated edge-gap blind spot),
-// I5=0.286, and J2 dead at 0.
+// Recipe 3: sunk-neighbor confusion (round-2 rework: the round-1 wreck+wall
+// corner corridor was a single-region argument the frontier model re-aced at
+// 1.0). Now the proven wreck-FLANK direction-bias shape with cross-axis
+// pricing: the destroyer wreck runs vertically at D6,E6 and a fresh hit
+// lands at E5, orthogonally beside the wreck's lower cell. The wreck kills
+// the eastward row entirely; the remaining decision compares the westward
+// row family (capped by the wreck, max count 4) against the column family,
+// whose asymmetry only appears after propagating two quiet misses: A5 (four
+// above) and G5 (two below) leave up-room 3 vs down-room 1. "Retreat from
+// the wreck" points west (E4), the no-touch-the-wreck instinct avoids D5
+// (which hugs the wreck diagonal), and the {5,4,3,3} multiset actually
+// stacks on D5. Oracle result: keyed = {D5} alone (1.0, count 7); sub-bar
+// decoys C5=0.714, E4/E3/F5=0.571 (flee-west and the coin-flip south),
+// B5/E2=0.286, E1=0.143 -- five distinct ratio tiers.
 // -----------------------------------------------------------------------------
 const SUNK_NEIGHBOR_SCENARIO = makeV2Scenario({
   id: "gameiq-v0.2-battleship-sunk-neighbor-confusion",
   title: "Battleship v2: retarget around a sunk neighbor",
   difficulty: "hard",
   orangeShips: [
-    shipFor("destroyer", { row: 7, column: 1 }, "horizontal"), // H2,H3 -- sunk
-    shipFor("cruiser", { row: 8, column: 1 }, "horizontal"), // I2,I3,I4 -- hit at I2
-    shipFor("carrier", { row: 0, column: 0 }, "horizontal"),
-    shipFor("battleship", { row: 2, column: 0 }, "horizontal"),
-    shipFor("submarine", { row: 4, column: 0 }, "horizontal"),
+    shipFor("destroyer", { row: 3, column: 5 }, "vertical"), // D6,E6 -- sunk
+    shipFor("battleship", { row: 1, column: 4 }, "vertical"), // B5..E5 -- hit at E5
+    shipFor("carrier", { row: 8, column: 0 }, "horizontal"),
+    shipFor("cruiser", { row: 0, column: 6 }, "horizontal"),
+    shipFor("submarine", { row: 6, column: 6 }, "horizontal"),
   ],
-  shots: ["H2", "H3", "I6", "I2"],
+  shots: ["A5", "G5", "D6", "E6", "E5"],
   tags: ["target-mode", "sunk-neighbor"],
 });
 
@@ -367,30 +383,34 @@ const EDGE_PINNED_SCENARIO = makeV2Scenario({
 });
 
 // -----------------------------------------------------------------------------
-// Hunt chain 1 (gate re-seed: the old isolated-hit probe ties were all aced
-// -- every "extend the line" pick was keyed). Now: hunt the carrier along
-// the top wall. The opener sinks the destroyer at A6,A7, then lands a hit on
-// the carrier at A4, so every state is target mode inside the five-cell
-// wall corridor A1..A5 (bounded east by the wreck). Oracle-argmax
-// progression (measured, not scripted): s1 keys {A3}=1.0 ALONE -- the
-// wall-pinned long-ship families stack one cell west of the hit -- while
-// the two demonstrated frontier heuristics are parked sub-bar: A5=0.571
-// (fill the gap between hit and wreck) and B4=0.571 (flee the wall
-// southward), with A2=0.714 between them; s2 keys {A2}=1.0 with A5=0.8
-// still keyed; s3 collapses to the {A1,A5} end-pair tie; s4 is the forced
-// kill approach {A5} after A1 hits.
+// Hunt chain 1 (round-2 re-seed: the round-1 wall-corridor carrier hunt keyed
+// s1 on a single-region pinning argument -- re-aced -- and its s3 was the
+// {A1,A5} ratio-1 END-PAIR TIE that stalled a reasoning model into timeouts
+// on the probe; ties are now banned in every state). Now: hunt the carrier
+// down the LEFT WALL with nothing sunk. Three hunting misses -- C1 above,
+// I1 below, and the quiet D4 east -- box the first hit at D1, and the
+// carrier runs D1..H1, flush under the C1 bound. Because the corridor is
+// closed at the top, every later state has exactly one live end: no ties
+// anywhere, and s4 stays the forced kill approach. s1 is the cross-region
+// decision: the boxed vertical family (5 placements, incl. the destroyer
+// pair that separates E1 from F1 -- nothing is sunk, so the full multiset
+// counts) against the D4-capped horizontal family. Oracle-argmax progression
+// (measured, not scripted): s1 keys {E1}=1.0 with F1=0.8 an honest second
+// key, D2=0.6 (flee-the-wall east -- the proven frontier bait), G1/D3=0.4,
+// H1=0.2; s2 keys {F1}=1.0 alone (G1=0.5); s3 keys {G1}=1.0 alone (H1=0.5);
+// s4 is the forced {H1}, whose argmax lands the sink.
 // -----------------------------------------------------------------------------
 const HUNT_CHAIN_1_SCENARIOS = buildHuntChain({
   idPrefix: "gameiq-v0.2-battleship-hunt1",
   titlePrefix: "Battleship v2: hunt the carrier",
   orangeShips: [
-    shipFor("carrier", { row: 0, column: 0 }, "horizontal"), // A1..A5
-    shipFor("destroyer", { row: 0, column: 5 }, "horizontal"), // A6,A7 -- sunk
-    shipFor("battleship", { row: 4, column: 2 }, "horizontal"),
-    shipFor("cruiser", { row: 6, column: 5 }, "horizontal"),
-    shipFor("submarine", { row: 8, column: 1 }, "horizontal"),
+    shipFor("carrier", { row: 3, column: 0 }, "vertical"), // D1..H1 -- hit at D1
+    shipFor("battleship", { row: 1, column: 3 }, "horizontal"),
+    shipFor("cruiser", { row: 9, column: 4 }, "horizontal"),
+    shipFor("submarine", { row: 1, column: 8 }, "vertical"),
+    shipFor("destroyer", { row: 6, column: 4 }, "horizontal"),
   ],
-  openingShots: ["A6", "A7", "A4"], // sink the destroyer, then hit the carrier
+  openingShots: ["C1", "I1", "D4", "D1"], // three hunt misses box the first hit
   states: 4,
   tags: ["hunt-chain-1"],
 });
