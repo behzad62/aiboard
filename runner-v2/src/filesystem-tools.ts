@@ -201,7 +201,7 @@ export function createFilesystemTools(
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
           if (input.createDirectories === true) await mkdir(dirname(path), { recursive: true });
-          const conflict = await checkExpected(path, input.expectedSha256);
+          const conflict = await checkExpected(context, path, input.expectedSha256);
           if (conflict) return conflict;
           const bytes = Buffer.from(input.content as string);
           await atomicWrite(path, bytes);
@@ -217,7 +217,12 @@ export function createFilesystemTools(
           const path = toolPath(context, input.path as string);
           const bytes = await readFile(path);
           if (sha256(bytes) !== input.expectedSha256) {
-            return error("revision_conflict", "File changed since it was read.");
+            return revisionConflict(
+              context,
+              path,
+              input.expectedSha256 as string,
+              bytes,
+            );
           }
           const original = decodeText(bytes);
           const search = input.search as string;
@@ -432,18 +437,50 @@ function error(code: string, message: string): ToolExecutionOutput {
   return { content: [{ type: "text", text: message }], isError: true, error: { code, message } };
 }
 
-async function checkExpected(path: string, expected: unknown): Promise<ToolExecutionOutput | null> {
+async function checkExpected(
+  context: ToolExecutionContext,
+  path: string,
+  expected: unknown,
+): Promise<ToolExecutionOutput | null> {
   if (expected === undefined) return null;
   if (typeof expected !== "string") return error("invalid_revision", "expectedSha256 must be a string.");
   try {
-    if (sha256(await readFile(path)) !== expected) {
-      return error("revision_conflict", "File changed since it was read.");
+    const bytes = await readFile(path);
+    if (sha256(bytes) !== expected) {
+      return revisionConflict(context, path, expected, bytes);
     }
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-    return error("revision_conflict", "Expected file does not exist.");
+    return revisionConflict(context, path, expected, null);
   }
   return null;
+}
+
+function revisionConflict(
+  context: ToolExecutionContext,
+  path: string,
+  expectedSha256: string,
+  currentBytes: Buffer | null,
+): ToolExecutionOutput {
+  const currentSha256 = currentBytes ? sha256(currentBytes) : null;
+  const message = currentSha256
+    ? "File changed since it was read. Use currentSha256 to retry after confirming the replacement still applies."
+    : "Expected file does not exist. Re-inspect the path before retrying.";
+  return {
+    content: [
+      { type: "text", text: message },
+      json({
+        path: displayPath(context, path),
+        expectedSha256,
+        currentSha256,
+        recovery: currentSha256
+          ? "Retry fs.patch with currentSha256 after confirming the replacement still applies."
+          : "Re-inspect the path before retrying.",
+      }),
+    ],
+    isError: true,
+    error: { code: "revision_conflict", message },
+  };
 }
 
 async function atomicWrite(path: string, bytes: Buffer): Promise<void> {

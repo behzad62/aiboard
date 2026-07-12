@@ -116,6 +116,23 @@ test("filesystem mutations are revision-aware, serialized, movable, and deletabl
       [first, second].map((result) => result.error?.code ?? "ok").sort(),
       ["ok", "revision_conflict"]
     );
+    const conflict = [first, second].find(
+      (result) => result.error?.code === "revision_conflict"
+    );
+    assert.ok(conflict);
+    const conflictDetails = json(conflict) as {
+      path: string;
+      expectedSha256: string;
+      currentSha256: string;
+      recovery: string;
+    };
+    assert.deepEqual(conflictDetails, {
+      path: "value.txt",
+      expectedSha256: originalHash,
+      currentSha256: sha256(readFileSync(join(workspace, "value.txt"))),
+      recovery: "Retry fs.patch with currentSha256 after confirming the replacement still applies.",
+    });
+    assert.match(text(conflict), /currentSha256/);
 
     const write = await invoke(broker, "write", "fs.write", {
       path: "created/note.txt",
