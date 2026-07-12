@@ -73,7 +73,12 @@ export async function runNativeBuildDiscussion(
   await createNativeBuild(connection, {
     runId,
     projectPath: health.projectPath,
-    permissionProfile: discussion.runnerAccess === "full" ? "full" : "guarded",
+    permissionProfile:
+      discussion.runnerAccess === "full"
+        ? "full"
+        : discussion.runnerAccess === "project"
+          ? "project"
+          : "guarded",
     idempotencyKey: `create:${runId}`,
     build: {
       projectId: discussion.id,

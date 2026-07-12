@@ -34,8 +34,10 @@ export default function RunnerGuidePage() {
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Access and handoff</h2>
         <p>
-          Guarded access pauses for destructive or external effects. Full access allows those operations without
-          per-action approval. Final project handoff is always a user choice in either profile.
+          Guarded access pauses for every mutation. Project Autonomous runs project-contained work without prompts
+          but pauses for outside or external effects. Full Access allows destructive, credential, push/PR,
+          deployment, and external-system operations without per-action approval. Final project handoff is always
+          a user choice in every profile.
         </p>
       </section>
       <section className="space-y-3">

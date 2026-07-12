@@ -244,7 +244,7 @@ export function interruptOrphanedRunningBuild(id: string): boolean {
  */
 export function setDiscussionRunner(
   id: string,
-  sel: { url: string; token: string; access: "ask" | "full" } | null
+  sel: { url: string; token: string; access: "ask" | "project" | "full" } | null
 ): void {
   updateDiscussion(
     id,
@@ -406,7 +406,7 @@ export interface CreateDiscussionInput {
   projectFolderName?: string | null;
   runnerUrl?: string | null;
   runnerToken?: string | null;
-  runnerAccess?: "ask" | "full" | null;
+  runnerAccess?: "ask" | "project" | "full" | null;
   buildRunPolicy?: BuildRunPolicy;
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;

@@ -331,7 +331,7 @@ export interface Discussion {
   runnerUrl?: string | null;
   runnerToken?: string | null;
   /** "ask" = approve each command in the UI; "full" = run without asking. */
-  runnerAccess?: "ask" | "full" | null;
+  runnerAccess?: "ask" | "project" | "full" | null;
   /** Durable Runner V2 run identity for the current native Build pass. */
   nativeBuildRunId?: string | null;
   buildRunPolicy?: BuildRunPolicy;

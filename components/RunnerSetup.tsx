@@ -14,7 +14,7 @@ import {
 export interface RunnerSelection {
   url: string;
   token: string;
-  access: "ask" | "full";
+  access: "ask" | "project" | "full";
 }
 
 interface RunnerSetupProps {
@@ -32,7 +32,7 @@ export function RunnerSetup({
 }: RunnerSetupProps) {
   const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_V2_URL);
   const [token, setToken] = useState(initialSelection?.token ?? "");
-  const [access, setAccess] = useState<"ask" | "full">(
+  const [access, setAccess] = useState<"ask" | "project" | "full">(
     initialSelection?.access ?? "ask"
   );
   const [status, setStatus] = useState<{
@@ -120,12 +120,17 @@ export function RunnerSetup({
       {token.trim() && (
         <div className="space-y-1.5">
           <Label className="text-xs">Access ceiling</Label>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-3">
             {([
               {
                 value: "ask",
                 title: "Guarded",
-                description: "Project work is allowed; external or destructive actions require approval.",
+                description: "Every write, command, network call, and external action requires approval.",
+              },
+              {
+                value: "project",
+                title: "Project autonomous",
+                description: "Project-contained work runs automatically; outside or external effects require approval.",
               },
               {
                 value: "full",
