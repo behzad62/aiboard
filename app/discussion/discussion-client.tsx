@@ -102,6 +102,7 @@ import {
   decideNativePermission,
   getNativeBuild,
   getNativeBuildAudit,
+  getNativeBuildEvents,
   getNativeBuildObservability,
   getNativeBuildUsage,
   getNativeRun,
@@ -112,6 +113,7 @@ import {
   type NativeBuildObservability,
   type NativeBuildProjection,
 } from "@/lib/client/runner-v2";
+import { nativeBuildActivityEntries } from "@/lib/client/native-build-activity";
 import {
   BuildTaskBoard,
   type BuildTaskView,
@@ -890,7 +892,8 @@ function DiscussionPageInner() {
       getNativeBuild(connection, discussion.nativeBuildRunId),
       getNativeBuildUsage(connection, discussion.nativeBuildRunId),
       getNativeRun(connection, discussion.nativeBuildRunId),
-    ]).then(([projection, usage, run]) => {
+      getNativeBuildEvents(connection, discussion.nativeBuildRunId, 0),
+    ]).then(([projection, usage, run, events]) => {
       if (cancelled) return;
       const handoffs = durableBuildHandoffPanels(projection);
       setNativeProjection(projection);
@@ -905,6 +908,13 @@ function DiscussionPageInner() {
         }))
       );
       setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
+      const durableActivity = nativeBuildActivityEntries(
+        discussion.nativeBuildRunId!,
+        events,
+        ACTIVITY_LOG_CAP
+      );
+      setDiagnostics(durableActivity);
+      saveDiagnostics(id, durableActivity);
     }).catch(() => {
       // Runner availability is already represented by the connection control;
       // retain the last durable UI state and retry on the next page lifecycle.
@@ -913,6 +923,7 @@ function DiscussionPageInner() {
       cancelled = true;
     };
   }, [
+    id,
     discussion?.mode,
     discussion?.runnerUrl,
     discussion?.runnerToken,

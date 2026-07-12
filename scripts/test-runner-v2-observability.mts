@@ -5,6 +5,30 @@ import {
   runnerBuildControlSummary,
   runnerObservabilitySummary,
 } from "../components/RunnerV2ObservabilityPanel";
+import { nativeBuildActivityEntries } from "../lib/client/native-build-activity";
+
+const activity = nativeBuildActivityEntries("run_1", [
+  {
+    sequence: 1,
+    type: "task.transitioned",
+    occurredAt: "2026-07-12T00:00:00.000Z",
+    actor: { role: "runner", id: "scheduler" },
+    payload: { taskId: "T1", status: "running" },
+  },
+  {
+    sequence: 2,
+    type: "guidance.requested",
+    occurredAt: "2026-07-12T00:00:01.000Z",
+    actor: { role: "worker", id: "worker_1" },
+    payload: { taskId: "T1" },
+  },
+], 1, (value) => value.slice(11, 19));
+assert.deepEqual(activity, [{
+  id: "native:run_1:2",
+  at: "00:00:01",
+  phase: "model_streaming",
+  message: "worker worker_1: guidance.requested — T1",
+}]);
 
 const control = runnerBuildControlSummary({
   runId: "run_1",
