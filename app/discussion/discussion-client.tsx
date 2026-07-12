@@ -15,6 +15,7 @@ import {
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
+import { RunnerV2ObservabilityPanel } from "@/components/RunnerV2ObservabilityPanel";
 import {
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
   reduceBuildContextPanelState,
@@ -100,12 +101,14 @@ import {
   commandNativeRun,
   decideNativePermission,
   getNativeBuild,
+  getNativeBuildObservability,
   getNativeBuildUsage,
   getNativeRun,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
+  type NativeBuildObservability,
 } from "@/lib/client/runner-v2";
 import {
   BuildTaskBoard,
@@ -223,6 +226,8 @@ function DiscussionPageInner() {
   );
   const [, setBuildSkillEvents] = useState<BuildSkillEvent[]>([]);
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
+  const [nativeObservability, setNativeObservability] =
+    useState<NativeBuildObservability | null>(null);
   const [buildStopReport, setBuildStopReport] =
     useState<BuildStopReport | null>(null);
   const [buildToolReviewReport, setBuildToolReviewReport] =
@@ -901,6 +906,43 @@ function DiscussionPageInner() {
     });
     return () => {
       cancelled = true;
+    };
+  }, [
+    discussion?.mode,
+    discussion?.runnerUrl,
+    discussion?.runnerToken,
+    discussion?.nativeBuildRunId,
+    status,
+  ]);
+
+  useEffect(() => {
+    if (
+      discussion?.mode !== "build" ||
+      !discussion.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    let cancelled = false;
+    const connection = {
+      url: discussion.runnerUrl,
+      token: discussion.runnerToken,
+    };
+    const refresh = () => {
+      void getNativeBuildObservability(
+        connection,
+        discussion.nativeBuildRunId!
+      ).then((snapshot) => {
+        if (!cancelled) setNativeObservability(snapshot);
+      }).catch(() => {
+        // The runner connection control represents reachability. Keep the
+        // latest durable snapshot during transient observer disconnects.
+      });
+    };
+    refresh();
+    const timer = status === "running" ? window.setInterval(refresh, 2_000) : null;
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
     };
   }, [
     discussion?.mode,
@@ -1670,6 +1712,10 @@ function DiscussionPageInner() {
           prUrl={repoWorkflow?.prUrl ?? null}
           usage={buildUsage}
         />
+      )}
+
+      {discussion.mode === "build" && (
+        <RunnerV2ObservabilityPanel snapshot={nativeObservability} />
       )}
 
       {discussion.mode === "build" && architectHandoff && (

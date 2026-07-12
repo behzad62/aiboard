@@ -133,6 +133,63 @@ export interface NativeBuildUsageProjection {
   lastSequence: number;
 }
 
+export interface NativeBuildObservability {
+  runId: string;
+  budget: NativeBuildUsageProjection;
+  agents: Array<{
+    sessionId: string;
+    actor: { role: "architect" | "worker" | "subagent"; id: string };
+    status: "active" | "suspended" | "submitted";
+    turns: number;
+    suspensionReason?: string;
+    error?: string;
+    changeSetId?: string;
+    lastSequence: number;
+  }>;
+  tools: Array<{
+    sequence: number;
+    sessionId: string;
+    callId: string;
+    toolName: string;
+    status: "started" | "retrying" | "completed";
+    occurredAt: string;
+    isError?: boolean;
+    errorCode?: string;
+  }>;
+  evidence: Array<{
+    id: string;
+    taskId: string;
+    actor: { role: "architect" | "worker" | "subagent"; id: string };
+    status: "observed";
+    fact: { kind: "command"; label: string; command: string; exitCode: number | null };
+    createdAt: string;
+  }>;
+  memories: Array<{
+    id: string;
+    content: string;
+    concepts: string[];
+    status: "proposed" | "promoted" | "archived";
+    updatedAt: string;
+  }>;
+  skills: Array<{
+    id: string;
+    name: string;
+    description: string;
+    source: "project" | "built-in" | "user";
+    digest: string;
+  }>;
+  processes: Array<{
+    processId: string;
+    sessionId: string;
+    command: string;
+    args: string[];
+    status: "running" | "stopped" | "exited_unknown";
+    startedAt: string;
+    updatedAt: string;
+    exitCode: number | null;
+  }>;
+}
+
 export interface NativeBuildStepResult {
   status: "progressed" | "paused" | "completed" | "idle";
   action?: string;
@@ -237,6 +294,19 @@ export async function getNativeBuildUsage(
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/usage`,
+    {},
+    fetchImpl
+  );
+}
+
+export async function getNativeBuildObservability(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildObservability> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/observability`,
     {},
     fetchImpl
   );

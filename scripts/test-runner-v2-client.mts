@@ -4,6 +4,7 @@ import {
   configureNativeProviders,
   createNativeBuild,
   getNativeBuildUsage,
+  getNativeBuildObservability,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
   type NativeRunnerConnection,
@@ -89,6 +90,18 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       lastSequence: 42,
     });
   }
+  if (String(input).endsWith("/build/observability")) {
+    return Response.json({
+      runId: "run_1",
+      budget: { effective: { modelCalls: 9, toolCalls: 27 } },
+      agents: [{ sessionId: "worker:run_1:T1:1", status: "submitted" }],
+      tools: [{ callId: "read_1", toolName: "fs.read", status: "completed" }],
+      evidence: [],
+      memories: [],
+      skills: [],
+      processes: [],
+    });
+  }
   return Response.json({ runId: "run_1", state: "created" }, { status: 201 });
 };
 
@@ -128,6 +141,9 @@ await selectNativeProjectHandoff(
 const usage = await getNativeBuildUsage(connection, "run_1", fetchImpl);
 assert.equal(usage.effective.modelCalls, 9);
 assert.equal(usage.effective.inputTokens, 12_000);
+const observed = await getNativeBuildObservability(connection, "run_1", fetchImpl);
+assert.equal(observed.agents.length, 1);
+assert.equal(observed.tools[0].toolName, "fs.read");
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
@@ -136,4 +152,5 @@ assert.equal(JSON.parse(String(calls[2].init.body)).build.maxConcurrency, 2);
 assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
 assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
 assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
+assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
 console.log("PASS runner-v2 client");

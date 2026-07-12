@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { AccountRunnerModel } from "./account-runner-model.js";
 import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import type {
+  BuildObservabilitySnapshot,
+  BuildToolObservation,
+} from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
@@ -27,11 +34,15 @@ import {
   rebuildSchedulerProjection,
   type SchedulerEvent,
 } from "./scheduler-store.js";
-import { SkillCatalog } from "./skill-catalog.js";
+import {
+  SkillCatalog,
+  type SharedSkillRoot,
+} from "./skill-catalog.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
+import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { WorkspaceManager } from "./workspace-manager.js";
@@ -43,6 +54,7 @@ export interface NativeBuildFactoryOptions {
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
   baselineFor(runId: string): string;
+  skillRoots?: readonly SharedSkillRoot[];
 }
 
 export class NativeBuildFactory {
@@ -114,7 +126,10 @@ export class NativeBuildFactory {
       health,
     });
     const architectRouter = new RuntimeRouter({ candidates, health });
-    const skillCatalog = new SkillCatalog({ projectRoot: this.options.projectRoot });
+    const skillCatalog = new SkillCatalog({
+      projectRoot: this.options.projectRoot,
+      sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
+    });
     const workerDriver = new NativeWorkerDriver({
       schedulerStore,
       router: workerRouter,
@@ -195,6 +210,38 @@ export class NativeBuildFactory {
     return {
       runtime,
       usage: () => budgetLedger.snapshot(spec.runId),
+      observability: async (): Promise<BuildObservabilitySnapshot> => {
+        const agentSessions = await sessions.listRun(spec.runId);
+        return {
+          runId: spec.runId,
+          budget: budgetLedger.snapshot(spec.runId),
+          agents: agentSessions.map((session) => ({
+            sessionId: session.sessionId,
+            actor: { ...session.actor },
+            status: session.status,
+            turns: session.checkpoint?.turns ?? 0,
+            ...(session.suspensionReason
+              ? { suspensionReason: session.suspensionReason }
+              : {}),
+            ...(session.error ? { error: session.error } : {}),
+            ...(session.changeSetId ? { changeSetId: session.changeSetId } : {}),
+            lastSequence: session.lastSequence,
+          })),
+          tools: summarizeToolCalls(ledger.listRun(spec.runId)).slice(-1_000),
+          evidence: evidenceStore.list({ runId: spec.runId, limit: 1_000 }),
+          memories: [...rebuildProjectMemories(
+            this.memoryStore.events(spec.projectId)
+          ).values()],
+          skills: await skillCatalog.discover(),
+          processes: this.managedProcesses.listRun(spec.runId).slice(-100).map(
+            (process) => ({
+              ...process,
+              stdout: process.stdout.slice(-8 * 1024),
+              stderr: process.stderr.slice(-8 * 1024),
+            })
+          ),
+        };
+      },
       projectHandoff: async (choice) =>
         choice === "apply_to_project"
           ? await integrationManager.applyToProject()
@@ -219,6 +266,48 @@ export class NativeBuildFactory {
     this.managedProcesses.close();
     await this.browserBackend.closeAll();
   }
+}
+
+function summarizeToolCalls(
+  events: ReturnType<SqliteToolLedger["listRun"]>
+): BuildToolObservation[] {
+  const calls = new Map<string, BuildToolObservation>();
+  for (const event of events) {
+    if (!event.sessionId || !event.callId || !event.toolName) continue;
+    const previous = calls.get(event.key);
+    calls.set(event.key, {
+      sequence: event.sequence,
+      sessionId: event.sessionId,
+      callId: event.callId,
+      toolName: event.toolName,
+      status: event.type === "tool.completed"
+        ? "completed"
+        : event.type === "tool.retry_started"
+          ? "retrying"
+          : "started",
+      occurredAt: event.occurredAt,
+      ...(event.result ? { isError: event.result.isError } : previous?.isError !== undefined
+        ? { isError: previous.isError }
+        : {}),
+      ...(event.result?.error?.code
+        ? { errorCode: event.result.error.code }
+        : previous?.errorCode
+          ? { errorCode: previous.errorCode }
+          : {}),
+    });
+  }
+  return [...calls.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
+export function defaultSharedSkillRoots(): SharedSkillRoot[] {
+  const builtIn = resolve(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+  const home = homedir();
+  return [
+    { path: builtIn, source: "built-in" },
+    { path: join(home, ".codex", "skills"), source: "user" },
+    { path: join(home, ".claude", "skills"), source: "user" },
+    { path: join(home, ".aiboard", "skills"), source: "user" },
+  ];
 }
 
 export function providerHealthFromSchedulerEvents(

@@ -73,6 +73,7 @@ test("worker context carries provenance for instructions, skills, memory, and ev
         relativePath: ".agents/skills/testing/SKILL.md",
         digest: "b".repeat(64),
         byteLength: 18,
+        source: "project",
         content: "Inspect before editing.",
       },
     ],

@@ -53,6 +53,16 @@ export interface ManagedProcessSnapshot {
   stderr: string;
 }
 
+export interface ManagedProcessObservation extends ManagedProcessSnapshot {
+  runId: string;
+  sessionId: string;
+  actor: AgentActor;
+  command: string;
+  args: string[];
+  cwd: string;
+  environmentKeys: string[];
+}
+
 export interface ManagedProcessServiceOptions {
   stateDirectory: string;
   idFactory?: () => string;
@@ -174,6 +184,25 @@ export class ManagedProcessService {
       .map((record) => {
         this.reconcile(record);
         return this.snapshot(record);
+      });
+  }
+
+  listRun(runId: string): ManagedProcessObservation[] {
+    return [...this.records.values()]
+      .filter((record) => record.runId === runId)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+      .map((record) => {
+        this.reconcile(record);
+        return {
+          ...this.snapshot(record),
+          runId: record.runId,
+          sessionId: record.sessionId,
+          actor: { ...record.actor },
+          command: record.command,
+          args: [...record.args],
+          cwd: record.cwd,
+          environmentKeys: [...record.environmentKeys],
+        };
       });
   }
 

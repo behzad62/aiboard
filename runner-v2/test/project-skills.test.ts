@@ -7,11 +7,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import test from "node:test";
 
 import { discoverProjectInstructions } from "../src/project-context.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
+import { defaultSharedSkillRoots } from "../src/native-build-factory.js";
 import { createSkillTools } from "../src/skill-tools.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
@@ -115,6 +116,54 @@ test("skill tools list and read bounded project skills without lifecycle authori
   }
 });
 
+test("skill catalog includes provenance-scoped built-in and user-installed roots", async () => {
+  const fixture = projectFixture();
+  try {
+    const builtIn = join(fixture.root, "built-in-skills");
+    const user = join(fixture.root, "user-skills");
+    mkdirSync(join(builtIn, "verification"), { recursive: true });
+    mkdirSync(join(user, "debugging"), { recursive: true });
+    writeFileSync(join(builtIn, "verification", "SKILL.md"), "# Verification\nGather fresh evidence.\n");
+    writeFileSync(join(user, "debugging", "SKILL.md"), "# Debugging\nFind root cause first.\n");
+
+    const catalog = new SkillCatalog({
+      projectRoot: fixture.project,
+      sharedRoots: [
+        { path: builtIn, source: "built-in" },
+        { path: user, source: "user" },
+      ],
+    });
+    const skills = await catalog.discover();
+    assert.deepEqual(
+      skills.map((skill) => ({ id: skill.id, source: skill.source })),
+      [
+        { id: "built-in:verification", source: "built-in" },
+        { id: "user:debugging", source: "user" },
+      ]
+    );
+    assert.match((await catalog.read("built-in:verification")).content, /fresh evidence/);
+    assert.match((await catalog.read("user:debugging")).content, /root cause/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("runner defaults expose bundled and standard user skill roots", async () => {
+  const fixture = projectFixture();
+  try {
+    const roots = defaultSharedSkillRoots();
+    assert.equal(roots.some((root) => root.source === "built-in"), true);
+    assert.equal(roots.some((root) => root.source === "user"), true);
+    assert.equal(roots.every((root) => isAbsolute(root.path)), true);
+    const catalog = new SkillCatalog({ projectRoot: fixture.project, sharedRoots: roots });
+    const skills = await catalog.discover();
+    assert.equal(skills.some((skill) => skill.id === "built-in:verification"), true);
+    assert.equal(skills.some((skill) => skill.id === "built-in:systematic-debugging"), true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 function projectFixture() {
   const root = mkdtempSync(join(tmpdir(), "aiboard-project-skills-"));
   const project = join(root, "project");
@@ -122,6 +171,7 @@ function projectFixture() {
   mkdirSync(project, { recursive: true });
   mkdirSync(outside, { recursive: true });
   return {
+    root,
     project,
     outside,
     cleanup: () => rmSync(root, { recursive: true, force: true }),

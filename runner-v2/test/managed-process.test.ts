@@ -29,6 +29,10 @@ test("background process output and ownership survive service restart", async ()
     });
     assert.equal(started.isError, false);
     assert.equal((json(started) as { processId: string }).processId, "process_1");
+    const observed = firstService.listRun("run_1");
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].sessionId, "session_owner");
+    assert.equal(observed[0].command, process.execPath);
     let pollAttempt = 0;
     await waitFor(async () => text(await invoke(owner, `poll_initial_${pollAttempt++}`, "process.poll", {
       processId: "process_1",

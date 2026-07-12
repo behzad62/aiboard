@@ -14,6 +14,10 @@ export interface ProjectMemoryEntry {
   createdAt: string;
   updatedAt: string;
   archivedReason?: string;
+  workspaceRevision?: string;
+  confidence?: number;
+  evidenceIds?: string[];
+  supersedes?: string[];
 }
 
 export type ProjectMemoryEventType =
@@ -41,6 +45,10 @@ export interface ProposeProjectMemoryInput {
   concepts: string[];
   occurredAt: string;
   idempotencyKey: string;
+  workspaceRevision?: string;
+  confidence?: number;
+  evidenceIds?: string[];
+  supersedes?: string[];
 }
 
 export interface PromoteProjectMemoryInput {
@@ -93,6 +101,14 @@ export function rebuildProjectMemories(
         proposedBy: event.actor,
         createdAt: event.occurredAt,
         updatedAt: event.occurredAt,
+        ...(typeof event.payload.workspaceRevision === "string"
+          ? { workspaceRevision: event.payload.workspaceRevision }
+          : {}),
+        ...(typeof event.payload.confidence === "number"
+          ? { confidence: event.payload.confidence }
+          : {}),
+        ...optionalArrayProperty(event.payload, "evidenceIds"),
+        ...optionalArrayProperty(event.payload, "supersedes"),
       });
       continue;
     }
@@ -135,4 +151,20 @@ function stringArray(payload: Record<string, unknown>, key: string): string[] {
     throw new Error(`Missing ${key}.`);
   }
   return [...value] as string[];
+}
+function optionalStringArray(
+  payload: Record<string, unknown>,
+  key: string
+): string[] | undefined {
+  const value = payload[key];
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? [...value] as string[]
+    : undefined;
+}
+function optionalArrayProperty(
+  payload: Record<string, unknown>,
+  key: "evidenceIds" | "supersedes"
+): Partial<Pick<ProjectMemoryEntry, "evidenceIds" | "supersedes">> {
+  const value = optionalStringArray(payload, key);
+  return value ? { [key]: value } : {};
 }

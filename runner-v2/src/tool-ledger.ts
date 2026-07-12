@@ -16,6 +16,10 @@ export interface ToolLedgerEvent {
   fingerprint: string;
   occurredAt: string;
   result?: ToolResult;
+  runId?: string;
+  sessionId?: string;
+  callId?: string;
+  toolName?: string;
 }
 
 export interface BeginToolInvocation {
@@ -44,6 +48,7 @@ export interface ToolInvocationLedger {
     occurredAt: string
   ): void;
   events(key: string): ToolLedgerEvent[];
+  listRun(runId: string): ToolLedgerEvent[];
   close(): void;
 }
 

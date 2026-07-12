@@ -53,6 +53,7 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
 
   propose(input: ProposeProjectMemoryInput): ProjectMemoryEntry {
     assertBase(input.projectId, input.content, input.concepts);
+    assertProvenance(input);
     const memoryId = `memory_${createHash("sha256")
       .update(`${input.projectId}\0${input.idempotencyKey}`)
       .digest("hex")}`;
@@ -68,6 +69,12 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
         ...(input.taskId ? { taskId: input.taskId } : {}),
         content: input.content.trim(),
         concepts: normalizeConcepts(input.concepts),
+        ...(input.workspaceRevision
+          ? { workspaceRevision: input.workspaceRevision.trim() }
+          : {}),
+        ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
+        ...(input.evidenceIds ? { evidenceIds: normalizeLinks(input.evidenceIds) } : {}),
+        ...(input.supersedes ? { supersedes: normalizeLinks(input.supersedes) } : {}),
       },
     });
     return this.requireEntry(input.projectId, requiredMemoryId(event));
@@ -248,6 +255,18 @@ function assertBase(projectId: string, content: string, concepts: string[]): voi
   if (Buffer.byteLength(content) > 64 * 1024) throw new Error("Memory content exceeds 64 KiB.");
   if (concepts.length > 50) throw new Error("Memory concepts exceed 50 entries.");
 }
+function assertProvenance(input: ProposeProjectMemoryInput): void {
+  if (
+    input.workspaceRevision !== undefined &&
+    (!input.workspaceRevision.trim() || input.workspaceRevision.length > 512)
+  ) throw new Error("Memory workspace revision must be a non-empty string of at most 512 characters.");
+  if (
+    input.confidence !== undefined &&
+    (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1)
+  ) throw new Error("Memory confidence must be from 0 to 1.");
+  if (input.evidenceIds) normalizeLinks(input.evidenceIds);
+  if (input.supersedes) normalizeLinks(input.supersedes);
+}
 function assertArchitect(actor: AgentActor): void {
   if (actor.role !== "architect") throw new Error("Only the Architect may change durable memory status.");
 }
@@ -257,5 +276,21 @@ function requiredMemoryId(event: ProjectMemoryEvent): string {
   return value;
 }
 function cloneEntry(entry: ProjectMemoryEntry): ProjectMemoryEntry {
-  return { ...entry, concepts: [...entry.concepts], proposedBy: { ...entry.proposedBy } };
+  return {
+    ...entry,
+    concepts: [...entry.concepts],
+    proposedBy: { ...entry.proposedBy },
+    ...(entry.evidenceIds ? { evidenceIds: [...entry.evidenceIds] } : {}),
+    ...(entry.supersedes ? { supersedes: [...entry.supersedes] } : {}),
+  };
+}
+
+function normalizeLinks(values: string[]): string[] {
+  if (
+    values.length > 100 ||
+    values.some((value) => !value.trim() || value.length > 512)
+  ) {
+    throw new Error("Memory evidence and supersession links must contain at most 100 non-empty IDs of at most 512 characters.");
+  }
+  return [...new Set(values.map((value) => value.trim()))].sort();
 }

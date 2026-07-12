@@ -66,7 +66,12 @@ export class SqliteToolLedger implements ToolInvocationLedger {
         events.length > 0 ? "tool.retry_started" : "tool.started",
         input.fingerprint,
         input.occurredAt,
-        null
+        JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          callId: input.callId,
+          toolName: input.toolName,
+        })
       );
       this.database.exec("COMMIT");
       return { state: "new" };
@@ -105,16 +110,21 @@ export class SqliteToolLedger implements ToolInvocationLedger {
   }
 
   events(key: string): ToolLedgerEvent[] {
-    return this.readRows(key).map((row) => ({
-      sequence: row.sequence,
-      key: row.invocation_key,
-      type: row.event_type,
-      fingerprint: row.fingerprint,
-      occurredAt: row.occurred_at,
-      ...(row.event_type === "tool.completed"
-        ? { result: decodeResult(row) }
-        : {}),
-    }));
+    return this.readRows(key).map(decodeEvent);
+  }
+
+  listRun(runId: string): ToolLedgerEvent[] {
+    return (
+      this.database
+        .prepare(
+          `SELECT sequence, invocation_key, event_type, fingerprint,
+                  occurred_at, payload_json
+           FROM tool_events ORDER BY sequence ASC`
+        )
+        .all() as unknown as EventRow[]
+    )
+      .filter((row) => row.invocation_key.startsWith(`${runId}\0`))
+      .map(decodeEvent);
   }
 
   close(): void {
@@ -146,6 +156,35 @@ export class SqliteToolLedger implements ToolInvocationLedger {
       )
       .run(key, type, fingerprint, occurredAt, payload);
   }
+}
+
+function decodeEvent(row: EventRow): ToolLedgerEvent {
+  const [runId, sessionId, callId] = row.invocation_key.split("\0");
+  let toolName: string | undefined;
+  if (row.event_type === "tool.completed") {
+    toolName = decodeResult(row).toolName;
+  } else if (row.payload_json) {
+    try {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      toolName = typeof payload.toolName === "string" ? payload.toolName : undefined;
+    } catch {
+      toolName = undefined;
+    }
+  }
+  return {
+    sequence: row.sequence,
+    key: row.invocation_key,
+    type: row.event_type,
+    fingerprint: row.fingerprint,
+    occurredAt: row.occurred_at,
+    ...(runId ? { runId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(callId ? { callId } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(row.event_type === "tool.completed"
+      ? { result: decodeResult(row) }
+      : {}),
+  };
 }
 
 function decodeResult(row: EventRow): ToolResult {

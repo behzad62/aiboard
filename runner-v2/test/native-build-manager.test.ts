@@ -46,6 +46,7 @@ test("native Build manager recreates persisted runtimes and closes resources", a
         return {
           runtime: fakeRuntime(input.runId),
           usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
           projectHandoff: async () => ({
             integrationRevision: "revision_final",
             integrationBranch: "aiboard/run/integration",
@@ -88,6 +89,7 @@ test("native Build manager owns one autonomous pump per active run", async () =>
           },
         } as BuildRuntime,
         usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
         projectHandoff: async () => ({
           integrationRevision: "revision_final",
           integrationBranch: "aiboard/run/integration",
@@ -127,6 +129,7 @@ test("recovery autonomously restarts only runs the supervisor still marks active
           },
         } as BuildRuntime,
         usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
         projectHandoff: async () => ({
           integrationRevision: "revision_final",
           integrationBranch: "aiboard/run/integration",
@@ -195,6 +198,19 @@ function emptyBudget(scopeId: string) {
       artifactBytes: 0,
     },
     lastSequence: 0,
+  };
+}
+
+function emptyObservability(runId: string) {
+  return {
+    runId,
+    budget: emptyBudget(runId),
+    agents: [],
+    tools: [],
+    evidence: [],
+    memories: [],
+    skills: [],
+    processes: [],
   };
 }
 

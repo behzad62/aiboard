@@ -53,7 +53,7 @@ function recallTool(options: MemoryToolsOptions): NativeTool<{
 function proposeTool(
   options: MemoryToolsOptions,
   clock: () => string
-): NativeTool<{ content: string; concepts: string[] }> {
+): NativeTool<MemoryProposalArguments> {
   return {
     definition: {
       name: "propose_project_memory",
@@ -61,6 +61,18 @@ function proposeTool(
       inputSchema: objectSchema({
         content: { type: "string", minLength: 1 },
         concepts: { type: "array", items: { type: "string", minLength: 1 } },
+        workspaceRevision: { type: "string", minLength: 1, maxLength: 512 },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
+        evidenceIds: {
+          type: "array",
+          maxItems: 100,
+          items: { type: "string", minLength: 1, maxLength: 512 },
+        },
+        supersedes: {
+          type: "array",
+          maxItems: 100,
+          items: { type: "string", minLength: 1, maxLength: 512 },
+        },
       }, ["content", "concepts"]),
       readOnly: false,
       effect: "none",
@@ -75,6 +87,12 @@ function proposeTool(
           actor: context.actor,
           content: input.content,
           concepts: input.concepts,
+          ...(input.workspaceRevision
+            ? { workspaceRevision: input.workspaceRevision }
+            : {}),
+          ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
+          ...(input.evidenceIds ? { evidenceIds: input.evidenceIds } : {}),
+          ...(input.supersedes ? { supersedes: input.supersedes } : {}),
           occurredAt: clock(),
           idempotencyKey: `proposal:${context.sessionId}:${context.callId}`,
         });
@@ -205,10 +223,48 @@ function parseSearch(input: unknown): ValidationResult<{ query: string; concepts
     ? { ok: true, value: { query: input.query, concepts, limit } }
     : invalid("concepts must be strings and limit must be from 1 to 100");
 }
-function parseProposal(input: unknown): ValidationResult<{ content: string; concepts: string[] }> {
+interface MemoryProposalArguments {
+  content: string;
+  concepts: string[];
+  workspaceRevision?: string;
+  confidence?: number;
+  evidenceIds?: string[];
+  supersedes?: string[];
+}
+
+function parseProposal(input: unknown): ValidationResult<MemoryProposalArguments> {
   if (!record(input) || typeof input.content !== "string" || !input.content.trim()) return invalid("content is required");
   const concepts = strings(input.concepts);
-  return concepts ? { ok: true, value: { content: input.content, concepts } } : invalid("concepts must be strings");
+  const workspaceRevision = input.workspaceRevision;
+  const confidence = input.confidence;
+  const evidenceIds = input.evidenceIds === undefined ? undefined : strings(input.evidenceIds);
+  const supersedes = input.supersedes === undefined ? undefined : strings(input.supersedes);
+  if (!concepts) return invalid("concepts must be strings");
+  if (
+    workspaceRevision !== undefined &&
+    (typeof workspaceRevision !== "string" || !workspaceRevision.trim() || workspaceRevision.length > 512)
+  ) return invalid("workspaceRevision must be a non-empty string of at most 512 characters");
+  if (
+    confidence !== undefined &&
+    (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+  ) return invalid("confidence must be a number from 0 to 1");
+  if (evidenceIds === null || supersedes === null) {
+    return invalid("evidenceIds and supersedes must contain non-empty strings");
+  }
+  if ((evidenceIds?.length ?? 0) > 100 || (supersedes?.length ?? 0) > 100) {
+    return invalid("evidenceIds and supersedes must contain at most 100 entries");
+  }
+  return {
+    ok: true,
+    value: {
+      content: input.content,
+      concepts,
+      ...(workspaceRevision !== undefined ? { workspaceRevision } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...(evidenceIds ? { evidenceIds } : {}),
+      ...(supersedes ? { supersedes } : {}),
+    },
+  };
 }
 function parseMemoryId(input: unknown): ValidationResult<{ memoryId: string }> {
   return record(input) && typeof input.memoryId === "string" && input.memoryId.trim()

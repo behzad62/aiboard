@@ -16,9 +16,18 @@ test("worker proposals require Architect promotion and survive restart", async (
     const proposed = await invoke(worker, "worker", "propose_project_memory", {
       content: "Use npm run focused-test before the full suite.",
       concepts: ["testing", "npm"],
+      workspaceRevision: "abc123",
+      confidence: 0.9,
+      evidenceIds: ["evidence_test_output"],
+      supersedes: ["memory_old_testing_note"],
     });
     assert.equal(proposed.isError, false);
     const memoryId = (jsonValue(proposed) as { memoryId: string }).memoryId;
+    const proposal = store.proposals("project_a")[0];
+    assert.equal(proposal.workspaceRevision, "abc123");
+    assert.equal(proposal.confidence, 0.9);
+    assert.deepEqual(proposal.evidenceIds, ["evidence_test_output"]);
+    assert.deepEqual(proposal.supersedes, ["memory_old_testing_note"]);
 
     const hidden = await invoke(worker, "worker", "recall_project_memory", {
       query: "focused test",
@@ -59,6 +68,24 @@ test("worker proposals require Architect promotion and survive restart", async (
   }
 });
 
+test("memory proposal tool rejects invalid provenance instead of silently storing it", async () => {
+  const fixture = memoryFixture();
+  const store = new SqliteProjectMemoryStore(fixture.database);
+  try {
+    const worker = registry(store, "project_a", "worker");
+    const result = await invoke(worker, "worker", "propose_project_memory", {
+      content: "Uncertain claim.",
+      concepts: ["testing"],
+      confidence: 2,
+    });
+    assert.equal(result.isError, true);
+    assert.deepEqual(store.proposals("project_a"), []);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
 test("memory never crosses project identity and lexical ranking is deterministic", async () => {
   const fixture = memoryFixture();
   const store = new SqliteProjectMemoryStore(fixture.database);
@@ -70,9 +97,17 @@ test("memory never crosses project identity and lexical ranking is deterministic
       actor,
       content: "SQLite migrations use WAL mode.",
       concepts: ["sqlite", "persistence"],
+      workspaceRevision: "abc123",
+      confidence: 0.8,
+      evidenceIds: ["evidence_1"],
+      supersedes: ["memory_legacy"],
       occurredAt: "2026-07-12T00:00:00.000Z",
       idempotencyKey: "proposal:first",
     });
+    assert.equal(first.workspaceRevision, "abc123");
+    assert.equal(first.confidence, 0.8);
+    assert.deepEqual(first.evidenceIds, ["evidence_1"]);
+    assert.deepEqual(first.supersedes, ["memory_legacy"]);
     store.promote({
       projectId: "project_a",
       memoryId: first.id,

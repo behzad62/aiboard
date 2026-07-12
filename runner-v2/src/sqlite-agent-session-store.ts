@@ -171,6 +171,22 @@ export class SqliteAgentSessionStore {
     ).map(decodeEvent);
   }
 
+  async listRun(runId: string): Promise<AgentSessionProjection[]> {
+    const created = (
+      this.database
+        .prepare(
+          `SELECT sequence, session_id, event_type, occurred_at,
+                  idempotency_key, payload_json, artifact_hash
+           FROM agent_session_events
+           WHERE event_type = 'session.created' ORDER BY session_id ASC`
+        )
+        .all() as unknown as EventRow[]
+    )
+      .map(decodeEvent)
+      .filter((event) => event.payload.runId === runId);
+    return await Promise.all(created.map((event) => this.load(event.sessionId)));
+  }
+
   close(): void {
     this.database.close();
   }

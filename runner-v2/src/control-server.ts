@@ -368,6 +368,19 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "observability" &&
+        request.method === "GET"
+      ) {
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().observability(runId)
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "architect-handoff" &&
         request.method === "POST"
       ) {

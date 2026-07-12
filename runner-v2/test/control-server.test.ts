@@ -439,6 +439,45 @@ test("native Build projections and pump controls are runner-owned API routes", a
       },
       lastSequence: 42,
     }),
+    observability: async () => ({
+      runId: "run_1",
+      budget: {
+        scopeId: "run_1",
+        reservations: {},
+        activeSegments: {},
+        effective: {
+          modelCalls: 9,
+          toolCalls: 27,
+          inputTokens: 12_000,
+          outputTokens: 3_000,
+          estimatedCostMicros: 125_000,
+          activeMs: 45_000,
+          artifactBytes: 1_024,
+        },
+        lastSequence: 42,
+      },
+      agents: [{
+        sessionId: "worker:run_1:task_a:1",
+        actor: { role: "worker", id: "worker_task_a_1" },
+        status: "submitted",
+        turns: 4,
+        changeSetId: "changeset_1",
+        lastSequence: 8,
+      }],
+      tools: [{
+        sequence: 1,
+        sessionId: "worker:run_1:task_a:1",
+        callId: "read_1",
+        toolName: "fs.read",
+        status: "completed",
+        occurredAt: "2026-07-12T00:00:00.000Z",
+        isError: false,
+      }],
+      evidence: [],
+      memories: [],
+      skills: [],
+      processes: [],
+    }),
     step: async () => {
       steps += 1;
       return { status: "progressed", action: "workers_advanced" };
@@ -495,6 +534,15 @@ test("native Build projections and pump controls are runner-owned API routes", a
       activeMs: 45_000,
       artifactBytes: 1_024,
     });
+
+    const observability = await fetch(
+      `${url}/v2/runs/run_1/build/observability`,
+      authorized()
+    );
+    assert.equal(observability.status, 200);
+    const observed = await json(observability);
+    assert.equal((observed.agents as unknown[]).length, 1);
+    assert.equal((observed.tools as unknown[]).length, 1);
 
     const tasks = await fetch(
       `${url}/v2/runs/run_1/build/tasks`,

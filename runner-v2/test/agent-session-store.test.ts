@@ -98,3 +98,28 @@ test("session event idempotency never hides conflicting creation data", async ()
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("agent session store lists durable projections by run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-session-list-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const store = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  try {
+    await store.create({
+      sessionId: "architect:run_1",
+      runId: "run_1",
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-07-12T00:00:00.000Z",
+    });
+    await store.create({
+      sessionId: "worker:run_2:task_a:1",
+      runId: "run_2",
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-07-12T00:00:00.000Z",
+    });
+    const sessions = await store.listRun("run_1");
+    assert.deepEqual(sessions.map((session) => session.sessionId), ["architect:run_1"]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

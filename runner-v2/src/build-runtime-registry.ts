@@ -1,5 +1,6 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
 import { emptyUsage, type BudgetProjection } from "./budget-ledger.js";
+import type { BuildObservabilitySnapshot } from "./build-observability.js";
 import type {
   ProjectHandoffChoice,
   SchedulerEvent,
@@ -9,6 +10,7 @@ import type {
 export interface BuildControlPlane {
   projection(runId: string): SchedulerProjection;
   usage(runId: string): BudgetProjection;
+  observability(runId: string): Promise<BuildObservabilitySnapshot>;
   events(runId: string, afterSequence?: number): SchedulerEvent[];
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
@@ -54,6 +56,19 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       activeSegments: {},
       effective: emptyUsage(),
       lastSequence: 0,
+    };
+  }
+
+  async observability(runId: string): Promise<BuildObservabilitySnapshot> {
+    return {
+      runId,
+      budget: this.usage(runId),
+      agents: [],
+      tools: [],
+      evidence: [],
+      memories: [],
+      skills: [],
+      processes: [],
     };
   }
 

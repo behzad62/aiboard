@@ -16,6 +16,7 @@ test("completed side effects replay their durable result after broker restart", 
   const root = mkdtempSync(join(tmpdir(), "aiboard-tool-ledger-replay-"));
   const database = join(root, "ledger.sqlite");
   let executions = 0;
+  let recoveredLedger: SqliteToolLedger | undefined;
   try {
     const firstLedger = new SqliteToolLedger(database);
     const first = broker(root, firstLedger, () => executions++);
@@ -23,7 +24,7 @@ test("completed side effects replay their durable result after broker restart", 
     assert.equal(result.isError, false);
     firstLedger.close();
 
-    const recoveredLedger = new SqliteToolLedger(database);
+    recoveredLedger = new SqliteToolLedger(database);
     const recovered = broker(root, recoveredLedger, () => executions++);
     const replay = await recovered.invoke(call("write_1", "one"), context());
     assert.deepEqual(replay, result);
@@ -32,8 +33,13 @@ test("completed side effects replay their durable result after broker restart", 
       recoveredLedger.events(toolInvocationKey(context(), "write_1")).map((event) => event.type),
       ["tool.started", "tool.completed"]
     );
-    recoveredLedger.close();
+    const runEvents = recoveredLedger.listRun("run_1");
+    assert.equal(runEvents.length, 2);
+    assert.equal(runEvents[0].sessionId, "session_1");
+    assert.equal(runEvents[0].callId, "write_1");
+    assert.equal(runEvents[0].toolName, "write_value");
   } finally {
+    recoveredLedger?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
