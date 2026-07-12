@@ -139,6 +139,61 @@ test("blocking guidance pauses one task while advisory guidance preserves scope"
   });
 });
 
+test("a reused worker guidance label allocates a fresh durable request", async () => {
+  await withStore(async (store) => {
+    seedRunningTask(store);
+    const workerRegistry = new ToolRegistry();
+    for (const tool of createWorkerLifecycleTools({
+      store,
+      taskId: "task_a",
+      clock: now,
+    })) workerRegistry.register(tool);
+    const architectRegistry = new ToolRegistry();
+    for (const tool of createArchitectTools({ store, clock: now })) {
+      architectRegistry.register(tool);
+    }
+
+    const first = await invoke(workerRegistry, workerContext(), "ask_architect", {
+      requestId: "final_review_block",
+      question: "How should the first failure be resolved?",
+      blocking: true,
+      evidenceSequence: 10,
+    });
+    assert.equal(first.isError, false);
+    const answered = await invoke(
+      architectRegistry,
+      architectContext(),
+      "answer_guidance",
+      {
+        requestId: "final_review_block",
+        expectedVersion: 1,
+        answer: "Resolve the first failure.",
+      }
+    );
+    assert.equal(answered.isError, false);
+
+    const second = await invoke(workerRegistry, workerContext(), "ask_architect", {
+      requestId: "final_review_block",
+      question: "How should the newly observed failure be resolved?",
+      blocking: true,
+      evidenceSequence: 20,
+    });
+
+    assert.equal(second.isError, false);
+    assert.equal(second.lifecycle?.type, "ask_architect");
+    assert.notEqual(second.lifecycle?.requestId, "final_review_block");
+    const secondRequestId = second.lifecycle?.requestId ?? "";
+    const current = projection(store);
+    assert.equal(current.guidance.final_review_block.status, "answered");
+    assert.equal(current.guidance[secondRequestId]?.status, "open");
+    assert.equal(
+      current.guidance[secondRequestId]?.question,
+      "How should the newly observed failure be resolved?"
+    );
+    assert.equal(current.tasks.task_a.guidanceRequestId, secondRequestId);
+  });
+});
+
 test("guidance challenges require fresh evidence and only one challenge per version", async () => {
   await withStore(async (store) => {
     seedRunningTask(store);

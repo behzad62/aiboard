@@ -4,7 +4,10 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
-import type { SchedulerStore } from "./scheduler-store.js";
+import {
+  rebuildSchedulerProjection,
+  type SchedulerStore,
+} from "./scheduler-store.js";
 import type { ChangeSet } from "./change-set.js";
 
 export interface WorkerLifecycleToolsOptions {
@@ -148,25 +151,48 @@ function askArchitectTool(
     execute: async (input, context) => {
       const denied = workerOnly(context);
       if (denied) return denied;
+      const requestId = allocateGuidanceRequestId(
+        store,
+        context.runId,
+        input.requestId
+      );
       const result = append(store, {
         runId: context.runId,
         type: "guidance.requested",
         occurredAt: clock(),
         actor: { role: "worker", id: context.actor.id },
-        idempotencyKey: `guidance:${input.requestId}`,
-        payload: { ...input, taskId },
+        idempotencyKey: `guidance:${requestId}`,
+        payload: { ...input, requestId, taskId },
       });
       if (result.isError || !input.blocking) return result;
       return {
         ...result,
         lifecycle: {
           type: "ask_architect",
-          requestId: input.requestId,
+          requestId,
           blocking: true,
         },
       };
     },
   };
+}
+
+function allocateGuidanceRequestId(
+  store: SchedulerStore,
+  runId: string,
+  proposedRequestId: string
+): string {
+  const events = store.readRun(runId);
+  if (events.length === 0) return proposedRequestId;
+  const guidance = rebuildSchedulerProjection(events).guidance;
+  if (!guidance[proposedRequestId]) return proposedRequestId;
+  let ordinal = 2;
+  let requestId = `${proposedRequestId}:request:${ordinal}`;
+  while (guidance[requestId]) {
+    ordinal += 1;
+    requestId = `${proposedRequestId}:request:${ordinal}`;
+  }
+  return requestId;
 }
 
 function challengeGuidanceTool(
