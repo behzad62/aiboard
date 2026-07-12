@@ -82,3 +82,18 @@ export function durableBuildHandoffPanels(
     project: null,
   };
 }
+
+export function nativeBuildTaskStatus(
+  status: string
+): "planned" | "in_progress" | "review" | "fixing" | "done" | "failed" {
+  if (status === "planned") return "planned";
+  if (["assigned", "running", "waiting_guidance"].includes(status)) {
+    return "in_progress";
+  }
+  if (["submitted", "architect_review", "approved", "integrating"].includes(status)) {
+    return "review";
+  }
+  if (["rejected", "integration_resolution"].includes(status)) return "fixing";
+  if (["integrated", "cancelled"].includes(status)) return "done";
+  return "failed";
+}

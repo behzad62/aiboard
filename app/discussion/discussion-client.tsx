@@ -87,6 +87,7 @@ import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
+  nativeBuildTaskStatus,
   shouldShowBuildStopFallback,
 } from "@/lib/client/discussion-live-state";
 import {
@@ -884,7 +885,7 @@ function DiscussionPageInner() {
         Object.values(projection.tasks).map((task) => ({
           id: task.id,
           title: task.objective,
-          status: task.status as BuildTaskView["status"],
+          status: nativeBuildTaskStatus(task.status),
           worker: task.assignedWorkerId,
         }))
       );

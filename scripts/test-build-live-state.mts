@@ -4,6 +4,7 @@ import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
+  nativeBuildTaskStatus,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
 
@@ -68,5 +69,8 @@ assert.deepEqual(
     },
   }
 );
+assert.equal(nativeBuildTaskStatus("integrated"), "done");
+assert.equal(nativeBuildTaskStatus("running"), "in_progress");
+assert.equal(nativeBuildTaskStatus("submitted"), "review");
 
 console.log("PASS Build live discussion state");

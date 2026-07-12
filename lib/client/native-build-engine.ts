@@ -24,6 +24,7 @@ import {
   type NativeProviderConfig,
   type NativeRunnerConnection,
 } from "./runner-v2";
+import { nativeBuildTaskStatus } from "./discussion-live-state";
 
 type Emit = (event: OrchestratorEvent) => void;
 
@@ -412,7 +413,7 @@ function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void
     tasks: Object.values(projection.tasks).map((task) => ({
       id: task.id,
       title: task.objective,
-      status: taskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status),
     })),
   });
   for (const task of Object.values(projection.tasks)) {
@@ -420,20 +421,11 @@ function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void
       type: "task_status",
       taskId: task.id,
       title: task.objective,
-      status: taskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status),
       worker: task.assignedWorkerId,
       cycle: projection.planRevision,
     });
   }
-}
-
-function taskStatus(status: string): "planned" | "in_progress" | "review" | "fixing" | "done" | "failed" {
-  if (status === "planned") return "planned";
-  if (["assigned", "running", "waiting_guidance"].includes(status)) return "in_progress";
-  if (["submitted", "architect_review", "approved", "integrating"].includes(status)) return "review";
-  if (["rejected", "integration_resolution"].includes(status)) return "fixing";
-  if (["integrated", "cancelled"].includes(status)) return "done";
-  return "failed";
 }
 
 function emitSchedulerEvent(event: NativeBuildEvent, emit: Emit): void {
