@@ -103,3 +103,32 @@ test("stop is two-stage and terminal runs reject new lifecycle commands", () => 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a paused run can complete after its required user handoff", () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-runner-v2-paused-complete-"));
+  const supervisor = new RunSupervisor(
+    new SqliteEventStore(join(directory, "events.sqlite")),
+    { clock: () => "2026-07-12T00:00:00.000Z" }
+  );
+  try {
+    supervisor.createRun({
+      runId: "run_1",
+      projectPath: join(directory, "project"),
+      permissionProfile: "full",
+      idempotencyKey: "create:run_1",
+    });
+    supervisor.captureBaseline(
+      "run_1",
+      "baseline:run_1",
+      "c".repeat(40),
+      "refs/aiboard/runs/run-1/baseline"
+    );
+    supervisor.start("run_1", "start:run_1");
+    supervisor.pause("run_1", "handoff-wait:run_1", "native-build");
+    supervisor.complete("run_1", "handoff-complete:run_1");
+    assert.equal(supervisor.getRun("run_1").state, "completed");
+  } finally {
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

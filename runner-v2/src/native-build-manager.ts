@@ -124,6 +124,14 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<SchedulerProjection> {
     const handle = this.require(runId);
     const projection = handle.runtime.projection();
+    if (projection.projectHandoff?.status === "selected") {
+      if (projection.projectHandoff.choice !== choice) {
+        throw new Error(
+          `Final project handoff already selected ${projection.projectHandoff.choice}.`
+        );
+      }
+      return projection;
+    }
     if (projection.projectHandoff?.status !== "requested") {
       throw new Error("Final project handoff is not awaiting user selection.");
     }

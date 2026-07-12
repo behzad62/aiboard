@@ -21,6 +21,7 @@ const TRANSITIONS: Partial<Record<RunState, Partial<Record<RunEventType, RunStat
   paused: {
     "run.resumed": "running",
     "run.stop_requested": "stopping",
+    "run.completed": "completed",
     "run.failed": "failed",
   },
   stopping: {

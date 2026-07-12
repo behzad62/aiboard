@@ -169,7 +169,7 @@ export interface NativeBuildObservability {
   agents: Array<{
     sessionId: string;
     actor: { role: "architect" | "worker" | "subagent"; id: string };
-    status: "active" | "suspended" | "submitted";
+    status: "active" | "suspended" | "submitted" | "completed";
     turns: number;
     suspensionReason?: string;
     error?: string;

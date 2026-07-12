@@ -137,7 +137,11 @@ function spawnSubagentTool(
         const recovered = await options.sessions.load(sessionId);
         if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
         const prior = returnedFromMessages(messages);
-        if (prior) return await persistReturn(prior, sessionId, options.artifacts);
+        if (prior) {
+          const output = await persistReturn(prior, sessionId, options.artifacts);
+          options.sessions.complete(sessionId, clock());
+          return output;
+        }
       }
 
       const broker = new ToolBroker({
@@ -240,7 +244,9 @@ function spawnSubagentTool(
         options.sessions.suspend(sessionId, "subagent_incomplete", reason, clock());
         return failure("subagent_incomplete", reason);
       }
-      return await persistReturn(result, sessionId, options.artifacts);
+      const output = await persistReturn(result, sessionId, options.artifacts);
+      options.sessions.complete(sessionId, clock());
+      return output;
     },
   };
 }

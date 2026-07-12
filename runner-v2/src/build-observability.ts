@@ -13,7 +13,7 @@ import type {
 export interface BuildAgentObservation {
   sessionId: string;
   actor: AgentActor;
-  status: "active" | "suspended" | "submitted";
+  status: "active" | "suspended" | "submitted" | "completed";
   turns: number;
   suspensionReason?: string;
   error?: string;

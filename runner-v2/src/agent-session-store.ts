@@ -6,7 +6,8 @@ export type AgentSessionEventType =
   | "session.created"
   | "session.checkpointed"
   | "session.suspended"
-  | "session.submitted";
+  | "session.submitted"
+  | "session.completed";
 
 export interface AgentSessionEvent {
   sequence: number;
@@ -29,7 +30,7 @@ export interface AgentSessionProjection {
   sessionId: string;
   runId: string;
   actor: AgentActor;
-  status: "active" | "suspended" | "submitted";
+  status: "active" | "suspended" | "submitted" | "completed";
   checkpoint?: AgentLoopCheckpoint;
   suspensionReason?: string;
   error?: string;

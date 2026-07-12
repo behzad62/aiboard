@@ -114,6 +114,16 @@ export class SqliteAgentSessionStore {
     );
   }
 
+  complete(sessionId: string, occurredAt: string): void {
+    this.append(
+      sessionId,
+      "session.completed",
+      occurredAt,
+      "complete",
+      {}
+    );
+  }
+
   async load(sessionId: string): Promise<AgentSessionProjection> {
     const events = this.events(sessionId);
     if (events.length === 0) throw new Error(`Unknown agent session ${sessionId}.`);
@@ -157,6 +167,10 @@ export class SqliteAgentSessionStore {
         projection.changeSet = JSON.parse(
           (await this.artifacts.get(event.artifactHash)).toString("utf8")
         ) as ChangeSet;
+      } else if (event.type === "session.completed") {
+        projection.status = "completed";
+        delete projection.suspensionReason;
+        delete projection.error;
       }
     }
     return projection;

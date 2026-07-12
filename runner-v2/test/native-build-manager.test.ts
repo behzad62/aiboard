@@ -12,6 +12,7 @@ import {
   selectRuntimeCandidates,
 } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 
 const spec: NativeBuildSpec = {
@@ -143,6 +144,71 @@ test("recovery autonomously restarts only runs the supervisor still marks active
     assert.deepEqual(pumped, ["run_1"]);
     await manager.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("completed project handoff replays without applying the project twice", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-handoff-replay-"));
+  let handoffCalls = 0;
+  let manager: NativeBuildManager | undefined;
+  let projection: SchedulerProjection = {
+    ...fakeRuntime("run_1").projection(),
+    status: "paused" as const,
+    projectHandoff: {
+      status: "requested" as const,
+      summary: "Ready",
+      options: ["keep_integration_branch", "apply_to_project"],
+    },
+  };
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+            projection = {
+              ...projection,
+              status: "completed",
+              projectHandoff: {
+                status: "selected",
+                summary: "Ready",
+                options: ["keep_integration_branch", "apply_to_project"],
+                choice,
+                integrationRevision: "revision_final",
+                integrationBranch: "aiboard/run/integration",
+                appliedToProject: choice === "apply_to_project",
+              },
+            };
+            return projection;
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          handoffCalls += 1;
+          return {
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: true,
+          };
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    await manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:apply");
+    const replay = await manager.selectProjectHandoff(
+      "run_1",
+      "apply_to_project",
+      "handoff:apply"
+    );
+    assert.equal(replay.status, "completed");
+    assert.equal(handoffCalls, 1);
+  } finally {
+    await manager?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

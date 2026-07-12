@@ -62,6 +62,10 @@ test("read-only subagents expose no workspace mutation tools and are concurrency
       workspacePath: workspace,
     });
     assert.equal(result.isError, false, result.error?.message ?? "read-only subagent failed");
+    assert.equal(
+      (await sessions.load("worker:run_1:T1:1:subagent:research_1")).status,
+      "completed"
+    );
     const childTools = new Set(requests[0].tools.map((tool) => tool.name));
     assert.equal(childTools.has("fs.read"), true);
     assert.equal(childTools.has("git.show"), true);
