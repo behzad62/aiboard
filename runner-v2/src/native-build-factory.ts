@@ -153,6 +153,11 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       objective: spec.objective,
       budgetLedger,
+      permissionProfile: spec.permissionProfile,
+      ledger,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      browserBackend: this.browserBackend,
+      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
     });
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {

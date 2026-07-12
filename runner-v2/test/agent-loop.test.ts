@@ -9,6 +9,7 @@ import type {
   NativeTool,
 } from "../src/agent-contracts.js";
 import { runAgentLoop } from "../src/agent-loop.js";
+import { compactAgentMessages } from "../src/agent-loop.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
 class ScriptedModel implements AgentModel {
@@ -239,6 +240,52 @@ test("checkpoint failure suspends before a newly proposed tool side effect", asy
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "checkpoint_error");
   assert.equal(executions, 0);
+});
+
+test("model working context compacts deterministically without deleting raw session history", () => {
+  const messages: AgentMessage[] = [
+    { id: "system", role: "system", content: "Stable policy" },
+    { id: "intent", role: "user", content: "Protected task intent" },
+  ];
+  for (let index = 0; index < 50; index += 1) {
+    messages.push({
+      id: `assistant-${index}`,
+      role: "assistant",
+      content: [{
+        type: "tool_call",
+        callId: `call-${index}`,
+        name: "fs.read",
+        arguments: { path: `file-${index}.ts` },
+      }],
+    });
+    messages.push({
+      id: `tool-${index}`,
+      role: "tool",
+      content: {
+        callId: `call-${index}`,
+        toolName: "fs.read",
+        isError: false,
+        content: [{ type: "text", text: `content-${index}` }],
+      },
+    });
+  }
+  const compacted = compactAgentMessages(messages, {
+    maxMessages: 30,
+    maxBytes: 64 * 1024,
+    retainRecent: 12,
+  });
+  assert.equal(messages.length, 102, "raw checkpoint history is untouched");
+  assert.equal(compacted.length < messages.length, true);
+  assert.equal(compacted.some((message) => message.id === "system"), true);
+  assert.equal(compacted.some((message) => message.id === "intent"), true);
+  const summary = compacted.find((message) => message.id.startsWith("compacted-history:"));
+  assert.ok(summary && typeof summary.content === "string");
+  assert.match(summary.content, /COMPACTED_AGENT_HISTORY/);
+  assert.deepEqual(
+    compactAgentMessages(messages, { maxMessages: 30, maxBytes: 64 * 1024, retainRecent: 12 }),
+    compacted,
+    "same history produces byte-identical working context"
+  );
 });
 
 function context() {

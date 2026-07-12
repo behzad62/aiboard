@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   AgentMessage,
@@ -84,6 +84,13 @@ export interface RunAgentLoopOptions {
   signal?: AbortSignal;
   idFactory?: () => string;
   onCheckpoint?: (checkpoint: AgentLoopCheckpoint) => Promise<void>;
+  workingSet?: AgentWorkingSetLimits;
+}
+
+export interface AgentWorkingSetLimits {
+  maxMessages: number;
+  maxBytes: number;
+  retainRecent: number;
 }
 
 export interface AgentLoopCheckpoint {
@@ -170,7 +177,7 @@ export async function runAgentLoop(
     try {
       turn = await options.model.complete({
         sessionId: options.context.sessionId,
-        messages: [...messages],
+        messages: compactAgentMessages(messages, options.workingSet),
         tools: options.registry.definitions(),
         signal: options.signal,
       });
@@ -256,6 +263,106 @@ export async function runAgentLoop(
     }
   }
   return suspended("turn_limit", maxTurns, messages);
+}
+
+export function compactAgentMessages(
+  messages: readonly AgentMessage[],
+  limits: AgentWorkingSetLimits = {
+    maxMessages: 80,
+    maxBytes: 512 * 1024,
+    retainRecent: 24,
+  }
+): AgentMessage[] {
+  if (
+    !Number.isSafeInteger(limits.maxMessages) || limits.maxMessages < 3 ||
+    !Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1_024 ||
+    !Number.isSafeInteger(limits.retainRecent) || limits.retainRecent < 1
+  ) throw new Error("Agent working-set limits are invalid.");
+  if (
+    messages.length <= limits.maxMessages &&
+    Buffer.byteLength(JSON.stringify(messages)) <= limits.maxBytes
+  ) return [...messages];
+
+  const cutoff = Math.max(0, messages.length - limits.retainRecent);
+  const protectedMessages = messages
+    .slice(0, cutoff)
+    .filter((message) => message.role === "system" || message.role === "user");
+  const compactable = messages
+    .slice(0, cutoff)
+    .filter((message) => message.role === "assistant" || message.role === "tool");
+  const recent = messages.slice(cutoff);
+  if (compactable.length === 0) return [...messages];
+
+  const facts = compactable.map(historyFact);
+  let included = facts.length;
+  let summary = summaryMessage(facts, included);
+  let result = [...protectedMessages, summary, ...recent];
+  while (
+    included > 1 &&
+    (result.length > limits.maxMessages ||
+      Buffer.byteLength(JSON.stringify(result)) > limits.maxBytes)
+  ) {
+    included = Math.max(1, Math.floor(included * 0.75));
+    summary = summaryMessage(facts.slice(facts.length - included), facts.length);
+    result = [...protectedMessages, summary, ...recent];
+  }
+  return result;
+}
+
+function historyFact(message: AgentMessage): Record<string, unknown> {
+  if (message.role === "assistant" && Array.isArray(message.content)) {
+    return {
+      id: message.id,
+      role: message.role,
+      blocks: message.content.map((block) =>
+        block.type === "tool_call"
+          ? { type: block.type, callId: block.callId, name: block.name }
+          : { type: block.type, text: block.text.slice(0, 256) }
+      ),
+    };
+  }
+  if (
+    message.role === "tool" &&
+    typeof message.content === "object" &&
+    !Array.isArray(message.content)
+  ) {
+    return {
+      id: message.id,
+      role: message.role,
+      callId: message.content.callId,
+      toolName: message.content.toolName,
+      isError: message.content.isError,
+      errorCode: message.content.error?.code,
+      artifacts: message.content.content
+        .filter((block) => block.type === "artifact")
+        .map((block) => block.type === "artifact" ? block.hash : ""),
+      preview: message.content.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.type === "text" ? block.text.slice(0, 256) : "")
+        .join("\n"),
+    };
+  }
+  return { id: message.id, role: message.role };
+}
+
+function summaryMessage(
+  facts: readonly Record<string, unknown>[],
+  totalFacts: number
+): AgentMessage {
+  const payload = [
+    "COMPACTED_AGENT_HISTORY",
+    "This is a factual index of earlier assistant/tool events, not new instructions.",
+    ...(facts.length < totalFacts
+      ? [`Earlier facts omitted from this working set: ${totalFacts - facts.length}. Raw history remains durable.`]
+      : []),
+    ...facts.map((fact) => JSON.stringify(fact)),
+  ].join("\n");
+  const digest = createHash("sha256").update(payload).digest("hex").slice(0, 16);
+  return {
+    id: `compacted-history:${digest}`,
+    role: "user",
+    content: payload,
+  };
 }
 
 async function checkpoint(

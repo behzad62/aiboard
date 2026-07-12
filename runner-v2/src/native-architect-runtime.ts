@@ -8,6 +8,7 @@ import type {
 import { runAgentLoop } from "./agent-loop.js";
 import { buildArchitectContext, type PromptEvidence } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
 import type {
@@ -16,7 +17,13 @@ import type {
 } from "./build-runtime.js";
 import type { ContextLimits } from "./context-assembler.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import { createEvidenceTools } from "./evidence-tools.js";
+import { createFilesystemTools } from "./filesystem-tools.js";
+import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
+import { createMcpTools, type McpManager } from "./mcp-tools.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
+import type { PermissionProfile } from "./contracts.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
 import {
@@ -29,9 +36,11 @@ import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
+import { createResearchTools } from "./research-tools.js";
+import { ToolBroker } from "./tool-broker.js";
+import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
-  ToolRegistry,
   type AgentToolRuntime,
 } from "./tool-registry.js";
 
@@ -54,6 +63,11 @@ export interface NativeArchitectRuntimeOptions {
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   clock?: () => string;
+  permissionProfile?: PermissionProfile;
+  ledger?: ToolInvocationLedger;
+  permissions?: SqlitePermissionStore;
+  browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -143,7 +157,29 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         messages.push(reminder);
       }
     }
-    const extras = new ToolRegistry();
+    const extras = new ToolBroker({
+      permissionProfile: this.options.permissionProfile ?? "project",
+      workspacePath: this.options.projectRoot,
+      artifacts: this.options.artifacts,
+      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+      ...(this.options.permissions
+        ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
+        : {}),
+    });
+    for (const tool of createFilesystemTools({ artifacts: this.options.artifacts })) {
+      if (tool.definition.readOnly) extras.register(tool);
+    }
+    for (const tool of createGitTools()) {
+      if (tool.definition.readOnly) extras.register(tool);
+    }
+    for (const tool of createEvidenceTools({
+      store: this.options.evidenceStore,
+      artifacts: this.options.artifacts,
+      taskId: "architect",
+      clock: this.clock,
+    })) {
+      if (tool.definition.name === "inspect_evidence") extras.register(tool);
+    }
     for (const tool of createSkillTools(this.options.skillCatalog)) extras.register(tool);
     for (const tool of createMemoryTools({
       store: this.options.memoryStore,
@@ -151,6 +187,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       runId: request.runId,
       clock: this.clock,
     })) extras.register(tool);
+    for (const tool of createResearchTools({ artifacts: this.options.artifacts })) {
+      extras.register(tool);
+    }
+    if (this.options.browserBackend) {
+      for (const tool of createBrowserTools({
+        backend: this.options.browserBackend,
+        artifacts: this.options.artifacts,
+        taskId: "architect",
+      })) extras.register(tool);
+    }
+    if (this.options.mcpManager) {
+      for (const tool of createMcpTools(this.options.mcpManager, this.options.artifacts)) {
+        extras.register(tool);
+      }
+    }
     const tools = new LayeredToolRuntime(request.tools, extras);
     const runtimeModel = this.options.budgetLedger
       ? new BudgetedAgentModel({
@@ -164,7 +215,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     const result = await runAgentLoop({
       model: runtimeModel,
       registry: tools,
-      context: request.context,
+      context: { ...request.context, workspacePath: this.options.projectRoot },
       initialMessages: messages,
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());

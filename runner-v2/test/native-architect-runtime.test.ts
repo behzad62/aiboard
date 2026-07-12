@@ -116,6 +116,12 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     assert.equal(projection.planRevision, 1);
     assert.equal(projection.tasks.task_a.status, "planned");
     assert.equal(projection.runtime.architect.runtimeId, "fallback:architect");
+    const architectTools = new Set(fallback.requests[0].tools.map((tool) => tool.name));
+    assert.equal(architectTools.has("fs.search"), true);
+    assert.equal(architectTools.has("git.diff"), true);
+    assert.equal(architectTools.has("research.fetch"), true);
+    assert.equal(architectTools.has("fs.write"), false);
+    assert.equal(architectTools.has("git.commit"), false);
     assert.match(
       fallback.requests[0].messages
         .map((message) => (typeof message.content === "string" ? message.content : ""))
