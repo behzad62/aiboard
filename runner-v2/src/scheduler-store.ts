@@ -518,12 +518,18 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may request Architect handoff.");
       }
+      const offeredRuntimeIds = stringArray(event.payload, "candidateRuntimeIds");
+      const candidateRuntimeIds = offeredRuntimeIds.length > 0
+        ? offeredRuntimeIds
+        : next.runtime.architect.runtimeId
+          ? [next.runtime.architect.runtimeId]
+          : [];
       next.runtime.architect = {
         ...next.runtime.architect,
         handoff: {
           reason: requiredString(event.payload, "reason"),
           requiredCapabilities: stringArray(event.payload, "requiredCapabilities"),
-          candidateRuntimeIds: stringArray(event.payload, "candidateRuntimeIds"),
+          candidateRuntimeIds,
         },
       };
       next.status = "paused";

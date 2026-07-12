@@ -187,6 +187,50 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
   }
 });
 
+test("an empty durable Architect handoff offers an explicit retry of the current runtime", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-empty-handoff-"));
+  const database = join(root, "scheduler.sqlite");
+  const store = new SqliteSchedulerStore(database);
+  try {
+    store.append({
+      runId: "run_1",
+      type: "run.initialized",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "run:initialized",
+      payload: {},
+    });
+    store.append({
+      runId: "run_1",
+      type: "architect.runtime_assigned",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "architect:assigned",
+      payload: { runtimeId: "chatgpt:gpt-5.5" },
+    });
+    store.append({
+      runId: "run_1",
+      type: "architect.handoff_required",
+      occurredAt: "2026-07-12T00:00:01.000Z",
+      actor: { role: "runner", id: "runtime-router" },
+      idempotencyKey: "architect:handoff",
+      payload: {
+        reason: "usage limit reached",
+        requiredCapabilities: ["code"],
+        candidateRuntimeIds: [],
+      },
+    });
+
+    const projection = rebuildSchedulerProjection(store.readRun("run_1"));
+    assert.deepEqual(projection.runtime.architect.handoff?.candidateRuntimeIds, [
+      "chatgpt:gpt-5.5",
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function event(
   runId: string,
   type: NewSchedulerEvent["type"],
