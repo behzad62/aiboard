@@ -14,6 +14,7 @@ import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
+import type { McpManager } from "./mcp-tools.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
@@ -37,6 +38,7 @@ export interface NativeBuildFactoryOptions {
   projectRoot: string;
   stateDirectory: string;
   providerConfigs: ProviderConfigStore;
+  mcpManager?: McpManager;
   baselineFor(runId: string): string;
 }
 
@@ -121,6 +123,7 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       budgetLedger,
       browserBackend: this.browserBackend,
+      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
     });
     const architectDriver = new NativeArchitectRuntime({
       schedulerStore,

@@ -8,6 +8,7 @@ import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
 import { NativeBuildFactory } from "./native-build-factory.js";
 import { NativeBuildManager } from "./native-build-manager.js";
+import { McpManager, type McpServerSpec } from "./mcp-tools.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
@@ -20,6 +21,7 @@ interface CliOptions {
   stateDirectory: string;
   port: number;
   token: string;
+  mcpServers: McpServerSpec[];
 }
 
 interface RunnerResources {
@@ -27,6 +29,7 @@ interface RunnerResources {
   supervisor: RunSupervisor;
   builds: NativeBuildManager;
   buildFactory: NativeBuildFactory;
+  mcpManager: McpManager;
 }
 
 void main();
@@ -59,10 +62,16 @@ async function main(): Promise<void> {
       join(options.stateDirectory, "provider-configs.enc"),
       options.token
     );
+    const mcpManager = new McpManager({
+      cwd: options.projectPath,
+      servers: options.mcpServers,
+    });
+    await mcpManager.start();
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
       providerConfigs,
+      mcpManager,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
@@ -100,6 +109,7 @@ async function main(): Promise<void> {
         projectPath: options.projectPath,
         nodeVersion: process.versions.node,
       },
+      mcp: mcpManager,
       token: options.token,
       checkGit: async () => git,
       bootstrapRun: async (input) => {
@@ -119,7 +129,7 @@ async function main(): Promise<void> {
         };
       },
     });
-    resources = { server, supervisor, builds, buildFactory };
+    resources = { server, supervisor, builds, buildFactory, mcpManager };
     await builds.recover();
     const address = await server.start(options.port);
 
@@ -133,6 +143,7 @@ async function main(): Promise<void> {
         projectPath: options.projectPath,
         stateDirectory: options.stateDirectory,
         gitVersion: git.version,
+        mcp: mcpManager.status(),
       })}\n`
     );
 
@@ -169,14 +180,26 @@ function assertCertifiedNodeVersion(): void {
 
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
+  const mcpServers: McpServerSpec[] = [];
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
     if (!flag?.startsWith("--") || value === undefined || value.startsWith("--")) {
       throw new Error(`invalid_arguments: Expected a value after ${flag ?? "argument"}.`);
     }
-    if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
+    if (!["--project", "--state-dir", "--port", "--token", "--mcp"].includes(flag)) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
+    }
+    if (flag === "--mcp") {
+      const separator = value.indexOf("=");
+      if (separator < 1 || !value.slice(separator + 1).trim()) {
+        throw new Error("invalid_arguments: --mcp must be name=command.");
+      }
+      mcpServers.push({
+        name: value.slice(0, separator).trim(),
+        command: value.slice(separator + 1).trim(),
+      });
+      continue;
     }
     if (values.has(flag)) {
       throw new Error(`invalid_arguments: Duplicate option ${flag}.`);
@@ -195,7 +218,7 @@ function parseArguments(args: string[]): CliOptions {
   if (token.length < 16) {
     throw new Error("invalid_arguments: --token must contain at least 16 characters.");
   }
-  return { projectPath, stateDirectory, port, token };
+  return { projectPath, stateDirectory, port, token, mcpServers };
 }
 
 function requiredAbsolutePath(values: Map<string, string>, flag: string): string {
@@ -229,6 +252,7 @@ async function closeResources(resources: RunnerResources | undefined): Promise<v
   await resources.server.close();
   await resources.builds.close();
   await resources.buildFactory.close();
+  await resources.mcpManager.close();
   resources.supervisor.close();
 }
 

@@ -21,6 +21,7 @@ import type {
   RunnerProviderConfig,
 } from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
+import type { McpManager } from "./mcp-tools.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -34,6 +35,7 @@ export interface ControlServerOptions {
   buildProvisioner?: { create(spec: NativeBuildSpec): Promise<unknown> };
   providerConfigs?: ProviderConfigStore;
   runnerInfo?: { projectPath: string; nodeVersion: string };
+  mcp?: Pick<McpManager, "status">;
 }
 
 export interface RunBootstrapInput {
@@ -113,6 +115,7 @@ export class ControlServer {
   private readonly buildProvisioner?: ControlServerOptions["buildProvisioner"];
   private readonly providerConfigs?: ProviderConfigStore;
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
+  private readonly mcp?: ControlServerOptions["mcp"];
   private readonly streams = new Set<ServerResponse>();
   private server: Server | undefined;
 
@@ -127,6 +130,7 @@ export class ControlServer {
     this.buildProvisioner = options.buildProvisioner;
     this.providerConfigs = options.providerConfigs;
     this.runnerInfo = options.runnerInfo;
+    this.mcp = options.mcp;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -222,7 +226,12 @@ export class ControlServer {
         protocolVersion: 2,
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
+        mcpServers: this.mcp?.status().length ?? 0,
       });
+      return;
+    }
+    if (segments.length === 2 && segments[1] === "mcp" && request.method === "GET") {
+      sendJson(response, 200, { servers: this.mcp?.status() ?? [] });
       return;
     }
     if (segments.length === 2 && segments[1] === "provider-configs") {

@@ -20,6 +20,7 @@ import { createSkillTools } from "./skill-tools.js";
 import { createSubagentTools } from "./subagent-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createMemoryTools } from "./memory-tools.js";
+import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
@@ -54,6 +55,7 @@ export interface RunWorkerTaskOptions {
   initialMessages: readonly AgentMessage[];
   clock?: () => string;
   browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
 }
 
 export interface WorkerTaskResult {
@@ -117,6 +119,11 @@ export async function runWorkerTask(
       taskId: options.taskId,
     })) broker.register(tool);
   }
+  if (options.mcpManager) {
+    for (const tool of createMcpTools(options.mcpManager, options.artifacts)) {
+      broker.register(tool);
+    }
+  }
   for (const tool of createGitTools()) broker.register(tool);
   if (options.evidenceStore) {
     for (const tool of createEvidenceTools({
@@ -162,6 +169,7 @@ export async function runWorkerTask(
     ...(options.projectId ? { projectId: options.projectId } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.browserBackend ? { browserBackend: options.browserBackend } : {}),
+    ...(options.mcpManager ? { mcpManager: options.mcpManager } : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

@@ -3,6 +3,7 @@ import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import type { BrowserBackend } from "./browser-tools.js";
+import type { McpManager } from "./mcp-tools.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
 import type { ContextLimits } from "./context-assembler.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -47,6 +48,7 @@ export interface NativeWorkerDriverOptions {
   projectRoot: string;
   budgetLedger?: BudgetLedger;
   browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   clock?: () => string;
@@ -141,6 +143,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.browserBackend
           ? { browserBackend: this.options.browserBackend }
           : {}),
+        ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);

@@ -14,6 +14,7 @@ import type { EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
+import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
@@ -50,6 +51,7 @@ export interface SubagentToolsOptions {
   projectId?: string;
   clock?: () => string;
   browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
 }
 
 export function createSubagentTools(
@@ -131,6 +133,11 @@ export function createSubagentTools(
           artifacts: options.artifacts,
           taskId: options.taskId,
         })) broker.register(tool);
+      }
+      if (options.mcpManager) {
+        for (const tool of createMcpTools(options.mcpManager, options.artifacts)) {
+          broker.register(tool);
+        }
       }
       for (const tool of createGitTools()) {
         if (tool.definition.name !== "git.commit") broker.register(tool);
