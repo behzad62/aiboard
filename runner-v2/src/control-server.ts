@@ -522,6 +522,7 @@ export class ControlServer {
         this.builds.projection(runId);
         if (body.command === "start" || body.command === "resume") {
           this.builds.resume(runId, `build:${body.idempotencyKey}`);
+          this.builds.activate(runId);
         } else {
           this.builds.pause(
             runId,

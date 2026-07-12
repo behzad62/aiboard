@@ -347,6 +347,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       status: "idle",
       action: `max:${maxSteps ?? 100}`,
     }),
+    activate: () => undefined,
     pause: () => ({ ...projection, status: "paused" }),
     resume: () => projection,
     selectArchitectHandoff: () => projection,

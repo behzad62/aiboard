@@ -10,6 +10,7 @@ export interface BuildControlPlane {
   events(runId: string, afterSequence?: number): SchedulerEvent[];
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
+  activate(runId: string): void;
   pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection;
   resume(runId: string, idempotencyKey: string): SchedulerProjection;
   selectArchitectHandoff(
@@ -26,6 +27,7 @@ export interface BuildControlPlane {
 
 export class BuildRuntimeRegistry implements BuildControlPlane {
   private readonly runtimes = new Map<string, BuildRuntime>();
+  private readonly pumps = new Map<string, Promise<void>>();
 
   register(runtime: BuildRuntime): void {
     if (this.runtimes.has(runtime.id)) {
@@ -55,6 +57,15 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     maxSteps?: number
   ): Promise<BuildStepResult> {
     return await this.require(runId).runUntilBlocked(maxSteps);
+  }
+
+  activate(runId: string): void {
+    if (this.pumps.has(runId)) return;
+    const pump = this.require(runId).runUntilBlocked().then(() => undefined).finally(() => {
+      this.pumps.delete(runId);
+    });
+    this.pumps.set(runId, pump);
+    void pump.catch(() => undefined);
   }
 
   pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {

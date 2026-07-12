@@ -74,6 +74,22 @@ async function main(): Promise<void> {
         join(options.stateDirectory, "build-specs.sqlite")
       ),
       createRuntime: (spec) => buildFactory.create(spec),
+      shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
+      onPumpResult: (runId, result) => {
+        const run = supervisor.getRun(runId);
+        if (result.status === "completed" && run.state === "running") {
+          supervisor.complete(
+            runId,
+            `autonomous-build-completed:${run.lastSequence}`
+          );
+        } else if (result.status === "paused" && run.state === "running") {
+          supervisor.pause(
+            runId,
+            `autonomous-build-paused:${run.lastSequence}`,
+            result.action ?? "native-build"
+          );
+        }
+      },
     });
     const server = new ControlServer({
       supervisor,

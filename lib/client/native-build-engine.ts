@@ -16,7 +16,6 @@ import {
   getNativeBuildEvents,
   getNativeRun,
   getNativeRunnerHealth,
-  stepNativeBuild,
   type NativeBuildEvent,
   type NativeBuildProjection,
   type NativeProviderConfig,
@@ -110,13 +109,14 @@ export async function runNativeBuildDiscussion(
   try {
     for (;;) {
       if (signal.aborted) throw abortError();
-      const observed = await observeNativeStep(connection, runId, cursor, emit, signal);
-      const result = observed.result;
-      const events = observed.events;
-      cursor = observed.cursor;
+      const events = await getNativeBuildEvents(connection, runId, cursor);
+      for (const event of events) {
+        cursor = Math.max(cursor, event.sequence);
+        emitSchedulerEvent(event, emit);
+      }
       const projection = await getNativeBuild(connection, runId);
       emitTaskProjection(projection, emit);
-      if (result.status === "completed" || projection.status === "completed") {
+      if (projection.status === "completed") {
         finalizeNativeBuild(
           discussion,
           completionSummary(events) ?? completionSummary(
@@ -126,8 +126,7 @@ export async function runNativeBuildDiscussion(
         );
         return;
       }
-      if (result.status === "paused" || projection.status === "paused") {
-        await pauseSupervisor(connection, runId);
+      if (projection.status === "paused") {
         if (projection.projectHandoff?.status === "requested") {
           emitProjectHandoffPause(discussion, projection, emit);
           return;
@@ -153,13 +152,10 @@ export async function runNativeBuildDiscussion(
         emit({ type: "build_stopped", reason: "blocked", message });
         return;
       }
-      if (result.status === "idle") {
-        throw new Error("Native Build made no mechanical progress and stopped to avoid wasting model calls.");
-      }
+      await delay(750, signal);
     }
   } catch (error) {
     if (signal.aborted || (error instanceof Error && error.name === "AbortError")) {
-      await pauseSupervisor(connection, runId).catch(() => undefined);
       const now = new Date().toISOString();
       updateDiscussion(discussion.id, {
         status: "stopped",
@@ -170,8 +166,20 @@ export async function runNativeBuildDiscussion(
       emit({ type: "build_stopped", reason: "user", message: "Native Build paused by the user." });
       return;
     }
-    await pauseSupervisor(connection, runId).catch(() => undefined);
-    throw error;
+    const now = new Date().toISOString();
+    updateDiscussion(discussion.id, {
+      status: "stopped",
+      buildStopReason: "blocked",
+      buildStoppedAt: now,
+      updatedAt: now,
+    });
+    emit({
+      type: "build_stopped",
+      reason: "blocked",
+      message:
+        "Lost the Runner V2 observer connection. The native Build may still be running; Resume reconnects to the same durable run.",
+    });
+    return;
   }
 }
 
@@ -190,41 +198,6 @@ export function selectNativeBuildRuntimes(
     configuredRuntimeIds: [...new Set([architectRuntimeId, ...workers])],
     workerRuntimeIds: workers,
   };
-}
-
-async function observeNativeStep(
-  connection: NativeRunnerConnection,
-  runId: string,
-  initialCursor: number,
-  emit: Emit,
-  signal: AbortSignal
-): Promise<{
-  result: Awaited<ReturnType<typeof stepNativeBuild>>;
-  cursor: number;
-  events: NativeBuildEvent[];
-}> {
-  const step = stepNativeBuild(connection, runId, signal);
-  let cursor = initialCursor;
-  const collected: NativeBuildEvent[] = [];
-  for (;;) {
-    const outcome = await Promise.race([
-      step.then(
-        (result) => ({ done: true as const, result }),
-        (error: unknown) => ({ done: true as const, error })
-      ),
-      delay(750, signal).then(() => ({ done: false as const })),
-    ]);
-    const events = await getNativeBuildEvents(connection, runId, cursor);
-    for (const event of events) {
-      cursor = Math.max(cursor, event.sequence);
-      collected.push(event);
-      emitSchedulerEvent(event, emit);
-    }
-    emitTaskProjection(await getNativeBuild(connection, runId), emit);
-    if (!outcome.done) continue;
-    if ("error" in outcome) throw outcome.error;
-    return { result: outcome.result, cursor, events: collected };
-  }
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -398,16 +371,6 @@ function finalizeNativeBuild(
   emit({ type: "final_answer", answer, confidence: 1, dissent: [] });
   emit({ type: "diagnostic", phase: "finished", message: "Native Build completed" });
   emit({ type: "complete" });
-}
-
-async function pauseSupervisor(
-  connection: NativeRunnerConnection,
-  runId: string
-): Promise<void> {
-  const run = await getNativeRun(connection, runId);
-  if (run.state === "running") {
-    await commandNativeRun(connection, runId, "pause", `pause:${Date.now()}`, "user");
-  }
 }
 
 function abortError(): Error {

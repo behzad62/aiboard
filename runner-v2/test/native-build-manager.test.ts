@@ -69,6 +69,78 @@ test("native Build manager recreates persisted runtimes and closes resources", a
   }
 });
 
+test("native Build manager owns one autonomous pump per active run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-pump-"));
+  const results: string[] = [];
+  let pumpCalls = 0;
+  try {
+    const manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (runId, result) => results.push(`${runId}:${result.status}`),
+      createRuntime: async (input) => ({
+        runtime: {
+          ...fakeRuntime(input.runId),
+          runUntilBlocked: async () => {
+            pumpCalls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            return { status: "completed" as const };
+          },
+        } as BuildRuntime,
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+    assert.equal(pumpCalls, 1);
+    assert.deepEqual(results, ["run_1:completed"]);
+    await manager.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery autonomously restarts only runs the supervisor still marks active", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recover-pump-"));
+  const pumped: string[] = [];
+  try {
+    const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+    specs.save(spec);
+    specs.save({ ...spec, runId: "run_paused", idempotencyKey: "build-spec:paused" });
+    const manager = new NativeBuildManager({
+      specs,
+      shouldAutoRun: (runId) => runId === "run_1",
+      createRuntime: async (input) => ({
+        runtime: {
+          ...fakeRuntime(input.runId),
+          runUntilBlocked: async () => {
+            pumped.push(input.runId);
+            return { status: "paused" as const };
+          },
+        } as BuildRuntime,
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        close: () => undefined,
+      }),
+    });
+    await manager.recover();
+    await manager.awaitIdle();
+    assert.deepEqual(pumped, ["run_1"]);
+    await manager.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a brand-new native Build starts with no recovered provider cooldowns", () => {
   assert.deepEqual(providerHealthFromSchedulerEvents([]), []);
 });

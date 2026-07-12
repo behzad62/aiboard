@@ -17,21 +17,28 @@ export interface NativeBuildRuntimeHandle {
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
+  shouldAutoRun?(runId: string): boolean;
+  onPumpResult?(runId: string, result: BuildStepResult): void;
+  onPumpError?(runId: string, error: unknown): void;
 }
 
 export class NativeBuildManager implements BuildControlPlane {
   private readonly handles = new Map<string, NativeBuildRuntimeHandle>();
+  private readonly pumps = new Map<string, Promise<void>>();
   private operationQueue = Promise.resolve();
   private closed = false;
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
   async recover(): Promise<void> {
+    const active: string[] = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
         await this.ensureRuntime(spec);
+        if (this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
       }
     });
+    for (const runId of active) this.activate(runId);
   }
 
   async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
@@ -56,6 +63,27 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult> {
     return await this.require(runId).runtime.runUntilBlocked(maxSteps);
+  }
+
+  activate(runId: string): void {
+    this.assertOpen();
+    if (this.pumps.has(runId)) return;
+    const handle = this.require(runId);
+    if (handle.runtime.projection().status !== "running") return;
+    const pump = this.pump(runId, handle).finally(() => {
+      this.pumps.delete(runId);
+    });
+    this.pumps.set(runId, pump);
+    void pump.catch(() => undefined);
+  }
+
+  async awaitIdle(runId?: string): Promise<void> {
+    if (runId) {
+      const pump = this.pumps.get(runId);
+      if (pump) await pump;
+      return;
+    }
+    await Promise.all([...this.pumps.values()]);
   }
 
   pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {
@@ -92,9 +120,10 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.awaitIdle();
     await this.serialized(async () => {
-      if (this.closed) return;
-      this.closed = true;
       const handles = [...this.handles.values()];
       this.handles.clear();
       const failures: unknown[] = [];
@@ -123,6 +152,39 @@ export class NativeBuildManager implements BuildControlPlane {
     }
     this.handles.set(spec.runId, handle);
     return handle;
+  }
+
+  private async pump(
+    runId: string,
+    handle: NativeBuildRuntimeHandle
+  ): Promise<void> {
+    try {
+      let result = await handle.runtime.runUntilBlocked();
+      if (result.status === "idle") {
+        const projection = handle.runtime.projection();
+        if (projection.status === "running") {
+          handle.runtime.pause(
+            "no_mechanical_progress",
+            `autonomous-idle:${projection.lastSequence}`
+          );
+        }
+        result = { status: "paused", action: "no_mechanical_progress" };
+      }
+      this.options.onPumpResult?.(runId, result);
+    } catch (error) {
+      const projection = handle.runtime.projection();
+      if (projection.status === "running") {
+        handle.runtime.pause(
+          "autonomous_pump_error",
+          `autonomous-error:${projection.lastSequence}`
+        );
+      }
+      this.options.onPumpError?.(runId, error);
+      this.options.onPumpResult?.(runId, {
+        status: "paused",
+        action: "autonomous_pump_error",
+      });
+    }
   }
 
   private require(runId: string): NativeBuildRuntimeHandle {
