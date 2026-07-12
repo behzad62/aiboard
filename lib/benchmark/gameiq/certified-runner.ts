@@ -447,7 +447,7 @@ function battleshipModelView(state: BattleshipGameState): BattleshipModelView {
   };
 }
 
-function gameIqStructuredOutputForScenario(
+export function gameIqStructuredOutputForScenario(
   scenario: GameIqScenario
 ): StructuredOutputFormat {
   return GAMEIQ_ACTION_OUTPUT_BY_GAME[scenario.gameId];
