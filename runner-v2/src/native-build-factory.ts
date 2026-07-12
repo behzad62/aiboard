@@ -212,9 +212,11 @@ export class NativeBuildFactory {
       usage: () => budgetLedger.snapshot(spec.runId),
       observability: async (): Promise<BuildObservabilitySnapshot> => {
         const agentSessions = await sessions.listRun(spec.runId);
+        const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
         return {
           runId: spec.runId,
           budget: budgetLedger.snapshot(spec.runId),
+          toolCallCount: toolCalls.length,
           agents: agentSessions.map((session) => ({
             sessionId: session.sessionId,
             actor: { ...session.actor },
@@ -227,7 +229,7 @@ export class NativeBuildFactory {
             ...(session.changeSetId ? { changeSetId: session.changeSetId } : {}),
             lastSequence: session.lastSequence,
           })),
-          tools: summarizeToolCalls(ledger.listRun(spec.runId)).slice(-1_000),
+          tools: toolCalls.slice(-1_000),
           evidence: evidenceStore.list({ runId: spec.runId, limit: 1_000 }),
           memories: [...rebuildProjectMemories(
             this.memoryStore.events(spec.projectId)

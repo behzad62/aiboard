@@ -93,6 +93,7 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
   if (String(input).endsWith("/build/observability")) {
     return Response.json({
       runId: "run_1",
+      toolCallCount: 1,
       budget: { effective: { modelCalls: 9, toolCalls: 27 } },
       agents: [{ sessionId: "worker:run_1:T1:1", status: "submitted" }],
       tools: [{ callId: "read_1", toolName: "fs.read", status: "completed" }],
@@ -143,6 +144,7 @@ assert.equal(usage.effective.modelCalls, 9);
 assert.equal(usage.effective.inputTokens, 12_000);
 const observed = await getNativeBuildObservability(connection, "run_1", fetchImpl);
 assert.equal(observed.agents.length, 1);
+assert.equal(observed.toolCallCount, 1);
 assert.equal(observed.tools[0].toolName, "fs.read");
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);

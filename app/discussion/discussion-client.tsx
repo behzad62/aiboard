@@ -1611,11 +1611,15 @@ function DiscussionPageInner() {
         </TabsList>
 
         <TabsContent value="activity" className="space-y-6">
-      {discussion.mode === "build" && buildStopReport && (
+      {discussion.mode === "build" &&
+        !discussion.nativeBuildRunId &&
+        buildStopReport && (
         <BuildStopReportPanel report={buildStopReport} />
       )}
 
-      {discussion.mode === "build" && buildToolReviewReport && (
+      {discussion.mode === "build" &&
+        !discussion.nativeBuildRunId &&
+        buildToolReviewReport && (
         <BuildToolReviewPanel report={buildToolReviewReport} />
       )}
 

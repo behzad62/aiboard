@@ -136,6 +136,7 @@ export interface NativeBuildUsageProjection {
 export interface NativeBuildObservability {
   runId: string;
   budget: NativeBuildUsageProjection;
+  toolCallCount: number;
   agents: Array<{
     sessionId: string;
     actor: { role: "architect" | "worker" | "subagent"; id: string };

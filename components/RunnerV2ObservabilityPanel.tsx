@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
   return {
     modelCalls: snapshot.budget.effective.modelCalls,
-    toolCalls: snapshot.budget.effective.toolCalls,
+    toolCalls: snapshot.toolCallCount,
     totalTokens:
       snapshot.budget.effective.inputTokens +
       snapshot.budget.effective.outputTokens,

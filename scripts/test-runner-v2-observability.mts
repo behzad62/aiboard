@@ -4,6 +4,7 @@ import { runnerObservabilitySummary } from "../components/RunnerV2ObservabilityP
 
 const summary = runnerObservabilitySummary({
   runId: "run_1",
+  toolCallCount: 1,
   budget: {
     scopeId: "run_1",
     reservations: {},
@@ -49,7 +50,7 @@ const summary = runnerObservabilitySummary({
 
 assert.deepEqual(summary, {
   modelCalls: 9,
-  toolCalls: 27,
+  toolCalls: 1,
   totalTokens: 15_000,
   agents: 1,
   suspendedAgents: 0,

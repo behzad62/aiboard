@@ -63,6 +63,7 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     return {
       runId,
       budget: this.usage(runId),
+      toolCallCount: 0,
       agents: [],
       tools: [],
       evidence: [],

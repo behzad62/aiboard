@@ -441,6 +441,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     }),
     observability: async () => ({
       runId: "run_1",
+      toolCallCount: 1,
       budget: {
         scopeId: "run_1",
         reservations: {},

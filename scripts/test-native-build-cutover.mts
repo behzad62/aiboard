@@ -7,6 +7,7 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
 const engine = readFileSync("lib/client/engine.ts", "utf8");
 const runnerSetup = readFileSync("components/RunnerSetup.tsx", "utf8");
 const nativeBuildEngine = readFileSync("lib/client/native-build-engine.ts", "utf8");
+const discussionClient = readFileSync("app/discussion/discussion-client.tsx", "utf8");
 const workBenchAdapter = readFileSync("lib/benchmark/workbench/build-adapter.ts", "utf8");
 const certification = readFileSync("lib/benchmark/certified/certification.ts", "utf8");
 
@@ -19,6 +20,14 @@ assert.doesNotMatch(runnerSetup, /@\/lib\/client\/runner["']/);
 assert.match(runnerSetup, /Node\.js[\s\S]*24\.18\.0/);
 assert.doesNotMatch(nativeBuildEngine, /stepNativeBuild/);
 assert.doesNotMatch(nativeBuildEngine, /\/build\/step/);
+assert.match(
+  discussionClient,
+  /discussion\.mode === "build" &&\s*!discussion\.nativeBuildRunId &&\s*buildToolReviewReport/
+);
+assert.match(
+  discussionClient,
+  /discussion\.mode === "build" &&\s*!discussion\.nativeBuildRunId &&\s*buildStopReport/
+);
 assert.doesNotMatch(workBenchAdapter, /import\([^)]*legacy-build-engine/);
 assert.doesNotMatch(certification, /legacy-build-engine/);
 

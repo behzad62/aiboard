@@ -30,6 +30,7 @@ export interface BuildToolObservation {
 export interface BuildObservabilitySnapshot {
   runId: string;
   budget: BudgetProjection;
+  toolCallCount: number;
   agents: BuildAgentObservation[];
   tools: BuildToolObservation[];
   evidence: EvidenceRecord[];

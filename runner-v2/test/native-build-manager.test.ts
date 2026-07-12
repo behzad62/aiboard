@@ -205,6 +205,7 @@ function emptyObservability(runId: string) {
   return {
     runId,
     budget: emptyBudget(runId),
+    toolCallCount: 0,
     agents: [],
     tools: [],
     evidence: [],
