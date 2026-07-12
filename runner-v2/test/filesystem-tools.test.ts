@@ -26,6 +26,10 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = brokerWithFilesystem(workspace, artifacts);
   try {
+    assert.match(
+      broker.definitions().find((tool) => tool.name === "fs.patch")?.description ?? "",
+      /one fs\.patch per file per model turn/i,
+    );
     const read = await invoke(broker, "read", "fs.read", { path: "src/app.ts" });
     assert.equal(read.isError, false);
     assert.match(text(read), /const alpha/);

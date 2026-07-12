@@ -209,7 +209,12 @@ export function createFilesystemTools(
         }),
     },
     {
-      definition: definition("fs.patch", "Apply one exact revision-aware replacement", false, "workspace"),
+      definition: definition(
+        "fs.patch",
+        "Apply one exact revision-aware replacement. Issue at most one fs.patch per file per model turn; use the returned sha256 as expectedSha256 for a later patch.",
+        false,
+        "workspace",
+      ),
       validate: objectWithStrings("path", "search", "replace", "expectedSha256"),
       assessAccess: (input) => pathAccess(input, "write"),
       execute: async (input, context) =>
