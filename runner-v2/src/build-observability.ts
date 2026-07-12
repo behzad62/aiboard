@@ -4,6 +4,10 @@ import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
 import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SkillMetadata } from "./skill-catalog.js";
+import type {
+  ProviderHealthProjection,
+  SchedulerEvent,
+} from "./scheduler-store.js";
 
 export interface BuildAgentObservation {
   sessionId: string;
@@ -37,4 +41,6 @@ export interface BuildObservabilitySnapshot {
   memories: ProjectMemoryEntry[];
   skills: SkillMetadata[];
   processes: ManagedProcessObservation[];
+  providers: ProviderHealthProjection[];
+  events: SchedulerEvent[];
 }

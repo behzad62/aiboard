@@ -491,6 +491,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
       memories: [],
       skills: [],
       processes: [],
+      providers: [],
+      events: [],
     }),
     step: async () => {
       steps += 1;

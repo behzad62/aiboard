@@ -191,6 +191,22 @@ export interface NativeBuildObservability {
     updatedAt: string;
     exitCode: number | null;
   }>;
+  providers: Array<{
+    providerId: string;
+    status: "healthy" | "cooldown";
+    consecutiveFailures: number;
+    updatedAt: number;
+    failureKind?: string;
+    failureMessage?: string;
+    cooldownUntil?: number;
+  }>;
+  events: Array<{
+    sequence: number;
+    type: string;
+    occurredAt: string;
+    actor: { role: string; id: string };
+    payload: Record<string, unknown>;
+  }>;
 }
 
 export interface NativeBuildAuditExport {

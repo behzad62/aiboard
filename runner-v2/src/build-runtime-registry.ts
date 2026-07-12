@@ -70,6 +70,8 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       memories: [],
       skills: [],
       processes: [],
+      providers: [],
+      events: [],
     };
   }
 

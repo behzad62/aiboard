@@ -212,6 +212,8 @@ function emptyObservability(runId: string) {
     memories: [],
     skills: [],
     processes: [],
+    providers: [],
+    events: [],
   };
 }
 

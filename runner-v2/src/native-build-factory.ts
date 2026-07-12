@@ -213,6 +213,8 @@ export class NativeBuildFactory {
       observability: async (): Promise<BuildObservabilitySnapshot> => {
         const agentSessions = await sessions.listRun(spec.runId);
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
+        const schedulerEvents = schedulerStore.readRun(spec.runId);
+        const schedulerProjection = rebuildSchedulerProjection(schedulerEvents);
         return {
           runId: spec.runId,
           budget: budgetLedger.snapshot(spec.runId),
@@ -242,6 +244,8 @@ export class NativeBuildFactory {
               stderr: process.stderr.slice(-8 * 1024),
             })
           ),
+          providers: Object.values(schedulerProjection.runtime.providerHealth),
+          events: schedulerEvents.slice(-1_000),
         };
       },
       projectHandoff: async (choice) =>

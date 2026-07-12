@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, Bot, Database, Download, Hammer, ListChecks, Wrench } from "lucide-react";
+import { useState } from "react";
+import { Activity, Bot, Database, Download, Hammer, ListChecks, Search, Server, Wrench } from "lucide-react";
 
 import type { NativeBuildObservability } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
@@ -24,6 +25,41 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
     memories: snapshot.memories.length,
     skills: snapshot.skills.length,
     runningProcesses: snapshot.processes.filter((process) => process.status === "running").length,
+    providers: snapshot.providers.length,
+    events: snapshot.events.length,
+  };
+}
+
+type SearchableObservability = Pick<
+  NativeBuildObservability,
+  | "agents"
+  | "tools"
+  | "evidence"
+  | "memories"
+  | "skills"
+  | "processes"
+  | "providers"
+  | "events"
+>;
+
+export function filterRunnerObservability<T extends SearchableObservability>(
+  snapshot: T,
+  query: string
+): SearchableObservability {
+  const normalized = query.trim().toLowerCase();
+  const filter = <TValue,>(values: TValue[]) =>
+    normalized
+      ? values.filter((value) => JSON.stringify(value).toLowerCase().includes(normalized))
+      : values;
+  return {
+    agents: filter(snapshot.agents),
+    tools: filter(snapshot.tools),
+    evidence: filter(snapshot.evidence),
+    memories: filter(snapshot.memories),
+    skills: filter(snapshot.skills),
+    processes: filter(snapshot.processes),
+    providers: filter(snapshot.providers),
+    events: filter(snapshot.events),
   };
 }
 
@@ -34,8 +70,10 @@ export function RunnerV2ObservabilityPanel({
   snapshot: NativeBuildObservability | null;
   onDownloadAudit?: () => void;
 }) {
+  const [query, setQuery] = useState("");
   if (!snapshot) return null;
   const summary = runnerObservabilitySummary(snapshot);
+  const filtered = filterRunnerObservability(snapshot, query);
   return (
     <section className="rounded-lg border bg-card shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
@@ -74,12 +112,25 @@ export function RunnerV2ObservabilityPanel({
         <Stat label="Active processes" value={String(summary.runningProcesses)} />
       </div>
 
+      <div className="border-t px-4 py-3">
+        <label className="relative block max-w-xl">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search durable runner records"
+            className="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-xs outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+      </div>
+
       <div className="grid gap-3 border-t p-4 lg:grid-cols-2">
         <ObservationList
           icon={<Bot className="h-3.5 w-3.5" />}
           title="Agent sessions"
           empty="No agent sessions recorded."
-          items={snapshot.agents.slice(-12).reverse().map((agent) => ({
+          items={filtered.agents.slice(-12).reverse().map((agent) => ({
             key: agent.sessionId,
             title: `${agent.actor.role}: ${agent.actor.id}`,
             detail: `${agent.status} · ${agent.turns} turn${agent.turns === 1 ? "" : "s"}${
@@ -91,7 +142,7 @@ export function RunnerV2ObservabilityPanel({
           icon={<Wrench className="h-3.5 w-3.5" />}
           title="Recent tools"
           empty="No native tool calls recorded."
-          items={snapshot.tools.slice(-12).reverse().map((tool) => ({
+          items={filtered.tools.slice(-12).reverse().map((tool) => ({
             key: `${tool.sessionId}:${tool.callId}`,
             title: tool.toolName,
             detail: `${tool.status}${tool.errorCode ? ` · ${tool.errorCode}` : ""}`,
@@ -101,7 +152,7 @@ export function RunnerV2ObservabilityPanel({
           icon={<ListChecks className="h-3.5 w-3.5" />}
           title="Evidence"
           empty="No command evidence recorded."
-          items={snapshot.evidence.slice(-8).reverse().map((evidence) => ({
+          items={filtered.evidence.slice(-8).reverse().map((evidence) => ({
             key: evidence.id,
             title: evidence.fact.label,
             detail: `${evidence.taskId} · exit ${evidence.fact.exitCode ?? "signal"}`,
@@ -112,27 +163,47 @@ export function RunnerV2ObservabilityPanel({
           title="Context resources"
           empty="No skills or project memories discovered."
           items={[
-            ...snapshot.skills.slice(0, 8).map((skill) => ({
+            ...filtered.skills.slice(0, 8).map((skill) => ({
               key: `skill:${skill.id}`,
               title: skill.name,
               detail: `${skill.source} skill`,
             })),
-            ...snapshot.memories.slice(-4).reverse().map((memory) => ({
+            ...filtered.memories.slice(-4).reverse().map((memory) => ({
               key: `memory:${memory.id}`,
               title: memory.content.slice(0, 80),
               detail: `${memory.status} project memory`,
             })),
           ]}
         />
+        <ObservationList
+          icon={<Server className="h-3.5 w-3.5" />}
+          title="Provider health"
+          empty="No provider health transitions recorded."
+          items={filtered.providers.map((provider) => ({
+            key: provider.providerId,
+            title: provider.providerId,
+            detail: `${provider.status} · ${provider.consecutiveFailures} consecutive failure${provider.consecutiveFailures === 1 ? "" : "s"}${provider.failureKind ? ` · ${provider.failureKind}` : ""}`,
+          }))}
+        />
+        <ObservationList
+          icon={<Activity className="h-3.5 w-3.5" />}
+          title="Recent events"
+          empty="No matching scheduler events."
+          items={filtered.events.slice(-12).reverse().map((event) => ({
+            key: `${event.sequence}:${event.type}`,
+            title: event.type,
+            detail: `${event.actor.role}: ${event.actor.id} · #${event.sequence}`,
+          }))}
+        />
       </div>
 
-      {snapshot.processes.length > 0 && (
+      {filtered.processes.length > 0 && (
         <div className="border-t px-4 py-3">
           <div className="mb-2 flex items-center gap-2 text-xs font-medium">
             <Hammer className="h-3.5 w-3.5" /> Background processes
           </div>
           <div className="space-y-1 font-mono text-xs text-muted-foreground">
-            {snapshot.processes.slice(-8).reverse().map((process) => (
+            {filtered.processes.slice(-8).reverse().map((process) => (
               <p key={process.processId} className="truncate">
                 {process.status} · {process.command} {process.args.join(" ")}
               </p>

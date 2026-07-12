@@ -102,6 +102,8 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       memories: [],
       skills: [],
       processes: [],
+      providers: [],
+      events: [],
     });
   }
   if (String(input).endsWith("/build/audit")) {

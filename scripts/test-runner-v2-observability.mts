@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
-import { runnerObservabilitySummary } from "../components/RunnerV2ObservabilityPanel";
+import {
+  filterRunnerObservability,
+  runnerObservabilitySummary,
+} from "../components/RunnerV2ObservabilityPanel";
 
 const summary = runnerObservabilitySummary({
   runId: "run_1",
@@ -48,6 +51,19 @@ const summary = runnerObservabilitySummary({
     digest: "a".repeat(64),
   }],
   processes: [],
+  providers: [{
+    providerId: "chatgpt",
+    status: "healthy",
+    consecutiveFailures: 0,
+    updatedAt: 1,
+  }],
+  events: [{
+    sequence: 1,
+    type: "task.transitioned",
+    occurredAt: "2026-07-12T00:00:00.000Z",
+    actor: { role: "runner", id: "scheduler" },
+    payload: { taskId: "T1", to: "running" },
+  }],
 });
 
 assert.deepEqual(summary, {
@@ -63,6 +79,34 @@ assert.deepEqual(summary, {
   memories: 0,
   skills: 1,
   runningProcesses: 0,
+  providers: 1,
+  events: 1,
 });
+
+const filtered = filterRunnerObservability({
+  agents: [],
+  tools: [{
+    sequence: 1,
+    sessionId: "worker:run_1:T1:1",
+    callId: "read_1",
+    toolName: "fs.read",
+    status: "completed",
+    occurredAt: "2026-07-12T00:00:00.000Z",
+  }],
+  evidence: [],
+  memories: [],
+  skills: [],
+  processes: [],
+  providers: [],
+  events: [{
+    sequence: 1,
+    type: "task.transitioned",
+    occurredAt: "2026-07-12T00:00:00.000Z",
+    actor: { role: "runner", id: "scheduler" },
+    payload: { taskId: "T1" },
+  }],
+}, "fs.read");
+assert.equal(filtered.tools.length, 1);
+assert.equal(filtered.events.length, 0);
 
 console.log("PASS Runner V2 observability panel");
