@@ -14,6 +14,7 @@ import type { ToolResult } from "./agent-contracts.js";
 interface EventRow {
   sequence: number;
   invocation_key: string;
+  invocation_key_hex: string;
   event_type: ToolLedgerEventType;
   fingerprint: string;
   occurred_at: string;
@@ -121,12 +122,13 @@ export class SqliteToolLedger implements ToolInvocationLedger {
       this.database
         .prepare(
           `SELECT sequence, invocation_key, event_type, fingerprint,
+                  hex(invocation_key) AS invocation_key_hex,
                   occurred_at, payload_json
            FROM tool_events ORDER BY sequence ASC`
         )
         .all() as unknown as EventRow[]
     )
-      .filter((row) => row.invocation_key.startsWith(`${runId}\0`))
+      .filter((row) => invocationKey(row).startsWith(`${runId}\0`))
       .map(decodeEvent);
   }
 
@@ -138,6 +140,7 @@ export class SqliteToolLedger implements ToolInvocationLedger {
     return this.database
       .prepare(
         `SELECT sequence, invocation_key, event_type, fingerprint,
+                hex(invocation_key) AS invocation_key_hex,
                 occurred_at, payload_json
          FROM tool_events WHERE invocation_key = ? ORDER BY sequence ASC`
       )
@@ -162,7 +165,8 @@ export class SqliteToolLedger implements ToolInvocationLedger {
 }
 
 function decodeEvent(row: EventRow): ToolLedgerEvent {
-  const [runId, sessionId, callId] = row.invocation_key.split("\0");
+  const key = invocationKey(row);
+  const [runId, sessionId, callId] = key.split("\0");
   let toolName: string | undefined;
   let metadata: Record<string, unknown> | undefined;
   if (row.event_type === "tool.completed") {
@@ -178,7 +182,7 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
   }
   return {
     sequence: row.sequence,
-    key: row.invocation_key,
+    key,
     type: row.event_type,
     fingerprint: row.fingerprint,
     occurredAt: row.occurred_at,
@@ -201,6 +205,10 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
       ? { result: decodeResult(row) }
       : {}),
   };
+}
+
+function invocationKey(row: EventRow): string {
+  return Buffer.from(row.invocation_key_hex, "hex").toString("utf8");
 }
 
 function isAccessRequest(value: unknown): value is import("./agent-contracts.js").ToolAccessRequest {

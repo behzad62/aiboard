@@ -97,6 +97,54 @@ test("idempotent reservations replay while conflicting reuse is rejected", () =>
   }
 });
 
+test("a durable budget window renews limits while preserving lifetime usage", () => {
+  const fixture = budgetFixture();
+  try {
+    let ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });
+    for (const reservationId of ["model_1", "model_2"]) {
+      ledger.reserve({
+        scopeId: "run_1",
+        reservationId,
+        kind: "model",
+        estimate: { inputTokens: 10, outputTokens: 5 },
+        occurredAt: "2026-07-12T00:00:00.000Z",
+        idempotencyKey: `reserve:${reservationId}`,
+      });
+    }
+    const started = ledger.startWindow({
+      scopeId: "run_1",
+      occurredAt: "2026-07-12T00:01:00.000Z",
+      idempotencyKey: "resume:budget:1",
+    });
+    const replay = ledger.startWindow({
+      scopeId: "run_1",
+      occurredAt: "2026-07-12T00:01:00.000Z",
+      idempotencyKey: "resume:budget:1",
+    });
+    assert.equal(replay.eventId, started.eventId);
+    ledger.reserve({
+      scopeId: "run_1",
+      reservationId: "model_3",
+      kind: "model",
+      estimate: { inputTokens: 8, outputTokens: 4 },
+      occurredAt: "2026-07-12T00:01:01.000Z",
+      idempotencyKey: "reserve:model_3",
+    });
+    ledger.close();
+
+    ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });
+    const snapshot = ledger.snapshot("run_1");
+    assert.equal(snapshot.window.index, 2);
+    assert.equal(snapshot.effective.modelCalls, 1);
+    assert.equal(snapshot.effective.inputTokens, 8);
+    assert.equal(snapshot.lifetime.modelCalls, 3);
+    assert.equal(snapshot.lifetime.inputTokens, 28);
+    ledger.close();
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("active-time accounting excludes waiting intervals", () => {
   const fixture = budgetFixture();
   const ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });

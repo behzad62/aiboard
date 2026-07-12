@@ -250,19 +250,24 @@ test("worker routing excludes Architect-only runtimes from the worker pool", () 
 });
 
 function emptyBudget(scopeId: string) {
+  const usage = () => ({
+    modelCalls: 0,
+    toolCalls: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    estimatedCostMicros: 0,
+    activeMs: 0,
+    artifactBytes: 0,
+  });
   return {
     scopeId,
     reservations: {},
     activeSegments: {},
-    effective: {
-      modelCalls: 0,
-      toolCalls: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      estimatedCostMicros: 0,
-      activeMs: 0,
-      artifactBytes: 0,
-    },
+    effective: usage(),
+    lifetime: usage(),
+    window: { index: 1 },
     lastSequence: 0,
   };
 }

@@ -162,6 +162,40 @@ test("fresh native Builds expose an empty projection and obey durable user pause
   }
 });
 
+test("each explicit paused Resume renews exactly one budget window", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-budget-resume-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const renewals: string[] = [];
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_budget_resume",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      renewBudgetWindow: (idempotencyKey) => renewals.push(idempotencyKey),
+    });
+    runtime.pause("budget_exhausted:modelCalls", "pause:budget");
+    runtime.resume("resume:budget");
+    runtime.resume("resume:duplicate-while-running");
+    assert.deepEqual(renewals, ["budget-window:resume:budget"]);
+
+    runtime.pause("user", "pause:user");
+    runtime.resume("resume:user");
+    assert.deepEqual(renewals, [
+      "budget-window:resume:budget",
+      "budget-window:resume:user",
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an idempotently repeated worker pause remains paused instead of becoming idle", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-repeat-pause-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));

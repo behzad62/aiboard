@@ -46,6 +46,7 @@ export class BudgetExceededError extends Error {
 export type BudgetEventType =
   | "budget.reserved"
   | "budget.settled"
+  | "budget.window_started"
   | "active.started"
   | "active.stopped";
 
@@ -65,6 +66,7 @@ export interface BudgetReservationProjection {
   estimate: BudgetAmount;
   actual?: BudgetAmount;
   status: "reserved" | "settled";
+  windowIndex: number;
 }
 
 export interface ActiveSegmentProjection {
@@ -72,6 +74,7 @@ export interface ActiveSegmentProjection {
   startedAt: string;
   reserveMs: number;
   durationMs?: number;
+  windowIndex: number;
 }
 
 export interface BudgetProjection {
@@ -79,7 +82,18 @@ export interface BudgetProjection {
   reservations: Record<string, BudgetReservationProjection>;
   activeSegments: Record<string, ActiveSegmentProjection>;
   effective: BudgetUsage;
+  lifetime: BudgetUsage;
+  window: {
+    index: number;
+    startedAt?: string;
+  };
   lastSequence: number;
+}
+
+export interface StartBudgetWindowInput {
+  scopeId: string;
+  occurredAt: string;
+  idempotencyKey: string;
 }
 
 export interface ReserveBudgetInput {
@@ -119,6 +133,7 @@ export interface BudgetLedger {
   settle(input: SettleBudgetInput): BudgetEvent;
   startActive(input: StartActiveInput): BudgetEvent;
   stopActive(input: StopActiveInput): BudgetEvent;
+  startWindow(input: StartBudgetWindowInput): BudgetEvent;
   snapshot(scopeId: string): BudgetProjection;
   events(scopeId: string): BudgetEvent[];
   close(): void;
@@ -133,10 +148,13 @@ export function rebuildBudgetProjection(
     reservations: {},
     activeSegments: {},
     effective: emptyUsage(),
+    lifetime: emptyUsage(),
+    window: { index: 1 },
     lastSequence: 0,
   };
   for (const event of events) reduceBudgetEvent(projection, event);
-  projection.effective = effectiveUsage(projection);
+  projection.effective = effectiveUsage(projection, true);
+  projection.lifetime = effectiveUsage(projection, false);
   return projection;
 }
 
@@ -147,7 +165,12 @@ export function reduceBudgetEvent(
   if (event.scopeId !== projection.scopeId) {
     throw new Error(`Budget event ${event.eventId} belongs to another scope.`);
   }
-  if (event.type === "budget.reserved") {
+  if (event.type === "budget.window_started") {
+    projection.window = {
+      index: projection.window.index + 1,
+      startedAt: event.occurredAt,
+    };
+  } else if (event.type === "budget.reserved") {
     const reservationId = requiredString(event.payload, "reservationId");
     if (projection.reservations[reservationId]) {
       throw new Error(`Duplicate budget reservation ${reservationId}.`);
@@ -159,6 +182,7 @@ export function reduceBudgetEvent(
       kind,
       estimate: usageAmount(event.payload.estimate),
       status: "reserved",
+      windowIndex: projection.window.index,
     };
   } else if (event.type === "budget.settled") {
     const reservationId = requiredString(event.payload, "reservationId");
@@ -180,6 +204,7 @@ export function reduceBudgetEvent(
       segmentId,
       startedAt: event.occurredAt,
       reserveMs: requiredNonNegative(event.payload, "reserveMs"),
+      windowIndex: projection.window.index,
     };
   } else {
     const segmentId = requiredString(event.payload, "segmentId");
@@ -193,17 +218,23 @@ export function reduceBudgetEvent(
     };
   }
   projection.lastSequence = event.sequence;
-  projection.effective = effectiveUsage(projection);
+  projection.effective = effectiveUsage(projection, true);
+  projection.lifetime = effectiveUsage(projection, false);
 }
 
-function effectiveUsage(projection: BudgetProjection): BudgetUsage {
+function effectiveUsage(
+  projection: BudgetProjection,
+  currentWindowOnly: boolean
+): BudgetUsage {
   const usage = emptyUsage();
   for (const reservation of Object.values(projection.reservations)) {
+    if (currentWindowOnly && reservation.windowIndex !== projection.window.index) continue;
     if (reservation.kind === "model") usage.modelCalls += 1;
     else usage.toolCalls += 1;
     addAmount(usage, reservation.actual ?? reservation.estimate);
   }
   for (const segment of Object.values(projection.activeSegments)) {
+    if (currentWindowOnly && segment.windowIndex !== projection.window.index) continue;
     usage.activeMs += segment.durationMs ?? segment.reserveMs;
   }
   return usage;

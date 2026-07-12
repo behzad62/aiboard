@@ -211,6 +211,13 @@ export class NativeBuildFactory {
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task) =>
         (await workspaceManager.createTaskWorkspace(task.id)).path,
+      renewBudgetWindow: (idempotencyKey, occurredAt) => {
+        budgetLedger.startWindow({
+          scopeId: spec.runId,
+          occurredAt,
+          idempotencyKey,
+        });
+      },
     });
     let closed = false;
     return {

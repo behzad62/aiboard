@@ -11,6 +11,7 @@ import {
   AgentProtocolError,
   type AgentToolRuntime,
 } from "./tool-registry.js";
+import { BudgetExceededError } from "./budget-ledger.js";
 
 export type AgentSuspensionReason =
   | "model_ended_without_lifecycle"
@@ -172,11 +173,15 @@ export async function runAgentLoop(
       });
     } catch (error) {
       return suspended(
-        options.signal?.aborted ? "cancelled" : "provider_error",
+        options.signal?.aborted
+          ? "cancelled"
+          : error instanceof BudgetExceededError
+            ? "budget_exhausted"
+            : "provider_error",
         turnNumber - 1,
         messages,
         error instanceof Error ? error.message : String(error),
-        providerErrorDetails(error)
+        error instanceof BudgetExceededError ? undefined : providerErrorDetails(error)
       );
     }
 

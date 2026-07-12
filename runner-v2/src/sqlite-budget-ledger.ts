@@ -15,6 +15,7 @@ import {
   type ReserveBudgetInput,
   type SettleBudgetInput,
   type StartActiveInput,
+  type StartBudgetWindowInput,
   type StopActiveInput,
 } from "./budget-ledger.js";
 import { assertBudgetLimits, assertWithinBudget } from "./budget-policy.js";
@@ -129,6 +130,25 @@ export class SqliteBudgetLedger implements BudgetLedger {
       input.occurredAt,
       input.idempotencyKey,
       { segmentId: input.segmentId, durationMs }
+    );
+  }
+
+  startWindow(input: StartBudgetWindowInput): BudgetEvent {
+    return this.append(
+      input.scopeId,
+      "budget.window_started",
+      input.occurredAt,
+      input.idempotencyKey,
+      {},
+      (projection) => {
+        if (
+          Object.values(projection.activeSegments).some(
+            (segment) => segment.durationMs === undefined
+          )
+        ) {
+          throw new Error("A budget window cannot start while active work is running.");
+        }
+      }
     );
   }
 

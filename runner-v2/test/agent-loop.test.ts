@@ -11,6 +11,7 @@ import type {
 import { runAgentLoop } from "../src/agent-loop.js";
 import { compactAgentMessages } from "../src/agent-loop.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import { BudgetExceededError } from "../src/budget-ledger.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -45,6 +46,21 @@ test("prose completion and model EOF never complete a task", async () => {
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "model_ended_without_lifecycle");
   assert.equal(result.turns, 1);
+});
+
+test("model budget exhaustion is a typed budget suspension, not a provider failure", async () => {
+  const model = new ScriptedModel([
+    new BudgetExceededError("run_1", "modelCalls", 201, 200),
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry: new ToolRegistry(),
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "budget_exhausted");
+  assert.match(result.error ?? "", /modelCalls/);
 });
 
 test("native tool results feed the next turn and only submit_task submits work", async () => {

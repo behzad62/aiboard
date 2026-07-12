@@ -55,6 +55,8 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       reservations: {},
       activeSegments: {},
       effective: emptyUsage(),
+      lifetime: emptyUsage(),
+      window: { index: 1 },
       lastSequence: 0,
     };
   }

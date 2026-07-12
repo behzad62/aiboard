@@ -69,6 +69,7 @@ export interface BuildRuntimeOptions {
   maxTaskAttempts?: number;
   architectId?: string;
   clock?: () => string;
+  renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
 }
 
 export interface BuildStepResult {
@@ -86,6 +87,7 @@ export class BuildRuntime {
   private readonly maxTaskAttempts: number;
   private readonly architectId: string;
   private readonly clock: () => string;
+  private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private stepQueue = Promise.resolve();
 
   constructor(options: BuildRuntimeOptions) {
@@ -97,6 +99,7 @@ export class BuildRuntime {
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
+    this.renewBudgetWindow = options.renewBudgetWindow;
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -147,10 +150,14 @@ export class BuildRuntime {
         "This Build is awaiting the user's final project handoff selection."
       );
     }
+    const occurredAt = this.clock();
+    if (projection.status === "paused") {
+      this.renewBudgetWindow?.(`budget-window:${idempotencyKey}`, occurredAt);
+    }
     this.store.append({
       runId: this.runId,
       type: "run.resumed",
-      occurredAt: this.clock(),
+      occurredAt,
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: {},
