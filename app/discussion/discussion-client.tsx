@@ -83,6 +83,7 @@ import {
   updateDiscussionConfig,
 } from "@/lib/client/api";
 import { saveAttachmentFile } from "@/lib/client/settings-api";
+import { applyDiscussionLiveStatus } from "@/lib/client/discussion-live-state";
 import {
   getProjectHandle,
   queryProjectPermission,
@@ -298,6 +299,11 @@ function DiscussionPageInner() {
           if (event.status === "running") {
             setBuildStopReport(null);
             setBuildToolReviewReport(null);
+            setDiscussion((previous) =>
+              previous
+                ? applyDiscussionLiveStatus(previous, "running")
+                : previous
+            );
           }
           if (event.round !== undefined) setCurrentRound(event.round);
           if (event.maxRounds !== undefined) setMaxRounds(event.maxRounds);
