@@ -99,8 +99,12 @@ async function runWorkBenchBuildDiscussion(
     },
   };
   const discussion = createWorkBenchBuildDiscussion(input, models);
-  const runBuildDiscussion =
-    input.runBuildDiscussion ?? (await loadRunBuildDiscussion());
+  const runBuildDiscussion = input.runBuildDiscussion;
+  if (!runBuildDiscussion) {
+    throw new Error(
+      "WorkBench Build requires a Runner V2 execution adapter; the retired browser Build executor is unavailable."
+    );
+  }
 
   await runBuildDiscussion(
     discussion,
@@ -142,11 +146,6 @@ function isValidWorkBenchToolCall(trace: BenchmarkToolCallTrace): boolean {
     typeof trace.exitCode === "number" &&
     Number.isFinite(trace.exitCode)
   );
-}
-
-async function loadRunBuildDiscussion(): Promise<RunBuildDiscussionFn> {
-  const engine = await import("@/lib/client/legacy-build-engine.benchmark");
-  return engine.runBuildDiscussion;
 }
 
 function createWorkBenchBuildDiscussion(
