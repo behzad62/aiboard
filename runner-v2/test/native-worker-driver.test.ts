@@ -206,6 +206,10 @@ test("native worker fails over with the same session, context, tools, and eviden
     assert.match(contextText, /Batch independent read-only tool calls/i);
     assert.match(contextText, /Keep command output narrow/i);
     assert.match(contextText, /Before every submit_task/i);
+    assert.match(
+      contextText,
+      /do not submit while your own fresh evidence still shows a known acceptance failure/i
+    );
     assert.match(contextText, /Run focused tests first/);
     assert.match(contextText, /focused testing evidence/);
     assert.match(contextText, /newline-terminated text/);

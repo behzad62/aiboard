@@ -145,6 +145,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               "Batch independent read-only tool calls in one turn when that reduces model round trips.",
               "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
               "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
+              "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
             ].join("\n"),
           },
         ],
@@ -393,6 +394,7 @@ export function workerContinuationMessages(
         "Resume the same durable task attempt with its existing workspace, tool results, and evidence.",
         "Do not repeat completed work. Inspect current state only as needed.",
         "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required.",
+        "Do not submit while your own fresh evidence still shows a known acceptance failure.",
       ].join("\n"),
     },
   ];
