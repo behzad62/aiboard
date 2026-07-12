@@ -15,6 +15,7 @@ import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createProcessTools } from "./process-tools.js";
+import { createResearchTools } from "./research-tools.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
@@ -119,6 +120,9 @@ export function createSubagentTools(
         broker.register(tool);
       }
       for (const tool of createProcessTools()) broker.register(tool);
+      for (const tool of createResearchTools({ artifacts: options.artifacts })) {
+        broker.register(tool);
+      }
       for (const tool of createGitTools()) {
         if (tool.definition.name !== "git.commit") broker.register(tool);
       }
