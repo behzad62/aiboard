@@ -83,6 +83,7 @@ export class BuildRuntime {
   private readonly scheduler: TaskScheduler;
   private readonly architectDriver: ArchitectRuntimeDriver;
   private readonly integrationDriver: IntegrationRuntimeDriver;
+  private readonly maxTaskAttempts: number;
   private readonly architectId: string;
   private readonly clock: () => string;
   private stepQueue = Promise.resolve();
@@ -93,6 +94,7 @@ export class BuildRuntime {
     this.store = options.store;
     this.architectDriver = options.architectDriver;
     this.integrationDriver = options.integrationDriver;
+    this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.scheduler = new TaskScheduler({
@@ -330,6 +332,15 @@ export class BuildRuntime {
       .sort((left, right) => left.id.localeCompare(right.id))
       .find((task) => task.status === "rejected");
     if (rejected) {
+      if (rejected.attempt >= (rejected.attemptLimit ?? this.maxTaskAttempts)) {
+        await this.runArchitect({
+          type: "task_failure_resolution_required",
+          taskId: rejected.id,
+          attempt: rejected.attempt,
+          failureReason: "architect_rejected_attempt_budget_exhausted",
+        }, projection);
+        return this.afterArchitect("rejected_task_resolution_required");
+      }
       this.store.append({
         runId: this.runId,
         type: "task.transitioned",

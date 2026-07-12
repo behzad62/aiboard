@@ -220,11 +220,15 @@ export function reduceSchedulerEvent(
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
-      if (task.status !== "planned" && task.status !== "failed") {
-        throw new Error(`Task ${taskId} must be planned or failed before revision.`);
+      if (
+        task.status !== "planned" &&
+        task.status !== "failed" &&
+        task.status !== "rejected"
+      ) {
+        throw new Error(`Task ${taskId} must be planned, failed, or rejected before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
-      const revised: BuildTask = task.status === "failed"
+      const revised: BuildTask = task.status === "failed" || task.status === "rejected"
         ? {
             ...task,
             ...patch,

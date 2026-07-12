@@ -270,6 +270,73 @@ test("exhausted failed tasks return to the Architect for revision instead of dea
   }
 });
 
+test("exhausted rejected tasks return to the Architect instead of pausing in planned state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-rejected-exhausted-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append({
+      runId: "run_rejected_exhausted",
+      type: "plan.created",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: "task_browser",
+          objective: "Collect browser acceptance evidence",
+          dependencies: [],
+          status: "rejected",
+          requiredCapabilities: ["browser-acceptance"],
+          attempt: 2,
+        }],
+      },
+    });
+    let reasonSeen: ArchitectActionRequest["reason"] | undefined;
+    const runtime = new BuildRuntime({
+      runId: "run_rejected_exhausted",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          reasonSeen = request.reason;
+          const result = await request.tools.invoke({
+            type: "tool_call",
+            callId: "revise_rejected_task",
+            name: "revise_task",
+            arguments: {
+              taskId: "task_browser",
+              revision: 2,
+              objective: "Collect durable browser acceptance facts",
+            },
+          }, request.context);
+          assert.equal(result.isError, false, result.error?.message ?? "revision failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      maxTaskAttempts: 2,
+      workspaceFor: async () => "C:/work/task_browser",
+    });
+
+    const step = await runtime.step();
+    assert.equal(step.status, "progressed");
+    assert.deepEqual(reasonSeen, {
+      type: "task_failure_resolution_required",
+      taskId: "task_browser",
+      attempt: 2,
+      failureReason: "architect_rejected_attempt_budget_exhausted",
+    });
+    assert.equal(runtime.projection().tasks.task_browser.status, "planned");
+    assert.equal(runtime.projection().tasks.task_browser.attemptLimit, 3);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;
