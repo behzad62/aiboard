@@ -1,4 +1,7 @@
 import type { Browser, BrowserContext, Page } from "playwright";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 import type {
   NativeTool,
@@ -38,34 +41,56 @@ interface BrowserSession {
   page: Page;
   console: BrowserConsoleEvent[];
   network: BrowserNetworkEvent[];
+  width: number;
+  height: number;
+}
+
+interface PersistedBrowserSession {
+  url: string;
+  width: number;
+  height: number;
 }
 
 export class PlaywrightBrowserBackend implements BrowserBackend {
   private browser: Browser | undefined;
   private readonly sessions = new Map<string, BrowserSession>();
 
+  constructor(private readonly stateDirectory?: string) {}
+
   async open(sessionId: string, input: { url: string; width: number; height: number }) {
-    await this.close(sessionId);
+    await this.discard(sessionId);
     const browser = await this.browserInstance();
     const context = await browser.newContext({
       viewport: { width: input.width, height: input.height },
     });
     const page = await context.newPage();
-    const session: BrowserSession = { context, page, console: [], network: [] };
+    const session: BrowserSession = {
+      context,
+      page,
+      console: [],
+      network: [],
+      width: input.width,
+      height: input.height,
+    };
     this.observe(session);
     this.sessions.set(sessionId, session);
     await page.goto(input.url, { waitUntil: "domcontentloaded" });
+    await this.persist(sessionId, session);
     return { url: page.url(), title: await page.title() };
   }
 
   async navigate(sessionId: string, url: string) {
-    const page = this.require(sessionId).page;
+    const session = await this.require(sessionId);
+    const page = session.page;
     await page.goto(url, { waitUntil: "domcontentloaded" });
+    await this.persist(sessionId, session);
     return { url: page.url(), title: await page.title() };
   }
 
   async snapshot(sessionId: string) {
-    const page = this.require(sessionId).page;
+    const session = await this.require(sessionId);
+    const page = session.page;
+    await this.persist(sessionId, session);
     return {
       url: page.url(),
       title: await page.title(),
@@ -75,32 +100,52 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
   }
 
   async click(sessionId: string, selector: string): Promise<void> {
-    await this.require(sessionId).page.locator(selector).click();
+    const session = await this.require(sessionId);
+    await session.page.locator(selector).click();
+    await this.persist(sessionId, session);
   }
 
   async fill(sessionId: string, selector: string, value: string): Promise<void> {
-    await this.require(sessionId).page.locator(selector).fill(value);
+    const session = await this.require(sessionId);
+    await session.page.locator(selector).fill(value);
+    await this.persist(sessionId, session);
   }
 
   async screenshot(sessionId: string): Promise<Buffer> {
-    return Buffer.from(await this.require(sessionId).page.screenshot({ fullPage: true }));
+    const session = await this.require(sessionId);
+    const bytes = Buffer.from(await session.page.screenshot({ fullPage: true }));
+    await this.persist(sessionId, session);
+    return bytes;
   }
 
   async events(sessionId: string) {
-    const session = this.require(sessionId);
+    const session = await this.require(sessionId);
     return { console: [...session.console], network: [...session.network] };
   }
 
   async close(sessionId: string): Promise<void> {
+    await this.discard(sessionId);
+  }
+
+  private async discard(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
-    this.sessions.delete(sessionId);
-    await session.context.close();
+    if (session) {
+      this.sessions.delete(sessionId);
+      await session.context.close();
+    }
+    if (this.stateDirectory) {
+      await rm(this.metadataPath(sessionId), { force: true });
+      await rm(this.storagePath(sessionId), { force: true });
+    }
   }
 
   async closeAll(): Promise<void> {
-    const sessions = [...this.sessions.keys()];
-    for (const sessionId of sessions) await this.close(sessionId);
+    const sessions = [...this.sessions.entries()];
+    for (const [sessionId, session] of sessions) {
+      await this.persist(sessionId, session);
+      await session.context.close();
+      this.sessions.delete(sessionId);
+    }
     await this.browser?.close();
     this.browser = undefined;
   }
@@ -113,10 +158,66 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     return this.browser;
   }
 
-  private require(sessionId: string): BrowserSession {
+  private async require(sessionId: string): Promise<BrowserSession> {
     const session = this.sessions.get(sessionId);
-    if (!session) throw new Error("Browser session is not open; call browser.open first.");
+    if (session) return session;
+    const recovered = await this.recover(sessionId);
+    if (!recovered) throw new Error("Browser session is not open; call browser.open first.");
+    return recovered;
+  }
+
+  private async recover(sessionId: string): Promise<BrowserSession | undefined> {
+    if (!this.stateDirectory) return undefined;
+    let metadata: PersistedBrowserSession;
+    try {
+      metadata = JSON.parse(await readFile(this.metadataPath(sessionId), "utf8")) as PersistedBrowserSession;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    const browser = await this.browserInstance();
+    const context = await browser.newContext({
+      viewport: { width: metadata.width, height: metadata.height },
+      storageState: this.storagePath(sessionId),
+    });
+    const page = await context.newPage();
+    const session: BrowserSession = {
+      context,
+      page,
+      console: [],
+      network: [],
+      width: metadata.width,
+      height: metadata.height,
+    };
+    this.observe(session);
+    this.sessions.set(sessionId, session);
+    await page.goto(metadata.url, { waitUntil: "domcontentloaded" });
     return session;
+  }
+
+  private async persist(sessionId: string, session: BrowserSession): Promise<void> {
+    if (!this.stateDirectory) return;
+    await mkdir(resolve(this.stateDirectory), { recursive: true });
+    await session.context.storageState({
+      path: this.storagePath(sessionId),
+      indexedDB: true,
+    });
+    const destination = this.metadataPath(sessionId);
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    await writeFile(temporary, JSON.stringify({
+      url: session.page.url(),
+      width: session.width,
+      height: session.height,
+    } satisfies PersistedBrowserSession));
+    await rename(temporary, destination);
+  }
+
+  private metadataPath(sessionId: string): string {
+    return join(resolve(this.stateDirectory!), `${safeSession(sessionId)}.json`);
+  }
+
+  private storagePath(sessionId: string): string {
+    return join(resolve(this.stateDirectory!), `${safeSession(sessionId)}.storage.json`);
   }
 
   private observe(session: BrowserSession): void {
@@ -274,3 +375,4 @@ function record(value: unknown): value is Record<string, unknown> { return typeo
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function dimension(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 320 && (value as number) <= 4096; }
 function pushBounded<T>(items: T[], item: T): void { items.push(item); if (items.length > 1_000) items.shift(); }
+function safeSession(sessionId: string): string { return createHash("sha256").update(sessionId).digest("hex").slice(0, 32); }

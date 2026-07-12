@@ -48,7 +48,7 @@ export interface NativeBuildFactoryOptions {
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly memoryStore: SqliteProjectMemoryStore;
-  private readonly browserBackend = new PlaywrightBrowserBackend();
+  private readonly browserBackend: PlaywrightBrowserBackend;
   private readonly managedProcesses: ManagedProcessService;
   private closed = false;
 
@@ -56,6 +56,9 @@ export class NativeBuildFactory {
     this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
     this.memoryStore = new SqliteProjectMemoryStore(
       join(options.stateDirectory, "project-memory.sqlite")
+    );
+    this.browserBackend = new PlaywrightBrowserBackend(
+      join(options.stateDirectory, "browser-sessions")
     );
     this.managedProcesses = new ManagedProcessService({
       stateDirectory: join(options.stateDirectory, "managed-processes"),

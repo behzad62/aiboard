@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
   createBrowserTools,
+  PlaywrightBrowserBackend,
   type BrowserBackend,
 } from "../src/browser-tools.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
@@ -121,6 +123,37 @@ test("browser interactions require approval outside Full Access", async () => {
     assert.equal(result.error?.code, "approval_required");
   } finally {
     ledger.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Playwright task session rehydrates URL and storage after runner restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-recovery-"));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<!doctype html><body><script>
+      document.body.textContent = localStorage.getItem("runner-state") || "first";
+      localStorage.setItem("runner-state", "restored");
+    </script></body>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/state`;
+    const first = new PlaywrightBrowserBackend(join(root, "sessions"));
+    assert.equal((await first.open("run:task", { url, width: 800, height: 600 })).url, url);
+    assert.equal((await first.snapshot("run:task")).text, "first");
+    await first.closeAll();
+
+    const recovered = new PlaywrightBrowserBackend(join(root, "sessions"));
+    const snapshot = await recovered.snapshot("run:task");
+    assert.equal(snapshot.url, url);
+    assert.equal(snapshot.text, "restored");
+    await recovered.close("run:task");
+    await recovered.closeAll();
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
 });
