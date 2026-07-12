@@ -17,10 +17,12 @@ import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SchedulerStore } from "./scheduler-store.js";
+import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
 import { createSubagentTools } from "./subagent-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
+import { rebuildProjectMemories } from "./project-memory.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
@@ -194,7 +196,7 @@ export async function runWorkerTask(
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;
-  broker.register(createSubmitTaskTool(async (summary) => {
+  broker.register(createSubmitTaskTool(async ({ summary, unresolvedConcerns }) => {
     const evidenceHashes = options.evidenceStore
       ? evidenceArtifactHashes(
           options.evidenceStore.list({
@@ -231,6 +233,9 @@ export async function runWorkerTask(
       taskCommit: commit,
       artifacts: options.artifacts,
       evidenceArtifactHashes: evidenceHashes,
+      guidanceIds: taskGuidanceIds(options),
+      memoryIds: taskMemoryIds(options),
+      unresolvedConcerns,
     });
     return producedChangeSet;
   }));
@@ -280,6 +285,29 @@ export async function runWorkerTask(
     );
   }
   return { loop, ...(producedChangeSet ? { changeSet: producedChangeSet } : {}) };
+}
+
+function taskGuidanceIds(options: RunWorkerTaskOptions): string[] {
+  if (!options.schedulerStore) return [];
+  const projection = rebuildSchedulerProjection(
+    options.schedulerStore.readRun(options.runId)
+  );
+  return Object.values(projection.guidance)
+    .filter((guidance) => guidance.taskId === options.taskId)
+    .map((guidance) => guidance.requestId);
+}
+
+function taskMemoryIds(options: RunWorkerTaskOptions): string[] {
+  if (!options.memoryStore || !options.projectId) return [];
+  return [...rebuildProjectMemories(
+    options.memoryStore.events(options.projectId)
+  ).values()]
+    .filter(
+      (memory) =>
+        memory.runId === options.runId &&
+        memory.taskId === options.taskId
+    )
+    .map((memory) => memory.id);
 }
 
 function evidenceArtifactHashes(

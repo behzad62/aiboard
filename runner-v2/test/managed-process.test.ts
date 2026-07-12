@@ -101,7 +101,7 @@ function broker(
   sessionId: string
 ): ToolBroker & { sessionId: string } {
   const result = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath: workspace,
   }) as ToolBroker & { sessionId: string };
   result.sessionId = sessionId;

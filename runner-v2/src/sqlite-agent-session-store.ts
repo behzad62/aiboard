@@ -138,6 +138,8 @@ export class SqliteAgentSessionStore {
           (await this.artifacts.get(event.artifactHash)).toString("utf8")
         ) as AgentLoopCheckpoint;
         projection.status = "active";
+        delete projection.suspensionReason;
+        delete projection.error;
       } else if (event.type === "session.suspended") {
         projection.status = "suspended";
         projection.suspensionReason = requiredString(event.payload, "reason");
@@ -145,6 +147,8 @@ export class SqliteAgentSessionStore {
           typeof event.payload.error === "string" ? event.payload.error : undefined;
       } else if (event.type === "session.submitted") {
         projection.status = "submitted";
+        delete projection.suspensionReason;
+        delete projection.error;
         projection.changeSetId = requiredString(event.payload, "changeSetId");
         if (!event.artifactHash) {
           throw new Error(`Submitted session event ${event.sequence} has no change set.`);

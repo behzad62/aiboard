@@ -123,3 +123,35 @@ test("agent session store lists durable projections by run", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a resumed checkpoint clears stale suspension metadata", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-session-resume-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const store = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  try {
+    await store.create({
+      sessionId: "architect:run_1",
+      runId: "run_1",
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-07-12T00:00:00.000Z",
+    });
+    store.suspend(
+      "architect:run_1",
+      "provider_error",
+      "temporary outage",
+      "2026-07-12T00:00:01.000Z"
+    );
+    await store.checkpoint(
+      "architect:run_1",
+      { messages: [], turns: 2, seenCallIds: [] },
+      "2026-07-12T00:00:02.000Z"
+    );
+    const resumed = await store.load("architect:run_1");
+    assert.equal(resumed.status, "active");
+    assert.equal(resumed.suspensionReason, undefined);
+    assert.equal(resumed.error, undefined);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

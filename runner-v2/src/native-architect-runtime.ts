@@ -394,6 +394,10 @@ class LayeredToolRuntime implements AgentToolRuntime {
     return this.owner.get(name)?.isLifecycleTool(name) ?? false;
   }
 
+  isReadOnlyTool(name: string): boolean {
+    return this.owner.get(name)?.isReadOnlyTool(name) ?? false;
+  }
+
   assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
     const current = new Set<string>();
     for (const call of calls) {

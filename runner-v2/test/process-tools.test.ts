@@ -48,7 +48,12 @@ test("exec mode does not interpret shell syntax and cwd cannot escape workspace"
     assert.match(text(literal), /;echo injected/);
     assert.equal(existsSync(marker), false);
 
-    const escaped = await invoke(broker, "escape", {
+    const projectBroker = new ToolBroker({
+      permissionProfile: "project",
+      workspacePath: workspace,
+    });
+    for (const tool of createProcessTools()) projectBroker.register(tool);
+    const escaped = await invoke(projectBroker, "escape", {
       command: process.execPath,
       args: ["--version"],
       cwd: "..",
@@ -76,9 +81,27 @@ test("process timeout is mechanical and terminates the child", async () => {
   }
 });
 
-function brokerWithProcesses(workspace: string): ToolBroker {
+test("project-autonomous mode cannot run arbitrary executables without approval", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-approval-"));
   const broker = new ToolBroker({
     permissionProfile: "project",
+    workspacePath: workspace,
+  });
+  for (const tool of createProcessTools()) broker.register(tool);
+  try {
+    const result = await invoke(broker, "approval", {
+      command: process.execPath,
+      args: ["--version"],
+    });
+    assert.equal(result.error?.code, "approval_required");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+function brokerWithProcesses(workspace: string): ToolBroker {
+  const broker = new ToolBroker({
+    permissionProfile: "full",
     workspacePath: workspace,
     toolTimeoutMs: 5_000,
   });

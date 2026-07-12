@@ -142,28 +142,16 @@ export async function runAgentLoop(
         error instanceof Error ? error.message : String(error)
       );
     }
-    for (const call of pendingCalls) {
-      seenCallIds.add(call.callId);
-      const result = await options.registry.invoke(call, {
-        ...options.context,
-        signal: options.signal ?? options.context.signal,
-      });
-      messages.push({
-        id: `tool_${nextId()}`,
-        role: "tool",
-        content: result,
-      });
-      const checkpointError = await checkpoint(
-        options,
-        messages,
-        initialTurns,
-        seenCallIds
-      );
-      if (checkpointError) return checkpointError;
-      if (!result.isError && result.lifecycle) {
-        return lifecycleResult(result.lifecycle, initialTurns, messages);
-      }
-    }
+    for (const call of pendingCalls) seenCallIds.add(call.callId);
+    const pendingResult = await executeToolCalls(
+      pendingCalls,
+      options,
+      messages,
+      initialTurns,
+      seenCallIds,
+      nextId
+    );
+    if (pendingResult) return pendingResult;
   }
 
   for (
@@ -238,40 +226,81 @@ export async function runAgentLoop(
     }
     for (const call of calls) seenCallIds.add(call.callId);
 
-    for (const call of calls) {
-      if (options.signal?.aborted) {
-        return suspended("cancelled", turnNumber, messages);
-      }
-      const result = await options.registry.invoke(call, {
-        ...options.context,
-        signal: options.signal ?? options.context.signal,
-      });
+    const toolResult = await executeToolCalls(
+      calls,
+      options,
+      messages,
+      turnNumber,
+      seenCallIds,
+      nextId
+    );
+    if (toolResult) return toolResult;
+  }
+  return suspended("turn_limit", maxTurns, messages);
+}
+
+async function executeToolCalls(
+  calls: readonly ToolCallBlock[],
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  seenCallIds: ReadonlySet<string>,
+  nextId: () => string
+): Promise<AgentLoopResult | null> {
+  for (let index = 0; index < calls.length;) {
+    if (options.signal?.aborted) {
+      return suspended("cancelled", turns, messages);
+    }
+    const readOnly = options.registry.isReadOnlyTool(calls[index].name);
+    let end = index + 1;
+    if (readOnly) {
+      while (
+        end < calls.length &&
+        options.registry.isReadOnlyTool(calls[end].name)
+      ) end += 1;
+    }
+    const batch = calls.slice(index, end);
+    const results = readOnly
+      ? await Promise.all(batch.map((call) => invokeTool(call, options)))
+      : [await invokeTool(batch[0], options)];
+    for (const result of results) {
       messages.push({
         id: `tool_${nextId()}`,
         role: "tool",
         content: result,
       });
-      const toolCheckpointError = await checkpoint(
+      const checkpointError = await checkpoint(
         options,
         messages,
-        turnNumber,
+        turns,
         seenCallIds
       );
-      if (toolCheckpointError) return toolCheckpointError;
+      if (checkpointError) return checkpointError;
       if (result.isError && result.error?.code === "budget_exhausted") {
         return suspended(
           "budget_exhausted",
-          turnNumber,
+          turns,
           messages,
           result.error.message
         );
       }
       if (!result.isError && result.lifecycle) {
-        return lifecycleResult(result.lifecycle, turnNumber, messages);
+        return lifecycleResult(result.lifecycle, turns, messages);
       }
     }
+    index = end;
   }
-  return suspended("turn_limit", maxTurns, messages);
+  return null;
+}
+
+async function invokeTool(
+  call: ToolCallBlock,
+  options: RunAgentLoopOptions
+) {
+  return await options.registry.invoke(call, {
+    ...options.context,
+    signal: options.signal ?? options.context.signal,
+  });
 }
 
 export function compactAgentMessages(
@@ -287,20 +316,21 @@ export function compactAgentMessages(
     !Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1_024 ||
     !Number.isSafeInteger(limits.retainRecent) || limits.retainRecent < 1
   ) throw new Error("Agent working-set limits are invalid.");
+  const currentMessages = omitSupersededRunnerSnapshots(messages);
   if (
-    messages.length <= limits.maxMessages &&
-    Buffer.byteLength(JSON.stringify(messages)) <= limits.maxBytes
-  ) return [...messages];
+    currentMessages.length <= limits.maxMessages &&
+    Buffer.byteLength(JSON.stringify(currentMessages)) <= limits.maxBytes
+  ) return currentMessages;
 
-  const cutoff = Math.max(0, messages.length - limits.retainRecent);
-  const protectedMessages = messages
+  const cutoff = Math.max(0, currentMessages.length - limits.retainRecent);
+  const protectedMessages = currentMessages
     .slice(0, cutoff)
     .filter((message) => message.role === "system" || message.role === "user");
-  const compactable = messages
+  const compactable = currentMessages
     .slice(0, cutoff)
     .filter((message) => message.role === "assistant" || message.role === "tool");
-  const recent = messages.slice(cutoff);
-  if (compactable.length === 0) return [...messages];
+  const recent = currentMessages.slice(cutoff);
+  if (compactable.length === 0) return currentMessages;
 
   const facts = compactable.map(historyFact);
   let included = facts.length;
@@ -316,6 +346,21 @@ export function compactAgentMessages(
     result = [...protectedMessages, summary, ...recent];
   }
   return result;
+}
+
+function omitSupersededRunnerSnapshots(
+  messages: readonly AgentMessage[]
+): AgentMessage[] {
+  const prefixes = ["context:", "action-resume:", "worker-resume:"];
+  const newest = new Map<string, number>();
+  for (const [index, message] of messages.entries()) {
+    const prefix = prefixes.find((candidate) => message.id.startsWith(candidate));
+    if (prefix) newest.set(prefix, index);
+  }
+  return messages.filter((message, index) => {
+    const prefix = prefixes.find((candidate) => message.id.startsWith(candidate));
+    return !prefix || newest.get(prefix) === index;
+  });
 }
 
 function historyFact(message: AgentMessage): Record<string, unknown> {

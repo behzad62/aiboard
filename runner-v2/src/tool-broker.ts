@@ -134,6 +134,10 @@ export class ToolBroker implements AgentToolRuntime {
     return this.registry.isLifecycleTool(name);
   }
 
+  isReadOnlyTool(name: string): boolean {
+    return this.registry.isReadOnlyTool(name);
+  }
+
   assertUniqueCallIds(
     calls: readonly ToolCallBlock[],
     seenCallIds: ReadonlySet<string>

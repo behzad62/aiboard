@@ -119,7 +119,10 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
         cwd: ".",
       }),
       toolTurn("diff", "git.diff", {}),
-      toolTurn("submit", "submit_task", { summary: "Change value to two" }),
+      toolTurn("submit", "submit_task", {
+        summary: "Change value to two",
+        unresolvedConcerns: ["Windows line endings were not exercised."],
+      }),
     ]);
     const finished = await runWorkerTask({
       model: recoveredModel,
@@ -140,6 +143,9 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     assert.ok(finished.changeSet);
     assert.equal(finished.changeSet.taskId, "task_worker");
     assert.equal(finished.changeSet.evidenceArtifactHashes.length, 2);
+    assert.deepEqual(finished.changeSet.unresolvedConcerns, [
+      "Windows line endings were not exercised.",
+    ]);
     assert.match(
       (await artifacts.get(finished.changeSet.diffArtifactHash)).toString(),
       /-one[\s\S]*\+two/

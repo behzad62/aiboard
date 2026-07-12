@@ -31,6 +31,10 @@ export class BudgetedToolRuntime implements AgentToolRuntime {
     return this.options.runtime.isLifecycleTool(name);
   }
 
+  isReadOnlyTool(name: string): boolean {
+    return this.options.runtime.isReadOnlyTool(name);
+  }
+
   assertUniqueCallIds(
     calls: readonly ToolCallBlock[],
     seenCallIds: ReadonlySet<string>

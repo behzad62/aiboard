@@ -49,12 +49,13 @@ export function createProcessTools(
         additionalProperties: false,
       },
       readOnly: false,
-      effect: "workspace",
+      effect: "external",
     },
     validate: validateInput,
     assessAccess: (input) => ({
       capability: input.shell ? "process.shell" : "process.execute",
       paths: [{ path: input.cwd ?? ".", access: "write" }],
+      external: true,
     }),
     execute: async (input, context) =>
       await executeProcess(

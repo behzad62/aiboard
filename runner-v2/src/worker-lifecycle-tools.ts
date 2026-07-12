@@ -38,8 +38,8 @@ export function createWorkerLifecycleTools(
 }
 
 export function createSubmitTaskTool(
-  submit: (summary: string) => Promise<ChangeSet>
-): NativeTool<{ summary: string }> {
+  submit: (input: SubmitTaskInput) => Promise<ChangeSet>
+): NativeTool<SubmitTaskInput> {
   return {
     definition: {
       name: "submit_task",
@@ -47,7 +47,14 @@ export function createSubmitTaskTool(
         "Commit the task workspace and submit a typed change set after durable command evidence has been recorded",
       inputSchema: {
         type: "object",
-        properties: { summary: { type: "string" } },
+        properties: {
+          summary: { type: "string" },
+          unresolvedConcerns: {
+            type: "array",
+            maxItems: 100,
+            items: { type: "string", minLength: 1, maxLength: 2_000 },
+          },
+        },
         required: ["summary"],
         additionalProperties: false,
       },
@@ -56,21 +63,45 @@ export function createSubmitTaskTool(
       lifecycle: true,
     },
     validate: (input) =>
-      isRecord(input) && nonEmpty(input.summary)
-        ? { ok: true, value: { summary: input.summary } }
-        : { ok: false, issues: ["summary must be a non-empty string"] },
+      validateSubmit(input),
     assessAccess: () => ({
       capability: "task.submit",
       paths: [{ path: ".", access: "write" }],
     }),
     execute: async (input) => {
-      const changeSet = await submit(input.summary.trim());
+      const changeSet = await submit({
+        summary: input.summary.trim(),
+        unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
+      });
       return {
         content: [{ type: "json", value: changeSet }],
         isError: false,
         lifecycle: { type: "submit_task", changeSetId: changeSet.id },
       };
     },
+  };
+}
+
+interface SubmitTaskInput {
+  summary: string;
+  unresolvedConcerns: string[];
+}
+
+function validateSubmit(input: unknown): ValidationResult<SubmitTaskInput> {
+  if (!isRecord(input) || !nonEmpty(input.summary)) {
+    return invalid("summary must be a non-empty string");
+  }
+  const concerns = input.unresolvedConcerns ?? [];
+  if (
+    !Array.isArray(concerns) ||
+    concerns.length > 100 ||
+    concerns.some(
+      (item) => typeof item !== "string" || !item.trim() || item.length > 2_000
+    )
+  ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
+  return {
+    ok: true,
+    value: { summary: input.summary, unresolvedConcerns: concerns as string[] },
   };
 }
 

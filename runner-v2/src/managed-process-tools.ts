@@ -16,11 +16,12 @@ export function createManagedProcessTools(
 ): NativeTool<unknown>[] {
   const tools: NativeTool<Input>[] = [
     {
-      definition: definition("process.start", "Start a durable background process", false, "workspace"),
+      definition: definition("process.start", "Start a durable background process", false, "external"),
       validate: validateStart,
       assessAccess: (input) => ({
         capability: "process.start",
         paths: [{ path: (input.cwd as string | undefined) ?? ".", access: "write" }],
+        external: true,
       }),
       execute: async (input, context) => {
         try {
@@ -85,7 +86,7 @@ function definition(
   name: string,
   description: string,
   readOnly: boolean,
-  effect: "none" | "workspace"
+  effect: "none" | "workspace" | "external"
 ) {
   return { name, description, inputSchema: managedProcessSchema(name), readOnly, effect } as const;
 }

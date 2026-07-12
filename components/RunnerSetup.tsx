@@ -130,7 +130,7 @@ export function RunnerSetup({
               {
                 value: "project",
                 title: "Project autonomous",
-                description: "Project-contained work runs automatically; outside or external effects require approval.",
+                description: "Native project file and Git operations run automatically; arbitrary processes and external effects require approval.",
               },
               {
                 value: "full",

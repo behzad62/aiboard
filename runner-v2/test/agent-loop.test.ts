@@ -94,6 +94,57 @@ test("native tool results feed the next turn and only submit_task submits work",
   );
 });
 
+test("independent read-only tool calls execute concurrently and preserve result order", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const registry = new ToolRegistry();
+  for (const name of ["read_alpha", "read_beta"]) {
+    registry.register({
+      definition: {
+        name,
+        description: `Run ${name}`,
+        inputSchema: { type: "object" },
+        readOnly: true,
+        effect: "none",
+      },
+      validate: () => ({ ok: true, value: {} }),
+      execute: async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        active -= 1;
+        return { content: [{ type: "text" as const, text: name }], isError: false };
+      },
+    });
+  }
+  const model = new ScriptedModel([
+    {
+      blocks: [
+        { type: "tool_call", callId: "alpha", name: "read_alpha", arguments: {} },
+        { type: "tool_call", callId: "beta", name: "read_beta", arguments: {} },
+      ],
+      stopReason: "tool_calls",
+    },
+    { blocks: [{ type: "text", text: "Observed." }], stopReason: "end_turn" },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(maxActive, 2);
+  const toolIds = result.messages
+    .filter((message) => message.role === "tool")
+    .map((message) =>
+      typeof message.content === "object" && !Array.isArray(message.content)
+        ? message.content.callId
+        : ""
+    );
+  assert.deepEqual(toolIds, ["alpha", "beta"]);
+});
+
 test("duplicate call IDs suspend before the repeated tool executes", async () => {
   let executions = 0;
   const registry = new ToolRegistry();
@@ -334,6 +385,22 @@ test("model working context compacts deterministically without deleting raw sess
     compacted,
     "same history produces byte-identical working context"
   );
+});
+
+test("working context keeps only the newest runner-owned state and resume snapshots", () => {
+  const messages: AgentMessage[] = [
+    { id: "system", role: "system", content: "Stable policy" },
+    { id: "context:old", role: "user", content: "Old projection" },
+    { id: "action-resume:1", role: "user", content: "Old action" },
+    { id: "context:new", role: "user", content: "Current projection" },
+    { id: "action-resume:2", role: "user", content: "Current action" },
+  ];
+  const working = compactAgentMessages(messages);
+  assert.deepEqual(
+    working.map((message) => message.id),
+    ["system", "context:new", "action-resume:2"]
+  );
+  assert.equal(messages.length, 5, "durable raw history is not mutated");
 });
 
 function context() {

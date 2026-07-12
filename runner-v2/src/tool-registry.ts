@@ -24,6 +24,7 @@ export class AgentProtocolError extends Error {
 export interface AgentToolRuntime {
   definitions(): ToolDefinition[];
   isLifecycleTool(name: string): boolean;
+  isReadOnlyTool(name: string): boolean;
   assertUniqueCallIds(
     calls: readonly ToolCallBlock[],
     seenCallIds: ReadonlySet<string>
@@ -57,6 +58,10 @@ export class ToolRegistry implements AgentToolRuntime {
 
   isLifecycleTool(name: string): boolean {
     return this.tools.get(name)?.definition.lifecycle === true;
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.tools.get(name)?.definition.readOnly === true;
   }
 
   assertUniqueCallIds(
