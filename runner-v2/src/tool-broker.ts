@@ -2,6 +2,10 @@ import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
+import {
+  BudgetExceededError,
+  type BudgetLedger,
+} from "./budget-ledger.js";
 import type {
   NativeTool,
   ToolAccessRequest,
@@ -58,6 +62,8 @@ export interface ToolBrokerOptions {
   toolTimeoutMs?: number;
   clock?: () => string;
   ledger?: ToolInvocationLedger;
+  budget?: BudgetLedger;
+  budgetScopeId?: string;
 }
 
 interface InvocationCacheEntry {
@@ -83,6 +89,8 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly toolTimeoutMs: number;
   private readonly clock: () => string;
   private readonly ledger?: ToolInvocationLedger;
+  private readonly budget?: BudgetLedger;
+  private readonly budgetScopeId?: string;
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -96,6 +104,11 @@ export class ToolBroker implements AgentToolRuntime {
     this.toolTimeoutMs = options.toolTimeoutMs ?? 120_000;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.ledger = options.ledger;
+    this.budget = options.budget;
+    this.budgetScopeId = options.budgetScopeId;
+    if (Boolean(this.budget) !== Boolean(this.budgetScopeId)) {
+      throw new Error("Tool budget and budgetScopeId must be configured together.");
+    }
     if (!Number.isSafeInteger(this.maxInlineOutputBytes) || this.maxInlineOutputBytes < 1) {
       throw new Error("maxInlineOutputBytes must be a positive integer.");
     }
@@ -255,6 +268,27 @@ export class ToolBroker implements AgentToolRuntime {
       name: tool.definition.name,
       arguments: input,
     });
+    const budgetReservationId = `tool:${context.sessionId}:${callId}`;
+    if (this.budget && this.budgetScopeId) {
+      try {
+        this.budget.reserve({
+          scopeId: this.budgetScopeId,
+          reservationId: budgetReservationId,
+          kind: "tool",
+          estimate: {},
+          occurredAt: this.clock(),
+          idempotencyKey: `reserve:${budgetReservationId}`,
+        });
+      } catch (error) {
+        if (error instanceof BudgetExceededError) {
+          return outputFailure(
+            "budget_exhausted",
+            `Tool-call budget ${error.dimension} reached its limit ${error.limit}.`
+          );
+        }
+        throw error;
+      }
+    }
     const ledgerDecision = this.ledger?.begin({
       key: ledgerKey,
       fingerprint: ledgerFingerprint,
@@ -296,6 +330,7 @@ export class ToolBroker implements AgentToolRuntime {
         await Promise.race([execution, timeoutResult])
       );
       this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+      this.settleToolBudget(budgetReservationId);
       return output;
     } catch (error) {
       if (error instanceof ToolTimeoutError) {
@@ -304,17 +339,31 @@ export class ToolBroker implements AgentToolRuntime {
           `Tool ${tool.definition.name} exceeded ${this.toolTimeoutMs} ms.`
         );
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        this.settleToolBudget(budgetReservationId);
         return output;
       }
       if (signal.aborted) {
         const output = outputFailure("tool_cancelled", "Tool call was cancelled.");
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        this.settleToolBudget(budgetReservationId);
         return output;
       }
+      this.settleToolBudget(budgetReservationId);
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private settleToolBudget(reservationId: string): void {
+    if (!this.budget || !this.budgetScopeId) return;
+    this.budget.settle({
+      scopeId: this.budgetScopeId,
+      reservationId,
+      actual: {},
+      occurredAt: this.clock(),
+      idempotencyKey: `settle:${reservationId}`,
+    });
   }
 
   private completeLedger(

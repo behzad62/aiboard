@@ -4,6 +4,8 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import type { BudgetLedger } from "./budget-ledger.js";
+import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import { createChangeSet, type ChangeSet } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -61,6 +63,7 @@ export interface RunWorkerTaskOptions {
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
+  budgetLedger?: BudgetLedger;
 }
 
 export interface WorkerTaskResult {
@@ -176,6 +179,7 @@ export async function runWorkerTask(
     artifacts: options.artifacts,
     ledger: options.ledger,
     sessions: options.sessions,
+    ...(options.budgetLedger ? { budgetLedger: options.budgetLedger } : {}),
     ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
     ...(options.skillCatalog ? { skillCatalog: options.skillCatalog } : {}),
     ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
@@ -231,9 +235,17 @@ export async function runWorkerTask(
     return producedChangeSet;
   }));
 
+  const toolRuntime = options.budgetLedger
+    ? new BudgetedToolRuntime({
+        runtime: broker,
+        ledger: options.budgetLedger,
+        scopeId: options.runId,
+        clock,
+      })
+    : broker;
   const loop = await runAgentLoop({
     model: options.model,
-    registry: broker,
+    registry: toolRuntime,
     context: {
       runId: options.runId,
       sessionId: options.sessionId,

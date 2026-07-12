@@ -84,6 +84,38 @@ test("provider errors settle the conservative reservation and restart advances c
   }
 });
 
+test("model calls record active duration and prevent new work after the time limit", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 3, maxActiveMs: 5 }),
+  });
+  let calls = 0;
+  let tick = 0;
+  const clock = () =>
+    new Date(Date.parse("2026-07-12T00:00:00.000Z") + tick++ * 10).toISOString();
+  const budgeted = new BudgetedAgentModel({
+    model: {
+      complete: async () => {
+        calls += 1;
+        return { blocks: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    },
+    ledger,
+    scopeId: "run_1",
+    outputTokenReserve: 1,
+    clock,
+  });
+  try {
+    await budgeted.complete(request("session_1"));
+    assert.equal(ledger.snapshot("run_1").effective.activeMs > 5, true);
+    await assert.rejects(() => budgeted.complete(request("session_1")), /activeMs/i);
+    assert.equal(calls, 1, "provider is not called after active time is exhausted");
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
 function request(sessionId: string): AgentModelRequest {
   return {
     sessionId,

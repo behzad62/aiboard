@@ -121,6 +121,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         artifacts: this.options.artifacts,
         ledger: this.options.ledger,
         sessions: this.options.sessions,
+        ...(this.options.budgetLedger
+          ? { budgetLedger: this.options.budgetLedger }
+          : {}),
         schedulerStore: this.options.schedulerStore,
         evidenceStore: this.options.evidenceStore,
         skillCatalog: this.options.skillCatalog,
@@ -337,6 +340,12 @@ export function recoverableWorkerSuspension(
     return {
       type: "paused",
       reason: "worker_model_ended_without_lifecycle",
+    };
+  }
+  if (reason === "budget_exhausted") {
+    return {
+      type: "paused",
+      reason: `budget_exhausted:${_error ?? "hard limit reached"}`,
     };
   }
   return undefined;

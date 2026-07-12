@@ -11,6 +11,7 @@ import type { ArtifactStore } from "./artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedAgentModel } from "./budgeted-model.js";
+import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import type {
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
@@ -202,7 +203,15 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         extras.register(tool);
       }
     }
-    const tools = new LayeredToolRuntime(request.tools, extras);
+    const layeredTools = new LayeredToolRuntime(request.tools, extras);
+    const tools = this.options.budgetLedger
+      ? new BudgetedToolRuntime({
+          runtime: layeredTools,
+          ledger: this.options.budgetLedger,
+          scopeId: request.runId,
+          clock: this.clock,
+        })
+      : layeredTools;
     const runtimeModel = this.options.budgetLedger
       ? new BudgetedAgentModel({
           model,

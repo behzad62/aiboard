@@ -16,6 +16,7 @@ import type {
   ToolExecutionContext,
 } from "../src/agent-contracts.js";
 import { ToolBroker } from "../src/tool-broker.js";
+import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 
 test("project profile allows contained writes but blocks traversal and symlink escape", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-broker-paths-"));
@@ -121,6 +122,32 @@ test("call identity prevents duplicate or conflicting side effects", async () =>
     assert.equal(executions, 1);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("tool execution reserves the hard tool-call budget before side effects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-broker-budget-"));
+  const budget = new SqliteBudgetLedger(join(root, "budget.sqlite"), {
+    limitsFor: () => ({ maxToolCalls: 1 }),
+  });
+  let executions = 0;
+  const broker = new ToolBroker({
+    permissionProfile: "project",
+    workspacePath: root,
+    budget,
+    budgetScopeId: "run_1",
+  });
+  broker.register(pathTool(() => executions++));
+  try {
+    const first = await broker.invoke(call("first", join(root, "a.txt")), context());
+    const blocked = await broker.invoke(call("second", join(root, "b.txt")), context());
+    assert.equal(first.isError, false);
+    assert.equal(blocked.error?.code, "budget_exhausted");
+    assert.equal(executions, 1);
+    assert.equal(budget.snapshot("run_1").effective.toolCalls, 1);
+  } finally {
+    budget.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

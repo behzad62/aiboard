@@ -59,6 +59,10 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
     recoverableWorkerSuspension("model_ended_without_lifecycle", ""),
     { type: "paused", reason: "worker_model_ended_without_lifecycle" }
   );
+  assert.deepEqual(
+    recoverableWorkerSuspension("budget_exhausted", "maxToolCalls reached"),
+    { type: "paused", reason: "budget_exhausted:maxToolCalls reached" }
+  );
   assert.equal(recoverableWorkerSuspension("checkpoint_error", "write failed"), undefined);
 
   const first = workerContinuationMessages(

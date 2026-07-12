@@ -158,6 +158,54 @@ test("provider errors and hard turn limits suspend with resumable messages", asy
   assert.equal(limited.reason, "turn_limit");
 });
 
+test("a hard tool budget error suspends before another model call", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    definition: {
+      name: "budgeted_tool",
+      description: "Exercise the hard tool budget",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async () => ({
+      content: [{ type: "text", text: "Tool-call budget reached." }],
+      isError: true,
+      error: { code: "budget_exhausted", message: "Tool-call budget reached." },
+    }),
+  });
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "budget_1",
+        name: "budgeted_tool",
+        arguments: {},
+      }],
+      stopReason: "tool_calls",
+    },
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "should_not_run",
+        name: "budgeted_tool",
+        arguments: {},
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "budget_exhausted");
+  assert.equal(model.requests.length, 1);
+});
+
 test("restart executes a persisted pending tool call before another model turn", async () => {
   let executions = 0;
   const registry = new ToolRegistry();

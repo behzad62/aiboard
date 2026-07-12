@@ -19,7 +19,8 @@ export type AgentSuspensionReason =
   | "turn_limit"
   | "cancelled"
   | "max_tokens"
-  | "checkpoint_error";
+  | "checkpoint_error"
+  | "budget_exhausted";
 
 export type AgentLoopResult =
   | {
@@ -257,6 +258,14 @@ export async function runAgentLoop(
         seenCallIds
       );
       if (toolCheckpointError) return toolCheckpointError;
+      if (result.isError && result.error?.code === "budget_exhausted") {
+        return suspended(
+          "budget_exhausted",
+          turnNumber,
+          messages,
+          result.error.message
+        );
+      }
       if (!result.isError && result.lifecycle) {
         return lifecycleResult(result.lifecycle, turnNumber, messages);
       }

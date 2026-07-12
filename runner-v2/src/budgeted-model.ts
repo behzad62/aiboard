@@ -58,6 +58,13 @@ export class BudgetedAgentModel implements AgentModel {
       occurredAt: this.clock(),
       idempotencyKey: `reserve:${reservationId}`,
     });
+    const activeSegmentId = `active:${reservationId}`;
+    this.ledger.startActive({
+      scopeId: this.scopeId,
+      segmentId: activeSegmentId,
+      occurredAt: this.clock(),
+      idempotencyKey: `start:${activeSegmentId}`,
+    });
     try {
       const turn = await this.model.complete(request);
       const actualInput = nonNegative(turn.usage?.inputTokens, inputTokens);
@@ -80,6 +87,13 @@ export class BudgetedAgentModel implements AgentModel {
         estimatedCostMicros
       );
       throw error;
+    } finally {
+      this.ledger.stopActive({
+        scopeId: this.scopeId,
+        segmentId: activeSegmentId,
+        occurredAt: this.clock(),
+        idempotencyKey: `stop:${activeSegmentId}`,
+      });
     }
   }
 

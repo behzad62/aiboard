@@ -7,6 +7,8 @@ import type {
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import type { BudgetLedger } from "./budget-ledger.js";
+import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
@@ -57,6 +59,7 @@ export interface SubagentToolsOptions {
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
+  budgetLedger?: BudgetLedger;
 }
 
 export function createSubagentTools(
@@ -180,9 +183,17 @@ export function createSubagentTools(
         }
       }
       broker.register(createReturnToParentTool());
+      const toolRuntime = options.budgetLedger
+        ? new BudgetedToolRuntime({
+            runtime: broker,
+            ledger: options.budgetLedger,
+            scopeId: options.runId,
+            clock,
+          })
+        : broker;
       const result = await runAgentLoop({
         model: options.model,
-        registry: broker,
+        registry: toolRuntime,
         context: {
           runId: options.runId,
           sessionId,
