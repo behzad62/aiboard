@@ -195,6 +195,30 @@ test("control API stores provider credentials without returning secrets and prov
     const listed = await json(await fetch(`${url}/v2/provider-configs`, authorized()));
     assert.equal(JSON.stringify(listed).includes("provider-secret"), false);
     assert.equal(JSON.stringify(listed).includes("runner-secret"), false);
+    const secondTab = await fetch(
+      `${url}/v2/provider-configs`,
+      authorized({
+        method: "PUT",
+        body: JSON.stringify({
+          configs: [{
+            runtimeId: "anthropic:claude-code",
+            providerId: "anthropic",
+            modelId: "claude-code",
+            transport: "anthropic",
+            secret: "second-provider-secret",
+            capabilities: ["code"],
+            priority: 2,
+          }],
+        }),
+      })
+    );
+    assert.equal(secondTab.status, 200);
+    assert.deepEqual(
+      configs.map((config) => config.runtimeId).sort(),
+      ["anthropic:claude-code", "chatgpt:gpt-5.5"],
+      "a second tab upserts its runtime without deleting the first run's recovery credentials"
+    );
+    assert.equal(configs.find((config) => config.runtimeId === "chatgpt:gpt-5.5")?.secret, "provider-secret");
 
     const create = await fetch(
       `${url}/v2/runs`,

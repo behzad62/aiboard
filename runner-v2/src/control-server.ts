@@ -279,8 +279,9 @@ export class ControlServer {
       if (request.method === "PUT") {
         const body = await readJson<ProviderConfigsBody>(request);
         if (!Array.isArray(body.configs)) invalidBody();
-        store.save(body.configs);
-        sendJson(response, 200, body.configs.map(redactProviderConfig));
+        const merged = mergeProviderConfigs(store.load(), body.configs);
+        store.save(merged);
+        sendJson(response, 200, merged.map(redactProviderConfig));
         return;
       }
     }
@@ -660,6 +661,27 @@ export class ControlServer {
     request.once("close", cleanup);
     response.once("close", cleanup);
   }
+}
+
+function mergeProviderConfigs(
+  current: readonly RunnerProviderConfig[],
+  incoming: readonly RunnerProviderConfig[]
+): RunnerProviderConfig[] {
+  const merged = new Map(
+    current.map((config) => [config.runtimeId, {
+      ...config,
+      capabilities: [...config.capabilities],
+    }])
+  );
+  for (const config of incoming) {
+    merged.set(config.runtimeId, {
+      ...config,
+      capabilities: [...config.capabilities],
+    });
+  }
+  return [...merged.values()].sort((left, right) =>
+    left.runtimeId.localeCompare(right.runtimeId)
+  );
 }
 
 function hasBearerToken(header: string | undefined, expected: string): boolean {
