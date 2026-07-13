@@ -148,6 +148,42 @@ test("skill catalog includes provenance-scoped built-in and user-installed roots
   }
 });
 
+test("skill reads remain available while a concurrent discovery refresh is in progress", async () => {
+  const fixture = projectFixture();
+  try {
+    for (let index = 0; index < 12; index += 1) {
+      const directory = join(
+        fixture.project,
+        ".agents",
+        "skills",
+        `project-${String(index).padStart(3, "0")}`
+      );
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "SKILL.md"), `# Project ${index}\nInspect safely.\n`);
+    }
+    const builtIn = join(fixture.root, "built-in-skills");
+    mkdirSync(join(builtIn, "systematic-debugging"), { recursive: true });
+    writeFileSync(
+      join(builtIn, "systematic-debugging", "SKILL.md"),
+      "# Systematic debugging\nFind the root cause first.\n"
+    );
+    const catalog = new SkillCatalog({
+      projectRoot: fixture.project,
+      sharedRoots: [{ path: builtIn, source: "built-in" }],
+    });
+    await catalog.discover();
+
+    const refresh = catalog.discover();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const document = await catalog.read("built-in:systematic-debugging");
+
+    assert.match(document.content, /root cause first/);
+    await refresh;
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("runner defaults expose bundled and standard user skill roots", async () => {
   const fixture = projectFixture();
   try {

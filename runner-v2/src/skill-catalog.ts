@@ -63,14 +63,14 @@ export class SkillCatalog {
   async discover(): Promise<SkillMetadata[]> {
     const root = await this.root();
     const discovered = new Map<string, SkillMetadata>();
-    this.skillPaths = new Map();
+    const skillPaths = new Map<string, string>();
     for (const configured of this.roots) {
       if (isAbsolute(configured) || configured.split(/[\\/]+/).includes("..")) {
         throw new Error(`Skill root ${configured} must be project-relative.`);
       }
       const searchRoot = resolve(root, configured);
       if (!contained(root, searchRoot)) throw new Error(`Skill root ${configured} escapes project.`);
-      await this.walk(searchRoot, root, root, "", "project", 0, discovered);
+      await this.walk(searchRoot, root, root, "", "project", 0, discovered, skillPaths);
     }
     for (const shared of this.sharedRoots) {
       if (!isAbsolute(shared.path)) {
@@ -89,10 +89,12 @@ export class SkillCatalog {
         `${shared.source}:`,
         shared.source,
         0,
-        discovered
+        discovered,
+        skillPaths
       );
     }
     this.cache = discovered;
+    this.skillPaths = skillPaths;
     return [...discovered.values()].sort((left, right) => left.id.localeCompare(right.id));
   }
 
@@ -121,7 +123,8 @@ export class SkillCatalog {
     idPrefix: string,
     source: SkillMetadata["source"],
     depth: number,
-    discovered: Map<string, SkillMetadata>
+    discovered: Map<string, SkillMetadata>,
+    skillPaths: Map<string, string>
   ): Promise<void> {
     if (depth > this.maxDepth || discovered.size >= this.maxSkills) return;
     let canonicalDirectory: string;
@@ -156,7 +159,7 @@ export class SkillCatalog {
         byteLength: details.size,
         source,
       });
-      this.skillPaths.set(id, canonical);
+      skillPaths.set(id, canonical);
       return;
     }
     const directories = entries
@@ -171,7 +174,8 @@ export class SkillCatalog {
         idPrefix,
         source,
         depth + 1,
-        discovered
+        discovered,
+        skillPaths
       );
     }
   }
