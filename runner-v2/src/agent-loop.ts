@@ -431,10 +431,21 @@ function repeatedFailedEvidence(
   messages: readonly AgentMessage[]
 ): FailedEvidenceStreak | null {
   const attempts = new Map<string, FailedEvidenceStreak>();
-  const reminded = new Set<string>();
+  const remindedCounts = new Map<string, number>();
   for (const message of messages) {
     if (message.id.startsWith("evidence-failure-reminder:")) {
-      reminded.add(message.id.slice("evidence-failure-reminder:".length));
+      const reminderIdentity = message.id.slice("evidence-failure-reminder:".length);
+      const separator = reminderIdentity.lastIndexOf(":");
+      const signature = separator >= 0
+        ? reminderIdentity.slice(0, separator)
+        : reminderIdentity;
+      const count = separator >= 0
+        ? Number.parseInt(reminderIdentity.slice(separator + 1), 10)
+        : 3;
+      remindedCounts.set(signature, Math.max(
+        remindedCounts.get(signature) ?? 0,
+        Number.isSafeInteger(count) ? count : 0
+      ));
       continue;
     }
     if (
@@ -462,7 +473,7 @@ function repeatedFailedEvidence(
       })).digest("hex").slice(0, 16);
       if (commandFact.exitCode === 0) {
         attempts.delete(signature);
-        reminded.delete(signature);
+        remindedCounts.delete(signature);
         continue;
       }
       if (typeof commandFact.exitCode !== "number") continue;
@@ -475,7 +486,9 @@ function repeatedFailedEvidence(
     }
   }
   return [...attempts.values()].find(
-    (attempt) => attempt.count >= 3 && !reminded.has(attempt.signature)
+    (attempt) =>
+      attempt.count >= 3 &&
+      (remindedCounts.get(attempt.signature) ?? 0) < attempt.count
   ) ?? null;
 }
 
@@ -489,7 +502,7 @@ async function enforceRepeatedEvidenceFailure(
   const repeated = repeatedFailedEvidence(messages);
   if (!repeated) return null;
   messages.push({
-    id: `evidence-failure-reminder:${repeated.signature}`,
+    id: `evidence-failure-reminder:${repeated.signature}:${repeated.count}`,
     role: "user",
     content: [
       "MECHANICAL_EVIDENCE_FAILURE_REMINDER",

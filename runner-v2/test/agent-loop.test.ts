@@ -534,7 +534,7 @@ test("repeated equivalent evidence failures advise a worker to seek Architect gu
   registry.register(failingEvidenceTool());
   registry.register(submitTool());
   const model = new ScriptedModel([
-    ...Array.from({ length: 3 }, (_, index) => ({
+    ...Array.from({ length: 4 }, (_, index) => ({
       blocks: [{
         type: "tool_call" as const,
         callId: `failed_evidence_${index}`,
@@ -571,6 +571,10 @@ test("repeated equivalent evidence failures advise a worker to seek Architect gu
   assert.match(String(reminder?.content ?? ""), /failed 3 times/i);
   assert.match(String(reminder?.content ?? ""), /ask the Architect/i);
   assert.match(String(reminder?.content ?? ""), /does not decide/i);
+  const refreshedReminder = model.requests[4].messages.find((message) =>
+    message.id.startsWith("evidence-failure-reminder:")
+  );
+  assert.match(String(refreshedReminder?.content ?? ""), /failed 4 times/i);
 });
 
 test("a hard tool budget error suspends before another model call", async () => {
