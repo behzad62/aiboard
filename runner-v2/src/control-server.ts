@@ -13,7 +13,10 @@ import type {
 } from "./contracts.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
 import type { ProjectHandoffChoice } from "./scheduler-store.js";
-import type { NativeBuildSpec } from "./build-spec.js";
+import {
+  assertBuildRunPolicyLimits,
+  type NativeBuildSpec,
+} from "./build-spec.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { checkGit, type GitPreflightResult } from "./git-preflight.js";
 import type {
@@ -861,6 +864,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
   }
   try {
     assertBudgetLimits(body.budgetLimits);
+    assertBuildRunPolicyLimits(body.runPolicy, body.budgetLimits);
   } catch {
     invalidBody();
   }

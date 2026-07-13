@@ -302,33 +302,99 @@ test("control API stores provider credentials without returning secrets and prov
       idempotencyKey: "build:create:run_budgeted",
     });
 
-    const invalidPolicy = await fetch(
+    const createPlanOnly = await fetch(
       `${url}/v2/runs`,
       authorized({
         method: "POST",
         body: JSON.stringify({
-          runId: "run_invalid_policy",
+          runId: "run_plan_only",
           projectPath: join(directory, "project"),
           permissionProfile: "guarded",
-          idempotencyKey: "create:run_invalid_policy",
+          idempotencyKey: "create:run_plan_only",
           build: {
             projectId: "project_native",
-            objective: "Reject an invalid policy.",
+            objective: "Plan without implementation.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             maxConcurrency: 1,
-            runPolicy: "unbounded",
+            runPolicy: "plan_only",
             budgetLimits: {},
           },
         }),
       })
     );
-    assert.equal(invalidPolicy.status, 400);
-    assert.equal(created.length, 2);
-    assert.throws(
-      () => supervisor.getRun("run_invalid_policy"),
-      /Unknown run run_invalid_policy/
-    );
+    assert.equal(createPlanOnly.status, 201);
+    assert.deepEqual(created[2], {
+      version: 1,
+      runId: "run_plan_only",
+      projectId: "project_native",
+      objective: "Plan without implementation.",
+      architectRuntimeId: "chatgpt:gpt-5.5",
+      workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      maxConcurrency: 1,
+      permissionProfile: "guarded",
+      runPolicy: "plan_only",
+      budgetLimits: {},
+      createdAt: "2026-07-11T00:00:00.000Z",
+      idempotencyKey: "build:create:run_plan_only",
+    });
+
+    const invalidBuilds = [
+      {
+        runId: "run_invalid_policy",
+        runPolicy: "unbounded",
+        budgetLimits: {},
+      },
+      {
+        runId: "run_finish_with_ceiling",
+        runPolicy: "finish",
+        budgetLimits: { maxActiveMs: 60_000 },
+      },
+      {
+        runId: "run_plan_with_ceiling",
+        runPolicy: "plan_only",
+        budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+      },
+      {
+        runId: "run_budgeted_empty",
+        runPolicy: "budgeted",
+        budgetLimits: {},
+      },
+      {
+        runId: "run_budgeted_call_token_only",
+        runPolicy: "budgeted",
+        budgetLimits: { maxModelCalls: 10, maxInputTokens: 1_000 },
+      },
+    ];
+    for (const invalid of invalidBuilds) {
+      const response = await fetch(
+        `${url}/v2/runs`,
+        authorized({
+          method: "POST",
+          body: JSON.stringify({
+            runId: invalid.runId,
+            projectPath: join(directory, "project"),
+            permissionProfile: "guarded",
+            idempotencyKey: `create:${invalid.runId}`,
+            build: {
+              projectId: "project_native",
+              objective: "Reject an invalid policy and limit combination.",
+              architectRuntimeId: "chatgpt:gpt-5.5",
+              workerRuntimeIds: ["chatgpt:gpt-5.5"],
+              maxConcurrency: 1,
+              runPolicy: invalid.runPolicy,
+              budgetLimits: invalid.budgetLimits,
+            },
+          }),
+        })
+      );
+      assert.equal(response.status, 400, invalid.runId);
+      assert.throws(
+        () => supervisor.getRun(invalid.runId),
+        new RegExp(`Unknown run ${invalid.runId}`)
+      );
+    }
+    assert.equal(created.length, 3);
     const references = await json(await fetch(
       `${url}/v2/builds?projectId=project_native`,
       authorized()
@@ -344,6 +410,13 @@ test("control API stores provider credentials without returning secrets and prov
         },
         {
           runId: "run_budgeted",
+          projectId: "project_native",
+          state: "created",
+          createdAt: "2026-07-11T00:00:00.000Z",
+          updatedAt: "2026-07-11T00:00:00.000Z",
+        },
+        {
+          runId: "run_plan_only",
           projectId: "project_native",
           state: "created",
           createdAt: "2026-07-11T00:00:00.000Z",

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   cloneBuildSpec,
+  recoverLegacyBuildSpec,
   validateBuildSpec,
   type BuildSpecStore,
   type NativeBuildSpec,
@@ -85,10 +86,10 @@ function decode(row: SpecRow): NativeBuildSpec {
     NativeBuildSpec,
     "runPolicy"
   > & { runPolicy?: NativeBuildSpec["runPolicy"] };
-  const spec: NativeBuildSpec =
-    stored.runPolicy === undefined
-      ? { ...stored, runPolicy: "budgeted" }
-      : stored as NativeBuildSpec;
+  if (stored.runPolicy === undefined) {
+    return cloneBuildSpec(recoverLegacyBuildSpec(stored));
+  }
+  const spec = stored as NativeBuildSpec;
   validateBuildSpec(spec);
   return cloneBuildSpec(spec);
 }

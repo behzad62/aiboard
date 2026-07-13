@@ -26,7 +26,7 @@ export interface BuildSpecStore {
   close(): void;
 }
 
-export function validateBuildSpec(spec: NativeBuildSpec): void {
+function validateBuildSpecCore(spec: NativeBuildSpec): void {
   if (spec.version !== 1) throw new Error("Unsupported Build spec version.");
   if (
     !spec.runId ||
@@ -53,6 +53,39 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
     throw new Error("Build spec run policy is invalid.");
   }
   assertBudgetLimits(spec.budgetLimits);
+}
+
+export function assertBuildRunPolicyLimits(
+  runPolicy: NativeBuildRunPolicy,
+  budgetLimits: BudgetLimits
+): void {
+  if (runPolicy !== "budgeted") {
+    if (Object.keys(budgetLimits).length > 0) {
+      throw new Error(`${runPolicy} runs require empty budgetLimits.`);
+    }
+    return;
+  }
+  if (
+    (budgetLimits.maxEstimatedCostMicros ?? 0) <= 0 &&
+    (budgetLimits.maxActiveMs ?? 0) <= 0
+  ) {
+    throw new Error(
+      "Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs limit."
+    );
+  }
+}
+
+export function validateBuildSpec(spec: NativeBuildSpec): void {
+  validateBuildSpecCore(spec);
+  assertBuildRunPolicyLimits(spec.runPolicy, spec.budgetLimits);
+}
+
+export function recoverLegacyBuildSpec(
+  spec: Omit<NativeBuildSpec, "runPolicy">
+): NativeBuildSpec {
+  const recovered: NativeBuildSpec = { ...spec, runPolicy: "budgeted" };
+  validateBuildSpecCore(recovered);
+  return recovered;
 }
 
 export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {

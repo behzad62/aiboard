@@ -5,7 +5,66 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
+import {
+  validateBuildSpec,
+  type NativeBuildSpec,
+} from "../src/build-spec.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
+
+const validSpec: NativeBuildSpec = {
+  version: 1,
+  runId: "run_policy",
+  projectId: "project_policy",
+  objective: "Validate the native policy contract.",
+  architectRuntimeId: "chatgpt:gpt-5.5",
+  workerRuntimeIds: ["chatgpt:gpt-5.4"],
+  maxConcurrency: 1,
+  permissionProfile: "full",
+  runPolicy: "budgeted",
+  budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+  createdAt: "2026-07-12T00:00:00.000Z",
+  idempotencyKey: "build-spec:run_policy",
+};
+
+test("native Build specs enforce policy-specific limit shapes", () => {
+  assert.doesNotThrow(() => validateBuildSpec(validSpec));
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, runPolicy: "finish", budgetLimits: {} })
+  );
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, runPolicy: "plan_only", budgetLimits: {} })
+  );
+  assert.throws(
+    () =>
+      validateBuildSpec({
+        ...validSpec,
+        runPolicy: "finish",
+        budgetLimits: { maxActiveMs: 60_000 },
+      }),
+    /finish runs require empty budgetLimits/
+  );
+  assert.throws(
+    () =>
+      validateBuildSpec({
+        ...validSpec,
+        runPolicy: "plan_only",
+        budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+      }),
+    /plan_only runs require empty budgetLimits/
+  );
+  assert.throws(
+    () => validateBuildSpec({ ...validSpec, budgetLimits: {} }),
+    /Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs/
+  );
+  assert.throws(
+    () =>
+      validateBuildSpec({
+        ...validSpec,
+        budgetLimits: { maxModelCalls: 10, maxInputTokens: 1_000 },
+      }),
+    /Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs/
+  );
+});
 
 test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
@@ -20,7 +79,10 @@ test("native Build specs recover exactly and idempotently", () => {
     maxConcurrency: 2,
     permissionProfile: "full" as const,
     runPolicy: "budgeted" as const,
-    budgetLimits: { maxModelCalls: 100, maxToolCalls: 500 },
+    budgetLimits: {
+      maxEstimatedCostMicros: 1_000_000,
+      maxActiveMs: 60_000,
+    },
     createdAt: "2026-07-12T00:00:00.000Z",
     idempotencyKey: "build-spec:run_1",
   };
