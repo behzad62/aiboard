@@ -111,12 +111,32 @@ export function projectNativeModelUsage(
       );
     }
     const usage = usageByRuntime.get(runtime.runtimeId)!;
-    usage.calls += 1;
+    usage.calls = checkedAdd(usage.calls, 1, "calls", runtime.runtimeId);
     usage.roles.add(reservation.attribution.role);
-    usage.inputTokens += reservation.actual.inputTokens ?? 0;
-    usage.cachedInputTokens += reservation.actual.cachedInputTokens ?? 0;
-    usage.cacheWriteInputTokens += reservation.actual.cacheWriteInputTokens ?? 0;
-    usage.outputTokens += reservation.actual.outputTokens ?? 0;
+    usage.inputTokens = checkedAdd(
+      usage.inputTokens,
+      reservation.actual.inputTokens ?? 0,
+      "inputTokens",
+      runtime.runtimeId
+    );
+    usage.cachedInputTokens = checkedAdd(
+      usage.cachedInputTokens,
+      reservation.actual.cachedInputTokens ?? 0,
+      "cachedInputTokens",
+      runtime.runtimeId
+    );
+    usage.cacheWriteInputTokens = checkedAdd(
+      usage.cacheWriteInputTokens,
+      reservation.actual.cacheWriteInputTokens ?? 0,
+      "cacheWriteInputTokens",
+      runtime.runtimeId
+    );
+    usage.outputTokens = checkedAdd(
+      usage.outputTokens,
+      reservation.actual.outputTokens ?? 0,
+      "outputTokens",
+      runtime.runtimeId
+    );
     if (reservation.tokenSources) {
       usage.tokenSources.push(
         reservation.tokenSources.inputTokens,
@@ -157,7 +177,12 @@ export function projectNativeModelUsage(
         cachedInputTokens: usage.cachedInputTokens,
         cacheWriteInputTokens: usage.cacheWriteInputTokens,
         outputTokens: usage.outputTokens,
-        totalTokens: usage.inputTokens + usage.outputTokens,
+        totalTokens: checkedAdd(
+          usage.inputTokens,
+          usage.outputTokens,
+          "totalTokens",
+          runtime.runtimeId
+        ),
         ...cost,
         usageQuality: projectUsageQuality(usage),
         lastUsedAt: usage.lastUsedAt,
@@ -212,11 +237,16 @@ function projectCost(
   if (runtime.transport === "account-runner") {
     return { estimatedCostMicros: null, costBasis: "account_not_metered" };
   }
-  const cached = Math.min(usage.inputTokens, usage.cachedInputTokens);
-  const cacheWrite = Math.min(
-    usage.inputTokens - cached,
-    usage.cacheWriteInputTokens
-  );
+  if (
+    usage.cachedInputTokens > usage.inputTokens ||
+    usage.cacheWriteInputTokens > usage.inputTokens ||
+    BigInt(usage.cachedInputTokens) + BigInt(usage.cacheWriteInputTokens) >
+      BigInt(usage.inputTokens)
+  ) {
+    return { estimatedCostMicros: null, costBasis: "unknown" };
+  }
+  const cached = usage.cachedInputTokens;
+  const cacheWrite = usage.cacheWriteInputTokens;
   const uncached = usage.inputTokens - cached - cacheWrite;
   if (
     (usage.calls === 0 &&
@@ -231,13 +261,41 @@ function projectCost(
   ) {
     return { estimatedCostMicros: null, costBasis: "unknown" };
   }
+  const numerator =
+    BigInt(uncached) * BigInt(runtime.inputCostMicrosPerMillion ?? 0) +
+    BigInt(cached) * BigInt(runtime.cachedInputCostMicrosPerMillion ?? 0) +
+    BigInt(cacheWrite) *
+      BigInt(runtime.cacheWriteInputCostMicrosPerMillion ?? 0) +
+    BigInt(usage.outputTokens) *
+      BigInt(runtime.outputCostMicrosPerMillion ?? 0);
+  const estimatedCostMicros = (numerator + 500_000n) / 1_000_000n;
+  if (estimatedCostMicros > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `Estimated model cost for ${runtime.runtimeId} exceeds the safe integer range.`
+    );
+  }
   return {
-    estimatedCostMicros: Math.round((
-      uncached * (runtime.inputCostMicrosPerMillion ?? 0) +
-      cached * (runtime.cachedInputCostMicrosPerMillion ?? 0) +
-      cacheWrite * (runtime.cacheWriteInputCostMicrosPerMillion ?? 0) +
-      usage.outputTokens * (runtime.outputCostMicrosPerMillion ?? 0)
-    ) / 1_000_000),
+    estimatedCostMicros: Number(estimatedCostMicros),
     costBasis: "api_estimate",
   };
+}
+
+function checkedAdd(
+  left: number,
+  right: number,
+  dimension: string,
+  runtimeId: string
+): number {
+  if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right)) {
+    throw new Error(
+      `Model usage ${dimension} for ${runtimeId} exceeds the safe integer range.`
+    );
+  }
+  const sum = BigInt(left) + BigInt(right);
+  if (sum > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `Model usage ${dimension} for ${runtimeId} exceeds the safe integer range.`
+    );
+  }
+  return Number(sum);
 }

@@ -158,6 +158,16 @@ test("requires pricing for consumed token classes while treating explicit zero a
       { inputTokens: "reported", outputTokens: "reported" },
       "2026-07-13T12:00:00.000Z",
     ),
+    missing_cache_write_price: settled(
+      "missing_cache_write_price",
+      "missing-cache-write",
+      "provider-cache-write",
+      "model-cache-write",
+      "worker",
+      { inputTokens: 10, cacheWriteInputTokens: 10, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:00:00.000Z",
+    ),
   });
 
   const rows = projectNativeModelUsage({
@@ -167,6 +177,16 @@ test("requires pricing for consumed token classes while treating explicit zero a
         inputCostMicrosPerMillion: 1_000_000,
         outputCostMicrosPerMillion: 1_000_000,
       }),
+      runtime(
+        "missing-cache-write",
+        "provider-cache-write",
+        "model-cache-write",
+        ["worker"],
+        {
+          inputCostMicrosPerMillion: 1_000_000,
+          outputCostMicrosPerMillion: 1_000_000,
+        },
+      ),
       runtime("zero-price", "provider-zero", "model-zero", ["worker"], {
         inputCostMicrosPerMillion: 0,
         outputCostMicrosPerMillion: 0,
@@ -186,6 +206,11 @@ test("requires pricing for consumed token classes while treating explicit zero a
     })),
     [
       {
+        runtimeId: "missing-cache-write",
+        estimatedCostMicros: null,
+        costBasis: "unknown",
+      },
+      {
         runtimeId: "missing-cached",
         estimatedCostMicros: null,
         costBasis: "unknown",
@@ -202,6 +227,175 @@ test("requires pricing for consumed token classes while treating explicit zero a
       },
     ],
   );
+});
+
+test("preserves inconsistent cache counts and makes their API cost unknown", () => {
+  const budget = projection({
+    sum_exceeds_input: settled(
+      "sum_exceeds_input",
+      "sum-exceeds",
+      "provider-sum",
+      "model-sum",
+      "worker",
+      { inputTokens: 10, cachedInputTokens: 8, cacheWriteInputTokens: 5, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:10:00.000Z",
+    ),
+    class_exceeds_input: settled(
+      "class_exceeds_input",
+      "class-exceeds",
+      "provider-class",
+      "model-class",
+      "worker",
+      { inputTokens: 10, cachedInputTokens: 11, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:10:00.000Z",
+    ),
+  });
+  const pricing = {
+    inputCostMicrosPerMillion: 1_000_000,
+    cachedInputCostMicrosPerMillion: 500_000,
+    cacheWriteInputCostMicrosPerMillion: 2_000_000,
+    outputCostMicrosPerMillion: 1_000_000,
+  };
+
+  const rows = projectNativeModelUsage({
+    budget,
+    runtimes: [
+      runtime("sum-exceeds", "provider-sum", "model-sum", ["worker"], pricing),
+      runtime("class-exceeds", "provider-class", "model-class", ["worker"], pricing),
+    ],
+    providerHealth: [],
+  });
+
+  assert.deepEqual(rows.map((row) => ({
+    runtimeId: row.runtimeId,
+    inputTokens: row.inputTokens,
+    cachedInputTokens: row.cachedInputTokens,
+    cacheWriteInputTokens: row.cacheWriteInputTokens,
+    estimatedCostMicros: row.estimatedCostMicros,
+    costBasis: row.costBasis,
+  })), [
+    {
+      runtimeId: "class-exceeds",
+      inputTokens: 10,
+      cachedInputTokens: 11,
+      cacheWriteInputTokens: 0,
+      estimatedCostMicros: null,
+      costBasis: "unknown",
+    },
+    {
+      runtimeId: "sum-exceeds",
+      inputTokens: 10,
+      cachedInputTokens: 8,
+      cacheWriteInputTokens: 5,
+      estimatedCostMicros: null,
+      costBasis: "unknown",
+    },
+  ]);
+});
+
+test("rejects unsafe aggregate token dimensions and totals", () => {
+  const runtimeConfig = runtime("overflow", "provider-overflow", "model-overflow", ["worker"], {
+    inputCostMicrosPerMillion: 1,
+    outputCostMicrosPerMillion: 1,
+  });
+  assert.throws(
+    () => projectNativeModelUsage({
+      budget: projection({
+        max: settled(
+          "max",
+          "overflow",
+          "provider-overflow",
+          "model-overflow",
+          "worker",
+          { inputTokens: Number.MAX_SAFE_INTEGER },
+          { inputTokens: "reported", outputTokens: "reported" },
+          "2026-07-13T12:20:00.000Z",
+        ),
+        plus_one: settled(
+          "plus_one",
+          "overflow",
+          "provider-overflow",
+          "model-overflow",
+          "worker",
+          { inputTokens: 1 },
+          { inputTokens: "reported", outputTokens: "reported" },
+          "2026-07-13T12:20:01.000Z",
+        ),
+      }),
+      runtimes: [runtimeConfig],
+      providerHealth: [],
+    }),
+    /Model usage inputTokens for overflow exceeds the safe integer range/,
+  );
+  assert.throws(
+    () => projectNativeModelUsage({
+      budget: projection({
+        total: settled(
+          "total",
+          "overflow",
+          "provider-overflow",
+          "model-overflow",
+          "worker",
+          { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 },
+          { inputTokens: "reported", outputTokens: "reported" },
+          "2026-07-13T12:20:00.000Z",
+        ),
+      }),
+      runtimes: [runtimeConfig],
+      providerHealth: [],
+    }),
+    /Model usage totalTokens for overflow exceeds the safe integer range/,
+  );
+});
+
+test("rejects an estimated API cost outside the safe integer range", () => {
+  assert.throws(
+    () => projectNativeModelUsage({
+      budget: projection({
+        cost: settled(
+          "cost",
+          "cost-overflow",
+          "provider-cost",
+          "model-cost",
+          "worker",
+          { inputTokens: Number.MAX_SAFE_INTEGER },
+          { inputTokens: "reported", outputTokens: "reported" },
+          "2026-07-13T12:30:00.000Z",
+        ),
+      }),
+      runtimes: [runtime(
+        "cost-overflow",
+        "provider-cost",
+        "model-cost",
+        ["worker"],
+        {
+          inputCostMicrosPerMillion: Number.MAX_SAFE_INTEGER,
+          outputCostMicrosPerMillion: 0,
+        },
+      )],
+      providerHealth: [],
+    }),
+    /Estimated model cost for cost-overflow exceeds the safe integer range/,
+  );
+});
+
+test("provider cooldown expires exactly at its durable boundary", () => {
+  const input = {
+    budget: projection({}),
+    runtimes: [runtime("boundary", "provider-boundary", "model-boundary", ["worker"])],
+    providerHealth: [{
+      providerId: "provider-boundary",
+      status: "cooldown" as const,
+      consecutiveFailures: 1,
+      updatedAt: 1_000,
+      cooldownUntil: 61_000,
+    }],
+  };
+
+  assert.equal(projectNativeModelUsage({ ...input, now: 60_999 })[0].status, "cooldown");
+  assert.equal(projectNativeModelUsage({ ...input, now: 61_000 })[0].status, "unused");
 });
 
 test("account runtimes are not metered and fully estimated calls retain that provenance", () => {
