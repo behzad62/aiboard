@@ -379,12 +379,16 @@ const unpricedLegacyPreviewAggregate = renderStats("finish", {
 });
 assert.match(unpricedLegacyPreviewAggregate, /Cost Unknown/);
 assert.doesNotMatch(unpricedLegacyPreviewAggregate, /Cost \$0\.75/);
+assert.doesNotMatch(
+  unpricedLegacyPreviewAggregate,
+  /Cost unknown:|missing pricing/
+);
 
 const unknownLegacyAggregate = renderStats("finish", {
   usage: {
     ...usage,
     estimatedUsd: 0.75,
-    unknownPricedModelIds: [],
+    unknownPricedModelIds: ["runner-v2:aggregate"],
     models: [{
       ...usage.models[2],
       modelId: "runner-v2:aggregate",
@@ -399,5 +403,6 @@ const unknownLegacyAggregate = renderStats("finish", {
 });
 assert.match(unknownLegacyAggregate, /Cost Unknown/);
 assert.doesNotMatch(unknownLegacyAggregate, /Cost \$0\.75/);
+assert.doesNotMatch(unknownLegacyAggregate, /Cost unknown:|missing pricing/);
 
 console.log("PASS Build run stats render contract");

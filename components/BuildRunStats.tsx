@@ -294,11 +294,19 @@ function summarizeCost(input: {
         model.costBasis === "api_estimate"
       )
   );
-  const unknownRowIds = new Set(unknownRows.map((model) => model.modelId));
+  const warningUnknownRowIds = new Set(
+    unknownRows
+      .filter(
+        (model) =>
+          model.usageOrigin !== "legacy_preview" &&
+          model.usageOrigin !== "legacy_aggregate"
+      )
+      .map((model) => model.modelId)
+  );
   const unknownModelIds = hasNativeRows
-    ? [...unknownRowIds].sort()
+    ? [...warningUnknownRowIds].sort()
     : [...suppliedUnknownModelIds]
-        .filter((modelId) => unknownRowIds.has(modelId))
+        .filter((modelId) => warningUnknownRowIds.has(modelId))
         .sort();
   const hasKnown = knownRows.length > 0 || aggregateBackedLegacyEstimate;
   const knownUsd = aggregateBackedLegacyEstimate
