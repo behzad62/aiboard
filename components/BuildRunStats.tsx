@@ -170,20 +170,20 @@ export function BuildRunStats({
 
       {models.length > 0 ? (
         <div className="overflow-x-auto px-4 py-3">
-          <table className="w-full min-w-[68rem] text-sm">
+          <table className="w-full min-w-[90rem] table-fixed text-sm">
             <caption className="sr-only">Lifetime model usage</caption>
             <thead className="border-b text-xs text-muted-foreground">
               <tr>
-                <th className="pb-2 text-left font-medium">Model</th>
-                <th className="pb-2 text-left font-medium">Role</th>
-                <th className="pb-2 text-left font-medium">Status</th>
-                <th className="pb-2 text-left font-medium">Usage quality</th>
-                <th className="pb-2 text-right font-medium">Calls</th>
-                <th className="pb-2 text-right font-medium">Input</th>
-                <th className="pb-2 text-right font-medium">Output</th>
-                <th className="pb-2 text-right font-medium">Total</th>
-                <th className="pb-2 text-right font-medium">Cost</th>
-                <th className="pb-2 text-right font-medium">Last used</th>
+                <th className="w-[12rem] pr-4 pb-2 text-left font-medium">Model</th>
+                <th className="w-[8rem] px-3 pb-2 text-left font-medium">Role</th>
+                <th className="w-[11rem] px-3 pb-2 text-left font-medium">Status</th>
+                <th className="w-[10rem] px-3 pb-2 text-left font-medium">Usage quality</th>
+                <th className="w-[5rem] px-3 pb-2 text-right font-medium">Calls</th>
+                <th className="w-[7rem] px-3 pb-2 text-right font-medium">Input</th>
+                <th className="w-[7rem] px-3 pb-2 text-right font-medium">Output</th>
+                <th className="w-[7rem] px-3 pb-2 text-right font-medium">Total</th>
+                <th className="w-[10rem] px-3 pb-2 text-right font-medium">Cost</th>
+                <th className="w-[15rem] pl-4 pb-2 text-right font-medium">Last used</th>
               </tr>
             </thead>
             <tbody>
@@ -192,18 +192,18 @@ export function BuildRunStats({
                   key={`${model.runtimeId ?? model.modelId}:${index}`}
                   className="border-b last:border-0"
                 >
-                  <td className="py-2 pr-3">
+                  <td className="py-2 pr-4">
                     <div className="font-medium">{model.modelName}</div>
                     <div className="font-mono text-[0.65rem] text-muted-foreground">
                       {model.providerId}
                     </div>
                   </td>
-                  <td className="py-2 pr-3">
+                  <td className="px-3 py-2">
                     <span className="inline-flex rounded-md border bg-muted/40 px-2 py-0.5 text-xs">
                       {formatRoles(model)}
                     </span>
                   </td>
-                  <td className="py-2 pr-3">
+                  <td className="px-3 py-2">
                     <ModelStatus status={model.status} />
                     {model.failureSummary && (
                       <div className="mt-1 max-w-52 text-xs text-muted-foreground">
@@ -214,23 +214,23 @@ export function BuildRunStats({
                       </div>
                     )}
                   </td>
-                  <td className="py-2 pr-3 text-xs text-muted-foreground">
+                  <td className="px-3 py-2 text-xs text-muted-foreground">
                     {formatUsageQuality(model)}
                   </td>
-                  <td className="py-2 text-right tabular-nums">{model.calls}</td>
-                  <td className="py-2 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{model.calls}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                     {formatTokenCount(model.inputTokens)}
                   </td>
-                  <td className="py-2 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                     {formatTokenCount(model.outputTokens)}
                   </td>
-                  <td className="py-2 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                     {formatTokenCount(model.totalTokens)}
                   </td>
-                  <td className="py-2 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                     {formatModelCost(model)}
                   </td>
-                  <td className="whitespace-nowrap py-2 pl-3 text-right font-mono text-xs text-muted-foreground">
+                  <td className="whitespace-nowrap py-2 pl-4 text-right font-mono text-xs text-muted-foreground">
                     {formatLastUsed(model.lastUsedAt)}
                   </td>
                 </tr>

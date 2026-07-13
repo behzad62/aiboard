@@ -89,11 +89,11 @@ const usage: BuildUsageWindow = {
   ],
 };
 
-function renderStats(
+function renderStatsMarkup(
   policy: BuildRunPolicy,
   overrides: Record<string, unknown> = {}
 ): string {
-  const markup = renderToStaticMarkup(createElement(BuildRunStats, {
+  return renderToStaticMarkup(createElement(BuildRunStats, {
     status: "running",
     policy,
     budgetUsd: 5,
@@ -101,7 +101,13 @@ function renderStats(
     usage,
     ...overrides,
   } as never));
-  return markup
+}
+
+function renderStats(
+  policy: BuildRunPolicy,
+  overrides: Record<string, unknown> = {}
+): string {
+  return renderStatsMarkup(policy, overrides)
     .replace(/<[^>]+>/g, " ")
     .replace(/&middot;|&#xB7;/g, "·")
     .replace(/&nbsp;/g, " ")
@@ -110,6 +116,7 @@ function renderStats(
 }
 
 const finish = renderStats("finish");
+const finishMarkup = renderStatsMarkup("finish");
 assert.match(finish, /Finish job · running/);
 assert.match(finish, /Calls 4/);
 assert.match(finish, /Tokens 4\.5k 3\.6k in \/ 900 out/);
@@ -153,6 +160,31 @@ assert.match(handoff, /Finish job · Awaiting project handoff/);
 assert.doesNotMatch(handoff, /Failed|failed|stopped \(blocked\)/);
 
 assert.match(finish, /Model Role Status Usage quality Calls Input Output Total Cost Last used/);
+assert.match(
+  finishMarkup,
+  /<table class="w-full min-w-\[90rem\] table-fixed text-sm">/,
+  "the model-usage table should preserve readable column widths and scroll instead of compressing",
+);
+assert.match(
+  finishMarkup,
+  /<th class="w-\[7rem\] px-3 pb-2 text-right font-medium">Input<\/th>/,
+  "token columns should have explicit width and horizontal spacing",
+);
+assert.match(
+  finishMarkup,
+  /<th class="w-\[7rem\] px-3 pb-2 text-right font-medium">Output<\/th>/,
+  "adjacent token headings must not touch",
+);
+assert.match(
+  finishMarkup,
+  /<th class="w-\[10rem\] px-3 pb-2 text-right font-medium">Cost<\/th>/,
+  "cost should remain visually separated from token totals",
+);
+assert.match(
+  finishMarkup,
+  /<th class="w-\[15rem\] pl-4 pb-2 text-right font-medium">Last used<\/th>/,
+  "timestamps need a stable non-overlapping column",
+);
 assert.match(
   finish,
   /GPT-5\.4 chatgpt Architect Healthy Provider-reported 2 1\.2k 300 1\.5k Not metered 12 Jul 2026, 10:11 UTC/
