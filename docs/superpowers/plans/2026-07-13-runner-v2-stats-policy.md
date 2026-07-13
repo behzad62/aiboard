@@ -20,7 +20,7 @@
 - Provider-reported input/output token values win independently. Estimate only a missing dimension from the actual serialized request or returned response.
 - Account-backed ChatGPT usage is `Not metered`; absent API pricing is `Unknown`, never `$0.00`.
 - Existing unattributed runs may use deterministic presentation-only preview rows. New runs must use durable real attribution.
-- Use exact Node.js 24.18.0 for every Runner V2 test and typecheck.
+- Validate tests on Node.js 24.18.0. Treat it as the minimum supported runtime, not an exact-version lock.
 
 ## Task 1: Make the Native Run-Policy Contract Explicit
 
@@ -31,31 +31,37 @@
 - Modify: `lib/client/runner-v2.ts`
 - Modify: `runner-v2/src/build-spec.ts`
 - Modify: `runner-v2/src/control-server.ts`
+- Create: `runner-v2/src/node-version.ts`
+- Modify: `runner-v2/src/cli.ts`
+- Modify: `runner-v2/package.json`
 - Modify: `components/BuildRunPolicyControl.tsx`
 - Test: `scripts/test-native-build-policy.mts`
 - Test: `runner-v2/test/control-server.test.ts`
+- Test: `runner-v2/test/node-version.test.ts`
 - Modify: `package.json`
 
-- [ ] Add failing browser-side tests for `usesBuildBudgetControls()` and `effectiveNativeBuildPolicy()`:
+- [x] Add failing browser-side tests for `usesBuildBudgetControls()` and `effectiveNativeBuildPolicy()`:
   - `finish` returns `{ runPolicy: "finish", budgetLimits: {} }` even when saved budget values are non-zero.
   - `plan_only` returns `{ runPolicy: "plan_only", budgetLimits: {} }`.
   - `budgeted` converts USD to integer microdollars and minutes to milliseconds.
   - `budgeted` rejects a zero/zero window.
-- [ ] Run the focused test and confirm it fails:
+- [x] Add failing runtime tests proving Node 24.18.0 and newer versions are accepted while older/malformed versions are rejected.
+- [x] Run the focused test and confirm it fails:
   ```powershell
   $env:PATH='C:\Users\b_a_s\AppData\Local\AIBoardTools\node-v24.18.0-win-x64;'+$env:PATH
   npx tsx scripts/test-native-build-policy.mts
   ```
-- [ ] Implement the pure policy helpers and make `shouldStopForBuildGuardrail()` a no-op outside `budgeted`.
-- [ ] Hide the USD/time fields unless `value.runPolicy === "budgeted"`; change Finish copy to say it continues until completed, blocked, or explicitly stopped.
-- [ ] Add `runPolicy` to `CreateNativeBuildInput.build` and `NativeBuildSpec`; validate it in the control server.
-- [ ] Replace effort-derived `buildBudgets()` with `effectiveNativeBuildPolicy()` in `native-build-engine.ts`.
-- [ ] Add a control-server test proving Finish persists an empty budget limit object and Budgeted persists the converted limits.
-- [ ] Run focused policy/control tests, lint touched files, then commit:
+- [x] Implement the pure policy helpers and make `shouldStopForBuildGuardrail()` a no-op outside `budgeted`.
+- [x] Replace the exact Node equality check with a minimum-version preflight shared by Runner startup and browser health validation.
+- [x] Hide the USD/time fields unless `value.runPolicy === "budgeted"`; change Finish copy to say it continues until completed, blocked, or explicitly stopped.
+- [x] Add `runPolicy` to `CreateNativeBuildInput.build` and `NativeBuildSpec`; validate it in the control server.
+- [x] Replace effort-derived `buildBudgets()` with `effectiveNativeBuildPolicy()` in `native-build-engine.ts`.
+- [x] Add a control-server test proving Finish persists an empty budget limit object and Budgeted persists the converted limits.
+- [x] Run focused policy/control tests, lint touched files, then commit:
   ```powershell
   npx tsx scripts/test-native-build-policy.mts
   npx tsx --test runner-v2/test/control-server.test.ts
-  git add lib/client/native-build-policy.ts lib/orchestrator/build-policy.ts lib/client/native-build-engine.ts lib/client/runner-v2.ts runner-v2/src/build-spec.ts runner-v2/src/control-server.ts components/BuildRunPolicyControl.tsx scripts/test-native-build-policy.mts runner-v2/test/control-server.test.ts package.json
+  git add lib/client/native-build-policy.ts lib/orchestrator/build-policy.ts lib/client/native-build-engine.ts lib/client/runner-v2.ts runner-v2/src/build-spec.ts runner-v2/src/control-server.ts runner-v2/src/node-version.ts runner-v2/src/cli.ts runner-v2/package.json components/BuildRunPolicyControl.tsx scripts/test-native-build-policy.mts runner-v2/test/control-server.test.ts runner-v2/test/node-version.test.ts package.json README.md app/build-mode/page.tsx app/runner-guide/page.tsx components/RunnerSetup.tsx
   git commit -m "fix(build): make run policies explicit"
   ```
 
@@ -197,4 +203,3 @@
   - The recovered paintball run uses deterministic preview rows without mutating durable usage.
   - The page remains at mandatory user project handoff with both choices available.
 - [ ] Never select the project handoff choice. Leave that final decision to the user.
-

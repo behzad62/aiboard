@@ -45,14 +45,22 @@ const noStop = shouldStopForBuildGuardrail({
 check("both zero limits do not stop", noStop === null, noStop);
 
 const moneyStop = shouldStopForBuildGuardrail({
-  settings: normalizeBuildSettings({ buildBudgetUsd: 2.5, buildTimeLimitMinutes: 0 }),
+  settings: normalizeBuildSettings({
+    buildRunPolicy: "budgeted",
+    buildBudgetUsd: 2.5,
+    buildTimeLimitMinutes: 0,
+  }),
   spentUsd: 2.51,
   elapsedMs: 1,
 });
 check("USD budget stops at threshold", moneyStop === "budget", moneyStop);
 
 const timeStop = shouldStopForBuildGuardrail({
-  settings: normalizeBuildSettings({ buildBudgetUsd: 0, buildTimeLimitMinutes: 120 }),
+  settings: normalizeBuildSettings({
+    buildRunPolicy: "budgeted",
+    buildBudgetUsd: 0,
+    buildTimeLimitMinutes: 120,
+  }),
   spentUsd: 0,
   elapsedMs: 121 * 60 * 1000,
 });
@@ -73,8 +81,8 @@ const finishWithBudget = shouldStopForBuildGuardrail({
   elapsedMs: 100,
 });
 check(
-  "finish policy still respects explicit USD guardrail",
-  finishWithBudget === "budget",
+  "finish policy ignores saved USD and time limits",
+  finishWithBudget === null,
   finishWithBudget
 );
 

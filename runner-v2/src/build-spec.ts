@@ -2,6 +2,8 @@ import type { BudgetLimits } from "./budget-ledger.js";
 import type { PermissionProfile } from "./contracts.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 
+export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
+
 export interface NativeBuildSpec {
   version: 1;
   runId: string;
@@ -11,6 +13,7 @@ export interface NativeBuildSpec {
   workerRuntimeIds: string[];
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
+  runPolicy: NativeBuildRunPolicy;
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
@@ -45,6 +48,9 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
   }
   if (!(["guarded", "project", "full"] as unknown[]).includes(spec.permissionProfile)) {
     throw new Error("Build spec permission profile is invalid.");
+  }
+  if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(spec.runPolicy)) {
+    throw new Error("Build spec run policy is invalid.");
   }
   assertBudgetLimits(spec.budgetLimits);
 }

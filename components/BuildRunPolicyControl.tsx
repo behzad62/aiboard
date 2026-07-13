@@ -11,6 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { usesBuildBudgetControls } from "@/lib/client/native-build-policy";
 
 const POLICIES: Array<{
   value: BuildRunPolicy;
@@ -18,8 +19,7 @@ const POLICIES: Array<{
 }> = [
   {
     value: "finish",
-    description:
-      "Keep working until completed, stopped, blocked, or guardrails are reached.",
+    description: "Continues until completed, blocked, or explicitly stopped.",
   },
   {
     value: "budgeted",
@@ -165,41 +165,43 @@ export function BuildRunPolicyControl({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="build-budget-usd">USD budget</Label>
-          <Input
-            id="build-budget-usd"
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            disabled={disabled}
-            value={budgetUsdInput}
-            onChange={(event) => setBudgetUsdInput(event.target.value)}
-            onBlur={commitBudgetUsd}
-          />
-          <p className="text-xs text-muted-foreground">0 means unlimited.</p>
+      {usesBuildBudgetControls(value.runPolicy) && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="build-budget-usd">USD budget</Label>
+            <Input
+              id="build-budget-usd"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="0.01"
+              disabled={disabled}
+              value={budgetUsdInput}
+              onChange={(event) => setBudgetUsdInput(event.target.value)}
+              onBlur={commitBudgetUsd}
+            />
+            <p className="text-xs text-muted-foreground">0 means unlimited.</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="build-time-minutes">Time budget, minutes</Label>
+            <Input
+              id="build-time-minutes"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step="1"
+              disabled={disabled}
+              value={timeLimitMinutesInput}
+              onChange={(event) => setTimeLimitMinutesInput(event.target.value)}
+              onBlur={commitTimeLimitMinutes}
+            />
+            <p className="text-xs text-muted-foreground">
+              0 means unlimited. Default is {DEFAULT_BUILD_TIME_LIMIT_MINUTES}{" "}
+              minutes.
+            </p>
+          </div>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="build-time-minutes">Time budget, minutes</Label>
-          <Input
-            id="build-time-minutes"
-            type="number"
-            inputMode="numeric"
-            min={0}
-            step="1"
-            disabled={disabled}
-            value={timeLimitMinutesInput}
-            onChange={(event) => setTimeLimitMinutesInput(event.target.value)}
-            onBlur={commitTimeLimitMinutes}
-          />
-          <p className="text-xs text-muted-foreground">
-            0 means unlimited. Default is {DEFAULT_BUILD_TIME_LIMIT_MINUTES}{" "}
-            minutes.
-          </p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

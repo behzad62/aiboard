@@ -10,6 +10,10 @@ import {
   DEFAULT_RUNNER_V2_URL,
   getNativeRunnerHealth,
 } from "@/lib/client/runner-v2";
+import {
+  MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  supportsNativeRunnerNodeVersion,
+} from "@/lib/client/native-build-policy";
 
 export interface RunnerSelection {
   url: string;
@@ -62,6 +66,11 @@ export function RunnerSetup({
     setStatus({ state: "checking", message: "Checking Runner V2…" });
     try {
       const health = await getNativeRunnerHealth({ url, token });
+      if (!supportsNativeRunnerNodeVersion(health.nodeVersion)) {
+        throw new Error(
+          `Runner V2 requires Node.js ${MINIMUM_NATIVE_RUNNER_NODE_VERSION} or newer; connected runner uses ${health.nodeVersion}.`
+        );
+      }
       setStatus({
         state: "ok",
         message: `Connected to ${health.projectPath} · Node ${health.nodeVersion}`,
@@ -82,8 +91,8 @@ export function RunnerSetup({
       </Label>
       <p className="text-sm text-muted-foreground">
         The durable native agent kernel owns Git worktrees, tools, checkpoints,
-        provider failover, and recovery. It requires Git and exactly Node.js
-        24.18.0; missing prerequisites stop before any model call.
+        provider failover, and recovery. It requires Git and Node.js 24.18.0 or
+        newer; missing prerequisites stop before any model call.
       </p>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
         {"npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}

@@ -89,6 +89,7 @@ export function shouldStopForBuildGuardrail(input: {
   spentUsd: number;
   elapsedMs: number;
 }): BuildStopReason | null {
+  if (input.settings.runPolicy !== "budgeted") return null;
   if (
     !isBuildBudgetUnlimited(input.settings.budgetUsd) &&
     input.spentUsd >= input.settings.budgetUsd

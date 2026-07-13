@@ -236,7 +236,8 @@ test("control API stores provider credentials without returning secrets and prov
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             maxConcurrency: 2,
-            budgetLimits: { maxModelCalls: 50, maxToolCalls: 200 },
+            runPolicy: "finish",
+            budgetLimits: {},
           },
         }),
       })
@@ -252,22 +253,103 @@ test("control API stores provider credentials without returning secrets and prov
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
       maxConcurrency: 2,
       permissionProfile: "full",
-      budgetLimits: { maxModelCalls: 50, maxToolCalls: 200 },
+      runPolicy: "finish",
+      budgetLimits: {},
       createdAt: "2026-07-11T00:00:00.000Z",
       idempotencyKey: "build:create:run_native",
     });
+
+    const createBudgeted = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_budgeted",
+          projectPath: join(directory, "project"),
+          permissionProfile: "guarded",
+          idempotencyKey: "create:run_budgeted",
+          build: {
+            projectId: "project_native",
+            objective: "Build within the selected window.",
+            architectRuntimeId: "chatgpt:gpt-5.5",
+            workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            maxConcurrency: 1,
+            runPolicy: "budgeted",
+            budgetLimits: {
+              maxEstimatedCostMicros: 2_750_000,
+              maxActiveMs: 2_700_000,
+            },
+          },
+        }),
+      })
+    );
+    assert.equal(createBudgeted.status, 201);
+    assert.deepEqual(created[1], {
+      version: 1,
+      runId: "run_budgeted",
+      projectId: "project_native",
+      objective: "Build within the selected window.",
+      architectRuntimeId: "chatgpt:gpt-5.5",
+      workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      maxConcurrency: 1,
+      permissionProfile: "guarded",
+      runPolicy: "budgeted",
+      budgetLimits: {
+        maxEstimatedCostMicros: 2_750_000,
+        maxActiveMs: 2_700_000,
+      },
+      createdAt: "2026-07-11T00:00:00.000Z",
+      idempotencyKey: "build:create:run_budgeted",
+    });
+
+    const invalidPolicy = await fetch(
+      `${url}/v2/runs`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runId: "run_invalid_policy",
+          projectPath: join(directory, "project"),
+          permissionProfile: "guarded",
+          idempotencyKey: "create:run_invalid_policy",
+          build: {
+            projectId: "project_native",
+            objective: "Reject an invalid policy.",
+            architectRuntimeId: "chatgpt:gpt-5.5",
+            workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            maxConcurrency: 1,
+            runPolicy: "unbounded",
+            budgetLimits: {},
+          },
+        }),
+      })
+    );
+    assert.equal(invalidPolicy.status, 400);
+    assert.equal(created.length, 2);
+    assert.throws(
+      () => supervisor.getRun("run_invalid_policy"),
+      /Unknown run run_invalid_policy/
+    );
     const references = await json(await fetch(
       `${url}/v2/builds?projectId=project_native`,
       authorized()
     ));
     assert.deepEqual(references, {
-      builds: [{
-        runId: "run_native",
-        projectId: "project_native",
-        state: "created",
-        createdAt: "2026-07-11T00:00:00.000Z",
-        updatedAt: "2026-07-11T00:00:00.000Z",
-      }],
+      builds: [
+        {
+          runId: "run_native",
+          projectId: "project_native",
+          state: "created",
+          createdAt: "2026-07-11T00:00:00.000Z",
+          updatedAt: "2026-07-11T00:00:00.000Z",
+        },
+        {
+          runId: "run_budgeted",
+          projectId: "project_native",
+          state: "created",
+          createdAt: "2026-07-11T00:00:00.000Z",
+          updatedAt: "2026-07-11T00:00:00.000Z",
+        },
+      ],
     });
   } finally {
     await server.close();

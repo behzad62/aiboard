@@ -18,8 +18,13 @@ assert.equal(packageJson.scripts.prebuild, "npm run publish-downloads");
 assert.equal("copy-runner" in packageJson.scripts, false);
 assert.doesNotMatch(runnerSetup, /@\/lib\/client\/runner["']/);
 assert.match(runnerSetup, /Node\.js[\s\S]*24\.18\.0/);
+assert.match(runnerSetup, /24\.18\.0 or\s+newer/);
 assert.doesNotMatch(nativeBuildEngine, /stepNativeBuild/);
 assert.doesNotMatch(nativeBuildEngine, /\/build\/step/);
+assert.match(nativeBuildEngine, /effectiveNativeBuildPolicy/);
+assert.match(nativeBuildEngine, /supportsNativeRunnerNodeVersion/);
+assert.doesNotMatch(nativeBuildEngine, /function buildBudgets/);
+assert.doesNotMatch(nativeBuildEngine, /health\.nodeVersion !== "24\.18\.0"/);
 assert.match(
   discussionClient,
   /discussion\.mode === "build" &&\s*!discussion\.nativeBuildRunId &&\s*buildToolReviewReport/

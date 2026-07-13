@@ -24,6 +24,7 @@ const spec: NativeBuildSpec = {
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
   maxConcurrency: 1,
   permissionProfile: "full",
+  runPolicy: "budgeted",
   budgetLimits: { maxModelCalls: 20, maxToolCalls: 100 },
   createdAt: "2026-07-12T00:00:00.000Z",
   idempotencyKey: "build-spec:run_1",

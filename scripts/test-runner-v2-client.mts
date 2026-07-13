@@ -163,7 +163,11 @@ await createNativeBuild(connection, {
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
     maxConcurrency: 2,
-    budgetLimits: { maxModelCalls: 50, maxToolCalls: 500 },
+    runPolicy: "budgeted",
+    budgetLimits: {
+      maxEstimatedCostMicros: 1_000_000,
+      maxActiveMs: 1_800_000,
+    },
   },
 }, fetchImpl);
 await selectNativeProjectHandoff(
@@ -188,6 +192,11 @@ assert.equal(calls.every((call) => new Headers(call.init.headers).get("authoriza
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
 assert.equal(JSON.parse(String(calls[1].init.body)).configs[0].secret, "provider-secret");
 assert.equal(JSON.parse(String(calls[2].init.body)).build.maxConcurrency, 2);
+assert.equal(JSON.parse(String(calls[2].init.body)).build.runPolicy, "budgeted");
+assert.deepEqual(JSON.parse(String(calls[2].init.body)).build.budgetLimits, {
+  maxEstimatedCostMicros: 1_000_000,
+  maxActiveMs: 1_800_000,
+});
 assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
 assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
 assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");

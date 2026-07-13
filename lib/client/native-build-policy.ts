@@ -1,0 +1,49 @@
+import type { BuildRunPolicy } from "@/lib/db/schema";
+import type { NormalizedBuildSettings } from "@/lib/orchestrator/build-policy";
+import {
+  MINIMUM_NODE_VERSION,
+  supportsNodeVersion,
+} from "@/runner-v2/src/node-version";
+
+export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = MINIMUM_NODE_VERSION;
+
+export interface NativeBuildBudgetLimits {
+  maxEstimatedCostMicros?: number;
+  maxActiveMs?: number;
+}
+
+export interface EffectiveNativeBuildPolicy {
+  runPolicy: BuildRunPolicy;
+  budgetLimits: NativeBuildBudgetLimits;
+}
+
+export function usesBuildBudgetControls(policy: BuildRunPolicy): boolean {
+  return policy === "budgeted";
+}
+
+export function supportsNativeRunnerNodeVersion(version: string): boolean {
+  return supportsNodeVersion(version);
+}
+
+export function effectiveNativeBuildPolicy(
+  settings: NormalizedBuildSettings
+): EffectiveNativeBuildPolicy {
+  if (!usesBuildBudgetControls(settings.runPolicy)) {
+    return { runPolicy: settings.runPolicy, budgetLimits: {} };
+  }
+  const budgetLimits: NativeBuildBudgetLimits = {};
+  if (settings.budgetUsd > 0) {
+    budgetLimits.maxEstimatedCostMicros = Math.round(
+      settings.budgetUsd * 1_000_000
+    );
+  }
+  if (settings.timeLimitMinutes > 0) {
+    budgetLimits.maxActiveMs = Math.round(
+      settings.timeLimitMinutes * 60_000
+    );
+  }
+  if (Object.keys(budgetLimits).length === 0) {
+    throw new Error("Budgeted runs require a USD or time limit.");
+  }
+  return { runPolicy: settings.runPolicy, budgetLimits };
+}

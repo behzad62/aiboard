@@ -1,3 +1,5 @@
+import type { BuildRunPolicy } from "@/lib/db/schema";
+
 export const DEFAULT_RUNNER_V2_URL = "http://127.0.0.1:8787";
 
 export interface NativeRunnerConnection {
@@ -61,12 +63,9 @@ export interface CreateNativeBuildInput {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     maxConcurrency: number;
+    runPolicy: BuildRunPolicy;
     budgetLimits: {
-      maxModelCalls?: number;
-      maxToolCalls?: number;
-      maxInputTokens?: number;
-      maxOutputTokens?: number;
-      maxCostUsd?: number;
+      maxEstimatedCostMicros?: number;
       maxActiveMs?: number;
     };
   };

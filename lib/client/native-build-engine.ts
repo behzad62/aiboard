@@ -1,5 +1,6 @@
-import type { Discussion, EffortLevel } from "@/lib/db/schema";
+import type { Discussion } from "@/lib/db/schema";
 import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
+import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
@@ -32,6 +33,11 @@ import {
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
 } from "./discussion-live-state";
+import {
+  effectiveNativeBuildPolicy,
+  MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  supportsNativeRunnerNodeVersion,
+} from "./native-build-policy";
 
 type Emit = (event: OrchestratorEvent) => void;
 
@@ -80,8 +86,10 @@ export async function runNativeBuildDiscussion(
     message: "Connecting to the native Runner V2 agent kernel",
   });
   const health = await getNativeRunnerHealth(connection);
-  if (health.nodeVersion !== "24.18.0") {
-    throw new Error(`Runner V2 requires Node.js 24.18.0; connected runner uses ${health.nodeVersion}.`);
+  if (!supportsNativeRunnerNodeVersion(health.nodeVersion)) {
+    throw new Error(
+      `Runner V2 requires Node.js ${MINIMUM_NATIVE_RUNNER_NODE_VERSION} or newer; connected runner uses ${health.nodeVersion}.`
+    );
   }
   let runId = discussion.nativeBuildRunId
     ? await resolveNativeBuildRunId(
@@ -112,6 +120,9 @@ export async function runNativeBuildDiscussion(
   if (!runId) {
     runId = `native-${crypto.randomUUID()}`;
     const objective = buildObjective(discussion);
+    const nativePolicy = effectiveNativeBuildPolicy(
+      normalizeBuildSettings(discussion)
+    );
     await createNativeBuild(connection, {
       runId,
       projectPath: health.projectPath,
@@ -128,7 +139,7 @@ export async function runNativeBuildDiscussion(
         architectRuntimeId,
         workerRuntimeIds,
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
-        budgetLimits: buildBudgets(discussion.effort),
+        ...nativePolicy,
       },
     });
     updateDiscussion(discussion.id, {
@@ -488,12 +499,6 @@ function buildObjective(discussion: Discussion): string {
   return notes.length > 0
     ? `${discussion.topic.trim()}\n\nUser follow-up guidance:\n${notes.map((note) => `- ${note}`).join("\n")}`
     : discussion.topic.trim();
-}
-
-function buildBudgets(effort: EffortLevel) {
-  if (effort === "low") return { maxModelCalls: 40, maxToolCalls: 500 };
-  if (effort === "medium") return { maxModelCalls: 100, maxToolCalls: 1_500 };
-  return { maxModelCalls: 200, maxToolCalls: 3_000 };
 }
 
 function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void {

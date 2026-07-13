@@ -81,7 +81,14 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
 }
 
 function decode(row: SpecRow): NativeBuildSpec {
-  const spec = JSON.parse(row.spec_json) as NativeBuildSpec;
+  const stored = JSON.parse(row.spec_json) as Omit<
+    NativeBuildSpec,
+    "runPolicy"
+  > & { runPolicy?: NativeBuildSpec["runPolicy"] };
+  const spec: NativeBuildSpec =
+    stored.runPolicy === undefined
+      ? { ...stored, runPolicy: "budgeted" }
+      : stored as NativeBuildSpec;
   validateBuildSpec(spec);
   return cloneBuildSpec(spec);
 }

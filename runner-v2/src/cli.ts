@@ -9,12 +9,12 @@ import { checkGit } from "./git-preflight.js";
 import { NativeBuildFactory } from "./native-build-factory.js";
 import { NativeBuildManager } from "./native-build-manager.js";
 import { McpManager, type McpServerSpec } from "./mcp-tools.js";
+import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 
-const CERTIFIED_NODE_VERSION = "24.18.0";
 const PROTOCOL_VERSION = 2;
 
 interface CliOptions {
@@ -39,7 +39,7 @@ void main();
 async function main(): Promise<void> {
   let resources: RunnerResources | undefined;
   try {
-    assertCertifiedNodeVersion();
+    assertSupportedNodeVersion(process.versions.node);
     const options = parseArguments(process.argv.slice(2));
     await assertDirectory(options.projectPath, "project");
     if (isInside(options.projectPath, options.stateDirectory)) {
@@ -174,14 +174,6 @@ async function main(): Promise<void> {
     await closeResources(resources);
     writeStartupError(error);
     process.exitCode = 1;
-  }
-}
-
-function assertCertifiedNodeVersion(): void {
-  if (process.versions.node !== CERTIFIED_NODE_VERSION) {
-    throw new Error(
-      `node_version_mismatch: Runner V2 requires Node.js ${CERTIFIED_NODE_VERSION}; received ${process.versions.node}.`
-    );
   }
 }
 

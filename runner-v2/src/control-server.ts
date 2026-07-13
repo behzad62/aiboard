@@ -72,6 +72,7 @@ interface CreateRunBody {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     maxConcurrency: number;
+    runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
   };
 }
@@ -325,7 +326,6 @@ export class ControlServer {
           if (!this.buildProvisioner) {
             throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
           }
-          assertBuildBody(body.build);
           await this.buildProvisioner.create({
             version: 1,
             runId: body.runId,
@@ -335,6 +335,7 @@ export class ControlServer {
             workerRuntimeIds: [...body.build.workerRuntimeIds],
             maxConcurrency: body.build.maxConcurrency,
             permissionProfile: body.permissionProfile,
+            runPolicy: body.build.runPolicy,
             budgetLimits: { ...body.build.budgetLimits },
             createdAt: projection.createdAt,
             idempotencyKey: `build:${body.idempotencyKey}`,
@@ -839,6 +840,7 @@ function assertCreateRunBody(body: CreateRunBody): void {
   if (!(["guarded", "project", "full"] as unknown[]).includes(body.permissionProfile)) {
     invalidBody();
   }
+  if (body.build !== undefined) assertBuildBody(body.build);
 }
 
 function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
@@ -852,6 +854,9 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId))
   ) invalidBody();
   if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
+    invalidBody();
+  }
+  if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(body.runPolicy)) {
     invalidBody();
   }
   try {

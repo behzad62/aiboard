@@ -20,7 +20,7 @@ Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control tok
 
 ## Requirements
 
-- Node.js 24.18.0.
+- Node.js 24.18.0 or newer.
 - Git on `PATH` for Build mode. Runner V2 stops before any model call if Git is unavailable.
 - Provider credentials only for the models you choose.
 
