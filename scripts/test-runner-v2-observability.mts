@@ -7,6 +7,7 @@ import {
   runnerEvidenceDiagnosticDetail,
   runnerObservabilitySummary,
   runnerUserFacingObservability,
+  runnerVerificationTone,
 } from "../components/RunnerV2ObservabilityPanel";
 import { nativeBuildActivityEntries } from "../lib/client/native-build-activity";
 
@@ -226,6 +227,81 @@ assert.equal(view.verification.length, 1);
 assert.equal(view.verification.find((item) => item.category === "Tests")?.status, "passed");
 assert.deepEqual(view.problems, []);
 
+assert.equal(runnerVerificationTone([{ status: "failed" }, { status: "passed" }]), "error");
+assert.equal(runnerVerificationTone([{ status: "passed" }, { status: "recorded" }]), "success");
+assert.equal(runnerVerificationTone([{ status: "recorded" }]), "progress");
+assert.equal(runnerVerificationTone([]), "progress");
+
+const projectionWithoutHandoff = {
+  ...projection,
+  status: "running",
+  projectHandoff: undefined,
+};
+const problemKeys = (
+  snapshot: Parameters<typeof runnerUserFacingObservability>[0],
+  projected: Parameters<typeof runnerUserFacingObservability>[1],
+  now?: number
+) => runnerUserFacingObservability(snapshot, projected, now).problems.map((problem) => problem.key);
+
+assert.deepEqual(problemKeys(observability, {
+  ...projectionWithoutHandoff,
+  guidance: {
+    guide_1: { ...projection.guidance.guide_1, status: "open", answer: undefined },
+  },
+}), ["guidance:guide_1"]);
+assert.deepEqual(problemKeys(observability, projectionWithoutHandoff), []);
+assert.deepEqual(problemKeys(observability, {
+  ...projectionWithoutHandoff,
+  tasks: { T1: { ...projection.tasks.T1, status: "failed" } },
+}), ["task:T1"]);
+assert.deepEqual(problemKeys(observability, {
+  ...projectionWithoutHandoff,
+  tasks: { T1: { ...projection.tasks.T1, status: "rejected" } },
+}), ["task:T1"]);
+assert.deepEqual(problemKeys(observability, {
+  ...projectionWithoutHandoff,
+  tasks: {
+    T1: {
+      ...projection.tasks.T1,
+      status: "integration_resolution",
+      conflictPaths: ["components/panel.tsx"],
+    },
+  },
+}), ["conflict:T1"]);
+assert.deepEqual(problemKeys(observability, {
+  ...projectionWithoutHandoff,
+  status: "paused",
+}), ["run:paused"]);
+
+const cooldownNow = 2_000;
+const activeCooldownObservability = {
+  ...observability,
+  providers: [{
+    providerId: "chatgpt",
+    status: "cooldown",
+    consecutiveFailures: 1,
+    cooldownUntil: cooldownNow + 1,
+    updatedAt: cooldownNow - 100,
+  }],
+} as const;
+const activeCooldownView = runnerUserFacingObservability(
+  activeCooldownObservability,
+  projectionWithoutHandoff,
+  cooldownNow
+);
+assert.deepEqual(activeCooldownView.problems.map((problem) => problem.key), ["provider:chatgpt"]);
+assert.equal(
+  activeCooldownView.problems[0]?.detail,
+  "Wait until the provider is available, then resume the build if it is paused."
+);
+assert.deepEqual(problemKeys({
+  ...activeCooldownObservability,
+  providers: [{
+    ...activeCooldownObservability.providers[0],
+    cooldownUntil: cooldownNow,
+  }],
+}, projectionWithoutHandoff, cooldownNow), []);
+
 const currentWorkerView = runnerUserFacingObservability({
   ...observability,
   agents: [...observability.agents, {
@@ -369,18 +445,57 @@ for (const copy of [
 ]) {
   assert.ok(panelSource.includes(copy), `expected panel source to contain ${copy}`);
 }
-const diagnosticsIndex = panelSource.indexOf("Advanced diagnostics");
-assert.ok(diagnosticsIndex >= 0, "expected an Advanced diagnostics disclosure");
+const detailsMatch = panelSource.match(/<details[^>]*>/);
+assert.ok(detailsMatch?.index !== undefined, "expected an Advanced diagnostics disclosure");
+assert.ok(!/\bopen\b/.test(detailsMatch[0]), "expected Advanced diagnostics to be collapsed by default");
+const detailsOpenIndex = detailsMatch.index;
+const detailsCloseIndex = panelSource.indexOf("</details>", detailsOpenIndex);
+assert.ok(detailsCloseIndex > detailsOpenIndex, "expected the Advanced diagnostics closing tag");
+const diagnosticsSource = panelSource.slice(detailsOpenIndex, detailsCloseIndex);
+assert.ok(diagnosticsSource.includes("Advanced diagnostics"));
 for (const diagnosticCopy of [
+  "Diagnostic overview",
+  "Model calls",
+  "Tool calls",
+  "Tokens",
   "Search durable runner records",
+  "Download audit",
   "Agent sessions",
   "Recent tools",
+  "Evidence",
+  "Context resources",
+  "Provider health",
+  "Recent events",
+  "Architect guidance",
+  "Integration queue and Git",
+  "Background processes",
 ]) {
   assert.ok(
-    panelSource.indexOf(diagnosticCopy) > diagnosticsIndex,
-    `expected ${diagnosticCopy} after the Advanced diagnostics disclosure`
+    diagnosticsSource.includes(diagnosticCopy),
+    `expected ${diagnosticCopy} inside the Advanced diagnostics disclosure`
   );
 }
+for (const rawDiagnosticCopy of [
+  "Diagnostic overview",
+  "Agent sessions",
+  "Recent tools",
+  "Context resources",
+  "Provider health",
+  "Recent events",
+  "Architect guidance",
+  "Integration queue and Git",
+  "Background processes",
+]) {
+  assert.ok(
+    !panelSource.slice(0, detailsOpenIndex).includes(rawDiagnosticCopy),
+    `expected ${rawDiagnosticCopy} not to appear before Advanced diagnostics`
+  );
+}
+assert.match(
+  diagnosticsSource,
+  /<input[\s\S]*?type="search"[\s\S]*?aria-label="Search durable runner records"/,
+  "expected diagnostics search to have a stable accessible name"
+);
 
 const filtered = filterRunnerObservability({
   agents: [],

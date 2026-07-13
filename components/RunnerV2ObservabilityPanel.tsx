@@ -112,6 +112,14 @@ export function runnerBuildControlSummary(projection: NativeBuildProjection | nu
 
 type UserFacingVerificationStatus = "passed" | "failed" | "recorded";
 
+export function runnerVerificationTone(
+  verification: ReadonlyArray<{ status: UserFacingVerificationStatus }>
+): "error" | "success" | "progress" {
+  if (verification.some((item) => item.status === "failed")) return "error";
+  if (verification.some((item) => item.status === "passed")) return "success";
+  return "progress";
+}
+
 type UserFacingProblem = {
   key: string;
   title: string;
@@ -233,7 +241,8 @@ function providerName(providerId: string): string {
 
 export function runnerUserFacingObservability(
   snapshot: NativeBuildObservability,
-  projection: NativeBuildProjection | null
+  projection: NativeBuildProjection | null,
+  now = Date.now()
 ): {
   lifecycle: string;
   progress: {
@@ -287,11 +296,14 @@ export function runnerUserFacingObservability(
       .filter((workerId): workerId is string => Boolean(workerId))
   );
   for (const provider of snapshot.providers) {
-    if (provider.status !== "cooldown") continue;
+    if (
+      provider.status !== "cooldown" ||
+      (provider.cooldownUntil !== undefined && provider.cooldownUntil <= now)
+    ) continue;
     problems.push({
       key: `provider:${provider.providerId}`,
       title: `${providerName(provider.providerId)} is temporarily unavailable`,
-      detail: "The runner will retry automatically when the provider cooldown ends.",
+      detail: "Wait until the provider is available, then resume the build if it is paused.",
     });
   }
   for (const agent of snapshot.agents) {
@@ -445,13 +457,7 @@ export function RunnerV2ObservabilityPanel({
         <UserSection
           title="Verification"
           icon={<ShieldCheck className="h-4 w-4" />}
-          accent={
-            view.verification.some((item) => item.status === "failed")
-              ? "error"
-              : view.verification.length > 0
-                ? "success"
-                : "progress"
-          }
+          accent={runnerVerificationTone(view.verification)}
         >
           {view.verification.length > 0 ? (
             <ul className="space-y-3">
@@ -547,6 +553,7 @@ export function RunnerV2ObservabilityPanel({
           <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="search"
+            aria-label="Search durable runner records"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search durable runner records"
