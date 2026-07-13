@@ -283,7 +283,8 @@ function projectCost(
       BigInt(runtime.cacheWriteInputCostMicrosPerMillion ?? 0) +
     BigInt(usage.outputTokens) *
       BigInt(runtime.outputCostMicrosPerMillion ?? 0);
-  const estimatedCostMicros = (numerator + 500_000n) / 1_000_000n;
+  const estimatedCostMicros =
+    (numerator + BigInt(500_000)) / BigInt(1_000_000);
   if (estimatedCostMicros > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error(
       `Estimated model cost for ${runtime.runtimeId} exceeds the safe integer range.`

@@ -47,15 +47,24 @@ export type BuildStopReason =
   | "completed";
 
 export interface BuildUsageModelTotal {
+  runtimeId?: string;
   modelId: string;
   modelName: string;
   providerId: string;
+  roles?: Array<"architect" | "worker" | "subagent">;
+  status?: "healthy" | "cooldown" | "unavailable" | "unused";
   calls: number;
   inputTokens: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
   outputTokens: number;
   totalTokens: number;
   estimatedUsd: number | null;
   priced: boolean;
+  usageQuality?: "reported" | "mixed" | "estimated" | "none";
+  costBasis?: "api_estimate" | "account_not_metered" | "unknown";
+  lastUsedAt?: string | null;
+  usageOrigin?: "native" | "legacy_preview" | "legacy_aggregate";
 }
 
 export interface BuildUsageWindow {

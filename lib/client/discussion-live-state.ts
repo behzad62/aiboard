@@ -9,6 +9,7 @@ import type {
   NativeBuildUsageProjection,
   NativeProjectHandoffChoice,
 } from "@/lib/client/runner-v2";
+import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
 
 export function applyDiscussionLiveStatus(
   discussion: Discussion,
@@ -118,22 +119,15 @@ export function nativeBuildUsageWindow(
 ): BuildUsageWindow {
   const usage = projection.effective;
   const estimatedUsd = usage.estimatedCostMicros / 1_000_000;
-  const model = {
-    modelId: "runner-v2:aggregate",
-    modelName: "Runner V2 models",
-    providerId: "runner-v2",
-    calls: usage.modelCalls,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    totalTokens: usage.inputTokens + usage.outputTokens,
-    estimatedUsd,
-    priced: true,
-  };
+  const models = mapNativeBuildUsageModels(projection);
   return {
     startedAt,
     elapsedMs: usage.activeMs,
     estimatedUsd,
-    unknownPricedModelIds: [],
-    models: usage.modelCalls > 0 ? [model] : [],
+    unknownPricedModelIds: models
+      .filter((model) => model.usageOrigin === "native" && !model.priced)
+      .map((model) => model.modelId)
+      .sort(),
+    models,
   };
 }

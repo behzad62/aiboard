@@ -164,7 +164,42 @@ export interface NativeBuildUsageProjection {
     activeMs: number;
     artifactBytes: number;
   };
+  models?: NativeModelUsageProjection[];
   lastSequence: number;
+}
+
+export type NativeModelUsageRole = "architect" | "worker" | "subagent";
+export type NativeModelUsageStatus =
+  | "healthy"
+  | "cooldown"
+  | "unavailable"
+  | "unused";
+export type NativeModelCostBasis =
+  | "api_estimate"
+  | "account_not_metered"
+  | "unknown";
+export type NativeModelUsageQuality =
+  | "reported"
+  | "mixed"
+  | "estimated"
+  | "none";
+
+export interface NativeModelUsageProjection {
+  runtimeId: string;
+  providerId: string;
+  modelId: string;
+  roles: NativeModelUsageRole[];
+  status: NativeModelUsageStatus;
+  calls: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostMicros: number | null;
+  costBasis: NativeModelCostBasis;
+  usageQuality: NativeModelUsageQuality;
+  lastUsedAt: string | null;
 }
 
 export interface NativeBuildObservability {
