@@ -274,7 +274,7 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
   }
 });
 
-test("an empty durable Architect handoff offers an explicit retry of the current runtime", () => {
+test("a durable Architect handoff always offers an explicit retry of the current runtime", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-empty-handoff-"));
   const database = join(root, "scheduler.sqlite");
   const store = new SqliteSchedulerStore(database);
@@ -304,13 +304,14 @@ test("an empty durable Architect handoff offers an explicit retry of the current
       payload: {
         reason: "usage limit reached",
         requiredCapabilities: ["code"],
-        candidateRuntimeIds: [],
+        candidateRuntimeIds: ["chatgpt:gpt-5.4"],
       },
     });
 
     const projection = rebuildSchedulerProjection(store.readRun("run_1"));
     assert.deepEqual(projection.runtime.architect.handoff?.candidateRuntimeIds, [
       "chatgpt:gpt-5.5",
+      "chatgpt:gpt-5.4",
     ]);
   } finally {
     store.close();

@@ -560,11 +560,12 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may request Architect handoff.");
       }
       const offeredRuntimeIds = stringArray(event.payload, "candidateRuntimeIds");
-      const candidateRuntimeIds = offeredRuntimeIds.length > 0
-        ? offeredRuntimeIds
-        : next.runtime.architect.runtimeId
+      const candidateRuntimeIds = Array.from(new Set([
+        ...(next.runtime.architect.runtimeId
           ? [next.runtime.architect.runtimeId]
-          : [];
+          : []),
+        ...offeredRuntimeIds,
+      ]));
       next.runtime.architect = {
         ...next.runtime.architect,
         handoff: {

@@ -124,6 +124,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     let projection = runtime.projection();
     assert.equal(projection.planRevision, 0);
     assert.deepEqual(projection.runtime.architect.handoff?.candidateRuntimeIds, [
+      "primary:architect",
       "fallback:architect",
     ]);
     assert.equal(fallback.requests.length, 0, "Architect replacement is never automatic");
@@ -188,10 +189,9 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     });
     assert.equal((await noFallbackRuntime.step()).status, "paused");
     const noFallbackProjection = noFallbackRuntime.projection();
-    assert.equal(noFallbackProjection.runtime.architect.handoff, undefined);
-    assert.equal(
-      scheduler.readRun("run_no_fallback").at(-1)?.payload.reason,
-      "all_architect_runtimes_unavailable"
+    assert.deepEqual(
+      noFallbackProjection.runtime.architect.handoff?.candidateRuntimeIds,
+      ["primary:architect"]
     );
   } finally {
     sessions.close();

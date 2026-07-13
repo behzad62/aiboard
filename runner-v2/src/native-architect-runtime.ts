@@ -308,21 +308,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       requiredCapabilities,
       new Set([failedRuntimeId])
     );
-    if (handoff.candidates.length === 0) {
-      this.options.schedulerStore.append({
-        runId,
-        type: "run.paused",
-        occurredAt: this.clock(),
-        actor: { role: "runner", id: "runtime-router" },
-        idempotencyKey: `architect-unavailable:${this.options.schedulerStore.readRun(runId).length + 1}`,
-        payload: {
-          reason: "all_architect_runtimes_unavailable",
-          providerFailure: reason,
-          requiredCapabilities,
-        },
-      });
-      return;
-    }
+    const candidateRuntimeIds = [
+      failedRuntimeId,
+      ...handoff.candidates.map((candidate) => candidate.runtimeId),
+    ];
     this.options.schedulerStore.append({
       runId,
       type: "architect.handoff_required",
@@ -332,7 +321,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       payload: {
         reason,
         requiredCapabilities,
-        candidateRuntimeIds: handoff.candidates.map((candidate) => candidate.runtimeId),
+        candidateRuntimeIds,
       },
     });
   }
