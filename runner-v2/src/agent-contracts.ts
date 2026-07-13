@@ -89,6 +89,7 @@ export type AgentLifecycleSignal =
       type: "architect_action";
       action:
         | "plan_created"
+        | "plan_reconciled"
         | "task_revised"
         | "guidance_answered"
         | "review_decided"

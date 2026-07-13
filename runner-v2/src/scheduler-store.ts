@@ -1,4 +1,8 @@
-import type { BuildTask } from "./task-contracts.js";
+import type {
+  BuildTask,
+  PlanReconciliation,
+  PlanTaskUpdate,
+} from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 
@@ -17,6 +21,7 @@ export type SchedulerEventType =
   | "run.initialized"
   | "run.policy_configured"
   | "plan.created"
+  | "plan.reconciled"
   | "task.revised"
   | "task.transitioned"
   | "guidance.requested"
@@ -240,6 +245,13 @@ export function reduceSchedulerEvent(
       next.tasks = Object.fromEntries(tasks.map((task) => [task.id, { ...task }]));
       break;
     }
+    case "plan.reconciled": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may reconcile a plan.");
+      }
+      applyPlanReconciliation(next, parsePlanReconciliation(event.payload));
+      break;
+    }
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
@@ -432,6 +444,12 @@ export function reduceSchedulerEvent(
         summary: requiredString(event.payload, "summary"),
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
       };
+      if (event.payload.planReconciliation !== undefined) {
+        applyPlanReconciliation(
+          next,
+          parsePlanReconciliation(event.payload.planReconciliation)
+        );
+      }
       break;
     }
     case "run.paused":
@@ -592,6 +610,148 @@ export function reduceSchedulerEvent(
     }
   }
   return next;
+}
+
+function parsePlanReconciliation(value: unknown): PlanReconciliation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Missing plan reconciliation.");
+  }
+  const payload = value as Record<string, unknown>;
+  const updates = payload.taskUpdates;
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error("Plan reconciliation requires taskUpdates.");
+  }
+  return {
+    revision: requiredNumber(payload, "revision"),
+    summary: requiredString(payload, "summary"),
+    taskUpdates: updates.map(parsePlanTaskUpdate),
+  };
+}
+
+function parsePlanTaskUpdate(value: unknown, index: number): PlanTaskUpdate {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Plan task update ${index} is invalid.`);
+  }
+  const payload = value as Record<string, unknown>;
+  const action = requiredString(payload, "action");
+  if (action !== "cancel" && action !== "revise") {
+    throw new Error(`Plan task update ${index} action ${action} is invalid.`);
+  }
+  const optionalStrings = (key: "dependencies" | "requiredCapabilities") =>
+    payload[key] === undefined ? undefined : stringArray(payload, key);
+  const objective = payload.objective;
+  if (objective !== undefined && (typeof objective !== "string" || !objective.trim())) {
+    throw new Error(`Plan task update ${index} objective is invalid.`);
+  }
+  return {
+    taskId: requiredString(payload, "taskId"),
+    action,
+    ...(typeof objective === "string" ? { objective } : {}),
+    ...(optionalStrings("dependencies") !== undefined
+      ? { dependencies: optionalStrings("dependencies") }
+      : {}),
+    ...(optionalStrings("requiredCapabilities") !== undefined
+      ? { requiredCapabilities: optionalStrings("requiredCapabilities") }
+      : {}),
+  };
+}
+
+function applyPlanReconciliation(
+  projection: SchedulerProjection,
+  reconciliation: PlanReconciliation
+): void {
+  if (reconciliation.revision !== projection.planRevision + 1) {
+    throw new Error(
+      `Plan reconciliation must advance plan revision ${projection.planRevision} by one.`
+    );
+  }
+  const duplicate = reconciliation.taskUpdates.find(
+    (update, index, updates) =>
+      updates.findIndex((candidate) => candidate.taskId === update.taskId) !== index
+  );
+  if (duplicate) {
+    throw new Error(`Plan reconciliation repeats task ${duplicate.taskId}.`);
+  }
+
+  const candidateTasks = Object.fromEntries(
+    Object.entries(projection.tasks).map(([taskId, task]) => [taskId, { ...task }])
+  );
+  for (const update of reconciliation.taskUpdates) {
+    const task = candidateTasks[update.taskId];
+    if (!task) throw new Error(`Unknown task ${update.taskId}.`);
+    if (
+      task.status !== "planned" &&
+      task.status !== "failed" &&
+      task.status !== "rejected"
+    ) {
+      throw new Error(
+        `Task ${update.taskId} must be planned, failed, or rejected before reconciliation.`
+      );
+    }
+    if (update.action === "cancel") {
+      candidateTasks[update.taskId] = applyTaskTransition(task, "cancelled", {
+        assignedWorkerId: undefined,
+        changeSetId: undefined,
+        failureReason: undefined,
+      });
+      continue;
+    }
+    if (
+      update.objective === undefined &&
+      update.dependencies === undefined &&
+      update.requiredCapabilities === undefined
+    ) {
+      throw new Error(`Task ${update.taskId} revision has no changes.`);
+    }
+    const patch = {
+      ...(update.objective !== undefined ? { objective: update.objective } : {}),
+      ...(update.dependencies !== undefined
+        ? { dependencies: [...update.dependencies] }
+        : {}),
+      ...(update.requiredCapabilities !== undefined
+        ? { requiredCapabilities: [...update.requiredCapabilities] }
+        : {}),
+    };
+    const grantsFreshAttempt =
+      task.status === "failed" ||
+      task.status === "rejected" ||
+      (task.status === "planned" && task.attempt > 0);
+    candidateTasks[update.taskId] = grantsFreshAttempt
+      ? {
+          ...task,
+          ...patch,
+          status: "planned",
+          attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          failureReason: undefined,
+        }
+      : { ...task, ...patch };
+  }
+
+  const tasks = Object.values(candidateTasks);
+  const validation = validateTaskGraph(tasks);
+  if (!validation.valid) {
+    throw new Error(
+      `Plan reconciliation has mechanical issues: ${validation.issues
+        .map((issue) => issue.code)
+        .join(", ")}.`
+    );
+  }
+  for (const task of tasks) {
+    if (task.status === "cancelled") continue;
+    const cancelledDependency = task.dependencies.find(
+      (dependency) => candidateTasks[dependency]?.status === "cancelled"
+    );
+    if (cancelledDependency) {
+      throw new Error(
+        `Task ${task.id} depends on cancelled task ${cancelledDependency}.`
+      );
+    }
+  }
+
+  projection.tasks = candidateTasks;
+  projection.planRevision = reconciliation.revision;
 }
 
 function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {

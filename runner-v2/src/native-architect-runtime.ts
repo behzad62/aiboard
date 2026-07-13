@@ -133,6 +133,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
           "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
+          "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
         ].join("\n"),
       },
     ];

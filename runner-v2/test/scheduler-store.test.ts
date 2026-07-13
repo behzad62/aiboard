@@ -10,6 +10,8 @@ import {
   type NewSchedulerEvent,
 } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { readyTaskIds } from "../src/task-graph.js";
+import type { BuildTask } from "../src/task-contracts.js";
 
 test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-policy-forgery-"));
@@ -319,6 +321,69 @@ test("a durable Architect handoff always offers an explicit retry of the current
   }
 });
 
+test("Architect plan reconciliation atomically cancels stale work and rewires dependents", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-reconcile-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+  const initial = event("run_reconcile", "plan.created", "plan:1", {
+    revision: 1,
+    tasks: [
+      task("T1", "integrated", []),
+      task("T2", "planned", ["T1"]),
+      task("T3", "planned", ["T2"]),
+    ],
+  });
+  const reconciled = event("run_reconcile", "plan.reconciled", "plan:2", {
+    revision: 2,
+    summary: "T1 evidence proves T2 is already satisfied.",
+    taskUpdates: [
+      { taskId: "T2", action: "cancel" },
+      { taskId: "T3", action: "revise", dependencies: ["T1"] },
+    ],
+  });
+
+  store.append(initial);
+  store.append(reconciled);
+  const projection = rebuildSchedulerProjection(store.readRun("run_reconcile"));
+  assert.equal(projection.planRevision, 2);
+  assert.equal(projection.tasks.T2.status, "cancelled");
+  assert.deepEqual(projection.tasks.T3.dependencies, ["T1"]);
+  assert.deepEqual(readyTaskIds(Object.values(projection.tasks)), ["T3"]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan reconciliation rejects live dependencies on cancelled tasks", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-reconcile-invalid-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+  const initial = event("run_invalid_reconcile", "plan.created", "plan:1", {
+    revision: 1,
+    tasks: [
+      task("T1", "integrated", []),
+      task("T2", "planned", ["T1"]),
+      task("T3", "planned", ["T2"]),
+    ],
+  });
+  const invalid = event("run_invalid_reconcile", "plan.reconciled", "plan:2", {
+    revision: 2,
+    summary: "Cancel T2 without repairing its dependent.",
+    taskUpdates: [{ taskId: "T2", action: "cancel" }],
+  });
+
+  store.append(initial);
+  assert.throws(
+    () => store.append(invalid),
+    /depends on cancelled task T2/i
+  );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function event(
   runId: string,
   type: NewSchedulerEvent["type"],
@@ -331,7 +396,7 @@ function event(
     occurredAt: "2026-07-12T00:00:00.000Z",
     actor: {
       role:
-        type === "plan.created"
+        type === "plan.created" || type === "plan.reconciled"
           ? "architect"
           : type === "guidance.requested"
             ? "worker"
@@ -340,6 +405,21 @@ function event(
     },
     idempotencyKey,
     payload,
+  };
+}
+
+function task(
+  id: string,
+  status: BuildTask["status"],
+  dependencies: string[]
+): BuildTask {
+  return {
+    id,
+    objective: `Objective ${id}`,
+    dependencies,
+    status,
+    requiredCapabilities: ["code"],
+    attempt: 0,
   };
 }
 

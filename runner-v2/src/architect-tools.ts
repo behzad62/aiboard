@@ -11,7 +11,11 @@ import {
   type SchedulerStore,
 } from "./scheduler-store.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
-import type { BuildTask } from "./task-contracts.js";
+import type {
+  BuildTask,
+  PlanReconciliation,
+  PlanTaskUpdate,
+} from "./task-contracts.js";
 import { validateTaskGraph } from "./task-graph.js";
 
 export interface ArchitectToolsOptions {
@@ -52,6 +56,7 @@ interface ReviewTaskInput {
   decision: "approved" | "rejected";
   summary: string;
   evidenceArtifactHashes: string[];
+  planReconciliation?: PlanReconciliation;
 }
 
 interface TaskIdInput { taskId: string }
@@ -73,10 +78,39 @@ export function createArchitectTools(
   }
   return [
     ...core,
+    reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
+}
+
+function reconcilePlanTool(
+  store: SchedulerStore,
+  clock: () => string
+): NativeTool<PlanReconciliation> {
+  return lifecycleTool({
+    name: "reconcile_plan",
+    description: "Atomically cancel or revise stale pending tasks and rewire their dependencies when current evidence invalidates the existing plan",
+    schema: planReconciliationSchema(),
+    validate: validatePlanReconciliation,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "plan.reconciled",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `plan-reconciliation:${input.revision}:${shortHash(input.summary)}`,
+        payload: { ...input },
+      }, {
+        type: "architect_action",
+        action: "plan_reconciled",
+        referenceId: String(input.revision),
+      });
+    },
+  });
 }
 
 function planTasksTool(
@@ -236,6 +270,7 @@ function reviewTaskTool(
         type: "array",
         items: { type: "string", pattern: "^[a-f0-9]{64}$" },
       },
+      planReconciliation: planReconciliationSchema(),
     }, ["taskId", "decision", "summary", "evidenceArtifactHashes"]),
     validate: validateReview,
     execute: async (input, context) => {
@@ -257,6 +292,9 @@ function reviewTaskTool(
           decision: input.decision,
           summary: input.summary,
           evidenceArtifactHashes: input.evidenceArtifactHashes,
+          ...(input.planReconciliation
+            ? { planReconciliation: input.planReconciliation }
+            : {}),
         },
       }, {
         type: "architect_action",
@@ -398,13 +436,65 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
     if (!nonEmpty(value.taskId) || (value.decision !== "approved" && value.decision !== "rejected") || !nonEmpty(value.summary)) return null;
     const hashes = stringList(value.evidenceArtifactHashes);
     if (!hashes || hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) return null;
+    const planReconciliation = value.planReconciliation === undefined
+      ? undefined
+      : parsePlanReconciliation(value.planReconciliation);
+    if (value.planReconciliation !== undefined && !planReconciliation) return null;
     return {
       taskId: value.taskId,
       decision: value.decision,
       summary: value.summary,
       evidenceArtifactHashes: hashes,
+      ...(planReconciliation ? { planReconciliation } : {}),
     };
   }, "taskId, decision, summary, and valid evidenceArtifactHashes are required");
+}
+
+function validatePlanReconciliation(input: unknown): ValidationResult<PlanReconciliation> {
+  return validateObject(
+    input,
+    parsePlanReconciliation,
+    "revision, summary, and valid taskUpdates are required"
+  );
+}
+
+function parsePlanReconciliation(
+  input: Record<string, unknown> | unknown
+): PlanReconciliation | null {
+  if (!isRecord(input)) return null;
+  if (
+    !positiveInteger(input.revision) ||
+    !nonEmpty(input.summary) ||
+    !Array.isArray(input.taskUpdates) ||
+    input.taskUpdates.length === 0
+  ) return null;
+  const taskUpdates: PlanTaskUpdate[] = [];
+  for (const candidate of input.taskUpdates) {
+    if (!isRecord(candidate) || !nonEmpty(candidate.taskId)) return null;
+    if (candidate.action !== "cancel" && candidate.action !== "revise") return null;
+    const objective = candidate.objective === undefined
+      ? undefined
+      : nonEmpty(candidate.objective) ? candidate.objective : null;
+    const dependencies = candidate.dependencies === undefined
+      ? undefined
+      : stringList(candidate.dependencies);
+    const capabilities = candidate.requiredCapabilities === undefined
+      ? undefined
+      : stringList(candidate.requiredCapabilities);
+    if (objective === null || dependencies === null || capabilities === null) return null;
+    taskUpdates.push({
+      taskId: candidate.taskId,
+      action: candidate.action,
+      ...(objective !== undefined ? { objective } : {}),
+      ...(dependencies !== undefined ? { dependencies } : {}),
+      ...(capabilities !== undefined ? { requiredCapabilities: capabilities } : {}),
+    });
+  }
+  return {
+    revision: input.revision,
+    summary: input.summary,
+    taskUpdates,
+  };
 }
 
 function validateObject<T>(
@@ -463,6 +553,24 @@ function taskSchema(): Record<string, unknown> {
     required: ["id", "objective", "dependencies", "requiredCapabilities"],
     additionalProperties: false,
   };
+}
+
+function planReconciliationSchema(): Record<string, unknown> {
+  return objectSchema({
+    revision: { type: "integer", minimum: 1 },
+    summary: { type: "string", minLength: 1 },
+    taskUpdates: {
+      type: "array",
+      minItems: 1,
+      items: objectSchema({
+        taskId: { type: "string", minLength: 1 },
+        action: { type: "string", enum: ["cancel", "revise"] },
+        objective: { type: "string", minLength: 1 },
+        dependencies: { type: "array", items: { type: "string" } },
+        requiredCapabilities: { type: "array", items: { type: "string" } },
+      }, ["taskId", "action"]),
+    },
+  }, ["revision", "summary", "taskUpdates"]);
 }
 
 function objectSchema(

@@ -36,6 +36,7 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
       plan_tasks: ["revision", "tasks"],
       revise_task: ["taskId", "revision"],
       answer_guidance: ["requestId", "expectedVersion", "answer"],
+      reconcile_plan: ["revision", "summary", "taskUpdates"],
       review_task: ["taskId", "decision", "summary", "evidenceArtifactHashes"],
       request_integration: ["taskId"],
       complete_run: ["summary"],
@@ -346,6 +347,145 @@ test("only Architect tools can approve, request integration, and complete", asyn
     assert.equal(projection(store).status, "completed");
     assert.equal(projection(store).projectHandoff?.status, "selected");
     assert.equal(projection(store).projectHandoff?.choice, "keep_integration_branch");
+  });
+});
+
+test("Architect review can atomically reconcile stale successor tasks", async () => {
+  await withStore(async (store) => {
+    store.append({
+      runId: "run_1",
+      type: "plan.created",
+      occurredAt: now(),
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [
+          {
+            id: "task_a",
+            objective: "Inspect the current implementation",
+            dependencies: [],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 0,
+          },
+          {
+            id: "task_b",
+            objective: "Apply the change assumed by the original plan",
+            dependencies: ["task_a"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 0,
+          },
+          {
+            id: "task_c",
+            objective: "Continue from the current implementation",
+            dependencies: ["task_b"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 0,
+          },
+        ],
+      },
+    });
+    transition(store, "assigned", { attempt: 1, assignedWorkerId: "worker_1" });
+    transition(store, "running", {});
+    transition(store, "submitted", { changeSetId: "inspection_1" });
+
+    const registry = new ToolRegistry();
+    for (const tool of createArchitectTools({ store, clock: now })) {
+      registry.register(tool);
+    }
+    const eventCount = store.readRun("run_1").length;
+    const review = await invoke(registry, architectContext(), "review_task", {
+      taskId: "task_a",
+      decision: "approved",
+      summary: "Inspection proves task_b is already satisfied.",
+      evidenceArtifactHashes: [],
+      planReconciliation: {
+        revision: 2,
+        summary: "Remove the obsolete change and continue from the inspected baseline.",
+        taskUpdates: [
+          { taskId: "task_b", action: "cancel" },
+          {
+            taskId: "task_c",
+            action: "revise",
+            dependencies: ["task_a"],
+          },
+        ],
+      },
+    });
+
+    assert.equal(review.isError, false, review.error?.message ?? "review failed");
+    assert.equal(store.readRun("run_1").length, eventCount + 1);
+    assert.equal(projection(store).tasks.task_a.status, "approved");
+    assert.equal(projection(store).tasks.task_b.status, "cancelled");
+    assert.deepEqual(projection(store).tasks.task_c.dependencies, ["task_a"]);
+    assert.equal(projection(store).planRevision, 2);
+  });
+});
+
+test("Architect can reconcile a stale plan during failure resolution", async () => {
+  await withStore(async (store) => {
+    store.append({
+      runId: "run_1",
+      type: "plan.created",
+      occurredAt: now(),
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [
+          {
+            id: "task_a",
+            objective: "Verified baseline",
+            dependencies: [],
+            status: "integrated",
+            requiredCapabilities: ["code"],
+            attempt: 1,
+          },
+          {
+            id: "task_b",
+            objective: "Obsolete work",
+            dependencies: ["task_a"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 2,
+          },
+          {
+            id: "task_c",
+            objective: "Remaining work",
+            dependencies: ["task_b"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 0,
+          },
+        ],
+      },
+    });
+    const registry = new ToolRegistry();
+    for (const tool of createArchitectTools({ store, clock: now })) {
+      registry.register(tool);
+    }
+
+    const result = await invoke(registry, architectContext(), "reconcile_plan", {
+      revision: 2,
+      summary: "Evidence invalidated task_b.",
+      taskUpdates: [
+        { taskId: "task_b", action: "cancel" },
+        { taskId: "task_c", action: "revise", dependencies: ["task_a"] },
+      ],
+    });
+
+    assert.equal(result.isError, false, result.error?.message ?? "reconciliation failed");
+    assert.deepEqual(result.lifecycle, {
+      type: "architect_action",
+      action: "plan_reconciled",
+      referenceId: "2",
+    });
+    assert.equal(projection(store).tasks.task_b.status, "cancelled");
+    assert.deepEqual(projection(store).tasks.task_c.dependencies, ["task_a"]);
+    assert.equal(projection(store).planRevision, 2);
   });
 });
 

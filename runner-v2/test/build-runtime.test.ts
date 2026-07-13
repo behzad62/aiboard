@@ -774,6 +774,100 @@ test("legacy exhausted planned checkpoints recover through Architect revision", 
   }
 });
 
+test("exhausted stale tasks can be cancelled and rewired without a third worker attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-reconcile-exhausted-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let workerCalls = 0;
+  try {
+    store.append({
+      runId: "run_reconcile_exhausted",
+      type: "plan.created",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [
+          {
+            id: "task_a",
+            objective: "Inspect the baseline",
+            dependencies: [],
+            status: "integrated",
+            requiredCapabilities: ["code"],
+            attempt: 1,
+          },
+          {
+            id: "task_b",
+            objective: "Obsolete change disproved by inspection",
+            dependencies: ["task_a"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 2,
+          },
+          {
+            id: "task_c",
+            objective: "Continue useful implementation",
+            dependencies: ["task_b"],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            attempt: 0,
+          },
+        ],
+      },
+    });
+    const runtime = new BuildRuntime({
+      runId: "run_reconcile_exhausted",
+      store,
+      workerDriver: {
+        run: async () => {
+          workerCalls += 1;
+          return { type: "failed", reason: "worker must not receive stale task" };
+        },
+      },
+      architectDriver: {
+        run: async (request) => {
+          assert.equal(request.reason.type, "task_failure_resolution_required");
+          assert.equal(
+            request.tools.definitions().some((tool) => tool.name === "reconcile_plan"),
+            true
+          );
+          const result = await request.tools.invoke({
+            type: "tool_call",
+            callId: "reconcile_stale_plan",
+            name: "reconcile_plan",
+            arguments: {
+              revision: 2,
+              summary: "Inspection proved task_b was already satisfied.",
+              taskUpdates: [
+                { taskId: "task_b", action: "cancel" },
+                { taskId: "task_c", action: "revise", dependencies: ["task_a"] },
+              ],
+            },
+          }, request.context);
+          assert.equal(result.isError, false, result.error?.message ?? "reconciliation failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      maxTaskAttempts: 2,
+      workspaceFor: async () => "C:/work/unused",
+    });
+
+    const step = await runtime.step();
+    assert.equal(step.status, "progressed");
+    assert.equal(workerCalls, 0);
+    assert.equal(runtime.projection().tasks.task_b.status, "cancelled");
+    assert.equal(runtime.projection().tasks.task_c.status, "planned");
+    assert.deepEqual(runtime.projection().tasks.task_c.dependencies, ["task_a"]);
+    assert.equal(runtime.projection().planRevision, 2);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;

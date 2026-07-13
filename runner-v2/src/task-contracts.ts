@@ -38,6 +38,20 @@ export interface TaskGraph {
   revision: number;
 }
 
+export interface PlanTaskUpdate {
+  taskId: string;
+  action: "cancel" | "revise";
+  objective?: string;
+  dependencies?: string[];
+  requiredCapabilities?: string[];
+}
+
+export interface PlanReconciliation {
+  revision: number;
+  summary: string;
+  taskUpdates: PlanTaskUpdate[];
+}
+
 export type TaskGraphIssueCode =
   | "duplicate_task_id"
   | "missing_dependency"
