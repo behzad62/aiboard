@@ -39,6 +39,22 @@ export function buildStopFallbackMessage(reason: BuildStopReason): string {
   return `Build stopped because the ${reason} guardrail was reached.`;
 }
 
+export function buildRunWorkflowStatus(input: {
+  status: string;
+  stopReason?: BuildStopReason | null;
+  projectHandoffRequested?: boolean;
+}): string {
+  if (input.projectHandoffRequested) return "Awaiting project handoff";
+  if (
+    input.status === "completed" ||
+    !input.stopReason ||
+    input.stopReason === "completed"
+  ) {
+    return input.status;
+  }
+  return `${input.status} (${input.stopReason})`;
+}
+
 export function shouldShowBuildStopFallback(input: {
   stopReason: BuildStopReason | null | undefined;
   status: string;

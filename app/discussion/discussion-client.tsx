@@ -1812,6 +1812,7 @@ function DiscussionPageInner() {
           branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
           prUrl={repoWorkflow?.prUrl ?? null}
           usage={buildUsage}
+          projectHandoffRequested={Boolean(projectHandoff)}
         />
       )}
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
+  buildRunWorkflowStatus,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
   nativeBuildDiscussionStatus,
@@ -10,6 +11,23 @@ import {
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
+
+assert.equal(
+  buildRunWorkflowStatus({
+    status: "failed",
+    stopReason: "blocked",
+    projectHandoffRequested: true,
+  }),
+  "Awaiting project handoff"
+);
+assert.equal(
+  buildRunWorkflowStatus({
+    status: "stopped",
+    stopReason: "blocked",
+    projectHandoffRequested: false,
+  }),
+  "stopped (blocked)"
+);
 
 const stopped = {
   id: "discussion_1",
