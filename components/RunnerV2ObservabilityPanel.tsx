@@ -119,6 +119,7 @@ type UserFacingProblem = {
 };
 
 const COMPLETE_TASK_STATUSES = new Set(["integrated", "cancelled"]);
+const ACTIVE_WORKER_TASK_STATUSES = new Set(["assigned", "running", "waiting_guidance"]);
 
 const TASK_STATUS_LABELS: Record<string, string> = {
   planned: "Not started",
@@ -279,6 +280,12 @@ export function runnerUserFacingObservability(
     });
 
   const problems: UserFacingProblem[] = [];
+  const currentWorkerIds = new Set(
+    tasks
+      .filter((task) => ACTIVE_WORKER_TASK_STATUSES.has(task.status))
+      .map((task) => task.assignedWorkerId)
+      .filter((workerId): workerId is string => Boolean(workerId))
+  );
   for (const provider of snapshot.providers) {
     if (provider.status !== "cooldown") continue;
     problems.push({
@@ -288,7 +295,11 @@ export function runnerUserFacingObservability(
     });
   }
   for (const agent of snapshot.agents) {
-    if (agent.status !== "suspended") continue;
+    if (
+      agent.status !== "suspended" ||
+      agent.actor.role !== "worker" ||
+      !currentWorkerIds.has(agent.actor.id)
+    ) continue;
     problems.push({
       key: `agent:${agent.sessionId}`,
       title: "An active agent is paused",

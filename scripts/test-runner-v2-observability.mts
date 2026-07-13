@@ -103,6 +103,13 @@ const observability = {
     status: "submitted",
     turns: 4,
     lastSequence: 8,
+  }, {
+    sessionId: "worker:run_1:T0:1:subagent:research_1",
+    actor: { role: "subagent", id: "worker_old:research_1" },
+    status: "suspended",
+    turns: 2,
+    suspensionReason: "subagent_incomplete",
+    lastSequence: 5,
   }],
   tools: [{
     sequence: 1,
@@ -198,8 +205,8 @@ assert.deepEqual(summary, {
   totalTokens: 15_000,
   cachedInputTokens: 8_000,
   cacheWriteInputTokens: 2_000,
-  agents: 1,
-  suspendedAgents: 0,
+  agents: 2,
+  suspendedAgents: 1,
   toolErrors: 0,
   evidence: 2,
   memories: 0,
@@ -218,6 +225,56 @@ assert.equal(view.progress.items[0]?.detail, "Complete");
 assert.equal(view.verification.length, 1);
 assert.equal(view.verification.find((item) => item.category === "Tests")?.status, "passed");
 assert.deepEqual(view.problems, []);
+
+const currentWorkerView = runnerUserFacingObservability({
+  ...observability,
+  agents: [...observability.agents, {
+    sessionId: "worker:run_1:T1:2",
+    actor: { role: "worker", id: "worker_current" },
+    status: "suspended",
+    turns: 3,
+    suspensionReason: "provider_error",
+    lastSequence: 13,
+  }],
+}, {
+  ...projection,
+  tasks: {
+    T1: {
+      ...projection.tasks.T1,
+      status: "running",
+      attempt: 2,
+      assignedWorkerId: "worker_current",
+    },
+  },
+  projectHandoff: undefined,
+});
+assert.equal(currentWorkerView.problems.length, 1);
+assert.equal(currentWorkerView.problems[0]?.key, "agent:worker:run_1:T1:2");
+assert.equal(currentWorkerView.problems[0]?.title, "An active agent is paused");
+
+const staleSubmittedWorkerView = runnerUserFacingObservability({
+  ...observability,
+  agents: [...observability.agents, {
+    sessionId: "worker:run_1:T1:1:stale",
+    actor: { role: "worker", id: "worker_submitted" },
+    status: "suspended",
+    turns: 2,
+    suspensionReason: "model_ended_without_lifecycle",
+    lastSequence: 9,
+  }],
+}, {
+  ...projection,
+  status: "running",
+  tasks: {
+    T1: {
+      ...projection.tasks.T1,
+      status: "submitted",
+      assignedWorkerId: "worker_submitted",
+    },
+  },
+  projectHandoff: undefined,
+});
+assert.deepEqual(staleSubmittedWorkerView.problems, []);
 
 const browserScreenshotFact = {
   kind: "browser_screenshot",
