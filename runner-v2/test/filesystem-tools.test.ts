@@ -30,6 +30,14 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     const patchDefinition = broker.definitions().find(
       (tool) => tool.name === "fs.patch"
     );
+    const readDefinition = broker.definitions().find(
+      (tool) => tool.name === "fs.read"
+    );
+    assert.match(
+      readDefinition?.description ?? "",
+      /6144 bytes/i,
+      "the model-facing read contract must advertise its byte ceiling"
+    );
     assert.match(
       patchDefinition?.description ?? "",
       /one or many.*atomically/i,

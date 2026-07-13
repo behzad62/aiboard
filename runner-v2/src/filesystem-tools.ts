@@ -55,7 +55,7 @@ export function createFilesystemTools(
     {
       definition: definition(
         "fs.read",
-        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine (maximum ${MAX_READ_LINES} lines) instead of reopening the whole file or paging its artifact.`,
+        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine. Each ranged read is limited to ${MAX_READ_LINES} lines and ${MAX_READ_RANGE_BYTES} bytes, so use narrower ranges for dense code instead of reopening the whole file or paging its artifact.`,
         true,
         "none"
       ),
