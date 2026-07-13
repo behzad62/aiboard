@@ -44,4 +44,3 @@ Extend the existing source-level observability contract to cover:
 - newest-per-category evidence selection;
 - active-problem detection and the no-blockers state;
 - preservation of search, audit download, and raw diagnostic sections inside Advanced diagnostics.
-

@@ -105,4 +105,3 @@ Expected: all commands pass with zero errors.
 git add components/RunnerV2ObservabilityPanel.tsx scripts/test-runner-v2-observability.mts docs/superpowers/specs/2026-07-13-runner-observability-ux-design.md docs/superpowers/plans/2026-07-13-runner-observability-ux.md
 git commit -m "feat(build): simplify runner activity for users"
 ```
-
