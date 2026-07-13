@@ -17,7 +17,10 @@ test("projects every configured runtime with deterministic roles and truthful he
       cachedInputCostMicrosPerMillion: 500_000,
       cacheWriteInputCostMicrosPerMillion: 3_000_000,
     }),
-    runtime("cooldown", "provider-cooldown", "model-cooldown", ["worker"]),
+    {
+      ...runtime("cooldown", "provider-cooldown", "model-cooldown", ["worker"]),
+      displayName: "Cooldown Display",
+    },
     { ...runtime("unavailable", "provider-unavailable", "model-unavailable", ["worker"]), selectable: false },
   ];
   const health: ProviderHealthState[] = [{
@@ -69,8 +72,12 @@ test("projects every configured runtime with deterministic roles and truthful he
       runtimeId: "cooldown",
       providerId: "provider-cooldown",
       modelId: "model-cooldown",
+      displayName: "Cooldown Display",
       roles: ["worker"],
       status: "cooldown",
+      cooldownUntil: 61_000,
+      failureCode: "rate_limit",
+      failureSummary: "Rate limited.",
       calls: 0,
       inputTokens: 0,
       cachedInputTokens: 0,
@@ -94,7 +101,7 @@ test("projects every configured runtime with deterministic roles and truthful he
       cacheWriteInputTokens: 100,
       outputTokens: 150,
       totalTokens: 1_150,
-      estimatedCostMicros: 3_300,
+      estimatedCostMicros: 999_999,
       costBasis: "api_estimate",
       usageQuality: "mixed",
       lastUsedAt: "2026-07-13T10:05:00.000Z",
@@ -134,6 +141,12 @@ test("projects every configured runtime with deterministic roles and truthful he
       lastUsedAt: null,
     },
   ]);
+  assert.doesNotMatch(JSON.stringify(projectNativeModelUsage({
+    budget,
+    runtimes,
+    providerHealth: health,
+    now: 1_000,
+  })), /slow down/);
 });
 
 test("requires pricing for consumed token classes while treating explicit zero as known", () => {
@@ -169,6 +182,8 @@ test("requires pricing for consumed token classes while treating explicit zero a
       "2026-07-13T12:00:00.000Z",
     ),
   });
+  delete budget.reservations.missing_cached_price.costBasis;
+  delete budget.reservations.missing_cache_write_price.costBasis;
 
   const rows = projectNativeModelUsage({
     budget,
@@ -281,16 +296,16 @@ test("preserves inconsistent cache counts and makes their API cost unknown", () 
       inputTokens: 10,
       cachedInputTokens: 11,
       cacheWriteInputTokens: 0,
-      estimatedCostMicros: null,
-      costBasis: "unknown",
+      estimatedCostMicros: 0,
+      costBasis: "api_estimate",
     },
     {
       runtimeId: "sum-exceeds",
       inputTokens: 10,
       cachedInputTokens: 8,
       cacheWriteInputTokens: 5,
-      estimatedCostMicros: null,
-      costBasis: "unknown",
+      estimatedCostMicros: 0,
+      costBasis: "api_estimate",
     },
   ]);
 });
@@ -367,16 +382,16 @@ test("a later call cannot mask an inconsistent cache settlement", () => {
       inputTokens: 110,
       cachedInputTokens: 11,
       cacheWriteInputTokens: 0,
-      estimatedCostMicros: null,
-      costBasis: "unknown",
+      estimatedCostMicros: 0,
+      costBasis: "api_estimate",
     },
     {
       runtimeId: "masked-sum",
       inputTokens: 110,
       cachedInputTokens: 8,
       cacheWriteInputTokens: 5,
-      estimatedCostMicros: null,
-      costBasis: "unknown",
+      estimatedCostMicros: 0,
+      costBasis: "api_estimate",
     },
   ]);
 });
@@ -436,7 +451,7 @@ test("rejects unsafe aggregate token dimensions and totals", () => {
   );
 });
 
-test("rejects an estimated API cost outside the safe integer range", () => {
+test("rejects a settled API cost subtotal outside the safe integer range", () => {
   assert.throws(
     () => projectNativeModelUsage({
       budget: projection({
@@ -446,9 +461,19 @@ test("rejects an estimated API cost outside the safe integer range", () => {
           "provider-cost",
           "model-cost",
           "worker",
-          { inputTokens: Number.MAX_SAFE_INTEGER },
+          { inputTokens: 1, estimatedCostMicros: Number.MAX_SAFE_INTEGER },
           { inputTokens: "reported", outputTokens: "reported" },
           "2026-07-13T12:30:00.000Z",
+        ),
+        cost_plus_one: settled(
+          "cost_plus_one",
+          "cost-overflow",
+          "provider-cost",
+          "model-cost",
+          "worker",
+          { inputTokens: 1, estimatedCostMicros: 1 },
+          { inputTokens: "reported", outputTokens: "reported" },
+          "2026-07-13T12:30:01.000Z",
         ),
       }),
       runtimes: [runtime(
@@ -463,7 +488,7 @@ test("rejects an estimated API cost outside the safe integer range", () => {
       )],
       providerHealth: [],
     }),
-    /Estimated model cost for cost-overflow exceeds the safe integer range/,
+    /Model usage estimatedCostMicros for cost-overflow exceeds the safe integer range/,
   );
 });
 
@@ -486,11 +511,14 @@ test("provider cooldown expires exactly at its durable boundary", () => {
 
 test("account runtimes are not metered and fully estimated calls retain that provenance", () => {
   const budget = projection({
-    account_1: settled("account_1", "account", "chatgpt", "gpt", "architect", {
-      inputTokens: 12,
-      outputTokens: 3,
-      estimatedCostMicros: 123_456,
-    }, { inputTokens: "estimated", outputTokens: "estimated" }, "2026-07-13T11:00:00.000Z"),
+    account_1: {
+      ...settled("account_1", "account", "chatgpt", "gpt", "architect", {
+        inputTokens: 12,
+        outputTokens: 3,
+        estimatedCostMicros: 123_456,
+      }, { inputTokens: "estimated", outputTokens: "estimated" }, "2026-07-13T11:00:00.000Z"),
+      costBasis: { kind: "account_not_metered" },
+    },
   });
 
   assert.deepEqual(projectNativeModelUsage({
@@ -520,6 +548,62 @@ test("account runtimes are not metered and fully estimated calls retain that pro
     usageQuality: "estimated",
     lastUsedAt: "2026-07-13T11:00:00.000Z",
   });
+});
+
+test("projects immutable per-call settlement costs across pricing changes and reopen", () => {
+  const budget = projection({
+    rounded_1: {
+      ...settled("rounded_1", "priced", "provider", "model", "architect", {
+        inputTokens: 1,
+        estimatedCostMicros: 1,
+      }, { inputTokens: "reported", outputTokens: "reported" }, "2026-07-13T13:00:00.000Z"),
+      costBasis: {
+        kind: "api_estimate",
+        inputCostMicrosPerMillion: 500_000,
+        outputCostMicrosPerMillion: 0,
+        cachedInputCostMicrosPerMillion: 500_000,
+        cacheWriteInputCostMicrosPerMillion: 500_000,
+      },
+    },
+    rounded_2: {
+      ...settled("rounded_2", "priced", "provider", "model", "worker", {
+        inputTokens: 1,
+        estimatedCostMicros: 1,
+      }, { inputTokens: "reported", outputTokens: "reported" }, "2026-07-13T13:00:01.000Z"),
+      costBasis: {
+        kind: "api_estimate",
+        inputCostMicrosPerMillion: 500_000,
+        outputCostMicrosPerMillion: 0,
+        cachedInputCostMicrosPerMillion: 500_000,
+        cacheWriteInputCostMicrosPerMillion: 500_000,
+      },
+    },
+  });
+  const [row] = projectNativeModelUsage({
+    budget,
+    runtimes: [runtime("priced", "provider", "model", ["architect", "worker"], {
+      inputCostMicrosPerMillion: 99_000_000,
+      outputCostMicrosPerMillion: 99_000_000,
+    })],
+    providerHealth: [],
+  });
+  assert.equal(row.estimatedCostMicros, 2, "sum ledger settlements without aggregate re-rounding");
+  assert.equal(row.costBasis, "api_estimate");
+
+  const old = settled("old", "priced", "provider", "model", "worker", {
+      inputTokens: 10,
+      estimatedCostMicros: 123,
+    }, { inputTokens: "reported", outputTokens: "reported" }, "2026-07-13T13:01:00.000Z");
+  delete old.costBasis;
+  const legacy = projection({ old });
+  assert.deepEqual(projectNativeModelUsage({
+    budget: legacy,
+    runtimes: [runtime("priced", "provider", "model", ["worker"], {
+      inputCostMicrosPerMillion: 99_000_000,
+      outputCostMicrosPerMillion: 99_000_000,
+    })],
+    providerHealth: [],
+  }).map((item) => [item.estimatedCostMicros, item.costBasis]), [[null, "unknown"]]);
 });
 
 function runtime(
@@ -563,6 +647,13 @@ function settled(
     estimate: {},
     actual,
     tokenSources,
+    costBasis: {
+      kind: "api_estimate",
+      inputCostMicrosPerMillion: 0,
+      outputCostMicrosPerMillion: 0,
+      cachedInputCostMicrosPerMillion: 0,
+      cacheWriteInputCostMicrosPerMillion: 0,
+    },
     settledAt,
     status: "settled",
     windowIndex: 1,

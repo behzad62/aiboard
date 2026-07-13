@@ -1,5 +1,6 @@
 import type {
   BuildStopReason,
+  BuildRunPolicy,
   BuildUsageWindow,
   Discussion,
   DiscussionStatus,
@@ -145,6 +146,13 @@ export function nativeBuildUsageWindow(
     )].sort(),
     models,
   };
+}
+
+export function nativeBuildRunPolicy(
+  projection: Pick<NativeBuildProjection, "runPolicy">,
+  fallback: BuildRunPolicy
+): BuildRunPolicy {
+  return projection.runPolicy ?? fallback;
 }
 
 function hasUnpricedContributingNativeUsage(

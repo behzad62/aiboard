@@ -355,6 +355,32 @@ test("legacy scheduler logs configure their migrated policy once before stepping
   }
 });
 
+test("recovered scheduler policy rejects a mismatched runtime policy", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-policy-mismatch-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const common = {
+      runId: "run_policy_mismatch",
+      store,
+      workerDriver: { run: async () => ({ type: "failed" as const, reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+    };
+    new BuildRuntime({ ...common, runPolicy: "finish" });
+    assert.throws(
+      () => new BuildRuntime({ ...common, runPolicy: "budgeted" }),
+      /already configured as finish/i
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Architect prose or no-op return cannot fabricate scheduler progress", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-noop-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
@@ -418,6 +444,7 @@ test("each explicit paused Resume renews exactly one budget window", () => {
   try {
     const runtime = new BuildRuntime({
       runId: "run_budget_resume",
+      runPolicy: "budgeted",
       store,
       workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
       architectDriver: { run: async () => undefined },
@@ -439,6 +466,67 @@ test("each explicit paused Resume renews exactly one budget window", () => {
       "budget-window:resume:budget",
       "budget-window:resume:user",
     ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Finish and Plan-only resumes do not create budget windows", () => {
+  for (const runPolicy of ["finish", "plan_only"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `aiboard-${runPolicy}-resume-`));
+    const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    const renewals: string[] = [];
+    try {
+      const runtime = new BuildRuntime({
+        runId: `run_${runPolicy}`,
+        runPolicy,
+        store,
+        workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+        architectDriver: { run: async () => undefined },
+        integrationDriver: {
+          integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+        },
+        maxConcurrency: 1,
+        workspaceFor: async () => "C:/unused",
+        renewBudgetWindow: (idempotencyKey) => renewals.push(idempotencyKey),
+      });
+      runtime.pause("user", `pause:${runPolicy}`);
+      runtime.resume(`resume:${runPolicy}`);
+      assert.deepEqual(renewals, []);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("bounded run work yields progress without a durable step-budget pause", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-yield-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_yield",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+    });
+    let steps = 0;
+    runtime.step = async () => {
+      steps += 1;
+      return { status: "progressed", action: `step_${steps}` };
+    };
+    assert.deepEqual(await runtime.runUntilBlocked(100), {
+      status: "progressed",
+      action: "step_allowance_yielded",
+    });
+    assert.equal(steps, 100);
+    assert.equal(runtime.events().some((event) => event.payload.reason === "build_step_budget"), false);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

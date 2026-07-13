@@ -5,7 +5,8 @@ import type { NativeBuildUsageProjection } from "../lib/client/runner-v2";
 
 function projection(
   effective: Partial<NativeBuildUsageProjection["effective"]>,
-  models?: NativeBuildUsageProjection["models"]
+  models?: NativeBuildUsageProjection["models"],
+  attributedModelReservationCount = 0,
 ): NativeBuildUsageProjection {
   return {
     scopeId: "run_1",
@@ -24,6 +25,7 @@ function projection(
       ...effective,
     },
     ...(models === undefined ? {} : { models }),
+    attributedModelReservationCount,
     lastSequence: 1,
   };
 }
@@ -406,6 +408,17 @@ assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.calls, 0), 0);
 assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.inputTokens, 0), 3);
 assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.cachedInputTokens!, 0), 1);
 assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.outputTokens, 0), 2);
+
+const attributedReservedRows = mapNativeBuildUsageModels(projection(
+  { modelCalls: 1, inputTokens: 100, outputTokens: 50 },
+  duplicateRuntimeRows,
+  1,
+));
+assert.equal(
+  attributedReservedRows.every((row) => row.usageOrigin === "native"),
+  true,
+);
+assert.equal(attributedReservedRows.every((row) => row.calls === 0), true);
 
 const maxSafePreview = mapNativeBuildUsageModels(projection(
   { inputTokens: Number.MAX_SAFE_INTEGER },

@@ -36,6 +36,9 @@ const usage: BuildUsageWindow = {
       providerId: "custom",
       roles: ["worker", "subagent"],
       status: "cooldown",
+      cooldownUntil: Date.parse("2026-07-12T10:14:00.000Z"),
+      failureCode: "rate_limit",
+      failureSummary: "Rate limited.",
       calls: 1,
       inputTokens: 400,
       outputTokens: 100,
@@ -126,6 +129,14 @@ assert.match(
   /Budget progress \$0\.50 \/ \$5\.00 · 1m 5s \/ 120m/
 );
 assert.doesNotMatch(budgeted, /Limits/);
+const renewedBudgeted = renderStats("budgeted", {
+  usage: { ...usage, estimatedUsd: 0.125, elapsedMs: 5_000 },
+});
+assert.match(
+  renewedBudgeted,
+  /Budget progress \$0\.13 \/ \$5\.00 .* 0m 5s \/ 120m Current budget window/,
+);
+assert.match(renewedBudgeted, /Lifetime model usage/);
 
 const planOnly = renderStats("plan_only");
 assert.match(planOnly, /Plan only · running/);
@@ -148,7 +159,7 @@ assert.match(
 );
 assert.match(
   finish,
-  /Unknown API model custom Worker, Subagent Cooldown Mixed 1 400 100 500 Unknown 12 Jul 2026, 10:12 UTC/
+  /Unknown API model custom Worker, Subagent Cooldown Rate limited\. Retry after 12 Jul 2026, 10:14 UTC\. Mixed 1 400 100 500 Unknown 12 Jul 2026, 10:12 UTC/
 );
 assert.match(
   finish,
@@ -321,7 +332,7 @@ const storedUnknownCost = renderStats("finish", {
 assert.match(storedUnknownCost, /Cost Unknown/);
 assert.match(
   storedUnknownCost,
-  /Stored unknown-cost model custom Worker, Subagent Cooldown Mixed 1 400 100 500 Unknown/
+  /Stored unknown-cost model custom Worker, Subagent Cooldown Rate limited\. Retry after 12 Jul 2026, 10:14 UTC\. Mixed 1 400 100 500 Unknown/
 );
 assert.doesNotMatch(storedUnknownCost, /Cost \$0\.00/);
 

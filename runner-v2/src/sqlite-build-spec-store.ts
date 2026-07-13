@@ -30,6 +30,7 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
         spec_json TEXT NOT NULL
       );
     `);
+    this.migrateLegacySpecs();
   }
 
   save(spec: NativeBuildSpec): NativeBuildSpec {
@@ -78,6 +79,35 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
 
   close(): void {
     this.database.close();
+  }
+
+  private migrateLegacySpecs(): void {
+    const rows = this.database
+      .prepare("SELECT run_id, idempotency_key, spec_json FROM build_specs ORDER BY rowid")
+      .all() as unknown as SpecRow[];
+    const legacy = rows.filter((row) => {
+      const parsed = JSON.parse(row.spec_json) as { runPolicy?: unknown };
+      return parsed.runPolicy === undefined;
+    });
+    if (legacy.length === 0) return;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.database.prepare(
+        "UPDATE build_specs SET spec_json = ? WHERE run_id = ? AND spec_json = ?"
+      );
+      for (const row of legacy) {
+        const stored = JSON.parse(row.spec_json) as Omit<NativeBuildSpec, "runPolicy">;
+        const migrated = recoverLegacyBuildSpec(stored);
+        const result = update.run(JSON.stringify(migrated), row.run_id, row.spec_json);
+        if (result.changes !== 1) {
+          throw new Error(`Build spec migration conflict for ${row.run_id}.`);
+        }
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 

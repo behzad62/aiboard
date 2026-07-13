@@ -72,7 +72,14 @@ export function BuildRunStats({
   const inputTokens = models.reduce((sum, model) => sum + model.inputTokens, 0);
   const outputTokens = models.reduce((sum, model) => sum + model.outputTokens, 0);
   const totalTokens = models.reduce((sum, model) => sum + model.totalTokens, 0);
-  const cost = summarizeCost({ usage, models, hasNativeRows });
+  const lifetimeCost = summarizeCost({ usage, models, hasNativeRows });
+  const cost = policy === "budgeted" && usage
+    ? {
+        ...lifetimeCost,
+        value: formatUsd(usage.estimatedUsd),
+        detail: "Current budget window",
+      }
+    : lifetimeCost;
   const hasUnknownPricing = cost.unknownModelIds.length > 0;
   const summaryStats = policy === "budgeted"
     ? [
@@ -164,7 +171,7 @@ export function BuildRunStats({
       {models.length > 0 ? (
         <div className="overflow-x-auto px-4 py-3">
           <table className="w-full min-w-[68rem] text-sm">
-            <caption className="sr-only">Configured Build models and usage</caption>
+            <caption className="sr-only">Lifetime model usage</caption>
             <thead className="border-b text-xs text-muted-foreground">
               <tr>
                 <th className="pb-2 text-left font-medium">Model</th>
@@ -198,6 +205,14 @@ export function BuildRunStats({
                   </td>
                   <td className="py-2 pr-3">
                     <ModelStatus status={model.status} />
+                    {model.failureSummary && (
+                      <div className="mt-1 max-w-52 text-xs text-muted-foreground">
+                        {model.failureSummary}
+                        {model.cooldownUntil !== undefined && (
+                          <> Retry after {formatTimestamp(model.cooldownUntil)}.</>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="py-2 pr-3 text-xs text-muted-foreground">
                     {formatUsageQuality(model)}
@@ -411,6 +426,10 @@ function formatModelCost(model: BuildUsageModelTotal): string {
 
 function formatLastUsed(value?: string | null): string {
   if (!value) return "Never";
+  return formatTimestamp(value);
+}
+
+function formatTimestamp(value: string | number): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Unknown";
   const months = [

@@ -7,6 +7,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from "./agent-contracts.js";
+import { serializedInputUsage } from "./provider-model-utils.js";
 
 export interface AccountRunnerModelOptions {
   baseUrl: string;
@@ -74,6 +75,20 @@ export class AccountRunnerModel implements AgentModel {
     const originalNameFor = new Map(
       [...wireNames].map(([original, wire]) => [wire, original])
     );
+    const body = JSON.stringify({
+      ...(this.options.providerApiKey
+        ? { apiKey: this.options.providerApiKey }
+        : {}),
+      model: this.options.modelId,
+      messages: request.messages.map(toRunnerMessage),
+      nativeTools: request.tools.map((tool) =>
+        toRunnerTool(tool, wireNames.get(tool.name)!)
+      ),
+      reasoningEffort: this.options.reasoningEffort,
+      attachments,
+      sessionId: request.sessionId,
+      stream: true,
+    });
     const response = await this.fetchImpl(
       `${this.options.baseUrl.replace(/\/$/, "")}/providers/${encodeURIComponent(
         this.options.runnerPath
@@ -84,20 +99,7 @@ export class AccountRunnerModel implements AgentModel {
           "content-type": "application/json",
           "x-runner-token": this.options.runnerToken,
         },
-        body: JSON.stringify({
-          ...(this.options.providerApiKey
-            ? { apiKey: this.options.providerApiKey }
-            : {}),
-          model: this.options.modelId,
-          messages: request.messages.map(toRunnerMessage),
-          nativeTools: request.tools.map((tool) =>
-            toRunnerTool(tool, wireNames.get(tool.name)!)
-          ),
-          reasoningEffort: this.options.reasoningEffort,
-          attachments,
-          sessionId: request.sessionId,
-          stream: true,
-        }),
+        body,
         signal: request.signal,
       }
     );
@@ -124,12 +126,13 @@ export class AccountRunnerModel implements AgentModel {
       return {
         blocks: data.content ? [{ type: "text", text: data.content }] : [],
         stopReason: "end_turn",
+        usage: serializedInputUsage(body),
       };
     }
 
     const blocks: AssistantBlock[] = [];
     let text = "";
-    let usage: ModelTurn["usage"];
+    let usage: ModelTurn["usage"] = serializedInputUsage(body);
     let toolIndex = 0;
     for await (const event of readSse(response)) {
       if (event.type === "token" && event.content) {
@@ -148,9 +151,7 @@ export class AccountRunnerModel implements AgentModel {
         });
       } else if (event.type === "usage" && event.usage) {
         usage = {
-          ...(event.usage.inputTokens !== undefined
-            ? { inputTokens: event.usage.inputTokens }
-            : {}),
+          ...serializedInputUsage(body, event.usage.inputTokens),
           ...(event.usage.outputTokens !== undefined
             ? { outputTokens: event.usage.outputTokens }
             : {}),
@@ -169,7 +170,7 @@ export class AccountRunnerModel implements AgentModel {
       stopReason: blocks.some((block) => block.type === "tool_call")
         ? "tool_calls"
         : "end_turn",
-      ...(usage ? { usage } : {}),
+      usage,
     };
   }
 }

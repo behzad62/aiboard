@@ -6,8 +6,14 @@ import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
 import { BuildRuntime } from "../src/build-runtime.js";
-import { NativeArchitectRuntime } from "../src/native-architect-runtime.js";
+import {
+  NativeArchitectRuntime,
+  PlanOnlyInspectionRuntime,
+  architectModelAttribution,
+} from "../src/native-architect-runtime.js";
+import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
@@ -15,6 +21,7 @@ import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { ToolRegistry } from "../src/tool-registry.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -27,6 +34,25 @@ class ScriptedModel implements AgentModel {
     return turn;
   }
 }
+
+test("Architect model calls carry direct durable role attribution", () => {
+  assert.deepEqual(
+    architectModelAttribution({
+      runtimeId: "api:architect",
+      providerId: "api",
+      modelId: "architect-model",
+      capabilities: ["code"],
+      priority: 1,
+    }, "architect:run_1"),
+    {
+      runtimeId: "api:architect",
+      providerId: "api",
+      modelId: "architect-model",
+      role: "architect",
+      sessionId: "architect:run_1",
+    }
+  );
+});
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-native-architect-"));
@@ -174,6 +200,76 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     memory.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Plan-only rejects forged mutating browser and MCP calls even under Full access", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-only-tools-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  let browserClicks = 0;
+  let mcpWrites = 0;
+  const browser = {
+    open: async () => ({ url: "https://example.test/", title: "Example" }),
+    navigate: async () => ({ url: "https://example.test/", title: "Example" }),
+    snapshot: async () => ({ url: "https://example.test/", title: "Example", text: "safe", html: "<p>safe</p>" }),
+    click: async () => { browserClicks += 1; },
+    fill: async () => undefined,
+    screenshot: async () => Buffer.from("png"),
+    events: async () => ({ console: [], network: [] }),
+    close: async () => undefined,
+    closeAll: async () => undefined,
+  } satisfies BrowserBackend;
+  const mcp = {
+    toolEntries: () => [
+      {
+        client: {
+          spec: { name: "audit", command: "unused" },
+          call: async () => ({ structuredContent: { ok: true } }),
+        },
+        tool: {
+          name: "read",
+          annotations: { readOnlyHint: true, destructiveHint: false },
+        },
+      },
+      {
+        client: {
+          spec: { name: "audit", command: "unused" },
+          call: async () => { mcpWrites += 1; return { structuredContent: { ok: true } }; },
+        },
+        tool: {
+          name: "write",
+          annotations: { readOnlyHint: false, destructiveHint: true },
+        },
+      },
+    ],
+  } as unknown as McpManager;
+  const registry = new ToolRegistry();
+  for (const tool of createBrowserTools({ backend: browser, artifacts, taskId: "architect" })) {
+    registry.register(tool);
+  }
+  for (const tool of createMcpTools(mcp, artifacts)) registry.register(tool);
+  const runtime = new PlanOnlyInspectionRuntime(registry);
+  const names = runtime.definitions().map((tool) => tool.name);
+  assert.equal(names.includes("browser.snapshot"), true);
+  assert.equal(names.includes("mcp.audit.read"), true);
+  assert.equal(names.includes("browser.click"), false);
+  assert.equal(names.includes("mcp.audit.write"), false);
+  const context = {
+    runId: "run_plan",
+    sessionId: "architect:run_plan",
+    actor: { role: "architect" as const, id: "architect" },
+    workspacePath: root,
+  };
+  const browserResult = await runtime.invoke({
+    type: "tool_call", callId: "forged_browser", name: "browser.click", arguments: { selector: "#buy" },
+  }, context);
+  const mcpResult = await runtime.invoke({
+    type: "tool_call", callId: "forged_mcp", name: "mcp.audit.write", arguments: {},
+  }, context);
+  assert.equal(browserResult.error?.code, "plan_only_tool_denied");
+  assert.equal(mcpResult.error?.code, "plan_only_tool_denied");
+  assert.equal(browserClicks, 0);
+  assert.equal(mcpWrites, 0);
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("resumed Architect action receives a fresh mechanical reminder", async () => {

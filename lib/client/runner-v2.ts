@@ -18,6 +18,7 @@ export interface NativeProviderConfig {
   runtimeId: string;
   providerId: string;
   modelId: string;
+  displayName?: string;
   transport: "account-runner" | "openai-compatible" | "anthropic" | "google";
   baseUrl?: string;
   secret: string;
@@ -109,6 +110,7 @@ export interface NativeReviewProjection {
 export interface NativeBuildProjection {
   runId: string;
   status: "running" | "paused" | "completed";
+  runPolicy?: BuildRunPolicy;
   planRevision: number;
   tasks: Record<string, NativeBuildTask>;
   guidance: Record<string, NativeGuidanceProjection>;
@@ -164,6 +166,19 @@ export interface NativeBuildUsageProjection {
     activeMs: number;
     artifactBytes: number;
   };
+  lifetime?: {
+    modelCalls: number;
+    toolCalls: number;
+    inputTokens: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    outputTokens: number;
+    estimatedCostMicros: number;
+    activeMs: number;
+    artifactBytes: number;
+  };
+  window?: { index: number; startedAt?: string };
+  attributedModelReservationCount?: number;
   models?: NativeModelUsageProjection[];
   lastSequence: number;
 }
@@ -200,6 +215,10 @@ export interface NativeModelUsageProjection {
   costBasis: NativeModelCostBasis;
   usageQuality: NativeModelUsageQuality;
   lastUsedAt: string | null;
+  displayName?: string;
+  cooldownUntil?: number;
+  failureCode?: string;
+  failureSummary?: string;
 }
 
 export interface NativeBuildObservability {

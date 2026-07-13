@@ -31,6 +31,7 @@ import {
 } from "./runner-v2";
 import {
   nativeBuildTaskStatus,
+  nativeBuildRunPolicy,
   nativeBuildUsageWindow,
 } from "./discussion-live-state";
 import {
@@ -197,6 +198,16 @@ export async function runNativeBuildDiscussion(
         getNativeBuild(connection, runId),
         getNativeBuildUsage(connection, runId),
       ]);
+      const durablePolicy = nativeBuildRunPolicy(
+        projection,
+        discussion.buildRunPolicy ?? "finish"
+      );
+      if (discussion.buildRunPolicy !== durablePolicy) {
+        updateDiscussion(discussion.id, {
+          buildRunPolicy: durablePolicy,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       emitTaskProjection(projection, emit);
       emit({
         type: "build_usage",
@@ -358,6 +369,7 @@ function providerConfig(
       runtimeId,
       providerId,
       modelId: custom.model,
+      displayName: custom.label,
       transport: "openai-compatible",
       baseUrl: custom.baseURL,
       secret: custom.apiKey || "aiboard-local-endpoint",
@@ -378,9 +390,10 @@ function providerConfig(
     saved.runnerToken ?? undefined,
     Boolean(definition?.accountRunner)
   );
-  const inputCapabilities = MODEL_CATALOG.find(
+  const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
-  )?.capabilities ?? {
+  );
+  const inputCapabilities = catalogModel?.capabilities ?? {
     image: false,
     document: false,
     audio: false,
@@ -390,6 +403,7 @@ function providerConfig(
     runtimeId,
     providerId,
     modelId: model,
+    ...(catalogModel?.name ? { displayName: catalogModel.name } : {}),
     transport: native.transport,
     ...(native.baseUrl ? { baseUrl: native.baseUrl } : {}),
     secret: saved.apiKey,

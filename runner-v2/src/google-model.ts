@@ -11,6 +11,7 @@ import {
   createToolNameCodec,
   fetchProviderJson,
   joinEndpoint,
+  serializedInputUsage,
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
@@ -57,21 +58,22 @@ export class GoogleModel implements AgentModel {
       this.options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta",
       `models/${encodeURIComponent(this.options.modelId)}:generateContent`
     );
+    const body = JSON.stringify({
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      contents: request.messages
+        .filter((message) => message.role !== "system")
+        .map((message) => toGoogleContent(message, toolNames)),
+      ...(request.tools.length > 0
+        ? { tools: [{ functionDeclarations: request.tools.map((tool) => toGoogleTool(tool, toolNames)) }] }
+        : {}),
+    });
     const response = await fetchProviderJson<GoogleResponse>(
       this.fetchImpl,
       `${endpoint}?key=${encodeURIComponent(this.options.apiKey)}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-          contents: request.messages
-            .filter((message) => message.role !== "system")
-            .map((message) => toGoogleContent(message, toolNames)),
-          ...(request.tools.length > 0
-            ? { tools: [{ functionDeclarations: request.tools.map((tool) => toGoogleTool(tool, toolNames)) }] }
-            : {}),
-        }),
+        body,
         signal: request.signal,
       }
     );
@@ -97,18 +99,12 @@ export class GoogleModel implements AgentModel {
           ? "max_tokens"
           : "end_turn",
       ...(response.responseId ? { providerRequestId: response.responseId } : {}),
-      ...(response.usageMetadata
-        ? {
-            usage: {
-              ...(response.usageMetadata.promptTokenCount !== undefined
-                ? { inputTokens: response.usageMetadata.promptTokenCount }
-                : {}),
-              ...(response.usageMetadata.candidatesTokenCount !== undefined
-                ? { outputTokens: response.usageMetadata.candidatesTokenCount }
-                : {}),
-            },
-          }
-        : {}),
+      usage: {
+        ...serializedInputUsage(body, response.usageMetadata?.promptTokenCount),
+        ...(response.usageMetadata?.candidatesTokenCount !== undefined
+          ? { outputTokens: response.usageMetadata.candidatesTokenCount }
+          : {}),
+      },
     };
   }
 }

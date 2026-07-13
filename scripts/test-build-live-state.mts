@@ -7,6 +7,7 @@ import {
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
   nativeBuildDiscussionStatus,
+  nativeBuildRunPolicy,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -96,6 +97,8 @@ assert.equal(nativeBuildTaskStatus("submitted"), "review");
 assert.equal(nativeBuildDiscussionStatus({ status: "running" } as never), "running");
 assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stopped");
 assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");
+assert.equal(nativeBuildRunPolicy({ runPolicy: "finish" } as never, "budgeted"), "finish");
+assert.equal(nativeBuildRunPolicy({} as never, "plan_only"), "plan_only");
 assert.equal(shouldRestoreDurableBuildProjection("stopped"), true);
 assert.equal(shouldRestoreDurableBuildProjection("failed"), true);
 assert.equal(shouldRestoreDurableBuildProjection("running"), false);

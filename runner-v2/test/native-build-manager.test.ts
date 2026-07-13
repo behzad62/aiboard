@@ -254,6 +254,47 @@ test("worker routing excludes Architect-only runtimes from the worker pool", () 
   );
 });
 
+test("autonomous pump continues after bounded progress without user Resume", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-yield-"));
+  let pumpCalls = 0;
+  let projection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async (input) => ({
+        runtime: {
+          ...fakeRuntime(input.runId),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            pumpCalls += 1;
+            if (pumpCalls === 1) {
+              return { status: "progressed" as const, action: "step_allowance_yielded" };
+            }
+            projection = { ...projection, status: "completed" };
+            return { status: "completed" as const };
+          },
+        } as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+    assert.equal(pumpCalls, 2);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("configured usage marks an Architect-only capability mismatch unavailable", () => {
   const architect = configuredModelUsageRuntime({
     runtimeId: "chatgpt:gpt-5.5",
@@ -300,6 +341,7 @@ function emptyBudget(scopeId: string) {
     lifetime: usage(),
     window: { index: 1 },
     lastSequence: 0,
+    attributedModelReservationCount: 0,
     models: [],
   };
 }

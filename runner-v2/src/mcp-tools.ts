@@ -19,7 +19,7 @@ interface McpToolDescription {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
-  annotations?: { readOnlyHint?: boolean };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
 interface McpCallResult {
@@ -254,13 +254,16 @@ export function createMcpTools(
         name,
         description: tool.description?.trim() || `Call ${tool.name} on MCP server ${client.spec.name}`,
         inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: true },
-        readOnly: tool.annotations?.readOnlyHint === true,
+        readOnly:
+          tool.annotations?.readOnlyHint === true &&
+          tool.annotations?.destructiveHint === false,
         effect: "external",
       },
       validate: objectInput,
       assessAccess: () => ({
         capability: `mcp.${client.spec.name}.${tool.name}`,
         external: true,
+        destructive: tool.annotations?.destructiveHint !== false,
       }),
       execute: async (input) => await mcpOutput(
         await client.call(tool.name, input),

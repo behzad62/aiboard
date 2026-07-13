@@ -12,6 +12,7 @@ import {
   fetchProviderJson,
   joinEndpoint,
   safeToolArguments,
+  serializedInputUsage,
   toolResultText,
 } from "./provider-model-utils.js";
 
@@ -78,6 +79,19 @@ export class OpenAICompatibleModel implements AgentModel {
     if (this.options.protocol === "responses") {
       return await this.completeResponses(request, toolNames);
     }
+    const body = JSON.stringify({
+      model: this.options.modelId,
+      ...(this.options.promptCaching
+        ? {
+            prompt_cache_key: request.sessionId,
+            prompt_cache_retention: "24h",
+          }
+        : {}),
+      messages: request.messages.map((message) => toOpenAIMessage(message, toolNames)),
+      ...(request.tools.length > 0
+        ? { tools: request.tools.map((tool) => toOpenAITool(tool, toolNames)), tool_choice: "auto" }
+        : {}),
+    });
     const response = await fetchProviderJson<OpenAIResponse>(
       this.fetchImpl,
       joinEndpoint(this.options.baseUrl, "chat/completions"),
@@ -87,19 +101,7 @@ export class OpenAICompatibleModel implements AgentModel {
           "content-type": "application/json",
           authorization: `Bearer ${this.options.apiKey}`,
         },
-        body: JSON.stringify({
-          model: this.options.modelId,
-          ...(this.options.promptCaching
-            ? {
-                prompt_cache_key: request.sessionId,
-                prompt_cache_retention: "24h",
-              }
-            : {}),
-          messages: request.messages.map((message) => toOpenAIMessage(message, toolNames)),
-          ...(request.tools.length > 0
-            ? { tools: request.tools.map((tool) => toOpenAITool(tool, toolNames)), tool_choice: "auto" }
-            : {}),
-        }),
+        body,
         signal: request.signal,
       }
     );
@@ -125,21 +127,15 @@ export class OpenAICompatibleModel implements AgentModel {
           ? "max_tokens"
           : "end_turn",
       ...(response.id ? { providerRequestId: response.id } : {}),
-      ...(response.usage
-        ? {
-            usage: {
-              ...(response.usage.prompt_tokens !== undefined
-                ? { inputTokens: response.usage.prompt_tokens }
-                : {}),
-              ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
-                ? { cachedInputTokens: response.usage.prompt_tokens_details.cached_tokens }
-                : {}),
-              ...(response.usage.completion_tokens !== undefined
-                ? { outputTokens: response.usage.completion_tokens }
-                : {}),
-            },
-          }
-        : {}),
+      usage: {
+        ...serializedInputUsage(body, response.usage?.prompt_tokens),
+        ...(response.usage?.prompt_tokens_details?.cached_tokens !== undefined
+          ? { cachedInputTokens: response.usage.prompt_tokens_details.cached_tokens }
+          : {}),
+        ...(response.usage?.completion_tokens !== undefined
+          ? { outputTokens: response.usage.completion_tokens }
+          : {}),
+      },
     };
   }
 
@@ -147,6 +143,21 @@ export class OpenAICompatibleModel implements AgentModel {
     request: AgentModelRequest,
     toolNames: import("./provider-model-utils.js").ToolNameCodec
   ): Promise<ModelTurn> {
+    const body = JSON.stringify({
+      model: this.options.modelId,
+      ...(this.options.promptCaching
+        ? {
+            prompt_cache_key: request.sessionId,
+            prompt_cache_retention: "24h",
+          }
+        : {}),
+      input: request.messages.flatMap((message) =>
+        toResponsesInput(message, toolNames)
+      ),
+      ...(request.tools.length > 0
+        ? { tools: request.tools.map((tool) => toResponsesTool(tool, toolNames)) }
+        : {}),
+    });
     const response = await fetchProviderJson<OpenAIResponsesResponse>(
       this.fetchImpl,
       joinEndpoint(this.options.baseUrl, "responses"),
@@ -156,21 +167,7 @@ export class OpenAICompatibleModel implements AgentModel {
           "content-type": "application/json",
           authorization: `Bearer ${this.options.apiKey}`,
         },
-        body: JSON.stringify({
-          model: this.options.modelId,
-          ...(this.options.promptCaching
-            ? {
-                prompt_cache_key: request.sessionId,
-                prompt_cache_retention: "24h",
-              }
-            : {}),
-          input: request.messages.flatMap((message) =>
-            toResponsesInput(message, toolNames)
-          ),
-          ...(request.tools.length > 0
-            ? { tools: request.tools.map((tool) => toResponsesTool(tool, toolNames)) }
-            : {}),
-        }),
+        body,
         signal: request.signal,
       }
     );
@@ -199,21 +196,15 @@ export class OpenAICompatibleModel implements AgentModel {
           ? "max_tokens"
           : "end_turn",
       ...(response.id ? { providerRequestId: response.id } : {}),
-      ...(response.usage
-        ? {
-            usage: {
-              ...(response.usage.input_tokens !== undefined
-                ? { inputTokens: response.usage.input_tokens }
-                : {}),
-              ...(response.usage.input_tokens_details?.cached_tokens !== undefined
-                ? { cachedInputTokens: response.usage.input_tokens_details.cached_tokens }
-                : {}),
-              ...(response.usage.output_tokens !== undefined
-                ? { outputTokens: response.usage.output_tokens }
-                : {}),
-            },
-          }
-        : {}),
+      usage: {
+        ...serializedInputUsage(body, response.usage?.input_tokens),
+        ...(response.usage?.input_tokens_details?.cached_tokens !== undefined
+          ? { cachedInputTokens: response.usage.input_tokens_details.cached_tokens }
+          : {}),
+        ...(response.usage?.output_tokens !== undefined
+          ? { outputTokens: response.usage.output_tokens }
+          : {}),
+      },
     };
   }
 }

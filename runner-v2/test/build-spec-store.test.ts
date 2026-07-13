@@ -106,7 +106,7 @@ test("native Build specs recover exactly and idempotently", () => {
   }
 });
 
-test("legacy native Build specs recover with their existing ceilings preserved", () => {
+test("legacy native Build specs migrate durably to Finish without hidden ceilings", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-legacy-"));
   const database = join(root, "build-specs.sqlite");
   const legacySpec = {
@@ -142,11 +142,32 @@ test("legacy native Build specs recover with their existing ceilings preserved",
       );
     legacyDatabase.close();
 
-    const store = new SqliteBuildSpecStore(database);
+    let store = new SqliteBuildSpecStore(database);
     try {
       assert.deepEqual(store.get(legacySpec.runId), {
         ...legacySpec,
-        runPolicy: "budgeted",
+        runPolicy: "finish",
+        budgetLimits: {},
+      });
+    } finally {
+      store.close();
+    }
+    store = new SqliteBuildSpecStore(database);
+    try {
+      assert.deepEqual(store.get(legacySpec.runId), {
+        ...legacySpec,
+        runPolicy: "finish",
+        budgetLimits: {},
+      });
+      const persistedDatabase = new DatabaseSync(database);
+      const persisted = persistedDatabase
+        .prepare("SELECT spec_json FROM build_specs WHERE run_id = ?")
+        .get(legacySpec.runId) as { spec_json: string };
+      persistedDatabase.close();
+      assert.deepEqual(JSON.parse(persisted.spec_json), {
+        ...legacySpec,
+        runPolicy: "finish",
+        budgetLimits: {},
       });
     } finally {
       store.close();

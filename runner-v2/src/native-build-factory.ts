@@ -7,8 +7,10 @@ import { fileURLToPath } from "node:url";
 import { AccountRunnerModel } from "./account-runner-model.js";
 import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
+import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
 import type { ModelCostEstimator } from "./budgeted-model.js";
 import type {
   BuildObservabilitySnapshot,
@@ -92,6 +94,7 @@ export class NativeBuildFactory {
       spec
     );
     const selectedConfigs = selected.configs;
+    assertEnforceableBuildBudget(spec, selectedConfigs);
     const candidates = selected.all;
     const workerCandidates = selected.workers;
     const modelUsageRuntimes = selectedConfigs.map((config) =>
@@ -104,7 +107,13 @@ export class NativeBuildFactory {
       ])
     );
     const modelCostEstimators = new Map<string, ModelCostEstimator>(
-      selectedConfigs.map((config) => [config.runtimeId, providerCostEstimator(config)])
+      selectedConfigs.flatMap((config) => {
+        const estimator = providerCostEstimator(config);
+        return estimator ? [[config.runtimeId, estimator] as const] : [];
+      })
+    );
+    const modelCostBases = new Map<string, ModelCostBasisSnapshot>(
+      selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
     const sessions = new SqliteAgentSessionStore(
@@ -167,6 +176,7 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       budgetLedger,
       modelCostEstimators,
+      modelCostBases,
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
@@ -187,8 +197,10 @@ export class NativeBuildFactory {
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
       objective: spec.objective,
+      runPolicy: spec.runPolicy,
       budgetLedger,
       modelCostEstimators,
+      modelCostBases,
       permissionProfile: spec.permissionProfile,
       ledger,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
@@ -251,6 +263,9 @@ export class NativeBuildFactory {
         const budget = budgetLedger.snapshot(spec.runId);
         return {
           ...budget,
+          attributedModelReservationCount: Object.values(budget.reservations).filter(
+            (reservation) => reservation.kind === "model" && reservation.attribution
+          ).length,
           models: projectNativeModelUsage({
             budget,
             runtimes: modelUsageRuntimes,
@@ -486,9 +501,16 @@ export function createProviderModel(
   });
 }
 
-export function providerCostEstimator(config: RunnerProviderConfig): ModelCostEstimator {
-  const inputRate = config.inputCostMicrosPerMillion ?? 0;
-  const outputRate = config.outputCostMicrosPerMillion ?? 0;
+export function providerCostEstimator(
+  config: RunnerProviderConfig
+): ModelCostEstimator | undefined {
+  if (
+    config.transport === "account-runner" ||
+    config.inputCostMicrosPerMillion === undefined ||
+    config.outputCostMicrosPerMillion === undefined
+  ) return undefined;
+  const inputRate = config.inputCostMicrosPerMillion;
+  const outputRate = config.outputCostMicrosPerMillion;
   const cachedRate = config.cachedInputCostMicrosPerMillion ?? inputRate;
   const cacheWriteRate = config.cacheWriteInputCostMicrosPerMillion ?? inputRate;
   return (inputTokens, outputTokens, cachedInputTokens = 0, cacheWriteInputTokens = 0) => {
@@ -502,6 +524,45 @@ export function providerCostEstimator(config: RunnerProviderConfig): ModelCostEs
       outputTokens * outputRate
     ) / 1_000_000);
   };
+}
+
+export function providerModelCostBasis(
+  config: RunnerProviderConfig
+): ModelCostBasisSnapshot {
+  if (config.transport === "account-runner") return { kind: "account_not_metered" };
+  if (
+    config.inputCostMicrosPerMillion === undefined ||
+    config.outputCostMicrosPerMillion === undefined
+  ) return { kind: "unknown" };
+  return {
+    kind: "api_estimate",
+    inputCostMicrosPerMillion: config.inputCostMicrosPerMillion,
+    outputCostMicrosPerMillion: config.outputCostMicrosPerMillion,
+    cachedInputCostMicrosPerMillion:
+      config.cachedInputCostMicrosPerMillion ?? config.inputCostMicrosPerMillion,
+    cacheWriteInputCostMicrosPerMillion:
+      config.cacheWriteInputCostMicrosPerMillion ?? config.inputCostMicrosPerMillion,
+  };
+}
+
+export function assertEnforceableBuildBudget(
+  spec: NativeBuildSpec,
+  configs: readonly RunnerProviderConfig[]
+): void {
+  const message = nativeBuildBudgetEnforceabilityError(
+    spec,
+    configs.map((config) => ({
+      runtimeId: config.runtimeId,
+      costBasis:
+        config.transport === "account-runner"
+          ? "account_not_metered"
+          : config.inputCostMicrosPerMillion !== undefined &&
+              config.outputCostMicrosPerMillion !== undefined
+            ? "priced_api"
+            : "unknown",
+    }))
+  );
+  if (message) throw new Error(message);
 }
 
 function isProviderHealthState(value: unknown): value is ProviderHealthState {

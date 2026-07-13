@@ -59,6 +59,7 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       lifetime: emptyUsage(),
       window: { index: 1 },
       lastSequence: 0,
+      attributedModelReservationCount: 0,
       models: [],
     };
   }

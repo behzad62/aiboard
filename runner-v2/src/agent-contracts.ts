@@ -50,6 +50,7 @@ export interface ModelTurn {
   providerRequestId?: string;
   usage?: {
     inputTokens?: number;
+    inputTokenSource?: "reported" | "estimated";
     cachedInputTokens?: number;
     cacheWriteInputTokens?: number;
     outputTokens?: number;

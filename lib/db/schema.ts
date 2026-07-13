@@ -65,6 +65,9 @@ export interface BuildUsageModelTotal {
   costBasis?: "api_estimate" | "account_not_metered" | "unknown";
   lastUsedAt?: string | null;
   usageOrigin?: "native" | "legacy_preview" | "legacy_aggregate";
+  cooldownUntil?: number;
+  failureCode?: string;
+  failureSummary?: string;
 }
 
 export interface BuildUsageWindow {

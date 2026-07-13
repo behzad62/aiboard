@@ -4,7 +4,7 @@ import type {
   ModelTokenSource,
 } from "./budget-ledger.js";
 import type { ProviderUsageConfig } from "./provider-config-store.js";
-import type { ProviderHealthState } from "./provider-health.js";
+import type { ProviderFailureKind, ProviderHealthState } from "./provider-health.js";
 
 export type NativeModelUsageStatus =
   | "healthy"
@@ -32,6 +32,7 @@ export interface NativeModelUsageProjection {
   runtimeId: string;
   providerId: string;
   modelId: string;
+  displayName?: string;
   roles: ModelCallRole[];
   status: NativeModelUsageStatus;
   calls: number;
@@ -44,10 +45,14 @@ export interface NativeModelUsageProjection {
   costBasis: NativeModelCostBasis;
   usageQuality: NativeModelUsageQuality;
   lastUsedAt: string | null;
+  cooldownUntil?: number;
+  failureCode?: ProviderFailureKind;
+  failureSummary?: string;
 }
 
 export interface NativeBuildUsageProjection extends BudgetProjection {
   models: NativeModelUsageProjection[];
+  attributedModelReservationCount: number;
 }
 
 export interface ProjectNativeModelUsageInput {
@@ -67,6 +72,9 @@ interface MutableUsage {
   inconsistentCacheTokens: boolean;
   tokenSources: ModelTokenSource[];
   missingTokenSources: boolean;
+  costBasisKinds: NativeModelCostBasis[];
+  missingCostBasis: boolean;
+  settledCostMicros: number;
   lastUsedAt: string | null;
 }
 
@@ -157,6 +165,17 @@ export function projectNativeModelUsage(
     } else {
       usage.missingTokenSources = true;
     }
+    if (reservation.costBasis) {
+      usage.costBasisKinds.push(reservation.costBasis.kind);
+    } else {
+      usage.missingCostBasis = true;
+    }
+    usage.settledCostMicros = checkedAdd(
+      usage.settledCostMicros,
+      reservation.actual.estimatedCostMicros ?? 0,
+      "estimatedCostMicros",
+      runtime.runtimeId
+    );
     if (
       reservation.settledAt &&
       (!usage.lastUsedAt || reservation.settledAt > usage.lastUsedAt)
@@ -171,19 +190,22 @@ export function projectNativeModelUsage(
     .map((runtime) => {
       const usage = usageByRuntime.get(runtime.runtimeId)!;
       const cost = projectCost(runtime, usage);
+      const health = healthByProvider.get(runtime.providerId);
       return {
         runtimeId: runtime.runtimeId,
         providerId: runtime.providerId,
         modelId: runtime.modelId,
+        ...(runtime.displayName ? { displayName: runtime.displayName } : {}),
         roles: [...usage.roles].sort(
           (left, right) => ROLE_ORDER[left] - ROLE_ORDER[right]
         ),
         status: projectStatus(
           runtime,
           usage.calls,
-          healthByProvider.get(runtime.providerId),
+          health,
           now
         ),
+        ...operationalMetadata(health, now),
         calls: usage.calls,
         inputTokens: usage.inputTokens,
         cachedInputTokens: usage.cachedInputTokens,
@@ -202,6 +224,35 @@ export function projectNativeModelUsage(
     });
 }
 
+const SAFE_FAILURE_SUMMARIES: Record<ProviderFailureKind, string> = {
+  usage_limit: "Usage limit reached.",
+  rate_limit: "Rate limited.",
+  authentication: "Authentication failed.",
+  provider_unavailable: "Provider unavailable.",
+  transient: "Temporary provider failure.",
+  invalid_request: "Provider rejected the request.",
+  cancelled: "Request cancelled.",
+};
+
+function operationalMetadata(
+  health: ProviderHealthState | undefined,
+  now: number
+): Pick<
+  NativeModelUsageProjection,
+  "cooldownUntil" | "failureCode" | "failureSummary"
+> {
+  if (!health?.failureKind) return {};
+  return {
+    ...(health.status === "cooldown" &&
+    health.cooldownUntil !== undefined &&
+    health.cooldownUntil > now
+      ? { cooldownUntil: health.cooldownUntil }
+      : {}),
+    failureCode: health.failureKind,
+    failureSummary: SAFE_FAILURE_SUMMARIES[health.failureKind],
+  };
+}
+
 function emptyMutableUsage(roles: readonly ModelCallRole[]): MutableUsage {
   return {
     roles: new Set(roles),
@@ -213,6 +264,9 @@ function emptyMutableUsage(roles: readonly ModelCallRole[]): MutableUsage {
     inconsistentCacheTokens: false,
     tokenSources: [],
     missingTokenSources: false,
+    costBasisKinds: [],
+    missingCostBasis: false,
+    settledCostMicros: 0,
     lastUsedAt: null,
   };
 }
@@ -247,53 +301,28 @@ function projectCost(
   runtime: NativeModelUsageRuntime,
   usage: MutableUsage
 ): Pick<NativeModelUsageProjection, "estimatedCostMicros" | "costBasis"> {
+  if (usage.calls > 0) {
+    if (usage.missingCostBasis || usage.costBasisKinds.includes("unknown")) {
+      return { estimatedCostMicros: null, costBasis: "unknown" };
+    }
+    if (usage.costBasisKinds.every((basis) => basis === "account_not_metered")) {
+      return { estimatedCostMicros: null, costBasis: "account_not_metered" };
+    }
+    if (usage.costBasisKinds.every((basis) => basis === "api_estimate")) {
+      return {
+        estimatedCostMicros: usage.settledCostMicros,
+        costBasis: "api_estimate",
+      };
+    }
+    return { estimatedCostMicros: null, costBasis: "unknown" };
+  }
   if (runtime.transport === "account-runner") {
     return { estimatedCostMicros: null, costBasis: "account_not_metered" };
   }
-  if (
-    usage.inconsistentCacheTokens ||
-    hasInconsistentCacheTokens(
-      usage.inputTokens,
-      usage.cachedInputTokens,
-      usage.cacheWriteInputTokens
-    )
-  ) {
-    return { estimatedCostMicros: null, costBasis: "unknown" };
-  }
-  const cached = usage.cachedInputTokens;
-  const cacheWrite = usage.cacheWriteInputTokens;
-  const uncached = usage.inputTokens - cached - cacheWrite;
-  if (
-    (usage.calls === 0 &&
-      (runtime.inputCostMicrosPerMillion === undefined ||
-        runtime.outputCostMicrosPerMillion === undefined)) ||
-    (uncached > 0 && runtime.inputCostMicrosPerMillion === undefined) ||
-    (cached > 0 && runtime.cachedInputCostMicrosPerMillion === undefined) ||
-    (cacheWrite > 0 &&
-      runtime.cacheWriteInputCostMicrosPerMillion === undefined) ||
-    (usage.outputTokens > 0 &&
-      runtime.outputCostMicrosPerMillion === undefined)
-  ) {
-    return { estimatedCostMicros: null, costBasis: "unknown" };
-  }
-  const numerator =
-    BigInt(uncached) * BigInt(runtime.inputCostMicrosPerMillion ?? 0) +
-    BigInt(cached) * BigInt(runtime.cachedInputCostMicrosPerMillion ?? 0) +
-    BigInt(cacheWrite) *
-      BigInt(runtime.cacheWriteInputCostMicrosPerMillion ?? 0) +
-    BigInt(usage.outputTokens) *
-      BigInt(runtime.outputCostMicrosPerMillion ?? 0);
-  const estimatedCostMicros =
-    (numerator + BigInt(500_000)) / BigInt(1_000_000);
-  if (estimatedCostMicros > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(
-      `Estimated model cost for ${runtime.runtimeId} exceeds the safe integer range.`
-    );
-  }
-  return {
-    estimatedCostMicros: Number(estimatedCostMicros),
-    costBasis: "api_estimate",
-  };
+  return runtime.inputCostMicrosPerMillion !== undefined &&
+    runtime.outputCostMicrosPerMillion !== undefined
+    ? { estimatedCostMicros: 0, costBasis: "api_estimate" }
+    : { estimatedCostMicros: null, costBasis: "unknown" };
 }
 
 function hasInconsistentCacheTokens(

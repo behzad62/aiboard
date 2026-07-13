@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   effectiveNativeBuildPolicy,
+  nativeBuildBudgetEnforceabilityError,
   supportsNativeRunnerNodeVersion,
   usesBuildBudgetControls,
 } from "../lib/client/native-build-policy";
@@ -54,6 +55,41 @@ assert.throws(
     ),
   /USD or time limit/i
 );
+
+const usdOnly = {
+  runPolicy: "budgeted" as const,
+  budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+};
+const timeOnly = {
+  runPolicy: "budgeted" as const,
+  budgetLimits: { maxActiveMs: 60_000 },
+};
+const usdAndTime = {
+  runPolicy: "budgeted" as const,
+  budgetLimits: { maxEstimatedCostMicros: 1_000_000, maxActiveMs: 60_000 },
+};
+const priced = {
+  runtimeId: "api:priced",
+  costBasis: "priced_api" as const,
+};
+const account = { runtimeId: "account:model", costBasis: "account_not_metered" as const };
+const unknown = { runtimeId: "api:unknown", costBasis: "unknown" as const };
+
+assert.match(
+  nativeBuildBudgetEnforceabilityError(usdOnly, [account]) ?? "",
+  /account:model.*time limit/i,
+);
+assert.match(
+  nativeBuildBudgetEnforceabilityError(usdOnly, [unknown]) ?? "",
+  /api:unknown.*pricing.*time limit/i,
+);
+assert.match(
+  nativeBuildBudgetEnforceabilityError(usdOnly, [priced, account]) ?? "",
+  /account:model/i,
+);
+assert.equal(nativeBuildBudgetEnforceabilityError(usdOnly, [priced]), null);
+assert.equal(nativeBuildBudgetEnforceabilityError(timeOnly, [account, unknown]), null);
+assert.equal(nativeBuildBudgetEnforceabilityError(usdAndTime, [account, unknown]), null);
 
 assert.equal(supportsNativeRunnerNodeVersion("24.18.0"), true);
 assert.equal(supportsNativeRunnerNodeVersion("24.20.0"), true);

@@ -10,7 +10,12 @@ import { AccountRunnerModel, ProviderTransportError } from "../src/account-runne
 import { AnthropicModel } from "../src/anthropic-model.js";
 import { EncryptedProviderConfigStore } from "../src/encrypted-provider-config-store.js";
 import { GoogleModel } from "../src/google-model.js";
-import { createProviderModel, providerCostEstimator } from "../src/native-build-factory.js";
+import {
+  assertEnforceableBuildBudget,
+  createProviderModel,
+  providerCostEstimator,
+} from "../src/native-build-factory.js";
+import type { NativeBuildSpec } from "../src/build-spec.js";
 import { OpenAICompatibleModel } from "../src/openai-compatible-model.js";
 import { validateProviderConfigs } from "../src/provider-config-store.js";
 
@@ -94,7 +99,62 @@ test("provider pricing converts token classes to integer microdollars", () => {
     cacheWriteInputCostMicrosPerMillion: 2_500_000,
     outputCostMicrosPerMillion: 15_000_000,
   });
-  assert.equal(estimate(1_000_000, 100_000, 600_000, 100_000), 2_650_000);
+  assert.equal(estimate!(1_000_000, 100_000, 600_000, 100_000), 2_650_000);
+});
+
+test("Runner rejects USD-only runs with any unpriced selectable runtime", () => {
+  const spec: NativeBuildSpec = {
+    version: 1,
+    runId: "run_usd",
+    projectId: "project",
+    objective: "Enforce the configured budget.",
+    architectRuntimeId: "api:priced",
+    workerRuntimeIds: ["api:priced"],
+    maxConcurrency: 1,
+    permissionProfile: "full",
+    runPolicy: "budgeted",
+    budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+    createdAt: "2026-07-13T00:00:00.000Z",
+    idempotencyKey: "spec:usd",
+  };
+  const base = {
+    providerId: "provider",
+    modelId: "model",
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+  };
+  const priced = {
+    ...base,
+    runtimeId: "api:priced",
+    transport: "openai-compatible" as const,
+    baseUrl: "https://example.test/v1",
+    inputCostMicrosPerMillion: 0,
+    outputCostMicrosPerMillion: 0,
+  };
+  const account = {
+    ...base,
+    runtimeId: "account:model",
+    transport: "account-runner" as const,
+    baseUrl: "http://127.0.0.1:1455",
+  };
+  const unknown = {
+    ...base,
+    runtimeId: "api:unknown",
+    transport: "anthropic" as const,
+  };
+  assert.doesNotThrow(() => assertEnforceableBuildBudget(spec, [priced]));
+  assert.throws(() => assertEnforceableBuildBudget(spec, [account]), /account:model.*time limit/i);
+  assert.throws(() => assertEnforceableBuildBudget(spec, [unknown]), /api:unknown.*pricing.*time limit/i);
+  assert.throws(() => assertEnforceableBuildBudget(spec, [priced, account]), /account:model/i);
+  assert.doesNotThrow(() => assertEnforceableBuildBudget({
+    ...spec,
+    budgetLimits: { maxActiveMs: 60_000 },
+  }, [account, unknown]));
+  assert.doesNotThrow(() => assertEnforceableBuildBudget({
+    ...spec,
+    budgetLimits: { maxEstimatedCostMicros: 1_000_000, maxActiveMs: 60_000 },
+  }, [account, unknown]));
 });
 
 test("account runner transport maps native tool calls, usage, and tool results", async () => {
@@ -156,7 +216,11 @@ test("account runner transport maps native tool calls, usage, and tool results",
       name: "fs.read",
       arguments: { path: "a.txt" },
     });
-    assert.deepEqual(turn.usage, { inputTokens: 12, outputTokens: 3 });
+    assert.deepEqual(turn.usage, {
+      inputTokens: 12,
+      inputTokenSource: "reported",
+      outputTokens: 3,
+    });
     assert.match(JSON.stringify(requests[0]), /TOOL_RESULT/);
     assert.equal((requests[0].nativeTools as unknown[]).length, 1);
     assert.equal(
@@ -193,7 +257,7 @@ test("account runner sends only current-round image artifacts to image-capable m
         return Buffer.from("recent-png");
       },
     });
-    await model.complete({
+    const imageTurn = await model.complete({
       sessionId: "session_image",
       messages: [
         {
@@ -219,6 +283,10 @@ test("account runner sends only current-round image artifacts to image-capable m
         base64Data: Buffer.from("recent-png").toString("base64"),
       },
     ]);
+    assert.deepEqual(imageTurn.usage, {
+      inputTokens: Math.ceil(Buffer.byteLength(JSON.stringify(requests[0])) / 4),
+      inputTokenSource: "estimated",
+    });
 
     const textOnly = new AccountRunnerModel({
       baseUrl: `http://127.0.0.1:${address.port}`,
@@ -292,7 +360,7 @@ test("OpenAI-compatible transport preserves native tool conversations and usage"
             }],
           },
         }],
-        usage: { prompt_tokens: 21, completion_tokens: 7 },
+        usage: { prompt_tokens: 0, completion_tokens: 7 },
       });
     },
   });
@@ -340,7 +408,11 @@ test("OpenAI-compatible transport preserves native tool conversations and usage"
   assert.equal(body.tools.length, 1);
   assert.equal(body.tools[0].function.name, "fs_read");
   assert.equal(turn.providerRequestId, "req_openai");
-  assert.deepEqual(turn.usage, { inputTokens: 21, outputTokens: 7 });
+  assert.deepEqual(turn.usage, {
+    inputTokens: 0,
+    inputTokenSource: "reported",
+    outputTokens: 7,
+  });
   assert.deepEqual(turn.blocks.at(-1), {
     type: "tool_call",
     callId: "call_2",
@@ -427,6 +499,7 @@ test("OpenAI Responses transport preserves function-call history for Codex model
   assert.equal(turn.providerRequestId, "resp_1");
   assert.deepEqual(turn.usage, {
     inputTokens: 51,
+    inputTokenSource: "reported",
     cachedInputTokens: 40,
     outputTokens: 13,
   });
@@ -514,6 +587,7 @@ test("Anthropic transport maps system context, tool results, tool use, and usage
   });
   assert.deepEqual(turn.usage, {
     inputTokens: 61,
+    inputTokenSource: "reported",
     cachedInputTokens: 20,
     cacheWriteInputTokens: 10,
     outputTokens: 9,
@@ -582,7 +656,11 @@ test("Google transport maps function declarations, function responses, calls, an
     name: "fs.read",
     arguments: { path: "package.json" },
   });
-  assert.deepEqual(turn.usage, { inputTokens: 41, outputTokens: 11 });
+  assert.deepEqual(turn.usage, {
+    inputTokens: 41,
+    inputTokenSource: "reported",
+    outputTokens: 11,
+  });
 });
 
 test("native HTTP provider failures preserve routing metadata without leaking secrets", async () => {

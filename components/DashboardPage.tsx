@@ -35,7 +35,7 @@ import type {
   ReasoningEffort,
   Verbosity,
 } from "@/lib/db/schema";
-import type { ModelInfo } from "@/lib/providers/base";
+import { parseModelId, type ModelInfo } from "@/lib/providers/base";
 import {
   estimateDiscussionCost,
   estimateDiscussionCostUsd,
@@ -64,6 +64,8 @@ import {
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 import { getCapabilityProfiles } from "@/lib/client/capability-api";
+import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { nativeBuildBudgetEnforceabilityError } from "@/lib/client/native-build-policy";
 import {
   selectBuildModelIdsByCapabilities,
   participantRequiredInputTypesForMode,
@@ -259,6 +261,42 @@ export default function DashboardPage() {
     effectiveSelectedModels.length
   );
   const hasJudge = Boolean(judgeModelId || effectiveSelectedModels[0]);
+  const buildBudgetEnforceabilityError = useMemo(() => {
+    if (mode !== "build") return null;
+    const runtimeIds = [...new Set([
+      judgeModelId || effectiveSelectedModels[0],
+      ...effectiveSelectedModels,
+    ].filter((id): id is string => Boolean(id)))];
+    return nativeBuildBudgetEnforceabilityError({
+      runPolicy: buildRunPolicy,
+      budgetLimits: {
+        ...(buildBudgetUsd > 0
+          ? { maxEstimatedCostMicros: Math.round(buildBudgetUsd * 1_000_000) }
+          : {}),
+        ...(buildTimeLimitMinutes > 0
+          ? { maxActiveMs: Math.round(buildTimeLimitMinutes * 60_000) }
+          : {}),
+      },
+    }, runtimeIds.map((runtimeId) => {
+      const { providerId } = parseModelId(runtimeId);
+      return {
+        runtimeId,
+        costBasis: getProviderDefinition(providerId)?.accountRunner
+          ? "account_not_metered" as const
+          : getModelPricing(runtimeId, data?.settings.modelPricingOverrides)
+            ? "priced_api" as const
+            : "unknown" as const,
+      };
+    }));
+  }, [
+    mode,
+    judgeModelId,
+    effectiveSelectedModels,
+    buildRunPolicy,
+    buildBudgetUsd,
+    buildTimeLimitMinutes,
+    data?.settings.modelPricingOverrides,
+  ]);
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =
     totalEnabledModels === 0
@@ -267,8 +305,10 @@ export default function DashboardPage() {
         ? "Connect Runner V2 to start a Build."
       : !hasEnoughModels
         ? participatingModelRequirementMessage(mode)
-        : !hasJudge
+      : !hasJudge
           ? "Choose a judge model."
+          : buildBudgetEnforceabilityError
+            ? buildBudgetEnforceabilityError
           : !hasTopic
             ? "Enter a topic to begin."
             : null;

@@ -11,6 +11,7 @@ import {
   createToolNameCodec,
   fetchProviderJson,
   joinEndpoint,
+  serializedInputUsage,
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
@@ -55,6 +56,18 @@ export class AnthropicModel implements AgentModel {
       .map(messageText)
       .filter(Boolean)
       .join("\n\n");
+    const body = JSON.stringify({
+      model: this.options.modelId,
+      max_tokens: this.options.maxTokens ?? 16_384,
+      cache_control: { type: "ephemeral" },
+      ...(system ? { system } : {}),
+      messages: request.messages
+        .filter((message) => message.role !== "system")
+        .map((message) => toAnthropicMessage(message, toolNames)),
+      ...(request.tools.length > 0
+        ? { tools: request.tools.map((tool) => toAnthropicTool(tool, toolNames)) }
+        : {}),
+    });
     const response = await fetchProviderJson<AnthropicResponse>(
       this.fetchImpl,
       joinEndpoint(this.options.baseUrl ?? "https://api.anthropic.com", "v1/messages"),
@@ -65,18 +78,7 @@ export class AnthropicModel implements AgentModel {
           "x-api-key": this.options.apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({
-          model: this.options.modelId,
-          max_tokens: this.options.maxTokens ?? 16_384,
-          cache_control: { type: "ephemeral" },
-          ...(system ? { system } : {}),
-          messages: request.messages
-            .filter((message) => message.role !== "system")
-            .map((message) => toAnthropicMessage(message, toolNames)),
-          ...(request.tools.length > 0
-            ? { tools: request.tools.map((tool) => toAnthropicTool(tool, toolNames)) }
-            : {}),
-        }),
+        body,
         signal: request.signal,
       }
     );
@@ -93,6 +95,7 @@ export class AnthropicModel implements AgentModel {
         });
       }
     }
+    const inputUsage = anthropicInputUsage(response.usage);
     return {
       blocks,
       stopReason: blocks.some((block) => block.type === "tool_call")
@@ -101,27 +104,25 @@ export class AnthropicModel implements AgentModel {
           ? "max_tokens"
           : "end_turn",
       ...(response.id ? { providerRequestId: response.id } : {}),
-      ...(response.usage
-        ? {
-            usage: {
-              ...anthropicInputUsage(response.usage),
-              ...(response.usage.output_tokens !== undefined
-                ? { outputTokens: response.usage.output_tokens }
-                : {}),
-            },
-          }
-        : {}),
+      usage: {
+        ...inputUsage,
+        ...serializedInputUsage(body, inputUsage.inputTokens),
+        ...(response.usage?.output_tokens !== undefined
+          ? { outputTokens: response.usage.output_tokens }
+          : {}),
+      },
     };
   }
 }
 
 function anthropicInputUsage(
-  usage: NonNullable<AnthropicResponse["usage"]>
+  usage: AnthropicResponse["usage"]
 ): {
   inputTokens?: number;
   cachedInputTokens?: number;
   cacheWriteInputTokens?: number;
 } {
+  if (!usage) return {};
   const hasInput = usage.input_tokens !== undefined;
   const cacheRead = usage.cache_read_input_tokens ?? 0;
   const cacheWrite = usage.cache_creation_input_tokens ?? 0;

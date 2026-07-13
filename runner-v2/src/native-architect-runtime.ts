@@ -11,7 +11,11 @@ import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-stor
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
-import type { BudgetLedger } from "./budget-ledger.js";
+import type {
+  BudgetLedger,
+  ModelCallAttribution,
+  ModelCostBasisSnapshot,
+} from "./budget-ledger.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import type {
@@ -27,6 +31,7 @@ import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { PermissionProfile } from "./contracts.js";
+import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
 import {
@@ -67,12 +72,14 @@ export interface NativeArchitectRuntimeOptions {
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   modelCostEstimators?: ReadonlyMap<string, ModelCostEstimator>;
+  modelCostBases?: ReadonlyMap<string, ModelCostBasisSnapshot>;
   clock?: () => string;
   permissionProfile?: PermissionProfile;
   ledger?: ToolInvocationLedger;
   permissions?: SqlitePermissionStore;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  runPolicy?: NativeBuildRunPolicy;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -211,7 +218,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         extras.register(tool);
       }
     }
-    const layeredTools = new LayeredToolRuntime(request.tools, extras);
+    const inspectionTools = this.options.runPolicy === "plan_only"
+      ? new PlanOnlyInspectionRuntime(extras)
+      : extras;
+    const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
           runtime: layeredTools,
@@ -225,15 +235,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           model,
           ledger: this.options.budgetLedger,
           scopeId: request.runId,
-          attribution: {
-            runtimeId: candidate.runtimeId,
-            providerId: candidate.providerId,
-            modelId: candidate.modelId,
-            role: "architect",
-            sessionId,
-          },
+          attribution: architectModelAttribution(candidate, sessionId),
           outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
           estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
+          costBasis: this.options.modelCostBases?.get(runtimeId),
           clock: this.clock,
         })
       : model;
@@ -383,6 +388,61 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       evidence,
       recentHistory: [],
     });
+  }
+}
+
+export function architectModelAttribution(
+  candidate: AgentRuntimeCandidate,
+  sessionId: string
+): ModelCallAttribution {
+  return {
+    runtimeId: candidate.runtimeId,
+    providerId: candidate.providerId,
+    modelId: candidate.modelId,
+    role: "architect",
+    sessionId,
+  };
+}
+
+export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
+  private readonly allowed: ReadonlySet<string>;
+
+  constructor(private readonly runtime: AgentToolRuntime) {
+    this.allowed = new Set(
+      runtime.definitions()
+        .filter((definition) => definition.readOnly && definition.effect !== "workspace")
+        .map((definition) => definition.name)
+    );
+  }
+
+  definitions() {
+    return this.runtime.definitions().filter((definition) => this.allowed.has(definition.name));
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.allowed.has(name) && this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.allowed.has(name) && this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (this.allowed.has(call.name)) return await this.runtime.invoke(call, context);
+    return {
+      callId: call.callId,
+      toolName: call.name,
+      content: [{ type: "text", text: `Tool ${call.name} is unavailable in Plan-only.` }],
+      isError: true,
+      error: {
+        code: "plan_only_tool_denied",
+        message: `Tool ${call.name} is unavailable in Plan-only.`,
+      },
+    };
   }
 }
 

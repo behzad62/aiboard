@@ -4,6 +4,11 @@ import {
   MINIMUM_NODE_VERSION,
   supportsNodeVersion,
 } from "@/runner-v2/src/node-version";
+export {
+  nativeBuildBudgetEnforceabilityError,
+  type NativeBudgetRuntime,
+  type NativeBudgetRuntimeCostBasis,
+} from "@/runner-v2/src/budget-enforceability";
 
 export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = MINIMUM_NODE_VERSION;
 

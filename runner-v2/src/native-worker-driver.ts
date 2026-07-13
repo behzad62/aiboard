@@ -3,7 +3,12 @@ import type { AgentSuspensionReason } from "./agent-loop.js";
 import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { BudgetLedger } from "./budget-ledger.js";
+import type {
+  BudgetLedger,
+  ModelCallAttribution,
+  ModelCallRole,
+  ModelCostBasisSnapshot,
+} from "./budget-ledger.js";
 import type { BrowserBackend } from "./browser-tools.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
@@ -58,6 +63,7 @@ export interface NativeWorkerDriverOptions {
   contextLimits?: ContextLimits;
   outputTokenReserve?: number;
   modelCostEstimators?: ReadonlyMap<string, ModelCostEstimator>;
+  modelCostBases?: ReadonlyMap<string, ModelCostBasisSnapshot>;
   clock?: () => string;
 }
 
@@ -118,16 +124,15 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             model,
             ledger: this.options.budgetLedger,
             scopeId: assignment.runId,
-            attribution: {
-              runtimeId: candidate.runtimeId,
-              providerId: candidate.providerId,
-              modelId: candidate.modelId,
-              role: "worker",
+            attribution: workerModelAttribution(
+              candidate,
               sessionId,
-              taskId: assignment.task.id,
-            },
+              assignment.task.id,
+              "worker"
+            ),
             outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
             estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
+            costBasis: this.options.modelCostBases?.get(runtimeId),
             clock: this.clock,
           })
         : model;
@@ -140,18 +145,17 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
                   model,
                   ledger: this.options.budgetLedger!,
                   scopeId: assignment.runId,
-                  attribution: {
-                    runtimeId: candidate.runtimeId,
-                    providerId: candidate.providerId,
-                    modelId: candidate.modelId,
-                    role: "subagent",
-                    sessionId: subagentSessionId,
-                    taskId: assignment.task.id,
-                  },
+                  attribution: workerModelAttribution(
+                    candidate,
+                    subagentSessionId,
+                    assignment.task.id,
+                    "subagent"
+                  ),
                   outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
                   estimateCostMicros: this.options.modelCostEstimators?.get(
                     candidate.runtimeId
                   ),
+                  costBasis: this.options.modelCostBases?.get(candidate.runtimeId),
                   clock: this.clock,
                 }),
             }
@@ -386,6 +390,22 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       recentHistory: [],
     });
   }
+}
+
+export function workerModelAttribution(
+  candidate: AgentRuntimeCandidate,
+  sessionId: string,
+  taskId: string,
+  role: Extract<ModelCallRole, "worker" | "subagent">
+): ModelCallAttribution {
+  return {
+    runtimeId: candidate.runtimeId,
+    providerId: candidate.providerId,
+    modelId: candidate.modelId,
+    role,
+    sessionId,
+    taskId,
+  };
 }
 
 export function recoverableWorkerSuspension(

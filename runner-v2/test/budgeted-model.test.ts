@@ -211,7 +211,7 @@ test("reported input and estimated serialized output are resolved independently"
   }
 });
 
-test("estimated serialized input and reported output are resolved independently", async () => {
+test("transport-estimated serialized input and reported output are resolved independently", async () => {
   const fixture = budgetFixture();
   const ledger = new SqliteBudgetLedger(fixture.database, {
     limitsFor: () => ({ maxModelCalls: 1, maxInputTokens: 1_000, maxOutputTokens: 1_000 }),
@@ -222,7 +222,11 @@ test("estimated serialized input and reported output are resolved independently"
         complete: async () => ({
           blocks: [{ type: "text", text: "provider counted output" }],
           stopReason: "end_turn",
-          usage: { outputTokens: 9 },
+          usage: {
+            inputTokens: 777,
+            inputTokenSource: "estimated",
+            outputTokens: 9,
+          },
         }),
       },
       ledger,
@@ -230,15 +234,11 @@ test("estimated serialized input and reported output are resolved independently"
       attribution: modelAttribution(),
       outputTokenReserve: 999,
     });
-    const modelRequest = request("session_1");
-    await budgeted.complete(modelRequest);
+    await budgeted.complete(request("session_1"));
     const reservation = ledger.snapshot("run_1").reservations["model:session_1:1"];
     assert.equal(
       reservation.actual?.inputTokens,
-      Math.ceil(Buffer.byteLength(JSON.stringify({
-        messages: modelRequest.messages,
-        tools: modelRequest.tools,
-      })) / 4),
+      777,
     );
     assert.equal(reservation.actual?.outputTokens, 9);
     assert.deepEqual(reservation.tokenSources, {

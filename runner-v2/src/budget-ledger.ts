@@ -18,6 +18,17 @@ export interface ModelTokenSources {
   outputTokens: ModelTokenSource;
 }
 
+export type ModelCostBasisSnapshot =
+  | {
+      kind: "api_estimate";
+      inputCostMicrosPerMillion: number;
+      outputCostMicrosPerMillion: number;
+      cachedInputCostMicrosPerMillion: number;
+      cacheWriteInputCostMicrosPerMillion: number;
+    }
+  | { kind: "account_not_metered" }
+  | { kind: "unknown" };
+
 export interface BudgetUsage {
   modelCalls: number;
   toolCalls: number;
@@ -85,6 +96,7 @@ export interface BudgetReservationProjection {
   estimate: BudgetAmount;
   actual?: BudgetAmount;
   tokenSources?: ModelTokenSources;
+  costBasis?: ModelCostBasisSnapshot;
   settledAt?: string;
   status: "reserved" | "settled";
   windowIndex: number;
@@ -129,6 +141,7 @@ export type ReserveBudgetInput =
   | (ReserveBudgetInputBase & {
       kind: "model";
       attribution: ModelCallAttribution;
+      costBasis?: ModelCostBasisSnapshot;
     })
   | (ReserveBudgetInputBase & {
       kind: "tool";
@@ -140,6 +153,7 @@ export interface SettleBudgetInput {
   reservationId: string;
   actual: BudgetAmount;
   tokenSources?: ModelTokenSources;
+  costBasis?: ModelCostBasisSnapshot;
   occurredAt: string;
   idempotencyKey: string;
 }
@@ -209,10 +223,12 @@ export function reduceBudgetEvent(
     const kind = requiredString(event.payload, "kind");
     if (kind !== "model" && kind !== "tool") throw new Error(`Invalid budget kind ${kind}.`);
     const attribution = optionalModelCallAttribution(event.payload.attribution);
+    const costBasis = optionalModelCostBasisSnapshot(event.payload.costBasis);
     projection.reservations[reservationId] = {
       reservationId,
       kind,
       ...(attribution ? { attribution } : {}),
+      ...(costBasis ? { costBasis } : {}),
       estimate: usageAmount(event.payload.estimate),
       status: "reserved",
       windowIndex: projection.window.index,
@@ -233,6 +249,9 @@ export function reduceBudgetEvent(
       ...(event.payload.settledAt === undefined
         ? {}
         : { settledAt: requiredString(event.payload, "settledAt") }),
+      ...(event.payload.costBasis === undefined
+        ? {}
+        : { costBasis: modelCostBasisSnapshot(event.payload.costBasis) }),
     };
   } else if (event.type === "active.started") {
     const segmentId = requiredString(event.payload, "segmentId");
@@ -358,6 +377,41 @@ export function modelTokenSources(value: unknown): ModelTokenSources {
     inputTokens: modelTokenSource(input.inputTokens, "inputTokens"),
     outputTokens: modelTokenSource(input.outputTokens, "outputTokens"),
   };
+}
+
+export function modelCostBasisSnapshot(value: unknown): ModelCostBasisSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid model cost basis snapshot.");
+  }
+  const input = value as Record<string, unknown>;
+  if (input.kind === "account_not_metered" || input.kind === "unknown") {
+    return { kind: input.kind };
+  }
+  if (input.kind !== "api_estimate") {
+    throw new Error("Invalid model cost basis snapshot.");
+  }
+  const fields = [
+    "inputCostMicrosPerMillion",
+    "outputCostMicrosPerMillion",
+    "cachedInputCostMicrosPerMillion",
+    "cacheWriteInputCostMicrosPerMillion",
+  ] as const;
+  for (const field of fields) {
+    if (!Number.isSafeInteger(input[field]) || (input[field] as number) < 0) {
+      throw new Error(`Invalid model cost basis ${field}.`);
+    }
+  }
+  return {
+    kind: "api_estimate",
+    inputCostMicrosPerMillion: input.inputCostMicrosPerMillion as number,
+    outputCostMicrosPerMillion: input.outputCostMicrosPerMillion as number,
+    cachedInputCostMicrosPerMillion: input.cachedInputCostMicrosPerMillion as number,
+    cacheWriteInputCostMicrosPerMillion: input.cacheWriteInputCostMicrosPerMillion as number,
+  };
+}
+
+function optionalModelCostBasisSnapshot(value: unknown): ModelCostBasisSnapshot | undefined {
+  return value === undefined ? undefined : modelCostBasisSnapshot(value);
 }
 
 function optionalModelCallAttribution(

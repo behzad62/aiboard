@@ -6,6 +6,7 @@ import type {
 import type {
   BudgetLedger,
   ModelCallAttribution,
+  ModelCostBasisSnapshot,
   ModelTokenSource,
 } from "./budget-ledger.js";
 
@@ -16,6 +17,7 @@ export interface BudgetedAgentModelOptions {
   attribution: ModelCallAttribution;
   outputTokenReserve: number;
   estimateCostMicros?: ModelCostEstimator;
+  costBasis?: ModelCostBasisSnapshot;
   clock?: () => string;
 }
 
@@ -33,6 +35,7 @@ export class BudgetedAgentModel implements AgentModel {
   private readonly attribution: Readonly<ModelCallAttribution>;
   private readonly outputTokenReserve: number;
   private readonly estimateCostMicros: ModelCostEstimator;
+  private readonly costBasis: ModelCostBasisSnapshot;
   private readonly clock: () => string;
 
   constructor(options: BudgetedAgentModelOptions) {
@@ -48,6 +51,7 @@ export class BudgetedAgentModel implements AgentModel {
     this.attribution = Object.freeze({ ...options.attribution });
     this.outputTokenReserve = options.outputTokenReserve;
     this.estimateCostMicros = options.estimateCostMicros ?? (() => 0);
+    this.costBasis = options.costBasis ?? { kind: "unknown" };
     this.clock = options.clock ?? (() => new Date().toISOString());
   }
 
@@ -62,6 +66,7 @@ export class BudgetedAgentModel implements AgentModel {
       reservationId,
       kind: "model",
       attribution: this.attribution,
+      costBasis: this.costBasis,
       estimate: {
         inputTokens,
         outputTokens: this.outputTokenReserve,
@@ -79,7 +84,10 @@ export class BudgetedAgentModel implements AgentModel {
     });
     try {
       const turn = await this.model.complete(request);
-      const actualInput = resolveTokens(turn.usage?.inputTokens, inputTokens);
+      const actualInput = resolveTransportInputTokens(
+        turn.usage?.inputTokens,
+        turn.usage?.inputTokenSource
+      );
       const actualOutput = resolveTokens(
         turn.usage?.outputTokens,
         estimateSerializedTokens(turn.blocks)
@@ -149,6 +157,7 @@ export class BudgetedAgentModel implements AgentModel {
         inputTokens: inputTokenSource,
         outputTokens: outputTokenSource,
       },
+      costBasis: this.costBasis,
       occurredAt: settledAt,
       idempotencyKey: `settle:${reservationId}`,
     });
@@ -187,6 +196,19 @@ function nonNegative(value: number | undefined, fallback: number): number {
   return Number.isSafeInteger(value) && (value as number) >= 0
     ? (value as number)
     : fallback;
+}
+
+function resolveTransportInputTokens(
+  value: number | undefined,
+  source: ModelTokenSource | undefined
+): { value: number; source: ModelTokenSource } {
+  if (value === undefined) {
+    throw new Error("Provider transport did not resolve input token usage.");
+  }
+  return {
+    value: nonNegative(value, 0),
+    source: source ?? "reported",
+  };
 }
 
 function resolveTokens(

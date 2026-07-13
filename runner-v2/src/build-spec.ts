@@ -83,8 +83,12 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
 export function recoverLegacyBuildSpec(
   spec: Omit<NativeBuildSpec, "runPolicy">
 ): NativeBuildSpec {
-  const recovered: NativeBuildSpec = { ...spec, runPolicy: "budgeted" };
-  validateBuildSpecCore(recovered);
+  const recovered: NativeBuildSpec = {
+    ...spec,
+    runPolicy: "finish",
+    budgetLimits: {},
+  };
+  validateBuildSpec(recovered);
   return recovered;
 }
 

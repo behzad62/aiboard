@@ -186,6 +186,13 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<void> {
     try {
       let result = await handle.runtime.runUntilBlocked();
+      while (
+        result.status === "progressed" &&
+        handle.runtime.projection().status === "running"
+      ) {
+        await eventLoopYield();
+        result = await handle.runtime.runUntilBlocked();
+      }
       if (result.status === "idle") {
         const projection = handle.runtime.projection();
         if (projection.status === "running") {
@@ -237,4 +244,8 @@ export class NativeBuildManager implements BuildControlPlane {
       release();
     }
   }
+}
+
+function eventLoopYield(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }

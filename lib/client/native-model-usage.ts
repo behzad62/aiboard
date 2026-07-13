@@ -28,7 +28,11 @@ export function mapNativeBuildUsageModels(
   projection: NativeBuildUsageProjection
 ): BuildUsageModelTotal[] {
   const models = projection.models ?? [];
-  if (models.some((model) => model.calls > 0) || !hasAggregateUsage(projection)) {
+  if (
+    (projection.attributedModelReservationCount ?? 0) > 0 ||
+    models.some((model) => model.calls > 0) ||
+    !hasAggregateUsage(projection)
+  ) {
     return models.map(mapNativeRow);
   }
 
@@ -43,7 +47,7 @@ function mapNativeRow(model: NativeModelUsageProjection): BuildUsageModelTotal {
   return {
     runtimeId: model.runtimeId,
     modelId: model.modelId,
-    modelName: model.modelId,
+    modelName: model.displayName ?? model.modelId,
     providerId: model.providerId,
     roles: [...model.roles],
     status: model.status,
@@ -62,6 +66,9 @@ function mapNativeRow(model: NativeModelUsageProjection): BuildUsageModelTotal {
     costBasis: model.costBasis,
     lastUsedAt: model.lastUsedAt,
     usageOrigin: "native",
+    ...(model.cooldownUntil !== undefined ? { cooldownUntil: model.cooldownUntil } : {}),
+    ...(model.failureCode ? { failureCode: model.failureCode } : {}),
+    ...(model.failureSummary ? { failureSummary: model.failureSummary } : {}),
   };
 }
 

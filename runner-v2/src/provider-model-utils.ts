@@ -35,6 +35,18 @@ export function joinEndpoint(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 }
 
+export function serializedInputUsage(
+  serializedBody: string,
+  reportedInputTokens?: number
+): { inputTokens: number; inputTokenSource: "reported" | "estimated" } {
+  return reportedInputTokens !== undefined
+    ? { inputTokens: reportedInputTokens, inputTokenSource: "reported" }
+    : {
+        inputTokens: Math.ceil(Buffer.byteLength(serializedBody) / 4),
+        inputTokenSource: "estimated",
+      };
+}
+
 export async function fetchProviderJson<T>(
   fetchImpl: typeof globalThis.fetch,
   url: string,

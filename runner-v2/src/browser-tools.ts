@@ -274,9 +274,9 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
   const clock = options.clock ?? (() => new Date().toISOString());
   return [
     tool("browser.open", "Open a runner-managed browser session", openSchema(), validateOpen, async (input, context) =>
-      json(await options.backend.open(sessionFor(context.runId), input)), external("browser.open")),
+      json(await options.backend.open(sessionFor(context.runId), input)), external("browser.open"), true),
     tool("browser.navigate", "Navigate the managed browser", urlSchema(), validateUrlOnly, async (input, context) =>
-      json(await options.backend.navigate(sessionFor(context.runId), input.url)), external("browser.navigate")),
+      json(await options.backend.navigate(sessionFor(context.runId), input.url)), external("browser.navigate"), true),
     tool("browser.snapshot", "Capture visible text and DOM from the managed browser", emptySchema(), validateEmpty, async (_input, context) => {
       const snapshot = await options.backend.snapshot(sessionFor(context.runId));
       const encoded = Buffer.from(snapshot.html);
@@ -309,15 +309,15 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         htmlBytes: encoded.byteLength,
         truncated: encoded.byteLength > bytes.byteLength,
       });
-    }, external("browser.snapshot")),
+    }, external("browser.snapshot"), true),
     tool("browser.click", "Click one element by Playwright selector", selectorSchema(), validateSelector, async (input, context) => {
       await options.backend.click(sessionFor(context.runId), input.selector);
       return json({ clicked: input.selector });
-    }, external("browser.click")),
+    }, external("browser.click"), false),
     tool("browser.fill", "Fill one form control by Playwright selector", fillSchema(), validateFill, async (input, context) => {
       await options.backend.fill(sessionFor(context.runId), input.selector, input.value);
       return json({ filled: input.selector });
-    }, external("browser.fill")),
+    }, external("browser.fill"), false),
     tool("browser.screenshot", "Capture a full-page PNG from the managed browser", emptySchema(), validateEmpty, async (_input, context) => {
       const bytes = await options.backend.screenshot(sessionFor(context.runId));
       const artifact = await options.artifacts.put(bytes, "image/png", `Browser screenshot ${options.taskId}`);
@@ -356,7 +356,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         ],
         isError: false,
       };
-    }, external("browser.screenshot")),
+    }, external("browser.screenshot"), true),
     tool("browser.events", "Read bounded console and network observations", emptySchema(), validateEmpty, async (_input, context) => {
       const events = await options.backend.events(sessionFor(context.runId));
       const artifact = await options.artifacts.put(
@@ -385,11 +385,11 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
       });
       return json(events);
-    }, external("browser.events")),
+    }, external("browser.events"), true),
     tool("browser.close", "Close the managed task browser session", emptySchema(), validateEmpty, async (_input, context) => {
       await options.backend.close(sessionFor(context.runId));
       return json({ closed: true });
-    }, external("browser.close")),
+    }, external("browser.close"), false),
   ];
 }
 
@@ -399,10 +399,11 @@ function tool<T>(
   inputSchema: Record<string, unknown>,
   validate: (input: unknown) => ValidationResult<T>,
   execute: NativeTool<T>["execute"],
-  assessAccess: NativeTool<T>["assessAccess"]
+  assessAccess: NativeTool<T>["assessAccess"],
+  readOnly: boolean
 ): NativeTool<T> {
   return {
-    definition: { name, description, inputSchema, readOnly: false, effect: "external" },
+    definition: { name, description, inputSchema, readOnly, effect: "external" },
     validate,
     assessAccess,
     execute,

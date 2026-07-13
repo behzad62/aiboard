@@ -157,7 +157,7 @@ export class BuildRuntime {
       );
     }
     const occurredAt = this.clock();
-    if (projection.status === "paused") {
+    if (projection.status === "paused" && this.runPolicy === "budgeted") {
       this.renewBudgetWindow?.(`budget-window:${idempotencyKey}`, occurredAt);
     }
     this.store.append({
@@ -229,17 +229,7 @@ export class BuildRuntime {
       latest = await this.step();
       if (latest.status !== "progressed") return latest;
     }
-    if (this.store.readRun(this.runId).length > 0) {
-      this.store.append({
-        runId: this.runId,
-        type: "run.paused",
-        occurredAt: this.clock(),
-        actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `step-budget:${this.projection().lastSequence}`,
-        payload: { reason: "build_step_budget" },
-      });
-    }
-    return { status: "paused", action: "build_step_budget" };
+    return { status: "progressed", action: "step_allowance_yielded" };
   }
 
   private async stepOnce(): Promise<BuildStepResult> {
@@ -479,6 +469,15 @@ export class BuildRuntime {
   }
 
   private configureRunPolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length > 0) {
+      const recovered = rebuildSchedulerProjection(events);
+      if (recovered.runPolicy && recovered.runPolicy !== this.runPolicy) {
+        throw new Error(
+          `Scheduler run policy is already configured as ${recovered.runPolicy}.`
+        );
+      }
+    }
     this.store.append({
       runId: this.runId,
       type: "run.policy_configured",

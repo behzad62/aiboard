@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   rebuildBudgetProjection,
   modelCallAttribution,
+  modelCostBasisSnapshot,
   modelTokenSources,
   reduceBudgetEvent,
   usageAmount,
@@ -66,6 +67,9 @@ export class SqliteBudgetLedger implements BudgetLedger {
     const attribution = input.kind === "model"
       ? modelCallAttribution(input.attribution)
       : undefined;
+    const costBasis = input.kind === "model" && input.costBasis
+      ? modelCostBasisSnapshot(input.costBasis)
+      : undefined;
     return this.append(
       input.scopeId,
       "budget.reserved",
@@ -75,6 +79,7 @@ export class SqliteBudgetLedger implements BudgetLedger {
         reservationId: input.reservationId,
         kind: input.kind,
         ...(attribution ? { attribution } : {}),
+        ...(costBasis ? { costBasis } : {}),
         estimate,
       },
       (projection) => {
@@ -97,6 +102,9 @@ export class SqliteBudgetLedger implements BudgetLedger {
     const tokenSources = input.tokenSources === undefined
       ? undefined
       : modelTokenSources(input.tokenSources);
+    const costBasis = input.costBasis === undefined
+      ? undefined
+      : modelCostBasisSnapshot(input.costBasis);
     return this.append(
       input.scopeId,
       "budget.settled",
@@ -108,6 +116,7 @@ export class SqliteBudgetLedger implements BudgetLedger {
         ...(tokenSources
           ? { tokenSources, settledAt: input.occurredAt }
           : {}),
+        ...(costBasis ? { costBasis } : {}),
       },
       (projection) => {
         const reservation = projection.reservations[input.reservationId];
@@ -116,6 +125,14 @@ export class SqliteBudgetLedger implements BudgetLedger {
         }
         if (reservation?.kind === "tool" && tokenSources) {
           throw new Error("Tool budget settlements cannot carry model token sources.");
+        }
+        if (
+          reservation?.kind === "model" &&
+          costBasis &&
+          reservation.costBasis &&
+          JSON.stringify(costBasis) !== JSON.stringify(reservation.costBasis)
+        ) {
+          throw new Error("Model cost basis cannot change at settlement.");
         }
       }
     );

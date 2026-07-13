@@ -14,6 +14,7 @@ import {
   workerContinuationMessages,
   shouldFailoverWorkerFailure,
   shouldAutoContinueWorker,
+  workerModelAttribution,
 } from "../src/native-worker-driver.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
@@ -37,6 +38,26 @@ class ScriptedModel implements AgentModel {
     return turn;
   }
 }
+
+test("worker model calls carry direct durable role and task attribution", () => {
+  assert.deepEqual(
+    workerModelAttribution({
+      runtimeId: "api:worker",
+      providerId: "api",
+      modelId: "worker-model",
+      capabilities: ["code"],
+      priority: 1,
+    }, "worker:run_1:task_1:1", "task_1", "worker"),
+    {
+      runtimeId: "api:worker",
+      providerId: "api",
+      modelId: "worker-model",
+      role: "worker",
+      sessionId: "worker:run_1:task_1:1",
+      taskId: "task_1",
+    }
+  );
+});
 
 test("invalid worker requests fail once instead of cycling through runtimes", () => {
   assert.equal(

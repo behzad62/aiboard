@@ -8,6 +8,7 @@ export interface RunnerProviderConfig {
   runtimeId: string;
   providerId: string;
   modelId: string;
+  displayName?: string;
   transport: ProviderTransport;
   baseUrl?: string;
   secret: string;
@@ -38,6 +39,7 @@ export interface ProviderUsageConfig {
   runtimeId: string;
   providerId: string;
   modelId: string;
+  displayName?: string;
   transport: ProviderTransport;
   inputCostMicrosPerMillion?: number;
   outputCostMicrosPerMillion?: number;
@@ -52,6 +54,7 @@ export function providerUsageConfig(
     runtimeId: config.runtimeId,
     providerId: config.providerId,
     modelId: config.modelId,
+    ...(config.displayName ? { displayName: config.displayName } : {}),
     transport: config.transport,
     ...(config.inputCostMicrosPerMillion !== undefined
       ? { inputCostMicrosPerMillion: config.inputCostMicrosPerMillion }
