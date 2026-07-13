@@ -64,6 +64,7 @@ interface MutableUsage {
   cachedInputTokens: number;
   cacheWriteInputTokens: number;
   outputTokens: number;
+  inconsistentCacheTokens: boolean;
   tokenSources: ModelTokenSource[];
   missingTokenSources: boolean;
   lastUsedAt: string | null;
@@ -113,21 +114,32 @@ export function projectNativeModelUsage(
     const usage = usageByRuntime.get(runtime.runtimeId)!;
     usage.calls = checkedAdd(usage.calls, 1, "calls", runtime.runtimeId);
     usage.roles.add(reservation.attribution.role);
+    const actualInputTokens = reservation.actual.inputTokens ?? 0;
+    const actualCachedInputTokens = reservation.actual.cachedInputTokens ?? 0;
+    const actualCacheWriteInputTokens =
+      reservation.actual.cacheWriteInputTokens ?? 0;
+    if (hasInconsistentCacheTokens(
+      actualInputTokens,
+      actualCachedInputTokens,
+      actualCacheWriteInputTokens
+    )) {
+      usage.inconsistentCacheTokens = true;
+    }
     usage.inputTokens = checkedAdd(
       usage.inputTokens,
-      reservation.actual.inputTokens ?? 0,
+      actualInputTokens,
       "inputTokens",
       runtime.runtimeId
     );
     usage.cachedInputTokens = checkedAdd(
       usage.cachedInputTokens,
-      reservation.actual.cachedInputTokens ?? 0,
+      actualCachedInputTokens,
       "cachedInputTokens",
       runtime.runtimeId
     );
     usage.cacheWriteInputTokens = checkedAdd(
       usage.cacheWriteInputTokens,
-      reservation.actual.cacheWriteInputTokens ?? 0,
+      actualCacheWriteInputTokens,
       "cacheWriteInputTokens",
       runtime.runtimeId
     );
@@ -198,6 +210,7 @@ function emptyMutableUsage(roles: readonly ModelCallRole[]): MutableUsage {
     cachedInputTokens: 0,
     cacheWriteInputTokens: 0,
     outputTokens: 0,
+    inconsistentCacheTokens: false,
     tokenSources: [],
     missingTokenSources: false,
     lastUsedAt: null,
@@ -238,10 +251,12 @@ function projectCost(
     return { estimatedCostMicros: null, costBasis: "account_not_metered" };
   }
   if (
-    usage.cachedInputTokens > usage.inputTokens ||
-    usage.cacheWriteInputTokens > usage.inputTokens ||
-    BigInt(usage.cachedInputTokens) + BigInt(usage.cacheWriteInputTokens) >
-      BigInt(usage.inputTokens)
+    usage.inconsistentCacheTokens ||
+    hasInconsistentCacheTokens(
+      usage.inputTokens,
+      usage.cachedInputTokens,
+      usage.cacheWriteInputTokens
+    )
   ) {
     return { estimatedCostMicros: null, costBasis: "unknown" };
   }
@@ -278,6 +293,19 @@ function projectCost(
     estimatedCostMicros: Number(estimatedCostMicros),
     costBasis: "api_estimate",
   };
+}
+
+function hasInconsistentCacheTokens(
+  inputTokens: number,
+  cachedInputTokens: number,
+  cacheWriteInputTokens: number
+): boolean {
+  return (
+    cachedInputTokens > inputTokens ||
+    cacheWriteInputTokens > inputTokens ||
+    BigInt(cachedInputTokens) + BigInt(cacheWriteInputTokens) >
+      BigInt(inputTokens)
+  );
 }
 
 function checkedAdd(

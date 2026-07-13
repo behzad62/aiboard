@@ -295,6 +295,92 @@ test("preserves inconsistent cache counts and makes their API cost unknown", () 
   ]);
 });
 
+test("a later call cannot mask an inconsistent cache settlement", () => {
+  const budget = projection({
+    class_bad: settled(
+      "class_bad",
+      "masked-class",
+      "provider-class",
+      "model-class",
+      "worker",
+      { inputTokens: 10, cachedInputTokens: 11, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:15:00.000Z",
+    ),
+    class_later: settled(
+      "class_later",
+      "masked-class",
+      "provider-class",
+      "model-class",
+      "worker",
+      { inputTokens: 100, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:15:01.000Z",
+    ),
+    sum_bad: settled(
+      "sum_bad",
+      "masked-sum",
+      "provider-sum",
+      "model-sum",
+      "worker",
+      { inputTokens: 10, cachedInputTokens: 8, cacheWriteInputTokens: 5, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:15:00.000Z",
+    ),
+    sum_later: settled(
+      "sum_later",
+      "masked-sum",
+      "provider-sum",
+      "model-sum",
+      "worker",
+      { inputTokens: 100, outputTokens: 1 },
+      { inputTokens: "reported", outputTokens: "reported" },
+      "2026-07-13T12:15:01.000Z",
+    ),
+  });
+  const pricing = {
+    inputCostMicrosPerMillion: 1_000_000,
+    cachedInputCostMicrosPerMillion: 500_000,
+    cacheWriteInputCostMicrosPerMillion: 2_000_000,
+    outputCostMicrosPerMillion: 1_000_000,
+  };
+
+  const rows = projectNativeModelUsage({
+    budget,
+    runtimes: [
+      runtime("masked-class", "provider-class", "model-class", ["worker"], pricing),
+      runtime("masked-sum", "provider-sum", "model-sum", ["worker"], pricing),
+    ],
+    providerHealth: [],
+  });
+
+  assert.deepEqual(rows.map((row) => ({
+    runtimeId: row.runtimeId,
+    inputTokens: row.inputTokens,
+    cachedInputTokens: row.cachedInputTokens,
+    cacheWriteInputTokens: row.cacheWriteInputTokens,
+    estimatedCostMicros: row.estimatedCostMicros,
+    costBasis: row.costBasis,
+  })), [
+    {
+      runtimeId: "masked-class",
+      inputTokens: 110,
+      cachedInputTokens: 11,
+      cacheWriteInputTokens: 0,
+      estimatedCostMicros: null,
+      costBasis: "unknown",
+    },
+    {
+      runtimeId: "masked-sum",
+      inputTokens: 110,
+      cachedInputTokens: 8,
+      cacheWriteInputTokens: 5,
+      estimatedCostMicros: null,
+      costBasis: "unknown",
+    },
+  ]);
+});
+
 test("rejects unsafe aggregate token dimensions and totals", () => {
   const runtimeConfig = runtime("overflow", "provider-overflow", "model-overflow", ["worker"], {
     inputCostMicrosPerMillion: 1,
