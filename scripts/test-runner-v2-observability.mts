@@ -5,6 +5,7 @@ import {
   filterRunnerObservability,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
+  runnerNextCooldownExpiry,
   runnerObservabilitySummary,
   runnerUserFacingObservability,
   runnerVerificationTone,
@@ -274,6 +275,37 @@ assert.deepEqual(problemKeys(observability, {
 }), ["run:paused"]);
 
 const cooldownNow = 2_000;
+assert.equal(runnerNextCooldownExpiry([{
+  providerId: "chatgpt",
+  status: "cooldown",
+  consecutiveFailures: 1,
+  cooldownUntil: cooldownNow + 500,
+  updatedAt: cooldownNow - 100,
+}, {
+  providerId: "openai",
+  status: "cooldown",
+  consecutiveFailures: 2,
+  cooldownUntil: cooldownNow + 100,
+  updatedAt: cooldownNow - 50,
+}, {
+  providerId: "anthropic",
+  status: "healthy",
+  consecutiveFailures: 0,
+  cooldownUntil: cooldownNow + 50,
+  updatedAt: cooldownNow,
+}], cooldownNow), cooldownNow + 100);
+assert.equal(runnerNextCooldownExpiry([{
+  providerId: "chatgpt",
+  status: "cooldown",
+  consecutiveFailures: 1,
+  cooldownUntil: cooldownNow,
+  updatedAt: cooldownNow - 100,
+}, {
+  providerId: "openai",
+  status: "cooldown",
+  consecutiveFailures: 1,
+  updatedAt: cooldownNow - 50,
+}], cooldownNow), null);
 const activeCooldownObservability = {
   ...observability,
   providers: [{
@@ -495,6 +527,23 @@ assert.match(
   diagnosticsSource,
   /<input[\s\S]*?type="search"[\s\S]*?aria-label="Search durable runner records"/,
   "expected diagnostics search to have a stable accessible name"
+);
+
+const panelComponentIndex = panelSource.indexOf("export function RunnerV2ObservabilityPanel");
+const panelComponentSource = panelSource.slice(panelComponentIndex);
+const nullReturnIndex = panelComponentSource.indexOf("if (!snapshot) return null");
+const cooldownEffectIndex = panelComponentSource.indexOf("useEffect(() =>");
+assert.ok(cooldownEffectIndex >= 0 && cooldownEffectIndex < nullReturnIndex, "expected cooldown effect before null return");
+assert.ok(
+  panelComponentSource.includes("runnerNextCooldownExpiry(snapshot?.providers ?? [], clock)"),
+  "expected the component clock to select the next provider cooldown expiry"
+);
+assert.ok(panelComponentSource.includes("setTimeout("), "expected a one-shot cooldown expiry timer");
+assert.ok(panelComponentSource.includes("clearTimeout("), "expected cooldown timer cleanup");
+assert.ok(!panelComponentSource.includes("setInterval("), "expected no cooldown polling interval");
+assert.ok(
+  panelComponentSource.includes("runnerUserFacingObservability(snapshot, projection ?? null, clock)"),
+  "expected the component clock to drive the user-facing projection"
 );
 
 const filtered = filterRunnerObservability({

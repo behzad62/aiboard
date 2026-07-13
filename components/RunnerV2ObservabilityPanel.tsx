@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -239,6 +239,24 @@ function providerName(providerId: string): string {
   return knownNames[providerId.toLowerCase()] ?? "A model provider";
 }
 
+export function runnerNextCooldownExpiry(
+  providers: NativeBuildObservability["providers"],
+  now = Date.now()
+): number | null {
+  let nextExpiry: number | null = null;
+  for (const provider of providers) {
+    if (
+      provider.status !== "cooldown" ||
+      provider.cooldownUntil === undefined ||
+      provider.cooldownUntil <= now
+    ) continue;
+    if (nextExpiry === null || provider.cooldownUntil < nextExpiry) {
+      nextExpiry = provider.cooldownUntil;
+    }
+  }
+  return nextExpiry;
+}
+
 export function runnerUserFacingObservability(
   snapshot: NativeBuildObservability,
   projection: NativeBuildProjection | null,
@@ -398,6 +416,16 @@ export function RunnerV2ObservabilityPanel({
   onDownloadAudit?: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [clock, setClock] = useState(() => Date.now());
+  const nextCooldownExpiry = runnerNextCooldownExpiry(snapshot?.providers ?? [], clock);
+  useEffect(() => {
+    if (nextCooldownExpiry === null) return;
+    const timeoutId = window.setTimeout(
+      () => setClock(Date.now()),
+      Math.max(0, nextCooldownExpiry - Date.now())
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [nextCooldownExpiry, snapshot]);
   if (!snapshot) return null;
   const summary = runnerObservabilitySummary(snapshot);
   const filtered = filterRunnerObservability(snapshot, query);
@@ -409,7 +437,7 @@ export function RunnerV2ObservabilityPanel({
   const integrationBranch = snapshot.git.integrationBranch || control.branch;
   const integrationRevision = snapshot.git.integrationRevision || control.revision;
   const visibleCommits = snapshot.git.commits.filter(matches);
-  const view = runnerUserFacingObservability(snapshot, projection ?? null);
+  const view = runnerUserFacingObservability(snapshot, projection ?? null, clock);
   return (
     <section aria-labelledby="runner-activity-title" className="overflow-hidden rounded-lg border bg-card shadow-sm">
       <div className="border-b px-4 py-4 sm:px-5">
