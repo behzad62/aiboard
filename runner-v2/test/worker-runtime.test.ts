@@ -81,6 +81,39 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     const workspace = await workspaces.createTaskWorkspace("task_worker");
     const artifacts = new ArtifactStore(join(state, "artifacts"));
     evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const staleStdout = await artifacts.put(
+      Buffer.from("stale prior-attempt output"),
+      "text/plain",
+      "stale prior-attempt stdout"
+    );
+    const staleStderr = await artifacts.put(
+      Buffer.from("stale prior-attempt error"),
+      "text/plain",
+      "stale prior-attempt stderr"
+    );
+    evidenceStore.record({
+      runId: "run_worker",
+      taskId: "task_worker",
+      actor: { role: "worker", id: "worker_old_attempt" },
+      fact: {
+        kind: "command",
+        label: "stale prior attempt",
+        command: process.execPath,
+        args: ["-e", "process.exit(1)"],
+        cwd: workspace.path,
+        startedAt: "2026-07-13T00:00:00.000Z",
+        finishedAt: "2026-07-13T00:00:01.000Z",
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        cancelled: false,
+        outputTruncated: false,
+        stdoutArtifactHash: staleStdout.hash,
+        stderrArtifactHash: staleStderr.hash,
+      },
+      createdAt: "2026-07-13T00:00:01.000Z",
+      idempotencyKey: "stale-prior-attempt",
+    });
     const messages: AgentMessage[] = [
       { id: "system", role: "system", content: "Use native tools and submit_task." },
       { id: "user", role: "user", content: "Change one to two and verify it." },
@@ -166,6 +199,8 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     assert.ok(finished.changeSet);
     assert.equal(finished.changeSet.taskId, "task_worker");
     assert.equal(finished.changeSet.evidenceArtifactHashes.length, 2);
+    assert.equal(finished.changeSet.evidenceArtifactHashes.includes(staleStdout.hash), false);
+    assert.equal(finished.changeSet.evidenceArtifactHashes.includes(staleStderr.hash), false);
     assert.deepEqual(finished.changeSet.unresolvedConcerns, [
       "Windows line endings were not exercised.",
     ]);

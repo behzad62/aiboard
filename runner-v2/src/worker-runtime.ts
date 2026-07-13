@@ -220,7 +220,8 @@ export async function runWorkerTask(
             runId: options.runId,
             taskId: options.taskId,
             limit: 1_000,
-          })
+          }),
+          options.actorId
         )
       : [];
     if (evidenceHashes.length === 0) {
@@ -366,11 +367,19 @@ function taskMemoryIds(options: RunWorkerTaskOptions): string[] {
 }
 
 function evidenceArtifactHashes(
-  records: ReturnType<EvidenceStore["list"]>
+  records: ReturnType<EvidenceStore["list"]>,
+  actorId: string
 ): string[] {
   return [
     ...new Set(
-      records.flatMap((record) => evidenceFactArtifactHashes(record.fact))
+      records
+        .filter(
+          (record) =>
+            record.actor.id === actorId ||
+            (record.actor.role === "subagent" &&
+              record.actor.id.startsWith(`${actorId}:`))
+        )
+        .flatMap((record) => evidenceFactArtifactHashes(record.fact))
     ),
   ];
 }

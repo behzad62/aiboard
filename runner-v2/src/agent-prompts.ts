@@ -109,11 +109,23 @@ export interface BuildArchitectContextInput {
   objective: string;
   reason: unknown;
   projection: SchedulerProjection;
+  reviewSubmission?: ArchitectReviewSubmission;
   instructions: ProjectInstructionSource[];
   skills: SkillDocument[];
   memories: ProjectMemoryEntry[];
   evidence: PromptEvidence[];
   recentHistory: string[];
+}
+
+export interface ArchitectReviewSubmission {
+  taskId: string;
+  attempt: number;
+  changeSetId: string;
+  baselineRevision: string;
+  taskRevision: string;
+  changedPaths: string[];
+  diffArtifactHash: string;
+  evidenceArtifactHashes: string[];
 }
 
 export function buildArchitectContext(
@@ -139,6 +151,19 @@ export function buildArchitectContext(
       )
     ),
   ];
+  if (input.reviewSubmission) {
+    sections.push(
+      required(
+        "current-submission",
+        "current-submission",
+        [
+          "Review this immutable submitted attempt, not a prior attempt or the project working tree.",
+          "Use artifact.read with diffArtifactHash for the authoritative submitted diff.",
+          JSON.stringify(input.reviewSubmission, null, 2),
+        ].join("\n")
+      )
+    );
+  }
   for (const instruction of input.instructions) {
     sections.push({
       id: `instruction:${instruction.relativePath}`,

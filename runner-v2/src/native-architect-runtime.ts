@@ -6,7 +6,11 @@ import type {
   ToolResult,
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
-import { buildArchitectContext, type PromptEvidence } from "./agent-prompts.js";
+import {
+  buildArchitectContext,
+  type ArchitectReviewSubmission,
+  type PromptEvidence,
+} from "./agent-prompts.js";
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
@@ -248,7 +252,14 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     const result = await runAgentLoop({
       model: runtimeModel,
       registry: tools,
-      context: { ...request.context, workspacePath: this.options.projectRoot },
+      context: {
+        ...request.context,
+        workspacePath: architectInspectionWorkspace(
+          request.reason,
+          projection,
+          this.options.projectRoot
+        ),
+      },
       initialMessages: messages,
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
@@ -347,6 +358,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
+    const reviewSubmission = await this.reviewSubmission(request, projection);
     const [instructions, metadata] = await Promise.all([
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
@@ -372,8 +384,23 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       query: JSON.stringify(request.reason),
       limit: 20,
     });
+    const focusedWorkerId = reviewSubmission
+      ? projection.tasks[reviewSubmission.taskId]?.assignedWorkerId
+      : undefined;
     const evidence: PromptEvidence[] = this.options.evidenceStore
-      .list({ runId: request.runId, limit: 1_000 })
+      .list({
+        runId: request.runId,
+        ...(reviewSubmission ? { taskId: reviewSubmission.taskId } : {}),
+        limit: 1_000,
+      })
+      .filter(
+        (record) =>
+          !reviewSubmission ||
+          !focusedWorkerId ||
+          record.actor.id === focusedWorkerId ||
+          (record.actor.role === "subagent" &&
+            record.actor.id.startsWith(`${focusedWorkerId}:`))
+      )
       .map((record) => ({
         id: record.id,
         summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
@@ -387,6 +414,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       objective: this.options.objective,
       reason: request.reason,
       projection,
+      ...(reviewSubmission ? { reviewSubmission } : {}),
       instructions,
       skills,
       memories,
@@ -394,6 +422,43 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       recentHistory: [],
     });
   }
+
+  private async reviewSubmission(
+    request: ArchitectActionRequest,
+    projection: ReturnType<typeof rebuildSchedulerProjection>
+  ): Promise<ArchitectReviewSubmission | undefined> {
+    if (request.reason.type !== "review_required") return undefined;
+    const task = projection.tasks[request.reason.taskId];
+    if (!task) throw new Error(`Unknown review task ${request.reason.taskId}.`);
+    const session = await this.options.sessions.load(
+      `worker:${request.runId}:${task.id}:${task.attempt}`
+    );
+    const changeSet = session.changeSet;
+    if (!changeSet || changeSet.id !== request.reason.changeSetId) {
+      throw new Error(
+        `Submitted change set ${request.reason.changeSetId} is unavailable for review.`
+      );
+    }
+    return {
+      taskId: task.id,
+      attempt: task.attempt,
+      changeSetId: changeSet.id,
+      baselineRevision: changeSet.baselineRevision,
+      taskRevision: changeSet.taskRevision,
+      changedPaths: [...changeSet.changedPaths],
+      diffArtifactHash: changeSet.diffArtifactHash,
+      evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+    };
+  }
+}
+
+export function architectInspectionWorkspace(
+  reason: ArchitectActionReason,
+  projection: ReturnType<typeof rebuildSchedulerProjection>,
+  projectRoot: string
+): string {
+  if (reason.type !== "review_required") return projectRoot;
+  return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
 }
 
 export function prioritizedArchitectCapabilities(

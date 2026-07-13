@@ -6,9 +6,11 @@ import {
   ProtectedContextOverflowError,
 } from "../src/context-assembler.js";
 import {
+  buildArchitectContext,
   buildWorkerContext,
   RUNNER_KERNEL_INVARIANTS,
 } from "../src/agent-prompts.js";
+import type { SchedulerProjection } from "../src/scheduler-store.js";
 
 test("context assembler protects intent and guidance before optional history", () => {
   const assembler = new ContextAssembler({ maxBytes: 420, maxEstimatedTokens: 200 });
@@ -103,6 +105,44 @@ test("worker context carries provenance for instructions, skills, memory, and ev
   assert.match(pack.text, /evidence_1/);
   assert.match(pack.text, /Preserve the existing API/);
   assert.equal(pack.digest.length, 64);
+});
+
+test("Architect review context protects the immutable current submission descriptor", () => {
+  const pack = buildArchitectContext({
+    limits: { maxBytes: 8_000, maxEstimatedTokens: 4_000 },
+    objective: "Add camera controls without removing visual effects.",
+    reason: { type: "review_required", taskId: "task_camera", changeSetId: "change_8" },
+    projection: {
+      status: "running",
+      planRevision: 8,
+      tasks: {},
+      guidance: {},
+      reviews: {},
+    } as unknown as SchedulerProjection,
+    reviewSubmission: {
+      taskId: "task_camera",
+      attempt: 8,
+      changeSetId: "change_8",
+      baselineRevision: "a".repeat(40),
+      taskRevision: "b".repeat(40),
+      changedPaths: ["src/renderer.js"],
+      diffArtifactHash: "c".repeat(64),
+      evidenceArtifactHashes: ["d".repeat(64)],
+    },
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  });
+
+  assert.match(pack.text, /CURRENT-SUBMISSION/);
+  assert.match(pack.text, new RegExp("c".repeat(64)));
+  assert.match(pack.text, /src\/renderer\.js/);
+  assert.equal(
+    pack.sections.find((section) => section.id === "current-submission")?.required,
+    true
+  );
 });
 
 test("same context inputs produce byte-identical packs", () => {

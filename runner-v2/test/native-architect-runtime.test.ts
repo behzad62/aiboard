@@ -11,9 +11,11 @@ import { BuildRuntime } from "../src/build-runtime.js";
 import {
   NativeArchitectRuntime,
   PlanOnlyInspectionRuntime,
+  architectInspectionWorkspace,
   architectModelAttribution,
   prioritizedArchitectCapabilities,
 } from "../src/native-architect-runtime.js";
+import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
@@ -73,6 +75,39 @@ test("Architect skill routing prioritizes the task named by the current action",
   ];
   const selected = rankSkillsForTask(metadata, "Review the submitted task", capabilities, 1);
   assert.equal(selected[0]?.name, "verification");
+});
+
+test("Architect reviews inspect the submitted attempt workspace instead of the project root", () => {
+  const projection = {
+    tasks: {
+      task_visual: {
+        id: "task_visual",
+        objective: "Add camera controls",
+        dependencies: [],
+        requiredCapabilities: ["verification"],
+        status: "architect_review",
+        attempt: 8,
+        assignedWorkerId: "worker_visual_8",
+        workspacePath: "C:/runner/workspaces/task-visual-attempt-8",
+        workspaceId: "task_visual:attempt:8",
+        workspaceBaselineRevision: "a".repeat(40),
+        changeSetId: "change_8",
+      },
+    },
+  } as unknown as SchedulerProjection;
+
+  assert.equal(
+    architectInspectionWorkspace(
+      { type: "review_required", taskId: "task_visual", changeSetId: "change_8" },
+      projection,
+      "C:/project"
+    ),
+    "C:/runner/workspaces/task-visual-attempt-8"
+  );
+  assert.equal(
+    architectInspectionWorkspace({ type: "plan_required" }, projection, "C:/project"),
+    "C:/project"
+  );
 });
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {
