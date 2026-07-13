@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 
 import type {
@@ -12,6 +13,7 @@ import { runAgentLoop } from "../src/agent-loop.js";
 import { compactAgentMessages } from "../src/agent-loop.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 import { BudgetExceededError } from "../src/budget-ledger.js";
+import { AccountRunnerModel } from "../src/account-runner-model.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -108,6 +110,54 @@ test("native tool results feed the next turn and only submit_task submits work",
       : null,
     "file contents"
   );
+});
+
+test("account-runner textual tool records execute through the agent loop", async () => {
+  let requestCount = 0;
+  let readExecutions = 0;
+  const server = createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const event = requestCount === 1
+      ? {
+          type: "token",
+          content: 'TOOL_CALL {"id":"read_text","name":"read_file","arguments":{}}',
+        }
+      : {
+          type: "tool_call",
+          toolCall: {
+            id: "submit_native",
+            name: "submit_task",
+            arguments: { changeSetId: "changeset_textual_recovery" },
+          },
+        };
+    response.end(`data: ${JSON.stringify(event)}\n\ndata: ${JSON.stringify({ type: "done" })}\n\n`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const registry = new ToolRegistry();
+    registry.register(textTool("read_file", "file contents", () => readExecutions++));
+    registry.register(submitTool());
+    const result = await runAgentLoop({
+      model: new AccountRunnerModel({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        runnerPath: "chatgpt",
+        runnerToken: "local-token",
+        modelId: "gpt-5.4",
+      }),
+      registry,
+      context: context(),
+      initialMessages,
+    });
+
+    assert.equal(result.status, "submitted");
+    assert.equal(result.changeSetId, "changeset_textual_recovery");
+    assert.equal(readExecutions, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("independent read-only tool calls execute concurrently and preserve result order", async () => {

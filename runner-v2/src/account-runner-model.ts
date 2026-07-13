@@ -123,9 +123,14 @@ export class AccountRunnerModel implements AgentModel {
         error?: string;
       };
       if (data.error) throw new ProviderTransportError(data.error, response.status);
+      const blocks = data.content
+        ? normalizeTextualToolCalls(data.content, wireNames, originalNameFor)
+        : [];
       return {
-        blocks: data.content ? [{ type: "text", text: data.content }] : [],
-        stopReason: "end_turn",
+        blocks,
+        stopReason: blocks.some((block) => block.type === "tool_call")
+          ? "tool_calls"
+          : "end_turn",
         usage: serializedInputUsage(body),
       };
     }
@@ -134,10 +139,12 @@ export class AccountRunnerModel implements AgentModel {
     let text = "";
     let usage: ModelTurn["usage"] = serializedInputUsage(body);
     let toolIndex = 0;
+    let sawNativeToolCall = false;
     for await (const event of readSse(response)) {
       if (event.type === "token" && event.content) {
         text += event.content;
       } else if (event.type === "tool_call" && event.toolCall?.name) {
+        sawNativeToolCall = true;
         if (text) {
           blocks.push({ type: "text", text });
           text = "";
@@ -164,7 +171,13 @@ export class AccountRunnerModel implements AgentModel {
         );
       }
     }
-    if (text) blocks.push({ type: "text", text });
+    if (text) {
+      blocks.push(
+        ...(sawNativeToolCall
+          ? [{ type: "text" as const, text }]
+          : normalizeTextualToolCalls(text, wireNames, originalNameFor))
+      );
+    }
     return {
       blocks,
       stopReason: blocks.some((block) => block.type === "tool_call")
@@ -172,6 +185,75 @@ export class AccountRunnerModel implements AgentModel {
         : "end_turn",
       usage,
     };
+  }
+}
+
+function normalizeTextualToolCalls(
+  text: string,
+  wireNames: ReadonlyMap<string, string>,
+  originalNameFor: ReadonlyMap<string, string>
+): AssistantBlock[] {
+  const blocks: AssistantBlock[] = [];
+  const textLines: string[] = [];
+  const flushText = () => {
+    if (textLines.length === 0) return;
+    const value = textLines.join("\n");
+    if (value) blocks.push({ type: "text", text: value });
+    textLines.length = 0;
+  };
+
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^TOOL_CALL\s+(\{.*\})$/.exec(line);
+    if (!match) {
+      textLines.push(line);
+      continue;
+    }
+    const record = parseTextualToolCall(match[1]);
+    const originalName = record
+      ? originalNameFor.get(record.name) ??
+        (wireNames.has(record.name) ? record.name : undefined)
+      : undefined;
+    if (!record || !originalName) {
+      textLines.push(line);
+      continue;
+    }
+    flushText();
+    blocks.push({
+      type: "tool_call",
+      callId: record.id,
+      name: originalName,
+      arguments: record.arguments,
+    });
+  }
+  flushText();
+  return blocks;
+}
+
+function parseTextualToolCall(value: string): {
+  id: string;
+  name: string;
+  arguments: unknown;
+} | undefined {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      typeof parsed.id !== "string" ||
+      parsed.id.length === 0 ||
+      typeof parsed.name !== "string" ||
+      parsed.name.length === 0
+    ) {
+      return undefined;
+    }
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      arguments: parsed.arguments ?? {},
+    };
+  } catch {
+    return undefined;
   }
 }
 

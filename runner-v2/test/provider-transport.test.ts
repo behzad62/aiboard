@@ -435,6 +435,185 @@ test("account runner transport maps native tool calls, usage, and tool results",
   }
 });
 
+test("account runner normalizes strict textual tool-call records from streamed tokens", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({
+      type: "token",
+      content: "Inspecting the renderer.\nTOOL_CALL {\"id\":\"call_",
+    })}\n\n`);
+    response.write(`data: ${JSON.stringify({
+      type: "token",
+      content: "text_1\",\"name\":\"fs.read\",\"arguments\":{\"path\":\"src/game.js\"}}\nTOOL_CALL {\"id\":\"call_text_2\",\"name\":\"fs_search\",\"arguments\":{\"query\":\"projectile\"}}\n",
+    })}\n\n`);
+    response.end(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const model = new AccountRunnerModel({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      runnerPath: "chatgpt",
+      runnerToken: "local-token",
+      modelId: "gpt-5.4",
+    });
+    const turn = await model.complete({
+      sessionId: "session_textual_tools",
+      messages: [],
+      tools: [
+        {
+          name: "fs.read",
+          description: "Read",
+          inputSchema: { type: "object" },
+          readOnly: true,
+          effect: "none",
+        },
+        {
+          name: "fs.search",
+          description: "Search",
+          inputSchema: { type: "object" },
+          readOnly: true,
+          effect: "none",
+        },
+      ],
+    });
+
+    assert.equal(turn.stopReason, "tool_calls");
+    assert.deepEqual(turn.blocks, [
+      { type: "text", text: "Inspecting the renderer." },
+      {
+        type: "tool_call",
+        callId: "call_text_1",
+        name: "fs.read",
+        arguments: { path: "src/game.js" },
+      },
+      {
+        type: "tool_call",
+        callId: "call_text_2",
+        name: "fs.search",
+        arguments: { query: "projectile" },
+      },
+    ]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("account runner normalizes strict textual tool calls from non-stream responses", async () => {
+  const model = new AccountRunnerModel({
+    baseUrl: "http://runner.example",
+    runnerPath: "chatgpt",
+    runnerToken: "local-token",
+    modelId: "gpt-5.4",
+    fetch: async () => Response.json({
+      content: 'TOOL_CALL {"id":"call_json","name":"fs_read","arguments":{"path":"README.md"}}',
+    }),
+  });
+  const turn = await model.complete({
+    sessionId: "session_non_stream_textual_tool",
+    messages: [],
+    tools: [{
+      name: "fs.read",
+      description: "Read",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+
+  assert.equal(turn.stopReason, "tool_calls");
+  assert.deepEqual(turn.blocks, [{
+    type: "tool_call",
+    callId: "call_json",
+    name: "fs.read",
+    arguments: { path: "README.md" },
+  }]);
+});
+
+test("account runner prefers native tool events over duplicate textual records", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({
+      type: "token",
+      content: 'TOOL_CALL {"id":"call_duplicate","name":"fs_read","arguments":{"path":"README.md"}}',
+    })}\n\n`);
+    response.write(`data: ${JSON.stringify({
+      type: "tool_call",
+      toolCall: {
+        id: "call_duplicate",
+        name: "fs_read",
+        arguments: { path: "README.md" },
+      },
+    })}\n\n`);
+    response.end(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const model = new AccountRunnerModel({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      runnerPath: "chatgpt",
+      runnerToken: "local-token",
+      modelId: "gpt-5.4",
+    });
+    const turn = await model.complete({
+      sessionId: "session_native_wins",
+      messages: [],
+      tools: [{
+        name: "fs.read",
+        description: "Read",
+        inputSchema: { type: "object" },
+        readOnly: true,
+        effect: "none",
+      }],
+    });
+
+    assert.equal(
+      turn.blocks.filter((block) => block.type === "tool_call").length,
+      1
+    );
+    assert.deepEqual(turn.blocks.at(-1), {
+      type: "tool_call",
+      callId: "call_duplicate",
+      name: "fs.read",
+      arguments: { path: "README.md" },
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("account runner leaves malformed or unknown textual tool-call records as text", async () => {
+  const content = [
+    "TOOL_CALL not-json",
+    'TOOL_CALL {"id":"unknown","name":"shell_exec","arguments":{"command":"oops"}}',
+  ].join("\n");
+  const model = new AccountRunnerModel({
+    baseUrl: "http://runner.example",
+    runnerPath: "chatgpt",
+    runnerToken: "local-token",
+    modelId: "gpt-5.4",
+    fetch: async () => Response.json({ content }),
+  });
+
+  const turn = await model.complete({
+    sessionId: "session_untrusted_text",
+    messages: [],
+    tools: [{
+      name: "fs.read",
+      description: "Read",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+
+  assert.equal(turn.stopReason, "end_turn");
+  assert.deepEqual(turn.blocks, [{ type: "text", text: content }]);
+});
+
 test("account runner sends only current-round image artifacts to image-capable models", async () => {
   const requests: Array<Record<string, unknown>> = [];
   const server = createServer(async (request, response) => {
