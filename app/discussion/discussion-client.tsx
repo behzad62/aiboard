@@ -1831,6 +1831,42 @@ function DiscussionPageInner() {
         />
       )}
 
+      {discussion.mode === "build" && projectHandoff && (
+        <div className="space-y-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
+          <div>
+            <p className="font-medium">The Architect has finished — choose the final handoff</p>
+            <p className="mt-1 whitespace-pre-wrap text-xs opacity-80">
+              {projectHandoff.summary}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {projectHandoff.options.includes("keep_integration_branch") && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleProjectHandoff("keep_integration_branch")}
+              >
+                Keep integration branch
+              </Button>
+            )}
+            {projectHandoff.options.includes("apply_to_project") && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void handleProjectHandoff("apply_to_project")}
+              >
+                Apply to project
+              </Button>
+            )}
+          </div>
+          <p className="text-xs opacity-75">
+            Applying first performs a Git dry run. If your project has conflicting local changes,
+            Runner V2 leaves it untouched and keeps this decision open.
+          </p>
+        </div>
+      )}
+
       {discussion.mode === "build" && (
         <RunnerV2ObservabilityPanel
           snapshot={nativeObservability}
@@ -1897,42 +1933,6 @@ function DiscussionPageInner() {
           </div>
         </div>
       ))}
-
-      {discussion.mode === "build" && projectHandoff && (
-        <div className="space-y-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
-          <div>
-            <p className="font-medium">The Architect has finished — choose the final handoff</p>
-            <p className="mt-1 whitespace-pre-wrap text-xs opacity-80">
-              {projectHandoff.summary}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {projectHandoff.options.includes("keep_integration_branch") && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void handleProjectHandoff("keep_integration_branch")}
-              >
-                Keep integration branch
-              </Button>
-            )}
-            {projectHandoff.options.includes("apply_to_project") && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void handleProjectHandoff("apply_to_project")}
-              >
-                Apply to project
-              </Button>
-            )}
-          </div>
-          <p className="text-xs opacity-75">
-            Applying first performs a Git dry run. If your project has conflicting local changes,
-            Runner V2 leaves it untouched and keeps this decision open.
-          </p>
-        </div>
-      )}
 
       {discussion.mode === "build" &&
         shouldShowBuildStopFallback({

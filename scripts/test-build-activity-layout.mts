@@ -10,13 +10,21 @@ const source = readFileSync(
 
 const noteIndex = source.indexOf("Note to the Architect");
 const statsIndex = source.indexOf("<BuildRunStats");
+const handoffIndex = source.indexOf("The Architect has finished");
+const observabilityIndex = source.indexOf("<RunnerV2ObservabilityPanel");
 const budgetPanelIndex = source.indexOf("<BuildContextPanel");
 
 assert.notEqual(noteIndex, -1, "discussion page renders the Architect note panel");
 assert.notEqual(statsIndex, -1, "discussion page renders Build run stats");
+assert.notEqual(handoffIndex, -1, "discussion page renders the final project handoff");
+assert.notEqual(observabilityIndex, -1, "discussion page renders Runner V2 observability");
 assert.ok(
   noteIndex < statsIndex,
   "Architect note panel should render above Build run stats"
+);
+assert.ok(
+  statsIndex < handoffIndex && handoffIndex < observabilityIndex,
+  "Final project handoff should render after Build run stats and before Runner V2 observability"
 );
 assert.equal(
   budgetPanelIndex,
