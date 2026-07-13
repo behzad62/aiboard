@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   filterRunnerObservability,
   runnerBuildControlSummary,
   runnerObservabilitySummary,
+  runnerUserFacingObservability,
 } from "../components/RunnerV2ObservabilityPanel";
 import { nativeBuildActivityEntries } from "../lib/client/native-build-activity";
 
@@ -30,7 +32,7 @@ assert.deepEqual(activity, [{
   message: "worker worker_1: guidance.requested — T1",
 }]);
 
-const control = runnerBuildControlSummary({
+const projection = {
   runId: "run_1",
   status: "paused",
   planRevision: 2,
@@ -68,12 +70,13 @@ const control = runnerBuildControlSummary({
     integrationBranch: "aiboard/run/integration",
   },
   lastSequence: 12,
-});
+} as const;
+const control = runnerBuildControlSummary(projection);
 assert.equal(control.guidance[0].question, "Which API shape?");
 assert.equal(control.integration[0].revision, "abc123");
 assert.equal(control.branch, "aiboard/run/integration");
 
-const summary = runnerObservabilitySummary({
+const observability = {
   runId: "run_1",
   toolCallCount: 1,
   budget: {
@@ -109,7 +112,21 @@ const summary = runnerObservabilitySummary({
     occurredAt: "2026-07-12T00:00:00.000Z",
     isError: false,
   }],
-  evidence: [],
+  evidence: [{
+    id: "evidence_tests_failed",
+    taskId: "T1",
+    actor: { role: "worker", id: "worker_1" },
+    status: "observed",
+    fact: { kind: "command", label: "Runner tests", command: "npm test", exitCode: 1 },
+    createdAt: "2026-07-12T00:00:01.000Z",
+  }, {
+    id: "evidence_tests_passed",
+    taskId: "T1",
+    actor: { role: "worker", id: "worker_1" },
+    status: "observed",
+    fact: { kind: "command", label: "Runner tests", command: "npm test", exitCode: 0 },
+    createdAt: "2026-07-12T00:00:02.000Z",
+  }],
   memories: [],
   skills: [{
     id: "built-in:verification",
@@ -137,7 +154,8 @@ const summary = runnerObservabilitySummary({
     integrationRevision: "abc123",
     commits: [{ revision: "abc123", parents: [], subject: "Integrate T1" }],
   },
-});
+} as const;
+const summary = runnerObservabilitySummary(observability);
 
 assert.deepEqual(summary, {
   modelCalls: 9,
@@ -148,13 +166,49 @@ assert.deepEqual(summary, {
   agents: 1,
   suspendedAgents: 0,
   toolErrors: 0,
-  evidence: 0,
+  evidence: 2,
   memories: 0,
   skills: 1,
   runningProcesses: 0,
   providers: 1,
   events: 1,
 });
+
+const view = runnerUserFacingObservability(observability, projection);
+assert.equal(view.lifecycle, "Ready for your decision");
+assert.equal(view.progress.completed, 1);
+assert.equal(view.progress.total, 1);
+assert.equal(view.progress.items[0]?.title, "Implement feature");
+assert.equal(view.progress.items[0]?.detail, "Complete");
+assert.equal(view.verification.length, 1);
+assert.equal(view.verification.find((item) => item.category === "Tests")?.status, "passed");
+assert.deepEqual(view.problems, []);
+
+const panelSource = readFileSync(
+  new URL("../components/RunnerV2ObservabilityPanel.tsx", import.meta.url),
+  "utf8"
+);
+for (const copy of [
+  "Build activity",
+  "Progress",
+  "Verification",
+  "Problems requiring attention",
+  "<details",
+]) {
+  assert.ok(panelSource.includes(copy), `expected panel source to contain ${copy}`);
+}
+const diagnosticsIndex = panelSource.indexOf("Advanced diagnostics");
+assert.ok(diagnosticsIndex >= 0, "expected an Advanced diagnostics disclosure");
+for (const diagnosticCopy of [
+  "Search durable runner records",
+  "Agent sessions",
+  "Recent tools",
+]) {
+  assert.ok(
+    panelSource.indexOf(diagnosticCopy) > diagnosticsIndex,
+    `expected ${diagnosticCopy} after the Advanced diagnostics disclosure`
+  );
+}
 
 const filtered = filterRunnerObservability({
   agents: [],
