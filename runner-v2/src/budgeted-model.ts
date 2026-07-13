@@ -3,12 +3,17 @@ import type {
   AgentModelRequest,
   ModelTurn,
 } from "./agent-contracts.js";
-import type { BudgetLedger } from "./budget-ledger.js";
+import type {
+  BudgetLedger,
+  ModelCallAttribution,
+  ModelTokenSource,
+} from "./budget-ledger.js";
 
 export interface BudgetedAgentModelOptions {
   model: AgentModel;
   ledger: BudgetLedger;
   scopeId: string;
+  attribution: ModelCallAttribution;
   outputTokenReserve: number;
   estimateCostMicros?: ModelCostEstimator;
   clock?: () => string;
@@ -25,6 +30,7 @@ export class BudgetedAgentModel implements AgentModel {
   private readonly model: AgentModel;
   private readonly ledger: BudgetLedger;
   private readonly scopeId: string;
+  private readonly attribution: Readonly<ModelCallAttribution>;
   private readonly outputTokenReserve: number;
   private readonly estimateCostMicros: ModelCostEstimator;
   private readonly clock: () => string;
@@ -39,6 +45,7 @@ export class BudgetedAgentModel implements AgentModel {
     this.model = options.model;
     this.ledger = options.ledger;
     this.scopeId = options.scopeId;
+    this.attribution = Object.freeze({ ...options.attribution });
     this.outputTokenReserve = options.outputTokenReserve;
     this.estimateCostMicros = options.estimateCostMicros ?? (() => 0);
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -54,6 +61,7 @@ export class BudgetedAgentModel implements AgentModel {
       scopeId: this.scopeId,
       reservationId,
       kind: "model",
+      attribution: this.attribution,
       estimate: {
         inputTokens,
         outputTokens: this.outputTokenReserve,
@@ -71,25 +79,27 @@ export class BudgetedAgentModel implements AgentModel {
     });
     try {
       const turn = await this.model.complete(request);
-      const actualInput = nonNegative(turn.usage?.inputTokens, inputTokens);
-      const actualOutput = nonNegative(
+      const actualInput = resolveTokens(turn.usage?.inputTokens, inputTokens);
+      const actualOutput = resolveTokens(
         turn.usage?.outputTokens,
-        this.outputTokenReserve
+        estimateSerializedTokens(turn.blocks)
       );
       const cachedInput = nonNegative(turn.usage?.cachedInputTokens, 0);
       const cacheWriteInput = nonNegative(turn.usage?.cacheWriteInputTokens, 0);
       this.settle(
         reservationId,
-        actualInput,
-        actualOutput,
+        actualInput.value,
+        actualOutput.value,
         checkedCost(this.estimateCostMicros(
-          actualInput,
-          actualOutput,
+          actualInput.value,
+          actualOutput.value,
           cachedInput,
           cacheWriteInput
         )),
         cachedInput,
-        cacheWriteInput
+        cacheWriteInput,
+        actualInput.source,
+        actualOutput.source
       );
       return turn;
     } catch (error) {
@@ -99,7 +109,9 @@ export class BudgetedAgentModel implements AgentModel {
         this.outputTokenReserve,
         estimatedCostMicros,
         0,
-        0
+        0,
+        "estimated",
+        "estimated"
       );
       throw error;
     } finally {
@@ -118,8 +130,11 @@ export class BudgetedAgentModel implements AgentModel {
     outputTokens: number,
     estimatedCostMicros: number,
     cachedInputTokens: number,
-    cacheWriteInputTokens: number
+    cacheWriteInputTokens: number,
+    inputTokenSource: ModelTokenSource,
+    outputTokenSource: ModelTokenSource
   ): void {
+    const settledAt = this.clock();
     this.ledger.settle({
       scopeId: this.scopeId,
       reservationId,
@@ -130,7 +145,11 @@ export class BudgetedAgentModel implements AgentModel {
         outputTokens,
         estimatedCostMicros,
       },
-      occurredAt: this.clock(),
+      tokenSources: {
+        inputTokens: inputTokenSource,
+        outputTokens: outputTokenSource,
+      },
+      occurredAt: settledAt,
       idempotencyKey: `settle:${reservationId}`,
     });
   }
@@ -150,11 +169,11 @@ export class BudgetedAgentModel implements AgentModel {
 }
 
 function estimateInputTokens(request: AgentModelRequest): number {
-  return Math.ceil(
-    Buffer.byteLength(
-      JSON.stringify({ messages: request.messages, tools: request.tools })
-    ) / 4
-  );
+  return estimateSerializedTokens({ messages: request.messages, tools: request.tools });
+}
+
+function estimateSerializedTokens(value: unknown): number {
+  return Math.ceil(Buffer.byteLength(JSON.stringify(value)) / 4);
 }
 
 function checkedCost(value: number): number {
@@ -168,4 +187,13 @@ function nonNegative(value: number | undefined, fallback: number): number {
   return Number.isSafeInteger(value) && (value as number) >= 0
     ? (value as number)
     : fallback;
+}
+
+function resolveTokens(
+  reported: number | undefined,
+  estimated: number
+): { value: number; source: ModelTokenSource } {
+  return Number.isSafeInteger(reported) && (reported as number) >= 0
+    ? { value: reported as number, source: "reported" }
+    : { value: estimated, source: "estimated" };
 }

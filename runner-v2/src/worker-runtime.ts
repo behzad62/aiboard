@@ -52,6 +52,7 @@ import {
 
 export interface RunWorkerTaskOptions {
   model: AgentModel;
+  subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
   sessionId: string;
   taskId: string;
@@ -185,6 +186,9 @@ export async function runWorkerTask(
   }
   for (const tool of createSubagentTools({
     model: options.model,
+    ...(options.subagentModelForSession
+      ? { subagentModelForSession: options.subagentModelForSession }
+      : {}),
     runId: options.runId,
     parentSessionId: options.sessionId,
     taskId: options.taskId,

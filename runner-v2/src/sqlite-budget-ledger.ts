@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   rebuildBudgetProjection,
+  modelCallAttribution,
+  modelTokenSources,
   reduceBudgetEvent,
   usageAmount,
   type BudgetEvent,
@@ -61,12 +63,20 @@ export class SqliteBudgetLedger implements BudgetLedger {
 
   reserve(input: ReserveBudgetInput): BudgetEvent {
     const estimate = usageAmount(input.estimate);
+    const attribution = input.kind === "model"
+      ? modelCallAttribution(input.attribution)
+      : undefined;
     return this.append(
       input.scopeId,
       "budget.reserved",
       input.occurredAt,
       input.idempotencyKey,
-      { reservationId: input.reservationId, kind: input.kind, estimate },
+      {
+        reservationId: input.reservationId,
+        kind: input.kind,
+        ...(attribution ? { attribution } : {}),
+        estimate,
+      },
       (projection) => {
         const delta = {
           ...(input.kind === "model" ? { modelCalls: 1 } : { toolCalls: 1 }),
@@ -84,12 +94,30 @@ export class SqliteBudgetLedger implements BudgetLedger {
 
   settle(input: SettleBudgetInput): BudgetEvent {
     const actual = usageAmount(input.actual);
+    const tokenSources = input.tokenSources === undefined
+      ? undefined
+      : modelTokenSources(input.tokenSources);
     return this.append(
       input.scopeId,
       "budget.settled",
       input.occurredAt,
       input.idempotencyKey,
-      { reservationId: input.reservationId, actual }
+      {
+        reservationId: input.reservationId,
+        actual,
+        ...(tokenSources
+          ? { tokenSources, settledAt: input.occurredAt }
+          : {}),
+      },
+      (projection) => {
+        const reservation = projection.reservations[input.reservationId];
+        if (reservation?.kind === "model" && !tokenSources) {
+          throw new Error("Model budget settlements require token source provenance.");
+        }
+        if (reservation?.kind === "tool" && tokenSources) {
+          throw new Error("Tool budget settlements cannot carry model token sources.");
+        }
+      }
     );
   }
 
@@ -220,7 +248,7 @@ export class SqliteBudgetLedger implements BudgetLedger {
         .get(scopeId, idempotencyKey) as BudgetRow | undefined;
       if (existing) {
         const event = decode(existing);
-        if (event.type !== type || JSON.stringify(event.payload) !== JSON.stringify(payload)) {
+        if (event.type !== type || !samePayload(type, event.payload, payload)) {
           throw new Error(`Budget idempotency conflict for ${idempotencyKey}.`);
         }
         this.database.exec("COMMIT");
@@ -278,4 +306,19 @@ function decode(row: BudgetRow): BudgetEvent {
     idempotencyKey: row.idempotency_key,
     payload: JSON.parse(row.payload_json) as Record<string, unknown>,
   };
+}
+
+function samePayload(
+  type: BudgetEventType,
+  left: Record<string, unknown>,
+  right: Record<string, unknown>
+): boolean {
+  if (type !== "budget.settled") {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  const leftSemantic = { ...left };
+  const rightSemantic = { ...right };
+  delete leftSemantic.settledAt;
+  delete rightSemantic.settledAt;
+  return JSON.stringify(leftSemantic) === JSON.stringify(rightSemantic);
 }

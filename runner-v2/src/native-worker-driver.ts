@@ -118,6 +118,14 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             model,
             ledger: this.options.budgetLedger,
             scopeId: assignment.runId,
+            attribution: {
+              runtimeId: candidate.runtimeId,
+              providerId: candidate.providerId,
+              modelId: candidate.modelId,
+              role: "worker",
+              sessionId,
+              taskId: assignment.task.id,
+            },
             outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
             estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
             clock: this.clock,
@@ -125,6 +133,29 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         : model;
       const result = await runWorkerTask({
         model: budgetedModel,
+        ...(this.options.budgetLedger
+          ? {
+              subagentModelForSession: (subagentSessionId: string) =>
+                new BudgetedAgentModel({
+                  model,
+                  ledger: this.options.budgetLedger!,
+                  scopeId: assignment.runId,
+                  attribution: {
+                    runtimeId: candidate.runtimeId,
+                    providerId: candidate.providerId,
+                    modelId: candidate.modelId,
+                    role: "subagent",
+                    sessionId: subagentSessionId,
+                    taskId: assignment.task.id,
+                  },
+                  outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
+                  estimateCostMicros: this.options.modelCostEstimators?.get(
+                    candidate.runtimeId
+                  ),
+                  clock: this.clock,
+                }),
+            }
+          : {}),
         runId: assignment.runId,
         sessionId,
         taskId: assignment.task.id,

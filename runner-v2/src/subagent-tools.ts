@@ -43,6 +43,7 @@ interface ReturnSubagentInput {
 
 export interface SubagentToolsOptions {
   model: AgentModel;
+  subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
   parentSessionId: string;
   taskId: string;
@@ -110,6 +111,7 @@ function spawnSubagentTool(
       }
       const callId = context.callId ?? "subagent";
       const sessionId = `${options.parentSessionId}:subagent:${callId}`;
+      const model = options.subagentModelForSession?.(sessionId) ?? options.model;
       let messages: AgentMessage[] = [
         {
           id: "subagent-system",
@@ -223,7 +225,7 @@ function spawnSubagentTool(
           })
         : broker;
       const result = await runAgentLoop({
-        model: options.model,
+        model,
         registry: toolRuntime,
         context: {
           runId: options.runId,

@@ -1,5 +1,23 @@
 export type BudgetReservationKind = "model" | "tool";
 
+export type ModelCallRole = "architect" | "worker" | "subagent";
+
+export interface ModelCallAttribution {
+  runtimeId: string;
+  providerId: string;
+  modelId: string;
+  role: ModelCallRole;
+  sessionId: string;
+  taskId?: string;
+}
+
+export type ModelTokenSource = "reported" | "estimated";
+
+export interface ModelTokenSources {
+  inputTokens: ModelTokenSource;
+  outputTokens: ModelTokenSource;
+}
+
 export interface BudgetUsage {
   modelCalls: number;
   toolCalls: number;
@@ -63,8 +81,11 @@ export interface BudgetEvent {
 export interface BudgetReservationProjection {
   reservationId: string;
   kind: BudgetReservationKind;
+  attribution?: ModelCallAttribution;
   estimate: BudgetAmount;
   actual?: BudgetAmount;
+  tokenSources?: ModelTokenSources;
+  settledAt?: string;
   status: "reserved" | "settled";
   windowIndex: number;
 }
@@ -96,19 +117,29 @@ export interface StartBudgetWindowInput {
   idempotencyKey: string;
 }
 
-export interface ReserveBudgetInput {
+interface ReserveBudgetInputBase {
   scopeId: string;
   reservationId: string;
-  kind: BudgetReservationKind;
   estimate: BudgetAmount;
   occurredAt: string;
   idempotencyKey: string;
 }
 
+export type ReserveBudgetInput =
+  | (ReserveBudgetInputBase & {
+      kind: "model";
+      attribution: ModelCallAttribution;
+    })
+  | (ReserveBudgetInputBase & {
+      kind: "tool";
+      attribution?: never;
+    });
+
 export interface SettleBudgetInput {
   scopeId: string;
   reservationId: string;
   actual: BudgetAmount;
+  tokenSources?: ModelTokenSources;
   occurredAt: string;
   idempotencyKey: string;
 }
@@ -177,9 +208,11 @@ export function reduceBudgetEvent(
     }
     const kind = requiredString(event.payload, "kind");
     if (kind !== "model" && kind !== "tool") throw new Error(`Invalid budget kind ${kind}.`);
+    const attribution = optionalModelCallAttribution(event.payload.attribution);
     projection.reservations[reservationId] = {
       reservationId,
       kind,
+      ...(attribution ? { attribution } : {}),
       estimate: usageAmount(event.payload.estimate),
       status: "reserved",
       windowIndex: projection.window.index,
@@ -194,6 +227,12 @@ export function reduceBudgetEvent(
       ...reservation,
       status: "settled",
       actual: usageAmount(event.payload.actual),
+      ...(event.payload.tokenSources === undefined
+        ? {}
+        : { tokenSources: modelTokenSources(event.payload.tokenSources) }),
+      ...(event.payload.settledAt === undefined
+        ? {}
+        : { settledAt: requiredString(event.payload, "settledAt") }),
     };
   } else if (event.type === "active.started") {
     const segmentId = requiredString(event.payload, "segmentId");
@@ -287,6 +326,51 @@ export function usageAmount(value: unknown): BudgetAmount {
     result[key] = amount as number;
   }
   return result;
+}
+
+export function modelCallAttribution(value: unknown): ModelCallAttribution {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Model reservation attribution must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  const role = requiredString(input, "role");
+  if (role !== "architect" && role !== "worker" && role !== "subagent") {
+    throw new Error(`Invalid model call role ${role}.`);
+  }
+  return {
+    runtimeId: requiredString(input, "runtimeId"),
+    providerId: requiredString(input, "providerId"),
+    modelId: requiredString(input, "modelId"),
+    role,
+    sessionId: requiredString(input, "sessionId"),
+    ...(input.taskId === undefined
+      ? {}
+      : { taskId: requiredString(input, "taskId") }),
+  };
+}
+
+export function modelTokenSources(value: unknown): ModelTokenSources {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Model token sources must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  return {
+    inputTokens: modelTokenSource(input.inputTokens, "inputTokens"),
+    outputTokens: modelTokenSource(input.outputTokens, "outputTokens"),
+  };
+}
+
+function optionalModelCallAttribution(
+  value: unknown
+): ModelCallAttribution | undefined {
+  return value === undefined ? undefined : modelCallAttribution(value);
+}
+
+function modelTokenSource(value: unknown, dimension: string): ModelTokenSource {
+  if (value !== "reported" && value !== "estimated") {
+    throw new Error(`Invalid ${dimension} token source.`);
+  }
+  return value;
 }
 
 function requiredString(payload: Record<string, unknown>, key: string): string {

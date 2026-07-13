@@ -225,6 +225,13 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           model,
           ledger: this.options.budgetLedger,
           scopeId: request.runId,
+          attribution: {
+            runtimeId: candidate.runtimeId,
+            providerId: candidate.providerId,
+            modelId: candidate.modelId,
+            role: "architect",
+            sessionId,
+          },
           outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
           estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
           clock: this.clock,

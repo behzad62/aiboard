@@ -34,6 +34,7 @@ test("budgeted model reserves before provider call and settles actual usage", as
       model,
       ledger,
       scopeId: "run_1",
+      attribution: modelAttribution(),
       outputTokenReserve: 20,
       clock: () => "2026-07-12T00:00:00.000Z",
     });
@@ -44,6 +45,10 @@ test("budgeted model reserves before provider call and settles actual usage", as
     assert.equal(ledger.snapshot("run_1").effective.outputTokens, 4);
     assert.equal(ledger.snapshot("run_1").effective.cachedInputTokens, 8);
     assert.equal(ledger.snapshot("run_1").effective.cacheWriteInputTokens, 2);
+    assert.deepEqual(
+      ledger.snapshot("run_1").reservations["model:session_1:1"].tokenSources,
+      { inputTokens: "reported", outputTokens: "reported" },
+    );
     await assert.rejects(() => budgeted.complete(request("session_1")), /modelCalls/i);
     assert.equal(calls, 1, "provider is not called after budget rejection");
   } finally {
@@ -73,6 +78,7 @@ test("budgeted model prices uncached, cached, cache-write, and output tokens sep
       },
       ledger,
       scopeId: "run_1",
+      attribution: modelAttribution(),
       outputTokenReserve: 20,
       estimateCostMicros: (input, output, cached = 0, cacheWrite = 0) =>
         (input - cached - cacheWrite) * 10 + cached * 2 + cacheWrite * 12 + output * 30,
@@ -95,6 +101,7 @@ test("provider errors settle the conservative reservation and restart advances c
       model: { complete: async () => { throw new Error("provider down"); } },
       ledger,
       scopeId: "run_1",
+      attribution: modelAttribution(),
       outputTokenReserve: 10,
     });
     await assert.rejects(() => failing.complete(request("session_1")), /provider down/);
@@ -114,6 +121,7 @@ test("provider errors settle the conservative reservation and restart advances c
       },
       ledger,
       scopeId: "run_1",
+      attribution: modelAttribution(),
       outputTokenReserve: 10,
     });
     await recovered.complete(request("session_1"));
@@ -142,6 +150,7 @@ test("model calls record active duration and prevent new work after the time lim
     },
     ledger,
     scopeId: "run_1",
+    attribution: modelAttribution(),
     outputTokenReserve: 1,
     clock,
   });
@@ -155,6 +164,103 @@ test("model calls record active duration and prevent new work after the time lim
     fixture.cleanup();
   }
 });
+
+test("reported input and estimated serialized output are resolved independently", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 1, maxInputTokens: 1_000, maxOutputTokens: 1_000 }),
+  });
+  const blocks = [
+    { type: "text" as const, text: "small response" },
+    {
+      type: "tool_call" as const,
+      callId: "call_1",
+      name: "fs.read",
+      arguments: { path: "runner-v2/src/budgeted-model.ts" },
+    },
+  ];
+  try {
+    const budgeted = new BudgetedAgentModel({
+      model: {
+        complete: async () => ({
+          blocks,
+          stopReason: "tool_calls",
+          usage: { inputTokens: 7 },
+        }),
+      },
+      ledger,
+      scopeId: "run_1",
+      attribution: modelAttribution(),
+      outputTokenReserve: 999,
+    });
+    await budgeted.complete(request("session_1"));
+    const reservation = ledger.snapshot("run_1").reservations["model:session_1:1"];
+    assert.equal(reservation.actual?.inputTokens, 7);
+    assert.equal(
+      reservation.actual?.outputTokens,
+      Math.ceil(Buffer.byteLength(JSON.stringify(blocks)) / 4),
+    );
+    assert.notEqual(reservation.actual?.outputTokens, 999);
+    assert.deepEqual(reservation.tokenSources, {
+      inputTokens: "reported",
+      outputTokens: "estimated",
+    });
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
+test("estimated serialized input and reported output are resolved independently", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 1, maxInputTokens: 1_000, maxOutputTokens: 1_000 }),
+  });
+  try {
+    const budgeted = new BudgetedAgentModel({
+      model: {
+        complete: async () => ({
+          blocks: [{ type: "text", text: "provider counted output" }],
+          stopReason: "end_turn",
+          usage: { outputTokens: 9 },
+        }),
+      },
+      ledger,
+      scopeId: "run_1",
+      attribution: modelAttribution(),
+      outputTokenReserve: 999,
+    });
+    const modelRequest = request("session_1");
+    await budgeted.complete(modelRequest);
+    const reservation = ledger.snapshot("run_1").reservations["model:session_1:1"];
+    assert.equal(
+      reservation.actual?.inputTokens,
+      Math.ceil(Buffer.byteLength(JSON.stringify({
+        messages: modelRequest.messages,
+        tools: modelRequest.tools,
+      })) / 4),
+    );
+    assert.equal(reservation.actual?.outputTokens, 9);
+    assert.deepEqual(reservation.tokenSources, {
+      inputTokens: "estimated",
+      outputTokens: "reported",
+    });
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
+function modelAttribution() {
+  return {
+    runtimeId: "runtime_test",
+    providerId: "provider_test",
+    modelId: "model_test",
+    role: "worker" as const,
+    sessionId: "session_1",
+    taskId: "task_test",
+  };
+}
 
 function request(sessionId: string): AgentModelRequest {
   return {
