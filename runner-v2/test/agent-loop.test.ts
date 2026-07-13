@@ -336,6 +336,50 @@ test("sustained read-only turns warn once and suspend without a further model ca
   );
 });
 
+test("the default worker guard warns after eight unproductive turns", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  registry.register(mutationTool());
+  registry.register(submitTool());
+  const model = new ScriptedModel([
+    ...Array.from({ length: 8 }, (_, index) => ({
+      blocks: [{
+        type: "tool_call" as const,
+        callId: `default_read_${index}`,
+        name: "read_file",
+        arguments: {},
+      }],
+      stopReason: "tool_calls" as const,
+    })),
+    {
+      blocks: [{ type: "tool_call", callId: "default_mutate", name: "write_file", arguments: {} }],
+      stopReason: "tool_calls" as const,
+    },
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "default_submit",
+        name: "submit_task",
+        arguments: { changeSetId: "changeset_default_guard" },
+      }],
+      stopReason: "tool_calls" as const,
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "submitted");
+  assert.match(
+    String(model.requests[8].messages.find((message) =>
+      message.id.startsWith("progress-reminder:")
+    )?.content ?? ""),
+    /last 8 model turns/i
+  );
+});
+
 test("a workspace mutation resets the mechanical read-only streak", async () => {
   const registry = new ToolRegistry();
   registry.register(textTool("read_file", "content"));

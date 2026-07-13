@@ -476,7 +476,7 @@ async function enforceReadOnlyStall(
 ): Promise<AgentLoopResult | null> {
   const limits = options.readOnlyStall ?? (
     options.context.actor.role === "worker"
-      ? { warnTurns: 12, suspendTurns: 20 }
+      ? { warnTurns: 8, suspendTurns: 16 }
       : undefined
   );
   if (!limits) return null;
