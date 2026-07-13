@@ -6,6 +6,7 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
 };
 const engine = readFileSync("lib/client/engine.ts", "utf8");
 const runnerSetup = readFileSync("components/RunnerSetup.tsx", "utf8");
+const runnerGuide = readFileSync("app/runner-guide/page.tsx", "utf8");
 const nativeBuildEngine = readFileSync("lib/client/native-build-engine.ts", "utf8");
 const discussionClient = readFileSync("app/discussion/discussion-client.tsx", "utf8");
 const workBenchAdapter = readFileSync("lib/benchmark/workbench/build-adapter.ts", "utf8");
@@ -19,6 +20,17 @@ assert.equal("copy-runner" in packageJson.scripts, false);
 assert.doesNotMatch(runnerSetup, /@\/lib\/client\/runner["']/);
 assert.match(runnerSetup, /Node\.js[\s\S]*24\.18\.0/);
 assert.match(runnerSetup, /24\.18\.0 or\s+newer/);
+const runnerDownloadLink = /<(?:a|Link)\b(?=[^>]*\bhref=["']\/aiboard-runner-v2\.zip["'])(?=[^>]*\bdownload(?:\s|=|>))[^>]*>/s;
+assert.deepEqual(
+  [
+    ["components/RunnerSetup.tsx", runnerSetup],
+    ["app/runner-guide/page.tsx", runnerGuide],
+  ]
+    .filter(([, source]) => !runnerDownloadLink.test(source))
+    .map(([path]) => path),
+  [],
+  "both Runner setup surfaces must link to /aiboard-runner-v2.zip with the download attribute"
+);
 assert.doesNotMatch(nativeBuildEngine, /stepNativeBuild/);
 assert.doesNotMatch(nativeBuildEngine, /\/build\/step/);
 assert.match(nativeBuildEngine, /effectiveNativeBuildPolicy/);

@@ -13,7 +13,7 @@
 - Product Build mode remains native Runner V2 only; never restore `runner.mjs`.
 - Support Node.js 24.18.0 or newer and require Git.
 - Runner state must remain outside the project.
-- The archive must include built-in skills and browser setup instructions.
+- The archive must include built-in skills, AGPL license metadata and text, and browser setup instructions.
 
 ---
 

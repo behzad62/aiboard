@@ -94,9 +94,20 @@ export function RunnerSetup({
         provider failover, and recovery. It requires Git and Node.js 24.18.0 or
         newer; missing prerequisites stop before any model call.
       </p>
+      <Button asChild type="button" size="sm">
+        <a href="/aiboard-runner-v2.zip" download>
+          Download Runner V2
+        </a>
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        Extract the ZIP, open a terminal in the extracted directory, then run:
+      </p>
       <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        {"npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
+        {"npm install\nnpm run setup:browser\nnpm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
       </pre>
+      <p className="text-xs text-muted-foreground">
+        Repository contributors can alternatively use <code>npm run runner:v2 -- --project ...</code> from the AI Board checkout.
+      </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <Label htmlFor="runner-v2-url" className="text-xs">Runner URL</Label>

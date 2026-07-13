@@ -25,11 +25,28 @@ export default function RunnerGuidePage() {
         </ul>
       </section>
       <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Download and install</h2>
+        <a
+          href="/aiboard-runner-v2.zip"
+          download
+          className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Download Runner V2 ZIP
+        </a>
+        <p>Extract the ZIP, open a terminal in the extracted directory, and run:</p>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
+          {"npm install\nnpm run setup:browser"}
+        </pre>
+      </section>
+      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Start the runner</h2>
         <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
-          {"npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
+          {"npm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
         </pre>
         <p>The runner prints a localhost URL and control token. Paste them into Build setup and test the connection.</p>
+        <p className="text-sm text-muted-foreground">
+          Repository contributors can alternatively run <code>npm run runner:v2 -- --project ...</code> from the AI Board checkout.
+        </p>
       </section>
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Access and handoff</h2>

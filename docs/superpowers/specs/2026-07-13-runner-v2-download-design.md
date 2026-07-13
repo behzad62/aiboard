@@ -6,7 +6,7 @@ The published AI Board app requires native Runner V2, but it only explains the r
 
 ## Decision
 
-Publish `/aiboard-runner-v2.zip` as a source distribution of the native kernel. The archive contains Runner V2 source, built-in skills, a standalone package manifest, setup/start scripts, and a README. It does not contain or restore the retired browser runner.
+Publish `/aiboard-runner-v2.zip` as a source distribution of the native kernel. The archive contains Runner V2 source, built-in skills, the AGPL license, a standalone package manifest, setup/start scripts, and a README. It does not contain or restore the retired browser runner.
 
 The package supports Node.js 24.18.0 or newer and requires Git. Installation uses pinned `tsx` and `playwright` dependencies. A setup command installs Chromium; a start command launches `src/cli.ts` and forwards the user's `--project`, `--state-dir`, and `--port` arguments.
 
