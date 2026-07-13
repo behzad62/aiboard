@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   BuildStopReport,
   BuildStopReason,
+  BuildRunPolicy,
   BuildToolReviewReport,
   BuildUsageWindow,
   DiscussionMode,
@@ -94,6 +95,7 @@ export type OrchestratorEvent =
       type: "build_usage";
       usage: BuildUsageWindow;
     }
+  | { type: "native_build_policy"; policy: BuildRunPolicy }
   | {
       type: "build_budget";
       phase: "worker" | "review" | "plan" | "summary";

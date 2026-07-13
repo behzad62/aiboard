@@ -4,11 +4,17 @@ export type ProviderTransport =
   | "anthropic"
   | "google";
 
+export type ProviderBillingBasis =
+  | "account_not_metered"
+  | "api_priced"
+  | "unknown";
+
 export interface RunnerProviderConfig {
   runtimeId: string;
   providerId: string;
   modelId: string;
   displayName?: string;
+  billingBasis?: ProviderBillingBasis;
   transport: ProviderTransport;
   baseUrl?: string;
   secret: string;
@@ -40,6 +46,7 @@ export interface ProviderUsageConfig {
   providerId: string;
   modelId: string;
   displayName?: string;
+  billingBasis: ProviderBillingBasis;
   transport: ProviderTransport;
   inputCostMicrosPerMillion?: number;
   outputCostMicrosPerMillion?: number;
@@ -55,6 +62,7 @@ export function providerUsageConfig(
     providerId: config.providerId,
     modelId: config.modelId,
     ...(config.displayName ? { displayName: config.displayName } : {}),
+    billingBasis: resolvedProviderBillingBasis(config),
     transport: config.transport,
     ...(config.inputCostMicrosPerMillion !== undefined
       ? { inputCostMicrosPerMillion: config.inputCostMicrosPerMillion }
@@ -91,6 +99,14 @@ export function validateProviderConfigs(
       throw new Error(`Provider runtime ${config.runtimeId} has invalid transport.`);
     }
     if (
+      config.billingBasis !== undefined &&
+      !(["account_not_metered", "api_priced", "unknown"] as const).includes(
+        config.billingBasis
+      )
+    ) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid billing basis.`);
+    }
+    if (
       config.protocol !== undefined &&
       (!(OPENAI_PROTOCOLS as readonly unknown[]).includes(config.protocol) ||
         config.transport !== "openai-compatible")
@@ -116,6 +132,23 @@ export function validateProviderConfigs(
     }
     ids.add(config.runtimeId);
   }
+}
+
+export function resolvedProviderBillingBasis(
+  config: Pick<
+    RunnerProviderConfig,
+    | "billingBasis"
+    | "transport"
+    | "inputCostMicrosPerMillion"
+    | "outputCostMicrosPerMillion"
+  >
+): ProviderBillingBasis {
+  if (config.billingBasis) return config.billingBasis;
+  if (
+    config.inputCostMicrosPerMillion !== undefined &&
+    config.outputCostMicrosPerMillion !== undefined
+  ) return "api_priced";
+  return config.transport === "account-runner" ? "account_not_metered" : "unknown";
 }
 
 const TRANSPORTS = [

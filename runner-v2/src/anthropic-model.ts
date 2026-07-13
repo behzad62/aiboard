@@ -11,6 +11,7 @@ import {
   createToolNameCodec,
   fetchProviderJson,
   joinEndpoint,
+  providerReportedTokenCount,
   serializedInputUsage,
   toolResultText,
   type ToolNameCodec,
@@ -123,12 +124,21 @@ function anthropicInputUsage(
   cacheWriteInputTokens?: number;
 } {
   if (!usage) return {};
-  const hasInput = usage.input_tokens !== undefined;
-  const cacheRead = usage.cache_read_input_tokens ?? 0;
-  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const values = [
+    usage.input_tokens,
+    usage.cache_read_input_tokens,
+    usage.cache_creation_input_tokens,
+  ];
+  if (values.some(
+    (value) => value !== undefined && providerReportedTokenCount(value) === undefined
+  )) return {};
+  const hasInput = values.some((value) => value !== undefined);
+  const input = providerReportedTokenCount(usage.input_tokens) ?? 0;
+  const cacheRead = providerReportedTokenCount(usage.cache_read_input_tokens) ?? 0;
+  const cacheWrite = providerReportedTokenCount(usage.cache_creation_input_tokens) ?? 0;
   return {
-    ...(hasInput || cacheRead > 0 || cacheWrite > 0
-      ? { inputTokens: (usage.input_tokens ?? 0) + cacheRead + cacheWrite }
+    ...(hasInput
+      ? { inputTokens: input + cacheRead + cacheWrite }
       : {}),
     ...(usage.cache_read_input_tokens !== undefined
       ? { cachedInputTokens: usage.cache_read_input_tokens }

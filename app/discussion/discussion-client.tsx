@@ -86,9 +86,11 @@ import {
 import { saveAttachmentFile } from "@/lib/client/settings-api";
 import {
   applyDiscussionLiveStatus,
+  applyNativeBuildPolicyEvent,
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
   nativeBuildDiscussionStatus,
+  nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
@@ -448,6 +450,11 @@ function DiscussionPageInner() {
           break;
         case "build_usage":
           setBuildUsage(event.usage);
+          break;
+        case "native_build_policy":
+          setDiscussion((previous) =>
+            previous ? applyNativeBuildPolicyEvent(previous, event) : previous
+          );
           break;
         case "context_assembled":
         case "memory_event":
@@ -915,7 +922,12 @@ function DiscussionPageInner() {
     }).then(({ runId, projection, usage, run, events }) => {
       if (cancelled) return;
       const durableStatus = nativeBuildDiscussionStatus(projection);
-      if (durableStatus !== status) {
+      const policyPatch = nativeBuildRestorationPolicyPatch(
+        { buildRunPolicy: discussion.buildRunPolicy },
+        projection
+      );
+      const statusChanged = durableStatus !== status;
+      if (statusChanged || "buildRunPolicy" in policyPatch) {
         const updatedAt = new Date().toISOString();
         const buildStopReason = durableStatus === "completed"
           ? "completed"
@@ -924,19 +936,21 @@ function DiscussionPageInner() {
             : null;
         const buildStoppedAt = durableStatus === "running" ? null : updatedAt;
         updateDiscussion(discussion.id, {
-          status: durableStatus,
-          buildStopReason,
-          buildStoppedAt,
+          ...(statusChanged
+            ? { status: durableStatus, buildStopReason, buildStoppedAt }
+            : {}),
+          ...policyPatch,
           updatedAt,
         });
-        setStatus(durableStatus);
+        if (statusChanged) setStatus(durableStatus);
         setError(null);
         setDiscussion((current) => current
           ? {
               ...current,
-              status: durableStatus,
-              buildStopReason,
-              buildStoppedAt,
+              ...(statusChanged
+                ? { status: durableStatus, buildStopReason, buildStoppedAt }
+                : {}),
+              ...policyPatch,
               updatedAt,
             }
           : current);
@@ -975,6 +989,7 @@ function DiscussionPageInner() {
     discussion?.runnerUrl,
     discussion?.runnerToken,
     discussion?.nativeBuildRunId,
+    discussion?.buildRunPolicy,
     status,
   ]);
 

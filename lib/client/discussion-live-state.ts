@@ -155,6 +155,52 @@ export function nativeBuildRunPolicy(
   return projection.runPolicy ?? fallback;
 }
 
+export interface NativeBuildPolicyEvent {
+  type: "native_build_policy";
+  policy: BuildRunPolicy;
+}
+
+export function nativeBuildPolicyChange(
+  current: BuildRunPolicy,
+  projection: Pick<NativeBuildProjection, "runPolicy">
+): NativeBuildPolicyEvent | null {
+  const policy = nativeBuildRunPolicy(projection, current);
+  return policy === current ? null : { type: "native_build_policy", policy };
+}
+
+export function createNativeBuildPolicySynchronizer(
+  initial: BuildRunPolicy,
+  onChange: (event: NativeBuildPolicyEvent) => void
+): (projection: Pick<NativeBuildProjection, "runPolicy">) => void {
+  let current = initial;
+  return (projection) => {
+    const change = nativeBuildPolicyChange(current, projection);
+    if (!change) return;
+    current = change.policy;
+    onChange(change);
+  };
+}
+
+export function applyNativeBuildPolicyEvent(
+  discussion: Discussion,
+  event: NativeBuildPolicyEvent
+): Discussion {
+  return discussion.buildRunPolicy === event.policy
+    ? discussion
+    : { ...discussion, buildRunPolicy: event.policy };
+}
+
+export function nativeBuildRestorationPolicyPatch(
+  discussion: Pick<Discussion, "buildRunPolicy">,
+  projection: Pick<NativeBuildProjection, "runPolicy">
+): Pick<Discussion, "buildRunPolicy"> | Record<string, never> {
+  const policy = nativeBuildRunPolicy(
+    projection,
+    discussion.buildRunPolicy ?? "finish"
+  );
+  return discussion.buildRunPolicy === policy ? {} : { buildRunPolicy: policy };
+}
+
 function hasUnpricedContributingNativeUsage(
   model: BuildUsageWindow["models"][number]
 ): boolean {

@@ -251,6 +251,47 @@ test("transport-estimated serialized input and reported output are resolved inde
   }
 });
 
+test("malformed transport input cannot settle as reported zero", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 1, maxInputTokens: 1_000, maxOutputTokens: 1_000 }),
+  });
+  try {
+    const budgeted = new BudgetedAgentModel({
+      model: {
+        complete: async () => ({
+          blocks: [{ type: "text", text: "unsafe usage" }],
+          stopReason: "end_turn",
+          usage: {
+            inputTokens: -1,
+            inputTokenSource: "reported",
+            outputTokens: 1,
+          },
+        }),
+      },
+      ledger,
+      scopeId: "run_1",
+      attribution: modelAttribution(),
+      outputTokenReserve: 9,
+      estimateCostMicros: (input, output) => input * 2 + output * 3,
+    });
+    await assert.rejects(
+      () => budgeted.complete(request("session_1")),
+      /invalid transport input token usage/i,
+    );
+    const reservation = ledger.snapshot("run_1").reservations["model:session_1:1"];
+    assert.notEqual(reservation.actual?.inputTokens, 0);
+    assert.equal(reservation.actual?.estimatedCostMicros, reservation.estimate.estimatedCostMicros);
+    assert.deepEqual(reservation.tokenSources, {
+      inputTokens: "estimated",
+      outputTokens: "estimated",
+    });
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
 function modelAttribution() {
   return {
     runtimeId: "runtime_test",

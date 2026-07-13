@@ -202,11 +202,11 @@ function resolveTransportInputTokens(
   value: number | undefined,
   source: ModelTokenSource | undefined
 ): { value: number; source: ModelTokenSource } {
-  if (value === undefined) {
-    throw new Error("Provider transport did not resolve input token usage.");
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error("Invalid transport input token usage.");
   }
   return {
-    value: nonNegative(value, 0),
+    value: value as number,
     source: source ?? "reported",
   };
 }

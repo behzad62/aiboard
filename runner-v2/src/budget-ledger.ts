@@ -21,13 +21,14 @@ export interface ModelTokenSources {
 export type ModelCostBasisSnapshot =
   | {
       kind: "api_estimate";
+      billingBasis?: "api_priced";
       inputCostMicrosPerMillion: number;
       outputCostMicrosPerMillion: number;
       cachedInputCostMicrosPerMillion: number;
       cacheWriteInputCostMicrosPerMillion: number;
     }
-  | { kind: "account_not_metered" }
-  | { kind: "unknown" };
+  | { kind: "account_not_metered"; billingBasis?: "account_not_metered" }
+  | { kind: "unknown"; billingBasis?: "unknown" };
 
 export interface BudgetUsage {
   modelCalls: number;
@@ -385,7 +386,13 @@ export function modelCostBasisSnapshot(value: unknown): ModelCostBasisSnapshot {
   }
   const input = value as Record<string, unknown>;
   if (input.kind === "account_not_metered" || input.kind === "unknown") {
-    return { kind: input.kind };
+    const expected = input.kind;
+    if (input.billingBasis !== undefined && input.billingBasis !== expected) {
+      throw new Error("Invalid model cost basis billingBasis.");
+    }
+    return expected === "account_not_metered"
+      ? { kind: "account_not_metered", billingBasis: "account_not_metered" }
+      : { kind: "unknown", billingBasis: "unknown" };
   }
   if (input.kind !== "api_estimate") {
     throw new Error("Invalid model cost basis snapshot.");
@@ -403,6 +410,7 @@ export function modelCostBasisSnapshot(value: unknown): ModelCostBasisSnapshot {
   }
   return {
     kind: "api_estimate",
+    billingBasis: "api_priced",
     inputCostMicrosPerMillion: input.inputCostMicrosPerMillion as number,
     outputCostMicrosPerMillion: input.outputCostMicrosPerMillion as number,
     cachedInputCostMicrosPerMillion: input.cachedInputCostMicrosPerMillion as number,

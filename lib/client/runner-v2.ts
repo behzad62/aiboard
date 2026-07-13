@@ -19,6 +19,7 @@ export interface NativeProviderConfig {
   providerId: string;
   modelId: string;
   displayName?: string;
+  billingBasis: "account_not_metered" | "api_priced" | "unknown";
   transport: "account-runner" | "openai-compatible" | "anthropic" | "google";
   baseUrl?: string;
   secret: string;

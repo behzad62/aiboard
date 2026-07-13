@@ -37,14 +37,21 @@ export function joinEndpoint(baseUrl: string, path: string): string {
 
 export function serializedInputUsage(
   serializedBody: string,
-  reportedInputTokens?: number
+  reportedInputTokens?: unknown
 ): { inputTokens: number; inputTokenSource: "reported" | "estimated" } {
-  return reportedInputTokens !== undefined
-    ? { inputTokens: reportedInputTokens, inputTokenSource: "reported" }
+  const reported = providerReportedTokenCount(reportedInputTokens);
+  return reported !== undefined
+    ? { inputTokens: reported, inputTokenSource: "reported" }
     : {
         inputTokens: Math.ceil(Buffer.byteLength(serializedBody) / 4),
         inputTokenSource: "estimated",
       };
+}
+
+export function providerReportedTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 export async function fetchProviderJson<T>(

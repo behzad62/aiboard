@@ -14,10 +14,15 @@ import {
   assertEnforceableBuildBudget,
   createProviderModel,
   providerCostEstimator,
+  providerModelCostBasis,
 } from "../src/native-build-factory.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { OpenAICompatibleModel } from "../src/openai-compatible-model.js";
-import { validateProviderConfigs } from "../src/provider-config-store.js";
+import {
+  resolvedProviderBillingBasis,
+  validateProviderConfigs,
+} from "../src/provider-config-store.js";
+import { serializedInputUsage } from "../src/provider-model-utils.js";
 
 test("provider configuration is encrypted at rest and rejects the wrong runner token", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-provider-config-"));
@@ -29,6 +34,7 @@ test("provider configuration is encrypted at rest and rejects the wrong runner t
         runtimeId: "chatgpt:gpt-5.5",
         providerId: "chatgpt",
         modelId: "gpt-5.5",
+        billingBasis: "account_not_metered",
         transport: "account-runner",
         baseUrl: "http://127.0.0.1:1455",
         secret: "account-runner-secret",
@@ -43,6 +49,7 @@ test("provider configuration is encrypted at rest and rejects the wrong runner t
 
     store = new EncryptedProviderConfigStore(path, "runner-token-secret");
     assert.equal(store.load()[0].secret, "account-runner-secret");
+    assert.equal(store.load()[0].billingBasis, "account_not_metered");
     store.close();
     assert.throws(
       () => new EncryptedProviderConfigStore(path, "wrong-runner-token-secret").load(),
@@ -102,6 +109,136 @@ test("provider pricing converts token classes to integer microdollars", () => {
   assert.equal(estimate!(1_000_000, 100_000, 600_000, 100_000), 2_650_000);
 });
 
+test("legacy provider configs infer billing conservatively", () => {
+  assert.equal(resolvedProviderBillingBasis({
+    transport: "account-runner",
+    inputCostMicrosPerMillion: 1,
+    outputCostMicrosPerMillion: 1,
+  }), "api_priced");
+  assert.equal(resolvedProviderBillingBasis({
+    transport: "account-runner",
+  }), "account_not_metered");
+  assert.equal(resolvedProviderBillingBasis({
+    transport: "anthropic",
+  }), "unknown");
+});
+
+test("serialized input usage accepts only safe non-negative provider integers", () => {
+  const body = JSON.stringify({ expanded: "delivered provider body" });
+  const estimated = Math.ceil(Buffer.byteLength(body) / 4);
+  for (const malformed of [null, "12", -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(serializedInputUsage(body, malformed), {
+      inputTokens: estimated,
+      inputTokenSource: "estimated",
+    });
+  }
+  assert.deepEqual(serializedInputUsage(body, 0), {
+    inputTokens: 0,
+    inputTokenSource: "reported",
+  });
+});
+
+test("every native transport estimates malformed provider input from its delivered body", async () => {
+  const request = { sessionId: "malformed", messages: [], tools: [] };
+  const cases: Array<{
+    name: string;
+    body: () => string;
+    complete: () => Promise<Awaited<ReturnType<OpenAICompatibleModel["complete"]>>>;
+  }> = [];
+  let accountBody = "";
+  cases.push({
+    name: "account",
+    body: () => accountBody,
+    complete: () => new AccountRunnerModel({
+      baseUrl: "http://runner.test",
+      runnerPath: "nvidia",
+      runnerToken: "token",
+      modelId: "model",
+      fetch: async (_input, init) => {
+        accountBody = String(init?.body);
+        return new Response(
+          `data: ${JSON.stringify({ type: "usage", usage: { inputTokens: "12" } })}\n\ndata: ${JSON.stringify({ type: "done" })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    }).complete(request),
+  });
+  let openAiBody = "";
+  cases.push({
+    name: "openai",
+    body: () => openAiBody,
+    complete: () => new OpenAICompatibleModel({
+      baseUrl: "https://api.test/v1",
+      apiKey: "secret",
+      modelId: "model",
+      fetch: async (_input, init) => {
+        openAiBody = String(init?.body);
+        return Response.json({ choices: [{ message: {} }], usage: { prompt_tokens: null } });
+      },
+    }).complete(request),
+  });
+  let anthropicBody = "";
+  cases.push({
+    name: "anthropic",
+    body: () => anthropicBody,
+    complete: () => new AnthropicModel({
+      apiKey: "secret",
+      modelId: "model",
+      fetch: async (_input, init) => {
+        anthropicBody = String(init?.body);
+        return Response.json({ content: [], usage: { input_tokens: -1 } });
+      },
+    }).complete(request),
+  });
+  let googleBody = "";
+  cases.push({
+    name: "google",
+    body: () => googleBody,
+    complete: () => new GoogleModel({
+      apiKey: "secret",
+      modelId: "model",
+      fetch: async (_input, init) => {
+        googleBody = String(init?.body);
+        return Response.json({ candidates: [], usageMetadata: { promptTokenCount: 1.5 } });
+      },
+    }).complete(request),
+  });
+
+  for (const item of cases) {
+    const turn = await item.complete();
+    assert.deepEqual(turn.usage, {
+      inputTokens: Math.ceil(Buffer.byteLength(item.body()) / 4),
+      inputTokenSource: "estimated",
+    }, item.name);
+  }
+});
+
+test("metered account-runner proxy keeps API billing and immutable pricing", () => {
+  const proxy = {
+    runtimeId: "nvidia:model",
+    providerId: "nvidia",
+    modelId: "model",
+    transport: "account-runner" as const,
+    billingBasis: "api_priced" as const,
+    baseUrl: "http://127.0.0.1:1455",
+    secret: "api-key",
+    runnerToken: "runner-token",
+    capabilities: ["*"],
+    priority: 1,
+    inputCostMicrosPerMillion: 2_000_000,
+    outputCostMicrosPerMillion: 8_000_000,
+  };
+  assert.equal(providerCostEstimator(proxy)!(1_000_000, 1_000_000), 10_000_000);
+  assert.deepEqual(providerModelCostBasis(proxy), {
+    kind: "api_estimate",
+    billingBasis: "api_priced",
+    inputCostMicrosPerMillion: 2_000_000,
+    outputCostMicrosPerMillion: 8_000_000,
+    cachedInputCostMicrosPerMillion: 2_000_000,
+    cacheWriteInputCostMicrosPerMillion: 2_000_000,
+  });
+});
+
 test("Runner rejects USD-only runs with any unpriced selectable runtime", () => {
   const spec: NativeBuildSpec = {
     version: 1,
@@ -138,12 +275,20 @@ test("Runner rejects USD-only runs with any unpriced selectable runtime", () => 
     transport: "account-runner" as const,
     baseUrl: "http://127.0.0.1:1455",
   };
+  const meteredProxy = {
+    ...account,
+    runtimeId: "nvidia:priced",
+    billingBasis: "api_priced" as const,
+    inputCostMicrosPerMillion: 1,
+    outputCostMicrosPerMillion: 1,
+  };
   const unknown = {
     ...base,
     runtimeId: "api:unknown",
     transport: "anthropic" as const,
   };
   assert.doesNotThrow(() => assertEnforceableBuildBudget(spec, [priced]));
+  assert.doesNotThrow(() => assertEnforceableBuildBudget(spec, [meteredProxy]));
   assert.throws(() => assertEnforceableBuildBudget(spec, [account]), /account:model.*time limit/i);
   assert.throws(() => assertEnforceableBuildBudget(spec, [unknown]), /api:unknown.*pricing.*time limit/i);
   assert.throws(() => assertEnforceableBuildBudget(spec, [priced, account]), /account:model/i);

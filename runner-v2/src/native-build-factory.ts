@@ -35,7 +35,10 @@ import type {
   ProviderConfigStore,
   RunnerProviderConfig,
 } from "./provider-config-store.js";
-import { providerUsageConfig } from "./provider-config-store.js";
+import {
+  providerUsageConfig,
+  resolvedProviderBillingBasis,
+} from "./provider-config-store.js";
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import {
@@ -505,7 +508,7 @@ export function providerCostEstimator(
   config: RunnerProviderConfig
 ): ModelCostEstimator | undefined {
   if (
-    config.transport === "account-runner" ||
+    resolvedProviderBillingBasis(config) !== "api_priced" ||
     config.inputCostMicrosPerMillion === undefined ||
     config.outputCostMicrosPerMillion === undefined
   ) return undefined;
@@ -529,13 +532,18 @@ export function providerCostEstimator(
 export function providerModelCostBasis(
   config: RunnerProviderConfig
 ): ModelCostBasisSnapshot {
-  if (config.transport === "account-runner") return { kind: "account_not_metered" };
+  const billingBasis = resolvedProviderBillingBasis(config);
+  if (billingBasis === "account_not_metered") {
+    return { kind: "account_not_metered", billingBasis };
+  }
   if (
+    billingBasis !== "api_priced" ||
     config.inputCostMicrosPerMillion === undefined ||
     config.outputCostMicrosPerMillion === undefined
-  ) return { kind: "unknown" };
+  ) return { kind: "unknown", billingBasis: "unknown" };
   return {
     kind: "api_estimate",
+    billingBasis,
     inputCostMicrosPerMillion: config.inputCostMicrosPerMillion,
     outputCostMicrosPerMillion: config.outputCostMicrosPerMillion,
     cachedInputCostMicrosPerMillion:
@@ -554,10 +562,9 @@ export function assertEnforceableBuildBudget(
     configs.map((config) => ({
       runtimeId: config.runtimeId,
       costBasis:
-        config.transport === "account-runner"
+        resolvedProviderBillingBasis(config) === "account_not_metered"
           ? "account_not_metered"
-          : config.inputCostMicrosPerMillion !== undefined &&
-              config.outputCostMicrosPerMillion !== undefined
+          : resolvedProviderBillingBasis(config) === "api_priced"
             ? "priced_api"
             : "unknown",
     }))

@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 
 import {
   applyDiscussionLiveStatus,
+  applyNativeBuildPolicyEvent,
+  createNativeBuildPolicySynchronizer,
   buildStopFallbackMessage,
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
   nativeBuildDiscussionStatus,
   nativeBuildRunPolicy,
+  nativeBuildPolicyChange,
+  nativeBuildRestorationPolicyPatch,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -20,6 +24,18 @@ assert.equal(
     projectHandoffRequested: true,
   }),
   "Awaiting project handoff"
+);
+const synchronizedPolicies: string[] = [];
+const synchronizePolicy = createNativeBuildPolicySynchronizer(
+  "budgeted",
+  (event) => synchronizedPolicies.push(event.policy)
+);
+synchronizePolicy({ runPolicy: "finish" } as never);
+synchronizePolicy({ runPolicy: "finish" } as never);
+assert.deepEqual(
+  synchronizedPolicies,
+  ["finish"],
+  "the engine persistence/emission callback runs only for an actual change",
 );
 assert.equal(
   buildRunWorkflowStatus({
@@ -99,6 +115,32 @@ assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stoppe
 assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");
 assert.equal(nativeBuildRunPolicy({ runPolicy: "finish" } as never, "budgeted"), "finish");
 assert.equal(nativeBuildRunPolicy({} as never, "plan_only"), "plan_only");
+const policyChange = nativeBuildPolicyChange(
+  "budgeted",
+  { runPolicy: "finish" } as never
+);
+assert.deepEqual(policyChange, { type: "native_build_policy", policy: "finish" });
+assert.equal(
+  nativeBuildPolicyChange(policyChange!.policy, { runPolicy: "finish" } as never),
+  null,
+  "the engine emits and persists a durable policy change only once",
+);
+assert.equal(
+  applyNativeBuildPolicyEvent(
+    { ...stopped, buildRunPolicy: "budgeted" } as never,
+    policyChange!
+  ).buildRunPolicy,
+  "finish",
+  "the live discussion event updates React-facing discussion state",
+);
+assert.deepEqual(
+  nativeBuildRestorationPolicyPatch(
+    { ...stopped, buildRunPolicy: "budgeted" } as never,
+    { status: "paused", runPolicy: "plan_only" } as never
+  ),
+  { buildRunPolicy: "plan_only" },
+  "stopped restoration synchronizes the Runner policy even when status is unchanged",
+);
 assert.equal(shouldRestoreDurableBuildProjection("stopped"), true);
 assert.equal(shouldRestoreDurableBuildProjection("failed"), true);
 assert.equal(shouldRestoreDurableBuildProjection("running"), false);

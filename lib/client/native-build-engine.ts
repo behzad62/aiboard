@@ -31,12 +31,13 @@ import {
 } from "./runner-v2";
 import {
   nativeBuildTaskStatus,
-  nativeBuildRunPolicy,
+  createNativeBuildPolicySynchronizer,
   nativeBuildUsageWindow,
 } from "./discussion-live-state";
 import {
   effectiveNativeBuildPolicy,
   MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
 
@@ -80,6 +81,16 @@ export async function runNativeBuildDiscussion(
     url: discussion.runnerUrl,
     token: discussion.runnerToken,
   };
+  const syncDurablePolicy = createNativeBuildPolicySynchronizer(
+    discussion.buildRunPolicy ?? "finish",
+    (change) => {
+      updateDiscussion(discussion.id, {
+        buildRunPolicy: change.policy,
+        updatedAt: new Date().toISOString(),
+      });
+      emit(change);
+    }
+  );
   emit({ type: "status", status: "running" });
   emit({
     type: "diagnostic",
@@ -149,6 +160,8 @@ export async function runNativeBuildDiscussion(
     });
   }
   const run = await getNativeRun(connection, runId);
+  const initialProjection = await getNativeBuild(connection, runId);
+  syncDurablePolicy(initialProjection);
   emit({
     type: "build_usage",
     usage: nativeBuildUsageWindow(
@@ -159,7 +172,7 @@ export async function runNativeBuildDiscussion(
   if (run.state === "created") {
     await commandNativeRun(connection, runId, "start", `start:${runId}`);
   } else if (run.state === "paused") {
-    const pausedProjection = await getNativeBuild(connection, runId);
+    const pausedProjection = initialProjection;
     const pauseGate = nativeBuildPauseGate(pausedProjection);
     if (pauseGate.kind === "project_handoff") {
       emitProjectHandoffPause(discussion, pausedProjection, emit);
@@ -198,16 +211,7 @@ export async function runNativeBuildDiscussion(
         getNativeBuild(connection, runId),
         getNativeBuildUsage(connection, runId),
       ]);
-      const durablePolicy = nativeBuildRunPolicy(
-        projection,
-        discussion.buildRunPolicy ?? "finish"
-      );
-      if (discussion.buildRunPolicy !== durablePolicy) {
-        updateDiscussion(discussion.id, {
-          buildRunPolicy: durablePolicy,
-          updatedAt: new Date().toISOString(),
-        });
-      }
+      syncDurablePolicy(projection);
       emitTaskProjection(projection, emit);
       emit({
         type: "build_usage",
@@ -370,6 +374,12 @@ function providerConfig(
       providerId,
       modelId: custom.model,
       displayName: custom.label,
+      billingBasis: nativeProviderBillingBasis({
+        hasApiPricing:
+          pricing.inputCostMicrosPerMillion !== undefined &&
+          pricing.outputCostMicrosPerMillion !== undefined,
+        accountSubscription: false,
+      }),
       transport: "openai-compatible",
       baseUrl: custom.baseURL,
       secret: custom.apiKey || "aiboard-local-endpoint",
@@ -404,6 +414,12 @@ function providerConfig(
     providerId,
     modelId: model,
     ...(catalogModel?.name ? { displayName: catalogModel.name } : {}),
+    billingBasis: nativeProviderBillingBasis({
+      hasApiPricing:
+        pricing.inputCostMicrosPerMillion !== undefined &&
+        pricing.outputCostMicrosPerMillion !== undefined,
+      accountSubscription: Boolean(definition?.accountRunner),
+    }),
     transport: native.transport,
     ...(native.baseUrl ? { baseUrl: native.baseUrl } : {}),
     secret: saved.apiKey,

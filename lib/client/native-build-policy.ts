@@ -12,6 +12,14 @@ export {
 
 export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = MINIMUM_NODE_VERSION;
 
+export function nativeProviderBillingBasis(input: {
+  hasApiPricing: boolean;
+  accountSubscription: boolean;
+}): "account_not_metered" | "api_priced" | "unknown" {
+  if (input.hasApiPricing) return "api_priced";
+  return input.accountSubscription ? "account_not_metered" : "unknown";
+}
+
 export interface NativeBuildBudgetLimits {
   maxEstimatedCostMicros?: number;
   maxActiveMs?: number;

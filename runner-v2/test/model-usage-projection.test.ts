@@ -529,6 +529,7 @@ test("account runtimes are not metered and fully estimated calls retain that pro
         outputCostMicrosPerMillion: 1,
       }),
       transport: "account-runner",
+      billingBasis: "account_not_metered",
     }],
     providerHealth: [],
   })[0], {
@@ -548,6 +549,54 @@ test("account runtimes are not metered and fully estimated calls retain that pro
     usageQuality: "estimated",
     lastUsedAt: "2026-07-13T11:00:00.000Z",
   });
+});
+
+test("metered account-runner proxy projects immutable API cost", () => {
+  const budget = projection({
+    proxy_1: {
+      ...settled("proxy_1", "proxy", "nvidia", "model", "worker", {
+        inputTokens: 10,
+        outputTokens: 2,
+        estimatedCostMicros: 17,
+      }, { inputTokens: "reported", outputTokens: "reported" }, "2026-07-13T11:30:00.000Z"),
+      costBasis: {
+        kind: "api_estimate",
+        billingBasis: "api_priced",
+        inputCostMicrosPerMillion: 1_000_000,
+        outputCostMicrosPerMillion: 3_500_000,
+        cachedInputCostMicrosPerMillion: 1_000_000,
+        cacheWriteInputCostMicrosPerMillion: 1_000_000,
+      },
+    },
+  });
+  const [row] = projectNativeModelUsage({
+    budget,
+    runtimes: [{
+      ...runtime("proxy", "nvidia", "model", ["worker"], {
+        inputCostMicrosPerMillion: 99_000_000,
+        outputCostMicrosPerMillion: 99_000_000,
+      }),
+      transport: "account-runner",
+      billingBasis: "api_priced",
+    }],
+    providerHealth: [],
+  });
+  assert.equal(row.costBasis, "api_estimate");
+  assert.equal(row.estimatedCostMicros, 17);
+  const [unused] = projectNativeModelUsage({
+    budget: projection({}),
+    runtimes: [{
+      ...runtime("proxy", "nvidia", "model", ["worker"], {
+        inputCostMicrosPerMillion: 1,
+        outputCostMicrosPerMillion: 1,
+      }),
+      transport: "account-runner",
+      billingBasis: "api_priced",
+    }],
+    providerHealth: [],
+  });
+  assert.equal(unused.costBasis, "api_estimate");
+  assert.equal(unused.estimatedCostMicros, 0);
 });
 
 test("projects immutable per-call settlement costs across pricing changes and reopen", () => {
@@ -624,6 +673,7 @@ function runtime(
     providerId,
     modelId,
     transport: "openai-compatible",
+    billingBasis: "api_priced",
     roles,
     selectable: true,
     ...pricing,

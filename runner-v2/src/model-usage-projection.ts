@@ -316,10 +316,11 @@ function projectCost(
     }
     return { estimatedCostMicros: null, costBasis: "unknown" };
   }
-  if (runtime.transport === "account-runner") {
+  if (runtime.billingBasis === "account_not_metered") {
     return { estimatedCostMicros: null, costBasis: "account_not_metered" };
   }
-  return runtime.inputCostMicrosPerMillion !== undefined &&
+  return runtime.billingBasis === "api_priced" &&
+    runtime.inputCostMicrosPerMillion !== undefined &&
     runtime.outputCostMicrosPerMillion !== undefined
     ? { estimatedCostMicros: 0, costBasis: "api_estimate" }
     : { estimatedCostMicros: null, costBasis: "unknown" };

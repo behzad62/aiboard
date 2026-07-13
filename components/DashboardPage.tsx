@@ -65,7 +65,10 @@ import {
 } from "@/lib/orchestrator/build-policy";
 import { getCapabilityProfiles } from "@/lib/client/capability-api";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
-import { nativeBuildBudgetEnforceabilityError } from "@/lib/client/native-build-policy";
+import {
+  nativeBuildBudgetEnforceabilityError,
+  nativeProviderBillingBasis,
+} from "@/lib/client/native-build-policy";
 import {
   selectBuildModelIdsByCapabilities,
   participantRequiredInputTypesForMode,
@@ -279,13 +282,18 @@ export default function DashboardPage() {
       },
     }, runtimeIds.map((runtimeId) => {
       const { providerId } = parseModelId(runtimeId);
+      const hasApiPricing = Boolean(
+        getModelPricing(runtimeId, data?.settings.modelPricingOverrides)
+      );
+      const billingBasis = nativeProviderBillingBasis({
+        hasApiPricing,
+        accountSubscription: Boolean(getProviderDefinition(providerId)?.accountRunner),
+      });
       return {
         runtimeId,
-        costBasis: getProviderDefinition(providerId)?.accountRunner
-          ? "account_not_metered" as const
-          : getModelPricing(runtimeId, data?.settings.modelPricingOverrides)
-            ? "priced_api" as const
-            : "unknown" as const,
+        costBasis: billingBasis === "api_priced"
+          ? "priced_api" as const
+          : billingBasis,
       };
     }));
   }, [

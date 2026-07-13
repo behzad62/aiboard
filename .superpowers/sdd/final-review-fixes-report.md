@@ -8,7 +8,7 @@ Date: 2026-07-13
 
 ## Outcome
 
-All nine review sections and the three coverage notes were implemented test-first. The final Runner V2 aggregate suite passes with 203 Runner tests plus every bundled client contract. Runner and root TypeScript checks, touched-file ESLint, and `git diff --check` are clean.
+All nine review sections, the three coverage notes, and the three follow-up findings were implemented test-first. The final Runner V2 aggregate suite passes with 209 Runner tests plus every bundled client contract. Runner and root TypeScript checks, touched-file ESLint, and `git diff --check` are clean.
 
 ## 1. Plan-only mechanical capability boundary
 
@@ -180,7 +180,7 @@ Both contracts pass with sanitized `Rate limited.` copy and no raw `slow down` t
 npm run test:runner-v2
 ```
 
-PASS: 203 Runner tests, then all client contracts:
+PASS: 209 Runner tests, then all client contracts:
 
 - runner-v2 client
 - native Build policy and policy UI
@@ -211,3 +211,61 @@ PASS: touched-file ESLint and whitespace validation. `npm run build` was intenti
 - No raw provider error text, secrets, credentials, or cost configuration secrets are added to safe projections.
 - No product Build path imports benchmark-era or legacy server engines.
 - No known unresolved correctness concern remains.
+
+## Follow-up final-review corrections
+
+### A. Billing basis is explicit and transport-independent
+
+- Added durable `billingBasis` metadata (`account_not_metered`, `api_priced`, or `unknown`) from browser provider configuration through encrypted Runner configuration and safe usage projection.
+- Pricing takes precedence over account-runner transport, so an NVIDIA-like metered localhost proxy remains API-priced while true account subscriptions remain unmetered.
+- Cost estimators, USD-only enforceability, unused-runtime projections, and immutable reservation snapshots now classify from billing basis rather than transport.
+- Legacy configs remain readable: complete pricing infers API billing, an unpriced account-runner infers the historical account basis, and other unpriced providers infer unknown.
+
+RED: focused contracts failed because billing was inferred from transport and the metered proxy was rejected as an account runtime.
+
+GREEN: provider/config/projection and browser policy tests cover explicit account billing, a metered account-runner proxy, immutable settled cost after rate changes, unused API estimates, and conservative legacy inference.
+
+### B. Durable policy reaches live and restored discussion state exactly once
+
+- Added the typed `native_build_policy` event and a stateful synchronizer that persists/emits only on an actual policy transition.
+- The native engine synchronizes the initial projection before terminal-state handling and reuses the synchronizer during polling, preventing repeated writes/events against the stale initial discussion object.
+- The discussion client applies live policy events to React state. Stopped and failed restoration now persists the durable Runner policy even when the discussion status itself is unchanged, while preserving existing stop metadata.
+
+RED: the live-state contract failed because no typed event/synchronizer/restoration patch existed.
+
+GREEN: the contract proves one callback for repeated identical projections, live React-facing application, and Plan-only restoration over an already-stopped discussion.
+
+### C. Provider usage is validated as untrusted input
+
+- Native transports accept provider-reported token counts only when they are safe, non-negative integers; null, strings, negatives, fractions, `NaN`, and infinity fall back to an estimate of the exact serialized body sent.
+- Anthropic cache/input components are validated before aggregation so one malformed component cannot produce reported usage.
+- `BudgetedAgentModel` independently rejects malformed transport input and conservatively settles the reservation with estimated provenance and cost instead of normalizing it to reported zero.
+
+RED: the helper classified malformed values as reported and Budgeted settlement accepted `-1` as reported zero.
+
+GREEN: every native transport exercises a different malformed shape and matches the exact delivered-body estimate; Budgeted defense-in-depth proves nonzero conservative settlement and estimated token sources.
+
+### Follow-up verification
+
+```text
+npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs --test runner-v2/test/provider-transport.test.ts runner-v2/test/model-usage-projection.test.ts runner-v2/test/budgeted-model.test.ts runner-v2/test/budget-ledger.test.ts runner-v2/test/native-build-manager.test.ts
+```
+
+PASS: 49/49 focused Runner tests, followed by native Build policy, live discussion state, native model usage mapping, and Build stats render contracts.
+
+```text
+npm run test:runner-v2
+```
+
+PASS: 209/209 Runner tests and all nine bundled client/observability contracts.
+
+```text
+npx tsc -p tsconfig.json --noEmit
+npm run typecheck:runner-v2
+$files = git diff --name-only HEAD --diff-filter=ACM | Where-Object { $_ -match '\.(ts|tsx|mts)$' }; npx eslint $files
+git diff --check
+```
+
+PASS: both TypeScript projects, touched-file ESLint with zero warnings/errors, and whitespace validation.
+
+Follow-up self-review found no unresolved correctness concern. Compatibility inference is confined to legacy configs; new browser configs always send an explicit billing basis. The new live policy event contains no secrets, and malformed provider values never reach durable usage as trusted reported counts.

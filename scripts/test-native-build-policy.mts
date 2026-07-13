@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   effectiveNativeBuildPolicy,
   nativeBuildBudgetEnforceabilityError,
+  nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
   usesBuildBudgetControls,
 } from "../lib/client/native-build-policy";
@@ -90,6 +91,20 @@ assert.match(
 assert.equal(nativeBuildBudgetEnforceabilityError(usdOnly, [priced]), null);
 assert.equal(nativeBuildBudgetEnforceabilityError(timeOnly, [account, unknown]), null);
 assert.equal(nativeBuildBudgetEnforceabilityError(usdAndTime, [account, unknown]), null);
+
+assert.equal(
+  nativeProviderBillingBasis({ hasApiPricing: true, accountSubscription: false }),
+  "api_priced",
+  "a priced NVIDIA-like local proxy is API billed despite its transport",
+);
+assert.equal(
+  nativeProviderBillingBasis({ hasApiPricing: false, accountSubscription: true }),
+  "account_not_metered",
+);
+assert.equal(
+  nativeProviderBillingBasis({ hasApiPricing: false, accountSubscription: false }),
+  "unknown",
+);
 
 assert.equal(supportsNativeRunnerNodeVersion("24.18.0"), true);
 assert.equal(supportsNativeRunnerNodeVersion("24.20.0"), true);
