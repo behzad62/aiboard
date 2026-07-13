@@ -488,8 +488,11 @@ function repeatedFailedEvidence(
   }
   return [...attempts.values()].find(
     (attempt) =>
-      attempt.count >= 3 &&
-      (remindedCounts.get(attempt.signature) ?? 0) < attempt.count
+      attempt.count >= 8 ||
+      (
+        attempt.count >= 3 &&
+        (remindedCounts.get(attempt.signature) ?? 0) < attempt.count
+      )
   ) ?? null;
 }
 

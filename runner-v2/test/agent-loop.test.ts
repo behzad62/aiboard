@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 
@@ -604,6 +605,64 @@ test("eight equivalent evidence failures suspend the worker for Architect resolu
   assert.equal(result.reason, "repeated_evidence_failure");
   assert.match(result.error ?? "", /failed 8 times/i);
   assert.equal(model.requests.length, 8);
+});
+
+test("restart still escalates when the eighth-failure reminder is already durable", async () => {
+  const signature = createHash("sha256").update(JSON.stringify({
+    command: "node",
+    args: ["--test", "tests/renderer.test.mjs"],
+    cwd: "C:\\project",
+  })).digest("hex").slice(0, 16);
+  const history: AgentMessage[] = [...initialMessages];
+  for (let index = 0; index < 8; index += 1) {
+    const callId = `recovered_failed_evidence_${index}`;
+    history.push({
+      id: `assistant_${callId}`,
+      role: "assistant",
+      content: [{
+        type: "tool_call",
+        callId,
+        name: "run_evidence_command",
+        arguments: {},
+      }],
+    });
+    history.push({
+      id: `tool_${callId}`,
+      role: "tool",
+      content: {
+        callId,
+        toolName: "run_evidence_command",
+        content: [{
+          type: "json",
+          value: {
+            fact: {
+              kind: "command",
+              command: "node",
+              args: ["--test", "tests/renderer.test.mjs"],
+              cwd: "C:\\project",
+              exitCode: 1,
+            },
+          },
+        }],
+        isError: false,
+      },
+    });
+  }
+  history.push({
+    id: `evidence-failure-reminder:${signature}:8`,
+    role: "user",
+    content: "The same command failed 8 times.",
+  });
+  const model = new ScriptedModel([]);
+  const result = await runAgentLoop({
+    model,
+    registry: new ToolRegistry(),
+    context: context(),
+    initialMessages: history,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "repeated_evidence_failure");
+  assert.equal(model.requests.length, 0);
 });
 
 test("a hard tool budget error suspends before another model call", async () => {
