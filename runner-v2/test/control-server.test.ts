@@ -168,6 +168,7 @@ test("control API stores provider credentials without returning secrets and prov
         created.push(spec);
         return {} as never;
       },
+      listSpecs: () => created,
     },
   });
   try {
@@ -254,6 +255,19 @@ test("control API stores provider credentials without returning secrets and prov
       budgetLimits: { maxModelCalls: 50, maxToolCalls: 200 },
       createdAt: "2026-07-11T00:00:00.000Z",
       idempotencyKey: "build:create:run_native",
+    });
+    const references = await json(await fetch(
+      `${url}/v2/builds?projectId=project_native`,
+      authorized()
+    ));
+    assert.deepEqual(references, {
+      builds: [{
+        runId: "run_native",
+        projectId: "project_native",
+        state: "created",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      }],
     });
   } finally {
     await server.close();

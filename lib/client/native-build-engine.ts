@@ -22,6 +22,7 @@ import {
   getNativePermissions,
   getNativeRun,
   getNativeRunnerHealth,
+  resolveNativeBuildRunId,
   type NativeBuildEvent,
   type NativeBuildProjection,
   type NativeProviderConfig,
@@ -72,13 +73,6 @@ export async function runNativeBuildDiscussion(
     url: discussion.runnerUrl,
     token: discussion.runnerToken,
   };
-  const runId = discussion.nativeBuildRunId ?? `native-${crypto.randomUUID()}`;
-  if (!discussion.nativeBuildRunId) {
-    updateDiscussion(discussion.id, {
-      nativeBuildRunId: runId,
-      updatedAt: new Date().toISOString(),
-    });
-  }
   emit({ type: "status", status: "running" });
   emit({
     type: "diagnostic",
@@ -88,6 +82,19 @@ export async function runNativeBuildDiscussion(
   const health = await getNativeRunnerHealth(connection);
   if (health.nodeVersion !== "24.18.0") {
     throw new Error(`Runner V2 requires Node.js 24.18.0; connected runner uses ${health.nodeVersion}.`);
+  }
+  let runId = discussion.nativeBuildRunId
+    ? await resolveNativeBuildRunId(
+        connection,
+        discussion.nativeBuildRunId,
+        discussion.id
+      )
+    : undefined;
+  if (runId && runId !== discussion.nativeBuildRunId) {
+    updateDiscussion(discussion.id, {
+      nativeBuildRunId: runId,
+      updatedAt: new Date().toISOString(),
+    });
   }
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
@@ -102,26 +109,33 @@ export async function runNativeBuildDiscussion(
       providerConfig(runtimeId, discussion, index)
     )
   );
-  const objective = buildObjective(discussion);
-  await createNativeBuild(connection, {
-    runId,
-    projectPath: health.projectPath,
-    permissionProfile:
-      discussion.runnerAccess === "full"
-        ? "full"
-        : discussion.runnerAccess === "project"
-          ? "project"
-          : "guarded",
-    idempotencyKey: `create:${runId}`,
-    build: {
-      projectId: discussion.id,
-      objective,
-      architectRuntimeId,
-      workerRuntimeIds,
-      maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
-      budgetLimits: buildBudgets(discussion.effort),
-    },
-  });
+  if (!runId) {
+    runId = `native-${crypto.randomUUID()}`;
+    const objective = buildObjective(discussion);
+    await createNativeBuild(connection, {
+      runId,
+      projectPath: health.projectPath,
+      permissionProfile:
+        discussion.runnerAccess === "full"
+          ? "full"
+          : discussion.runnerAccess === "project"
+            ? "project"
+            : "guarded",
+      idempotencyKey: `create:${runId}`,
+      build: {
+        projectId: discussion.id,
+        objective,
+        architectRuntimeId,
+        workerRuntimeIds,
+        maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
+        budgetLimits: buildBudgets(discussion.effort),
+      },
+    });
+    updateDiscussion(discussion.id, {
+      nativeBuildRunId: runId,
+      updatedAt: new Date().toISOString(),
+    });
+  }
   const run = await getNativeRun(connection, runId);
   emit({
     type: "build_usage",

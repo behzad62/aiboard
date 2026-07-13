@@ -33,7 +33,10 @@ export interface ControlServerOptions {
   bootstrapRun: (input: RunBootstrapInput) => Promise<RunBootstrapResult>;
   heartbeatMs?: number;
   builds?: BuildControlPlane;
-  buildProvisioner?: { create(spec: NativeBuildSpec): Promise<unknown> };
+  buildProvisioner?: {
+    create(spec: NativeBuildSpec): Promise<unknown>;
+    listSpecs(projectId?: string): NativeBuildSpec[];
+  };
   providerConfigs?: ProviderConfigStore;
   runnerInfo?: { projectPath: string; nodeVersion: string };
   mcp?: Pick<McpManager, "status">;
@@ -340,6 +343,29 @@ export class ControlServer {
         sendJson(response, 201, projection);
         return;
       }
+    }
+
+    if (
+      segments.length === 2 &&
+      segments[1] === "builds" &&
+      request.method === "GET"
+    ) {
+      if (!this.buildProvisioner) {
+        throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
+      }
+      const projectId = url.searchParams.get("projectId") ?? undefined;
+      const builds = this.buildProvisioner.listSpecs(projectId).map((spec) => {
+        const run = this.supervisor.getRun(spec.runId);
+        return {
+          runId: spec.runId,
+          projectId: spec.projectId,
+          state: run.state,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+        };
+      });
+      sendJson(response, 200, { builds });
+      return;
     }
 
     if (segments.length >= 3 && segments[1] === "runs") {

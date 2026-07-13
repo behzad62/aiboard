@@ -53,6 +53,12 @@ export class NativeBuildManager implements BuildControlPlane {
     });
   }
 
+  listSpecs(projectId?: string): NativeBuildSpec[] {
+    return this.options.specs
+      .list()
+      .filter((spec) => projectId === undefined || spec.projectId === projectId);
+  }
+
   projection(runId: string): SchedulerProjection {
     return this.require(runId).runtime.projection();
   }

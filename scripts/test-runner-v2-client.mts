@@ -6,6 +6,7 @@ import {
   getNativeBuildAudit,
   getNativeBuildUsage,
   getNativeBuildObservability,
+  resolveNativeBuildRunId,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
   type NativeRunnerConnection,
@@ -192,4 +193,66 @@ assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_br
 assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
 assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
 assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
+
+const recoveryFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/missing/build")) {
+    return Response.json({ error: "Unknown build runtime missing." }, { status: 404 });
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_1")) {
+    return Response.json({
+      builds: [
+        {
+          runId: "run_paused",
+          projectId: "discussion_1",
+          state: "paused",
+          createdAt: "2026-07-12T00:00:00.000Z",
+          updatedAt: "2026-07-12T01:00:00.000Z",
+        },
+        {
+          runId: "run_handoff",
+          projectId: "discussion_1",
+          state: "paused",
+          createdAt: "2026-07-12T02:00:00.000Z",
+          updatedAt: "2026-07-12T03:00:00.000Z",
+        },
+      ],
+    });
+  }
+  if (url.endsWith("/v2/runs/run_paused/build")) {
+    return Response.json({
+      runId: "run_paused",
+      status: "paused",
+      planRevision: 1,
+      tasks: {}, guidance: {}, reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      lastSequence: 1,
+    });
+  }
+  if (url.endsWith("/v2/runs/run_handoff/build")) {
+    return Response.json({
+      runId: "run_handoff",
+      status: "paused",
+      planRevision: 1,
+      tasks: {}, guidance: {}, reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      projectHandoff: {
+        status: "requested",
+        summary: "Ready",
+        options: ["keep_integration_branch", "apply_to_project"],
+      },
+      lastSequence: 2,
+    });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "missing",
+    "discussion_1",
+    recoveryFetch
+  ),
+  "run_handoff"
+);
 console.log("PASS runner-v2 client");

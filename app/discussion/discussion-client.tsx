@@ -33,7 +33,7 @@ import {
 } from "@/components/DiscussionSessionSettings";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
-import { getBuildCheckpoint, getBuildFiles } from "@/lib/client/store";
+import { getBuildCheckpoint, getBuildFiles, updateDiscussion } from "@/lib/client/store";
 import {
   DiscussionDiagnostics,
   type DiagnosticEntry,
@@ -108,6 +108,7 @@ import {
   getNativeBuildUsage,
   getNativeRun,
   getNativeRunnerHealth,
+  resolveNativeBuildRunId,
   selectNativeArchitectHandoff,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
@@ -889,12 +890,28 @@ function DiscussionPageInner() {
     ) return;
     let cancelled = false;
     const connection = { url: discussion.runnerUrl, token: discussion.runnerToken };
-    void Promise.all([
-      getNativeBuild(connection, discussion.nativeBuildRunId),
-      getNativeBuildUsage(connection, discussion.nativeBuildRunId),
-      getNativeRun(connection, discussion.nativeBuildRunId),
-      getNativeBuildEvents(connection, discussion.nativeBuildRunId, 0),
-    ]).then(([projection, usage, run, events]) => {
+    void resolveNativeBuildRunId(
+      connection,
+      discussion.nativeBuildRunId,
+      discussion.id
+    ).then(async (runId) => {
+      if (runId !== discussion.nativeBuildRunId) {
+        const updatedAt = new Date().toISOString();
+        updateDiscussion(discussion.id, { nativeBuildRunId: runId, updatedAt });
+        if (!cancelled) {
+          setDiscussion((current) => current
+            ? { ...current, nativeBuildRunId: runId, updatedAt }
+            : current);
+        }
+      }
+      const [projection, usage, run, events] = await Promise.all([
+        getNativeBuild(connection, runId),
+        getNativeBuildUsage(connection, runId),
+        getNativeRun(connection, runId),
+        getNativeBuildEvents(connection, runId, 0),
+      ]);
+      return { runId, projection, usage, run, events };
+    }).then(({ runId, projection, usage, run, events }) => {
       if (cancelled) return;
       const handoffs = durableBuildHandoffPanels(projection);
       setNativeProjection(projection);
@@ -910,7 +927,7 @@ function DiscussionPageInner() {
       );
       setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
       const durableActivity = nativeBuildActivityEntries(
-        discussion.nativeBuildRunId!,
+        runId,
         events,
         ACTIVITY_LOG_CAP
       );
@@ -925,6 +942,7 @@ function DiscussionPageInner() {
     };
   }, [
     id,
+    discussion?.id,
     discussion?.mode,
     discussion?.runnerUrl,
     discussion?.runnerToken,

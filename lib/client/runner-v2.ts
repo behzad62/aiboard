@@ -273,6 +273,14 @@ export interface NativeRunProjection {
   stopReason?: string;
 }
 
+export interface NativeBuildReference {
+  runId: string;
+  projectId: string;
+  state: NativeRunProjection["state"];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class NativeRunnerError extends Error {
   constructor(
     message: string,
@@ -350,6 +358,56 @@ export async function getNativeBuild(
     `/v2/runs/${encodeURIComponent(runId)}/build`,
     {},
     fetchImpl
+  );
+}
+
+export async function getNativeBuildReferences(
+  connection: NativeRunnerConnection,
+  projectId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildReference[]> {
+  const result = await request<{ builds: NativeBuildReference[] }>(
+    connection,
+    `/v2/builds?projectId=${encodeURIComponent(projectId)}`,
+    {},
+    fetchImpl
+  );
+  return result.builds;
+}
+
+export async function resolveNativeBuildRunId(
+  connection: NativeRunnerConnection,
+  savedRunId: string,
+  projectId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<string> {
+  try {
+    await getNativeBuild(connection, savedRunId, fetchImpl);
+    return savedRunId;
+  } catch (error) {
+    if (!(error instanceof NativeRunnerError) || error.status !== 404) throw error;
+  }
+
+  const references = await getNativeBuildReferences(connection, projectId, fetchImpl);
+  const awaitingHandoff: string[] = [];
+  for (const reference of references) {
+    try {
+      const projection = await getNativeBuild(connection, reference.runId, fetchImpl);
+      if (projection.projectHandoff?.status === "requested") {
+        awaitingHandoff.push(reference.runId);
+      }
+    } catch (error) {
+      if (!(error instanceof NativeRunnerError) || error.status !== 404) throw error;
+    }
+  }
+  if (awaitingHandoff.length === 1) return awaitingHandoff[0];
+  if (awaitingHandoff.length > 1) {
+    throw new Error(
+      `Runner V2 found multiple Builds for this discussion awaiting project handoff; select the intended run explicitly.`
+    );
+  }
+  throw new Error(
+    `The saved Runner V2 Build ${savedRunId} no longer exists, and no matching Build is awaiting project handoff.`
   );
 }
 
