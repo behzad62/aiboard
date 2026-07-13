@@ -27,9 +27,31 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = brokerWithFilesystem(workspace, artifacts);
   try {
+    const patchDefinition = broker.definitions().find(
+      (tool) => tool.name === "fs.patch"
+    );
     assert.match(
-      broker.definitions().find((tool) => tool.name === "fs.patch")?.description ?? "",
-      /one fs\.patch per file per model turn/i,
+      patchDefinition?.description ?? "",
+      /one or many.*atomically/i,
+    );
+    assert.deepEqual(
+      ((patchDefinition?.inputSchema as {
+        properties?: { edits?: { minItems?: number; maxItems?: number } };
+      }).properties?.edits),
+      {
+        type: "array",
+        minItems: 1,
+        maxItems: 50,
+        items: {
+          type: "object",
+          properties: {
+            search: { type: "string", minLength: 1 },
+            replace: { type: "string" },
+          },
+          required: ["search", "replace"],
+          additionalProperties: false,
+        },
+      },
     );
     const read = await invoke(broker, "read", "fs.read", { path: "src/app.ts" });
     assert.equal(read.isError, false);
@@ -116,6 +138,72 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
       readFileSync(join(workspace, "src", "app.ts"), "utf8"),
       "const alpha = 1;\r\nconst beta = 3;\r\n"
     );
+
+    const patchedMetadata = json(patch) as { sha256: string };
+    const multiPatch = await invoke(broker, "patch_many", "fs.patch", {
+      path: "src/app.ts",
+      expectedSha256: patchedMetadata.sha256,
+      edits: [
+        { search: "const alpha = 1;", replace: "const alpha = 10;" },
+        {
+          search: "const alpha = 10;\r\nconst beta = 3;",
+          replace: "const alpha = 10;\r\nconst beta = 30;",
+        },
+      ],
+    });
+    assert.equal(multiPatch.isError, false);
+    assert.equal(
+      readFileSync(join(workspace, "src", "app.ts"), "utf8"),
+      "const alpha = 10;\r\nconst beta = 30;\r\n"
+    );
+
+    const beforeFailedPatch = readFileSync(join(workspace, "src", "app.ts"));
+    const failedPatch = await invoke(broker, "patch_many_invalid", "fs.patch", {
+      path: "src/app.ts",
+      expectedSha256: (json(multiPatch) as { sha256: string }).sha256,
+      edits: [
+        { search: "const alpha = 10;", replace: "const alpha = 11;" },
+        { search: "missing text", replace: "never written" },
+      ],
+    });
+    assert.equal(failedPatch.isError, true);
+    assert.equal(failedPatch.error?.code, "ambiguous_patch");
+    assert.match(text(failedPatch), /edit 2/i);
+    assert.deepEqual(
+      readFileSync(join(workspace, "src", "app.ts")),
+      beforeFailedPatch,
+      "all replacements must validate before the atomic write"
+    );
+
+    const staleBatch = await invoke(broker, "patch_many_stale", "fs.patch", {
+      path: "src/app.ts",
+      expectedSha256: patchedMetadata.sha256,
+      edits: [{ search: "const beta = 30;", replace: "const beta = 31;" }],
+    });
+    assert.equal(staleBatch.isError, true);
+    assert.equal(staleBatch.error?.code, "revision_conflict");
+    assert.deepEqual(
+      readFileSync(join(workspace, "src", "app.ts")),
+      beforeFailedPatch,
+    );
+
+    const mixedPatchShape = await invoke(broker, "patch_mixed_shape", "fs.patch", {
+      path: "src/app.ts",
+      expectedSha256: (json(multiPatch) as { sha256: string }).sha256,
+      search: "const alpha = 10;",
+      replace: "const alpha = 11;",
+      edits: [{ search: "const beta = 30;", replace: "const beta = 31;" }],
+    });
+    assert.equal(mixedPatchShape.isError, true);
+    assert.equal(mixedPatchShape.error?.code, "invalid_arguments");
+
+    const emptyBatch = await invoke(broker, "patch_empty_batch", "fs.patch", {
+      path: "src/app.ts",
+      expectedSha256: (json(multiPatch) as { sha256: string }).sha256,
+      edits: [],
+    });
+    assert.equal(emptyBatch.isError, true);
+    assert.equal(emptyBatch.error?.code, "invalid_arguments");
 
     const binary = await invoke(broker, "binary", "fs.read", { path: "binary.bin" });
     const artifact = binary.content.find((block) => block.type === "artifact");

@@ -28,6 +28,7 @@ export interface FilesystemToolsOptions {
 type Input = Record<string, unknown>;
 const MAX_READ_LINES = 500;
 const MAX_READ_RANGE_BYTES = 6 * 1024;
+const MAX_PATCH_EDITS = 50;
 
 export function createFilesystemTools(
   options: FilesystemToolsOptions = {}
@@ -255,11 +256,11 @@ export function createFilesystemTools(
     {
       definition: definition(
         "fs.patch",
-        "Apply one exact revision-aware replacement. Issue at most one fs.patch per file per model turn; use the returned sha256 as expectedSha256 for a later patch.",
+        "Apply one or many exact replacements atomically to one file. Prefer the edits array when changing multiple regions; issue only one fs.patch per file per model turn. Every edit is validated before the file is written.",
         false,
         "workspace",
       ),
-      validate: objectWithStrings("path", "search", "replace", "expectedSha256"),
+      validate: validatePatch,
       assessAccess: (input) => pathAccess(input, "write"),
       execute: async (input, context) =>
         await mutate(async () => {
@@ -274,13 +275,19 @@ export function createFilesystemTools(
             );
           }
           const original = decodeText(bytes);
-          const search = input.search as string;
-          if (!search) return error("invalid_patch", "Search text cannot be empty.");
-          const count = occurrences(original, search);
-          if (count !== 1) {
-            return error("ambiguous_patch", `Expected one match, found ${count}.`);
+          let nextText = original;
+          const edits = patchEdits(input);
+          for (const [index, edit] of edits.entries()) {
+            const count = occurrences(nextText, edit.search);
+            if (count !== 1) {
+              return error(
+                "ambiguous_patch",
+                `Edit ${index + 1}: expected one match, found ${count}. No changes were written.`,
+              );
+            }
+            nextText = nextText.replace(edit.search, edit.replace);
           }
-          const next = Buffer.from(original.replace(search, input.replace as string));
+          const next = Buffer.from(nextText);
           await atomicWrite(path, next);
           return successRevision(context, path, next);
         }),
@@ -382,9 +389,21 @@ function filesystemSchema(name: string): Record<string, unknown> {
           path,
           search: { type: "string", minLength: 1 },
           replace: { type: "string" },
+          edits: {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_PATCH_EDITS,
+            items: objectSchema(
+              {
+                search: { type: "string", minLength: 1 },
+                replace: { type: "string" },
+              },
+              ["search", "replace"],
+            ),
+          },
           expectedSha256: sha,
         },
-        ["path", "search", "replace", "expectedSha256"]
+        ["path", "expectedSha256"],
       );
     case "fs.move":
       return objectSchema(
@@ -450,6 +469,76 @@ function validateRead(input: unknown): ValidationResult<Input> {
     };
   }
   return { ok: true, value: input };
+}
+
+function validatePatch(input: unknown): ValidationResult<Input> {
+  if (
+    !isObject(input) ||
+    typeof input.path !== "string" ||
+    typeof input.expectedSha256 !== "string"
+  ) {
+    return {
+      ok: false,
+      issues: ["path and expectedSha256 must be strings"],
+    };
+  }
+  const hasLegacy = input.search !== undefined || input.replace !== undefined;
+  const hasEdits = input.edits !== undefined;
+  if (hasLegacy === hasEdits) {
+    return {
+      ok: false,
+      issues: ["provide either search and replace, or edits, but not both"],
+    };
+  }
+  if (hasLegacy) {
+    return typeof input.search === "string" &&
+      input.search.length > 0 &&
+      typeof input.replace === "string"
+      ? { ok: true, value: input }
+      : {
+          ok: false,
+          issues: ["search must be a non-empty string and replace must be a string"],
+        };
+  }
+  if (
+    !Array.isArray(input.edits) ||
+    input.edits.length === 0 ||
+    input.edits.length > MAX_PATCH_EDITS
+  ) {
+    return {
+      ok: false,
+      issues: [`edits must contain between 1 and ${MAX_PATCH_EDITS} replacements`],
+    };
+  }
+  for (const [index, edit] of input.edits.entries()) {
+    if (
+      !isObject(edit) ||
+      typeof edit.search !== "string" ||
+      edit.search.length === 0 ||
+      typeof edit.replace !== "string"
+    ) {
+      return {
+        ok: false,
+        issues: [
+          `edits[${index}] must contain a non-empty search string and a replace string`,
+        ],
+      };
+    }
+  }
+  return { ok: true, value: input };
+}
+
+function patchEdits(input: Input): Array<{ search: string; replace: string }> {
+  if (Array.isArray(input.edits)) {
+    return input.edits.map((edit) => ({
+      search: (edit as Input).search as string,
+      replace: (edit as Input).replace as string,
+    }));
+  }
+  return [{
+    search: input.search as string,
+    replace: input.replace as string,
+  }];
 }
 
 function objectWithStrings(...keys: string[]) {
