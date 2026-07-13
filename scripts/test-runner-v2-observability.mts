@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   filterRunnerObservability,
   runnerBuildControlSummary,
+  runnerEvidenceDiagnosticDetail,
   runnerObservabilitySummary,
   runnerUserFacingObservability,
 } from "../components/RunnerV2ObservabilityPanel";
@@ -114,18 +115,52 @@ const observability = {
   }],
   evidence: [{
     id: "evidence_tests_failed",
+    runId: "run_1",
     taskId: "T1",
     actor: { role: "worker", id: "worker_1" },
     status: "observed",
-    fact: { kind: "command", label: "Runner tests", command: "npm test", exitCode: 1 },
+    fact: {
+      kind: "command",
+      label: "Runner tests",
+      command: "npm",
+      args: ["test"],
+      cwd: "C:\\project",
+      startedAt: "2026-07-12T00:00:00.000Z",
+      finishedAt: "2026-07-12T00:00:01.000Z",
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      outputTruncated: false,
+      stdoutArtifactHash: "a".repeat(64),
+      stderrArtifactHash: "b".repeat(64),
+    },
     createdAt: "2026-07-12T00:00:01.000Z",
+    idempotencyKey: "tests:failed",
   }, {
     id: "evidence_tests_passed",
+    runId: "run_1",
     taskId: "T1",
     actor: { role: "worker", id: "worker_1" },
     status: "observed",
-    fact: { kind: "command", label: "Runner tests", command: "npm test", exitCode: 0 },
+    fact: {
+      kind: "command",
+      label: "Runner tests",
+      command: "npm",
+      args: ["test"],
+      cwd: "C:\\project",
+      startedAt: "2026-07-12T00:00:01.000Z",
+      finishedAt: "2026-07-12T00:00:02.000Z",
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      outputTruncated: false,
+      stdoutArtifactHash: "c".repeat(64),
+      stderrArtifactHash: "d".repeat(64),
+    },
     createdAt: "2026-07-12T00:00:02.000Z",
+    idempotencyKey: "tests:passed",
   }],
   memories: [],
   skills: [{
@@ -183,6 +218,86 @@ assert.equal(view.progress.items[0]?.detail, "Complete");
 assert.equal(view.verification.length, 1);
 assert.equal(view.verification.find((item) => item.category === "Tests")?.status, "passed");
 assert.deepEqual(view.problems, []);
+
+const browserScreenshotFact = {
+  kind: "browser_screenshot",
+  label: "internal screenshot evidence label",
+  capturedAt: "2026-07-12T00:00:03.000Z",
+  screenshotArtifactHash: "e".repeat(64),
+  mediaType: "image/png",
+  byteLength: 2_048,
+} as const;
+const browserEventsFact = {
+  kind: "browser_events",
+  label: "internal events evidence label",
+  capturedAt: "2026-07-12T00:00:04.000Z",
+  eventsArtifactHash: "f".repeat(64),
+  consoleEventCount: 7,
+  consoleErrorCount: 2,
+  networkEventCount: 11,
+  networkFailureCount: 1,
+} as const;
+const browserSnapshotFact = {
+  kind: "browser_snapshot",
+  label: "internal snapshot evidence label",
+  url: "http://127.0.0.1:3000/discussion?id=demo",
+  title: "AI Board",
+  capturedAt: "2026-07-12T00:00:05.000Z",
+  htmlArtifactHash: "0".repeat(64),
+  htmlBytes: 4_096,
+  truncated: false,
+} as const;
+const browserView = runnerUserFacingObservability({
+  ...observability,
+  evidence: [{
+    id: "evidence_browser_screenshot",
+    runId: "run_1",
+    taskId: "T_BROWSER_SCREENSHOT",
+    actor: { role: "worker", id: "worker_1" },
+    status: "observed",
+    fact: browserScreenshotFact,
+    createdAt: "2026-07-12T00:00:03.000Z",
+    idempotencyKey: "browser:screenshot",
+  }, {
+    id: "evidence_browser_events",
+    runId: "run_1",
+    taskId: "T_BROWSER_EVENTS",
+    actor: { role: "worker", id: "worker_1" },
+    status: "observed",
+    fact: browserEventsFact,
+    createdAt: "2026-07-12T00:00:04.000Z",
+    idempotencyKey: "browser:events",
+  }, {
+    id: "evidence_browser_snapshot",
+    runId: "run_1",
+    taskId: "T_BROWSER_SNAPSHOT",
+    actor: { role: "worker", id: "worker_1" },
+    status: "observed",
+    fact: browserSnapshotFact,
+    createdAt: "2026-07-12T00:00:05.000Z",
+    idempotencyKey: "browser:snapshot",
+  }],
+}, null);
+assert.equal(browserView.verification.length, 3);
+for (const item of browserView.verification) {
+  assert.equal(item.status, "recorded");
+  assert.equal(item.category, "Browser checks");
+  assert.equal(item.detail, "Browser evidence recorded.");
+  assert.ok(!item.detail.includes("internal"));
+}
+assert.equal(view.verification.find((item) => item.category === "Tests")?.detail, "Latest test result passed.");
+assert.equal(
+  runnerEvidenceDiagnosticDetail(browserScreenshotFact),
+  "browser screenshot recorded · 2,048 bytes"
+);
+assert.equal(
+  runnerEvidenceDiagnosticDetail(browserEventsFact),
+  "browser events recorded · 2 console errors · 1 network failure"
+);
+assert.equal(
+  runnerEvidenceDiagnosticDetail(browserSnapshotFact),
+  "browser snapshot recorded · AI Board · http://127.0.0.1:3000/discussion?id=demo"
+);
 
 const panelSource = readFileSync(
   new URL("../components/RunnerV2ObservabilityPanel.tsx", import.meta.url),

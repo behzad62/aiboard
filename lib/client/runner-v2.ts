@@ -222,6 +222,61 @@ export interface NativeModelUsageProjection {
   failureSummary?: string;
 }
 
+export interface NativeCommandEvidenceFact {
+  kind: "command";
+  label: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  startedAt: string;
+  finishedAt: string;
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  cancelled: boolean;
+  outputTruncated: boolean;
+  stdoutArtifactHash: string;
+  stderrArtifactHash: string;
+  repositoryRevision?: string;
+}
+
+export interface NativeBrowserSnapshotEvidenceFact {
+  kind: "browser_snapshot";
+  label: string;
+  url: string;
+  title: string;
+  capturedAt: string;
+  htmlArtifactHash: string;
+  htmlBytes: number;
+  truncated: boolean;
+}
+
+export interface NativeBrowserScreenshotEvidenceFact {
+  kind: "browser_screenshot";
+  label: string;
+  capturedAt: string;
+  screenshotArtifactHash: string;
+  mediaType: "image/png";
+  byteLength: number;
+}
+
+export interface NativeBrowserEventsEvidenceFact {
+  kind: "browser_events";
+  label: string;
+  capturedAt: string;
+  eventsArtifactHash: string;
+  consoleEventCount: number;
+  consoleErrorCount: number;
+  networkEventCount: number;
+  networkFailureCount: number;
+}
+
+export type NativeBuildEvidenceFact =
+  | NativeCommandEvidenceFact
+  | NativeBrowserSnapshotEvidenceFact
+  | NativeBrowserScreenshotEvidenceFact
+  | NativeBrowserEventsEvidenceFact;
+
 export interface NativeBuildObservability {
   runId: string;
   budget: NativeBuildUsageProjection;
@@ -248,11 +303,13 @@ export interface NativeBuildObservability {
   }>;
   evidence: Array<{
     id: string;
+    runId: string;
     taskId: string;
     actor: { role: "architect" | "worker" | "subagent"; id: string };
     status: "observed";
-    fact: { kind: "command"; label: string; command: string; exitCode: number | null };
+    fact: NativeBuildEvidenceFact;
     createdAt: string;
+    idempotencyKey: string;
   }>;
   memories: Array<{
     id: string;

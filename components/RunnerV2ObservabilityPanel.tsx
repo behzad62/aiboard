@@ -20,7 +20,11 @@ import {
   Wrench,
 } from "lucide-react";
 
-import type { NativeBuildObservability, NativeBuildProjection } from "@/lib/client/runner-v2";
+import type {
+  NativeBuildEvidenceFact,
+  NativeBuildObservability,
+  NativeBuildProjection,
+} from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,8 +140,9 @@ function taskStatusLabel(status: string): string {
   return TASK_STATUS_LABELS[status] ?? "Status unavailable";
 }
 
-function evidenceCategory(label: string, command: string): string {
-  const value = `${label} ${command}`.toLowerCase();
+function evidenceCategory(fact: NativeBuildEvidenceFact): string {
+  if (fact.kind !== "command") return "Browser checks";
+  const value = `${fact.label} ${fact.command} ${fact.args.join(" ")}`.toLowerCase();
   if (/\b(browser|playwright|screenshot|visual|console)\b/.test(value)) {
     return "Browser checks";
   }
@@ -148,6 +153,37 @@ function evidenceCategory(label: string, command: string): string {
     return "Tests";
   }
   return "Other checks";
+}
+
+function evidenceStatus(fact: NativeBuildEvidenceFact): UserFacingVerificationStatus {
+  if (fact.kind !== "command") return "recorded";
+  if (fact.exitCode === 0) return "passed";
+  return fact.exitCode === null ? "recorded" : "failed";
+}
+
+function evidenceDetail(category: string, status: UserFacingVerificationStatus): string {
+  const result = status === "passed" ? "passed" : status === "failed" ? "failed" : "recorded";
+  if (category === "Tests") return `Latest test result ${result}.`;
+  if (category === "Browser checks") return "Browser evidence recorded.";
+  if (category === "Source control") return `Latest source control check ${result}.`;
+  return `Latest check ${result}.`;
+}
+
+export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): string {
+  switch (fact.kind) {
+    case "command":
+      return fact.exitCode === null
+        ? `command · signal ${fact.signal ?? "unknown"}`
+        : `command · exit ${fact.exitCode}`;
+    case "browser_snapshot":
+      return `browser snapshot recorded · ${fact.title} · ${fact.url}`;
+    case "browser_screenshot":
+      return `browser screenshot recorded · ${fact.byteLength.toLocaleString("en-US")} bytes`;
+    case "browser_events":
+      return `browser events recorded · ${fact.consoleErrorCount} console error${
+        fact.consoleErrorCount === 1 ? "" : "s"
+      } · ${fact.networkFailureCount} network failure${fact.networkFailureCount === 1 ? "" : "s"}`;
+  }
 }
 
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
@@ -221,7 +257,7 @@ export function runnerUserFacingObservability(
   >();
 
   for (const record of snapshot.evidence) {
-    const category = evidenceCategory(record.fact.label, record.fact.command);
+    const category = evidenceCategory(record.fact);
     const key = `${record.taskId}:${category}`;
     const current = newestEvidence.get(key);
     if (!current || record.createdAt > current.record.createdAt) {
@@ -232,21 +268,12 @@ export function runnerUserFacingObservability(
   const verification = [...newestEvidence.entries()]
     .sort(([, left], [, right]) => right.record.createdAt.localeCompare(left.record.createdAt))
     .map(([key, { category, record }]) => {
-      const status: UserFacingVerificationStatus = record.fact.exitCode === 0
-        ? "passed"
-        : record.fact.exitCode === null
-          ? "recorded"
-          : "failed";
-      const statusLabel = status === "passed"
-        ? "Passed"
-        : status === "failed"
-          ? "Failed"
-          : "Recorded";
+      const status = evidenceStatus(record.fact);
       return {
         key,
         category,
         title: taskTitles.get(record.taskId) ?? "Build verification",
-        detail: `${record.fact.label} · ${statusLabel}`,
+        detail: evidenceDetail(category, status),
         status,
       };
     });
@@ -543,11 +570,11 @@ export function RunnerV2ObservabilityPanel({
         <ObservationList
           icon={<ListChecks className="h-3.5 w-3.5" />}
           title="Evidence"
-          empty="No command evidence recorded."
+          empty="No evidence recorded."
           items={filtered.evidence.slice(-8).reverse().map((evidence) => ({
             key: evidence.id,
             title: evidence.fact.label,
-            detail: `${evidence.taskId} · exit ${evidence.fact.exitCode ?? "signal"}`,
+            detail: `${evidence.taskId} · ${runnerEvidenceDiagnosticDetail(evidence.fact)}`,
           }))}
         />
         <ObservationList
