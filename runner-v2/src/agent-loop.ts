@@ -372,14 +372,27 @@ function omitSupersededRunnerSnapshots(
 
 function historyFact(message: AgentMessage): Record<string, unknown> {
   if (message.role === "assistant" && Array.isArray(message.content)) {
+    const blocks = message.content.map((block) =>
+      block.type === "tool_call"
+        ? {
+            type: block.type,
+            callId: block.callId,
+            name: block.name,
+            ...boundedToolArguments(block.arguments),
+          }
+        : { type: block.type, text: block.text.slice(0, 256) }
+    );
+    const fact = {
+      id: message.id,
+      role: message.role,
+      blocks,
+    };
+    if (Buffer.byteLength(JSON.stringify(fact)) <= 8 * 1024) return fact;
+    const serializedBlocks = JSON.stringify(blocks);
     return {
       id: message.id,
       role: message.role,
-      blocks: message.content.map((block) =>
-        block.type === "tool_call"
-          ? { type: block.type, callId: block.callId, name: block.name }
-          : { type: block.type, text: block.text.slice(0, 256) }
-      ),
+      blocksSummary: boundedSummary(serializedBlocks, 2 * 1024),
     };
   }
   if (
@@ -404,6 +417,86 @@ function historyFact(message: AgentMessage): Record<string, unknown> {
     };
   }
   return { id: message.id, role: message.role };
+}
+
+function boundedToolArguments(
+  argumentsValue: unknown,
+  maximumBytes = 2 * 1024
+): Record<string, unknown> {
+  const redacted = redactSensitiveValues(argumentsValue);
+  const serialized = JSON.stringify(redacted) ?? "null";
+  const bytes = Buffer.from(serialized);
+  if (bytes.byteLength <= maximumBytes) return { arguments: redacted };
+  return {
+    argumentsSummary: boundedSummary(serialized, maximumBytes),
+  };
+}
+
+function boundedSummary(serialized: string, maximumBytes: number) {
+  const bytes = Buffer.from(serialized);
+  return {
+    byteLength: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    preview: safeUtf8Preview(serialized, maximumBytes),
+  };
+}
+
+function safeUtf8Preview(text: string, maximumBytes: number): string {
+  const totalBytes = Buffer.byteLength(text);
+  if (totalBytes <= maximumBytes) return text;
+  const headBytes = Math.ceil(maximumBytes * 0.75);
+  const tailBytes = maximumBytes - headBytes;
+  const head = utf8Prefix(text, headBytes);
+  const tail = utf8Suffix(text, tailBytes);
+  const retainedBytes = Buffer.byteLength(head) + Buffer.byteLength(tail);
+  return `${head}\n… ${totalBytes - retainedBytes} bytes omitted …\n${tail}`;
+}
+
+function utf8Prefix(text: string, maximumBytes: number): string {
+  let used = 0;
+  let result = "";
+  for (const character of text) {
+    const size = Buffer.byteLength(character);
+    if (used + size > maximumBytes) break;
+    result += character;
+    used += size;
+  }
+  return result;
+}
+
+function utf8Suffix(text: string, maximumBytes: number): string {
+  let used = 0;
+  let start = text.length;
+  while (start > 0) {
+    let characterStart = start - 1;
+    const code = text.charCodeAt(characterStart);
+    if (code >= 0xdc00 && code <= 0xdfff && characterStart > 0) {
+      const previous = text.charCodeAt(characterStart - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) characterStart -= 1;
+    }
+    const character = text.slice(characterStart, start);
+    const size = Buffer.byteLength(character);
+    if (used + size > maximumBytes) break;
+    start = characterStart;
+    used += size;
+  }
+  return text.slice(start);
+}
+
+function redactSensitiveValues(value: unknown, key = "", depth = 0): unknown {
+  if (/token|password|secret|authorization|api[_-]?key|credential/i.test(key)) {
+    return "[REDACTED]";
+  }
+  if (depth >= 20 || typeof value !== "object" || value === null) return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSensitiveValues(entry, "", depth + 1));
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([entryKey, entryValue]) => [
+      entryKey,
+      redactSensitiveValues(entryValue, entryKey, depth + 1),
+    ])
+  );
 }
 
 function summaryMessage(

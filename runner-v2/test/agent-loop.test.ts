@@ -401,7 +401,13 @@ test("model working context compacts deterministically without deleting raw sess
         type: "tool_call",
         callId: `call-${index}`,
         name: "fs.read",
-        arguments: { path: `file-${index}.ts` },
+        arguments: index === 40
+          ? {
+              path: `file-${index}.ts`,
+              content: `${"😀".repeat(5_000)}END`,
+              apiKey: "must-not-survive-compaction",
+            }
+          : { path: `file-${index}.ts` },
       }],
     });
     messages.push({
@@ -427,6 +433,33 @@ test("model working context compacts deterministically without deleting raw sess
   const summary = compacted.find((message) => message.id.startsWith("compacted-history:"));
   assert.ok(summary && typeof summary.content === "string");
   assert.match(summary.content, /COMPACTED_AGENT_HISTORY/);
+  assert.match(
+    summary.content,
+    /"arguments":\{"path":"file-0\.ts"\}/,
+    "ordinary tool arguments survive working-set compaction"
+  );
+  assert.match(summary.content, /argumentsSummary/);
+  assert.match(summary.content, /file-40\.ts/);
+  const oversizedArgumentBytes = Buffer.byteLength(JSON.stringify({
+    path: "file-40.ts",
+    content: `${"😀".repeat(5_000)}END`,
+    apiKey: "[REDACTED]",
+  }));
+  assert.match(summary.content, new RegExp(`"byteLength":${oversizedArgumentBytes}`));
+  assert.equal(
+    summary.content.includes("😀".repeat(1_000)),
+    false,
+    "large tool arguments are represented by a bounded summary"
+  );
+  assert.equal(summary.content.includes("must-not-survive-compaction"), false);
+  assert.equal(summary.content.includes("�"), false, "UTF-8 previews keep code points intact");
+  for (const line of summary.content.split("\n").filter((line) => line.startsWith("{"))) {
+    assert.equal(
+      Buffer.byteLength(line) <= 8 * 1024,
+      true,
+      "each compacted fact remains independently bounded"
+    );
+  }
   assert.deepEqual(
     compactAgentMessages(messages, { maxMessages: 30, maxBytes: 64 * 1024, retainRecent: 12 }),
     compacted,
