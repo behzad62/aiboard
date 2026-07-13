@@ -34,6 +34,40 @@ export interface ProviderConfigStore {
   close(): void;
 }
 
+export interface ProviderUsageConfig {
+  runtimeId: string;
+  providerId: string;
+  modelId: string;
+  transport: ProviderTransport;
+  inputCostMicrosPerMillion?: number;
+  outputCostMicrosPerMillion?: number;
+  cachedInputCostMicrosPerMillion?: number;
+  cacheWriteInputCostMicrosPerMillion?: number;
+}
+
+export function providerUsageConfig(
+  config: RunnerProviderConfig
+): ProviderUsageConfig {
+  return {
+    runtimeId: config.runtimeId,
+    providerId: config.providerId,
+    modelId: config.modelId,
+    transport: config.transport,
+    ...(config.inputCostMicrosPerMillion !== undefined
+      ? { inputCostMicrosPerMillion: config.inputCostMicrosPerMillion }
+      : {}),
+    ...(config.outputCostMicrosPerMillion !== undefined
+      ? { outputCostMicrosPerMillion: config.outputCostMicrosPerMillion }
+      : {}),
+    ...(config.cachedInputCostMicrosPerMillion !== undefined
+      ? { cachedInputCostMicrosPerMillion: config.cachedInputCostMicrosPerMillion }
+      : {}),
+    ...(config.cacheWriteInputCostMicrosPerMillion !== undefined
+      ? { cacheWriteInputCostMicrosPerMillion: config.cacheWriteInputCostMicrosPerMillion }
+      : {}),
+  };
+}
+
 export function validateProviderConfigs(
   configs: readonly RunnerProviderConfig[]
 ): void {

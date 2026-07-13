@@ -610,6 +610,23 @@ test("native Build projections and pump controls are runner-owned API routes", a
       scopeId: "run_1",
       reservations: {},
       activeSegments: {},
+      models: [{
+        runtimeId: "openai:gpt-code",
+        providerId: "openai",
+        modelId: "gpt-code",
+        roles: ["architect", "worker"],
+        status: "healthy",
+        calls: 9,
+        inputTokens: 12_000,
+        cachedInputTokens: 2_000,
+        cacheWriteInputTokens: 500,
+        outputTokens: 3_000,
+        totalTokens: 15_000,
+        estimatedCostMicros: 125_000,
+        costBasis: "api_estimate",
+        usageQuality: "mixed",
+        lastUsedAt: "2026-07-13T00:00:00.000Z",
+      }],
       effective: {
         modelCalls: 9,
         toolCalls: 27,
@@ -711,7 +728,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
       authorized()
     );
     assert.equal(usage.status, 200);
-    assert.deepEqual((await json(usage)).effective, {
+    const usageBody = await json(usage);
+    assert.deepEqual(usageBody.effective, {
       modelCalls: 9,
       toolCalls: 27,
       inputTokens: 12_000,
@@ -720,6 +738,23 @@ test("native Build projections and pump controls are runner-owned API routes", a
       activeMs: 45_000,
       artifactBytes: 1_024,
     });
+    assert.deepEqual(usageBody.models, [{
+      runtimeId: "openai:gpt-code",
+      providerId: "openai",
+      modelId: "gpt-code",
+      roles: ["architect", "worker"],
+      status: "healthy",
+      calls: 9,
+      inputTokens: 12_000,
+      cachedInputTokens: 2_000,
+      cacheWriteInputTokens: 500,
+      outputTokens: 3_000,
+      totalTokens: 15_000,
+      estimatedCostMicros: 125_000,
+      costBasis: "api_estimate",
+      usageQuality: "mixed",
+      lastUsedAt: "2026-07-13T00:00:00.000Z",
+    }]);
 
     const observability = await fetch(
       `${url}/v2/runs/run_1/build/observability`,
@@ -740,6 +775,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.run as { runId: string }).runId, "run_1");
     assert.equal((audit.build as { planRevision: number }).planRevision, 1);
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
+    assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
     assert.equal((audit.runEvents as unknown[]).length, 3);
     assert.deepEqual(audit.buildEvents, []);

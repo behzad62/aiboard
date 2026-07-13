@@ -416,11 +416,12 @@ export class ControlServer {
       ) {
         const builds = this.requireBuilds();
         const observability = await builds.observability(runId);
+        const usage = builds.usage(runId);
         sendJson(response, 200, {
           protocolVersion: 2,
           run: this.supervisor.getRun(runId),
           build: builds.projection(runId),
-          usage: builds.usage(runId),
+          usage,
           observability,
           runEvents: this.supervisor.events(runId),
           buildEvents: builds.events(runId),

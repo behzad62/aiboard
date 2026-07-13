@@ -20,6 +20,10 @@ import { IntegrationManager } from "./integration-manager.js";
 import { GoogleModel } from "./google-model.js";
 import { ManagedProcessService } from "./managed-process.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
+import {
+  projectNativeModelUsage,
+  type NativeModelUsageRuntime,
+} from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
@@ -29,6 +33,7 @@ import type {
   ProviderConfigStore,
   RunnerProviderConfig,
 } from "./provider-config-store.js";
+import { providerUsageConfig } from "./provider-config-store.js";
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import {
@@ -89,6 +94,9 @@ export class NativeBuildFactory {
     const selectedConfigs = selected.configs;
     const candidates = selected.all;
     const workerCandidates = selected.workers;
+    const modelUsageRuntimes = selectedConfigs.map((config) =>
+      configuredModelUsageRuntime(config, spec)
+    );
     const models = new Map<string, AgentModel>(
       selectedConfigs.map((config) => [
         config.runtimeId,
@@ -238,7 +246,17 @@ export class NativeBuildFactory {
     let closed = false;
     return {
       runtime,
-      usage: () => budgetLedger.snapshot(spec.runId),
+      usage: () => {
+        const budget = budgetLedger.snapshot(spec.runId);
+        return {
+          ...budget,
+          models: projectNativeModelUsage({
+            budget,
+            runtimes: modelUsageRuntimes,
+            providerHealth: health.snapshot(),
+          }),
+        };
+      },
       observability: async (): Promise<BuildObservabilitySnapshot> => {
         const agentSessions = await sessions.listRun(spec.runId);
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
@@ -398,6 +416,23 @@ function toCandidate(config: RunnerProviderConfig): AgentRuntimeCandidate {
     modelId: config.modelId,
     capabilities: [...config.capabilities],
     priority: config.priority,
+  };
+}
+
+export function configuredModelUsageRuntime(
+  config: RunnerProviderConfig,
+  spec: NativeBuildSpec
+): NativeModelUsageRuntime {
+  const roles = new Set<NativeModelUsageRuntime["roles"][number]>();
+  if (config.runtimeId === spec.architectRuntimeId) roles.add("architect");
+  if (spec.workerRuntimeIds.includes(config.runtimeId)) roles.add("worker");
+  return {
+    ...providerUsageConfig(config),
+    roles: [...roles],
+    selectable:
+      roles.has("worker") ||
+      config.capabilities.includes("*") ||
+      config.capabilities.includes("code"),
   };
 }
 

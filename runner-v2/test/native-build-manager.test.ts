@@ -8,6 +8,7 @@ import type { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import {
+  configuredModelUsageRuntime,
   providerHealthFromSchedulerEvents,
   selectRuntimeCandidates,
 } from "../src/native-build-factory.js";
@@ -253,6 +254,32 @@ test("worker routing excludes Architect-only runtimes from the worker pool", () 
   );
 });
 
+test("configured usage marks an Architect-only capability mismatch unavailable", () => {
+  const architect = configuredModelUsageRuntime({
+    runtimeId: "chatgpt:gpt-5.5",
+    providerId: "chatgpt",
+    modelId: "gpt-5.5",
+    transport: "account-runner",
+    secret: "architect-secret",
+    capabilities: ["vision"],
+    priority: 0,
+  }, spec);
+  const worker = configuredModelUsageRuntime({
+    runtimeId: "chatgpt:gpt-5.4",
+    providerId: "chatgpt",
+    modelId: "gpt-5.4",
+    transport: "account-runner",
+    secret: "worker-secret",
+    capabilities: ["vision"],
+    priority: 1,
+  }, spec);
+
+  assert.deepEqual(architect.roles, ["architect"]);
+  assert.equal(architect.selectable, false);
+  assert.deepEqual(worker.roles, ["worker"]);
+  assert.equal(worker.selectable, true);
+});
+
 function emptyBudget(scopeId: string) {
   const usage = () => ({
     modelCalls: 0,
@@ -273,6 +300,7 @@ function emptyBudget(scopeId: string) {
     lifetime: usage(),
     window: { index: 1 },
     lastSequence: 0,
+    models: [],
   };
 }
 
