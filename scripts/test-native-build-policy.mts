@@ -102,6 +102,11 @@ assert.equal(
   "account_not_metered",
 );
 assert.equal(
+  nativeProviderBillingBasis({ hasApiPricing: true, accountSubscription: true }),
+  "account_not_metered",
+  "pricing overrides never turn a true account subscription into metered API billing",
+);
+assert.equal(
   nativeProviderBillingBasis({ hasApiPricing: false, accountSubscription: false }),
   "unknown",
 );

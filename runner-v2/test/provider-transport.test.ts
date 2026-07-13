@@ -121,6 +121,64 @@ test("legacy provider configs infer billing conservatively", () => {
   assert.equal(resolvedProviderBillingBasis({
     transport: "anthropic",
   }), "unknown");
+  assert.equal(resolvedProviderBillingBasis({
+    billingBasis: "account_not_metered",
+    transport: "account-runner",
+    inputCostMicrosPerMillion: 1,
+    outputCostMicrosPerMillion: 1,
+  }), "account_not_metered");
+});
+
+test("explicit API billing fails closed without usable normal pricing", () => {
+  const spec: NativeBuildSpec = {
+    version: 1,
+    runId: "run_spoofed_pricing",
+    projectId: "project_spoofed_pricing",
+    objective: "Reject spoofed pricing",
+    architectRuntimeId: "proxy:model",
+    workerRuntimeIds: ["proxy:model"],
+    maxConcurrency: 1,
+    permissionProfile: "full",
+    runPolicy: "budgeted",
+    budgetLimits: { maxEstimatedCostMicros: 1_000_000 },
+    createdAt: "2026-07-13T00:00:00.000Z",
+    idempotencyKey: "spec:spoofed-pricing",
+  };
+  const base = {
+    runtimeId: "proxy:model",
+    providerId: "proxy",
+    modelId: "model",
+    billingBasis: "api_priced" as const,
+    transport: "account-runner" as const,
+    baseUrl: "http://127.0.0.1:1455",
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+  };
+  const malformed = [
+    base,
+    { ...base, inputCostMicrosPerMillion: 1 },
+    { ...base, outputCostMicrosPerMillion: 1 },
+    { ...base, inputCostMicrosPerMillion: Number.NaN, outputCostMicrosPerMillion: 1 },
+    { ...base, inputCostMicrosPerMillion: 1, outputCostMicrosPerMillion: Number.POSITIVE_INFINITY },
+    { ...base, inputCostMicrosPerMillion: -1, outputCostMicrosPerMillion: 1 },
+  ];
+  for (const config of malformed) {
+    assert.equal(resolvedProviderBillingBasis(config), "unknown");
+    assert.equal(providerCostEstimator(config), undefined);
+    assert.deepEqual(providerModelCostBasis(config), {
+      kind: "unknown",
+      billingBasis: "unknown",
+    });
+    assert.throws(
+      () => assertEnforceableBuildBudget(spec, [config]),
+      /proxy:model.*pricing.*time limit/i,
+    );
+    assert.throws(
+      () => validateProviderConfigs([config]),
+      /api-priced billing requires valid input and output pricing/i,
+    );
+  }
 });
 
 test("serialized input usage accepts only safe non-negative provider integers", () => {

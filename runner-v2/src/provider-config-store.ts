@@ -107,6 +107,14 @@ export function validateProviderConfigs(
       throw new Error(`Provider runtime ${config.runtimeId} has invalid billing basis.`);
     }
     if (
+      config.billingBasis === "api_priced" &&
+      !hasUsableNormalPricing(config)
+    ) {
+      throw new Error(
+        `Provider runtime ${config.runtimeId} API-priced billing requires valid input and output pricing.`
+      );
+    }
+    if (
       config.protocol !== undefined &&
       (!(OPENAI_PROTOCOLS as readonly unknown[]).includes(config.protocol) ||
         config.transport !== "openai-compatible")
@@ -143,12 +151,25 @@ export function resolvedProviderBillingBasis(
     | "outputCostMicrosPerMillion"
   >
 ): ProviderBillingBasis {
-  if (config.billingBasis) return config.billingBasis;
-  if (
-    config.inputCostMicrosPerMillion !== undefined &&
-    config.outputCostMicrosPerMillion !== undefined
-  ) return "api_priced";
+  if (config.billingBasis === "account_not_metered") return "account_not_metered";
+  if (config.billingBasis === "unknown") return "unknown";
+  if (config.billingBasis === "api_priced") {
+    return hasUsableNormalPricing(config) ? "api_priced" : "unknown";
+  }
+  if (hasUsableNormalPricing(config)) return "api_priced";
   return config.transport === "account-runner" ? "account_not_metered" : "unknown";
+}
+
+function hasUsableNormalPricing(
+  config: Pick<
+    RunnerProviderConfig,
+    "inputCostMicrosPerMillion" | "outputCostMicrosPerMillion"
+  >
+): boolean {
+  return (
+    isNonNegativeInteger(config.inputCostMicrosPerMillion) &&
+    isNonNegativeInteger(config.outputCostMicrosPerMillion)
+  );
 }
 
 const TRANSPORTS = [
@@ -168,7 +189,11 @@ const PRICING_FIELDS = [
 ] as const;
 
 function isOptionalNonNegativeInteger(value: number | undefined): boolean {
-  return value === undefined || (Number.isSafeInteger(value) && value >= 0);
+  return value === undefined || isNonNegativeInteger(value);
+}
+
+function isNonNegativeInteger(value: number | undefined): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 export function cloneProviderConfigs(

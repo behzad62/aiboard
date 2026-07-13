@@ -269,3 +269,30 @@ git diff --check
 PASS: both TypeScript projects, touched-file ESLint with zero warnings/errors, and whitespace validation.
 
 Follow-up self-review found no unresolved correctness concern. Compatibility inference is confined to legacy configs; new browser configs always send an explicit billing basis. The new live policy event contains no secrets, and malformed provider values never reach durable usage as trusted reported counts.
+
+## Critical billing trust-boundary follow-up
+
+- Runner no longer trusts an explicit browser `api_priced` classification by itself. Resolution returns `api_priced` only when both normal input and output rates satisfy the durable safe, non-negative integer pricing contract; missing, negative, non-finite, or otherwise invalid rates normalize to `unknown`.
+- Provider-config validation rejects explicit API billing without usable normal pricing, while estimator creation, immutable cost-basis creation, and USD-only enforcement independently consume the fail-closed normalized basis.
+- Legacy configs without `billingBasis` still infer API pricing from complete valid rates, preserving old paid localhost proxy configs. Explicit `account_not_metered` remains authoritative even when valid pricing metadata is present.
+- Browser classification now gives a true account subscription precedence over pricing overrides. ChatGPT/GitHub Copilot therefore remain unmetered; NVIDIA remains API-priced because its provider definition is not account-backed.
+
+RED:
+
+```text
+npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs --test runner-v2/test/provider-transport.test.ts
+npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-policy.mts
+```
+
+The Runner test resolved an explicit API basis with no rates as `api_priced`, and the browser policy test classified a priced true account subscription as API-billed.
+
+GREEN: provider transport passed 18/18, including missing input/output rates, `NaN`, infinity, and negative pricing through resolver, estimator, immutable snapshot, USD-only enforcement, and config validation. The native Build policy contract passed the account-subscription-plus-pricing precedence case.
+
+```text
+npx tsc -p tsconfig.json --noEmit
+npm run typecheck:runner-v2
+$files = git diff --name-only HEAD --diff-filter=ACM | Where-Object { $_ -match '\.(ts|tsx|mts)$' }; npx eslint $files
+git diff --check
+```
+
+PASS: both TypeScript projects, touched-file ESLint with zero warnings/errors, and whitespace validation.

@@ -16,8 +16,8 @@ export function nativeProviderBillingBasis(input: {
   hasApiPricing: boolean;
   accountSubscription: boolean;
 }): "account_not_metered" | "api_priced" | "unknown" {
-  if (input.hasApiPricing) return "api_priced";
-  return input.accountSubscription ? "account_not_metered" : "unknown";
+  if (input.accountSubscription) return "account_not_metered";
+  return input.hasApiPricing ? "api_priced" : "unknown";
 }
 
 export interface NativeBuildBudgetLimits {
