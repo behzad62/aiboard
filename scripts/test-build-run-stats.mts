@@ -232,6 +232,62 @@ const realRowsWithStalePreview = renderStats("finish", {
 });
 assert.doesNotMatch(realRowsWithStalePreview, /Stale legacy preview/);
 
+const hiddenStaleCost = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 1,
+    unknownPricedModelIds: [],
+    models: [
+      usage.models[2],
+      {
+        ...usage.models[2],
+        modelId: "api:hidden-priced-preview",
+        modelName: "Hidden priced preview",
+        usageOrigin: "legacy_preview",
+      },
+    ],
+  },
+});
+assert.match(hiddenStaleCost, /Calls 1/);
+assert.match(hiddenStaleCost, /Cost \$0\.50 Estimated/);
+assert.doesNotMatch(hiddenStaleCost, /\$1\.00|Hidden priced preview/);
+
+const hiddenStaleUnknown = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 0.5,
+    unknownPricedModelIds: ["api:hidden-unknown-preview"],
+    models: [
+      usage.models[2],
+      {
+        ...usage.models[1],
+        modelId: "api:hidden-unknown-preview",
+        modelName: "Hidden unknown preview",
+        usageOrigin: "legacy_preview",
+      },
+    ],
+  },
+});
+assert.match(hiddenStaleUnknown, /Cost \$0\.50 Estimated/);
+assert.doesNotMatch(
+  hiddenStaleUnknown,
+  /Partial estimate|missing pricing|Hidden unknown preview/
+);
+
+const nativeUnknownWithoutRawIds = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 0,
+    unknownPricedModelIds: [],
+    models: [usage.models[1]],
+  },
+});
+assert.match(nativeUnknownWithoutRawIds, /Cost Unknown/);
+assert.match(
+  nativeUnknownWithoutRawIds,
+  /Cost unknown: 1 contributing model missing pricing\./
+);
+
 const storedLegacyRow = renderStats("finish", {
   usage: {
     ...usage,
@@ -250,17 +306,23 @@ const storedUnknownCost = renderStats("finish", {
   usage: {
     ...usage,
     estimatedUsd: 0,
-    unknownPricedModelIds: ["legacy:unknown"],
+    unknownPricedModelIds: [],
     models: [{
       ...usage.models[1],
       modelId: "legacy:unknown",
       modelName: "Stored unknown-cost model",
       costBasis: undefined,
+      priced: false,
+      estimatedUsd: 0,
       usageOrigin: undefined,
     }],
   },
 });
 assert.match(storedUnknownCost, /Cost Unknown/);
+assert.match(
+  storedUnknownCost,
+  /Stored unknown-cost model custom Worker, Subagent Cooldown Mixed 1 400 100 500 Unknown/
+);
 assert.doesNotMatch(storedUnknownCost, /Cost \$0\.00/);
 
 const storedPartialCost = renderStats("finish", {
@@ -284,5 +346,58 @@ const storedPartialCost = renderStats("finish", {
   },
 });
 assert.match(storedPartialCost, /Cost \$0\.50 Partial estimate/);
+
+const knownLegacyPreviewAggregate = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 0.75,
+    unknownPricedModelIds: [],
+    models: [{
+      ...usage.models[2],
+      modelName: "Known legacy API preview",
+      estimatedUsd: null,
+      priced: false,
+      usageOrigin: "legacy_preview",
+    }],
+  },
+});
+assert.match(knownLegacyPreviewAggregate, /Cost \$0\.75 Estimated/);
+
+const unpricedLegacyPreviewAggregate = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 0.75,
+    unknownPricedModelIds: ["api:priced"],
+    models: [{
+      ...usage.models[2],
+      modelName: "Unpriced legacy API preview",
+      estimatedUsd: null,
+      priced: false,
+      usageOrigin: "legacy_preview",
+    }],
+  },
+});
+assert.match(unpricedLegacyPreviewAggregate, /Cost Unknown/);
+assert.doesNotMatch(unpricedLegacyPreviewAggregate, /Cost \$0\.75/);
+
+const unknownLegacyAggregate = renderStats("finish", {
+  usage: {
+    ...usage,
+    estimatedUsd: 0.75,
+    unknownPricedModelIds: [],
+    models: [{
+      ...usage.models[2],
+      modelId: "runner-v2:aggregate",
+      modelName: "Runner V2 models (legacy aggregate)",
+      providerId: "runner-v2",
+      estimatedUsd: null,
+      priced: false,
+      costBasis: "unknown",
+      usageOrigin: "legacy_aggregate",
+    }],
+  },
+});
+assert.match(unknownLegacyAggregate, /Cost Unknown/);
+assert.doesNotMatch(unknownLegacyAggregate, /Cost \$0\.75/);
 
 console.log("PASS Build run stats render contract");

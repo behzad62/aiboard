@@ -72,8 +72,8 @@ export function BuildRunStats({
   const inputTokens = models.reduce((sum, model) => sum + model.inputTokens, 0);
   const outputTokens = models.reduce((sum, model) => sum + model.outputTokens, 0);
   const totalTokens = models.reduce((sum, model) => sum + model.totalTokens, 0);
-  const hasUnknownPricing = (usage?.unknownPricedModelIds.length ?? 0) > 0;
-  const cost = summarizeCost(usage, models);
+  const cost = summarizeCost({ usage, models, hasNativeRows });
+  const hasUnknownPricing = cost.unknownModelIds.length > 0;
   const summaryStats = policy === "budgeted"
     ? [
         { label: "Calls", value: String(calls) },
@@ -155,8 +155,8 @@ export function BuildRunStats({
         <div className="flex items-start gap-2 border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            {cost.value === "Unknown" ? "Cost unknown" : "Partial USD estimate"}: {usage?.unknownPricedModelIds.length} contributing model
-            {usage?.unknownPricedModelIds.length === 1 ? "" : "s"} missing pricing.
+            {cost.value === "Unknown" ? "Cost unknown" : "Partial USD estimate"}: {cost.unknownModelIds.length} contributing model
+            {cost.unknownModelIds.length === 1 ? "" : "s"} missing pricing.
           </span>
         </div>
       )}
@@ -253,58 +253,105 @@ function hasUsage(model: BuildUsageModelTotal): boolean {
   );
 }
 
-function summarizeCost(
-  usage?: BuildUsageWindow | null,
-  models: readonly BuildUsageModelTotal[] = usage?.models ?? []
-): {
+function summarizeCost(input: {
+  usage?: BuildUsageWindow | null;
+  models: readonly BuildUsageModelTotal[];
+  hasNativeRows: boolean;
+}): {
   value: string;
   detail?: string;
+  unknownModelIds: string[];
 } {
-  if (!usage) return { value: "No usage" };
+  const { usage, models, hasNativeRows } = input;
+  if (!usage) return { value: "No usage", unknownModelIds: [] };
   const contributing = models.filter(hasUsage);
-  const unknownModelIds = new Set(usage.unknownPricedModelIds);
-  const hasPriced = contributing.some(
-    (model) =>
-      model.estimatedUsd != null &&
-      (model.costBasis === "api_estimate" ||
-        (model.costBasis === undefined && model.priced))
-  );
-  const hasUnknown = contributing.some((model) =>
-    model.costBasis === "unknown" ||
-    unknownModelIds.has(model.modelId) ||
-    (model.costBasis !== "account_not_metered" && model.estimatedUsd == null)
-  );
-  const hasAccount = contributing.some(
+  const knownRows = contributing.filter(hasKnownModelCost);
+  const accountRows = contributing.filter(
     (model) => model.costBasis === "account_not_metered"
   );
+  const suppliedUnknownModelIds = new Set(usage.unknownPricedModelIds);
+  const aggregateBackedLegacyEstimate =
+    !hasNativeRows &&
+    contributing.some(
+      (model) =>
+        model.usageOrigin === "legacy_preview" &&
+        model.costBasis === "api_estimate"
+    ) &&
+    contributing.every(
+      (model) =>
+        model.costBasis === "account_not_metered" ||
+        (model.usageOrigin === "legacy_preview" &&
+          model.costBasis === "api_estimate")
+    ) &&
+    !contributing.some((model) => suppliedUnknownModelIds.has(model.modelId)) &&
+    Number.isFinite(usage.estimatedUsd);
+  const unknownRows = contributing.filter(
+    (model) =>
+      hasUnknownModelCost(model) &&
+      !(
+        aggregateBackedLegacyEstimate &&
+        model.usageOrigin === "legacy_preview" &&
+        model.costBasis === "api_estimate"
+      )
+  );
+  const unknownRowIds = new Set(unknownRows.map((model) => model.modelId));
+  const unknownModelIds = hasNativeRows
+    ? [...unknownRowIds].sort()
+    : [...suppliedUnknownModelIds]
+        .filter((modelId) => unknownRowIds.has(modelId))
+        .sort();
+  const hasKnown = knownRows.length > 0 || aggregateBackedLegacyEstimate;
+  const knownUsd = aggregateBackedLegacyEstimate
+    ? usage.estimatedUsd
+    : knownRows.reduce((sum, model) => sum + (model.estimatedUsd ?? 0), 0);
 
-  if (hasPriced) {
+  if (hasKnown) {
     return {
-      value: formatUsd(usage.estimatedUsd),
+      value: formatUsd(knownUsd),
       detail:
-        usage.unknownPricedModelIds.length > 0 || hasAccount
+        unknownRows.length > 0 || accountRows.length > 0
           ? "Partial estimate"
           : "Estimated",
+      unknownModelIds,
     };
   }
-  if (hasUnknown) return { value: "Unknown" };
-  if (hasAccount) return { value: "Not metered" };
+  if (unknownRows.length > 0) return { value: "Unknown", unknownModelIds };
+  if (accountRows.length > 0) return { value: "Not metered", unknownModelIds };
   if (contributing.length === 0) {
     const configuredCostBases = models.map((model) => model.costBasis);
     if (
       configuredCostBases.length > 0 &&
       configuredCostBases.every((basis) => basis === "account_not_metered")
     ) {
-      return { value: "Not metered" };
+      return { value: "Not metered", unknownModelIds };
     }
     if (
       configuredCostBases.length > 0 &&
       configuredCostBases.every((basis) => basis === "unknown")
     ) {
-      return { value: "Unknown" };
+      return { value: "Unknown", unknownModelIds };
     }
   }
-  return { value: formatUsd(usage.estimatedUsd), detail: "Estimated" };
+  return {
+    value: formatUsd(0),
+    detail: "Estimated",
+    unknownModelIds,
+  };
+}
+
+function hasKnownModelCost(model: BuildUsageModelTotal): boolean {
+  return (
+    model.estimatedUsd != null &&
+    (model.costBasis === "api_estimate" ||
+      (model.costBasis === undefined && model.priced))
+  );
+}
+
+function hasUnknownModelCost(model: BuildUsageModelTotal): boolean {
+  if (model.costBasis === "account_not_metered") return false;
+  if (model.costBasis === "unknown") return true;
+  if (model.costBasis === undefined && !model.priced) return true;
+  return model.estimatedUsd == null;
 }
 
 function budgetProgress(input: {
@@ -344,7 +391,13 @@ function formatUsageQuality(model: BuildUsageModelTotal): string {
 
 function formatModelCost(model: BuildUsageModelTotal): string {
   if (model.costBasis === "account_not_metered") return "Not metered";
-  if (model.costBasis === "unknown" || model.estimatedUsd == null) return "Unknown";
+  if (
+    model.costBasis === "unknown" ||
+    (model.costBasis === undefined && !model.priced) ||
+    model.estimatedUsd == null
+  ) {
+    return "Unknown";
+  }
   return formatUsd(model.estimatedUsd);
 }
 
