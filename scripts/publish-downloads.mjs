@@ -27,6 +27,16 @@ function pinnedVersion(specifier, dependency) {
   return version;
 }
 
+function normalizedTextFile(source) {
+  return fs.readFileSync(source, "utf8").replace(/\r\n?/g, "\n");
+}
+
+function archiveFileContent(source) {
+  return [".ts", ".md"].includes(path.extname(source).toLowerCase())
+    ? normalizedTextFile(source)
+    : fs.readFileSync(source);
+}
+
 function addDirectory(zip, sourceDirectory, archiveDirectory) {
   if (!fs.existsSync(sourceDirectory) || !fs.statSync(sourceDirectory).isDirectory()) {
     throw new Error(`Cannot publish Runner V2: missing ${path.relative(root, sourceDirectory)}.`);
@@ -40,7 +50,7 @@ function addDirectory(zip, sourceDirectory, archiveDirectory) {
     if (entry.isDirectory()) {
       addDirectory(zip, source, destination);
     } else if (entry.isFile()) {
-      zip.file(destination, fs.readFileSync(source), { date: new Date(0), createFolders: false });
+      zip.file(destination, archiveFileContent(source), { date: new Date(0), createFolders: false });
     }
   }
 }
@@ -78,7 +88,7 @@ async function publishNativeRunner() {
     },
   };
   zip.file("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, { date: new Date(0), createFolders: false });
-  zip.file("LICENSE", fs.readFileSync(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
+  zip.file("LICENSE", normalizedTextFile(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
   zip.file("README.md", `# AI Board Runner V2
 
 Runner V2 is the native process required by AI Board Build mode.

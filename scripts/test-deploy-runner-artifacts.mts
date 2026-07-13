@@ -16,6 +16,10 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+function normalizeLf(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
 function nodeCheck(path: string): boolean {
   try {
     execFileSync(process.execPath, ["--check", path], { stdio: "pipe" });
@@ -52,10 +56,10 @@ check(
   { firstPublishedNativeRunnerHash, secondPublishedNativeRunnerHash }
 );
 
-function builtInSkillPaths(): string[] {
-  return readdirSync("runner-v2/skills", { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name === "SKILL.md")
-    .map((entry) => relative("runner-v2/skills", `${entry.parentPath}/${entry.name}`).replaceAll("\\", "/"))
+function textFilePaths(directory: string, extension: string): string[] {
+  return readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(extension))
+    .map((entry) => relative(directory, `${entry.parentPath}/${entry.name}`).replaceAll("\\", "/"))
     .sort();
 }
 
@@ -94,7 +98,9 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
     }
 
     if (licenseFile) {
-      check(`${path} LICENSE matches root LICENSE`, (await licenseFile.async("string")) === read("LICENSE"));
+      const archivedLicense = await licenseFile.async("string");
+      check(`${path} LICENSE uses LF line endings`, !archivedLicense.includes("\r"));
+      check(`${path} LICENSE matches normalized root LICENSE`, archivedLicense === normalizeLf(read("LICENSE")));
     }
 
     if (readmeFile) {
@@ -108,21 +114,30 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       );
     }
 
-    if (cliFile) {
-      check(
-        `${path} CLI matches Runner V2 source`,
-        (await cliFile.async("string")) === read("runner-v2/src/cli.ts")
-      );
+    for (const sourcePath of textFilePaths("runner-v2/src", ".ts")) {
+      const archivePath = `src/${sourcePath}`;
+      const sourceFile = archive.file(archivePath);
+      check(`${path} contains ${archivePath}`, sourceFile !== null);
+      if (sourceFile) {
+        const archivedSource = await sourceFile.async("string");
+        check(`${path} ${archivePath} uses LF line endings`, !archivedSource.includes("\r"));
+        check(
+          `${path} ${archivePath} matches normalized Runner V2 source`,
+          archivedSource === normalizeLf(read(`runner-v2/src/${sourcePath}`))
+        );
+      }
     }
 
-    for (const skillPath of builtInSkillPaths()) {
+    for (const skillPath of textFilePaths("runner-v2/skills", ".md")) {
       const archivePath = `skills/${skillPath}`;
       const skillFile = archive.file(archivePath);
       check(`${path} contains ${archivePath}`, skillFile !== null);
       if (skillFile) {
+        const archivedSkill = await skillFile.async("string");
+        check(`${path} ${archivePath} uses LF line endings`, !archivedSkill.includes("\r"));
         check(
-          `${path} ${archivePath} matches Runner V2 source`,
-          (await skillFile.async("string")) === read(`runner-v2/skills/${skillPath}`)
+          `${path} ${archivePath} matches normalized Runner V2 source`,
+          archivedSkill === normalizeLf(read(`runner-v2/skills/${skillPath}`))
         );
       }
     }
