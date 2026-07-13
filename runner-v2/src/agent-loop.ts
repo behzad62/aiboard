@@ -22,7 +22,8 @@ export type AgentSuspensionReason =
   | "max_tokens"
   | "checkpoint_error"
   | "budget_exhausted"
-  | "read_only_stall";
+  | "read_only_stall"
+  | "repeated_evidence_failure";
 
 export type AgentLoopResult =
   | {
@@ -501,6 +502,14 @@ async function enforceRepeatedEvidenceFailure(
   if (options.context.actor.role !== "worker") return null;
   const repeated = repeatedFailedEvidence(messages);
   if (!repeated) return null;
+  if (repeated.count >= 8) {
+    return suspended(
+      "repeated_evidence_failure",
+      turns,
+      messages,
+      `The same command shape (${repeated.command}) failed ${repeated.count} times without a successful equivalent run; Architect resolution is required.`
+    );
+  }
   messages.push({
     id: `evidence-failure-reminder:${repeated.signature}:${repeated.count}`,
     role: "user",

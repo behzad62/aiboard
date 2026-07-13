@@ -577,6 +577,35 @@ test("repeated equivalent evidence failures advise a worker to seek Architect gu
   assert.match(String(refreshedReminder?.content ?? ""), /failed 4 times/i);
 });
 
+test("eight equivalent evidence failures suspend the worker for Architect resolution", async () => {
+  const registry = new ToolRegistry();
+  registry.register(failingEvidenceTool());
+  const model = new ScriptedModel(Array.from({ length: 8 }, (_, index) => ({
+    blocks: [{
+      type: "tool_call" as const,
+      callId: `exhausted_evidence_${index}`,
+      name: "run_evidence_command",
+      arguments: {
+        label: `same-check-${index}`,
+        command: "node",
+        args: ["--test", "tests/renderer.test.mjs"],
+        cwd: "C:\\project",
+      },
+    }],
+    stopReason: "tool_calls" as const,
+  })));
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "repeated_evidence_failure");
+  assert.match(result.error ?? "", /failed 8 times/i);
+  assert.equal(model.requests.length, 8);
+});
+
 test("a hard tool budget error suspends before another model call", async () => {
   const registry = new ToolRegistry();
   registry.register({
