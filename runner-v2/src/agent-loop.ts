@@ -180,6 +180,13 @@ export async function runAgentLoop(
     seenCallIds
   );
   if (initialStallResult) return initialStallResult;
+  const initialEvidenceReminderError = await enforceRepeatedEvidenceFailure(
+    options,
+    messages,
+    initialTurns,
+    seenCallIds
+  );
+  if (initialEvidenceReminderError) return initialEvidenceReminderError;
 
   for (
     let turnNumber = initialTurns + 1;
@@ -266,6 +273,13 @@ export async function runAgentLoop(
       nextId
     );
     if (toolResult) return toolResult;
+    const evidenceReminderError = await enforceRepeatedEvidenceFailure(
+      options,
+      messages,
+      turnNumber,
+      seenCallIds
+    );
+    if (evidenceReminderError) return evidenceReminderError;
     const stallResult = await enforceReadOnlyStall(
       options,
       messages,
@@ -394,6 +408,7 @@ function omitSupersededRunnerSnapshots(
     "action-resume:",
     "worker-resume:",
     "progress-reminder:",
+    "evidence-failure-reminder:",
   ];
   const newest = new Map<string, number>();
   for (const [index, message] of messages.entries()) {
@@ -404,6 +419,87 @@ function omitSupersededRunnerSnapshots(
     const prefix = prefixes.find((candidate) => message.id.startsWith(candidate));
     return !prefix || newest.get(prefix) === index;
   });
+}
+
+interface FailedEvidenceStreak {
+  signature: string;
+  count: number;
+  command: string;
+}
+
+function repeatedFailedEvidence(
+  messages: readonly AgentMessage[]
+): FailedEvidenceStreak | null {
+  const attempts = new Map<string, FailedEvidenceStreak>();
+  const reminded = new Set<string>();
+  for (const message of messages) {
+    if (message.id.startsWith("evidence-failure-reminder:")) {
+      reminded.add(message.id.slice("evidence-failure-reminder:".length));
+      continue;
+    }
+    if (
+      message.role !== "tool" ||
+      typeof message.content !== "object" ||
+      Array.isArray(message.content) ||
+      message.content.toolName !== "run_evidence_command"
+    ) continue;
+    for (const block of message.content.content) {
+      if (block.type !== "json" || typeof block.value !== "object" || !block.value) continue;
+      const fact = (block.value as { fact?: unknown }).fact;
+      if (typeof fact !== "object" || !fact) continue;
+      const commandFact = fact as {
+        kind?: unknown;
+        command?: unknown;
+        args?: unknown;
+        cwd?: unknown;
+        exitCode?: unknown;
+      };
+      if (commandFact.kind !== "command" || typeof commandFact.command !== "string") continue;
+      const signature = createHash("sha256").update(JSON.stringify({
+        command: commandFact.command,
+        args: commandFact.args ?? [],
+        cwd: commandFact.cwd ?? "",
+      })).digest("hex").slice(0, 16);
+      if (commandFact.exitCode === 0) {
+        attempts.delete(signature);
+        reminded.delete(signature);
+        continue;
+      }
+      if (typeof commandFact.exitCode !== "number") continue;
+      const prior = attempts.get(signature);
+      attempts.set(signature, {
+        signature,
+        count: (prior?.count ?? 0) + 1,
+        command: commandFact.command,
+      });
+    }
+  }
+  return [...attempts.values()].find(
+    (attempt) => attempt.count >= 3 && !reminded.has(attempt.signature)
+  ) ?? null;
+}
+
+async function enforceRepeatedEvidenceFailure(
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  seenCallIds: ReadonlySet<string>
+): Promise<AgentLoopResult | null> {
+  if (options.context.actor.role !== "worker") return null;
+  const repeated = repeatedFailedEvidence(messages);
+  if (!repeated) return null;
+  messages.push({
+    id: `evidence-failure-reminder:${repeated.signature}`,
+    role: "user",
+    content: [
+      "MECHANICAL_EVIDENCE_FAILURE_REMINDER",
+      `The same command shape (${repeated.command}) has failed ${repeated.count} times without a successful equivalent run.`,
+      "Do not keep changing expectations or retrying the same failure without a new mechanical basis.",
+      "Inspect the execution path, make a materially different scoped change, or ask the Architect for guidance if the intended resolution is unclear.",
+      "This reminder reports repeated command evidence only; it does not decide task meaning or whether the task is complete.",
+    ].join("\n"),
+  });
+  return await checkpoint(options, messages, turns, seenCallIds);
 }
 
 function trailingUnproductiveTurns(

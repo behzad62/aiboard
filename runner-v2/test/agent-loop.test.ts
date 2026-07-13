@@ -529,6 +529,50 @@ test("a failed mutation does not reset the mechanical no-progress streak", async
   assert.equal(model.requests.length, 5);
 });
 
+test("repeated equivalent evidence failures advise a worker to seek Architect guidance", async () => {
+  const registry = new ToolRegistry();
+  registry.register(failingEvidenceTool());
+  registry.register(submitTool());
+  const model = new ScriptedModel([
+    ...Array.from({ length: 3 }, (_, index) => ({
+      blocks: [{
+        type: "tool_call" as const,
+        callId: `failed_evidence_${index}`,
+        name: "run_evidence_command",
+        arguments: {
+          label: `renderer-rerun-${index}`,
+          command: "node",
+          args: ["--test", "tests/renderer.test.mjs"],
+          cwd: "C:\\project",
+        },
+      }],
+      stopReason: "tool_calls" as const,
+    })),
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "submit_after_failure_advice",
+        name: "submit_task",
+        arguments: { changeSetId: "changeset_after_failure_advice" },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(result.status, "submitted");
+  const reminder = model.requests[3].messages.find((message) =>
+    message.id.startsWith("evidence-failure-reminder:")
+  );
+  assert.match(String(reminder?.content ?? ""), /failed 3 times/i);
+  assert.match(String(reminder?.content ?? ""), /ask the Architect/i);
+  assert.match(String(reminder?.content ?? ""), /does not decide/i);
+});
+
 test("a hard tool budget error suspends before another model call", async () => {
   const registry = new ToolRegistry();
   registry.register({
@@ -833,6 +877,38 @@ function failingMutationTool(): NativeTool<Record<string, never>> {
       content: [{ type: "text", text: "write failed" }],
       isError: true,
       error: { code: "write_failed", message: "write failed" },
+    }),
+  };
+}
+
+function failingEvidenceTool(): NativeTool<Record<string, unknown>> {
+  return {
+    definition: {
+      name: "run_evidence_command",
+      description: "Run deterministic evidence",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: (input) => ({
+      ok: true,
+      value: input as Record<string, unknown>,
+    }),
+    execute: async (input) => ({
+      content: [{
+        type: "json",
+        value: {
+          fact: {
+            kind: "command",
+            label: input.label,
+            command: input.command,
+            args: input.args,
+            cwd: input.cwd,
+            exitCode: 1,
+          },
+        },
+      }],
+      isError: false,
     }),
   };
 }
