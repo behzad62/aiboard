@@ -40,7 +40,7 @@ function addDirectory(zip, sourceDirectory, archiveDirectory) {
     if (entry.isDirectory()) {
       addDirectory(zip, source, destination);
     } else if (entry.isFile()) {
-      zip.file(destination, fs.readFileSync(source), { date: new Date(0) });
+      zip.file(destination, fs.readFileSync(source), { date: new Date(0), createFolders: false });
     }
   }
 }
@@ -77,8 +77,8 @@ async function publishNativeRunner() {
       tsx: tsxVersion,
     },
   };
-  zip.file("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, { date: new Date(0) });
-  zip.file("LICENSE", fs.readFileSync(path.join(root, "LICENSE")), { date: new Date(0) });
+  zip.file("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, { date: new Date(0), createFolders: false });
+  zip.file("LICENSE", fs.readFileSync(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
   zip.file("README.md", `# AI Board Runner V2
 
 Runner V2 is the native process required by AI Board Build mode.
@@ -106,7 +106,7 @@ Runner V2 is the native process required by AI Board Build mode.
    \`\`\`
 
 Runner V2 prints its localhost URL and control token. Paste both into AI Board Build setup, then test the connection.
-`, { date: new Date(0) });
+`, { date: new Date(0), createFolders: false });
 
   const destination = path.join(publicDirectory, "aiboard-runner-v2.zip");
   fs.writeFileSync(destination, await zip.generateAsync({

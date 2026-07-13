@@ -1,5 +1,6 @@
 /* Static deploy runner artifact checks (run after npm run build). */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { relative } from "node:path";
 import JSZip from "jszip";
@@ -36,6 +37,20 @@ const publicManifest = "public/runner-manifest.json";
 const exportedManifest = "out/runner-manifest.json";
 const publicNativeRunner = "public/aiboard-runner-v2.zip";
 const exportedNativeRunner = "out/aiboard-runner-v2.zip";
+
+function publishNativeRunnerHash(): string {
+  execFileSync(process.execPath, ["scripts/publish-downloads.mjs"], { stdio: "pipe" });
+  return createHash("sha256").update(readFileSync(publicNativeRunner)).digest("hex");
+}
+
+const firstPublishedNativeRunnerHash = publishNativeRunnerHash();
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_100);
+const secondPublishedNativeRunnerHash = publishNativeRunnerHash();
+check(
+  "Runner V2 ZIP publication is reproducible",
+  firstPublishedNativeRunnerHash === secondPublishedNativeRunnerHash,
+  { firstPublishedNativeRunnerHash, secondPublishedNativeRunnerHash }
+);
 
 function builtInSkillPaths(): string[] {
   return readdirSync("runner-v2/skills", { recursive: true, withFileTypes: true })
@@ -130,6 +145,12 @@ for (const path of [publicRunner, exportedRunner, publicManifest, exportedManife
 for (const path of [publicNativeRunner, exportedNativeRunner]) {
   check(`${path} exists`, existsSync(path));
   await checkNativeRunnerArchive(path);
+}
+if (existsSync(publicNativeRunner) && existsSync(exportedNativeRunner)) {
+  check(
+    "public and exported Runner V2 ZIPs are byte-identical",
+    readFileSync(publicNativeRunner).equals(readFileSync(exportedNativeRunner))
+  );
 }
 
 if (existsSync(publicAccountRunner) && existsSync(sourceAccountRunner)) {
