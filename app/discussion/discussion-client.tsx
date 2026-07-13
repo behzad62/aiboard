@@ -90,6 +90,7 @@ import {
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
+  shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "@/lib/client/discussion-live-state";
 import {
@@ -881,7 +882,7 @@ function DiscussionPageInner() {
   useEffect(() => {
     if (
       discussion?.mode !== "build" ||
-      status !== "stopped" ||
+      !shouldRestoreDurableBuildProjection(status) ||
       !discussion.runnerUrl ||
       !discussion.runnerToken ||
       !discussion.nativeBuildRunId

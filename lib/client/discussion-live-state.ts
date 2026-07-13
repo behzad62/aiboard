@@ -54,6 +54,12 @@ export function shouldShowBuildStopFallback(input: {
   );
 }
 
+export function shouldRestoreDurableBuildProjection(
+  status: DiscussionStatus
+): boolean {
+  return status === "stopped" || status === "failed";
+}
+
 export function durableBuildHandoffPanels(
   projection: NativeBuildProjection
 ): {

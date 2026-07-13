@@ -6,6 +6,7 @@ import {
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
+  shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
 
@@ -73,6 +74,10 @@ assert.deepEqual(
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");
+assert.equal(shouldRestoreDurableBuildProjection("stopped"), true);
+assert.equal(shouldRestoreDurableBuildProjection("failed"), true);
+assert.equal(shouldRestoreDurableBuildProjection("running"), false);
+assert.equal(shouldRestoreDurableBuildProjection("completed"), false);
 assert.deepEqual(
   nativeBuildUsageWindow({
     scopeId: "run_1",
