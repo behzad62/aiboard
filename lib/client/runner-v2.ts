@@ -490,8 +490,22 @@ export async function resolveNativeBuildRunId(
   connection: NativeRunnerConnection,
   savedRunId: string,
   projectId: string,
-  fetchImpl: typeof fetch = fetch
-): Promise<string> {
+  fetchImpl?: typeof fetch
+): Promise<string>;
+export async function resolveNativeBuildRunId(
+  connection: NativeRunnerConnection,
+  savedRunId: string,
+  projectId: string,
+  fetchImpl: typeof fetch,
+  options: { allowMissing: true }
+): Promise<string | undefined>;
+export async function resolveNativeBuildRunId(
+  connection: NativeRunnerConnection,
+  savedRunId: string,
+  projectId: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { allowMissing?: boolean } = {}
+): Promise<string | undefined> {
   try {
     await getNativeBuild(connection, savedRunId, fetchImpl);
     return savedRunId;
@@ -517,6 +531,7 @@ export async function resolveNativeBuildRunId(
       `Runner V2 found multiple Builds for this discussion awaiting project handoff; select the intended run explicitly.`
     );
   }
+  if (options.allowMissing) return undefined;
   throw new Error(
     `The saved Runner V2 Build ${savedRunId} no longer exists, and no matching Build is awaiting project handoff.`
   );

@@ -264,4 +264,29 @@ assert.equal(
   ),
   "run_handoff"
 );
+
+const missingFollowUpFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/new_follow_up/build")) {
+    return Response.json(
+      { error: "Unknown build runtime new_follow_up." },
+      { status: 404 }
+    );
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_1")) {
+    return Response.json({ builds: [] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "new_follow_up",
+    "discussion_1",
+    missingFollowUpFetch,
+    { allowMissing: true }
+  ),
+  undefined,
+  "a deliberately new follow-up may proceed to native provisioning"
+);
 console.log("PASS runner-v2 client");

@@ -104,11 +104,19 @@ export async function runNativeBuildDiscussion(
     );
   }
   let runId = discussion.nativeBuildRunId
-    ? await resolveNativeBuildRunId(
-        connection,
-        discussion.nativeBuildRunId,
-        discussion.id
-      )
+    ? discussion.status === "pending"
+      ? await resolveNativeBuildRunId(
+          connection,
+          discussion.nativeBuildRunId,
+          discussion.id,
+          fetch,
+          { allowMissing: true }
+        )
+      : await resolveNativeBuildRunId(
+          connection,
+          discussion.nativeBuildRunId,
+          discussion.id
+        )
     : undefined;
   if (runId && runId !== discussion.nativeBuildRunId) {
     updateDiscussion(discussion.id, {
