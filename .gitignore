@@ -27,6 +27,7 @@
 .playwright-mcp/
 .codex-run-logs/
 .superpowers/
+.worktrees/
 docs/superpowers/
 
 # debug
