@@ -199,8 +199,6 @@ export function rebuildBudgetProjection(
     lastSequence: 0,
   };
   for (const event of events) reduceBudgetEvent(projection, event);
-  projection.effective = effectiveUsage(projection, true);
-  projection.lifetime = effectiveUsage(projection, false);
   return projection;
 }
 
@@ -216,6 +214,7 @@ export function reduceBudgetEvent(
       index: projection.window.index + 1,
       startedAt: event.occurredAt,
     };
+    projection.effective = emptyUsage();
   } else if (event.type === "budget.reserved") {
     const reservationId = requiredString(event.payload, "reservationId");
     if (projection.reservations[reservationId]) {
@@ -225,7 +224,7 @@ export function reduceBudgetEvent(
     if (kind !== "model" && kind !== "tool") throw new Error(`Invalid budget kind ${kind}.`);
     const attribution = optionalModelCallAttribution(event.payload.attribution);
     const costBasis = optionalModelCostBasisSnapshot(event.payload.costBasis);
-    projection.reservations[reservationId] = {
+    const reservation: BudgetReservationProjection = {
       reservationId,
       kind,
       ...(attribution ? { attribution } : {}),
@@ -234,16 +233,23 @@ export function reduceBudgetEvent(
       status: "reserved",
       windowIndex: projection.window.index,
     };
+    projection.reservations[reservationId] = reservation;
+    const callDimension = kind === "model" ? "modelCalls" : "toolCalls";
+    projection.lifetime[callDimension] += 1;
+    projection.effective[callDimension] += 1;
+    adjustAmount(projection.lifetime, reservation.estimate, 1);
+    adjustAmount(projection.effective, reservation.estimate, 1);
   } else if (event.type === "budget.settled") {
     const reservationId = requiredString(event.payload, "reservationId");
     const reservation = projection.reservations[reservationId];
     if (!reservation || reservation.status !== "reserved") {
       throw new Error(`Budget reservation ${reservationId} is not open.`);
     }
+    const actual = usageAmount(event.payload.actual);
     projection.reservations[reservationId] = {
       ...reservation,
       status: "settled",
-      actual: usageAmount(event.payload.actual),
+      actual,
       ...(event.payload.tokenSources === undefined
         ? {}
         : { tokenSources: modelTokenSources(event.payload.tokenSources) }),
@@ -254,60 +260,59 @@ export function reduceBudgetEvent(
         ? {}
         : { costBasis: modelCostBasisSnapshot(event.payload.costBasis) }),
     };
+    adjustAmount(projection.lifetime, reservation.estimate, -1);
+    adjustAmount(projection.lifetime, actual, 1);
+    if (reservation.windowIndex === projection.window.index) {
+      adjustAmount(projection.effective, reservation.estimate, -1);
+      adjustAmount(projection.effective, actual, 1);
+    }
   } else if (event.type === "active.started") {
     const segmentId = requiredString(event.payload, "segmentId");
     if (projection.activeSegments[segmentId]) {
       throw new Error(`Duplicate active segment ${segmentId}.`);
     }
-    projection.activeSegments[segmentId] = {
+    const segment: ActiveSegmentProjection = {
       segmentId,
       startedAt: event.occurredAt,
       reserveMs: requiredNonNegative(event.payload, "reserveMs"),
       windowIndex: projection.window.index,
     };
+    projection.activeSegments[segmentId] = segment;
+    projection.lifetime.activeMs += segment.reserveMs;
+    projection.effective.activeMs += segment.reserveMs;
   } else {
     const segmentId = requiredString(event.payload, "segmentId");
     const segment = projection.activeSegments[segmentId];
     if (!segment || segment.durationMs !== undefined) {
       throw new Error(`Active segment ${segmentId} is not open.`);
     }
+    const durationMs = requiredNonNegative(event.payload, "durationMs");
     projection.activeSegments[segmentId] = {
       ...segment,
-      durationMs: requiredNonNegative(event.payload, "durationMs"),
+      durationMs,
     };
+    const activeDelta = durationMs - segment.reserveMs;
+    projection.lifetime.activeMs += activeDelta;
+    if (segment.windowIndex === projection.window.index) {
+      projection.effective.activeMs += activeDelta;
+    }
   }
   projection.lastSequence = event.sequence;
-  projection.effective = effectiveUsage(projection, true);
-  projection.lifetime = effectiveUsage(projection, false);
 }
 
-function effectiveUsage(
-  projection: BudgetProjection,
-  currentWindowOnly: boolean
-): BudgetUsage {
-  const usage = emptyUsage();
-  for (const reservation of Object.values(projection.reservations)) {
-    if (currentWindowOnly && reservation.windowIndex !== projection.window.index) continue;
-    if (reservation.kind === "model") usage.modelCalls += 1;
-    else usage.toolCalls += 1;
-    addAmount(usage, reservation.actual ?? reservation.estimate);
-  }
-  for (const segment of Object.values(projection.activeSegments)) {
-    if (currentWindowOnly && segment.windowIndex !== projection.window.index) continue;
-    usage.activeMs += segment.durationMs ?? segment.reserveMs;
-  }
-  return usage;
-}
-
-function addAmount(target: BudgetUsage, amount: BudgetAmount): void {
-  target.inputTokens += amount.inputTokens ?? 0;
+function adjustAmount(
+  target: BudgetUsage,
+  amount: BudgetAmount,
+  direction: 1 | -1
+): void {
+  target.inputTokens += direction * (amount.inputTokens ?? 0);
   target.cachedInputTokens =
-    (target.cachedInputTokens ?? 0) + (amount.cachedInputTokens ?? 0);
+    (target.cachedInputTokens ?? 0) + direction * (amount.cachedInputTokens ?? 0);
   target.cacheWriteInputTokens =
-    (target.cacheWriteInputTokens ?? 0) + (amount.cacheWriteInputTokens ?? 0);
-  target.outputTokens += amount.outputTokens ?? 0;
-  target.estimatedCostMicros += amount.estimatedCostMicros ?? 0;
-  target.artifactBytes += amount.artifactBytes ?? 0;
+    (target.cacheWriteInputTokens ?? 0) + direction * (amount.cacheWriteInputTokens ?? 0);
+  target.outputTokens += direction * (amount.outputTokens ?? 0);
+  target.estimatedCostMicros += direction * (amount.estimatedCostMicros ?? 0);
+  target.artifactBytes += direction * (amount.artifactBytes ?? 0);
 }
 
 export function emptyUsage(): BudgetUsage {

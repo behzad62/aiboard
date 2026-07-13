@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -364,6 +366,178 @@ test("new model reservations require attribution while tool reservations do not"
       idempotencyKey: "reserve:tool_unattributed",
     });
     assert.equal(ledger.snapshot("run_1").effective.toolCalls, 1);
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
+
+test("large durable histories keep projection reads and appends bounded", () => {
+  const fixture = budgetFixture();
+  const historySize = 7_000;
+  let ledger: SqliteBudgetLedger | undefined;
+  try {
+    const initialized = new SqliteBudgetLedger(fixture.database, {
+      limitsFor: () => ({}),
+    });
+    initialized.close();
+
+    const database = new DatabaseSync(fixture.database);
+    database.exec("BEGIN IMMEDIATE");
+    const insert = database.prepare(`
+      INSERT INTO budget_events (
+        event_id, scope_id, event_type, occurred_at, idempotency_key, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (let index = 0; index < historySize; index += 1) {
+      insert.run(
+        `event_${index}`,
+        "run_large",
+        "budget.reserved",
+        "2026-07-12T00:00:00.000Z",
+        `seed:${index}`,
+        JSON.stringify({
+          reservationId: `tool_${index}`,
+          kind: "tool",
+          estimate: {},
+        })
+      );
+    }
+    database.exec("COMMIT");
+    database.close();
+
+    ledger = new SqliteBudgetLedger(fixture.database, {
+      limitsFor: () => ({}),
+    });
+    const snapshotStartedAt = performance.now();
+    const snapshot = ledger.snapshot("run_large");
+    const snapshotDurationMs = performance.now() - snapshotStartedAt;
+    assert.equal(snapshot.effective.toolCalls, historySize);
+
+    const appendStartedAt = performance.now();
+    ledger.reserve({
+      scopeId: "run_large",
+      reservationId: "tool_after_history",
+      kind: "tool",
+      estimate: {},
+      occurredAt: "2026-07-12T00:00:01.000Z",
+      idempotencyKey: "reserve:after-history",
+    });
+    const appendDurationMs = performance.now() - appendStartedAt;
+    assert.equal(ledger.snapshot("run_large").effective.toolCalls, historySize + 1);
+    assert.ok(
+      snapshotDurationMs < 1_500,
+      `replaying ${historySize} budget events took ${snapshotDurationMs.toFixed(1)} ms`
+    );
+    assert.ok(
+      appendDurationMs < 250,
+      `appending after ${historySize} budget events took ${appendDurationMs.toFixed(1)} ms`
+    );
+  } finally {
+    ledger?.close();
+    fixture.cleanup();
+  }
+});
+
+test("cached projections catch up with another ledger and snapshots stay isolated", () => {
+  const fixture = budgetFixture();
+  const sharedLimits = { maxToolCalls: 2 };
+  const first = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => sharedLimits,
+  });
+  const second = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => sharedLimits,
+  });
+  try {
+    assert.equal(first.snapshot("run_shared").effective.toolCalls, 0);
+    second.reserve({
+      scopeId: "run_shared",
+      reservationId: "tool_external",
+      kind: "tool",
+      estimate: { artifactBytes: 3 },
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: "reserve:external",
+    });
+    const local = first.reserve({
+      scopeId: "run_shared",
+      reservationId: "tool_local",
+      kind: "tool",
+      estimate: { artifactBytes: 4 },
+      occurredAt: "2026-07-12T00:00:01.000Z",
+      idempotencyKey: "reserve:local",
+    });
+    assert.equal(
+      first.events("run_shared").find((event) => event.eventId === local.eventId)?.sequence,
+      local.sequence,
+    );
+    assert.throws(
+      () => first.reserve({
+        scopeId: "run_shared",
+        reservationId: "tool_over_limit",
+        kind: "tool",
+        estimate: {},
+        occurredAt: "2026-07-12T00:00:02.000Z",
+        idempotencyKey: "reserve:over-limit",
+      }),
+      (error: unknown) =>
+        error instanceof BudgetExceededError && error.dimension === "toolCalls",
+    );
+
+    const exposed = first.snapshot("run_shared");
+    exposed.effective.toolCalls = 999;
+    exposed.reservations.tool_external.estimate.artifactBytes = 999;
+    const fresh = first.snapshot("run_shared");
+    assert.equal(fresh.effective.toolCalls, 2);
+    assert.equal(fresh.effective.artifactBytes, 7);
+    assert.equal(fresh.reservations.tool_external.estimate.artifactBytes, 3);
+  } finally {
+    first.close();
+    second.close();
+    fixture.cleanup();
+  }
+});
+
+test("a rolled-back projection mutation is discarded before the next append", () => {
+  const fixture = budgetFixture();
+  let ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({}),
+  });
+  try {
+    ledger.reserve({
+      scopeId: "run_rollback",
+      reservationId: "tool_1",
+      kind: "tool",
+      estimate: { artifactBytes: 1 },
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: "reserve:tool-1",
+    });
+    assert.throws(
+      () => ledger.reserve({
+        scopeId: "run_rollback",
+        reservationId: "tool_1",
+        kind: "tool",
+        estimate: { artifactBytes: 2 },
+        occurredAt: "2026-07-12T00:00:01.000Z",
+        idempotencyKey: "reserve:duplicate-reservation",
+      }),
+      /duplicate budget reservation/i,
+    );
+    ledger.reserve({
+      scopeId: "run_rollback",
+      reservationId: "tool_2",
+      kind: "tool",
+      estimate: { artifactBytes: 3 },
+      occurredAt: "2026-07-12T00:00:02.000Z",
+      idempotencyKey: "reserve:tool-2",
+    });
+    const beforeRestart = ledger.snapshot("run_rollback");
+    ledger.close();
+
+    ledger = new SqliteBudgetLedger(fixture.database, {
+      limitsFor: () => ({}),
+    });
+    assert.deepEqual(ledger.snapshot("run_rollback"), beforeRestart);
+    assert.equal(ledger.events("run_rollback").length, 2);
   } finally {
     ledger.close();
     fixture.cleanup();

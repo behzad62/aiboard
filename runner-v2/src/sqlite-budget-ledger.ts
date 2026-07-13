@@ -40,6 +40,7 @@ export interface SqliteBudgetLedgerOptions {
 export class SqliteBudgetLedger implements BudgetLedger {
   private readonly database: DatabaseSync;
   private readonly limitsFor: SqliteBudgetLedgerOptions["limitsFor"];
+  private readonly projections = new Map<string, BudgetProjection>();
 
   constructor(databasePath: string, options: SqliteBudgetLedgerOptions) {
     this.limitsFor = options.limitsFor;
@@ -160,7 +161,7 @@ export class SqliteBudgetLedger implements BudgetLedger {
   }
 
   stopActive(input: StopActiveInput): BudgetEvent {
-    const projection = this.snapshot(input.scopeId);
+    const projection = this.mutableProjection(input.scopeId);
     const segment = projection.activeSegments[input.segmentId];
     if (segment?.durationMs !== undefined) {
       const existing = this.events(input.scopeId).findLast(
@@ -220,22 +221,15 @@ export class SqliteBudgetLedger implements BudgetLedger {
   }
 
   snapshot(scopeId: string): BudgetProjection {
-    return rebuildBudgetProjection(scopeId, this.events(scopeId));
+    return structuredClone(this.mutableProjection(scopeId));
   }
 
   events(scopeId: string): BudgetEvent[] {
-    return (
-      this.database
-        .prepare(
-          `SELECT sequence, event_id, scope_id, event_type, occurred_at,
-                  idempotency_key, payload_json
-           FROM budget_events WHERE scope_id = ? ORDER BY sequence`
-        )
-        .all(scopeId) as unknown as BudgetRow[]
-    ).map(decode);
+    return this.rowsAfter(scopeId, 0).map(decode);
   }
 
   close(): void {
+    this.projections.clear();
     this.database.close();
   }
 
@@ -271,24 +265,10 @@ export class SqliteBudgetLedger implements BudgetLedger {
         this.database.exec("COMMIT");
         return event;
       }
-      const rows = this.database
-        .prepare(
-          `SELECT sequence, event_id, scope_id, event_type, occurred_at,
-                  idempotency_key, payload_json
-           FROM budget_events WHERE scope_id = ? ORDER BY sequence`
-        )
-        .all(scopeId) as unknown as BudgetRow[];
-      const prior = rows.map(decode);
-      const projection = rebuildBudgetProjection(scopeId, prior);
+      const projection = this.mutableProjection(scopeId);
       preflight?.(projection);
       const event: BudgetEvent = {
-        sequence: Number(
-          (
-            this.database
-              .prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM budget_events")
-              .get() as { sequence: number }
-          ).sequence
-        ),
+        sequence: 0,
         eventId: `budget_${randomUUID()}`,
         scopeId,
         type,
@@ -296,20 +276,47 @@ export class SqliteBudgetLedger implements BudgetLedger {
         idempotencyKey,
         payload,
       };
-      reduceBudgetEvent(projection, event);
-      this.database
+      const inserted = this.database
         .prepare(
           `INSERT INTO budget_events (
             event_id, scope_id, event_type, occurred_at, idempotency_key, payload_json
           ) VALUES (?, ?, ?, ?, ?, ?)`
         )
         .run(event.eventId, scopeId, type, occurredAt, idempotencyKey, JSON.stringify(payload));
+      event.sequence = Number(inserted.lastInsertRowid);
+      reduceBudgetEvent(projection, event);
       this.database.exec("COMMIT");
       return event;
     } catch (error) {
+      this.projections.delete(scopeId);
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  private mutableProjection(scopeId: string): BudgetProjection {
+    let projection = this.projections.get(scopeId);
+    if (!projection) {
+      projection = rebuildBudgetProjection(scopeId, this.events(scopeId));
+      this.projections.set(scopeId, projection);
+      return projection;
+    }
+    for (const row of this.rowsAfter(scopeId, projection.lastSequence)) {
+      reduceBudgetEvent(projection, decode(row));
+    }
+    return projection;
+  }
+
+  private rowsAfter(scopeId: string, sequence: number): BudgetRow[] {
+    return this.database
+      .prepare(
+        `SELECT sequence, event_id, scope_id, event_type, occurred_at,
+                idempotency_key, payload_json
+         FROM budget_events
+         WHERE scope_id = ? AND sequence > ?
+         ORDER BY sequence`
+      )
+      .all(scopeId, sequence) as unknown as BudgetRow[];
   }
 }
 
