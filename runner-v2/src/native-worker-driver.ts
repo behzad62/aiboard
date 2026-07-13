@@ -30,6 +30,7 @@ import type { SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog, SkillDocument, SkillMetadata } from "./skill-catalog.js";
+import { rankSkillsForTask } from "./skill-routing.js";
 import type {
   WorkerAssignment,
   WorkerOutcome,
@@ -351,6 +352,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       this.options.skillCatalog,
       skillMetadata,
       assignment.task.objective,
+      assignment.task.requiredCapabilities,
       3
     );
     const memories = this.options.memoryStore.search({
@@ -474,25 +476,14 @@ async function selectedSkills(
   catalog: SkillCatalog,
   metadata: SkillMetadata[],
   objective: string,
+  requiredCapabilities: readonly string[],
   limit: number
 ): Promise<SkillDocument[]> {
-  const objectiveTokens = new Set(tokens(objective));
-  const ranked = metadata
-    .map((skill) => ({
-      skill,
-      score: tokens(`${skill.name} ${skill.description}`).filter((token) =>
-        objectiveTokens.has(token)
-      ).length,
-    }))
-    .filter((item) => item.score > 0)
-    .sort(
-      (left, right) =>
-        right.score - left.score || left.skill.id.localeCompare(right.skill.id)
-    )
-    .slice(0, limit);
-  return await Promise.all(ranked.map(({ skill }) => catalog.read(skill.id)));
-}
-
-function tokens(value: string): string[] {
-  return value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
+  const ranked = rankSkillsForTask(
+    metadata,
+    objective,
+    requiredCapabilities,
+    limit
+  );
+  return await Promise.all(ranked.map((skill) => catalog.read(skill.id)));
 }

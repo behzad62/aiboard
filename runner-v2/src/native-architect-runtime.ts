@@ -19,6 +19,7 @@ import type {
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import type {
+  ArchitectActionReason,
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
 } from "./build-runtime.js";
@@ -43,6 +44,7 @@ import type { SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
+import { rankSkillsForTask } from "./skill-routing.js";
 import { createSkillTools } from "./skill-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { createSessionTools } from "./session-tools.js";
@@ -349,7 +351,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
     ]);
-    const skills = await Promise.all(metadata.slice(0, 5).map((skill) =>
+    const relevantTasks = Object.values(projection.tasks).filter(
+      (task) => task.status !== "integrated" && task.status !== "cancelled"
+    );
+    const requiredCapabilities = prioritizedArchitectCapabilities(
+      request.reason,
+      relevantTasks
+    );
+    const rankedSkills = rankSkillsForTask(
+      metadata,
+      `${this.options.objective}\n${JSON.stringify(request.reason)}`,
+      requiredCapabilities,
+      5
+    );
+    const skills = await Promise.all(rankedSkills.map((skill) =>
       this.options.skillCatalog.read(skill.id)
     ));
     const memories = this.options.memoryStore.search({
@@ -379,6 +394,23 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       recentHistory: [],
     });
   }
+}
+
+export function prioritizedArchitectCapabilities(
+  reason: ArchitectActionReason,
+  tasks: readonly {
+    id: string;
+    requiredCapabilities: readonly string[];
+  }[]
+): string[] {
+  const focusedTaskId = "taskId" in reason ? reason.taskId : undefined;
+  const focused = focusedTaskId
+    ? tasks.find((task) => task.id === focusedTaskId)?.requiredCapabilities ?? []
+    : [];
+  const broader = tasks
+    .filter((task) => task.id !== focusedTaskId)
+    .flatMap((task) => task.requiredCapabilities);
+  return [...new Set([...focused, ...broader])];
 }
 
 export function architectModelAttribution(

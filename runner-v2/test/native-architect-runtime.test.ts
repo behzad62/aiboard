@@ -12,11 +12,14 @@ import {
   NativeArchitectRuntime,
   PlanOnlyInspectionRuntime,
   architectModelAttribution,
+  prioritizedArchitectCapabilities,
 } from "../src/native-architect-runtime.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
+import type { SkillMetadata } from "../src/skill-catalog.js";
+import { rankSkillsForTask } from "../src/skill-routing.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
@@ -52,6 +55,24 @@ test("Architect model calls carry direct durable role attribution", () => {
       sessionId: "architect:run_1",
     }
   );
+});
+
+test("Architect skill routing prioritizes the task named by the current action", () => {
+  const capabilities = prioritizedArchitectCapabilities(
+    { type: "review_required", taskId: "task_visual", changeSetId: "change_1" },
+    [
+      { id: "task_setup", requiredCapabilities: ["repository-exploration"] },
+      { id: "task_visual", requiredCapabilities: ["verification"] },
+      { id: "task_later", requiredCapabilities: ["systematic-debugging"] },
+    ]
+  );
+  const metadata: SkillMetadata[] = [
+    skillMetadata("repository-exploration"),
+    skillMetadata("verification"),
+    skillMetadata("systematic-debugging"),
+  ];
+  const selected = rankSkillsForTask(metadata, "Review the submitted task", capabilities, 1);
+  assert.equal(selected[0]?.name, "verification");
 });
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {
@@ -381,3 +402,15 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function skillMetadata(name: string): SkillMetadata {
+  return {
+    id: `built-in:${name}`,
+    name,
+    description: `${name} guidance`,
+    relativePath: `built-in:${name}/SKILL.md`,
+    digest: name.padEnd(64, "0").slice(0, 64),
+    byteLength: 100,
+    source: "built-in",
+  };
+}

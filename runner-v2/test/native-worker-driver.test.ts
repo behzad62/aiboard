@@ -16,6 +16,8 @@ import {
   shouldAutoContinueWorker,
   workerModelAttribution,
 } from "../src/native-worker-driver.js";
+import { rankSkillsForTask } from "../src/skill-routing.js";
+import type { SkillMetadata } from "../src/skill-catalog.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
@@ -246,6 +248,57 @@ test("native worker fails over with the same session, context, tools, and eviden
     memory?.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
+});
+
+test("worker skill routing prefers required capability skills over generic description overlap", () => {
+  const skill = (
+    id: string,
+    name: string,
+    description: string,
+    source: SkillMetadata["source"] = "user"
+  ): SkillMetadata => ({
+    id,
+    name,
+    description,
+    relativePath: `${id}/SKILL.md`,
+    digest: id.padEnd(64, "0").slice(0, 64),
+    byteLength: 100,
+    source,
+  });
+  const metadata = [
+    skill("user:imagegen", "imagegen", "Create project visuals and image assets"),
+    skill("user:openai-docs", "openai-docs", "Current guidance for models and projects"),
+    skill("user:plugin-creator", "plugin-creator", "Create project plugins and files"),
+    skill("built-in:systematic-debugging", "systematic-debugging", "Debug methodically", "built-in"),
+    skill("built-in:verification", "verification", "Gather focused verification evidence", "built-in"),
+  ];
+  const selected = rankSkillsForTask(
+    metadata,
+    "Polish the visual style and verify visible projectile tracers in the project",
+    ["systematic-debugging", "verification"],
+    3
+  );
+  assert.deepEqual(
+    selected.map((item) => item.name),
+    ["systematic-debugging", "verification"]
+  );
+  const aliased = rankSkillsForTask(
+    [skill("project:testing", "testing", "Use focused verification evidence", "project")],
+    "Change the value safely",
+    ["verification"],
+    1
+  );
+  assert.equal(aliased[0]?.name, "testing");
+  const broadCapability = rankSkillsForTask(
+    [
+      skill("project:testing", "testing", "Run focused checks", "project"),
+      skill("user:docs", "docs", "Reference code and text documentation"),
+    ],
+    "Run the testing checks",
+    ["code"],
+    1
+  );
+  assert.equal(broadCapability[0]?.name, "testing");
 });
 
 function seedRunningTask(store: SqliteSchedulerStore): void {
