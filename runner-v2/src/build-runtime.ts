@@ -105,6 +105,7 @@ export class BuildRuntime {
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
+    this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -438,6 +439,10 @@ export class BuildRuntime {
       store: this.store,
       clock: this.clock,
       runPolicy: this.runPolicy,
+      planOnlyCompletionAvailable:
+        this.runPolicy === "plan_only" &&
+        reason.type === "completion_decision_required" &&
+        projection.planRevision > 0,
     })) {
       tools.register(tool);
     }
@@ -471,6 +476,17 @@ export class BuildRuntime {
       : projection.status === "paused"
         ? { status: "paused", action }
         : { status: "progressed", action };
+  }
+
+  private configureRunPolicy(): void {
+    this.store.append({
+      runId: this.runId,
+      type: "run.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "run-policy-configured",
+      payload: { runPolicy: this.runPolicy },
+    });
   }
 }
 

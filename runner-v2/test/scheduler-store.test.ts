@@ -11,6 +11,93 @@ import {
 } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 
+test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-policy-forgery-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    for (const runPolicy of ["finish", "budgeted"] as const) {
+      const runId = `run_${runPolicy}`;
+      store.append(policyEvent(runId, runPolicy));
+      store.append(event(runId, "plan.created", "plan:1", {
+        revision: 1,
+        tasks: [{
+          id: "task_1",
+          objective: "Plan work",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+        }],
+      }));
+      assert.throws(() => store.append({
+        runId,
+        type: "project.handoff_requested",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "project-handoff-requested",
+        payload: {
+          summary: "Forged plan-only handoff",
+          runPolicy: "plan_only",
+        },
+      }), /requires terminal task states/i);
+      assert.equal(
+        rebuildSchedulerProjection(store.readRun(runId)).projectHandoff,
+        undefined
+      );
+    }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable plan-only policy requires a plan and survives handoff replay", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-plan-policy-"));
+  const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
+  try {
+    store.append(policyEvent("run_plan_only", "plan_only"));
+    assert.throws(() => store.append({
+      runId: "run_plan_only",
+      type: "project.handoff_requested",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "handoff:before-plan",
+      payload: { summary: "No plan exists" },
+    }), /requires a valid plan/i);
+    store.append(event("run_plan_only", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_1",
+        objective: "Plan work",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+      }],
+    }));
+    store.append({
+      runId: "run_plan_only",
+      type: "project.handoff_requested",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "project-handoff-requested",
+      payload: { summary: "Plan is ready" },
+    });
+    store.close();
+
+    store = new SqliteSchedulerStore(database);
+    const recovered = rebuildSchedulerProjection(store.readRun("run_plan_only"));
+    assert.equal(recovered.runPolicy, "plan_only");
+    assert.equal(recovered.planRevision, 1);
+    assert.equal(recovered.tasks.task_1.status, "planned");
+    assert.equal(recovered.projectHandoff?.status, "requested");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("scheduler events recover exact task and blocking-guidance state", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-store-"));
   const database = join(root, "scheduler.sqlite");
@@ -252,5 +339,19 @@ function event(
     },
     idempotencyKey,
     payload,
+  };
+}
+
+function policyEvent(
+  runId: string,
+  runPolicy: "finish" | "budgeted" | "plan_only"
+): NewSchedulerEvent {
+  return {
+    runId,
+    type: "run.policy_configured",
+    occurredAt: "2026-07-13T00:00:00.000Z",
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: "run-policy-configured",
+    payload: { runPolicy },
   };
 }

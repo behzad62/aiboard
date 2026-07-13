@@ -1,5 +1,6 @@
 import type { BuildTask } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
+import type { NativeBuildRunPolicy } from "./build-spec.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -14,6 +15,7 @@ export interface SchedulerActor {
 
 export type SchedulerEventType =
   | "run.initialized"
+  | "run.policy_configured"
   | "plan.created"
   | "task.revised"
   | "task.transitioned"
@@ -115,6 +117,7 @@ export interface ProjectHandoffProjection {
 
 export interface SchedulerProjection {
   runId: string;
+  runPolicy?: NativeBuildRunPolicy;
   status: "running" | "paused" | "completed";
   planRevision: number;
   tasks: Record<string, BuildTask>;
@@ -154,8 +157,19 @@ export function reduceSchedulerEvent(
       }
       return emptySchedulerProjection(event);
     }
+    if (event.type === "run.policy_configured") {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure a scheduler run policy.");
+      }
+      return {
+        ...emptySchedulerProjection(event),
+        runPolicy: requiredRunPolicy(event.payload),
+      };
+    }
     if (event.type !== "plan.created") {
-      throw new Error(`Scheduler run ${event.runId} must begin with run.initialized or plan.created.`);
+      throw new Error(
+        `Scheduler run ${event.runId} must begin with run.initialized, run.policy_configured, or plan.created.`
+      );
     }
     if (event.actor.role !== "architect") {
       throw new Error("Only the Architect may create a plan.");
@@ -195,6 +209,19 @@ export function reduceSchedulerEvent(
   switch (event.type) {
     case "run.initialized":
       throw new Error("A scheduler run cannot be initialized twice.");
+    case "run.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure a scheduler run policy.");
+      }
+      const runPolicy = requiredRunPolicy(event.payload);
+      if (current.runPolicy && current.runPolicy !== runPolicy) {
+        throw new Error(
+          `Scheduler run policy is already configured as ${current.runPolicy}.`
+        );
+      }
+      next.runPolicy = runPolicy;
+      break;
+    }
     case "plan.created": {
       if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
         throw new Error("A scheduler run cannot create a second initial plan.");
@@ -426,7 +453,11 @@ export function reduceSchedulerEvent(
       if (current.projectHandoff) {
         throw new Error("Final project handoff was already requested.");
       }
-      if (event.payload.runPolicy !== "plan_only") {
+      if (current.runPolicy === "plan_only") {
+        if (current.planRevision <= 0) {
+          throw new Error("Plan-only final project handoff requires a valid plan.");
+        }
+      } else {
         const nonterminal = Object.values(next.tasks).find(
           (task) => task.status !== "integrated" && task.status !== "cancelled"
         );
@@ -625,4 +656,14 @@ function requiredNumber(payload: Record<string, unknown>, key: string): number {
   const value = payload[key];
   if (!Number.isSafeInteger(value)) throw new Error(`Missing ${key}.`);
   return value as number;
+}
+
+function requiredRunPolicy(
+  payload: Record<string, unknown>
+): NativeBuildRunPolicy {
+  const value = payload.runPolicy;
+  if (value !== "finish" && value !== "budgeted" && value !== "plan_only") {
+    throw new Error("Missing runPolicy.");
+  }
+  return value;
 }

@@ -152,6 +152,25 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
             );
           };
           if (request.reason.type === "plan_required") {
+            assert.deepEqual(
+              request.tools.definitions().map((tool) => tool.name).sort(),
+              ["answer_guidance", "plan_tasks", "revise_task"]
+            );
+            for (const name of [
+              "complete_run",
+              "review_task",
+              "request_integration",
+            ]) {
+              callSequence += 1;
+              const rejected = await request.tools.invoke({
+                type: "tool_call",
+                callId: `plan_only_forbidden_${callSequence}`,
+                name,
+                arguments: {},
+              }, request.context);
+              assert.equal(rejected.isError, true, `${name} must be unavailable`);
+              assert.equal(rejected.error?.code, "unknown_tool");
+            }
             await invoke("plan_tasks", {
               revision: 1,
               tasks: [
@@ -175,6 +194,21 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
             type: "completion_decision_required",
             runPolicy: "plan_only",
           });
+          assert.deepEqual(
+            request.tools.definitions().map((tool) => tool.name).sort(),
+            ["answer_guidance", "complete_run", "plan_tasks", "revise_task"]
+          );
+          for (const name of ["review_task", "request_integration"]) {
+            callSequence += 1;
+            const rejected = await request.tools.invoke({
+              type: "tool_call",
+              callId: `plan_only_post_plan_forbidden_${callSequence}`,
+              name,
+              arguments: {},
+            }, request.context);
+            assert.equal(rejected.isError, true, `${name} must remain unavailable`);
+            assert.equal(rejected.error?.code, "unknown_tool");
+          }
           completionDecisions += 1;
           if (completionDecisions === 1) {
             await invoke("revise_task", {
@@ -213,6 +247,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
     assert.equal(handoff.status, "paused");
     assert.equal(handoff.action, "completion_decision_required");
     assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(runtime.projection().runPolicy, "plan_only");
     assert.equal(runtime.projection().tasks.task_a.status, "planned");
     assert.equal(runtime.projection().tasks.task_b.status, "planned");
     assert.equal(
@@ -242,6 +277,84 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
   }
 });
 
+test("legacy scheduler logs configure their migrated policy once before stepping", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-policy-recovery-"));
+  const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
+  try {
+    store.append({
+      runId: "run_policy_recovery",
+      type: "plan.created",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: "task_1",
+          objective: "Preserve the recovered plan",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: ["code"],
+          attempt: 0,
+        }],
+      },
+    });
+    const architectDriver: ArchitectRuntimeDriver = {
+      run: async (request) => {
+        assert.deepEqual(request.reason, {
+          type: "completion_decision_required",
+          runPolicy: "plan_only",
+        });
+        const result = await request.tools.invoke({
+          type: "tool_call",
+          callId: "complete_recovered_plan",
+          name: "complete_run",
+          arguments: { summary: "Recovered plan is ready" },
+        }, request.context);
+        assert.equal(
+          result.isError,
+          false,
+          result.error?.message ?? "Recovered plan completion failed"
+        );
+      },
+    };
+    const runtimeOptions = {
+      runId: "run_policy_recovery",
+      runPolicy: "plan_only" as const,
+      workerDriver: { run: async () => ({ type: "failed" as const, reason: "unused" }) },
+      architectDriver,
+      integrationDriver: {
+        integrate: async () => ({
+          status: "integrated" as const,
+          integrationRevision: "unused",
+        }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+    };
+    let runtime = new BuildRuntime({ ...runtimeOptions, store });
+    assert.equal(runtime.projection().runPolicy, "plan_only");
+    assert.equal((await runtime.step()).status, "paused");
+    assert.deepEqual(
+      runtime.events().map((event) => event.type),
+      ["plan.created", "run.policy_configured", "project.handoff_requested"]
+    );
+    store.close();
+
+    store = new SqliteSchedulerStore(database);
+    runtime = new BuildRuntime({ ...runtimeOptions, store });
+    assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(
+      runtime.events().filter((event) => event.type === "run.policy_configured").length,
+      1
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Architect prose or no-op return cannot fabricate scheduler progress", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-noop-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
@@ -258,7 +371,10 @@ test("Architect prose or no-op return cannot fabricate scheduler progress", asyn
       workspaceFor: async () => "C:/unused",
     });
     await assert.rejects(() => runtime.step(), /without a typed action/i);
-    assert.equal(store.readRun("run_noop").length, 0);
+    assert.deepEqual(
+      store.readRun("run_noop").map((event) => event.type),
+      ["run.policy_configured"]
+    );
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -287,7 +403,7 @@ test("fresh native Builds expose an empty projection and obey durable user pause
     assert.equal(runtime.resume("resume:1").status, "running");
     assert.deepEqual(
       runtime.events().map((event) => event.type),
-      ["run.initialized", "run.paused", "run.resumed"]
+      ["run.policy_configured", "run.paused", "run.resumed"]
     );
   } finally {
     store.close();

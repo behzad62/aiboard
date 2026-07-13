@@ -18,6 +18,7 @@ export interface ArchitectToolsOptions {
   store: SchedulerStore;
   clock?: () => string;
   runPolicy?: NativeBuildRunPolicy;
+  planOnlyCompletionAvailable?: boolean;
 }
 
 interface PlanTaskInput {
@@ -60,10 +61,18 @@ export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
   const clock = options.clock ?? (() => new Date().toISOString());
-  return [
+  const core = [
     planTasksTool(options.store, clock),
     reviseTaskTool(options.store, clock),
     answerGuidanceTool(options.store, clock),
+  ];
+  if (options.runPolicy === "plan_only") {
+    return options.planOnlyCompletionAvailable
+      ? [...core, completeRunTool(options.store, clock, "plan_only")]
+      : core;
+  }
+  return [
+    ...core,
     reviewTaskTool(options.store, clock),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
@@ -317,10 +326,7 @@ function completeRunTool(
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
         idempotencyKey: "project-handoff-requested",
-        payload: {
-          summary: input.summary,
-          ...(runPolicy === "plan_only" ? { runPolicy } : {}),
-        },
+        payload: { summary: input.summary },
       }, { type: "architect_action", action: "run_completed" });
     },
   });
