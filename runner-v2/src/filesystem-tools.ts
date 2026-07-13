@@ -55,7 +55,7 @@ export function createFilesystemTools(
     {
       definition: definition(
         "fs.read",
-        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine. Each ranged read is limited to ${MAX_READ_LINES} lines and ${MAX_READ_RANGE_BYTES} bytes, so use narrower ranges for dense code instead of reopening the whole file or paging its artifact.`,
+        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine. Each ranged read is limited to ${MAX_READ_LINES} lines and ${MAX_READ_RANGE_BYTES} bytes; oversized multi-line ranges return the largest bounded prefix plus nextStartLine instead of failing.`,
         true,
         "none"
       ),
@@ -81,17 +81,49 @@ export function createFilesystemTools(
               `startLine ${startLine} exceeds the file's ${starts.length} lines.`
             );
           }
-          const endLine = Math.min(requestedEndLine, starts.length);
+          let endLine = Math.min(requestedEndLine, starts.length);
           const startOffset = starts[startLine - 1];
-          const endOffset = endLine < starts.length ? starts[endLine] : source.length;
-          const selected = source.slice(startOffset, endOffset);
-          const selectedBytes = Buffer.byteLength(selected);
+          let endOffset = endLine < starts.length ? starts[endLine] : source.length;
+          let selected = source.slice(startOffset, endOffset);
+          let selectedBytes = Buffer.byteLength(selected);
           if (selectedBytes > MAX_READ_RANGE_BYTES) {
-            return error(
-              "line_range_too_large",
-              `Selected lines contain ${selectedBytes} bytes; narrow the range to at most ${MAX_READ_RANGE_BYTES} bytes.`
+            const firstLineEndOffset = startLine < starts.length
+              ? starts[startLine]
+              : source.length;
+            const firstLineBytes = Buffer.byteLength(
+              source.slice(startOffset, firstLineEndOffset)
             );
+            if (firstLineBytes > MAX_READ_RANGE_BYTES) {
+              return error(
+                "line_range_too_large",
+                `Line ${startLine} contains ${firstLineBytes} bytes and cannot fit within the ${MAX_READ_RANGE_BYTES}-byte range limit; it is not possible to narrow the range further for this single line.`
+              );
+            }
+
+            let low = startLine;
+            let high = endLine;
+            let bestEndLine = startLine;
+            while (low <= high) {
+              const candidate = Math.floor((low + high) / 2);
+              const candidateEndOffset = candidate < starts.length
+                ? starts[candidate]
+                : source.length;
+              const candidateBytes = Buffer.byteLength(
+                source.slice(startOffset, candidateEndOffset)
+              );
+              if (candidateBytes <= MAX_READ_RANGE_BYTES) {
+                bestEndLine = candidate;
+                low = candidate + 1;
+              } else {
+                high = candidate - 1;
+              }
+            }
+            endLine = bestEndLine;
+            endOffset = endLine < starts.length ? starts[endLine] : source.length;
+            selected = source.slice(startOffset, endOffset);
+            selectedBytes = Buffer.byteLength(selected);
           }
+          const rangeWasClipped = endLine < Math.min(requestedEndLine, starts.length);
           return {
             content: [
               json({
@@ -100,6 +132,13 @@ export function createFilesystemTools(
                 startLine,
                 endLine,
                 truncated: startLine > 1 || endLine < starts.length,
+                ...(rangeWasClipped
+                  ? {
+                      requestedEndLine,
+                      nextStartLine: endLine + 1,
+                      rangeByteLength: selectedBytes,
+                    }
+                  : {}),
               }),
               { type: "text", text: selected },
             ],

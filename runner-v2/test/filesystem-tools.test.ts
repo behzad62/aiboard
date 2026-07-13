@@ -22,6 +22,10 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   const workspace = join(root, "workspace");
   mkdirSync(join(workspace, "src"), { recursive: true });
   writeFileSync(join(workspace, "src", "app.ts"), "const alpha = 1;\r\nconst beta = 2;\r\n");
+  writeFileSync(
+    join(workspace, "src", "dense.ts"),
+    Array.from({ length: 100 }, (_, index) => `const value${index} = "${"x".repeat(80)}";\n`).join("")
+  );
   writeFileSync(join(workspace, "src", "minified.js"), "x".repeat(7 * 1024));
   writeFileSync(join(workspace, "binary.bin"), Buffer.from([0, 1, 2, 255]));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
@@ -85,6 +89,24 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
       truncated: true,
     });
 
+    const clippedRange = await invoke(broker, "read_clipped_range", "fs.read", {
+      path: "src/dense.ts",
+      startLine: 1,
+      endLine: 100,
+    });
+    assert.equal(clippedRange.isError, false);
+    const clippedMetadata = json(clippedRange) as {
+      endLine: number;
+      requestedEndLine: number;
+      nextStartLine: number;
+      rangeByteLength: number;
+    };
+    assert.ok(clippedMetadata.endLine < 100);
+    assert.equal(clippedMetadata.requestedEndLine, 100);
+    assert.equal(clippedMetadata.nextStartLine, clippedMetadata.endLine + 1);
+    assert.ok(clippedMetadata.rangeByteLength <= 6144);
+    assert.match(text(clippedRange), /const value0/);
+
     const invalidRange = await invoke(broker, "read_bad_range", "fs.read", {
       path: "src/app.ts",
       startLine: 3,
@@ -107,7 +129,7 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     const list = await invoke(broker, "list", "fs.list", { path: ".", maxDepth: 2 });
     assert.deepEqual(
       (json(list) as { entries: Array<{ path: string }> }).entries.map((entry) => entry.path),
-      ["binary.bin", "src", "src/app.ts", "src/minified.js"]
+      ["binary.bin", "src", "src/app.ts", "src/dense.ts", "src/minified.js"]
     );
     const search = await invoke(broker, "search", "fs.search", {
       path: ".",
