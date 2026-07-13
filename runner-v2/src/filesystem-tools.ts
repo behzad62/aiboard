@@ -295,7 +295,7 @@ export function createFilesystemTools(
     {
       definition: definition(
         "fs.patch",
-        "Apply one or many exact replacements atomically to one file. Prefer the edits array when changing multiple regions; issue only one fs.patch per file per model turn. Every edit is validated before the file is written.",
+        "Apply one or many exact replacements atomically to one file. Multiline edits tolerate LF/CRLF differences and preserve the file's newline style. Prefer the edits array when changing multiple regions; issue only one fs.patch per file per model turn. Every edit is validated before the file is written.",
         false,
         "workspace",
       ),
@@ -317,14 +317,27 @@ export function createFilesystemTools(
           let nextText = original;
           const edits = patchEdits(input);
           for (const [index, edit] of edits.entries()) {
-            const count = occurrences(nextText, edit.search);
+            const newline = preferredNewline(nextText);
+            const exactCount = occurrences(nextText, edit.search);
+            const adaptedSearch = newline
+              ? normalizeNewlines(edit.search, newline)
+              : edit.search;
+            const search = exactCount === 0 && adaptedSearch !== edit.search
+              ? adaptedSearch
+              : edit.search;
+            const count = exactCount === 0
+              ? occurrences(nextText, search)
+              : exactCount;
             if (count !== 1) {
               return error(
                 "ambiguous_patch",
                 `Edit ${index + 1}: expected one match, found ${count}. No changes were written.`,
               );
             }
-            nextText = nextText.replace(edit.search, edit.replace);
+            const replacement = newline
+              ? normalizeNewlines(edit.replace, newline)
+              : edit.replace;
+            nextText = nextText.replace(search, replacement);
           }
           const next = Buffer.from(nextText);
           await atomicWrite(path, next);
@@ -738,6 +751,17 @@ function occurrences(value: string, search: string): number {
     cursor += search.length;
   }
   return count;
+}
+
+function preferredNewline(value: string): "\r\n" | "\n" | "\r" | null {
+  if (value.includes("\r\n")) return "\r\n";
+  if (value.includes("\n")) return "\n";
+  if (value.includes("\r")) return "\r";
+  return null;
+}
+
+function normalizeNewlines(value: string, newline: "\r\n" | "\n" | "\r"): string {
+  return value.replace(/\r\n|\r|\n/g, newline);
 }
 
 function integer(

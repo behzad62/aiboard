@@ -244,6 +244,40 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   }
 });
 
+test("fs.patch accepts LF multiline edits for CRLF files without mixing line endings", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-patch-crlf-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const file = join(workspace, "renderer.js");
+  const original = "const first = 1;\r\nconst second = 2;\r\nconst third = 3;\r\n";
+  writeFileSync(file, original);
+  const broker = brokerWithFilesystem(
+    workspace,
+    new ArtifactStore(join(root, "artifacts")),
+  );
+
+  try {
+    const result = await invoke(broker, "patch_crlf_with_lf", "fs.patch", {
+      path: "renderer.js",
+      expectedSha256: sha256(Buffer.from(original)),
+      edits: [
+        {
+          search: "const first = 1;\nconst second = 2;",
+          replace: "const first = 10;\nconst inserted = true;\nconst second = 20;",
+        },
+      ],
+    });
+
+    assert.equal(result.isError, false);
+    assert.equal(
+      readFileSync(file, "utf8"),
+      "const first = 10;\r\nconst inserted = true;\r\nconst second = 20;\r\nconst third = 3;\r\n",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("filesystem mutations are revision-aware, serialized, movable, and deletable", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-fs-mutations-"));
   const workspace = join(root, "workspace");
