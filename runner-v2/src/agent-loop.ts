@@ -21,7 +21,8 @@ export type AgentSuspensionReason =
   | "cancelled"
   | "max_tokens"
   | "checkpoint_error"
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "read_only_stall";
 
 export type AgentLoopResult =
   | {
@@ -88,6 +89,10 @@ export interface RunAgentLoopOptions {
   idFactory?: () => string;
   onCheckpoint?: (checkpoint: AgentLoopCheckpoint) => Promise<void>;
   workingSet?: AgentWorkingSetLimits;
+  readOnlyStall?: {
+    warnTurns: number;
+    suspendTurns: number;
+  };
 }
 
 export interface AgentWorkingSetLimits {
@@ -122,6 +127,17 @@ export async function runAgentLoop(
       .map((message) => (message.content as { callId: string }).callId)
   );
   const nextId = options.idFactory ?? (() => randomUUID());
+  const readOnlyStall = options.readOnlyStall ?? (
+    options.context.actor.role === "worker"
+      ? { warnTurns: 12, suspendTurns: 20 }
+      : undefined
+  );
+  if (readOnlyStall && (
+    !Number.isSafeInteger(readOnlyStall.warnTurns) ||
+    !Number.isSafeInteger(readOnlyStall.suspendTurns) ||
+    readOnlyStall.warnTurns < 1 ||
+    readOnlyStall.suspendTurns <= readOnlyStall.warnTurns
+  )) throw new Error("Read-only stall limits are invalid.");
   const initialTurns = messages.filter((message) => message.role === "assistant").length;
   const finalTurn = initialTurns + maxTurns;
 
@@ -156,6 +172,14 @@ export async function runAgentLoop(
     );
     if (pendingResult) return pendingResult;
   }
+
+  const initialStallResult = await enforceReadOnlyStall(
+    options,
+    messages,
+    initialTurns,
+    seenCallIds
+  );
+  if (initialStallResult) return initialStallResult;
 
   for (
     let turnNumber = initialTurns + 1;
@@ -242,6 +266,13 @@ export async function runAgentLoop(
       nextId
     );
     if (toolResult) return toolResult;
+    const stallResult = await enforceReadOnlyStall(
+      options,
+      messages,
+      turnNumber,
+      seenCallIds
+    );
+    if (stallResult) return stallResult;
   }
   return suspended("turn_limit", finalTurn, messages);
 }
@@ -358,7 +389,12 @@ export function compactAgentMessages(
 function omitSupersededRunnerSnapshots(
   messages: readonly AgentMessage[]
 ): AgentMessage[] {
-  const prefixes = ["context:", "action-resume:", "worker-resume:"];
+  const prefixes = [
+    "context:",
+    "action-resume:",
+    "worker-resume:",
+    "progress-reminder:",
+  ];
   const newest = new Map<string, number>();
   for (const [index, message] of messages.entries()) {
     const prefix = prefixes.find((candidate) => message.id.startsWith(candidate));
@@ -368,6 +404,107 @@ function omitSupersededRunnerSnapshots(
     const prefix = prefixes.find((candidate) => message.id.startsWith(candidate));
     return !prefix || newest.get(prefix) === index;
   });
+}
+
+function trailingUnproductiveTurns(
+  messages: readonly AgentMessage[],
+  registry: AgentToolRuntime
+): number {
+  const results = toolResults(messages);
+  let streak = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const calls = message.content.filter(
+      (block): block is ToolCallBlock => block.type === "tool_call"
+    );
+    if (calls.length === 0) continue;
+    if (calls.some((call) => !results.has(call.callId))) continue;
+    const madeProgress = calls.some((call) =>
+      !registry.isReadOnlyTool(call.name) && results.get(call.callId)?.isError === false
+    );
+    if (madeProgress) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+function hasCurrentProgressReminder(
+  messages: readonly AgentMessage[],
+  registry: AgentToolRuntime
+): boolean {
+  const results = toolResults(messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.id.startsWith("progress-reminder:")) return true;
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const calls = message.content.filter(
+      (block): block is ToolCallBlock => block.type === "tool_call"
+    );
+    const madeProgress = calls.some((call) =>
+      !registry.isReadOnlyTool(call.name) && results.get(call.callId)?.isError === false
+    );
+    if (madeProgress) return false;
+  }
+  return false;
+}
+
+function toolResults(
+  messages: readonly AgentMessage[]
+): Map<string, { isError: boolean }> {
+  const results = new Map<string, { isError: boolean }>();
+  for (const message of messages) {
+    if (
+      message.role === "tool" &&
+      typeof message.content === "object" &&
+      !Array.isArray(message.content) &&
+      "callId" in message.content &&
+      "isError" in message.content
+    ) {
+      const result = message.content as { callId: string; isError: boolean };
+      results.set(result.callId, result);
+    }
+  }
+  return results;
+}
+
+async function enforceReadOnlyStall(
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  seenCallIds: ReadonlySet<string>
+): Promise<AgentLoopResult | null> {
+  const limits = options.readOnlyStall ?? (
+    options.context.actor.role === "worker"
+      ? { warnTurns: 12, suspendTurns: 20 }
+      : undefined
+  );
+  if (!limits) return null;
+  const streak = trailingUnproductiveTurns(messages, options.registry);
+  if (streak >= limits.warnTurns && !hasCurrentProgressReminder(messages, options.registry)) {
+    messages.push({
+      id: `progress-reminder:${turns}`,
+      role: "user",
+      content: [
+        "MECHANICAL_PROGRESS_REMINDER",
+        `The last ${streak} model turns made no successful progress-producing tool call.`,
+        "Avoid repeating inspection that is already represented in durable history.",
+        "Make a scoped change, run task-relevant verification, submit if ready, or ask the Architect if the intended resolution is unclear.",
+        "This reminder does not decide whether the task is complete.",
+      ].join("\n"),
+    });
+    const checkpointError = await checkpoint(options, messages, turns, seenCallIds);
+    if (checkpointError) return checkpointError;
+  }
+  if (streak >= limits.suspendTurns) {
+    return suspended(
+      "read_only_stall",
+      turns,
+      messages,
+      `${streak} consecutive model turns made no successful progress-producing tool call.`
+    );
+  }
+  return null;
 }
 
 function historyFact(message: AgentMessage): Record<string, unknown> {

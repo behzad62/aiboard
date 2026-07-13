@@ -256,6 +256,185 @@ test("a resumed checkpoint receives a fresh per-invocation turn allowance", asyn
   assert.equal(model.requests.length, 1);
 });
 
+test("sustained read-only turns warn once and suspend without a further model call", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  const model = new ScriptedModel(Array.from({ length: 5 }, (_, index) => ({
+    blocks: [{
+      type: "tool_call" as const,
+      callId: `read_stall_${index}`,
+      name: "read_file",
+      arguments: {},
+    }],
+    stopReason: "tool_calls" as const,
+  })));
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+    readOnlyStall: { warnTurns: 3, suspendTurns: 5 },
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "read_only_stall");
+  assert.equal(model.requests.length, 5);
+  assert.match(
+    String(model.requests[3].messages.find((message) =>
+      message.id.startsWith("progress-reminder:")
+    )?.content ?? ""),
+    /does not decide whether the task is complete/i
+  );
+});
+
+test("a workspace mutation resets the mechanical read-only streak", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  registry.register(mutationTool());
+  registry.register(submitTool());
+  const readTurns = (prefix: string) => Array.from({ length: 3 }, (_, index) => ({
+    blocks: [{
+      type: "tool_call" as const,
+      callId: `${prefix}_${index}`,
+      name: "read_file",
+      arguments: {},
+    }],
+    stopReason: "tool_calls" as const,
+  }));
+  const model = new ScriptedModel([
+    ...readTurns("before"),
+    {
+      blocks: [{ type: "tool_call", callId: "mutate", name: "write_file", arguments: {} }],
+      stopReason: "tool_calls",
+    },
+    ...readTurns("after"),
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "submit_after_reset",
+        name: "submit_task",
+        arguments: { changeSetId: "changeset_after_reset" },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+    readOnlyStall: { warnTurns: 3, suspendTurns: 5 },
+  });
+  assert.equal(result.status, "submitted");
+  assert.equal(result.changeSetId, "changeset_after_reset");
+});
+
+test("the default read-only stall guard does not constrain the Architect", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  const model = new ScriptedModel([
+    ...Array.from({ length: 20 }, (_, index) => ({
+      blocks: [{
+        type: "tool_call" as const,
+        callId: `architect_read_${index}`,
+        name: "read_file",
+        arguments: {},
+      }],
+      stopReason: "tool_calls" as const,
+    })),
+    { blocks: [{ type: "text", text: "still reasoning" }], stopReason: "end_turn" },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      ...context(),
+      actor: { role: "architect", id: "architect_1" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "model_ended_without_lifecycle");
+  assert.equal(model.requests.length, 21);
+});
+
+test("a recovered pending read suspends at the durable threshold before another model call", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  const resumedMessages: AgentMessage[] = [...initialMessages];
+  for (let index = 0; index < 4; index += 1) {
+    const callId = `completed_read_${index}`;
+    resumedMessages.push({
+      id: `assistant_completed_${index}`,
+      role: "assistant",
+      content: [{ type: "tool_call", callId, name: "read_file", arguments: {} }],
+    });
+    resumedMessages.push({
+      id: `tool_completed_${index}`,
+      role: "tool",
+      content: {
+        callId,
+        toolName: "read_file",
+        content: [{ type: "text", text: "content" }],
+        isError: false,
+      },
+    });
+  }
+  resumedMessages.push({
+    id: "assistant_pending_threshold",
+    role: "assistant",
+    content: [{
+      type: "tool_call",
+      callId: "pending_threshold_read",
+      name: "read_file",
+      arguments: {},
+    }],
+  });
+  const model = new ScriptedModel([]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages: resumedMessages,
+    readOnlyStall: { warnTurns: 3, suspendTurns: 5 },
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "read_only_stall");
+  assert.equal(model.requests.length, 0);
+});
+
+test("a failed mutation does not reset the mechanical no-progress streak", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content"));
+  registry.register(failingMutationTool());
+  const read = (callId: string) => ({
+    blocks: [{ type: "tool_call" as const, callId, name: "read_file", arguments: {} }],
+    stopReason: "tool_calls" as const,
+  });
+  const model = new ScriptedModel([
+    read("read_1"), read("read_2"), read("read_3"),
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "failed_mutation",
+        name: "write_file",
+        arguments: {},
+      }],
+      stopReason: "tool_calls",
+    },
+    read("read_4"), read("read_5"),
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+    readOnlyStall: { warnTurns: 3, suspendTurns: 5 },
+  });
+  assert.equal(result.status, "suspended");
+  assert.equal(result.reason, "read_only_stall");
+  assert.equal(model.requests.length, 5);
+});
+
 test("a hard tool budget error suspends before another model call", async () => {
   const registry = new ToolRegistry();
   registry.register({
@@ -532,6 +711,34 @@ function submitTool(): NativeTool<{ changeSetId: string }> {
       content: [{ type: "text", text: `Submitted ${input.changeSetId}` }],
       isError: false,
       lifecycle: { type: "submit_task", changeSetId: input.changeSetId },
+    }),
+  };
+}
+
+function mutationTool(): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "write_file",
+      description: "Change workspace state",
+      inputSchema: { type: "object", additionalProperties: false },
+      readOnly: false,
+      effect: "workspace",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async () => ({
+      content: [{ type: "text", text: "written" }],
+      isError: false,
+    }),
+  };
+}
+
+function failingMutationTool(): NativeTool<Record<string, never>> {
+  return {
+    ...mutationTool(),
+    execute: async () => ({
+      content: [{ type: "text", text: "write failed" }],
+      isError: true,
+      error: { code: "write_failed", message: "write failed" },
     }),
   };
 }
