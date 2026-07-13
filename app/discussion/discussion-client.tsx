@@ -1118,7 +1118,39 @@ function DiscussionPageInner() {
   // point. The engine skips rounds/models that already have saved responses
   // (so a judge-stage network error resumes straight at the judge); a build
   // re-plans over the kept transcript and the files already on disk.
-  const handleResume = () => {
+  const handleResume = async () => {
+    if (
+      discussion?.mode === "build" &&
+      discussion.runnerUrl &&
+      discussion.runnerToken &&
+      discussion.nativeBuildRunId
+    ) {
+      try {
+        const connection = {
+          url: discussion.runnerUrl,
+          token: discussion.runnerToken,
+        };
+        const nativeRun = await getNativeRun(
+          connection,
+          discussion.nativeBuildRunId
+        );
+        if (nativeRun.state === "paused") {
+          await commandNativeRun(
+            connection,
+            discussion.nativeBuildRunId,
+            "resume",
+            `resume:explicit:${nativeRun.lastSequence + 1}`
+          );
+        }
+      } catch (resumeError) {
+        setError(
+          resumeError instanceof Error
+            ? resumeError.message
+            : "Could not resume the native Build."
+        );
+        return;
+      }
+    }
     const continued = continueDiscussion(id);
     if (continued) setDiscussion(continued);
     notifiedRef.current = false;
@@ -1147,7 +1179,7 @@ function DiscussionPageInner() {
         `architect-handoff:${discussion.nativeBuildRunId}:${runtimeId}`
       );
       setArchitectHandoff(null);
-      handleResume();
+      await handleResume();
     } catch (handoffError) {
       setError(
         handoffError instanceof Error
@@ -1171,7 +1203,7 @@ function DiscussionPageInner() {
         `project-handoff:${discussion.nativeBuildRunId}:${choice}`
       );
       setProjectHandoff(null);
-      handleResume();
+      await handleResume();
     } catch (handoffError) {
       setError(
         handoffError instanceof Error

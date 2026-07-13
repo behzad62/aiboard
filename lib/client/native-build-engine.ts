@@ -27,6 +27,7 @@ import {
   type NativeBuildEvent,
   type NativeBuildProjection,
   type NativeProviderConfig,
+  type NativeRunProjection,
   type NativeRunnerConnection,
 } from "./runner-v2";
 import {
@@ -67,6 +68,14 @@ export function nativeBuildPauseGate(
     };
   }
   return { kind: "resume" };
+}
+
+export function nativeBuildAttachAction(
+  state: NativeRunProjection["state"]
+): "start" | "observe_paused" | "observe" {
+  if (state === "created") return "start";
+  if (state === "paused") return "observe_paused";
+  return "observe";
 }
 
 export async function runNativeBuildDiscussion(
@@ -177,9 +186,10 @@ export async function runNativeBuildDiscussion(
       run.createdAt
     ),
   });
-  if (run.state === "created") {
+  const attachAction = nativeBuildAttachAction(run.state);
+  if (attachAction === "start") {
     await commandNativeRun(connection, runId, "start", `start:${runId}`);
-  } else if (run.state === "paused") {
+  } else if (attachAction === "observe_paused") {
     const pausedProjection = initialProjection;
     const pauseGate = nativeBuildPauseGate(pausedProjection);
     if (pauseGate.kind === "project_handoff") {
@@ -190,7 +200,8 @@ export async function runNativeBuildDiscussion(
       emitArchitectHandoffPause(discussion, pauseGate, emit);
       return;
     }
-    await commandNativeRun(connection, runId, "resume", `resume:${Date.now()}`);
+    emitResumablePause(discussion, emit);
+    return;
   } else if (run.state === "completed") {
     const events = await getNativeBuildEvents(connection, runId, 0);
     finalizeNativeBuild(discussion, completionSummary(events), emit);
@@ -263,18 +274,7 @@ export async function runNativeBuildDiscussion(
           emitArchitectHandoffPause(discussion, pauseGate, emit);
           return;
         }
-        const now = new Date().toISOString();
-        updateDiscussion(discussion.id, {
-          status: "stopped",
-          buildStopReason: "blocked",
-          buildStoppedAt: now,
-          updatedAt: now,
-        });
-        emit({
-          type: "build_stopped",
-          reason: "blocked",
-          message: "Native Build paused safely; resume after resolving the reported blocker.",
-        });
+        emitResumablePause(discussion, emit);
         return;
       }
       await delay(750, signal);
@@ -306,6 +306,21 @@ export async function runNativeBuildDiscussion(
     });
     return;
   }
+}
+
+function emitResumablePause(discussion: Discussion, emit: Emit): void {
+  const now = new Date().toISOString();
+  updateDiscussion(discussion.id, {
+    status: "stopped",
+    buildStopReason: "blocked",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({
+    type: "build_stopped",
+    reason: "blocked",
+    message: "Native Build paused safely; resume after resolving the reported blocker.",
+  });
 }
 
 function emitArchitectHandoffPause(

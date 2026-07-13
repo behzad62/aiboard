@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 
-import { nativeBuildPauseGate } from "../lib/client/native-build-engine";
+import {
+  nativeBuildAttachAction,
+  nativeBuildPauseGate,
+} from "../lib/client/native-build-engine";
+
+assert.equal(nativeBuildAttachAction("created"), "start");
+assert.equal(nativeBuildAttachAction("running"), "observe");
+assert.equal(
+  nativeBuildAttachAction("paused"),
+  "observe_paused",
+  "reconnecting a browser must never resume a durably paused Build"
+);
 
 assert.deepEqual(
   nativeBuildPauseGate({
