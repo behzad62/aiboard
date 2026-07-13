@@ -426,13 +426,15 @@ export function reduceSchedulerEvent(
       if (current.projectHandoff) {
         throw new Error("Final project handoff was already requested.");
       }
-      const nonterminal = Object.values(next.tasks).find(
-        (task) => task.status !== "integrated" && task.status !== "cancelled"
-      );
-      if (nonterminal) {
-        throw new Error(
-          `Final project handoff requires terminal task states; ${nonterminal.id} is ${nonterminal.status}.`
+      if (event.payload.runPolicy !== "plan_only") {
+        const nonterminal = Object.values(next.tasks).find(
+          (task) => task.status !== "integrated" && task.status !== "cancelled"
         );
+        if (nonterminal) {
+          throw new Error(
+            `Final project handoff requires terminal task states; ${nonterminal.id} is ${nonterminal.status}.`
+          );
+        }
       }
       next.projectHandoff = {
         status: "requested",

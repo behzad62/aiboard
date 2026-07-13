@@ -10,12 +10,14 @@ import {
   rebuildSchedulerProjection,
   type SchedulerStore,
 } from "./scheduler-store.js";
+import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type { BuildTask } from "./task-contracts.js";
 import { validateTaskGraph } from "./task-graph.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
   clock?: () => string;
+  runPolicy?: NativeBuildRunPolicy;
 }
 
 interface PlanTaskInput {
@@ -64,7 +66,7 @@ export function createArchitectTools(
     answerGuidanceTool(options.store, clock),
     reviewTaskTool(options.store, clock),
     requestIntegrationTool(options.store, clock),
-    completeRunTool(options.store, clock),
+    completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
 }
 
@@ -291,11 +293,14 @@ function requestIntegrationTool(
 
 function completeRunTool(
   store: SchedulerStore,
-  clock: () => string
+  clock: () => string,
+  runPolicy: NativeBuildRunPolicy
 ): NativeTool<CompleteRunInput> {
   return lifecycleTool({
     name: "complete_run",
-    description: "Record the Architect's semantic decision that the build is complete",
+    description: runPolicy === "plan_only"
+      ? "Record the Architect's semantic decision that the plan is complete and request explicit project handoff"
+      : "Record the Architect's semantic decision that the build is complete",
     schema: objectSchema(
       { summary: { type: "string", minLength: 1 } },
       ["summary"]
@@ -312,7 +317,10 @@ function completeRunTool(
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
         idempotencyKey: "project-handoff-requested",
-        payload: { summary: input.summary },
+        payload: {
+          summary: input.summary,
+          ...(runPolicy === "plan_only" ? { runPolicy } : {}),
+        },
       }, { type: "architect_action", action: "run_completed" });
     },
   });

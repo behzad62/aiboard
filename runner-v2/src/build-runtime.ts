@@ -3,6 +3,7 @@ import type {
 } from "./tool-registry.js";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools } from "./architect-tools.js";
+import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   ProjectHandoffChoice,
   SchedulerProjection,
@@ -22,7 +23,7 @@ export type ArchitectActionReason =
   | { type: "guidance_required"; requestId: string; taskId: string }
   | { type: "review_required"; taskId: string; changeSetId: string }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
-  | { type: "completion_decision_required" }
+  | { type: "completion_decision_required"; runPolicy?: "plan_only" }
   | {
       type: "task_failure_resolution_required";
       taskId: string;
@@ -61,6 +62,7 @@ export interface IntegrationRuntimeDriver {
 
 export interface BuildRuntimeOptions {
   runId: string;
+  runPolicy?: NativeBuildRunPolicy;
   store: SchedulerStore;
   workerDriver: WorkerRuntimeDriver;
   architectDriver: ArchitectRuntimeDriver;
@@ -85,6 +87,7 @@ export class BuildRuntime {
   private readonly scheduler: TaskScheduler;
   private readonly architectDriver: ArchitectRuntimeDriver;
   private readonly integrationDriver: IntegrationRuntimeDriver;
+  private readonly runPolicy: NativeBuildRunPolicy;
   private readonly maxTaskAttempts: number;
   private readonly architectId: string;
   private readonly clock: () => string;
@@ -97,6 +100,7 @@ export class BuildRuntime {
     this.store = options.store;
     this.architectDriver = options.architectDriver;
     this.integrationDriver = options.integrationDriver;
+    this.runPolicy = options.runPolicy ?? "finish";
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -264,6 +268,14 @@ export class BuildRuntime {
       return this.afterArchitect("guidance_required");
     }
 
+    if (this.runPolicy === "plan_only") {
+      await this.runArchitect({
+        type: "completion_decision_required",
+        runPolicy: "plan_only",
+      }, projection);
+      return this.afterArchitect("completion_decision_required");
+    }
+
     const submitted = firstTask(projection, "submitted");
     if (submitted?.changeSetId) {
       await this.runArchitect({
@@ -422,7 +434,11 @@ export class BuildRuntime {
   ): Promise<void> {
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const tools = new ToolRegistry();
-    for (const tool of createArchitectTools({ store: this.store, clock: this.clock })) {
+    for (const tool of createArchitectTools({
+      store: this.store,
+      clock: this.clock,
+      runPolicy: this.runPolicy,
+    })) {
       tools.register(tool);
     }
     await this.architectDriver.run({

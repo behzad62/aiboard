@@ -15,6 +15,7 @@ import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
+  TaskScheduler,
   type WorkerAssignment,
   type WorkerOutcome,
   type WorkerRuntimeDriver,
@@ -105,6 +106,138 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     assert.equal(selected.projectHandoff?.choice, "keep_integration_branch");
     recoveredStore.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-only Builds stay behind the scheduling boundary and require explicit handoff", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-plan-only-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const originalTick = TaskScheduler.prototype.tick;
+  let schedulerTicks = 0;
+  let workspaceCreations = 0;
+  let workerAssignments = 0;
+  let integrations = 0;
+  let completionDecisions = 0;
+  let callSequence = 0;
+  TaskScheduler.prototype.tick = async function () {
+    schedulerTicks += 1;
+    return originalTick.call(this);
+  };
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_plan_only",
+      runPolicy: "plan_only",
+      store,
+      workerDriver: {
+        run: async () => {
+          workerAssignments += 1;
+          return { type: "submitted", changeSetId: "forbidden_changeset" };
+        },
+      },
+      architectDriver: {
+        run: async (request) => {
+          const invoke = async (name: string, argumentsValue: unknown) => {
+            callSequence += 1;
+            const result = await request.tools.invoke({
+              type: "tool_call",
+              callId: `plan_only_${callSequence}`,
+              name,
+              arguments: argumentsValue,
+            }, request.context);
+            assert.equal(
+              result.isError,
+              false,
+              result.error?.message ?? `Architect ${name} action failed`
+            );
+          };
+          if (request.reason.type === "plan_required") {
+            await invoke("plan_tasks", {
+              revision: 1,
+              tasks: [
+                {
+                  id: "task_a",
+                  objective: "Draft the public API",
+                  dependencies: [],
+                  requiredCapabilities: ["code"],
+                },
+                {
+                  id: "task_b",
+                  objective: "Document the public API",
+                  dependencies: ["task_a"],
+                  requiredCapabilities: ["code"],
+                },
+              ],
+            });
+            return;
+          }
+          assert.deepEqual(request.reason, {
+            type: "completion_decision_required",
+            runPolicy: "plan_only",
+          });
+          completionDecisions += 1;
+          if (completionDecisions === 1) {
+            await invoke("revise_task", {
+              taskId: "task_b",
+              revision: 2,
+              objective: "Document the stable public API",
+            });
+            return;
+          }
+          await invoke("complete_run", {
+            summary: "The implementation plan is ready for handoff.",
+          });
+        },
+      },
+      integrationDriver: {
+        integrate: async () => {
+          integrations += 1;
+          return {
+            status: "integrated",
+            integrationRevision: "forbidden_revision",
+          };
+        },
+      },
+      maxConcurrency: 2,
+      workspaceFor: async () => {
+        workspaceCreations += 1;
+        return "C:/forbidden-workspace";
+      },
+      clock: () => "2026-07-13T00:00:00.000Z",
+    });
+
+    assert.equal((await runtime.step()).action, "plan_required");
+    assert.equal((await runtime.step()).action, "completion_decision_required");
+    const handoff = await runtime.step();
+
+    assert.equal(handoff.status, "paused");
+    assert.equal(handoff.action, "completion_decision_required");
+    assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(runtime.projection().tasks.task_a.status, "planned");
+    assert.equal(runtime.projection().tasks.task_b.status, "planned");
+    assert.equal(
+      runtime.projection().tasks.task_b.objective,
+      "Document the stable public API"
+    );
+    assert.equal(completionDecisions, 2);
+    assert.equal(schedulerTicks, 0);
+    assert.equal(workspaceCreations, 0);
+    assert.equal(workerAssignments, 0);
+    assert.equal(integrations, 0);
+
+    const selected = runtime.selectProjectHandoff(
+      "keep_integration_branch",
+      {
+        integrationRevision: "baseline_revision",
+        integrationBranch: "aiboard/integration/run_plan_only",
+        appliedToProject: false,
+      },
+      "handoff:plan-only:keep"
+    );
+    assert.equal(selected.status, "completed");
+  } finally {
+    TaskScheduler.prototype.tick = originalTick;
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

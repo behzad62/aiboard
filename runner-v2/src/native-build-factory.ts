@@ -219,6 +219,7 @@ export class NativeBuildFactory {
     };
     const runtime = new BuildRuntime({
       runId: spec.runId,
+      runPolicy: spec.runPolicy,
       store: schedulerStore,
       workerDriver,
       architectDriver,
