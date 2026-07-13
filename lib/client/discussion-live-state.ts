@@ -124,10 +124,27 @@ export function nativeBuildUsageWindow(
     startedAt,
     elapsedMs: usage.activeMs,
     estimatedUsd,
-    unknownPricedModelIds: models
-      .filter((model) => model.usageOrigin === "native" && !model.priced)
-      .map((model) => model.modelId)
-      .sort(),
+    unknownPricedModelIds: [...new Set(
+      models.filter(hasUnpricedContributingNativeUsage).map((model) => model.modelId)
+    )].sort(),
     models,
   };
+}
+
+function hasUnpricedContributingNativeUsage(
+  model: BuildUsageWindow["models"][number]
+): boolean {
+  if (
+    model.usageOrigin !== "native" ||
+    model.priced ||
+    model.costBasis === "account_not_metered"
+  ) return false;
+  return (
+    model.calls > 0 ||
+    model.inputTokens > 0 ||
+    (model.cachedInputTokens ?? 0) > 0 ||
+    (model.cacheWriteInputTokens ?? 0) > 0 ||
+    model.outputTokens > 0 ||
+    model.totalTokens > 0
+  );
 }

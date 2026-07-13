@@ -1,13 +1,28 @@
 import type { BuildUsageModelTotal } from "@/lib/db/schema";
 import type {
   NativeBuildUsageProjection,
+  NativeModelUsageRole,
   NativeModelUsageProjection,
+  NativeModelUsageStatus,
 } from "@/lib/client/runner-v2";
 
 interface WeightedIdentity {
   model: NativeModelUsageProjection;
   weight: number;
 }
+
+const ROLE_ORDER: Record<NativeModelUsageRole, number> = {
+  architect: 0,
+  worker: 1,
+  subagent: 2,
+};
+
+const HEALTH_SEVERITY: Record<NativeModelUsageStatus, number> = {
+  healthy: 0,
+  unused: 1,
+  cooldown: 2,
+  unavailable: 3,
+};
 
 export function mapNativeBuildUsageModels(
   projection: NativeBuildUsageProjection
@@ -101,13 +116,51 @@ function legacyPreviewRows(
 function distinctRuntimeIdentities(
   models: readonly NativeModelUsageProjection[]
 ): WeightedIdentity[] {
-  const byRuntime = new Map<string, NativeModelUsageProjection>();
+  const byRuntime = new Map<string, NativeModelUsageProjection[]>();
   for (const model of models) {
-    if (!byRuntime.has(model.runtimeId)) byRuntime.set(model.runtimeId, model);
+    const rows = byRuntime.get(model.runtimeId) ?? [];
+    rows.push(model);
+    byRuntime.set(model.runtimeId, rows);
   }
-  return [...byRuntime.values()]
-    .sort((left, right) => compareRuntimeIds(left.runtimeId, right.runtimeId))
+  return [...byRuntime.entries()]
+    .sort(([left], [right]) => compareRuntimeIds(left, right))
+    .map(([, rows]) => mergeRuntimeIdentity(rows))
     .map((model) => ({ model, weight: roleWeight(model) }));
+}
+
+function mergeRuntimeIdentity(
+  rows: readonly NativeModelUsageProjection[]
+): NativeModelUsageProjection {
+  // Runner emits one row per runtime. For malformed legacy duplicates, select
+  // identity/cost metadata by an ordinal tuple, union roles, and keep the most
+  // conservative health state so source order can never change the preview.
+  const canonical = [...rows].sort(compareModelMetadata)[0];
+  const roles = [...new Set(rows.flatMap((row) => row.roles))].sort(
+    (left, right) => ROLE_ORDER[left] - ROLE_ORDER[right]
+  );
+  const status = rows
+    .map((row) => row.status)
+    .sort((left, right) =>
+      HEALTH_SEVERITY[right] - HEALTH_SEVERITY[left] ||
+      compareRuntimeIds(left, right)
+    )[0];
+  return { ...canonical, roles, status };
+}
+
+function compareModelMetadata(
+  left: NativeModelUsageProjection,
+  right: NativeModelUsageProjection
+): number {
+  for (const [leftValue, rightValue] of [
+    [left.providerId, right.providerId],
+    [left.modelId, right.modelId],
+    [left.costBasis, right.costBasis],
+    [left.lastUsedAt ?? "", right.lastUsedAt ?? ""],
+  ] as const) {
+    const compared = compareRuntimeIds(leftValue, rightValue);
+    if (compared !== 0) return compared;
+  }
+  return 0;
 }
 
 function roleWeight(model: NativeModelUsageProjection): number {

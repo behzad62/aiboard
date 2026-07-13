@@ -301,4 +301,130 @@ assert.deepEqual(compatibilityRows, [{
   usageOrigin: "legacy_aggregate",
 }]);
 
+const duplicateRuntimeRows: NonNullable<NativeBuildUsageProjection["models"]> = [
+  {
+    runtimeId: "runtime-dup",
+    providerId: "provider-z",
+    modelId: "model-z",
+    roles: ["architect"],
+    status: "unused",
+    calls: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    estimatedCostMicros: 0,
+    costBasis: "api_estimate",
+    usageQuality: "none",
+    lastUsedAt: null,
+  },
+  {
+    runtimeId: "runtime-dup",
+    providerId: "provider-a",
+    modelId: "model-a",
+    roles: ["worker"],
+    status: "unavailable",
+    calls: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    estimatedCostMicros: null,
+    costBasis: "unknown",
+    usageQuality: "none",
+    lastUsedAt: "2026-07-12T00:00:00.000Z",
+  },
+  {
+    runtimeId: "runtime-other",
+    providerId: "provider-other",
+    modelId: "model-other",
+    roles: ["subagent"],
+    status: "unused",
+    calls: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    estimatedCostMicros: null,
+    costBasis: "account_not_metered",
+    usageQuality: "none",
+    lastUsedAt: null,
+  },
+];
+const duplicateProjection = (models: NonNullable<NativeBuildUsageProjection["models"]>) =>
+  mapNativeBuildUsageModels(projection({ modelCalls: 4, inputTokens: 8 }, models));
+const duplicateForward = duplicateProjection(duplicateRuntimeRows);
+const duplicateReversed = duplicateProjection([...duplicateRuntimeRows].reverse());
+assert.deepEqual(duplicateForward, duplicateReversed);
+assert.deepEqual(
+  duplicateForward.map((row) => ({
+    runtimeId: row.runtimeId,
+    providerId: row.providerId,
+    modelId: row.modelId,
+    roles: row.roles,
+    status: row.status,
+    calls: row.calls,
+    inputTokens: row.inputTokens,
+    costBasis: row.costBasis,
+    lastUsedAt: row.lastUsedAt,
+  })),
+  [
+    {
+      runtimeId: "runtime-dup",
+      providerId: "provider-a",
+      modelId: "model-a",
+      roles: ["architect", "worker"],
+      status: "unavailable",
+      calls: 3,
+      inputTokens: 6,
+      costBasis: "unknown",
+      lastUsedAt: "2026-07-12T00:00:00.000Z",
+    },
+    {
+      runtimeId: "runtime-other",
+      providerId: "provider-other",
+      modelId: "model-other",
+      roles: ["subagent"],
+      status: "unused",
+      calls: 1,
+      inputTokens: 2,
+      costBasis: "account_not_metered",
+      lastUsedAt: null,
+    },
+  ]
+);
+
+const tokensOnlyPreview = mapNativeBuildUsageModels(projection(
+  { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
+  duplicateRuntimeRows
+));
+assert.equal(tokensOnlyPreview.every((row) => row.usageOrigin === "legacy_preview"), true);
+assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.calls, 0), 0);
+assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.inputTokens, 0), 3);
+assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.cachedInputTokens!, 0), 1);
+assert.equal(tokensOnlyPreview.reduce((sum, row) => sum + row.outputTokens, 0), 2);
+
+const maxSafePreview = mapNativeBuildUsageModels(projection(
+  { inputTokens: Number.MAX_SAFE_INTEGER },
+  [
+    { ...duplicateRuntimeRows[2], runtimeId: "runtime-a" },
+    {
+      ...duplicateRuntimeRows[0],
+      runtimeId: "runtime-b",
+      roles: ["architect"],
+    },
+  ]
+));
+assert.deepEqual(
+  maxSafePreview.map((row) => row.inputTokens),
+  [3_002_399_751_580_330, 6_004_799_503_160_661]
+);
+assert.equal(
+  maxSafePreview.reduce((sum, row) => sum + row.inputTokens, 0),
+  Number.MAX_SAFE_INTEGER
+);
+
 console.log("PASS native Build model usage mapping");
