@@ -46,6 +46,8 @@ const browserEvidenceBackend: BrowserBackend = {
   },
   async click() {},
   async fill() {},
+  async wheel() {},
+  async drag() {},
   async screenshot() { return Buffer.from("arena-png"); },
   async events() { return { console: [], network: [] }; },
   async close() {},

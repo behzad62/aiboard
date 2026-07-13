@@ -234,6 +234,8 @@ test("Plan-only rejects forged mutating browser and MCP calls even under Full ac
     snapshot: async () => ({ url: "https://example.test/", title: "Example", text: "safe", html: "<p>safe</p>" }),
     click: async () => { browserClicks += 1; },
     fill: async () => undefined,
+    wheel: async () => undefined,
+    drag: async () => undefined,
     screenshot: async () => Buffer.from("png"),
     events: async () => ({ console: [], network: [] }),
     close: async () => undefined,
@@ -273,6 +275,8 @@ test("Plan-only rejects forged mutating browser and MCP calls even under Full ac
   assert.equal(names.includes("browser.snapshot"), true);
   assert.equal(names.includes("mcp.audit.read"), true);
   assert.equal(names.includes("browser.click"), false);
+  assert.equal(names.includes("browser.wheel"), false);
+  assert.equal(names.includes("browser.drag"), false);
   assert.equal(names.includes("mcp.audit.write"), false);
   const context = {
     runId: "run_plan",

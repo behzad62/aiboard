@@ -31,10 +31,26 @@ export interface BrowserBackend {
   snapshot(sessionId: string): Promise<{ url: string; title: string; text: string; html: string }>;
   click(sessionId: string, selector: string): Promise<void>;
   fill(sessionId: string, selector: string, value: string): Promise<void>;
+  wheel(sessionId: string, input: BrowserWheelInput): Promise<void>;
+  drag(sessionId: string, input: BrowserDragInput): Promise<void>;
   screenshot(sessionId: string): Promise<Buffer>;
   events(sessionId: string): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }>;
   close(sessionId: string): Promise<void>;
   closeAll(): Promise<void>;
+}
+
+export interface BrowserWheelInput {
+  selector: string;
+  deltaX: number;
+  deltaY: number;
+}
+
+export interface BrowserDragInput {
+  selector: string;
+  deltaX: number;
+  deltaY: number;
+  button: "left" | "middle" | "right";
+  steps: number;
 }
 
 interface BrowserSession {
@@ -111,6 +127,39 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
   async fill(sessionId: string, selector: string, value: string): Promise<void> {
     const session = await this.require(sessionId);
     await session.page.locator(selector).fill(value);
+    await this.persist(sessionId, session);
+  }
+
+  async wheel(sessionId: string, input: BrowserWheelInput): Promise<void> {
+    const session = await this.require(sessionId);
+    const target = session.page.locator(input.selector);
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    if (!box) throw new Error(`Browser target ${input.selector} is not visible.`);
+    await session.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await session.page.mouse.wheel(input.deltaX, input.deltaY);
+    await this.persist(sessionId, session);
+  }
+
+  async drag(sessionId: string, input: BrowserDragInput): Promise<void> {
+    const session = await this.require(sessionId);
+    const target = session.page.locator(input.selector);
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    if (!box) throw new Error(`Browser target ${input.selector} is not visible.`);
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    await session.page.mouse.move(startX, startY);
+    await session.page.mouse.down({ button: input.button });
+    try {
+      await session.page.mouse.move(
+        startX + input.deltaX,
+        startY + input.deltaY,
+        { steps: input.steps }
+      );
+    } finally {
+      await session.page.mouse.up({ button: input.button });
+    }
     await this.persist(sessionId, session);
   }
 
@@ -318,6 +367,14 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
       await options.backend.fill(sessionFor(context.runId), input.selector, input.value);
       return json({ filled: input.selector });
     }, external("browser.fill"), false),
+    tool("browser.wheel", "Dispatch a bounded mouse-wheel gesture over one visible element", wheelSchema(), validateWheel, async (input, context) => {
+      await options.backend.wheel(sessionFor(context.runId), input);
+      return json(input);
+    }, external("browser.wheel"), false),
+    tool("browser.drag", "Drag from the center of one visible element with a bounded mouse gesture", dragSchema(), validateDrag, async (input, context) => {
+      await options.backend.drag(sessionFor(context.runId), input);
+      return json(input);
+    }, external("browser.drag"), false),
     tool("browser.screenshot", "Capture a full-page PNG from the managed browser", emptySchema(), validateEmpty, async (_input, context) => {
       const bytes = await options.backend.screenshot(sessionFor(context.runId));
       const artifact = await options.artifacts.put(bytes, "image/png", `Browser screenshot ${options.taskId}`);
@@ -437,6 +494,38 @@ function validateFill(input: unknown): ValidationResult<{ selector: string; valu
     : invalid("selector and string value are required");
 }
 
+function validateWheel(input: unknown): ValidationResult<BrowserWheelInput> {
+  if (!record(input) || !nonEmpty(input.selector)) {
+    return invalid("selector must be a non-empty string");
+  }
+  const deltaX = input.deltaX ?? 0;
+  const deltaY = input.deltaY;
+  if (!boundedInteger(deltaX, -10_000, 10_000) || !boundedInteger(deltaY, -10_000, 10_000)) {
+    return invalid("deltaX and deltaY must be integers from -10000 to 10000");
+  }
+  if (deltaX === 0 && deltaY === 0) return invalid("wheel gesture must have a non-zero delta");
+  return { ok: true, value: { selector: input.selector, deltaX, deltaY } };
+}
+
+function validateDrag(input: unknown): ValidationResult<BrowserDragInput> {
+  if (!record(input) || !nonEmpty(input.selector)) {
+    return invalid("selector must be a non-empty string");
+  }
+  const deltaX = input.deltaX;
+  const deltaY = input.deltaY;
+  const button = input.button ?? "left";
+  const steps = input.steps ?? 10;
+  if (!boundedInteger(deltaX, -4096, 4096) || !boundedInteger(deltaY, -4096, 4096)) {
+    return invalid("deltaX and deltaY must be integers from -4096 to 4096");
+  }
+  if (deltaX === 0 && deltaY === 0) return invalid("drag gesture must have a non-zero delta");
+  if (button !== "left" && button !== "middle" && button !== "right") {
+    return invalid("button must be left, middle, or right");
+  }
+  if (!boundedInteger(steps, 1, 100)) return invalid("steps must be an integer from 1 to 100");
+  return { ok: true, value: { selector: input.selector, deltaX, deltaY, button, steps } };
+}
+
 function validateEmpty(input: unknown): ValidationResult<Record<string, never>> {
   return record(input) && Object.keys(input).length === 0
     ? { ok: true, value: {} }
@@ -465,9 +554,12 @@ function emptySchema() { return { type: "object", additionalProperties: false };
 function urlSchema() { return { type: "object", properties: { url: { type: "string" } }, required: ["url"], additionalProperties: false }; }
 function selectorSchema() { return { type: "object", properties: { selector: { type: "string" } }, required: ["selector"], additionalProperties: false }; }
 function fillSchema() { return { type: "object", properties: { selector: { type: "string" }, value: { type: "string" } }, required: ["selector", "value"], additionalProperties: false }; }
+function wheelSchema() { return { type: "object", properties: { selector: { type: "string" }, deltaX: { type: "integer", minimum: -10_000, maximum: 10_000 }, deltaY: { type: "integer", minimum: -10_000, maximum: 10_000 } }, required: ["selector", "deltaY"], additionalProperties: false }; }
+function dragSchema() { return { type: "object", properties: { selector: { type: "string" }, deltaX: { type: "integer", minimum: -4096, maximum: 4096 }, deltaY: { type: "integer", minimum: -4096, maximum: 4096 }, button: { type: "string", enum: ["left", "middle", "right"] }, steps: { type: "integer", minimum: 1, maximum: 100 } }, required: ["selector", "deltaX", "deltaY"], additionalProperties: false }; }
 function openSchema() { return { type: "object", properties: { url: { type: "string" }, width: { type: "integer", minimum: 320, maximum: 4096 }, height: { type: "integer", minimum: 320, maximum: 4096 } }, required: ["url"], additionalProperties: false }; }
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function dimension(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 320 && (value as number) <= 4096; }
+function boundedInteger(value: unknown, minimum: number, maximum: number): value is number { return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum; }
 function pushBounded<T>(items: T[], item: T): void { items.push(item); if (items.length > 1_000) items.shift(); }
 function safeSession(sessionId: string): string { return createHash("sha256").update(sessionId).digest("hex").slice(0, 32); }

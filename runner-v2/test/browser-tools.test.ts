@@ -35,6 +35,18 @@ class FakeBrowserBackend implements BrowserBackend {
   async fill(sessionId: string, selector: string, value: string) {
     this.calls.push({ operation: "fill", sessionId, input: { selector, value } });
   }
+  async wheel(sessionId: string, input: { selector: string; deltaX: number; deltaY: number }) {
+    this.calls.push({ operation: "wheel", sessionId, input });
+  }
+  async drag(sessionId: string, input: {
+    selector: string;
+    deltaX: number;
+    deltaY: number;
+    button: "left" | "middle" | "right";
+    steps: number;
+  }) {
+    this.calls.push({ operation: "drag", sessionId, input });
+  }
   async screenshot(sessionId: string) {
     this.calls.push({ operation: "screenshot", sessionId });
     return Buffer.from("png-bytes");
@@ -102,6 +114,31 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
         label: "Browser screenshot task_ui",
       }
     );
+    const wheel = await broker.invoke(call("wheel", "browser.wheel", {
+      selector: "canvas",
+      deltaY: -480,
+    }), context);
+    assert.equal(wheel.isError, false);
+    assert.deepEqual(jsonValue(wheel), {
+      selector: "canvas",
+      deltaX: 0,
+      deltaY: -480,
+    });
+    const drag = await broker.invoke(call("drag", "browser.drag", {
+      selector: "canvas",
+      deltaX: 160,
+      deltaY: -40,
+      button: "middle",
+      steps: 12,
+    }), context);
+    assert.equal(drag.isError, false);
+    assert.deepEqual(jsonValue(drag), {
+      selector: "canvas",
+      deltaX: 160,
+      deltaY: -40,
+      button: "middle",
+      steps: 12,
+    });
     const events = await broker.invoke(call("events", "browser.events", {}), context);
     assert.equal((jsonValue(events) as { console: unknown[] }).console.length, 1);
     const records = evidence.list({ runId: "run_ui", taskId: "task_ui" });
@@ -127,6 +164,27 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
     }
     assert.equal(new Set(backend.calls.map((entry) => entry.sessionId)).size, 1);
     assert.equal(backend.calls[0].sessionId, "run_ui:task_ui");
+    assert.deepEqual(
+      backend.calls.filter((entry) => entry.operation === "wheel" || entry.operation === "drag"),
+      [
+        {
+          operation: "wheel",
+          sessionId: "run_ui:task_ui",
+          input: { selector: "canvas", deltaX: 0, deltaY: -480 },
+        },
+        {
+          operation: "drag",
+          sessionId: "run_ui:task_ui",
+          input: {
+            selector: "canvas",
+            deltaX: 160,
+            deltaY: -40,
+            button: "middle",
+            steps: 12,
+          },
+        },
+      ]
+    );
   } finally {
     evidence.close();
     ledger.close();
