@@ -5,6 +5,7 @@ import {
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
+  nativeBuildDiscussionStatus,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -74,6 +75,9 @@ assert.deepEqual(
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");
+assert.equal(nativeBuildDiscussionStatus({ status: "running" } as never), "running");
+assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stopped");
+assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");
 assert.equal(shouldRestoreDurableBuildProjection("stopped"), true);
 assert.equal(shouldRestoreDurableBuildProjection("failed"), true);
 assert.equal(shouldRestoreDurableBuildProjection("running"), false);

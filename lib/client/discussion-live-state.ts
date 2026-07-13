@@ -106,6 +106,12 @@ export function nativeBuildTaskStatus(
   return "failed";
 }
 
+export function nativeBuildDiscussionStatus(
+  projection: Pick<NativeBuildProjection, "status">
+): DiscussionStatus {
+  return projection.status === "paused" ? "stopped" : projection.status;
+}
+
 export function nativeBuildUsageWindow(
   projection: NativeBuildUsageProjection,
   startedAt: string

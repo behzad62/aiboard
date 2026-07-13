@@ -88,6 +88,7 @@ import {
   applyDiscussionLiveStatus,
   buildStopFallbackMessage,
   durableBuildHandoffPanels,
+  nativeBuildDiscussionStatus,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
@@ -913,6 +914,33 @@ function DiscussionPageInner() {
       return { runId, projection, usage, run, events };
     }).then(({ runId, projection, usage, run, events }) => {
       if (cancelled) return;
+      const durableStatus = nativeBuildDiscussionStatus(projection);
+      if (durableStatus !== status) {
+        const updatedAt = new Date().toISOString();
+        const buildStopReason = durableStatus === "completed"
+          ? "completed"
+          : durableStatus === "stopped"
+            ? "blocked"
+            : null;
+        const buildStoppedAt = durableStatus === "running" ? null : updatedAt;
+        updateDiscussion(discussion.id, {
+          status: durableStatus,
+          buildStopReason,
+          buildStoppedAt,
+          updatedAt,
+        });
+        setStatus(durableStatus);
+        setError(null);
+        setDiscussion((current) => current
+          ? {
+              ...current,
+              status: durableStatus,
+              buildStopReason,
+              buildStoppedAt,
+              updatedAt,
+            }
+          : current);
+      }
       const handoffs = durableBuildHandoffPanels(projection);
       setNativeProjection(projection);
       setArchitectHandoff(handoffs.architect);
