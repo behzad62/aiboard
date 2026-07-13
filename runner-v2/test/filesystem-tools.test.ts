@@ -22,6 +22,7 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   const workspace = join(root, "workspace");
   mkdirSync(join(workspace, "src"), { recursive: true });
   writeFileSync(join(workspace, "src", "app.ts"), "const alpha = 1;\r\nconst beta = 2;\r\n");
+  writeFileSync(join(workspace, "src", "minified.js"), "x".repeat(7 * 1024));
   writeFileSync(join(workspace, "binary.bin"), Buffer.from([0, 1, 2, 255]));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = brokerWithFilesystem(workspace, artifacts);
@@ -37,12 +38,46 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
     assert.equal(metadata.byteLength, 35);
 
+    const ranged = await invoke(broker, "read_range", "fs.read", {
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 2,
+    });
+    assert.equal(ranged.isError, false);
+    assert.equal(text(ranged), "const beta = 2;\r\n");
+    assert.deepEqual(json(ranged), {
+      path: "src/app.ts",
+      sha256: metadata.sha256,
+      byteLength: 35,
+      totalLines: 3,
+      startLine: 2,
+      endLine: 2,
+      truncated: true,
+    });
+
+    const invalidRange = await invoke(broker, "read_bad_range", "fs.read", {
+      path: "src/app.ts",
+      startLine: 3,
+      endLine: 2,
+    });
+    assert.equal(invalidRange.isError, true);
+    assert.equal(invalidRange.error?.code, "invalid_arguments");
+
+    const oversizedRange = await invoke(broker, "read_oversized_range", "fs.read", {
+      path: "src/minified.js",
+      startLine: 1,
+      endLine: 1,
+    });
+    assert.equal(oversizedRange.isError, true);
+    assert.equal(oversizedRange.error?.code, "line_range_too_large");
+    assert.match(text(oversizedRange), /narrow the range/i);
+
     const stat = await invoke(broker, "stat", "fs.stat", { path: "src/app.ts" });
     assert.equal((json(stat) as { type: string }).type, "file");
     const list = await invoke(broker, "list", "fs.list", { path: ".", maxDepth: 2 });
     assert.deepEqual(
       (json(list) as { entries: Array<{ path: string }> }).entries.map((entry) => entry.path),
-      ["binary.bin", "src", "src/app.ts"]
+      ["binary.bin", "src", "src/app.ts", "src/minified.js"]
     );
     const search = await invoke(broker, "search", "fs.search", {
       path: ".",

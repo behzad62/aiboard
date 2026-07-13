@@ -26,6 +26,8 @@ export interface FilesystemToolsOptions {
 }
 
 type Input = Record<string, unknown>;
+const MAX_READ_LINES = 500;
+const MAX_READ_RANGE_BYTES = 6 * 1024;
 
 export function createFilesystemTools(
   options: FilesystemToolsOptions = {}
@@ -50,18 +52,60 @@ export function createFilesystemTools(
 
   const tools: NativeTool<Input>[] = [
     {
-      definition: definition("fs.read", "Read a file with revision metadata", true, "none"),
-      validate: objectWithString("path"),
+      definition: definition(
+        "fs.read",
+        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine (maximum ${MAX_READ_LINES} lines) instead of reopening the whole file or paging its artifact.`,
+        true,
+        "none"
+      ),
+      validate: validateRead,
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
         const bytes = await readFile(path);
         const hash = sha256(bytes);
-        const metadata = json({
+        const baseMetadata = {
           path: displayPath(context, path),
           sha256: hash,
           byteLength: bytes.byteLength,
-        });
+        };
+        if (input.startLine !== undefined && isUtf8Text(bytes)) {
+          const source = decodeText(bytes);
+          const starts = lineStarts(source);
+          const startLine = input.startLine as number;
+          const requestedEndLine = input.endLine as number;
+          if (startLine > starts.length) {
+            return error(
+              "invalid_line_range",
+              `startLine ${startLine} exceeds the file's ${starts.length} lines.`
+            );
+          }
+          const endLine = Math.min(requestedEndLine, starts.length);
+          const startOffset = starts[startLine - 1];
+          const endOffset = endLine < starts.length ? starts[endLine] : source.length;
+          const selected = source.slice(startOffset, endOffset);
+          const selectedBytes = Buffer.byteLength(selected);
+          if (selectedBytes > MAX_READ_RANGE_BYTES) {
+            return error(
+              "line_range_too_large",
+              `Selected lines contain ${selectedBytes} bytes; narrow the range to at most ${MAX_READ_RANGE_BYTES} bytes.`
+            );
+          }
+          return {
+            content: [
+              json({
+                ...baseMetadata,
+                totalLines: starts.length,
+                startLine,
+                endLine,
+                truncated: startLine > 1 || endLine < starts.length,
+              }),
+              { type: "text", text: selected },
+            ],
+            isError: false,
+          };
+        }
+        const metadata = json(baseMetadata);
         if (bytes.byteLength > maxReadBytes || !isUtf8Text(bytes)) {
           if (!options.artifacts) {
             return error("artifact_store_required", "Binary or large file requires artifact storage.");
@@ -296,6 +340,14 @@ function filesystemSchema(name: string): Record<string, unknown> {
   const sha = { type: "string", pattern: "^[a-f0-9]{64}$" };
   switch (name) {
     case "fs.read":
+      return objectSchema(
+        {
+          path,
+          startLine: { type: "integer", minimum: 1 },
+          endLine: { type: "integer", minimum: 1 },
+        },
+        ["path"]
+      );
     case "fs.stat":
       return objectSchema({ path }, ["path"]);
     case "fs.list":
@@ -367,6 +419,39 @@ function objectWithString(key: string) {
       : { ok: false, issues: [`${key} must be a string`] };
 }
 
+function validateRead(input: unknown): ValidationResult<Input> {
+  if (!isObject(input) || typeof input.path !== "string") {
+    return { ok: false, issues: ["path must be a string"] };
+  }
+  const hasStart = input.startLine !== undefined;
+  const hasEnd = input.endLine !== undefined;
+  if (hasStart !== hasEnd) {
+    return {
+      ok: false,
+      issues: ["startLine and endLine must be provided together"],
+    };
+  }
+  if (!hasStart) return { ok: true, value: input };
+  if (
+    !Number.isSafeInteger(input.startLine) ||
+    !Number.isSafeInteger(input.endLine) ||
+    (input.startLine as number) < 1 ||
+    (input.endLine as number) < (input.startLine as number)
+  ) {
+    return {
+      ok: false,
+      issues: ["startLine and endLine must form a positive ascending range"],
+    };
+  }
+  if ((input.endLine as number) - (input.startLine as number) + 1 > MAX_READ_LINES) {
+    return {
+      ok: false,
+      issues: [`line ranges may contain at most ${MAX_READ_LINES} lines`],
+    };
+  }
+  return { ok: true, value: input };
+}
+
 function objectWithStrings(...keys: string[]) {
   return (input: unknown): ValidationResult<Input> =>
     isObject(input) && keys.every((key) => typeof input[key] === "string")
@@ -376,6 +461,13 @@ function objectWithStrings(...keys: string[]) {
 
 function isObject(input: unknown): input is Input {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+function lineStarts(source: string): number[] {
+  const starts = [0];
+  const newline = /\r\n|\r|\n/g;
+  while (newline.exec(source) !== null) starts.push(newline.lastIndex);
+  return starts;
 }
 
 function pathAccess(input: Input, access: "read" | "write") {
