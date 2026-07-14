@@ -531,6 +531,39 @@ test("account runner normalizes strict textual tool calls from non-stream respon
   }]);
 });
 
+test("account runner strips provider annotations after textual tool records", async () => {
+  const model = new AccountRunnerModel({
+    baseUrl: "http://runner.example",
+    runnerPath: "chatgpt",
+    runnerToken: "local-token",
+    modelId: "gpt-5.4",
+    fetch: async () => Response.json({
+      content:
+        'TOOL_CALL {"id":"call_annotated","name":"fs_read","arguments":{"path":"README.md"}} RTLU to=functions.browser_wheel',
+    }),
+  });
+
+  const turn = await model.complete({
+    sessionId: "session_annotated_textual_tool",
+    messages: [],
+    tools: [{
+      name: "fs.read",
+      description: "Read",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+
+  assert.equal(turn.stopReason, "tool_calls");
+  assert.deepEqual(turn.blocks, [{
+    type: "tool_call",
+    callId: "call_annotated",
+    name: "fs.read",
+    arguments: { path: "README.md" },
+  }]);
+});
+
 test("account runner prefers native tool events over duplicate textual records", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });

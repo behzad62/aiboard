@@ -203,37 +203,54 @@ function normalizeTextualToolCalls(
   };
 
   for (const line of text.split(/\r?\n/)) {
-    const match = /^TOOL_CALL\s+(\{.*\})$/.exec(line);
-    if (!match) {
-      textLines.push(line);
-      continue;
+    let remaining = line;
+    while (remaining) {
+      const markerIndex = remaining.indexOf("TOOL_CALL ");
+      if (markerIndex < 0) {
+        if (remaining.trim() && !isProviderAnnotation(remaining)) {
+          textLines.push(remaining);
+        }
+        break;
+      }
+      const prefix = remaining.slice(0, markerIndex);
+      if (prefix.trim() && !isProviderAnnotation(prefix)) {
+        textLines.push(prefix);
+      }
+      const parsed = parseTextualToolCallAt(
+        remaining,
+        markerIndex + "TOOL_CALL ".length
+      );
+      if (!parsed) {
+        textLines.push(remaining);
+        break;
+      }
+      const originalName = originalNameFor.get(parsed.record.name) ??
+        (wireNames.has(parsed.record.name) ? parsed.record.name : undefined);
+      if (!originalName) {
+        textLines.push(remaining);
+        break;
+      }
+      flushText();
+      blocks.push({
+        type: "tool_call",
+        callId: parsed.record.id,
+        name: originalName,
+        arguments: parsed.record.arguments,
+      });
+      remaining = remaining.slice(parsed.end);
     }
-    const record = parseTextualToolCall(match[1]);
-    const originalName = record
-      ? originalNameFor.get(record.name) ??
-        (wireNames.has(record.name) ? record.name : undefined)
-      : undefined;
-    if (!record || !originalName) {
-      textLines.push(line);
-      continue;
-    }
-    flushText();
-    blocks.push({
-      type: "tool_call",
-      callId: record.id,
-      name: originalName,
-      arguments: record.arguments,
-    });
   }
   flushText();
   return blocks;
 }
 
-function parseTextualToolCall(value: string): {
+type TextualToolCallRecord = {
   id: string;
   name: string;
   arguments: unknown;
-} | undefined {
+};
+
+function parseTextualToolCall(value: string): TextualToolCallRecord | undefined {
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
     if (
@@ -255,6 +272,50 @@ function parseTextualToolCall(value: string): {
   } catch {
     return undefined;
   }
+}
+
+function parseTextualToolCallAt(
+  value: string,
+  start: number
+): { record: TextualToolCallRecord; end: number } | undefined {
+  const end = balancedJsonObjectEnd(value, start);
+  if (end === undefined) return undefined;
+  const record = parseTextualToolCall(value.slice(start, end));
+  return record ? { record, end } : undefined;
+}
+
+function balancedJsonObjectEnd(value: string, start: number): number | undefined {
+  if (value[start] !== "{") return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}" && --depth === 0) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+function isProviderAnnotation(value: string): boolean {
+  return /^(?:RTLU\b|【|analysis\b.*\bto=|commentary\b.*\bto=|recipient_name=|to=functions\.)/i.test(
+    value.trim()
+  );
 }
 
 async function currentImageAttachments(
