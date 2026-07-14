@@ -1266,14 +1266,15 @@ function DiscussionPageInner() {
       !discussion.nativeBuildRunId
     ) return;
     try {
-      await selectNativeProjectHandoff(
+      const projection = await selectNativeProjectHandoff(
         { url: discussion.runnerUrl, token: discussion.runnerToken },
         discussion.nativeBuildRunId,
         choice,
         `project-handoff:${discussion.nativeBuildRunId}:${choice}`
       );
+      setNativeProjection(projection);
       setProjectHandoff(null);
-      await handleResume();
+      nativeAttachmentControllerRef.current?.wake();
     } catch (handoffError) {
       setError(
         handoffError instanceof Error
