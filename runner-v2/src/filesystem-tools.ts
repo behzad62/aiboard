@@ -21,10 +21,12 @@ import type {
   RepositoryEntry,
   RepositoryIntelligence,
 } from "./repository-intelligence.js";
+import type { TypeScriptIntelligence } from "./typescript-intelligence.js";
 
 export interface FilesystemToolsOptions {
   artifacts?: ArtifactStore;
   repository?: RepositoryIntelligence;
+  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">;
   maxReadBytes?: number;
   maxEntries?: number;
   maxSearchMatches?: number;
@@ -327,7 +329,7 @@ export function createFilesystemTools(
           if (conflict) return conflict;
           const bytes = Buffer.from(input.content as string);
           await atomicWrite(path, bytes);
-          return successRevision(context, path, bytes);
+          return await successRevision(context, path, bytes, options.diagnostics);
         }),
     },
     {
@@ -379,7 +381,7 @@ export function createFilesystemTools(
           }
           const next = Buffer.from(nextText);
           await atomicWrite(path, next);
-          return successRevision(context, path, next);
+          return await successRevision(context, path, next, options.diagnostics);
         }),
     },
     {
@@ -821,13 +823,38 @@ async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
   }
 }
 
-function successRevision(
+async function successRevision(
   context: ToolExecutionContext,
   path: string,
-  bytes: Buffer
-): ToolExecutionOutput {
+  bytes: Buffer,
+  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
+): Promise<ToolExecutionOutput> {
+  const metadata: Record<string, unknown> = {
+    path: displayPath(context, path),
+    sha256: sha256(bytes),
+    byteLength: bytes.byteLength,
+  };
+  if (diagnostics && context.workspacePath) {
+    try {
+      const result = await diagnostics.diagnostics({
+        root: context.workspacePath,
+        path: displayPath(context, path),
+      }, context.signal);
+      if (result.status === "unsupported_language") {
+        metadata.diagnosticsSkipped = "unsupported_language";
+      } else {
+        metadata.diagnostics = {
+          ...(result.projectConfig ? { projectConfig: result.projectConfig } : {}),
+          results: result.results,
+          truncated: result.truncated,
+        };
+      }
+    } catch {
+      metadata.diagnosticsUnavailable = "code_intelligence_failed";
+    }
+  }
   return {
-    content: [json({ path: displayPath(context, path), sha256: sha256(bytes), byteLength: bytes.byteLength })],
+    content: [json(metadata)],
     isError: false,
   };
 }

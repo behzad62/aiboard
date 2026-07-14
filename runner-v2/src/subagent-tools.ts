@@ -163,6 +163,7 @@ function spawnSubagentTool(
       for (const tool of createFilesystemTools({
         artifacts: options.artifacts,
         repository,
+        diagnostics: typescript,
       })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
       }

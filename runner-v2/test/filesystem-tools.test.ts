@@ -18,6 +18,7 @@ import type { ToolCallBlock, ToolResult } from "../src/agent-contracts.js";
 import { createFilesystemTools } from "../src/filesystem-tools.js";
 import { RepositoryIntelligence } from "../src/repository-intelligence.js";
 import { ToolBroker } from "../src/tool-broker.js";
+import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
 
 test("filesystem tools read, inspect, list, search, and preserve CRLF edits", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-fs-tools-"));
@@ -404,7 +405,88 @@ test("filesystem mutations are revision-aware, serialized, movable, and deletabl
   }
 });
 
-function brokerWithFilesystem(workspace: string, artifacts: ArtifactStore): ToolBroker {
+test("text mutations attach changed-file TypeScript diagnostics", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-diagnostics-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { strict: true, target: "ES2022", module: "ESNext" },
+    include: ["*.ts"],
+  }));
+  const original = 'export const total: string = "ok";\n';
+  writeFileSync(join(workspace, "value.ts"), original);
+  const repository = new RepositoryIntelligence();
+  const diagnostics = new TypeScriptIntelligence(repository);
+  const broker = brokerWithFilesystem(
+    workspace,
+    new ArtifactStore(join(root, "artifacts")),
+    diagnostics,
+  );
+
+  try {
+    const patch = await invoke(broker, "diagnostic_patch", "fs.patch", {
+      path: "value.ts",
+      expectedSha256: sha256(Buffer.from(original)),
+      search: '"ok"',
+      replace: "1",
+    });
+    assert.equal(patch.isError, false);
+    const metadata = json(patch) as {
+      sha256: string;
+      diagnostics: { results: Array<{ code: number }>; truncated: boolean };
+    };
+    assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(metadata.diagnostics.results.some((item) => item.code === 2322));
+
+    const write = await invoke(broker, "diagnostic_skip", "fs.write", {
+      path: "note.txt",
+      content: "plain text\n",
+    });
+    assert.equal((json(write) as { diagnosticsSkipped: string }).diagnosticsSkipped,
+      "unsupported_language");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("diagnostic failures never roll back a successful atomic mutation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-diagnostic-failure-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const broker = brokerWithFilesystem(
+    workspace,
+    new ArtifactStore(join(root, "artifacts")),
+    {
+      diagnostics: async () => {
+        throw new Error("injected diagnostic failure");
+      },
+    },
+  );
+
+  try {
+    const result = await invoke(broker, "diagnostic_failure", "fs.write", {
+      path: "created.ts",
+      content: "export const created = true;\n",
+    });
+    assert.equal(result.isError, false);
+    assert.equal(
+      (json(result) as { diagnosticsUnavailable: string }).diagnosticsUnavailable,
+      "code_intelligence_failed",
+    );
+    assert.equal(
+      readFileSync(join(workspace, "created.ts"), "utf8"),
+      "export const created = true;\n",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function brokerWithFilesystem(
+  workspace: string,
+  artifacts: ArtifactStore,
+  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
+): ToolBroker {
   const broker = new ToolBroker({
     permissionProfile: "project",
     workspacePath: workspace,
@@ -413,6 +495,7 @@ function brokerWithFilesystem(workspace: string, artifacts: ArtifactStore): Tool
   for (const tool of createFilesystemTools({
     artifacts,
     repository: new RepositoryIntelligence(),
+    ...(diagnostics ? { diagnostics } : {}),
   })) broker.register(tool);
   return broker;
 }

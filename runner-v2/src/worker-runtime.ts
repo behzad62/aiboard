@@ -136,6 +136,7 @@ export async function runWorkerTask(
   for (const tool of createFilesystemTools({
     artifacts: options.artifacts,
     repository,
+    diagnostics: typescript,
   })) {
     broker.register(tool);
   }

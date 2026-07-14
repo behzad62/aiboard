@@ -228,6 +228,21 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       ),
       true
     );
+    const patchMessage = recoveredModel.requests[0].messages.find(
+      (message) =>
+        message.role === "tool" &&
+        typeof message.content === "object" &&
+        !Array.isArray(message.content) &&
+        message.content.callId === "patch",
+    );
+    assert.ok(
+      patchMessage && typeof patchMessage.content === "object" &&
+        !Array.isArray(patchMessage.content),
+    );
+    const patchMetadata = patchMessage.content.content.find(
+      (block) => block.type === "json",
+    )?.value as { diagnosticsSkipped?: string };
+    assert.equal(patchMetadata.diagnosticsSkipped, "unsupported_language");
     const session = await recoveredSessions.load("session_worker");
     assert.equal(session.status, "submitted");
     recoveredSessions.close();
