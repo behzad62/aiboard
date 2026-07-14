@@ -84,6 +84,7 @@ export function shouldRestoreDurableBuildProjection(
 export interface NativeBuildTimelineMessage {
   id: string;
   round: number;
+  ordinal: number;
   modelId: string;
   modelName: string;
   content: string;
@@ -94,6 +95,60 @@ export interface NativeBuildTranscriptAttachment {
   runId: string;
   cursor: number;
   messages: NativeBuildTimelineMessage[];
+}
+
+export interface NativeBuildAttachmentViewMessage {
+  id: string;
+  round: number;
+  ordinal?: number;
+  modelId: string;
+  modelName: string;
+  content: string;
+  streaming?: boolean;
+}
+
+export interface NativeBuildAttachmentViewFile {
+  path: string;
+  content: string;
+}
+
+export function selectNativeBuildAttachmentView(input: {
+  authoritativeRunId: string | null | undefined;
+  legacyMessages: readonly NativeBuildAttachmentViewMessage[];
+  legacyFiles: readonly NativeBuildAttachmentViewFile[];
+  nativeTranscript: NativeBuildTranscriptAttachment | null;
+  nativeFiles: NativeBuildFileAttachment | null;
+}): {
+  messages: NativeBuildAttachmentViewMessage[];
+  files: NativeBuildAttachmentViewFile[];
+  nativeTranscript: NativeBuildTranscriptAttachment | null;
+  nativeFiles: NativeBuildFileAttachment | null;
+  nativeAttached: boolean;
+} {
+  const nativeTranscript = input.authoritativeRunId &&
+    input.nativeTranscript?.runId === input.authoritativeRunId
+    ? input.nativeTranscript
+    : null;
+  const nativeFiles = input.authoritativeRunId &&
+    input.nativeFiles?.runId === input.authoritativeRunId
+    ? input.nativeFiles
+    : null;
+  return {
+    messages: [...(nativeTranscript?.messages ?? input.legacyMessages)],
+    files: [...(nativeFiles?.snapshot.files ?? input.legacyFiles)],
+    nativeTranscript,
+    nativeFiles,
+    nativeAttached: Boolean(nativeTranscript || nativeFiles),
+  };
+}
+
+export function shouldShowLegacyBuildFileFallback(input: {
+  hasNativeFiles: boolean;
+  hasFinalResult: boolean;
+  legacyFileCount: number;
+  streamConnected: boolean;
+}): boolean {
+  return !input.hasNativeFiles && !input.hasFinalResult && input.legacyFileCount > 0;
 }
 
 export function reconcileNativeBuildTranscript(
@@ -118,6 +173,7 @@ export function reconcileNativeBuildTranscript(
     byId.set(turn.id, {
       id: turn.id,
       round: turn.sequence,
+      ordinal: turn.ordinal,
       modelId: runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
       modelName: runtimeId
         ? `${actorName} · ${runtime?.displayName ?? runtime?.modelId ?? runtimeId}`
@@ -128,10 +184,22 @@ export function reconcileNativeBuildTranscript(
   return {
     runId,
     cursor: Math.max(current?.runId === runId ? current.cursor : 0, page.cursor),
-    messages: [...byId.values()].sort(
-      (left, right) => left.round - right.round || left.id.localeCompare(right.id)
-    ),
+    messages: [...byId.values()].sort(compareNativeBuildTimelineMessages),
   };
+}
+
+function compareNativeBuildTimelineMessages(
+  left: NativeBuildTimelineMessage,
+  right: NativeBuildTimelineMessage
+): number {
+  return left.round - right.round ||
+    left.ordinal - right.ordinal ||
+    compareCodeUnits(left.id, right.id);
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 function nativeActorRuntimeId(
@@ -156,6 +224,20 @@ function capitalize(value: string): string {
 export interface NativeBuildPollState {
   observedActive: boolean;
   terminalRefreshScheduled: boolean;
+}
+
+export function createNativeBuildAttachmentRefresh<TSnapshot extends object>(options: {
+  savedRunId: string;
+  resolveRunId: (savedRunId: string) => Promise<string>;
+  load: (runId: string) => Promise<TSnapshot>;
+}): () => Promise<TSnapshot & { runId: string }> {
+  let savedRunId = options.savedRunId;
+  return async () => {
+    const runId = await options.resolveRunId(savedRunId);
+    const snapshot = await options.load(runId);
+    savedRunId = runId;
+    return { ...snapshot, runId };
+  };
 }
 
 export interface NativeBuildFileAttachment {

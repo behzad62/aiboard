@@ -17,7 +17,7 @@ Implemented the browser attachment layer for the reviewed Runner V2 transcript/f
 ## Files changed
 
 - `lib/client/runner-v2.ts`
-  - Added transcript/file response types and `getNativeBuildTranscript` / `getNativeBuildFiles`.
+  - Added transcript/file response types, including the durable transcript ordinal, and `getNativeBuildTranscript` / `getNativeBuildFiles`.
   - Reworked authoritative run resolution to always inspect project references and use deterministic newest-reference ordering.
 - `lib/client/discussion-live-state.ts`
   - Added native transcript mapping/deduplication, actor-to-runtime resolution, file attachment revision keys, polling transitions/controller, all-status restoration, and automatic-handoff presentation rules.
@@ -38,8 +38,10 @@ Implemented the browser attachment layer for the reviewed Runner V2 transcript/f
   - Added Runner snapshot replacement and metadata/omission render checks.
 - `package.json`
   - Added transcript-panel and native-file scripts to `test:runner-v2`.
-
-No file under `runner-v2/src/` or `runner-v2/test/` was modified.
+- `runner-v2/src/agent-session-store.ts` and `runner-v2/src/sqlite-agent-session-store.ts`
+  - Preserve the durable event ordinal in projected transcript turns so turns from the same checkpoint remain ordered.
+- `runner-v2/test/agent-session-store.test.ts`
+  - Covers multiple assistant turns at one checkpoint with sequence/ordinal/id ordering.
 
 ## Test-first evidence
 
@@ -193,10 +195,87 @@ git diff --check   exit 0
 - Confirmed Runner file downloads consume the exact `files` array rendered with snapshot metadata; no browser store write is performed.
 - Confirmed applied snapshots remain rendered even with `finalResult` or a disconnected browser engine, and stale `BuildResultCard` file output is suppressed after native attachment.
 - Confirmed automatic apply presentation uses run state to distinguish in-flight success from paused failure/recovery.
-- Confirmed the diff contains no Runner backend behavior changes and no unrelated workspace edits.
+- Confirmed the only Runner backend change is preserving the already-durable ordinal in the transcript response contract; scheduling and lifecycle behavior are unchanged.
 
 ## Concerns
 
 - The browser fetch API is cancel-safe by ignoring stale responses rather than aborting underlying HTTP requests; this prevents state corruption, though an already-started request may still complete on the network.
 - File snapshots are fetched with each active reconciliation so revision/source changes cannot be missed. The attachment state avoids rerender replacement when the immutable run/source/revision key is unchanged.
 - Build verification was skipped only because an active Next dev server makes it unsafe under repository guidance; no other verification is outstanding.
+
+## Review-fix cycle
+
+### Missing saved run under `allowMissing`
+
+RED after adding a crash-recovery reference regression:
+
+```text
+npx tsx scripts/test-runner-v2-client.mts
+AssertionError: actual undefined; expected run_recovered_after_crash
+exit 1
+```
+
+GREEN after resolving project references before applying `allowMissing`:
+
+```text
+PASS runner-v2 client
+exit 0
+```
+
+### Same-checkpoint transcript order
+
+RED in the Runner projection test after requiring `ordinal`:
+
+```text
+npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs --test --test-name-pattern="transcript projects only stable assistant text turns" runner-v2/test/agent-session-store.test.ts
+AssertionError: projected turns omitted ordinal
+exit 1
+```
+
+RED in the client mapper/export regressions before ordinal-aware ordering:
+
+```text
+npx tsx scripts/test-build-live-state.mts
+AssertionError: actual [a-second-durable-turn,z-first-durable-turn]; expected [z-first-durable-turn,a-second-durable-turn]
+exit 1
+
+npx tsx scripts/test-build-transcript-panel.mts
+FAIL - same-checkpoint transcript export preserves Runner ordinal before id
+exit 1
+```
+
+GREEN after projecting and transporting `ordinal`, then sorting by sequence, ordinal, and code-unit id:
+
+```text
+runner-v2/test/agent-session-store.test.ts   13/13 PASS
+scripts/test-build-live-state.mts            PASS
+scripts/test-build-transcript-panel.mts      PASS
+```
+
+### Legacy replacement, stale runs, and retrying attachment
+
+The state-level replacement regression was observed RED before `selectNativeBuildAttachmentView` existed; the retry regression was RED before `createNativeBuildAttachmentRefresh` existed; and the connected fallback regression was RED before `shouldShowLegacyBuildFileFallback` existed. Each failed at module load with the corresponding missing export.
+
+GREEN after implementation:
+
+```text
+npx tsx scripts/test-build-live-state.mts
+PASS Build live discussion state
+exit 0
+```
+
+This test seeds real legacy messages and files, proves matching native attachments replace them, proves stale old-run attachments do not leak after an authoritative run switch, and proves resolve/fetch failures retry through the poller until a full attachment succeeds. The component now keeps browser-cached state as fallback and uses one selected message array for both display and Build transcript download.
+
+### Review-fix verification
+
+```text
+11 client/contract scripts                                      PASS
+npx tsc --noEmit                                                PASS
+npx -y node@24.18.0 node_modules/typescript/bin/tsc \
+  -p runner-v2/tsconfig.json --noEmit                           PASS
+agent-session-store.test.ts + control-server.test.ts            21/21 PASS
+npm run lint                                                    PASS, zero warnings
+git diff --check                                                PASS
+```
+
+The complete Runner suite passed 292 functional tests and encountered one Windows `EPERM` while removing the recovery smoke test's temporary directory. An immediate isolated rerun of `runner-v2/test/recovery-smoke.test.ts` passed 1/1, confirming the failure was transient cleanup rather than a product assertion.

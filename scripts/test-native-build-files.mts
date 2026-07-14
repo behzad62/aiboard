@@ -63,11 +63,6 @@ assert.deepEqual(
   ["src/applied.ts"],
   "a new Runner revision replaces the earlier Runner snapshot instead of merging files",
 );
-assert.equal(
-  refreshedAttachment.snapshot.files.some((file) => file.path === "src/legacy-cache.ts"),
-  false,
-  "Runner files replace legacy browser-cached native files",
-);
 assert.notEqual(firstAttachment.key, refreshedAttachment.key);
 
 console.log("PASS native Build files");

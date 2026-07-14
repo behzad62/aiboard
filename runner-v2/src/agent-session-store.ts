@@ -44,6 +44,7 @@ export interface AgentTranscriptTurn {
   sessionId: string;
   actor: AgentActor;
   sequence: number;
+  ordinal: number;
   occurredAt: string;
   text: string;
 }

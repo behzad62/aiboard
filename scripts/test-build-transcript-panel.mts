@@ -64,4 +64,29 @@ check(
   exported,
 );
 
+const sameCheckpointMessages = [
+  {
+    ...message(9, "first"),
+    id: "z-first-durable-turn",
+    ordinal: 2,
+    content: "First durable response",
+  },
+  {
+    ...message(9, "second"),
+    id: "a-second-durable-turn",
+    ordinal: 5,
+    content: "Second durable response",
+  },
+] as Array<TimelineMessage & { ordinal: number }>;
+const sameCheckpointExport = buildBuildTranscriptMarkdown(
+  "Same checkpoint",
+  sameCheckpointMessages,
+);
+check(
+  "same-checkpoint transcript export preserves Runner ordinal before id",
+  sameCheckpointExport.indexOf("First durable response") <
+    sameCheckpointExport.indexOf("Second durable response"),
+  sameCheckpointExport,
+);
+
 process.exit(failed === 0 ? 0 : 1);

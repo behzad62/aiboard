@@ -13,8 +13,11 @@ import {
   nativeBuildPolicyChange,
   nativeBuildRestorationPolicyPatch,
   reconcileNativeBuildTranscript,
+  selectNativeBuildAttachmentView,
+  shouldShowLegacyBuildFileFallback,
   nextNativeBuildPoll,
   createNativeBuildAttachmentPoller,
+  createNativeBuildAttachmentRefresh,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -234,6 +237,41 @@ const nativeTranscript = reconcileNativeBuildTranscript(
   transcriptProjection,
   transcriptUsage,
 );
+
+const sameCheckpointTranscript = reconcileNativeBuildTranscript(
+  null,
+  "run_same_checkpoint",
+  {
+    turns: [
+      {
+        id: "z-first-durable-turn",
+        sessionId: "architect:run_same_checkpoint",
+        actor: { role: "architect", id: "architect" },
+        sequence: 9,
+        ordinal: 2,
+        occurredAt: "2026-07-14T00:00:09.000Z",
+        text: "First durable response",
+      },
+      {
+        id: "a-second-durable-turn",
+        sessionId: "architect:run_same_checkpoint",
+        actor: { role: "architect", id: "architect" },
+        sequence: 9,
+        ordinal: 5,
+        occurredAt: "2026-07-14T00:00:09.000Z",
+        text: "Second durable response",
+      },
+    ],
+    cursor: 9,
+  } as never,
+  transcriptProjection,
+  transcriptUsage,
+);
+assert.deepEqual(
+  sameCheckpointTranscript.messages.map((message) => message.id),
+  ["z-first-durable-turn", "a-second-durable-turn"],
+  "same-checkpoint turns preserve Runner sequence, ordinal, id order",
+);
 assert.deepEqual(
   nativeTranscript.messages.map((message) => ({
     id: message.id,
@@ -290,7 +328,7 @@ const reconnectedTranscript = reconcileNativeBuildTranscript(
         text: "Architect subagent response",
       },
     ],
-    cursor: 5,
+    cursor: 6,
   },
   transcriptProjection,
   transcriptUsage,
@@ -305,17 +343,97 @@ assert.equal(
   "Subagent architect_1:call_2 · Architect Model",
   "Architect subagents inherit the Architect runtime display name",
 );
-assert.equal(reconnectedTranscript.cursor, 5);
+assert.equal(reconnectedTranscript.cursor, 6);
 assert.equal(
   reconnectedTranscript.messages.find((message) => message.id === "native-5")?.modelName,
   "Subagent worker_T1_1:call_1 · Worker Model",
   "subagents inherit their parent worker runtime display name",
 );
-const replacedLegacyMessages = reconnectedTranscript.messages;
+const legacyBrowserMessages = [{
+  id: "legacy-browser-message",
+  round: 1,
+  modelId: "legacy-model",
+  modelName: "Legacy model",
+  content: "Legacy cached response",
+}];
+const legacyBrowserFiles = [{
+  path: "src/legacy-cache.ts",
+  content: "export const legacy = true;",
+}];
+const nativeFileAttachment = {
+  runId: "run_native",
+  key: "run_native:integration:revision-native",
+  snapshot: {
+    source: "integration" as const,
+    revision: "revision-native",
+    appliedToProject: false,
+    omittedFileCount: 0,
+    files: [{
+      path: "src/native-runner.ts",
+      content: "export const native = true;",
+    }],
+  },
+};
+const pendingAttachmentView = selectNativeBuildAttachmentView({
+  authoritativeRunId: "run_native",
+  legacyMessages: legacyBrowserMessages,
+  legacyFiles: legacyBrowserFiles,
+  nativeTranscript: null,
+  nativeFiles: null,
+});
+assert.deepEqual(
+  pendingAttachmentView.messages.map((message) => message.id),
+  ["legacy-browser-message"],
+  "legacy transcript remains the visible/downloadable fallback before attachment succeeds",
+);
+assert.deepEqual(
+  pendingAttachmentView.files.map((file) => file.path),
+  ["src/legacy-cache.ts"],
+  "legacy files remain visible before attachment succeeds",
+);
 assert.equal(
-  replacedLegacyMessages.some((message) => message.id === "legacy-browser-message"),
-  false,
-  "native attachment replaces rather than appends legacy Build messages",
+  shouldShowLegacyBuildFileFallback({
+    hasNativeFiles: false,
+    hasFinalResult: false,
+    legacyFileCount: pendingAttachmentView.files.length,
+    streamConnected: true,
+  }),
+  true,
+  "an active/retrying native connection does not hide the legacy file fallback",
+);
+const attachedView = selectNativeBuildAttachmentView({
+  authoritativeRunId: "run_native",
+  legacyMessages: legacyBrowserMessages,
+  legacyFiles: legacyBrowserFiles,
+  nativeTranscript: reconnectedTranscript,
+  nativeFiles: nativeFileAttachment,
+});
+assert.deepEqual(
+  attachedView.messages.map((message) => message.id),
+  ["native-1", "native-3", "native-5", "native-6"],
+  "successful native attachment replaces seeded legacy browser messages",
+);
+assert.deepEqual(
+  attachedView.files.map((file) => file.path),
+  ["src/native-runner.ts"],
+  "successful native attachment replaces seeded legacy browser files",
+);
+const switchedRunView = selectNativeBuildAttachmentView({
+  authoritativeRunId: "run_after_switch",
+  legacyMessages: legacyBrowserMessages,
+  legacyFiles: legacyBrowserFiles,
+  nativeTranscript: reconnectedTranscript,
+  nativeFiles: nativeFileAttachment,
+});
+assert.deepEqual(
+  switchedRunView.messages.map((message) => message.id),
+  ["legacy-browser-message"],
+  "a stale old-run transcript response cannot overwrite the run-switch fallback",
+);
+assert.deepEqual(
+  switchedRunView.files.map((file) => file.path),
+  ["src/legacy-cache.ts"],
+  "a stale old-run file response cannot overwrite the run-switch fallback",
 );
 
 let pollState = { observedActive: false, terminalRefreshScheduled: false };
@@ -373,6 +491,41 @@ stalePoller.cancel();
 releaseStale({ runState: "running" });
 await staleStart;
 assert.equal(staleApplyCount, 0, "cancelled old-run responses cannot overwrite a newer attachment");
+
+const attachmentRetryQueue: Array<() => Promise<void>> = [];
+let resolutionAttempts = 0;
+let fetchAttempts = 0;
+const refreshAfterFailure = createNativeBuildAttachmentRefresh({
+  savedRunId: "stale-saved-run",
+  resolveRunId: async () => {
+    resolutionAttempts += 1;
+    if (resolutionAttempts === 1) throw new Error("runner temporarily unavailable");
+    return "run_recovered";
+  },
+  load: async (runId) => {
+    fetchAttempts += 1;
+    if (fetchAttempts === 1) throw new Error("snapshot temporarily unavailable");
+    return { runState: "completed" as const, marker: runId };
+  },
+});
+const recoveredSnapshots: string[] = [];
+const retryingAttachmentPoller = createNativeBuildAttachmentPoller({
+  refresh: refreshAfterFailure,
+  apply: (snapshot) => recoveredSnapshots.push(snapshot.marker),
+  schedule: (callback) => {
+    attachmentRetryQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+await retryingAttachmentPoller.start();
+assert.equal(attachmentRetryQueue.length, 1, "initial resolution failure schedules a retry");
+await attachmentRetryQueue.shift()!();
+assert.equal(attachmentRetryQueue.length, 1, "initial snapshot failure also schedules a retry");
+await attachmentRetryQueue.shift()!();
+assert.deepEqual(recoveredSnapshots, ["run_recovered"]);
+assert.equal(attachmentRetryQueue.length, 0, "terminal recovery stops cleanly after attachment");
 assert.deepEqual(
   nativeBuildUsageWindow({
     scopeId: "run_1",

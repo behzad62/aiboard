@@ -201,6 +201,7 @@ const attachmentFetch: typeof fetch = async (input) => {
         sessionId: "architect:run_1",
         actor: { role: "architect", id: "architect" },
         sequence: 18,
+        ordinal: 4,
         occurredAt: "2026-07-14T00:00:00.000Z",
         text: "Native model response",
       }],
@@ -225,6 +226,7 @@ const transcript = await getNativeBuildTranscript(
   attachmentFetch
 );
 assert.equal(transcript.turns[0].id, "turn_18");
+assert.equal(transcript.turns[0].ordinal, 4);
 assert.equal(transcript.cursor, 18);
 const fileSnapshot = await getNativeBuildFiles(connection, "run_1", attachmentFetch);
 assert.equal(fileSnapshot.source, "project");
@@ -334,6 +336,37 @@ assert.equal(
   ),
   undefined,
   "a deliberately new follow-up may proceed to native provisioning"
+);
+
+const crashedProvisioningFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/stale-provisional-id/build")) {
+    return Response.json(
+      { error: "Unknown build runtime stale-provisional-id." },
+      { status: 404 }
+    );
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_crash_recovery")) {
+    return Response.json({ builds: [{
+      runId: "run_recovered_after_crash",
+      projectId: "discussion_crash_recovery",
+      state: "running",
+      createdAt: "2026-07-14T04:00:00.000Z",
+      updatedAt: "2026-07-14T04:05:00.000Z",
+    }] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "stale-provisional-id",
+    "discussion_crash_recovery",
+    crashedProvisioningFetch,
+    { allowMissing: true }
+  ),
+  "run_recovered_after_crash",
+  "a stale provisional id after a browser crash reattaches the authoritative run instead of provisioning a duplicate"
 );
 
 const newestReferenceCalls: string[] = [];

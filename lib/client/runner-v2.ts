@@ -400,6 +400,7 @@ export interface NativeBuildTranscriptTurn {
   sessionId: string;
   actor: { role: NativeBuildActorRole; id: string };
   sequence: number;
+  ordinal: number;
   occurredAt: string;
   text: string;
 }
@@ -542,8 +543,6 @@ export async function resolveNativeBuildRunId(
     ),
   ]);
 
-  if (!savedExists && options.allowMissing) return undefined;
-
   const newestReference = [...references].sort((left, right) => {
     if (left.createdAt !== right.createdAt) {
       return left.createdAt < right.createdAt ? 1 : -1;
@@ -553,6 +552,7 @@ export async function resolveNativeBuildRunId(
   })[0];
   if (newestReference) return newestReference.runId;
   if (savedExists) return savedRunId;
+  if (options.allowMissing) return undefined;
   throw new Error(
     `The saved Runner V2 Build ${savedRunId} no longer exists, and this project has no matching Build reference.`
   );

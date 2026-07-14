@@ -92,6 +92,7 @@ import {
   applyNativeBuildPolicyEvent,
   buildStopFallbackMessage,
   createNativeBuildAttachmentPoller,
+  createNativeBuildAttachmentRefresh,
   durableBuildHandoffPanels,
   nativeBuildDiscussionStatus,
   nativeBuildRestorationPolicyPatch,
@@ -99,6 +100,8 @@ import {
   nativeBuildUsageWindow,
   reconcileNativeBuildFiles,
   reconcileNativeBuildTranscript,
+  selectNativeBuildAttachmentView,
+  shouldShowLegacyBuildFileFallback,
   shouldShowBuildStopFallback,
   type NativeBuildFileAttachment,
   type NativeBuildTranscriptAttachment,
@@ -809,13 +812,6 @@ function DiscussionPageInner() {
       setPersistedFiles([]);
       return;
     }
-    if (nativeFiles && nativeFiles.runId === discussion.nativeBuildRunId) {
-      setPersistedFiles(nativeFiles.snapshot.files.map((file) => ({
-        ...file,
-        language: languageOf(file.path),
-      })));
-      return;
-    }
     const stored = getBuildFiles(discussion.id);
     setPersistedFiles(
       stored.map((f) => ({
@@ -824,7 +820,7 @@ function DiscussionPageInner() {
         content: f.content,
       }))
     );
-  }, [discussion, status, nativeFiles]);
+  }, [discussion, status]);
 
   // Attach / replace / disconnect the runner between runs. Persist it and
   // mirror into local discussion state so the RunnerChip re-pings the new URL.
@@ -918,143 +914,136 @@ function DiscussionPageInner() {
       !discussion.runnerToken ||
       !discussion.nativeBuildRunId
     ) return;
-    let cancelled = false;
-    let poller: ReturnType<typeof createNativeBuildAttachmentPoller> | null = null;
+    const initialRunId = discussion.nativeBuildRunId;
     const connection = { url: discussion.runnerUrl, token: discussion.runnerToken };
+    let persistedRunId = initialRunId;
     let persistedStatus = discussion.status;
     let persistedPolicy = discussion.buildRunPolicy;
-
-    const attach = async () => {
-      const runId = await resolveNativeBuildRunId(
+    const refreshAttachment = createNativeBuildAttachmentRefresh({
+      savedRunId: initialRunId,
+      resolveRunId: async (savedRunId) => await resolveNativeBuildRunId(
         connection,
-        discussion.nativeBuildRunId!,
+        savedRunId,
         discussion.id
-      );
-      if (cancelled) return;
-      if (runId !== discussion.nativeBuildRunId) {
-        const updatedAt = new Date().toISOString();
-        updateDiscussion(discussion.id, { nativeBuildRunId: runId, updatedAt });
-        setDiscussion((current) => current
-          ? { ...current, nativeBuildRunId: runId, updatedAt }
-          : current);
-        return;
-      }
-
-      poller = createNativeBuildAttachmentPoller({
-        refresh: async () => {
-          const cursor = nativeTranscriptRef.current?.runId === runId
-            ? nativeTranscriptRef.current.cursor
-            : 0;
-          const [projection, usage, run, events, observability, transcript, files] =
-            await Promise.all([
-              getNativeBuild(connection, runId),
-              getNativeBuildUsage(connection, runId),
-              getNativeRun(connection, runId),
-              getNativeBuildEvents(connection, runId, 0),
-              getNativeBuildObservability(connection, runId),
-              getNativeBuildTranscript(connection, runId, cursor),
-              getNativeBuildFiles(connection, runId),
-            ]);
-          return {
-            runState: run.state,
-            projection,
-            usage,
-            run,
-            events,
-            observability,
-            transcript,
-            files,
-          };
-        },
-        apply: ({ projection, usage, run, events, observability, transcript, files }) => {
-          const durableStatus = nativeBuildDiscussionStatus(projection);
-          const policyPatch = nativeBuildRestorationPolicyPatch(
-            { buildRunPolicy: persistedPolicy },
-            projection
-          );
-          const statusChanged = durableStatus !== persistedStatus;
-          const policyChanged = "buildRunPolicy" in policyPatch;
-          if (statusChanged || policyChanged) {
-            const updatedAt = new Date().toISOString();
-            const buildStopReason = durableStatus === "completed"
-              ? "completed"
-              : durableStatus === "stopped"
-                ? "blocked"
-                : null;
-            const buildStoppedAt = durableStatus === "running" ? null : updatedAt;
-            updateDiscussion(discussion.id, {
-              ...(statusChanged
-                ? { status: durableStatus, buildStopReason, buildStoppedAt }
-                : {}),
-              ...policyPatch,
-              updatedAt,
-            });
-            persistedStatus = durableStatus;
-            if (policyChanged) persistedPolicy = policyPatch.buildRunPolicy;
-            setStatus(durableStatus);
-            setError(null);
-            setDiscussion((current) => current
-              ? {
-                  ...current,
-                  ...(statusChanged
-                    ? { status: durableStatus, buildStopReason, buildStoppedAt }
-                    : {}),
-                  ...policyPatch,
-                  updatedAt,
-                }
-              : current);
-          }
-
-          const handoffs = durableBuildHandoffPanels(projection, run.state);
-          setNativeProjection(projection);
-          setNativeObservability(observability);
-          setArchitectHandoff(handoffs.architect);
-          setProjectHandoff(handoffs.project);
-          setBuildTasks(
-            Object.values(projection.tasks).map((task) => ({
-              id: task.id,
-              title: task.objective,
-              status: nativeBuildTaskStatus(task.status),
-              worker: task.assignedWorkerId,
-            }))
-          );
-          setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
-          const durableActivity = nativeBuildActivityEntries(
-            runId,
-            events,
-            ACTIVITY_LOG_CAP
-          );
-          setDiagnostics(durableActivity);
-          saveDiagnostics(id, durableActivity);
-
-          const nextTranscript = reconcileNativeBuildTranscript(
-            nativeTranscriptRef.current,
-            runId,
-            transcript,
-            projection,
-            usage
-          );
-          nativeTranscriptRef.current = nextTranscript;
-          streamingRef.current.clear();
-          setNativeTranscript(nextTranscript);
-          setMessages(nextTranscript.messages);
-          setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, files));
-        },
-        schedule: (callback, delayMs) =>
-          window.setTimeout(() => void callback(), delayMs),
-        cancelScheduled: (handle) => window.clearTimeout(handle as number),
-        intervalMs: 2_000,
-      });
-      await poller.start();
-    };
-
-    void attach().catch(() => {
-      // Runner availability is already represented by the connection control;
-      // retain the last durable UI state and retry on the next page lifecycle.
+      ),
+      load: async (runId) => {
+        const cursor = nativeTranscriptRef.current?.runId === runId
+          ? nativeTranscriptRef.current.cursor
+          : 0;
+        const [projection, usage, run, events, observability, transcript, files] =
+          await Promise.all([
+            getNativeBuild(connection, runId),
+            getNativeBuildUsage(connection, runId),
+            getNativeRun(connection, runId),
+            getNativeBuildEvents(connection, runId, 0),
+            getNativeBuildObservability(connection, runId),
+            getNativeBuildTranscript(connection, runId, cursor),
+            getNativeBuildFiles(connection, runId),
+          ]);
+        return {
+          runState: run.state,
+          projection,
+          usage,
+          run,
+          events,
+          observability,
+          transcript,
+          files,
+        };
+      },
     });
+    const poller = createNativeBuildAttachmentPoller({
+      refresh: refreshAttachment,
+      apply: ({ runId, projection, usage, run, events, observability, transcript, files }) => {
+        if (runId !== persistedRunId) {
+          const updatedAt = new Date().toISOString();
+          updateDiscussion(discussion.id, { nativeBuildRunId: runId, updatedAt });
+          persistedRunId = runId;
+          setDiscussion((current) => current
+            ? { ...current, nativeBuildRunId: runId, updatedAt }
+            : current);
+        }
+        const durableStatus = nativeBuildDiscussionStatus(projection);
+        const policyPatch = nativeBuildRestorationPolicyPatch(
+          { buildRunPolicy: persistedPolicy },
+          projection
+        );
+        const statusChanged = durableStatus !== persistedStatus;
+        const policyChanged = "buildRunPolicy" in policyPatch;
+        if (statusChanged || policyChanged) {
+          const updatedAt = new Date().toISOString();
+          const buildStopReason = durableStatus === "completed"
+            ? "completed"
+            : durableStatus === "stopped"
+              ? "blocked"
+              : null;
+          const buildStoppedAt = durableStatus === "running" ? null : updatedAt;
+          updateDiscussion(discussion.id, {
+            ...(statusChanged
+              ? { status: durableStatus, buildStopReason, buildStoppedAt }
+              : {}),
+            ...policyPatch,
+            updatedAt,
+          });
+          persistedStatus = durableStatus;
+          if (policyChanged) persistedPolicy = policyPatch.buildRunPolicy;
+          setStatus(durableStatus);
+          setError(null);
+          setDiscussion((current) => current
+            ? {
+                ...current,
+                ...(statusChanged
+                  ? { status: durableStatus, buildStopReason, buildStoppedAt }
+                  : {}),
+                ...policyPatch,
+                updatedAt,
+              }
+            : current);
+        }
+
+        const handoffs = durableBuildHandoffPanels(projection, run.state);
+        setNativeProjection(projection);
+        setNativeObservability(observability);
+        setArchitectHandoff(handoffs.architect);
+        setProjectHandoff(handoffs.project);
+        setBuildTasks(
+          Object.values(projection.tasks).map((task) => ({
+            id: task.id,
+            title: task.objective,
+            status: nativeBuildTaskStatus(task.status),
+            worker: task.assignedWorkerId,
+          }))
+        );
+        setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
+        const durableActivity = nativeBuildActivityEntries(
+          runId,
+          events,
+          ACTIVITY_LOG_CAP
+        );
+        setDiagnostics(durableActivity);
+        saveDiagnostics(id, durableActivity);
+
+        const nextTranscript = reconcileNativeBuildTranscript(
+          nativeTranscriptRef.current,
+          runId,
+          transcript,
+          projection,
+          usage
+        );
+        nativeTranscriptRef.current = nextTranscript;
+        streamingRef.current.clear();
+        setNativeTranscript(nextTranscript);
+        setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, files));
+      },
+      schedule: (callback, delayMs) =>
+        window.setTimeout(() => void callback(), delayMs),
+      cancelScheduled: (handle) => window.clearTimeout(handle as number),
+      intervalMs: 2_000,
+    });
+
+    void poller.start();
     return () => {
-      cancelled = true;
-      poller?.cancel();
+      poller.cancel();
     };
   }, [
     id,
@@ -1363,14 +1352,10 @@ function DiscussionPageInner() {
   // final answer — as one Markdown file.
   const downloadTranscript = () => {
     if (!discussion) return;
-    if (
-      discussion.mode === "build" &&
-      nativeTranscript &&
-      nativeTranscript.runId === discussion.nativeBuildRunId
-    ) {
+    if (discussion.mode === "build") {
       downloadMarkdown(
         `${fileSlug(discussion.topic)}-transcript.md`,
-        buildBuildTranscriptMarkdown(discussion.topic, nativeTranscript.messages)
+        buildBuildTranscriptMarkdown(discussion.topic, buildAttachmentView.messages)
       );
       return;
     }
@@ -1393,7 +1378,7 @@ function DiscussionPageInner() {
     }
     if (discussion.judgeModelId) {
       lines.push(
-        `- **${discussion.mode === "build" ? "Architect" : "Judge"}:** ${nameOf(discussion.judgeModelId)}`
+        `- **Judge:** ${nameOf(discussion.judgeModelId)}`
       );
     }
 
@@ -1465,21 +1450,26 @@ function DiscussionPageInner() {
     [participantIds]
   );
 
-  const currentNativeTranscript =
-    nativeTranscript?.runId === discussion?.nativeBuildRunId ? nativeTranscript : null;
-  const currentNativeFiles =
-    nativeFiles?.runId === discussion?.nativeBuildRunId ? nativeFiles : null;
-  const nativeArtifactFiles = currentNativeFiles?.snapshot.files.map((file) => ({
+  const buildAttachmentView = selectNativeBuildAttachmentView({
+    authoritativeRunId: discussion?.nativeBuildRunId,
+    legacyMessages: messages,
+    legacyFiles: persistedFiles,
+    nativeTranscript,
+    nativeFiles,
+  });
+  const currentNativeFiles = buildAttachmentView.nativeFiles;
+  const nativeArtifactFiles = currentNativeFiles ? buildAttachmentView.files.map((file) => ({
     ...file,
     language: languageOf(file.path),
-  })) ?? [];
-  const buildTranscriptMessages = discussion?.mode === "build" &&
-    discussion.runnerUrl &&
-    discussion.runnerToken &&
-    discussion.nativeBuildRunId
-    ? currentNativeTranscript?.messages ?? []
+  })) : [];
+  const legacyArtifactFiles = currentNativeFiles ? [] : buildAttachmentView.files.map((file) => ({
+    ...file,
+    language: languageOf(file.path),
+  }));
+  const buildTranscriptMessages = discussion?.mode === "build"
+    ? buildAttachmentView.messages
     : messages;
-  const hasNativeAttachment = Boolean(currentNativeTranscript || currentNativeFiles);
+  const hasNativeAttachment = buildAttachmentView.nativeAttached;
 
   // Lead participants (Architect/Judge) that aren't among the
   // workers in modelIds — they'd otherwise never appear in the Team row even
@@ -2095,16 +2085,18 @@ function DiscussionPageInner() {
       )}
 
       {discussion.mode === "build" &&
-        !currentNativeFiles &&
-        !finalResult &&
-        !streamConnected &&
-        persistedFiles.length > 0 && (
+        shouldShowLegacyBuildFileFallback({
+          hasNativeFiles: Boolean(currentNativeFiles),
+          hasFinalResult: Boolean(finalResult),
+          legacyFileCount: legacyArtifactFiles.length,
+          streamConnected,
+        }) && (
           <div className="space-y-3">
             <p className="rounded-lg border border-dashed bg-card/50 px-4 py-3 text-sm text-muted-foreground">
               Files produced so far — the build didn&apos;t finish. Download them
               or attach a runner in Session settings and Resume.
             </p>
-            <ArtifactPanel files={persistedFiles} />
+            <ArtifactPanel files={legacyArtifactFiles} />
           </div>
         )}
 

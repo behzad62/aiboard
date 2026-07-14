@@ -10,8 +10,10 @@ import type { ModelAccent } from "@/lib/ui/model-accent";
 export const BUILD_TRANSCRIPT_INITIAL_ROUNDS = 5;
 export const BUILD_TRANSCRIPT_ROUND_INCREMENT = 5;
 
+type BuildTranscriptMessage = TimelineMessage & { ordinal?: number };
+
 interface BuildTranscriptPanelProps {
-  messages: TimelineMessage[];
+  messages: BuildTranscriptMessage[];
   accentMap: Map<string, ModelAccent>;
   onDownload: () => void;
 }
@@ -100,12 +102,12 @@ export function BuildTranscriptPanel({
 }
 
 export function selectBuildTranscriptMessages(
-  messages: TimelineMessage[],
+  messages: BuildTranscriptMessage[],
   visibleRoundCount: number
-): TimelineMessage[] {
+): BuildTranscriptMessage[] {
   if (visibleRoundCount <= 0) return [];
 
-  const grouped = new Map<number, TimelineMessage[]>();
+  const grouped = new Map<number, BuildTranscriptMessage[]>();
   for (const message of messages) {
     const roundMessages = grouped.get(message.round) ?? [];
     roundMessages.push(message);
@@ -120,16 +122,23 @@ export function selectBuildTranscriptMessages(
 
 export function buildBuildTranscriptMarkdown(
   title: string,
-  messages: TimelineMessage[]
+  messages: BuildTranscriptMessage[]
 ): string {
   const lines = [`# ${title}`, ""];
   for (const message of [...messages].sort(
-    (left, right) => left.round - right.round || left.id.localeCompare(right.id)
+    (left, right) => left.round - right.round ||
+      (left.ordinal ?? 0) - (right.ordinal ?? 0) ||
+      compareCodeUnits(left.id, right.id)
   )) {
     if (!message.content || message.streaming) continue;
     lines.push(`## ${message.modelName}`, "", message.content, "");
   }
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 function countTranscriptRounds(messages: TimelineMessage[]): number {

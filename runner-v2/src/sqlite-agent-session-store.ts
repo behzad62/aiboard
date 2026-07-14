@@ -44,6 +44,7 @@ interface TranscriptRow {
   session_id: string;
   actor_json: string;
   sequence: number;
+  ordinal: number;
   occurred_at: string;
   text: string;
 }
@@ -293,7 +294,7 @@ export class SqliteAgentSessionStore {
     await this.ensureTranscriptProjection(runId);
     const rows = this.database
       .prepare(
-        `SELECT id, session_id, actor_json, sequence, occurred_at, text
+        `SELECT id, session_id, actor_json, sequence, ordinal, occurred_at, text
          FROM agent_transcript_turns
          WHERE run_id = ? AND sequence > ?
          ORDER BY sequence ASC, ordinal ASC, id ASC`
@@ -311,6 +312,7 @@ export class SqliteAgentSessionStore {
         sessionId: row.session_id,
         actor: JSON.parse(row.actor_json) as AgentActor,
         sequence: row.sequence,
+        ordinal: row.ordinal,
         occurredAt: row.occurred_at,
         text: row.text,
       })),
