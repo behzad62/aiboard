@@ -38,3 +38,17 @@ export interface AgentSessionProjection {
   changeSet?: ChangeSet;
   lastSequence: number;
 }
+
+export interface AgentTranscriptTurn {
+  id: string;
+  sessionId: string;
+  actor: AgentActor;
+  sequence: number;
+  occurredAt: string;
+  text: string;
+}
+
+export interface AgentTranscriptPage {
+  turns: AgentTranscriptTurn[];
+  cursor: number;
+}

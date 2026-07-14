@@ -130,6 +130,14 @@ export class ArtifactStore {
     return record;
   }
 
+  async remove(hash: string): Promise<void> {
+    const paths = this.paths(hash);
+    await Promise.all([
+      unlinkIfPresent(paths.payload),
+      unlinkIfPresent(paths.metadata),
+    ]);
+  }
+
   private paths(hash: string): {
     directory: string;
     payload: string;
@@ -142,5 +150,13 @@ export class ArtifactStore {
       payload: join(directory, hash),
       metadata: join(directory, `${hash}.json`),
     };
+  }
+}
+
+async function unlinkIfPresent(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

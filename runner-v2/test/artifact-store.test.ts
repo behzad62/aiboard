@@ -49,3 +49,27 @@ test("concurrent identical puts create one durable artifact", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("removing an artifact deletes payload and metadata idempotently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "aiboard-runner-v2-remove-"));
+  const store = new ArtifactStore(directory);
+
+  try {
+    const record = await store.put(
+      Buffer.from("superseded checkpoint"),
+      "application/json"
+    );
+    await store.remove(record.hash);
+    await store.remove(record.hash);
+    await assert.rejects(
+      store.get(record.hash),
+      (error: unknown) => error instanceof ArtifactNotFoundError
+    );
+    await assert.rejects(
+      store.stat(record.hash),
+      (error: unknown) => error instanceof ArtifactNotFoundError
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
