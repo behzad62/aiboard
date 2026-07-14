@@ -198,6 +198,15 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     assert.equal(finished.loop.status, "submitted");
     assert.ok(finished.changeSet);
     assert.equal(finished.changeSet.taskId, "task_worker");
+    const workerTools = new Set(recoveredModel.requests[0].tools.map((tool) => tool.name));
+    for (const name of [
+      "repo.manifest",
+      "repo.map",
+      "code.workspace_symbols",
+      "code.definition",
+      "code.references",
+      "code.diagnostics",
+    ]) assert.equal(workerTools.has(name), true, `${name} must be available`);
     assert.equal(finished.changeSet.evidenceArtifactHashes.length, 2);
     assert.equal(finished.changeSet.evidenceArtifactHashes.includes(staleStdout.hash), false);
     assert.equal(finished.changeSet.evidenceArtifactHashes.includes(staleStderr.hash), false);
@@ -486,6 +495,14 @@ test("worker subagent edits the shared task workspace and returns without parent
     assert.equal(childTools.has("fs.patch"), true);
     assert.equal(childTools.has("return_to_parent"), true);
     assert.equal(childTools.has("process.start"), true);
+    for (const name of [
+      "repo.manifest",
+      "repo.map",
+      "code.workspace_symbols",
+      "code.definition",
+      "code.references",
+      "code.diagnostics",
+    ]) assert.equal(childTools.has(name), true, `${name} must be available`);
     assert.equal(childTools.has("submit_task"), false);
     assert.equal(childTools.has("git.commit"), false);
     assert.equal(childTools.has("spawn_subagent"), false, "subagent depth is bounded to one");

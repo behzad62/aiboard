@@ -203,6 +203,14 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     assert.equal(architectTools.has("fs.search"), true);
     assert.equal(architectTools.has("git.diff"), true);
     assert.equal(architectTools.has("research.fetch"), true);
+    for (const name of [
+      "repo.manifest",
+      "repo.map",
+      "code.workspace_symbols",
+      "code.definition",
+      "code.references",
+      "code.diagnostics",
+    ]) assert.equal(architectTools.has(name), true, `${name} must be available`);
     assert.equal(architectTools.has("fs.write"), false);
     assert.equal(architectTools.has("git.commit"), false);
     assert.match(

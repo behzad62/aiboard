@@ -11,6 +11,7 @@ import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -24,11 +25,13 @@ import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
+import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { createSkillTools } from "./skill-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { ToolBroker } from "./tool-broker.js";
+import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 
 interface SpawnSubagentInput {
@@ -155,8 +158,16 @@ function spawnSubagentTool(
           ? { approve: (request) => options.permissions!.requestTool(request) }
           : {}),
       });
-      for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
+      const repository = new RepositoryIntelligence();
+      const typescript = new TypeScriptIntelligence(repository);
+      for (const tool of createFilesystemTools({
+        artifacts: options.artifacts,
+        repository,
+      })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
+      }
+      for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+        broker.register(tool);
       }
       for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
       for (const tool of createSessionTools(options.sessions)) broker.register(tool);

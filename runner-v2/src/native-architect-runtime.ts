@@ -15,6 +15,7 @@ import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-stor
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import type {
   BudgetLedger,
   ModelCallAttribution,
@@ -51,8 +52,10 @@ import type { SkillCatalog } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
 import { createSkillTools } from "./skill-tools.js";
 import { createResearchTools } from "./research-tools.js";
+import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import { ToolBroker } from "./tool-broker.js";
+import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
@@ -185,8 +188,16 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
         : {}),
     });
-    for (const tool of createFilesystemTools({ artifacts: this.options.artifacts })) {
+    const repository = new RepositoryIntelligence();
+    const typescript = new TypeScriptIntelligence(repository);
+    for (const tool of createFilesystemTools({
+      artifacts: this.options.artifacts,
+      repository,
+    })) {
       if (tool.definition.readOnly) extras.register(tool);
+    }
+    for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+      extras.register(tool);
     }
     for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
     for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);

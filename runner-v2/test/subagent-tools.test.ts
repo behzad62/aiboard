@@ -72,6 +72,14 @@ test("read-only subagents expose no workspace mutation tools and are concurrency
     assert.equal(childTools.has("fs.read"), true);
     assert.equal(childTools.has("git.show"), true);
     assert.equal(childTools.has("search_session_history"), true);
+    for (const name of [
+      "repo.manifest",
+      "repo.map",
+      "code.workspace_symbols",
+      "code.definition",
+      "code.references",
+      "code.diagnostics",
+    ]) assert.equal(childTools.has(name), true, `${name} must be available`);
     for (const forbidden of [
       "fs.patch",
       "fs.write",

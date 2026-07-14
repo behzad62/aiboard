@@ -8,6 +8,7 @@ import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import {
   createChangeSet,
   type ChangeSet,
@@ -20,6 +21,7 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
+import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SchedulerStore } from "./scheduler-store.js";
@@ -35,6 +37,7 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
+import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type {
   ToolInvocationLedger,
   ToolLedgerEvent,
@@ -128,7 +131,15 @@ export async function runWorkerTask(
       ? { approve: (request) => options.permissions!.requestTool(request) }
       : {}),
   });
-  for (const tool of createFilesystemTools({ artifacts: options.artifacts })) {
+  const repository = new RepositoryIntelligence();
+  const typescript = new TypeScriptIntelligence(repository);
+  for (const tool of createFilesystemTools({
+    artifacts: options.artifacts,
+    repository,
+  })) {
+    broker.register(tool);
+  }
+  for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
     broker.register(tool);
   }
   for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
