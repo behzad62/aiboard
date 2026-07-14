@@ -483,7 +483,8 @@ export class NativeBuildManager implements BuildControlPlane {
     // Close synchronously while the settling caller still holds its lease.
     // It can queue tombstones, release itself, and only then can this scan run.
     this.activityGateClosed = true;
-    const operation = (async () => {
+    const slot: { generation?: Promise<void> } = {};
+    const generation = (async () => {
       await this.waitForRuntimeActivityIdle();
       try {
         await this.options.runArtifactCompaction!(async () => {
@@ -494,13 +495,13 @@ export class NativeBuildManager implements BuildControlPlane {
       } catch (error) {
         this.options.onPumpError?.("live-artifact-reachability", error);
       } finally {
+        if (this.liveCompaction === slot.generation) this.liveCompaction = undefined;
         this.openRuntimeActivityGate();
       }
     })();
-    this.liveCompaction = operation.finally(() => {
-      this.liveCompaction = undefined;
-    });
-    return this.liveCompaction;
+    slot.generation = generation;
+    this.liveCompaction = generation;
+    return generation;
   }
 
   private async withRuntimeActivity<T>(operation: () => Promise<T>): Promise<T> {

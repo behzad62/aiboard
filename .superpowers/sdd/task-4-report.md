@@ -22,6 +22,7 @@
 - Shutdown now rejects activity queued behind compaction, prevents new leases, and waits for already-running operations before closing stores.
 - Unified post-execution finalization across autonomous pumps and public `step` / `runUntilBlocked`: Finish and Budgeted handoffs auto-apply, completed runs clean up and request live GC, Plan-only remains explicit, and repeated settlement does not duplicate handoff or cleanup.
 - Moved pause, resume, and Architect-handoff lifecycle mutations behind the same asynchronous activity admission gate. Calls wait transparently during compaction, and both compaction passes recompute eligibility from current projections.
+- Rotated the published live-compaction generation before reopening the activity gate, so a settlement admitted after pass two cannot reuse the completed generation and strand new tombstones.
 - Settled cleanup now attempts checkpoint compaction, task-worktree cleanup, and integration-worktree cleanup independently and aggregates failures for retry.
 
 ## Test-first evidence
@@ -42,6 +43,16 @@ GREEN verification:
 - `npx tsc -p runner-v2/tsconfig.json --noEmit`: passed.
 - `npx tsc --noEmit`: passed.
 - Targeted ESLint for every changed source/test file: passed with zero warnings.
+- `git diff --check`: passed.
+
+Final generation-race review verification:
+
+- `node --test --import tsx --test-name-pattern="fresh compaction generation" runner-v2/test/native-build-manager.test.ts`: 1/1 passed after reproducing the artifact-retention failure against the prior ordering.
+- `node --test --import tsx runner-v2/test/native-build-manager.test.ts runner-v2/test/artifact-reachability.test.ts`: 38/38 passed.
+- `node node_modules/tsx/dist/cli.mjs --test runner-v2/test/*.test.ts`: 292/293 passed; the only failure was Windows `EPERM` removing the recovery-smoke temporary directory after its assertions.
+- `node node_modules/tsx/dist/cli.mjs --test runner-v2/test/recovery-smoke.test.ts`: isolated rerun 1/1 passed.
+- `npx tsc -p runner-v2/tsconfig.json --noEmit` and `npx tsc --noEmit`: passed.
+- `npx eslint runner-v2/src/native-build-manager.ts runner-v2/test/native-build-manager.test.ts --max-warnings=0`: passed with zero warnings.
 - `git diff --check`: passed.
 
 ## Safety notes / remaining concerns

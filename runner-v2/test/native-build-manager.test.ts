@@ -1221,6 +1221,106 @@ test("concurrent settlements coalesce into one live reachability scan", async ()
   }
 });
 
+test("settlement admitted after a live scan schedules a fresh compaction generation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-generation-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const guard = new ArtifactReachabilityGuard(root, artifacts);
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts, {
+    deleteArtifactIfGloballyUnreachable: (hash) => guard.removeIfGloballyUnreachable(hash),
+  });
+  let firstScanStarted!: () => void;
+  const firstScan = new Promise<void>((resolve) => { firstScanStarted = resolve; });
+  let releaseFirstScan!: () => void;
+  const firstScanRelease = new Promise<void>((resolve) => { releaseFirstScan = resolve; });
+  let prepareCalls = 0;
+  let manager: NativeBuildManager | undefined;
+  try {
+    const firstObsolete = await checkpointTwice(sessions, "run_first");
+    const queuedObsolete = await checkpointTwice(sessions, "run_queued");
+    const projections = new Map<string, SchedulerProjection>();
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      runArtifactCompaction: (operation) => guard.runQuiescent(operation),
+      prepareArtifactCleanup: async () => {
+        prepareCalls += 1;
+        if (prepareCalls === 1) {
+          firstScanStarted();
+          await firstScanRelease;
+        }
+        await guard.prepareReachabilityIndex();
+      },
+      createRuntime: async (input) => {
+        let projection: SchedulerProjection = input.runId === "run_queued"
+          ? {
+              ...fakeRuntime(input.runId).projection(),
+              status: "paused",
+              runPolicy: "plan_only",
+              projectHandoff: {
+                status: "requested",
+                summary: "Ready",
+                options: ["keep_integration_branch", "apply_to_project"],
+              },
+            }
+          : fakeRuntime(input.runId).projection();
+        projections.set(input.runId, projection);
+        return {
+          ...handleProjections(input.runId),
+          runtime: {
+            ...fakeRuntime(input.runId),
+            projection: () => projections.get(input.runId)!,
+            runUntilBlocked: async () => {
+              projection = { ...projection, status: "completed" };
+              projections.set(input.runId, projection);
+              return { status: "completed" as const };
+            },
+            selectProjectHandoff: (
+              choice: "keep_integration_branch" | "apply_to_project"
+            ) => {
+              projection = selectedHandoffProjection(projection, choice);
+              projections.set(input.runId, projection);
+              return projection;
+            },
+          } as unknown as BuildRuntime,
+          usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
+          compact: () => input.runId === "run_queued" &&
+            projection.projectHandoff?.status !== "selected"
+            ? undefined
+            : sessions.compactRun(input.runId),
+          projectHandoff: async (choice) => ({
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: choice === "apply_to_project",
+          }),
+          cleanup: () => sessions.compactRun(input.runId),
+          close: () => undefined,
+        };
+      },
+    });
+    await manager.create({ ...spec, runId: "run_first", idempotencyKey: "first" });
+    await manager.create({ ...spec, runId: "run_queued", idempotencyKey: "queued" });
+    manager.activate("run_first");
+    await firstScan;
+    const queuedSettlement = manager.selectProjectHandoff(
+      "run_queued",
+      "keep_integration_branch",
+      "queued-handoff"
+    );
+    releaseFirstScan();
+    await Promise.all([manager.awaitIdle("run_first"), queuedSettlement]);
+
+    await assert.rejects(artifacts.verify(firstObsolete), /not found/i);
+    await assert.rejects(artifacts.verify(queuedObsolete), /not found/i);
+    assert.equal(prepareCalls, 2);
+    assert.equal(guard.scanCount, 2);
+  } finally {
+    releaseFirstScan();
+    await manager?.close();
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a failed live reachability scan retains artifacts and reopens the activity gate", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-failure-"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
