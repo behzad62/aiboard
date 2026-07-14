@@ -523,14 +523,14 @@ export async function resolveNativeBuildRunId(
   savedRunId: string,
   projectId: string,
   fetchImpl: typeof fetch,
-  options: { allowMissing: true }
+  options: { allowMissing: true; requestedAt?: string | null }
 ): Promise<string | undefined>;
 export async function resolveNativeBuildRunId(
   connection: NativeRunnerConnection,
   savedRunId: string,
   projectId: string,
   fetchImpl: typeof fetch = fetch,
-  options: { allowMissing?: boolean } = {}
+  options: { allowMissing?: boolean; requestedAt?: string | null } = {}
 ): Promise<string | undefined> {
   const [references, savedExists] = await Promise.all([
     getNativeBuildReferences(connection, projectId, fetchImpl),
@@ -543,13 +543,21 @@ export async function resolveNativeBuildRunId(
     ),
   ]);
 
-  const newestReference = [...references].sort((left, right) => {
+  const requestedAt = options.requestedAt
+    ? Date.parse(options.requestedAt)
+    : Number.NaN;
+  const intentionalNewPass = options.allowMissing && Number.isFinite(requestedAt);
+  const eligibleReferences = intentionalNewPass
+    ? references.filter((reference) => Date.parse(reference.createdAt) >= requestedAt)
+    : references;
+  const newestReference = [...eligibleReferences].sort((left, right) => {
     if (left.createdAt !== right.createdAt) {
       return left.createdAt < right.createdAt ? 1 : -1;
     }
     if (left.runId === right.runId) return 0;
     return left.runId < right.runId ? 1 : -1;
   })[0];
+  if (intentionalNewPass && savedExists) return savedRunId;
   if (newestReference) return newestReference.runId;
   if (savedExists) return savedRunId;
   if (options.allowMissing) return undefined;

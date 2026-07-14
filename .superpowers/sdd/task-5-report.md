@@ -279,3 +279,79 @@ git diff --check                                                PASS
 ```
 
 The complete Runner suite passed 292 functional tests and encountered one Windows `EPERM` while removing the recovery smoke test's temporary directory. An immediate isolated rerun of `runner-v2/test/recovery-smoke.test.ts` passed 1/1, confirming the failure was transient cleanup rather than a product assertion.
+
+## Restart/follow-up pass provenance fix
+
+### Root cause
+
+Restart and follow-up already wrote a provisional `nativeBuildRunId`, but did not persist when that intentional pass was requested. Pending-run resolution therefore treated any older project reference as authoritative, and the provisioning branch generated a second run ID instead of using the browser reservation.
+
+### Test-first evidence
+
+RED for persisted provenance:
+
+```text
+npx tsx scripts/test-build-note-attachments.mts
+FAIL continue persists explicit new-pass provenance with the reserved run identity
+FAIL forced follow-up reserves a new run and persists its requested-at provenance
+FAIL restart persists requested-at provenance atomically with its reserved run identity
+exit 1
+```
+
+After those paths passed, an initial-Build regression was added and observed RED before initial reservation metadata was normalized:
+
+```text
+FAIL initial Build creation persists provenance with its reserved native run
+exit 1
+```
+
+GREEN after persisting `nativeBuildRequestedAt` atomically with every intentional reservation:
+
+```text
+npx tsx scripts/test-build-note-attachments.mts
+PASS initial Build creation persists provenance with its reserved native run
+PASS continue persists explicit new-pass provenance with the reserved run identity
+PASS forced follow-up reserves a new run and persists its requested-at provenance
+PASS restart persists requested-at provenance atomically with its reserved run identity
+exit 0
+```
+
+RED for resolver semantics:
+
+```text
+npx tsx scripts/test-runner-v2-client.mts
+AssertionError: an older completed pass cannot suppress provisioning an intentionally reserved fresh run
+actual: run_completed_previous_pass
+expected: undefined
+exit 1
+```
+
+RED for exact provisioning and attachment normalization:
+
+```text
+SyntaxError: native-build-engine does not provide nativeBuildProvisioningRunId
+SyntaxError: discussion-live-state does not provide nativeBuildAttachmentIdentityPatch
+exit 1
+```
+
+GREEN after filtering intentional-pass references at `requestedAt`, recognizing matching/newer crash recovery, provisioning the reserved ID, and clearing provenance only after authoritative attachment:
+
+```text
+npx tsx scripts/test-runner-v2-client.mts   PASS
+npx tsx scripts/test-build-live-state.mts   PASS
+```
+
+The resolver regressions also retain ordinary page-load behavior: without intentional new-pass provenance, a stale saved ID resolves to the newest project reference.
+
+### Verification
+
+```text
+12 covering client/contract scripts                              PASS
+npx tsc --noEmit                                                 PASS
+npx -y node@24.18.0 node_modules/typescript/bin/tsc \
+  -p runner-v2/tsconfig.json --noEmit                            PASS
+npm run lint                                                     PASS, zero warnings
+git diff --check                                                 PASS
+```
+
+`npm run build` was not run because the active development server makes it unsafe under `AGENTS.md`.

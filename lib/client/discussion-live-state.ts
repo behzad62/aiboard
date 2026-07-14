@@ -112,6 +112,21 @@ export interface NativeBuildAttachmentViewFile {
   content: string;
 }
 
+export function nativeBuildAttachmentIdentityPatch(
+  runId: string,
+  updatedAt: string
+): {
+  nativeBuildRunId: string;
+  nativeBuildRequestedAt: null;
+  updatedAt: string;
+} {
+  return {
+    nativeBuildRunId: runId,
+    nativeBuildRequestedAt: null,
+    updatedAt,
+  };
+}
+
 export function selectNativeBuildAttachmentView(input: {
   authoritativeRunId: string | null | undefined;
   legacyMessages: readonly NativeBuildAttachmentViewMessage[];

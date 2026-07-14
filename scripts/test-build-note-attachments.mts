@@ -71,6 +71,22 @@ const discussion: Discussion = {
 };
 
 storeApi.__resetClientStoreForTests();
+const initialBuild = clientApi.createDiscussion({
+  topic: "Create a native Build with durable pass provenance.",
+  mode: "build",
+  effort: "medium",
+  modelIds: ["test:worker"],
+  judgeModelId: "test:architect",
+});
+const initialBuildDiscussion = storeApi.getDiscussionById(initialBuild.id);
+check(
+  "initial Build creation persists provenance with its reserved native run",
+  Boolean(
+    initialBuildDiscussion?.nativeBuildRunId &&
+    initialBuildDiscussion.nativeBuildRequestedAt === initialBuildDiscussion.updatedAt
+  ),
+  initialBuildDiscussion
+);
 storeApi.addAttachment(existingAttachment);
 storeApi.addAttachment(newAttachment);
 storeApi.insertDiscussion(discussion);
@@ -129,6 +145,13 @@ check(
     continuedDiscussion.nativeBuildRunId !== "native-old-run"
   ),
   continuedDiscussion?.nativeBuildRunId
+);
+const continuedRequestedAt = continuedDiscussion?.nativeBuildRequestedAt;
+check(
+  "continue persists explicit new-pass provenance with the reserved run identity",
+  typeof continuedRequestedAt === "string" &&
+    continuedRequestedAt === continuedDiscussion?.updatedAt,
+  continuedDiscussion
 );
 check(
   "the Architect timeline note records the follow-up file name",
@@ -206,7 +229,27 @@ check(
   normalizedStoppedCheckpoint
 );
 
-const nativeRunBeforeRestart = storeApi.getDiscussionById(discussion.id)?.nativeBuildRunId;
+storeApi.updateDiscussion(discussion.id, {
+  status: "stopped",
+  updatedAt: now,
+});
+const nativeRunBeforeForcedFollowUp = storeApi.getDiscussionById(
+  discussion.id
+)?.nativeBuildRunId;
+const forcedFollowUp = clientApi.continueDiscussion(discussion.id, true);
+const forcedRequestedAt = forcedFollowUp?.nativeBuildRequestedAt;
+check(
+  "forced follow-up reserves a new run and persists its requested-at provenance",
+  Boolean(
+    forcedFollowUp?.nativeBuildRunId &&
+    forcedFollowUp.nativeBuildRunId !== nativeRunBeforeForcedFollowUp &&
+    typeof forcedRequestedAt === "string" &&
+    forcedRequestedAt === forcedFollowUp.updatedAt
+  ),
+  forcedFollowUp
+);
+
+const nativeRunBeforeRestart = forcedFollowUp?.nativeBuildRunId;
 storeApi.updateDiscussion(discussion.id, {
   status: "stopped",
   updatedAt: now,
@@ -219,6 +262,13 @@ check(
     restartedDiscussion.nativeBuildRunId !== nativeRunBeforeRestart
   ),
   restartedDiscussion?.nativeBuildRunId
+);
+const restartedRequestedAt = restartedDiscussion?.nativeBuildRequestedAt;
+check(
+  "restart persists requested-at provenance atomically with its reserved run identity",
+  typeof restartedRequestedAt === "string" &&
+    restartedRequestedAt === restartedDiscussion?.updatedAt,
+  restartedDiscussion
 );
 
 if (failed === 0) {

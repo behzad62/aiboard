@@ -14,11 +14,18 @@ import {
   type NativeRunnerConnection,
 } from "../lib/client/runner-v2";
 import {
+  nativeBuildProvisioningRunId,
   nativePricingMicros,
   resolveNativeProviderTransport,
   nativeProviderProtocol,
   selectNativeBuildRuntimes,
 } from "../lib/client/native-build-engine";
+
+assert.equal(
+  nativeBuildProvisioningRunId("native-reserved-by-browser"),
+  "native-reserved-by-browser",
+  "native provisioning uses the exact browser-reserved run identity"
+);
 
 assert.deepEqual(nativePricingMicros({
   inputUsdPer1M: 2.5,
@@ -336,6 +343,109 @@ assert.equal(
   ),
   undefined,
   "a deliberately new follow-up may proceed to native provisioning"
+);
+
+const freshPassRequestedAt = "2026-07-14T05:00:00.000Z";
+const oldPassReferenceFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/native-reserved-fresh-pass/build")) {
+    return Response.json(
+      { error: "Unknown build runtime native-reserved-fresh-pass." },
+      { status: 404 }
+    );
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_fresh_pass")) {
+    return Response.json({ builds: [{
+      runId: "run_completed_previous_pass",
+      projectId: "discussion_fresh_pass",
+      state: "completed",
+      createdAt: "2026-07-14T04:00:00.000Z",
+      updatedAt: "2026-07-14T04:30:00.000Z",
+    }] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "native-reserved-fresh-pass",
+    "discussion_fresh_pass",
+    oldPassReferenceFetch,
+    { allowMissing: true, requestedAt: freshPassRequestedAt }
+  ),
+  undefined,
+  "an older completed pass cannot suppress provisioning an intentionally reserved fresh run"
+);
+
+const matchingReservedRunFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/native-reserved-after-crash/build")) {
+    return Response.json({
+      runId: "native-reserved-after-crash",
+      status: "running",
+    });
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_matching_reserved")) {
+    return Response.json({ builds: [{
+      runId: "run_completed_previous_pass",
+      projectId: "discussion_matching_reserved",
+      state: "completed",
+      createdAt: "2026-07-14T04:00:00.000Z",
+      updatedAt: "2026-07-14T04:30:00.000Z",
+    }] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "native-reserved-after-crash",
+    "discussion_matching_reserved",
+    matchingReservedRunFetch,
+    { allowMissing: true, requestedAt: freshPassRequestedAt }
+  ),
+  "native-reserved-after-crash",
+  "a crash-created matching reserved run reattaches instead of duplicating provisioning"
+);
+
+const newerCrashReferenceFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/native-missing-after-crash/build")) {
+    return Response.json(
+      { error: "Unknown build runtime native-missing-after-crash." },
+      { status: 404 }
+    );
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_newer_crash_reference")) {
+    return Response.json({ builds: [
+      {
+        runId: "run_completed_previous_pass",
+        projectId: "discussion_newer_crash_reference",
+        state: "completed",
+        createdAt: "2026-07-14T04:00:00.000Z",
+        updatedAt: "2026-07-14T04:30:00.000Z",
+      },
+      {
+        runId: "run_created_after_request",
+        projectId: "discussion_newer_crash_reference",
+        state: "running",
+        createdAt: "2026-07-14T05:00:00.000Z",
+        updatedAt: "2026-07-14T05:01:00.000Z",
+      },
+    ] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "native-missing-after-crash",
+    "discussion_newer_crash_reference",
+    newerCrashReferenceFetch,
+    { allowMissing: true, requestedAt: freshPassRequestedAt }
+  ),
+  "run_created_after_request",
+  "a reference created at the request boundary is authoritative crash recovery"
 );
 
 const crashedProvisioningFetch: typeof fetch = async (input) => {

@@ -84,6 +84,7 @@ export function restartDiscussion(id: string): Discussion | undefined {
     throw new Error("Stop the run before restarting it.");
   }
   clearDiscussionRun(id);
+  const now = new Date().toISOString();
   updateDiscussion(id, {
     status: "pending",
     currentRound: 0,
@@ -91,7 +92,8 @@ export function restartDiscussion(id: string): Discussion | undefined {
     buildStopReason: null,
     buildStoppedAt: null,
     nativeBuildRunId: `native-${uuidv4()}`,
-    updatedAt: new Date().toISOString(),
+    nativeBuildRequestedAt: now,
+    updatedAt: now,
   });
   return getDiscussionById(id);
 }
@@ -189,13 +191,17 @@ export function continueDiscussion(
       updatedAt: now,
     });
   }
+  const startsNewNativePass = discussion?.mode === "build" &&
+    (forceNewBuildPass || discussion.status !== "stopped");
   updateDiscussion(id, {
     status: "pending",
     buildStopReason: null,
     buildStoppedAt: null,
-    ...(discussion?.mode === "build" &&
-    (forceNewBuildPass || discussion.status !== "stopped")
-      ? { nativeBuildRunId: `native-${uuidv4()}` }
+    ...(startsNewNativePass
+      ? {
+          nativeBuildRunId: `native-${uuidv4()}`,
+          nativeBuildRequestedAt: now,
+        }
       : {}),
     updatedAt: now,
   });
@@ -459,6 +465,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerToken: input.runnerToken ?? null,
     runnerAccess: input.runnerAccess ?? null,
     nativeBuildRunId: input.mode === "build" ? `native-${uuidv4()}` : null,
+    nativeBuildRequestedAt: input.mode === "build" ? now : null,
     buildRunPolicy: input.mode === "build" ? buildSettings.runPolicy : undefined,
     buildSkillMode: input.mode === "build" ? buildSettings.skillMode : undefined,
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,

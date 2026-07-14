@@ -346,6 +346,8 @@ export interface Discussion {
   runnerAccess?: "ask" | "project" | "full" | null;
   /** Durable Runner V2 run identity for the current native Build pass. */
   nativeBuildRunId?: string | null;
+  /** When set, the run id is reserved for an intentional not-yet-attached Build pass. */
+  nativeBuildRequestedAt?: string | null;
   buildRunPolicy?: BuildRunPolicy;
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;

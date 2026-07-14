@@ -8,6 +8,7 @@ import {
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
   nativeBuildTaskStatus,
+  nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -22,6 +23,19 @@ import {
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
+
+assert.deepEqual(
+  nativeBuildAttachmentIdentityPatch(
+    "native-attached-run",
+    "2026-07-14T06:00:00.000Z"
+  ),
+  {
+    nativeBuildRunId: "native-attached-run",
+    nativeBuildRequestedAt: null,
+    updatedAt: "2026-07-14T06:00:00.000Z",
+  },
+  "authoritative attachment clears provisional new-pass provenance"
+);
 
 assert.equal(
   buildRunWorkflowStatus({

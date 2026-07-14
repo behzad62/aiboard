@@ -31,6 +31,7 @@ import {
   type NativeRunnerConnection,
 } from "./runner-v2";
 import {
+  nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
   createNativeBuildPolicySynchronizer,
   nativeBuildUsageWindow,
@@ -78,6 +79,12 @@ export function nativeBuildAttachAction(
   return "observe";
 }
 
+export function nativeBuildProvisioningRunId(
+  reservedRunId: string | null | undefined
+): string {
+  return reservedRunId ?? `native-${crypto.randomUUID()}`;
+}
+
 export async function runNativeBuildDiscussion(
   discussion: Discussion,
   emit: Emit,
@@ -119,7 +126,10 @@ export async function runNativeBuildDiscussion(
           discussion.nativeBuildRunId,
           discussion.id,
           fetch,
-          { allowMissing: true }
+          {
+            allowMissing: true,
+            requestedAt: discussion.nativeBuildRequestedAt,
+          }
         )
       : await resolveNativeBuildRunId(
           connection,
@@ -127,11 +137,14 @@ export async function runNativeBuildDiscussion(
           discussion.id
         )
     : undefined;
-  if (runId && runId !== discussion.nativeBuildRunId) {
-    updateDiscussion(discussion.id, {
-      nativeBuildRunId: runId,
-      updatedAt: new Date().toISOString(),
-    });
+  if (
+    runId &&
+    (runId !== discussion.nativeBuildRunId || discussion.nativeBuildRequestedAt)
+  ) {
+    updateDiscussion(
+      discussion.id,
+      nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
+    );
   }
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
@@ -147,7 +160,7 @@ export async function runNativeBuildDiscussion(
     )
   );
   if (!runId) {
-    runId = `native-${crypto.randomUUID()}`;
+    runId = nativeBuildProvisioningRunId(discussion.nativeBuildRunId);
     const objective = buildObjective(discussion);
     const nativePolicy = effectiveNativeBuildPolicy(
       normalizeBuildSettings(discussion)
@@ -171,10 +184,10 @@ export async function runNativeBuildDiscussion(
         ...nativePolicy,
       },
     });
-    updateDiscussion(discussion.id, {
-      nativeBuildRunId: runId,
-      updatedAt: new Date().toISOString(),
-    });
+    updateDiscussion(
+      discussion.id,
+      nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
+    );
   }
   const run = await getNativeRun(connection, runId);
   const initialProjection = await getNativeBuild(connection, runId);

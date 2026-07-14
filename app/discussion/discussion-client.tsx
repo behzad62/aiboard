@@ -94,6 +94,7 @@ import {
   createNativeBuildAttachmentPoller,
   createNativeBuildAttachmentRefresh,
   durableBuildHandoffPanels,
+  nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
@@ -915,17 +916,34 @@ function DiscussionPageInner() {
       !discussion.nativeBuildRunId
     ) return;
     const initialRunId = discussion.nativeBuildRunId;
+    const initialRequestedAt = discussion.nativeBuildRequestedAt;
     const connection = { url: discussion.runnerUrl, token: discussion.runnerToken };
     let persistedRunId = initialRunId;
+    let hasPendingProvenance = Boolean(initialRequestedAt);
     let persistedStatus = discussion.status;
     let persistedPolicy = discussion.buildRunPolicy;
     const refreshAttachment = createNativeBuildAttachmentRefresh({
       savedRunId: initialRunId,
-      resolveRunId: async (savedRunId) => await resolveNativeBuildRunId(
-        connection,
-        savedRunId,
-        discussion.id
-      ),
+      resolveRunId: async (savedRunId) => {
+        if (!initialRequestedAt) {
+          return await resolveNativeBuildRunId(
+            connection,
+            savedRunId,
+            discussion.id
+          );
+        }
+        const resolved = await resolveNativeBuildRunId(
+          connection,
+          savedRunId,
+          discussion.id,
+          fetch,
+          { allowMissing: true, requestedAt: initialRequestedAt }
+        );
+        if (!resolved) {
+          throw new Error(`Native Build ${savedRunId} has not been provisioned yet.`);
+        }
+        return resolved;
+      },
       load: async (runId) => {
         const cursor = nativeTranscriptRef.current?.runId === runId
           ? nativeTranscriptRef.current.cursor
@@ -955,12 +973,14 @@ function DiscussionPageInner() {
     const poller = createNativeBuildAttachmentPoller({
       refresh: refreshAttachment,
       apply: ({ runId, projection, usage, run, events, observability, transcript, files }) => {
-        if (runId !== persistedRunId) {
+        if (runId !== persistedRunId || hasPendingProvenance) {
           const updatedAt = new Date().toISOString();
-          updateDiscussion(discussion.id, { nativeBuildRunId: runId, updatedAt });
+          const identityPatch = nativeBuildAttachmentIdentityPatch(runId, updatedAt);
+          updateDiscussion(discussion.id, identityPatch);
           persistedRunId = runId;
+          hasPendingProvenance = false;
           setDiscussion((current) => current
-            ? { ...current, nativeBuildRunId: runId, updatedAt }
+            ? { ...current, ...identityPatch }
             : current);
         }
         const durableStatus = nativeBuildDiscussionStatus(projection);
@@ -1052,6 +1072,7 @@ function DiscussionPageInner() {
     discussion?.runnerUrl,
     discussion?.runnerToken,
     discussion?.nativeBuildRunId,
+    discussion?.nativeBuildRequestedAt,
     discussion?.buildRunPolicy,
     discussion?.status,
   ]);
