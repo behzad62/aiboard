@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -15,6 +16,7 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { ToolCallBlock, ToolResult } from "../src/agent-contracts.js";
 import { createFilesystemTools } from "../src/filesystem-tools.js";
+import { RepositoryIntelligence } from "../src/repository-intelligence.js";
 import { ToolBroker } from "../src/tool-broker.js";
 
 test("filesystem tools read, inspect, list, search, and preserve CRLF edits", async () => {
@@ -278,6 +280,62 @@ test("fs.patch accepts LF multiline edits for CRLF files without mixing line end
   }
 });
 
+test("directory listing and search follow Git discovery and classification", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-git-aware-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(join(workspace, "dist"), { recursive: true });
+  mkdirSync(join(workspace, "src"), { recursive: true });
+  mkdirSync(join(workspace, "vendor"), { recursive: true });
+  writeFileSync(join(workspace, ".gitignore"), "ignored/\n");
+  mkdirSync(join(workspace, "ignored"), { recursive: true });
+  writeFileSync(join(workspace, "ignored", "secret.ts"), "export const needle = 'ignored';\n");
+  writeFileSync(join(workspace, "dist", "generated.ts"), "// @generated\nexport const needle = 'generated';\n");
+  writeFileSync(join(workspace, "src", "app.ts"), "export const needle = 'source';\n");
+  writeFileSync(join(workspace, "vendor", "library.js"), "export const needle = 'vendor';\n");
+  git(workspace, "init");
+  git(workspace, "add", ".gitignore", "src/app.ts", "vendor/library.js");
+  git(workspace, "add", "-f", "dist/generated.ts");
+  const broker = brokerWithFilesystem(
+    workspace,
+    new ArtifactStore(join(root, "artifacts")),
+  );
+
+  try {
+    const list = await invoke(broker, "git_list", "fs.list", {
+      path: ".",
+      maxDepth: 2,
+    });
+    assert.equal(list.isError, false);
+    const listed = (json(list) as { entries: Array<{ path: string }> }).entries
+      .map((item) => item.path);
+    assert.equal(listed.includes("ignored"), false);
+    assert.equal(listed.includes("ignored/secret.ts"), false);
+    assert.equal(listed.includes("dist/generated.ts"), true);
+
+    const defaultSearch = await invoke(broker, "git_search", "fs.search", {
+      path: ".",
+      pattern: "needle",
+    });
+    assert.deepEqual(searchPaths(defaultSearch), ["src/app.ts"]);
+
+    const inclusiveSearch = await invoke(broker, "git_search_all", "fs.search", {
+      path: ".",
+      pattern: "needle",
+      includeGenerated: true,
+      includeVendored: true,
+      includeIgnored: true,
+    });
+    assert.deepEqual(searchPaths(inclusiveSearch), [
+      "dist/generated.ts",
+      "ignored/secret.ts",
+      "src/app.ts",
+      "vendor/library.js",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("filesystem mutations are revision-aware, serialized, movable, and deletable", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-fs-mutations-"));
   const workspace = join(root, "workspace");
@@ -352,8 +410,20 @@ function brokerWithFilesystem(workspace: string, artifacts: ArtifactStore): Tool
     workspacePath: workspace,
     artifacts,
   });
-  for (const tool of createFilesystemTools({ artifacts })) broker.register(tool);
+  for (const tool of createFilesystemTools({
+    artifacts,
+    repository: new RepositoryIntelligence(),
+  })) broker.register(tool);
   return broker;
+}
+
+function searchPaths(result: ToolResult): string[] {
+  return (json(result) as { matches: Array<{ path: string }> }).matches
+    .map((match) => match.path);
+}
+
+function git(cwd: string, ...args: string[]): void {
+  execFileSync("git", args, { cwd, stdio: "pipe", windowsHide: true });
 }
 
 async function invoke(

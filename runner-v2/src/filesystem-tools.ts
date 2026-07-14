@@ -17,9 +17,14 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import type {
+  RepositoryEntry,
+  RepositoryIntelligence,
+} from "./repository-intelligence.js";
 
 export interface FilesystemToolsOptions {
   artifacts?: ArtifactStore;
+  repository?: RepositoryIntelligence;
   maxReadBytes?: number;
   maxEntries?: number;
   maxSearchMatches?: number;
@@ -208,11 +213,26 @@ export function createFilesystemTools(
         const root = toolPath(context, input.path as string);
         const depth = integer(input.maxDepth, 1, 0, 20);
         const entries: Array<{ path: string; type: string }> = [];
-        await walk(root, depth, async (path, type) => {
-          if (entries.length >= maxEntries) return false;
-          entries.push({ path: displayPath(context, path), type });
-          return true;
-        }, context.signal);
+        if (options.repository && context.workspacePath) {
+          const snapshot = await options.repository.snapshot(
+            context.workspacePath,
+            { maxEntries: Math.min(20_000, maxEntries) },
+            context.signal,
+          );
+          entries.push(...repositoryListEntries(
+            snapshot.entries,
+            context.workspacePath,
+            root,
+            depth,
+            maxEntries,
+          ));
+        } else {
+          await walk(root, depth, async (path, type) => {
+            if (entries.length >= maxEntries) return false;
+            entries.push({ path: displayPath(context, path), type });
+            return true;
+          }, context.signal);
+        }
         entries.sort((left, right) => left.path.localeCompare(right.path));
         return { content: [json({ entries, truncated: entries.length >= maxEntries })], isError: false };
       },
@@ -265,9 +285,27 @@ export function createFilesystemTools(
         if (rootDetails.isFile()) {
           await searchFile(root);
         } else if (rootDetails.isDirectory()) {
-          await walk(root, 50, async (path, type) =>
-            type === "file" ? await searchFile(path) : matches.length < limit,
-          context.signal);
+          if (options.repository && context.workspacePath) {
+            const snapshot = await options.repository.snapshot(
+              context.workspacePath,
+              {
+                includeIgnored: input.includeIgnored === true,
+                maxEntries: 20_000,
+              },
+              context.signal,
+            );
+            for (const entry of snapshot.entries) {
+              if (matches.length >= limit) break;
+              if (!entryIsSearchable(entry, input)) continue;
+              const path = resolve(context.workspacePath, entry.path);
+              if (!isWithin(root, path)) continue;
+              await searchFile(path);
+            }
+          } else {
+            await walk(root, 50, async (path, type) =>
+              type === "file" ? await searchFile(path) : matches.length < limit,
+            context.signal);
+          }
         } else {
           return error("invalid_search_path", "Search path must be a file or directory.");
         }
@@ -421,6 +459,10 @@ function filesystemSchema(name: string): Record<string, unknown> {
           pattern: { type: "string" },
           regex: { type: "boolean" },
           caseSensitive: { type: "boolean" },
+          includeGenerated: { type: "boolean" },
+          includeVendored: { type: "boolean" },
+          includeIgnored: { type: "boolean" },
+          includeBinary: { type: "boolean" },
           maxMatches: { type: "integer", minimum: 1 },
         },
         ["path", "pattern"]
@@ -474,6 +516,53 @@ function filesystemSchema(name: string): Record<string, unknown> {
     default:
       throw new Error(`Unknown filesystem tool ${name}.`);
   }
+}
+
+function repositoryListEntries(
+  repositoryEntries: RepositoryEntry[],
+  workspaceRoot: string,
+  requestedRoot: string,
+  maxDepth: number,
+  maxEntries: number,
+): Array<{ path: string; type: string }> {
+  const paths = new Map<string, string>();
+  for (const entry of repositoryEntries) {
+    const absolutePath = resolve(workspaceRoot, entry.path);
+    if (!isWithin(requestedRoot, absolutePath)) continue;
+    const relation = relative(requestedRoot, absolutePath);
+    const segments = relation.split(sep).filter(Boolean);
+    if (segments.length === 0) continue;
+    const maximumSegments = Math.min(segments.length, maxDepth + 1);
+    for (let count = 1; count <= maximumSegments; count += 1) {
+      const path = resolve(requestedRoot, ...segments.slice(0, count));
+      const type = count === segments.length ? "file" : "directory";
+      paths.set(path, type);
+      if (paths.size >= maxEntries) break;
+    }
+    if (paths.size >= maxEntries) break;
+  }
+  return [...paths.entries()].map(([path, type]) => ({
+    path: normalizeDisplayPath(workspaceRoot, path),
+    type,
+  }));
+}
+
+function entryIsSearchable(entry: RepositoryEntry, input: Input): boolean {
+  if (entry.gitState === "ignored" && input.includeIgnored !== true) return false;
+  if (entry.kind === "generated" && input.includeGenerated !== true) return false;
+  if (entry.kind === "vendored" && input.includeVendored !== true) return false;
+  if (entry.kind === "binary" && input.includeBinary !== true) return false;
+  return true;
+}
+
+function isWithin(root: string, path: string): boolean {
+  const relation = relative(root, path);
+  return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`));
+}
+
+function normalizeDisplayPath(root: string, path: string): string {
+  const value = relative(root, path);
+  return (value || ".").split(sep).join("/");
 }
 
 function objectSchema(
