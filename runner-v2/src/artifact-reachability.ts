@@ -24,9 +24,8 @@ export interface ArtifactReachabilityGuardOptions {
 }
 
 /**
- * Builds a conservative global artifact-reference index only while Runner
- * recovery is quiescent. Live cleanup may enqueue tombstones, but cannot
- * physically remove shared artifacts.
+ * Builds a conservative global artifact-reference index only while the Runner
+ * manager has made all artifact-writing activity quiescent.
  */
 export class ArtifactReachabilityGuard {
   private readonly stateDirectory: string;
@@ -67,7 +66,7 @@ export class ArtifactReachabilityGuard {
 
   async prepareReachabilityIndex(): Promise<void> {
     if (!this.quiescent) {
-      throw new Error("Artifact reachability can be indexed only during quiescent startup.");
+      throw new Error("Artifact reachability can be indexed only during quiescent compaction.");
     }
     this.scans += 1;
     try {
@@ -209,8 +208,9 @@ function collectSqliteHashes(path: string, hashes: Set<string>): void {
        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
        ORDER BY name`
     ).all() as Array<{ name: string }>;
+    const runnerSessionStore = isRunnerSessionStore(database, tables.map(({ name }) => name));
     for (const { name } of tables) {
-      if (NON_LIVE_SESSION_TABLES.has(name)) continue;
+      if (runnerSessionStore && NON_LIVE_SESSION_TABLES.has(name)) continue;
       const statement = database.prepare(`SELECT * FROM ${quoteIdentifier(name)}`);
       for (const row of statement.iterate() as Iterable<Record<string, unknown>>) {
         for (const value of Object.values(row)) collectValueHashes(value, hashes);
@@ -219,6 +219,49 @@ function collectSqliteHashes(path: string, hashes: Set<string>): void {
   } finally {
     database.close();
   }
+}
+
+function isRunnerSessionStore(database: DatabaseSync, tables: readonly string[]): boolean {
+  const required = new Map<string, readonly string[]>([
+    ["agent_session_events", [
+      "sequence",
+      "session_id",
+      "event_type",
+      "occurred_at",
+      "idempotency_key",
+      "payload_json",
+      "artifact_hash",
+    ]],
+    ["agent_transcript_checkpoints", ["sequence", "run_id"]],
+    ["agent_transcript_turns", [
+      "id",
+      "run_id",
+      "session_id",
+      "actor_json",
+      "sequence",
+      "ordinal",
+      "occurred_at",
+      "text",
+    ]],
+    ["agent_artifact_cleanup", ["hash"]],
+    ["agent_compacted_checkpoint_idempotency", [
+      "session_id",
+      "idempotency_key",
+      "occurred_at",
+      "payload_json",
+      "artifact_hash",
+    ]],
+  ]);
+  const available = new Set(tables);
+  for (const [table, requiredColumns] of required) {
+    if (!available.has(table)) return false;
+    const columns = new Set(
+      (database.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>)
+        .map(({ name }) => name)
+    );
+    if (requiredColumns.some((column) => !columns.has(column))) return false;
+  }
+  return true;
 }
 
 function collectValueHashes(value: unknown, hashes: Set<string>): void {

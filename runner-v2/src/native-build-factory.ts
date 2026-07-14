@@ -390,7 +390,7 @@ export class NativeBuildFactory {
     await this.browserBackend.closeAll();
   }
 
-  async runStartupCompaction<T>(operation: () => Promise<T>): Promise<T> {
+  async runArtifactCompaction<T>(operation: () => Promise<T>): Promise<T> {
     return await this.artifactReachability.runQuiescent(operation);
   }
 

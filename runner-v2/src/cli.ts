@@ -94,8 +94,8 @@ async function main(): Promise<void> {
       onPumpResult: (runId, result) =>
         syncAutonomousBuildLifecycle(supervisor, runId, result),
       onPumpError: (runId, error) => writeRunnerWarning(runId, error),
-      runStartupCompaction: (operation) =>
-        buildFactory.runStartupCompaction(operation),
+      runArtifactCompaction: (operation) =>
+        buildFactory.runArtifactCompaction(operation),
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
     const server = new ControlServer({

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -169,6 +170,59 @@ test("an orphan SQLite companion file is scanned conservatively", async () => {
     });
     await artifacts.verify(artifact.hash);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unknown SQLite table named like Runner cleanup state still retains references", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-artifact-guard-unknown-sqlite-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const databasePath = join(root, "unknown.sqlite");
+  const database = new DatabaseSync(databasePath);
+  try {
+    const artifact = await artifacts.put(Buffer.from("target"), "application/octet-stream");
+    database.exec("CREATE TABLE agent_artifact_cleanup (hash TEXT NOT NULL)");
+    database.prepare("INSERT INTO agent_artifact_cleanup (hash) VALUES (?)").run(artifact.hash);
+    database.close();
+
+    const guard = new ArtifactReachabilityGuard(root, artifacts);
+    await guard.runQuiescent(async () => {
+      await guard.prepareReachabilityIndex();
+      assert.equal(await guard.removeIfGloballyUnreachable(artifact.hash), false);
+    });
+    await artifacts.verify(artifact.hash);
+  } finally {
+    try { database.close(); } catch { /* already closed */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a near-miss SQLite schema is not trusted as a Runner session store", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-artifact-guard-near-miss-sqlite-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const database = new DatabaseSync(join(root, "near-miss.sqlite"));
+  try {
+    const artifact = await artifacts.put(Buffer.from("target"), "application/octet-stream");
+    database.exec(`
+      CREATE TABLE agent_session_events (
+        session_id TEXT, event_type TEXT, payload_json TEXT, artifact_hash TEXT
+      );
+      CREATE TABLE agent_artifact_cleanup (hash TEXT);
+      CREATE TABLE agent_compacted_checkpoint_idempotency (
+        session_id TEXT, idempotency_key TEXT, payload_json TEXT, artifact_hash TEXT
+      );
+    `);
+    database.prepare("INSERT INTO agent_artifact_cleanup (hash) VALUES (?)").run(artifact.hash);
+    database.close();
+
+    const guard = new ArtifactReachabilityGuard(root, artifacts);
+    await guard.runQuiescent(async () => {
+      await guard.prepareReachabilityIndex();
+      assert.equal(await guard.removeIfGloballyUnreachable(artifact.hash), false);
+    });
+    await artifacts.verify(artifact.hash);
+  } finally {
+    try { database.close(); } catch { /* already closed */ }
     rmSync(root, { recursive: true, force: true });
   }
 });

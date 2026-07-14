@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import type { BuildRuntime } from "../src/build-runtime.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import {
@@ -15,6 +17,7 @@ import {
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
+import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 
 const spec: NativeBuildSpec = {
   version: 1,
@@ -701,7 +704,7 @@ test("recovery reports a global reachability scan failure and still activates re
       runId,
       message: error instanceof Error ? error.message : String(error),
     }),
-    runStartupCompaction: async (operation) => await operation(),
+    runArtifactCompaction: async (operation) => await operation(),
     prepareArtifactCleanup: async () => {
       throw new Error("reachability scan failed");
     },
@@ -739,6 +742,381 @@ test("recovery reports a global reachability scan failure and still activates re
       message: "reachability scan failed",
     }]);
   } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("settlement requests live compaction after releasing its own activity lease", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-self-lease-"));
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let scans = 0;
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => { scans += 1; },
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        runUntilBlocked: async () => {
+          projection = { ...projection, status: "completed" };
+          return { status: "completed" as const };
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+      cleanup: () => undefined,
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.create(spec);
+    manager.activate("run_1");
+    await Promise.race([
+      manager.awaitIdle("run_1"),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("settlement deadlocked")), 500)),
+    ]);
+    assert.equal(scans, 1);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live compaction waits for active work, blocks new work, and scans once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-gate-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  let releaseWriter!: () => void;
+  const writerRelease = new Promise<void>((resolve) => { releaseWriter = resolve; });
+  let writerStarted!: () => void;
+  const writerStart = new Promise<void>((resolve) => { writerStarted = resolve; });
+  let cleanupDone!: () => void;
+  const cleanup = new Promise<void>((resolve) => { cleanupDone = resolve; });
+  let releaseScan!: () => void;
+  const scanRelease = new Promise<void>((resolve) => { releaseScan = resolve; });
+  let scanStarted!: () => void;
+  const scanStart = new Promise<void>((resolve) => { scanStarted = resolve; });
+  let scans = 0;
+  let waiterCalls = 0;
+  const projections = new Map<string, SchedulerProjection>();
+  const manager = new NativeBuildManager({
+    specs,
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => {
+      scans += 1;
+      scanStarted();
+      await scanRelease;
+    },
+    createRuntime: async (input) => {
+      let projection = fakeRuntime(input.runId).projection();
+      projections.set(input.runId, projection);
+      return {
+        ...handleProjections(input.runId),
+        runtime: {
+          ...fakeRuntime(input.runId),
+          projection: () => projections.get(input.runId)!,
+          step: async () => {
+            waiterCalls += 1;
+            return { status: "progressed" as const };
+          },
+          runUntilBlocked: async () => {
+            if (input.runId === "run_writer") {
+              writerStarted();
+              await writerRelease;
+              return { status: "paused" as const };
+            }
+            projection = { ...projection, status: "completed" };
+            projections.set(input.runId, projection);
+            return { status: "completed" as const };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => { if (input.runId === "run_settled") cleanupDone(); },
+        close: () => undefined,
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runId: "run_writer", idempotencyKey: "writer" });
+    await manager.create({ ...spec, runId: "run_settled", idempotencyKey: "settled" });
+    const activeWriter = manager.runUntilBlocked("run_writer");
+    await writerStart;
+    manager.activate("run_settled");
+    await cleanup;
+    const waitingStep = manager.step("run_writer");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(waiterCalls, 0);
+    releaseWriter();
+    await scanStart;
+    assert.equal(waiterCalls, 0);
+    assert.equal(scans, 1);
+    releaseScan();
+    await Promise.all([activeWriter, waitingStep, manager.awaitIdle("run_settled")]);
+    assert.equal(waiterCalls, 1);
+  } finally {
+    releaseWriter();
+    releaseScan();
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live settlement physically deletes obsolete checkpoints without touching active-run artifacts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-delete-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const guard = new ArtifactReachabilityGuard(root, artifacts);
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts, {
+    deleteArtifactIfGloballyUnreachable: (hash) => guard.removeIfGloballyUnreachable(hash),
+  });
+  let manager: NativeBuildManager | undefined;
+  try {
+    const settledOld = await checkpointTwice(sessions, "run_settled");
+    const activeOld = await checkpointTwice(sessions, "run_active");
+    const projections = new Map<string, SchedulerProjection>();
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      runArtifactCompaction: (operation) => guard.runQuiescent(operation),
+      prepareArtifactCleanup: () => guard.prepareReachabilityIndex(),
+      createRuntime: async (input) => {
+        let projection = fakeRuntime(input.runId).projection();
+        projections.set(input.runId, projection);
+        return {
+          ...handleProjections(input.runId),
+          runtime: {
+            ...fakeRuntime(input.runId),
+            projection: () => projections.get(input.runId)!,
+            runUntilBlocked: async () => {
+              if (input.runId === "run_settled") {
+                projection = { ...projection, status: "completed" };
+                projections.set(input.runId, projection);
+                return { status: "completed" as const };
+              }
+              return { status: "paused" as const };
+            },
+          } as unknown as BuildRuntime,
+          usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
+          compact: () => sessions.compactRun(input.runId),
+          projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+          cleanup: () => sessions.compactRun(input.runId),
+          close: () => undefined,
+        };
+      },
+    });
+    await manager.create({ ...spec, runId: "run_active", idempotencyKey: "active" });
+    await manager.create({ ...spec, runId: "run_settled", idempotencyKey: "settled" });
+    manager.activate("run_settled");
+    await manager.awaitIdle("run_settled");
+
+    await assert.rejects(artifacts.verify(settledOld), /not found/i);
+    await artifacts.verify(activeOld);
+    assert.equal(guard.scanCount, 1);
+  } finally {
+    await manager?.close();
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent settlements coalesce into one live reachability scan", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-coalesce-"));
+  let arrivals = 0;
+  let releaseBoth!: () => void;
+  const bothReleased = new Promise<void>((resolve) => { releaseBoth = resolve; });
+  let bothStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bothStarted = resolve; });
+  let scans = 0;
+  const projections = new Map<string, SchedulerProjection>();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => { scans += 1; },
+    createRuntime: async (input) => {
+      let projection = fakeRuntime(input.runId).projection();
+      projections.set(input.runId, projection);
+      return {
+        ...handleProjections(input.runId),
+        runtime: {
+          ...fakeRuntime(input.runId),
+          projection: () => projections.get(input.runId)!,
+          runUntilBlocked: async () => {
+            arrivals += 1;
+            if (arrivals === 2) bothStarted();
+            await bothReleased;
+            projection = { ...projection, status: "completed" };
+            projections.set(input.runId, projection);
+            return { status: "completed" as const };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runId: "run_a", idempotencyKey: "a" });
+    await manager.create({ ...spec, runId: "run_b", idempotencyKey: "b" });
+    manager.activate("run_a");
+    manager.activate("run_b");
+    await started;
+    releaseBoth();
+    await manager.awaitIdle();
+    assert.equal(scans, 1);
+  } finally {
+    releaseBoth();
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed live reachability scan retains artifacts and reopens the activity gate", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-failure-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const guard = new ArtifactReachabilityGuard(root, artifacts);
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts, {
+    deleteArtifactIfGloballyUnreachable: (hash) => guard.removeIfGloballyUnreachable(hash),
+  });
+  let manager: NativeBuildManager | undefined;
+  try {
+    const retained = await checkpointTwice(sessions, "run_settled");
+    writeFileSync(
+      join(root, "corrupt.sqlite"),
+      Buffer.concat([Buffer.from("SQLite format 3\0", "binary"), Buffer.from("broken")])
+    );
+    let waiterCalls = 0;
+    const errors: string[] = [];
+    const projections = new Map<string, SchedulerProjection>();
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpError: (runId) => errors.push(runId),
+      runArtifactCompaction: (operation) => guard.runQuiescent(operation),
+      prepareArtifactCleanup: () => guard.prepareReachabilityIndex(),
+      createRuntime: async (input) => {
+        let projection = fakeRuntime(input.runId).projection();
+        projections.set(input.runId, projection);
+        return {
+          ...handleProjections(input.runId),
+          runtime: {
+            ...fakeRuntime(input.runId),
+            projection: () => projections.get(input.runId)!,
+            step: async () => {
+              waiterCalls += 1;
+              return { status: "progressed" as const };
+            },
+            runUntilBlocked: async () => {
+              projection = { ...projection, status: "completed" };
+              projections.set(input.runId, projection);
+              return { status: "completed" as const };
+            },
+          } as unknown as BuildRuntime,
+          usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
+          compact: () => input.runId === "run_settled"
+            ? sessions.compactRun(input.runId)
+            : undefined,
+          projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+          cleanup: () => input.runId === "run_settled"
+            ? sessions.compactRun(input.runId)
+            : undefined,
+          close: () => undefined,
+        };
+      },
+    });
+    await manager.create({ ...spec, runId: "run_settled", idempotencyKey: "settled" });
+    await manager.create({ ...spec, runId: "run_waiter", idempotencyKey: "waiter" });
+    manager.activate("run_settled");
+    await manager.awaitIdle("run_settled");
+
+    await artifacts.verify(retained);
+    await manager.step("run_waiter");
+    assert.equal(waiterCalls, 1);
+    assert.deepEqual(errors, ["live-artifact-reachability"]);
+  } finally {
+    await manager?.close();
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("close rejects work queued behind live compaction and waits for active work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-close-"));
+  let releaseWriter!: () => void;
+  const writerRelease = new Promise<void>((resolve) => { releaseWriter = resolve; });
+  let writerStarted!: () => void;
+  const writerStart = new Promise<void>((resolve) => { writerStarted = resolve; });
+  let cleanupDone!: () => void;
+  const cleanup = new Promise<void>((resolve) => { cleanupDone = resolve; });
+  let releaseScan!: () => void;
+  const scanRelease = new Promise<void>((resolve) => { releaseScan = resolve; });
+  let scanStarted!: () => void;
+  const scanStart = new Promise<void>((resolve) => { scanStarted = resolve; });
+  let writerFinished = false;
+  let closeOverlappedWriter = false;
+  const projections = new Map<string, SchedulerProjection>();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => {
+      scanStarted();
+      await scanRelease;
+    },
+    createRuntime: async (input) => {
+      let projection = fakeRuntime(input.runId).projection();
+      projections.set(input.runId, projection);
+      return {
+        ...handleProjections(input.runId),
+        runtime: {
+          ...fakeRuntime(input.runId),
+          projection: () => projections.get(input.runId)!,
+          step: async () => ({ status: "progressed" as const }),
+          runUntilBlocked: async () => {
+            if (input.runId === "run_writer") {
+              writerStarted();
+              await writerRelease;
+              writerFinished = true;
+              return { status: "paused" as const };
+            }
+            projection = { ...projection, status: "completed" };
+            projections.set(input.runId, projection);
+            return { status: "completed" as const };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => { if (input.runId === "run_settled") cleanupDone(); },
+        close: () => { if (!writerFinished) closeOverlappedWriter = true; },
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runId: "run_writer", idempotencyKey: "writer" });
+    await manager.create({ ...spec, runId: "run_settled", idempotencyKey: "settled" });
+    const activeWriter = manager.runUntilBlocked("run_writer");
+    await writerStart;
+    manager.activate("run_settled");
+    await cleanup;
+    const queuedStep = manager.step("run_writer");
+    const closing = manager.close();
+    releaseWriter();
+    await scanStart;
+    releaseScan();
+
+    await activeWriter;
+    await assert.rejects(queuedStep, /clos/i);
+    await closing;
+    assert.equal(closeOverlappedWriter, false);
+  } finally {
+    releaseWriter();
+    releaseScan();
     await manager.close();
     rmSync(root, { recursive: true, force: true });
   }
@@ -998,4 +1376,37 @@ function selectedHandoffProjection(
       appliedToProject: choice === "apply_to_project",
     },
   };
+}
+
+async function checkpointTwice(
+  sessions: SqliteAgentSessionStore,
+  runId: string
+): Promise<string> {
+  const sessionId = `worker:${runId}:task:1`;
+  await sessions.create({
+    sessionId,
+    runId,
+    actor: { role: "worker", id: `worker_${runId}` },
+    occurredAt: "2026-07-14T00:00:00.000Z",
+  });
+  await sessions.checkpoint(sessionId, {
+    messages: [{
+      id: "assistant_1",
+      role: "assistant",
+      content: [{ type: "text", text: `${runId}:first` }],
+    }],
+    turns: 1,
+    seenCallIds: [],
+  }, "2026-07-14T00:00:01.000Z");
+  const oldHash = sessions.events(sessionId)[1]!.artifactHash!;
+  await sessions.checkpoint(sessionId, {
+    messages: [{
+      id: "assistant_2",
+      role: "assistant",
+      content: [{ type: "text", text: `${runId}:second` }],
+    }],
+    turns: 2,
+    seenCallIds: [],
+  }, "2026-07-14T00:00:02.000Z");
+  return oldHash;
 }

@@ -35,7 +35,7 @@ export interface NativeBuildManagerOptions {
   shouldAutoRun?(runId: string): boolean;
   onPumpResult?(runId: string, result: BuildStepResult): void;
   onPumpError?(runId: string, error: unknown): void;
-  runStartupCompaction?(operation: () => Promise<void>): Promise<void>;
+  runArtifactCompaction?(operation: () => Promise<void>): Promise<void>;
   prepareArtifactCleanup?(): Promise<void>;
 }
 
@@ -44,7 +44,16 @@ export class NativeBuildManager implements BuildControlPlane {
   private readonly pumps = new Map<string, Promise<void>>();
   private readonly settledRuns = new Set<string>();
   private operationQueue = Promise.resolve();
+  private activityGateClosed = false;
+  private activeRuntimeOperations = 0;
+  private readonly activityWaiters: Array<{
+    resolve(release: () => void): void;
+    reject(error: Error): void;
+  }> = [];
+  private readonly activityIdleWaiters: Array<() => void> = [];
+  private liveCompaction: Promise<void> | undefined;
   private closePromise: Promise<void> | undefined;
+  private closing = false;
   private closed = false;
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
@@ -78,8 +87,8 @@ export class NativeBuildManager implements BuildControlPlane {
         await this.tryCleanupSettledRun(runId, handle);
       }
     };
-    if (this.options.runStartupCompaction) {
-      await this.options.runStartupCompaction(compactAndCleanup);
+    if (this.options.runArtifactCompaction) {
+      await this.options.runArtifactCompaction(compactAndCleanup);
     } else {
       await compactAndCleanup();
     }
@@ -134,11 +143,13 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async step(runId: string): Promise<BuildStepResult> {
-    return await this.require(runId).runtime.step();
+    return await this.withRuntimeActivity(() => this.require(runId).runtime.step());
   }
 
   async runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult> {
-    return await this.require(runId).runtime.runUntilBlocked(maxSteps);
+    return await this.withRuntimeActivity(
+      () => this.require(runId).runtime.runUntilBlocked(maxSteps)
+    );
   }
 
   activate(runId: string): void {
@@ -205,8 +216,32 @@ export class NativeBuildManager implements BuildControlPlane {
     idempotencyKey: string,
     actor: SchedulerActor
   ): Promise<SchedulerProjection> {
+    const releaseActivity = await this.acquireRuntimeActivity();
+    const compaction = this.requestLiveCompaction();
+    let selected: SchedulerProjection;
+    try {
+      selected = await this.selectProjectHandoffInsideActivity(
+        runId,
+        choice,
+        idempotencyKey,
+        actor
+      );
+    } finally {
+      releaseActivity();
+    }
+    await compaction;
+    return selected;
+  }
+
+  private async selectProjectHandoffInsideActivity(
+    runId: string,
+    choice: ProjectHandoffChoice,
+    idempotencyKey: string,
+    actor: SchedulerActor
+  ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
-      const handle = this.require(runId);
+      const handle = this.handles.get(runId);
+      if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
       const projection = handle.runtime.projection();
       if (projection.projectHandoff?.status === "selected") {
         if (projection.projectHandoff.choice !== choice) {
@@ -233,12 +268,19 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async close(): Promise<void> {
-    this.closePromise ??= this.closeAfterPumps();
+    if (!this.closePromise) {
+      this.closing = true;
+      this.activityGateClosed = true;
+      this.rejectActivityWaiters();
+      this.closePromise = this.closeAfterPumps();
+    }
     await this.closePromise;
   }
 
   private async closeAfterPumps(): Promise<void> {
     await this.awaitIdle();
+    if (this.liveCompaction) await this.liveCompaction;
+    await this.waitForRuntimeActivityIdle();
     this.closed = true;
     await this.serialized(async () => {
       const handles = [...this.handles.values()];
@@ -282,6 +324,14 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     handle: NativeBuildRuntimeHandle
   ): Promise<void> {
+    let releaseActivity: (() => void) | undefined;
+    try {
+      releaseActivity = await this.acquireRuntimeActivity();
+    } catch (error) {
+      if (this.closing) return;
+      throw error;
+    }
+    let compaction: Promise<void> | undefined;
     try {
       let result = await handle.runtime.runUntilBlocked();
       while (
@@ -307,7 +357,8 @@ export class NativeBuildManager implements BuildControlPlane {
         (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
       ) {
         try {
-          await this.selectProjectHandoffAs(
+          compaction = this.requestLiveCompaction();
+          await this.selectProjectHandoffInsideActivity(
             runId,
             "apply_to_project",
             "automatic-project-handoff",
@@ -326,6 +377,7 @@ export class NativeBuildManager implements BuildControlPlane {
           return;
         }
       } else if (projection.status === "completed") {
+        compaction = this.requestLiveCompaction();
         try {
           await this.cleanupSettledRun(runId, handle);
         } catch (error) {
@@ -347,7 +399,99 @@ export class NativeBuildManager implements BuildControlPlane {
         status: "paused",
         action: "autonomous_pump_error",
       });
+    } finally {
+      releaseActivity();
+      if (compaction) await compaction;
     }
+  }
+
+  private requestLiveCompaction(): Promise<void> {
+    if (!this.options.runArtifactCompaction || !this.options.prepareArtifactCleanup) {
+      return Promise.resolve();
+    }
+    if (this.liveCompaction) return this.liveCompaction;
+
+    // Close synchronously while the settling caller still holds its lease.
+    // It can queue tombstones, release itself, and only then can this scan run.
+    this.activityGateClosed = true;
+    const operation = (async () => {
+      await this.waitForRuntimeActivityIdle();
+      try {
+        await this.options.runArtifactCompaction!(async () => {
+          const nonRunning = [...this.handles.entries()].filter(
+            ([, candidate]) => candidate.runtime.projection().status !== "running"
+          );
+          await this.compactRuns(nonRunning);
+          await this.options.prepareArtifactCleanup!();
+          await this.compactRuns(nonRunning);
+        });
+      } catch (error) {
+        this.options.onPumpError?.("live-artifact-reachability", error);
+      } finally {
+        this.openRuntimeActivityGate();
+      }
+    })();
+    this.liveCompaction = operation.finally(() => {
+      this.liveCompaction = undefined;
+    });
+    return this.liveCompaction;
+  }
+
+  private async withRuntimeActivity<T>(operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireRuntimeActivity();
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private acquireRuntimeActivity(): Promise<() => void> {
+    this.assertOpen();
+    if (!this.activityGateClosed) {
+      this.activeRuntimeOperations += 1;
+      return Promise.resolve(this.runtimeActivityRelease());
+    }
+    return new Promise((resolve, reject) => {
+      this.activityWaiters.push({ resolve, reject });
+    });
+  }
+
+  private runtimeActivityRelease(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeRuntimeOperations -= 1;
+      if (this.activeRuntimeOperations === 0) {
+        for (const resolve of this.activityIdleWaiters.splice(0)) resolve();
+      }
+    };
+  }
+
+  private waitForRuntimeActivityIdle(): Promise<void> {
+    if (this.activeRuntimeOperations === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.activityIdleWaiters.push(resolve);
+    });
+  }
+
+  private openRuntimeActivityGate(): void {
+    if (this.closing) {
+      this.activityGateClosed = true;
+      this.rejectActivityWaiters();
+      return;
+    }
+    this.activityGateClosed = false;
+    for (const { resolve } of this.activityWaiters.splice(0)) {
+      this.activeRuntimeOperations += 1;
+      resolve(this.runtimeActivityRelease());
+    }
+  }
+
+  private rejectActivityWaiters(): void {
+    const error = new Error("Native Build manager is closing.");
+    for (const { reject } of this.activityWaiters.splice(0)) reject(error);
   }
 
   private async cleanupSettledRun(
@@ -390,7 +534,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error("Native Build manager is closed.");
+    if (this.closed || this.closing) throw new Error("Native Build manager is closed.");
   }
 
   private async serialized<T>(operation: () => Promise<T>): Promise<T> {
