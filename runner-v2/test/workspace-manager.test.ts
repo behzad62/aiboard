@@ -229,6 +229,89 @@ test("cleanup removes every owned task worktree and branch, prunes, and is idemp
   }
 });
 
+test("cleanup removes an empty task directory with its exact stale worktree record", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-empty-stale-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_empty_stale",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_empty_stale",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await manager.createTaskWorkspace("task");
+    rmSync(workspace.path, { recursive: true, force: true });
+    mkdirSync(workspace.path);
+
+    await manager.cleanup();
+
+    assert.equal(existsSync(workspace.path), false);
+    assert.notEqual(
+      (
+        await runGit({
+          cwd: project,
+          args: ["rev-parse", "--verify", workspace.branch],
+          allowFailure: true,
+        })
+      ).exitCode,
+      0
+    );
+    assert.equal(
+      (await gitText(project, ["worktree", "list", "--porcelain"]))
+        .replaceAll("\\", "/")
+        .includes(workspace.path.replaceAll("\\", "/")),
+      false
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup refuses a nonempty invalid task directory with a stale worktree record", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-nonempty-stale-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_nonempty_stale",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_nonempty_stale",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await manager.createTaskWorkspace("task");
+    rmSync(workspace.path, { recursive: true, force: true });
+    mkdirSync(workspace.path);
+    writeFileSync(join(workspace.path, "user.txt"), "preserve me\n");
+
+    await assert.rejects(manager.cleanup());
+
+    assert.equal(readFileSync(join(workspace.path, "user.txt"), "utf8"), "preserve me\n");
+    assert.equal(
+      await gitText(project, ["rev-parse", "--verify", workspace.branch]),
+      baseline.revision
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("cleanup rejects a task worktree whose ownership no longer matches", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-owner-"));
   const project = join(root, "project");

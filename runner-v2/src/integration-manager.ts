@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
@@ -10,6 +19,10 @@ import {
   type GitCommandOptions,
 } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
+import {
+  isEmptyDirectory,
+  parseWorktreeAssociations,
+} from "./worktree-state.js";
 
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Integrator",
@@ -288,9 +301,72 @@ export class IntegrationManager {
 
   async cleanup(): Promise<void> {
     await this.serialized(async () => {
-      if (await pathExists(this.path)) {
+      const branchRevision = await this.resolveRef(this.branch);
+      if (branchRevision) {
+        const ancestry = await this.git(
+          this.repositoryRoot,
+          ["merge-base", "--is-ancestor", this.baselineRevision, branchRevision],
+          true
+        );
+        if (ancestry.exitCode !== 0) {
+          throw new Error("Integration branch escaped its run baseline.");
+        }
+      }
+      const descriptorExists = await pathExists(this.path);
+      let associations = parseWorktreeAssociations(
+        (
+          await this.git(this.repositoryRoot, [
+            "worktree",
+            "list",
+            "--porcelain",
+            "-z",
+          ])
+        ).stdout
+      ).filter((association) => association.branch === this.branch);
+      const exactStaleAssociation =
+        branchRevision !== null &&
+        associations.length === 1 &&
+        resolve(associations[0]!.path) === this.path &&
+        associations[0]!.prunable;
+      let removedStaleAssociation = false;
+      if (
+        exactStaleAssociation &&
+        (!descriptorExists || (await isEmptyDirectory(this.path)))
+      ) {
+        if (descriptorExists) {
+          await rmdir(this.path);
+        }
+        await this.git(this.repositoryRoot, [
+          "worktree",
+          "prune",
+          "--expire",
+          "now",
+        ]);
+        removedStaleAssociation = true;
+        associations = parseWorktreeAssociations(
+          (
+            await this.git(this.repositoryRoot, [
+              "worktree",
+              "list",
+              "--porcelain",
+              "-z",
+            ])
+          ).stdout
+        ).filter((association) => association.branch === this.branch);
+      } else if (descriptorExists) {
         await this.assertWorkspace();
         this.currentRevision ??= await this.head();
+      }
+      if (
+        associations.length !==
+          (descriptorExists && !removedStaleAssociation ? 1 : 0) ||
+        associations.some(
+          (association) => resolve(association.path) !== this.path
+        )
+      ) {
+        throw new Error("Integration branch has an unexpected worktree path.");
+      }
+      if (descriptorExists && !removedStaleAssociation) {
         await this.git(this.repositoryRoot, [
           "worktree",
           "remove",

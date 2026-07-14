@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
+import {
+  isEmptyDirectory,
+  parseWorktreeAssociations,
+} from "./worktree-state.js";
 
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Worker",
@@ -174,10 +178,7 @@ export class WorkspaceManager {
           throw new Error(`Task branch ${branch} escaped its run baseline.`);
         }
         const descriptorExists = await pathExists(workspace.path);
-        if (descriptorExists) {
-          await this.assertOwnedWorkspace(workspace);
-        }
-        const associations = parseWorktreeAssociations(
+        let associations = parseWorktreeAssociations(
           (
             await this.git(this.repositoryRoot, [
               "worktree",
@@ -187,15 +188,48 @@ export class WorkspaceManager {
             ])
           ).stdout
         ).filter((association) => association.branch === branch);
+        const exactStaleAssociation =
+          associations.length === 1 &&
+          resolve(associations[0]!.path) === workspace.path &&
+          associations[0]!.prunable;
+        let removedStaleAssociation = false;
         if (
-          associations.length !== (descriptorExists ? 1 : 0) ||
+          exactStaleAssociation &&
+          (!descriptorExists || (await isEmptyDirectory(workspace.path)))
+        ) {
+          if (descriptorExists) {
+            await rmdir(workspace.path);
+          }
+          await this.git(this.repositoryRoot, [
+            "worktree",
+            "prune",
+            "--expire",
+            "now",
+          ]);
+          removedStaleAssociation = true;
+          associations = parseWorktreeAssociations(
+            (
+              await this.git(this.repositoryRoot, [
+                "worktree",
+                "list",
+                "--porcelain",
+                "-z",
+              ])
+            ).stdout
+          ).filter((association) => association.branch === branch);
+        } else if (descriptorExists) {
+          await this.assertOwnedWorkspace(workspace);
+        }
+        if (
+          associations.length !==
+            (descriptorExists && !removedStaleAssociation ? 1 : 0) ||
           associations.some(
             (association) => resolve(association.path) !== workspace.path
           )
         ) {
           throw new Error(`Task branch ${branch} has an unexpected worktree path.`);
         }
-        if (descriptorExists) {
+        if (descriptorExists && !removedStaleAssociation) {
           await this.git(this.repositoryRoot, [
             "worktree",
             "remove",
@@ -417,28 +451,4 @@ function safeName(value: string): string {
     .slice(0, 40) || "item";
   const hash = createHash("sha256").update(value).digest("hex").slice(0, 10);
   return `${readable}-${hash}`;
-}
-
-interface WorktreeAssociation {
-  path: string;
-  branch?: string;
-}
-
-function parseWorktreeAssociations(output: string): WorktreeAssociation[] {
-  const associations: WorktreeAssociation[] = [];
-  let current: WorktreeAssociation | undefined;
-  for (const field of output.split("\0")) {
-    if (!field) {
-      if (current) associations.push(current);
-      current = undefined;
-      continue;
-    }
-    if (field.startsWith("worktree ")) {
-      current = { path: field.slice("worktree ".length) };
-    } else if (field.startsWith("branch ") && current) {
-      current.branch = field.slice("branch ".length);
-    }
-  }
-  if (current) associations.push(current);
-  return associations;
 }

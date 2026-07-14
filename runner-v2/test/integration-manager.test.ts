@@ -1341,6 +1341,79 @@ test("cleanup removes the owned integration worktree but retains its audit branc
   }
 });
 
+test("cleanup removes an empty integration directory with its exact stale worktree record", async () => {
+  const fixture = await createFixture("cleanup-empty-stale");
+  try {
+    const revision = fixture.integration.revision;
+    const branch = fixture.integration.integrationBranch;
+    rmSync(fixture.integration.path, { recursive: true, force: true });
+    mkdirSync(fixture.integration.path);
+
+    await fixture.integration.cleanup();
+
+    assert.equal(existsSync(fixture.integration.path), false);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
+    );
+    assert.equal(
+      (await gitText(fixture.project, ["worktree", "list", "--porcelain"]))
+        .replaceAll("\\", "/")
+        .includes(fixture.integration.path.replaceAll("\\", "/")),
+      false
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup refuses a nonempty invalid integration directory with a stale worktree record", async () => {
+  const fixture = await createFixture("cleanup-nonempty-stale");
+  try {
+    const revision = fixture.integration.revision;
+    const branch = fixture.integration.integrationBranch;
+    rmSync(fixture.integration.path, { recursive: true, force: true });
+    mkdirSync(fixture.integration.path);
+    writeFileSync(join(fixture.integration.path, "user.txt"), "preserve me\n");
+
+    await assert.rejects(fixture.integration.cleanup());
+
+    assert.equal(
+      readFileSync(join(fixture.integration.path, "user.txt"), "utf8"),
+      "preserve me\n"
+    );
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup refuses an integration worktree associated with an unexpected path", async () => {
+  const fixture = await createFixture("cleanup-unexpected-path");
+  const unexpectedPath = join(fixture.root, "unexpected-integration-path");
+  try {
+    const revision = fixture.integration.revision;
+    const branch = fixture.integration.integrationBranch;
+    await runGit({
+      cwd: fixture.project,
+      args: ["worktree", "move", fixture.integration.path, unexpectedPath],
+    });
+
+    await assert.rejects(fixture.integration.cleanup(), /unexpected worktree path/i);
+
+    assert.equal(existsSync(unexpectedPath), true);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 async function createFixture(label: string, execute?: GitRunner) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-integration-${label}-`));
   const project = join(root, "project");
