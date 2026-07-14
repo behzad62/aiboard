@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   applyDiscussionLiveStatus,
@@ -18,6 +19,7 @@ import {
   shouldShowLegacyBuildFileFallback,
   nextNativeBuildPoll,
   createNativeBuildAttachmentPoller,
+  createNativeBuildAttachmentController,
   createNativeBuildAttachmentRefresh,
   createNativeBuildFileLoader,
   nativeBuildFileIdentity,
@@ -593,6 +595,88 @@ assert.equal(attachmentRetryQueue.length, 1, "initial snapshot failure also sche
 await attachmentRetryQueue.shift()!();
 assert.deepEqual(recoveredSnapshots, ["run_recovered"]);
 assert.equal(attachmentRetryQueue.length, 0, "terminal recovery stops cleanly after attachment");
+
+const stableControllerQueue: Array<() => Promise<void>> = [];
+let authoritativeRunId = "run_stable_a";
+let stableLoads = 0;
+const stableApplies: string[] = [];
+const stableController = createNativeBuildAttachmentController({
+  initialSavedRunId: authoritativeRunId,
+  resolveRunId: async () => authoritativeRunId,
+  load: async (runId) => {
+    stableLoads += 1;
+    return { runState: "paused" as const, marker: runId };
+  },
+  apply: (snapshot) => stableApplies.push(snapshot.marker),
+  schedule: (callback) => {
+    stableControllerQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+await stableController.start();
+assert.deepEqual(stableApplies, ["run_stable_a"]);
+assert.equal(stableLoads, 1);
+assert.equal(stableControllerQueue.length, 1, "paused controllers keep lightweight discovery alive");
+await stableControllerQueue.shift()!();
+assert.deepEqual(stableApplies, ["run_stable_a"], "unchanged paused metadata does not reconcile twice");
+assert.equal(stableLoads, 1, "unchanged paused metadata does not reload snapshots or files");
+authoritativeRunId = "run_stable_b";
+await stableControllerQueue.shift()!();
+assert.deepEqual(stableApplies, ["run_stable_a", "run_stable_b"]);
+assert.equal(stableLoads, 2, "a run switch loads the new run exactly once");
+await stableControllerQueue.shift()!();
+assert.deepEqual(stableApplies, ["run_stable_a", "run_stable_b"]);
+assert.equal(stableLoads, 2, "the switched paused run is not fetched twice");
+stableController.wake();
+await stableControllerQueue.shift()!();
+assert.deepEqual(
+  stableApplies,
+  ["run_stable_a", "run_stable_b", "run_stable_b"],
+  "an explicit same-run Resume wakes the stable controller without recreating it"
+);
+assert.equal(stableLoads, 3);
+stableController.cancel();
+
+const wakeRaceQueue: Array<() => Promise<void>> = [];
+let releaseOldResolution!: (runId: string) => void;
+const oldResolution = new Promise<string>((resolve) => { releaseOldResolution = resolve; });
+let resolveAttempt = 0;
+const wakeRaceApplies: string[] = [];
+const wakeRaceController = createNativeBuildAttachmentController({
+  initialSavedRunId: "run_old",
+  resolveRunId: async () => ++resolveAttempt === 1 ? await oldResolution : "run_new",
+  load: async (runId) => ({ runState: "paused" as const, marker: runId }),
+  apply: (snapshot) => wakeRaceApplies.push(snapshot.marker),
+  schedule: (callback) => {
+    wakeRaceQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+const oldStart = wakeRaceController.start();
+wakeRaceController.wake();
+await wakeRaceQueue.shift()!();
+releaseOldResolution("run_old");
+await oldStart;
+assert.deepEqual(
+  wakeRaceApplies,
+  ["run_new"],
+  "an in-flight pre-wake response cannot overwrite the resumed controller"
+);
+wakeRaceController.cancel();
+
+const discussionClientSource = readFileSync(
+  new URL("../app/discussion/discussion-client.tsx", import.meta.url),
+  "utf8"
+);
+assert.match(
+  discussionClientSource,
+  /useEffect\(\(\) => \{[\s\S]*?createNativeBuildAttachmentController[\s\S]*?\}, \[nativeAttachmentControllerKey\]\);/,
+  "the component owns one stable native attachment controller keyed only by discussion/runner configuration"
+);
 assert.deepEqual(
   nativeBuildUsageWindow({
     scopeId: "run_1",

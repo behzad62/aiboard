@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
@@ -38,6 +38,12 @@ export interface IntegrationManagerOptions {
   baselineRevision: string;
   execute?: GitRunner;
   executeBytes?: GitBinaryRunner;
+  afterProjectRefAdvanced?: (input: {
+    projectBranch: string;
+    expectedParent: string;
+    targetCommit: string;
+    journalPath: string;
+  }) => void | Promise<void>;
 }
 
 export type IntegrationResult =
@@ -94,6 +100,7 @@ export class IntegrationManager {
   private readonly branch: string;
   private readonly execute: GitRunner;
   private readonly executeBytes: GitBinaryRunner;
+  private readonly afterProjectRefAdvanced?: IntegrationManagerOptions["afterProjectRefAdvanced"];
   private operationQueue: Promise<void> = Promise.resolve();
   private currentRevision: string | undefined;
 
@@ -111,6 +118,7 @@ export class IntegrationManager {
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
     this.execute = options.execute ?? runGit;
     this.executeBytes = options.executeBytes ?? runGitBytes;
+    this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
   }
 
   get revision(): string {
@@ -400,8 +408,16 @@ export class IntegrationManager {
       }
 
       const handoffDirectory = resolve(this.stateDirectory, "handoff");
-      const patchPath = resolve(handoffDirectory, `${this.runSegment}.patch`);
-      const indexPath = resolve(handoffDirectory, `${this.runSegment}.index`);
+      const transitionId = randomUUID();
+      const transitionSegment = safeName(transitionId);
+      const patchPath = resolve(
+        handoffDirectory,
+        `${this.runSegment}.${transitionSegment}.patch`
+      );
+      const indexPath = resolve(
+        handoffDirectory,
+        `${this.runSegment}.${transitionSegment}.index`
+      );
       if (
         relative(handoffDirectory, patchPath).startsWith("..") ||
         relative(handoffDirectory, indexPath).startsWith("..")
@@ -479,11 +495,15 @@ export class IntegrationManager {
           targetCommit: committedRevision,
           integrationRevision: this.revision,
         };
-        await this.writeProjectApplyJournal(journal);
+        await this.assertCheckoutWillNotOverwriteUntracked(
+          projectRevision,
+          committedRevision
+        );
+        const journalPath = await this.writeProjectApplyJournal(journal, transitionId);
         try {
           await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
         } catch (error) {
-          await this.clearProjectApplyJournal();
+          await this.clearProjectApplyJournal(journalPath);
           throw error;
         }
         const advanced = await this.git(
@@ -497,10 +517,20 @@ export class IntegrationManager {
           true
         );
         if (advanced.exitCode !== 0) {
-          await this.clearProjectApplyJournal();
+          await this.clearProjectApplyJournal(journalPath);
           throw new Error("The project changed during automatic handoff.");
         }
+        await this.afterProjectRefAdvanced?.({
+          projectBranch: projectBranch.stdout.trim(),
+          expectedParent: projectRevision,
+          targetCommit: committedRevision,
+          journalPath,
+        });
         try {
+          await this.assertCheckoutWillNotOverwriteUntracked(
+            projectRevision,
+            committedRevision
+          );
           const currentBranch = await this.git(
             this.repositoryRoot,
             ["symbolic-ref", "--quiet", "HEAD"],
@@ -526,7 +556,7 @@ export class IntegrationManager {
               `The committed result could not be checked out safely: ${checkout.stderr.trim()}`
             );
           }
-          await this.clearProjectApplyJournal();
+          await this.clearProjectApplyJournal(journalPath);
         } catch (error) {
           const rollback = await this.git(
             this.repositoryRoot,
@@ -545,7 +575,7 @@ export class IntegrationManager {
             );
           }
           if (await this.projectMatchesRevision(projectRevision)) {
-            await this.clearProjectApplyJournal();
+            await this.clearProjectApplyJournal(journalPath);
           }
           throw error;
         }
@@ -559,23 +589,26 @@ export class IntegrationManager {
   }
 
   private async recoverProjectApply(): Promise<ProjectHandoffResult | null> {
-    const journal = await this.readProjectApplyJournal();
-    if (!journal) return null;
+    const records = await this.readProjectApplyJournals();
+    if (records.length === 0) return null;
     const fail = (reason: string): never => {
       throw new Error(
         `The journaled automatic handoff cannot be recovered safely: ${reason}`
       );
     };
-    if (
-      journal.version !== 1 ||
-      journal.runId !== this.runId ||
-      journal.integrationRevision !== this.revision ||
-      journal.projectIdentity !== await this.projectIdentity() ||
-      !journal.projectBranch.startsWith("refs/heads/") ||
-      !isRevision(journal.expectedParent) ||
-      !isRevision(journal.targetCommit)
-    ) {
-      fail("its recorded project or run identity does not match.");
+    const projectIdentity = await this.projectIdentity();
+    for (const { journal } of records) {
+      if (
+        journal.version !== 1 ||
+        journal.runId !== this.runId ||
+        journal.integrationRevision !== this.revision ||
+        journal.projectIdentity !== projectIdentity ||
+        !journal.projectBranch.startsWith("refs/heads/") ||
+        !isRevision(journal.expectedParent) ||
+        !isRevision(journal.targetCommit)
+      ) {
+        fail("its recorded project or run identity does not match.");
+      }
     }
     const branch = await this.git(
       this.repositoryRoot,
@@ -585,9 +618,23 @@ export class IntegrationManager {
     const head = (
       await this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
     ).stdout.trim();
-    if (branch.exitCode !== 0 || branch.stdout.trim() !== journal.projectBranch) {
+    if (
+      branch.exitCode !== 0 ||
+      records.some(({ journal }) => branch.stdout.trim() !== journal.projectBranch)
+    ) {
       fail("the checked-out branch does not match the journal.");
     }
+    const matching = records.filter(({ journal }) => journal.targetCommit === head);
+    if (matching.length === 0) {
+      if (records.every(({ journal }) => journal.expectedParent === head)) {
+        if (!await this.projectMatchesRevision(head)) {
+          fail("the pre-advance project state contains unrelated changes.");
+        }
+        return null;
+      }
+      fail("the project ref moved after the journal was written.");
+    }
+    const { journal, path: journalPath } = matching[0];
     const parent = await this.git(
       this.repositoryRoot,
       ["rev-parse", "--verify", `${journal.targetCommit}^`],
@@ -600,18 +647,8 @@ export class IntegrationManager {
       fail("the target commit is not this run's integrated result.");
     }
 
-    if (head === journal.expectedParent) {
-      if (!await this.projectMatchesRevision(journal.expectedParent)) {
-        fail("the pre-advance project state contains unrelated changes.");
-      }
-      await this.clearProjectApplyJournal();
-      return null;
-    }
-    if (head !== journal.targetCommit) {
-      fail("the project ref moved after the journal was written.");
-    }
     if (await this.projectMatchesRevision(journal.targetCommit)) {
-      await this.clearProjectApplyJournal();
+      await this.clearProjectApplyJournal(journalPath);
       return this.descriptor(true, journal.targetCommit);
     }
     if (!await this.projectMatchesRevision(journal.expectedParent)) {
@@ -625,7 +662,7 @@ export class IntegrationManager {
     if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit)) {
       fail(`the exact journaled checkout could not be repaired: ${repaired.stderr.trim()}`);
     }
-    await this.clearProjectApplyJournal();
+    await this.clearProjectApplyJournal(journalPath);
     return this.descriptor(true, journal.targetCommit);
   }
 
@@ -634,7 +671,7 @@ export class IntegrationManager {
       this.git(this.repositoryRoot, ["write-tree"], true),
       this.git(this.repositoryRoot, ["rev-parse", `${revision}^{tree}`], true),
       this.git(this.repositoryRoot, ["diff", "--quiet"], true),
-      this.git(this.repositoryRoot, ["ls-files", "--others", "--exclude-standard", "-z"], true),
+      this.git(this.repositoryRoot, ["ls-files", "--others", "-z"], true),
     ]);
     return (
       indexTree.exitCode === 0 &&
@@ -655,43 +692,92 @@ export class IntegrationManager {
       .digest("hex");
   }
 
-  private projectApplyJournalPath(): string {
+  private projectApplyJournalPath(transitionId?: string): string {
     const directory = resolve(this.stateDirectory, "handoff");
-    const path = resolve(directory, `${this.runSegment}.apply.json`);
+    const suffix = transitionId ? `.${safeName(transitionId)}` : "";
+    const path = resolve(directory, `${this.runSegment}${suffix}.apply.json`);
     if (relative(directory, path).startsWith("..")) {
       throw new Error("Project apply journal escaped the runner state directory.");
     }
     return path;
   }
 
-  private async readProjectApplyJournal(): Promise<ProjectApplyJournal | null> {
-    const path = this.projectApplyJournalPath();
+  private async readProjectApplyJournals(): Promise<Array<{
+    path: string;
+    journal: ProjectApplyJournal;
+  }>> {
+    const directory = resolve(this.stateDirectory, "handoff");
+    let names: string[];
     try {
-      const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-      if (!parsed || typeof parsed !== "object") {
-        throw new Error("Project apply journal must be an object.");
-      }
-      return parsed as ProjectApplyJournal;
+      names = await readdir(directory);
     } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return null;
+      if (isNodeError(error) && error.code === "ENOENT") return [];
+      throw new Error("The project apply journal directory is unreadable.", { cause: error });
+    }
+    const prefix = `${this.runSegment}.`;
+    const legacy = `${this.runSegment}.apply.json`;
+    const paths = names
+      .filter((name) => name === legacy || (name.startsWith(prefix) && name.endsWith(".apply.json")))
+      .sort()
+      .map((name) => resolve(directory, name));
+    try {
+      return await Promise.all(paths.map(async (path) => {
+        const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+        if (!parsed || typeof parsed !== "object") {
+          throw new Error("Project apply journal must be an object.");
+        }
+        return { path, journal: parsed as ProjectApplyJournal };
+      }));
+    } catch (error) {
       throw new Error("The project apply journal is unreadable.", { cause: error });
     }
   }
 
-  private async writeProjectApplyJournal(journal: ProjectApplyJournal): Promise<void> {
-    const path = this.projectApplyJournalPath();
+  private async writeProjectApplyJournal(
+    journal: ProjectApplyJournal,
+    transitionId: string
+  ): Promise<string> {
+    const path = this.projectApplyJournalPath(transitionId);
     const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
     await mkdir(resolve(path, ".."), { recursive: true });
     try {
       await writeFile(temporary, `${JSON.stringify(journal)}\n`, { flag: "wx" });
       await rename(temporary, path);
+      return path;
     } finally {
       await rm(temporary, { force: true });
     }
   }
 
-  private async clearProjectApplyJournal(): Promise<void> {
-    await rm(this.projectApplyJournalPath(), { force: true });
+  private async clearProjectApplyJournal(path: string): Promise<void> {
+    await rm(path, { force: true });
+  }
+
+  private async assertCheckoutWillNotOverwriteUntracked(
+    fromRevision: string,
+    toRevision: string
+  ): Promise<void> {
+    const [changed, untracked] = await Promise.all([
+      this.git(this.repositoryRoot, [
+        "diff",
+        "--name-only",
+        "-z",
+        fromRevision,
+        toRevision,
+        "--",
+      ]),
+      this.git(this.repositoryRoot, ["ls-files", "--others", "-z"]),
+    ]);
+    const changedPaths = new Set(changed.stdout.split("\0").filter(Boolean));
+    const collision = untracked.stdout
+      .split("\0")
+      .filter(Boolean)
+      .find((path) => changedPaths.has(path));
+    if (collision) {
+      throw new Error(
+        `Automatic project handoff would overwrite the untracked or ignored path ${collision}.`
+      );
+    }
   }
 
   private async assertProjectUnchanged(

@@ -397,6 +397,72 @@ export function createNativeBuildAttachmentPoller<
   };
 }
 
+export function createNativeBuildAttachmentController<
+  TSnapshot extends { runState: NativeRunProjection["state"] },
+>(options: {
+  initialSavedRunId: string;
+  resolveRunId: (savedRunId: string) => Promise<string>;
+  load: (runId: string) => Promise<TSnapshot>;
+  apply: (snapshot: TSnapshot & { runId: string }) => void;
+  schedule: (callback: () => Promise<void>, delayMs: number) => unknown;
+  cancelScheduled: (handle: unknown) => void;
+  intervalMs: number;
+  onError?: (error: unknown) => void;
+}): { start: () => Promise<void>; wake: () => void; cancel: () => void } {
+  let cancelled = false;
+  let scheduled: unknown;
+  let savedRunId = options.initialSavedRunId;
+  let observedRunId: string | undefined;
+  let observedState: NativeRunProjection["state"] | undefined;
+  let generation = 0;
+
+  const schedule = (delayMs = options.intervalMs) => {
+    if (cancelled) return;
+    scheduled = options.schedule(run, delayMs);
+  };
+  const run = async (): Promise<void> => {
+    const runGeneration = generation;
+    scheduled = undefined;
+    try {
+      const runId = await options.resolveRunId(savedRunId);
+      if (cancelled || runGeneration !== generation) return;
+      const settled = observedState !== undefined &&
+        !["created", "running", "stopping"].includes(observedState);
+      if (settled && observedRunId === runId) {
+        schedule();
+        return;
+      }
+      const snapshot = await options.load(runId);
+      if (cancelled || runGeneration !== generation) return;
+      savedRunId = runId;
+      observedRunId = runId;
+      observedState = snapshot.runState;
+      options.apply({ ...snapshot, runId });
+      schedule();
+    } catch (error) {
+      if (cancelled) return;
+      options.onError?.(error);
+      schedule();
+    }
+  };
+
+  return {
+    start: run,
+    wake: () => {
+      if (cancelled) return;
+      generation += 1;
+      observedState = undefined;
+      if (scheduled !== undefined) options.cancelScheduled(scheduled);
+      schedule(0);
+    },
+    cancel: () => {
+      cancelled = true;
+      generation += 1;
+      if (scheduled !== undefined) options.cancelScheduled(scheduled);
+    },
+  };
+}
+
 export function durableBuildHandoffPanels(
   projection: NativeBuildProjection,
   runState?: NativeRunProjection["state"]

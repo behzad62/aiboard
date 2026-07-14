@@ -91,8 +91,7 @@ import {
   applyDiscussionLiveStatus,
   applyNativeBuildPolicyEvent,
   buildStopFallbackMessage,
-  createNativeBuildAttachmentPoller,
-  createNativeBuildAttachmentRefresh,
+  createNativeBuildAttachmentController,
   createNativeBuildFileLoader,
   durableBuildHandoffPanels,
   nativeBuildAttachmentIdentityPatch,
@@ -303,7 +302,24 @@ function DiscussionPageInner() {
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
   const nativeTranscriptRef = useRef<NativeBuildTranscriptAttachment | null>(null);
+  const nativeAttachmentControllerRef = useRef<{ wake: () => void } | null>(null);
+  const discussionRef = useRef<Discussion | null>(discussion);
+  discussionRef.current = discussion;
   const noteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeAttachmentControllerKey = useMemo(() => {
+    if (
+      !id ||
+      discussion?.mode !== "build" ||
+      !discussion.runnerUrl ||
+      !discussion.runnerToken
+    ) return null;
+    return JSON.stringify([
+      id,
+      discussion.id,
+      discussion.runnerUrl,
+      discussion.runnerToken,
+    ]);
+  }, [id, discussion?.id, discussion?.mode, discussion?.runnerUrl, discussion?.runnerToken]);
 
   const requestNotificationPermission = useCallback(async () => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -912,6 +928,7 @@ function DiscussionPageInner() {
 
   useEffect(() => {
     if (
+      !nativeAttachmentControllerKey ||
       discussion?.mode !== "build" ||
       !discussion.runnerUrl ||
       !discussion.runnerToken ||
@@ -927,25 +944,28 @@ function DiscussionPageInner() {
     const fileLoader = createNativeBuildFileLoader({
       load: async (runId) => await getNativeBuildFiles(connection, runId),
     });
-    const refreshAttachment = createNativeBuildAttachmentRefresh({
-      savedRunId: initialRunId,
+    const controller = createNativeBuildAttachmentController({
+      initialSavedRunId: initialRunId,
       resolveRunId: async (savedRunId) => {
-        if (!initialRequestedAt) {
+        const latestDiscussion = discussionRef.current;
+        const requestedAt = latestDiscussion?.nativeBuildRequestedAt ?? initialRequestedAt;
+        const latestSavedRunId = latestDiscussion?.nativeBuildRunId ?? savedRunId;
+        if (!requestedAt) {
           return await resolveNativeBuildRunId(
             connection,
-            savedRunId,
+            latestSavedRunId,
             discussion.id
           );
         }
         const resolved = await resolveNativeBuildRunId(
           connection,
-          savedRunId,
+          latestSavedRunId,
           discussion.id,
           fetch,
-          { allowMissing: true, requestedAt: initialRequestedAt }
+          { allowMissing: true, requestedAt }
         );
         if (!resolved) {
-          throw new Error(`Native Build ${savedRunId} has not been provisioned yet.`);
+          throw new Error(`Native Build ${latestSavedRunId} has not been provisioned yet.`);
         }
         return resolved;
       },
@@ -974,9 +994,6 @@ function DiscussionPageInner() {
           files,
         };
       },
-    });
-    const poller = createNativeBuildAttachmentPoller({
-      refresh: refreshAttachment,
       apply: ({ runId, projection, usage, run, events, observability, transcript, files }) => {
         if (runId !== persistedRunId || hasPendingProvenance) {
           const updatedAt = new Date().toISOString();
@@ -1066,21 +1083,18 @@ function DiscussionPageInner() {
       intervalMs: 2_000,
     });
 
-    void poller.start();
+    nativeAttachmentControllerRef.current = controller;
+    void controller.start();
     return () => {
-      poller.cancel();
+      if (nativeAttachmentControllerRef.current === controller) {
+        nativeAttachmentControllerRef.current = null;
+      }
+      controller.cancel();
     };
-  }, [
-    id,
-    discussion?.id,
-    discussion?.mode,
-    discussion?.runnerUrl,
-    discussion?.runnerToken,
-    discussion?.nativeBuildRunId,
-    discussion?.nativeBuildRequestedAt,
-    discussion?.buildRunPolicy,
-    discussion?.status,
-  ]);
+    // Mutable status, policy, provenance, and authoritative run metadata are
+    // reconciled by this controller and must never recreate it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeAttachmentControllerKey]);
 
   // Stop: abort the engine (it winds down at the next streamed token). If a
   // command approval is pending, deny it so the engine isn't stuck awaiting.
@@ -1193,6 +1207,7 @@ function DiscussionPageInner() {
             "resume",
             `resume:explicit:${nativeRun.lastSequence + 1}`
           );
+          nativeAttachmentControllerRef.current?.wake();
         }
       } catch (resumeError) {
         setError(

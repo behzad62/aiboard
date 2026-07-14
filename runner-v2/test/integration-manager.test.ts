@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  readdirSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -363,6 +364,191 @@ test("a fresh manager repairs the exact journaled post-ref crash state", async (
 
     const repeated = freshIntegration(fixture);
     assert.equal((await repeated.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("the real apply path leaves a recoverable journal when the process dies after update-ref", async () => {
+  const fixture = await createFixture("handoff-real-crash");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    let journalExistedBeforeRef = false;
+    const execute: GitRunner = async (options) => {
+      if (options.args[0] === "update-ref" && options.args.length === 4) {
+        journalExistedBeforeRef = applyJournalPaths(fixture).length === 1;
+      }
+      return await runGit(options);
+    };
+    const crashing = freshIntegration(fixture, {
+      execute,
+      afterProjectRefAdvanced: async () => {
+        throw new Error("simulated abrupt process termination");
+      },
+    });
+    await crashing.initialize();
+
+    await assert.rejects(
+      () => crashing.applyToProject(),
+      /simulated abrupt process termination/i
+    );
+    assert.equal(journalExistedBeforeRef, true, "the durable journal precedes the ref CAS");
+    assert.equal(applyJournalPaths(fixture).length, 1);
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 0);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("crash recovery never overwrites an ignored untracked target path", async () => {
+  const fixture = await createFixture("handoff-ignored-crash");
+  try {
+    writeFileSync(join(fixture.project, ".gitignore"), "secret.txt\n");
+    await runGit({ cwd: fixture.project, args: ["add", ".gitignore"] });
+    await runGit({ cwd: fixture.project, args: ["commit", "-m", "Ignore secret"] });
+    await integrateFeature(fixture, "secret.txt", "integrated secret\n");
+    const crashing = freshIntegration(fixture, {
+      afterProjectRefAdvanced: async () => {
+        writeFileSync(join(fixture.project, "secret.txt"), "user secret\n");
+        throw new Error("simulated abrupt process termination");
+      },
+    });
+    await crashing.initialize();
+
+    await assert.rejects(() => crashing.applyToProject(), /simulated abrupt/i);
+    const before = readFileSync(join(fixture.project, "secret.txt"), "utf8");
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    await assert.rejects(
+      () => recovered.applyToProject(),
+      /journaled automatic handoff.*unrelated|cannot be recovered safely/i
+    );
+    assert.equal(readFileSync(join(fixture.project, "secret.txt"), "utf8"), before);
+    assert.equal(applyJournalPaths(fixture).length, 1);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("the live checkout rechecks ignored target paths after advancing the ref", async () => {
+  const fixture = await createFixture("handoff-ignored-race");
+  try {
+    writeFileSync(join(fixture.project, ".gitignore"), "secret.txt\n");
+    await runGit({ cwd: fixture.project, args: ["add", ".gitignore"] });
+    await runGit({ cwd: fixture.project, args: ["commit", "-m", "Ignore secret"] });
+    const parent = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    await integrateFeature(fixture, "secret.txt", "integrated secret\n");
+    const racing = freshIntegration(fixture, {
+      afterProjectRefAdvanced: () => {
+        writeFileSync(join(fixture.project, "secret.txt"), "user secret\n");
+      },
+    });
+    await racing.initialize();
+
+    await assert.rejects(
+      () => racing.applyToProject(),
+      /overwrite.*untracked|untracked or ignored/i
+    );
+    assert.equal(await gitText(fixture.project, ["rev-parse", "HEAD"]), parent);
+    assert.equal(readFileSync(join(fixture.project, "secret.txt"), "utf8"), "user secret\n");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent managers cannot delete the winning post-ref crash journal", async () => {
+  const fixture = await createFixture("handoff-concurrent-journals");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    let releaseWinner!: () => void;
+    const winnerAdvanced = new Promise<void>((resolve) => { releaseWinner = resolve; });
+    let releaseLoser!: () => void;
+    const loserAttempted = new Promise<void>((resolve) => { releaseLoser = resolve; });
+    let commitCount = 0;
+    let releaseCommits!: () => void;
+    const bothCommitsCreated = new Promise<void>((resolve) => { releaseCommits = resolve; });
+    const createCommitTogether = async (options: Parameters<GitRunner>[0]) => {
+      const result = await runGit(options);
+      commitCount += 1;
+      if (commitCount === 2) releaseCommits();
+      await Promise.race([
+        bothCommitsCreated,
+        new Promise<never>((_, reject) => setTimeout(
+          () => reject(new Error(`only ${commitCount} concurrent commit-tree calls arrived`)),
+          5_000
+        )),
+      ]);
+      return result;
+    };
+    const waitForTwoJournals = async (): Promise<boolean> => {
+      const deadline = Date.now() + 2_000;
+      while (applyJournalPaths(fixture).length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return applyJournalPaths(fixture).length === 2;
+    };
+    const winnerExecute: GitRunner = async (options) => {
+      if (options.args[0] === "commit-tree") return await createCommitTogether(options);
+      if (options.args[0] === "update-ref" && options.args.length === 4) {
+        if (!await waitForTwoJournals()) {
+          releaseWinner();
+          releaseLoser();
+          assert.fail(`each transition must own a journal: ${applyJournalPaths(fixture).join(", ")}`);
+        }
+        const result = await runGit(options);
+        releaseWinner();
+        return result;
+      }
+      return await runGit(options);
+    };
+    const loserExecute: GitRunner = async (options) => {
+      if (options.args[0] === "commit-tree") return await createCommitTogether(options);
+      if (options.args[0] === "update-ref" && options.args.length === 4) {
+        if (!await waitForTwoJournals()) {
+          releaseWinner();
+          releaseLoser();
+          assert.fail(`each transition must own a journal: ${applyJournalPaths(fixture).join(", ")}`);
+        }
+        await winnerAdvanced;
+        const result = await runGit(options);
+        releaseLoser();
+        return result;
+      }
+      return await runGit(options);
+    };
+    const winner = freshIntegration(fixture, {
+      execute: winnerExecute,
+      afterProjectRefAdvanced: async () => {
+        await loserAttempted;
+        throw new Error("winner terminated before checkout");
+      },
+    });
+    const loser = freshIntegration(fixture, { execute: loserExecute });
+    await Promise.all([winner.initialize(), loser.initialize()]);
+
+    const [winnerResult, loserResult] = await Promise.allSettled([
+      winner.applyToProject(),
+      loser.applyToProject(),
+    ]);
+    assert.equal(winnerResult.status, "rejected");
+    assert.match(String((winnerResult as PromiseRejectedResult).reason), /winner terminated/i);
+    assert.equal(loserResult.status, "rejected");
+    assert.match(String((loserResult as PromiseRejectedResult).reason), /project changed/i);
+    assert.equal(applyJournalPaths(fixture).length, 1, "only the winning journal survives");
+
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 0);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -958,13 +1144,27 @@ async function integrateFeature(
   await fixture.integration.integrate(changeSet);
 }
 
-function freshIntegration(fixture: Awaited<ReturnType<typeof createFixture>>) {
+function freshIntegration(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  overrides: Partial<ConstructorParameters<typeof IntegrationManager>[0]> = {}
+) {
   return new IntegrationManager({
     repositoryRoot: fixture.project,
     stateDirectory: fixture.state,
     runId: fixture.runId,
     baselineRevision: fixture.baseline.revision,
+    ...overrides,
   });
+}
+
+function applyJournalPaths(
+  fixture: Awaited<ReturnType<typeof createFixture>>
+): string[] {
+  const directory = join(fixture.state, "handoff");
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory)
+    .filter((name) => name.endsWith(".apply.json"))
+    .map((name) => join(directory, name));
 }
 
 function applyJournalPath(fixture: Awaited<ReturnType<typeof createFixture>>): string {
