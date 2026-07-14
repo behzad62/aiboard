@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import { runGit, type GitCommandOptions } from "./git-command.js";
@@ -136,6 +136,70 @@ export class WorkspaceManager {
     });
   }
 
+  async cleanup(): Promise<void> {
+    await this.serialized(async () => {
+      const branchPrefix = `refs/heads/aiboard/${this.runSegment}/tasks/`;
+      const refs = await this.git(this.repositoryRoot, [
+        "for-each-ref",
+        "--format=%(refname)",
+        branchPrefix,
+      ]);
+      for (const branch of refs.stdout.split(/\r?\n/).filter(Boolean)) {
+        const workspaceSegment = branch.slice(branchPrefix.length);
+        if (
+          !branch.startsWith(branchPrefix) ||
+          !workspaceSegment ||
+          workspaceSegment.includes("/") ||
+          !/^[a-z0-9-]+-[0-9a-f]{10}$/.test(workspaceSegment)
+        ) {
+          throw new Error(`Task branch ${branch} has unexpected ownership metadata.`);
+        }
+        const workspace: TaskWorkspace = {
+          runId: this.runId,
+          taskId: workspaceSegment,
+          workspaceId: workspaceSegment,
+          path: this.ownedWorkspacePath(workspaceSegment),
+          branch,
+          baselineRevision: this.baselineRevision,
+        };
+        const branchRevision = (
+          await this.git(this.repositoryRoot, ["rev-parse", "--verify", branch])
+        ).stdout.trim();
+        const ancestry = await this.git(
+          this.repositoryRoot,
+          ["merge-base", "--is-ancestor", this.baselineRevision, branchRevision],
+          true
+        );
+        if (ancestry.exitCode !== 0) {
+          throw new Error(`Task branch ${branch} escaped its run baseline.`);
+        }
+        if (await pathExists(workspace.path)) {
+          await this.assertOwnedWorkspace(workspace);
+          await this.git(this.repositoryRoot, [
+            "worktree",
+            "remove",
+            "--force",
+            workspace.path,
+          ]);
+        }
+        await this.git(this.repositoryRoot, [
+          "update-ref",
+          "-d",
+          branch,
+          branchRevision,
+        ]);
+      }
+      await this.git(this.repositoryRoot, ["worktree", "prune", "--expire", "now"]);
+      if (await pathExists(this.workspaceRoot)) {
+        const unexpected = await readdir(this.workspaceRoot);
+        if (unexpected.length > 0) {
+          throw new Error("Task workspace root contains unexpected entries.");
+        }
+        await rm(this.workspaceRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
   private async commitWorkspaceUnlocked(
     workspace: TaskWorkspace,
     summary: string
@@ -200,11 +264,7 @@ export class WorkspaceManager {
     baselineRevision: string
   ): TaskWorkspace {
     const workspaceSegment = safeName(workspaceId);
-    const path = resolve(this.workspaceRoot, workspaceSegment);
-    const traversal = relative(this.workspaceRoot, path);
-    if (traversal.startsWith("..") || traversal === "") {
-      throw new Error(`Task ${taskId} produced an invalid workspace path.`);
-    }
+    const path = this.ownedWorkspacePath(workspaceSegment);
     return {
       runId: this.runId,
       taskId,
@@ -213,6 +273,20 @@ export class WorkspaceManager {
       branch: `refs/heads/aiboard/${this.runSegment}/tasks/${workspaceSegment}`,
       baselineRevision,
     };
+  }
+
+  private ownedWorkspacePath(workspaceSegment: string): string {
+    const path = resolve(this.workspaceRoot, workspaceSegment);
+    const traversal = relative(this.workspaceRoot, path);
+    if (
+      traversal.startsWith("..") ||
+      traversal === "" ||
+      traversal.includes("/") ||
+      traversal.includes("\\")
+    ) {
+      throw new Error(`Workspace segment ${workspaceSegment} produced an invalid path.`);
+    }
+    return path;
   }
 
   private async assertOwnedWorkspace(workspace: TaskWorkspace): Promise<void> {

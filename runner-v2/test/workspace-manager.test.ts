@@ -173,6 +173,98 @@ test("retries use fresh worktrees based on the current integration revision", as
   }
 });
 
+test("cleanup removes every owned task worktree and branch, prunes, and is idempotent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-cleanup-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  const commands: string[][] = [];
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_cleanup",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_cleanup",
+      baselineRevision: baseline.revision,
+      execute: async (options) => {
+        commands.push([...options.args]);
+        return await runGit(options);
+      },
+    });
+    const first = await manager.createTaskWorkspace("first");
+    const second = await manager.createTaskWorkspace("second", {
+      workspaceId: "second:attempt:2",
+    });
+
+    await manager.cleanup();
+
+    assert.equal(existsSync(first.path), false);
+    assert.equal(existsSync(second.path), false);
+    assert.equal(
+      await gitText(project, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/aiboard/",
+      ]),
+      ""
+    );
+    assert.equal(
+      commands.some(
+        (args) => args[0] === "worktree" && args[1] === "prune"
+      ),
+      true
+    );
+
+    await manager.cleanup();
+    assert.equal(existsSync(first.path), false);
+    assert.equal(existsSync(second.path), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup rejects a task worktree whose ownership no longer matches", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-owner-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_owner",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_owner",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await manager.createTaskWorkspace("task");
+    await runGit({
+      cwd: workspace.path,
+      args: ["switch", "-c", "user/unexpected"],
+    });
+
+    await assert.rejects(manager.cleanup(), /unexpected branch/i);
+    assert.equal(existsSync(workspace.path), true);
+    assert.equal(
+      await gitText(project, ["rev-parse", "--verify", workspace.branch]),
+      baseline.revision
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();
 }

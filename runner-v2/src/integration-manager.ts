@@ -11,6 +11,9 @@ const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_COMMITTER_EMAIL: "integrator@aiboard.local",
 };
 
+const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_FILE_RESPONSE_BYTES = 10 * 1024 * 1024;
+
 export interface IntegrationManagerOptions {
   repositoryRoot: string;
   stateDirectory: string;
@@ -39,12 +42,28 @@ export interface ProjectHandoffResult {
   integrationRevision: string;
   integrationBranch: string;
   appliedToProject: boolean;
+  projectRevision?: string;
 }
 
 export interface IntegrationCommit {
   revision: string;
   parents: string[];
   subject: string;
+}
+
+export type IntegrationFileSource = "integration" | "project";
+
+export interface IntegrationFile {
+  path: string;
+  content: string;
+}
+
+export interface IntegrationFileSnapshot {
+  source: IntegrationFileSource;
+  revision: string;
+  appliedToProject: boolean;
+  omittedFileCount: number;
+  files: IntegrationFile[];
 }
 
 export class IntegrationManager {
@@ -120,9 +139,75 @@ export class IntegrationManager {
     });
   }
 
+  async files(source: IntegrationFileSource): Promise<IntegrationFileSnapshot> {
+    return await this.serialized(async () => {
+      const revision = await this.fileRevision(source);
+      const tree = await this.execute({
+        cwd: this.repositoryRoot,
+        args: ["ls-tree", "-r", "-z", "--name-only", revision],
+        maxOutputBytes: MAX_FILE_RESPONSE_BYTES,
+      });
+      const files: IntegrationFile[] = [];
+      let responseBytes = 0;
+      let omittedFileCount = 0;
+      for (const path of tree.stdout.split("\0").filter(Boolean)) {
+        const object = `${revision}:${path}`;
+        const sizeResult = await this.git(this.repositoryRoot, [
+          "cat-file",
+          "-s",
+          object,
+        ]);
+        const size = Number(sizeResult.stdout.trim());
+        if (
+          !Number.isSafeInteger(size) ||
+          size < 0 ||
+          size > MAX_FILE_BYTES ||
+          responseBytes + size > MAX_FILE_RESPONSE_BYTES
+        ) {
+          omittedFileCount += 1;
+          continue;
+        }
+        const content = await this.execute({
+          cwd: this.repositoryRoot,
+          args: ["show", object],
+          maxOutputBytes: MAX_FILE_BYTES + 4096,
+        });
+        if (!isUtf8Text(content.stdout, size)) {
+          omittedFileCount += 1;
+          continue;
+        }
+        files.push({ path, content: content.stdout });
+        responseBytes += size;
+      }
+      return {
+        source,
+        revision,
+        appliedToProject: source === "project",
+        omittedFileCount,
+        files,
+      };
+    });
+  }
+
   async initialize(): Promise<void> {
     await this.serialized(async () => {
       await this.ensureIntegrationWorkspace();
+    });
+  }
+
+  async cleanup(): Promise<void> {
+    await this.serialized(async () => {
+      if (await pathExists(this.path)) {
+        await this.assertWorkspace();
+        this.currentRevision ??= await this.head();
+        await this.git(this.repositoryRoot, [
+          "worktree",
+          "remove",
+          "--force",
+          this.path,
+        ]);
+      }
+      await this.git(this.repositoryRoot, ["worktree", "prune", "--expire", "now"]);
     });
   }
 
@@ -312,6 +397,33 @@ export class IntegrationManager {
     this.currentRevision = await this.head();
   }
 
+  private async fileRevision(source: IntegrationFileSource): Promise<string> {
+    if (source === "project") {
+      return (
+        await this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
+      ).stdout.trim();
+    }
+    if (source !== "integration") {
+      throw new Error(`Unknown file source: ${String(source)}`);
+    }
+    if (this.currentRevision) return this.currentRevision;
+    const branchRevision = await this.resolveRef(this.branch);
+    if (!branchRevision) {
+      await this.ensureIntegrationWorkspace();
+      return this.revision;
+    }
+    const ancestor = await this.git(
+      this.repositoryRoot,
+      ["merge-base", "--is-ancestor", this.baselineRevision, branchRevision],
+      true
+    );
+    if (ancestor.exitCode !== 0) {
+      throw new Error("Integration branch escaped its run baseline.");
+    }
+    this.currentRevision = branchRevision;
+    return branchRevision;
+  }
+
   private async assertWorkspace(): Promise<void> {
     const [root, branch, ancestor] = await Promise.all([
       this.git(this.path, ["rev-parse", "--show-toplevel"]),
@@ -494,6 +606,14 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isUtf8Text(content: string, objectBytes: number): boolean {
+  return (
+    !content.includes("\0") &&
+    !content.includes("\uFFFD") &&
+    Buffer.byteLength(content, "utf8") === objectBytes
+  );
 }
 
 function safeName(value: string): string {

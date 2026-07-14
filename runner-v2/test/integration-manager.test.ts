@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -274,6 +281,118 @@ test("final handoff conflicts leave the original project unchanged", async () =>
     assert.equal(
       readFileSync(join(fixture.project, "shared.txt"), "utf8"),
       "user changed this\n"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("files returns bounded tracked UTF-8 content from the integration revision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-integration-files-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "00-readable.txt"), "hello, revision\n");
+  writeFileSync(join(project, "01-binary.bin"), Buffer.from([0, 1, 2, 255]));
+  writeFileSync(join(project, "02-oversized.txt"), "x".repeat(1024 * 1024 + 1));
+  for (let index = 0; index < 11; index += 1) {
+    writeFileSync(
+      join(project, `budget-${String(index).padStart(2, "0")}.txt`),
+      "b".repeat(1024 * 1024)
+    );
+  }
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_files",
+    });
+    const integration = new IntegrationManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_files",
+      baselineRevision: baseline.revision,
+    });
+    await integration.initialize();
+
+    const snapshot = await integration.files("integration");
+
+    assert.equal(snapshot.source, "integration");
+    assert.equal(snapshot.revision, integration.revision);
+    assert.equal(snapshot.appliedToProject, false);
+    assert.deepEqual(
+      snapshot.files.find((file) => file.path === "00-readable.txt"),
+      { path: "00-readable.txt", content: "hello, revision\n" }
+    );
+    assert.equal(snapshot.files.some((file) => file.path === "01-binary.bin"), false);
+    assert.equal(
+      snapshot.files.some((file) => file.path === "02-oversized.txt"),
+      false
+    );
+    assert.equal(
+      snapshot.files.some((file) => file.path === "budget-09.txt"),
+      false
+    );
+    assert.equal(
+      snapshot.files.some((file) => file.path === "budget-10.txt"),
+      false
+    );
+    assert.equal(snapshot.omittedFileCount, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("files reads the committed project revision when project is the source", async () => {
+  const fixture = await createFixture("project-files");
+  try {
+    writeFileSync(join(fixture.project, "project-only.txt"), "applied result\n");
+    await runGit({ cwd: fixture.project, args: ["add", "project-only.txt"] });
+    await runGit({
+      cwd: fixture.project,
+      args: ["commit", "-m", "Apply result"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const projectRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+
+    const snapshot = await fixture.integration.files("project");
+
+    assert.equal(snapshot.source, "project");
+    assert.equal(snapshot.revision, projectRevision);
+    assert.equal(snapshot.appliedToProject, true);
+    assert.deepEqual(
+      snapshot.files.find((file) => file.path === "project-only.txt"),
+      { path: "project-only.txt", content: "applied result\n" }
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup removes the owned integration worktree but retains its audit branch", async () => {
+  const fixture = await createFixture("cleanup");
+  try {
+    const revision = fixture.integration.revision;
+    const branch = fixture.integration.integrationBranch;
+
+    await fixture.integration.cleanup();
+
+    assert.equal(existsSync(fixture.integration.path), false);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
+    );
+    await fixture.integration.cleanup();
+    assert.equal(existsSync(fixture.integration.path), false);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
     );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
