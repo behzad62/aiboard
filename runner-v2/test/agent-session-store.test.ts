@@ -746,3 +746,62 @@ test("checkpoint rejects an unknown session before writing an artifact", async (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("replaying a compacted checkpoint cannot roll back the retained session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-compacted-replay-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const store = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const sessionId = "worker:run_1:task_1:1";
+  const checkpointA = {
+    messages: [{ id: "turn-a", role: "assistant" as const, content: "A" }],
+    turns: 1,
+    seenCallIds: [],
+  };
+  const checkpointB = {
+    messages: [
+      ...checkpointA.messages,
+      { id: "turn-b", role: "assistant" as const, content: "B" },
+    ],
+    turns: 2,
+    seenCallIds: [],
+  };
+  try {
+    await store.create({
+      sessionId,
+      runId: "run_1",
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-07-14T07:00:00.000Z",
+    });
+    await store.checkpoint(
+      sessionId,
+      checkpointA,
+      "2026-07-14T07:00:01.000Z"
+    );
+    await store.checkpoint(
+      sessionId,
+      checkpointB,
+      "2026-07-14T07:00:02.000Z"
+    );
+    await store.compactRun("run_1");
+    const eventsBeforeReplay = store.events(sessionId);
+    const transcriptBeforeReplay = await store.transcript("run_1", 0);
+    assert.deepEqual((await store.load(sessionId)).checkpoint, checkpointB);
+
+    await store.checkpoint(
+      sessionId,
+      checkpointA,
+      "2026-07-14T07:59:59.000Z"
+    );
+
+    assert.deepEqual((await store.load(sessionId)).checkpoint, checkpointB);
+    assert.deepEqual(store.events(sessionId), eventsBeforeReplay);
+    assert.deepEqual(await store.transcript("run_1", 0), transcriptBeforeReplay);
+
+    await store.compactRun("run_1");
+    assert.deepEqual((await store.load(sessionId)).checkpoint, checkpointB);
+    assert.deepEqual(store.events(sessionId), eventsBeforeReplay);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -26,7 +27,16 @@ interface EventRow {
 
 interface CheckpointRow {
   sequence: number;
+  occurred_at: string;
+  idempotency_key: string;
+  payload_json: string;
   artifact_hash: string | null;
+}
+
+interface CompactedCheckpointRow {
+  occurred_at: string;
+  payload_json: string;
+  artifact_hash: string;
 }
 
 interface TranscriptRow {
@@ -94,6 +104,14 @@ export class SqliteAgentSessionStore {
       CREATE TABLE IF NOT EXISTS agent_artifact_cleanup (
         hash TEXT PRIMARY KEY
       );
+      CREATE TABLE IF NOT EXISTS agent_compacted_checkpoint_idempotency (
+        session_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        artifact_hash TEXT NOT NULL,
+        PRIMARY KEY(session_id, idempotency_key)
+      );
     `);
   }
 
@@ -115,8 +133,22 @@ export class SqliteAgentSessionStore {
     if (!this.hasSession(sessionId)) {
       throw new Error(`Unknown agent session ${sessionId}.`);
     }
+    const bytes = Buffer.from(JSON.stringify(checkpoint));
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const idempotencyKey = `checkpoint:${hash}`;
+    const payload = { turns: checkpoint.turns };
+    if (
+      this.isCompactedCheckpointReplay(
+        sessionId,
+        idempotencyKey,
+        JSON.stringify(payload),
+        hash
+      )
+    ) {
+      return;
+    }
     const artifact = await this.artifacts.put(
-      Buffer.from(JSON.stringify(checkpoint)),
+      bytes,
       "application/json",
       `Agent checkpoint ${sessionId}`
     );
@@ -124,8 +156,8 @@ export class SqliteAgentSessionStore {
       sessionId,
       "session.checkpointed",
       occurredAt,
-      `checkpoint:${artifact.hash}`,
-      { turns: checkpoint.turns },
+      idempotencyKey,
+      payload,
       artifact.hash,
       checkpoint.messages
     );
@@ -293,7 +325,7 @@ export class SqliteAgentSessionStore {
     const candidates = new Set<string>();
     const cleanupCandidates = new Set<string>();
     const checkpointsForSession = this.database.prepare(
-      `SELECT sequence, artifact_hash
+      `SELECT sequence, occurred_at, idempotency_key, payload_json, artifact_hash
        FROM agent_session_events
        WHERE session_id = ? AND event_type = 'session.checkpointed'
        ORDER BY sequence DESC`
@@ -336,11 +368,42 @@ export class SqliteAgentSessionStore {
         `DELETE FROM agent_session_events
          WHERE sequence = ? AND event_type = 'session.checkpointed'`
       );
+      const preserveIdempotency = this.database.prepare(
+        `INSERT INTO agent_compacted_checkpoint_idempotency (
+          session_id, idempotency_key, occurred_at, payload_json, artifact_hash
+        ) VALUES (?, ?, ?, ?, ?)`
+      );
       for (const sessionId of sessionIds) {
         const checkpoints = checkpointsForSession.all(
           sessionId
         ) as unknown as CheckpointRow[];
         for (const checkpoint of checkpoints.slice(1)) {
+          const compacted = this.compactedCheckpoint(
+            sessionId,
+            checkpoint.idempotency_key
+          );
+          if (compacted) {
+            this.assertCompactedCheckpointMatches(
+              sessionId,
+              checkpoint.idempotency_key,
+              compacted,
+              checkpoint.payload_json,
+              checkpoint.artifact_hash
+            );
+          } else {
+            if (!checkpoint.artifact_hash) {
+              throw new Error(
+                `Checkpoint event ${checkpoint.sequence} has no artifact.`
+              );
+            }
+            preserveIdempotency.run(
+              sessionId,
+              checkpoint.idempotency_key,
+              checkpoint.occurred_at,
+              checkpoint.payload_json,
+              checkpoint.artifact_hash
+            );
+          }
           deleteCheckpoint.run(checkpoint.sequence);
           if (checkpoint.artifact_hash) candidates.add(checkpoint.artifact_hash);
         }
@@ -388,6 +451,20 @@ export class SqliteAgentSessionStore {
            WHERE session_id = ? AND idempotency_key = ?`
         )
         .get(sessionId, idempotencyKey) as EventRow | undefined;
+      if (!existing && type === "session.checkpointed" && artifactHash) {
+        const compacted = this.compactedCheckpoint(sessionId, idempotencyKey);
+        if (compacted) {
+          this.assertCompactedCheckpointMatches(
+            sessionId,
+            idempotencyKey,
+            compacted,
+            payloadJson,
+            artifactHash
+          );
+          this.database.exec("COMMIT");
+          return;
+        }
+      }
       let eventSequence: number;
       if (existing) {
         if (
@@ -577,6 +654,54 @@ export class SqliteAgentSessionStore {
         )
         .get(sessionId)
     );
+  }
+
+  private isCompactedCheckpointReplay(
+    sessionId: string,
+    idempotencyKey: string,
+    payloadJson: string,
+    artifactHash: string
+  ): boolean {
+    const compacted = this.compactedCheckpoint(sessionId, idempotencyKey);
+    if (!compacted) return false;
+    this.assertCompactedCheckpointMatches(
+      sessionId,
+      idempotencyKey,
+      compacted,
+      payloadJson,
+      artifactHash
+    );
+    return true;
+  }
+
+  private compactedCheckpoint(
+    sessionId: string,
+    idempotencyKey: string
+  ): CompactedCheckpointRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT occurred_at, payload_json, artifact_hash
+         FROM agent_compacted_checkpoint_idempotency
+         WHERE session_id = ? AND idempotency_key = ?`
+      )
+      .get(sessionId, idempotencyKey) as CompactedCheckpointRow | undefined;
+  }
+
+  private assertCompactedCheckpointMatches(
+    sessionId: string,
+    idempotencyKey: string,
+    compacted: CompactedCheckpointRow,
+    payloadJson: string,
+    artifactHash: string | null
+  ): void {
+    if (
+      compacted.payload_json !== payloadJson ||
+      compacted.artifact_hash !== artifactHash
+    ) {
+      throw new Error(
+        `Agent session ${sessionId} idempotency conflict for ${idempotencyKey}.`
+      );
+    }
   }
 
   private createdEvents(runId: string): AgentSessionEvent[] {
