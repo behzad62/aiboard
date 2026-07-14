@@ -38,12 +38,24 @@ interface TranscriptRow {
   text: string;
 }
 
+interface RetainedCheckpoint {
+  sessionId: string;
+  sequence: number;
+  artifactHash: string;
+}
+
+export interface SqliteAgentSessionStoreOptions {
+  /** Return true only after global proof and idempotent physical deletion complete. */
+  deleteArtifactIfGloballyUnreachable?: (hash: string) => Promise<boolean>;
+}
+
 export class SqliteAgentSessionStore {
   private readonly database: DatabaseSync;
 
   constructor(
     databasePath: string,
-    private readonly artifacts: ArtifactStore
+    private readonly artifacts: ArtifactStore,
+    private readonly options: SqliteAgentSessionStoreOptions = {}
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
@@ -100,6 +112,9 @@ export class SqliteAgentSessionStore {
     checkpoint: AgentLoopCheckpoint,
     occurredAt: string
   ): Promise<void> {
+    if (!this.hasSession(sessionId)) {
+      throw new Error(`Unknown agent session ${sessionId}.`);
+    }
     const artifact = await this.artifacts.put(
       Buffer.from(JSON.stringify(checkpoint)),
       "application/json",
@@ -274,8 +289,9 @@ export class SqliteAgentSessionStore {
   async compactRun(runId: string): Promise<void> {
     await this.ensureTranscriptProjection(runId);
     const sessionIds = this.createdEvents(runId).map((event) => event.sessionId);
+    const retained: RetainedCheckpoint[] = [];
     const candidates = new Set<string>();
-    const unreachable = new Set<string>();
+    const cleanupCandidates = new Set<string>();
     const checkpointsForSession = this.database.prepare(
       `SELECT sequence, artifact_hash
        FROM agent_session_events
@@ -293,10 +309,29 @@ export class SqliteAgentSessionStore {
       }
       await this.artifacts.verify(latest.artifact_hash);
       parseCheckpoint(await this.artifacts.get(latest.artifact_hash), latest.sequence);
+      retained.push({
+        sessionId,
+        sequence: latest.sequence,
+        artifactHash: latest.artifact_hash,
+      });
     }
 
     this.database.exec("BEGIN IMMEDIATE");
     try {
+      for (const expected of retained) {
+        const current = (
+          checkpointsForSession.all(expected.sessionId) as unknown as CheckpointRow[]
+        )[0];
+        if (
+          !current ||
+          current.sequence !== expected.sequence ||
+          current.artifact_hash !== expected.artifactHash
+        ) {
+          throw new Error(
+            `Agent session ${expected.sessionId} changed during compaction.`
+          );
+        }
+      }
       const deleteCheckpoint = this.database.prepare(
         `DELETE FROM agent_session_events
          WHERE sequence = ? AND event_type = 'session.checkpointed'`
@@ -314,12 +349,12 @@ export class SqliteAgentSessionStore {
         `SELECT 1 FROM agent_session_events WHERE artifact_hash = ? LIMIT 1`
       );
       for (const hash of candidates) {
-        if (!artifactReference.get(hash)) unreachable.add(hash);
+        if (!artifactReference.get(hash)) cleanupCandidates.add(hash);
       }
       const enqueueCleanup = this.database.prepare(
         `INSERT OR IGNORE INTO agent_artifact_cleanup (hash) VALUES (?)`
       );
-      for (const hash of unreachable) enqueueCleanup.run(hash);
+      for (const hash of cleanupCandidates) enqueueCleanup.run(hash);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -398,7 +433,7 @@ export class SqliteAgentSessionStore {
           requiredString(createdPayload, "runId"),
           sessionId,
           createdPayload.actor as AgentActor,
-          occurredAt,
+          existing?.occurred_at ?? occurredAt,
           transcriptMessages
         );
       }
@@ -516,6 +551,8 @@ export class SqliteAgentSessionStore {
   }
 
   private async drainArtifactCleanup(): Promise<void> {
+    const deleteArtifact = this.options.deleteArtifactIfGloballyUnreachable;
+    if (!deleteArtifact) return;
     const pending = this.database
       .prepare(`SELECT hash FROM agent_artifact_cleanup ORDER BY hash ASC`)
       .all() as Array<{ hash: string }>;
@@ -526,9 +563,20 @@ export class SqliteAgentSessionStore {
       `DELETE FROM agent_artifact_cleanup WHERE hash = ?`
     );
     for (const { hash } of pending) {
-      if (!referenced.get(hash)) await this.artifacts.remove(hash);
-      complete.run(hash);
+      if (referenced.get(hash)) continue;
+      if (await deleteArtifact(hash)) complete.run(hash);
     }
+  }
+
+  private hasSession(sessionId: string): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          `SELECT 1 FROM agent_session_events
+           WHERE session_id = ? AND event_type = 'session.created' LIMIT 1`
+        )
+        .get(sessionId)
+    );
   }
 
   private createdEvents(runId: string): AgentSessionEvent[] {

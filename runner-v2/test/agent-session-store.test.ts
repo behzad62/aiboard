@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import type { AgentMessage } from "../src/agent-contracts.js";
@@ -351,7 +352,13 @@ test("compacting a run retains its latest full checkpoint and removes superseded
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const sessionId = "worker:run_1:task_1:1";
   const messages: AgentMessage[] = [];
-  let store = new SqliteAgentSessionStore(database, artifacts);
+  const cleanup = {
+    deleteArtifactIfGloballyUnreachable: async (hash: string) => {
+      await artifacts.remove(hash);
+      return true;
+    },
+  };
+  let store = new SqliteAgentSessionStore(database, artifacts, cleanup);
 
   try {
     await store.create({
@@ -382,7 +389,7 @@ test("compacting a run retains its latest full checkpoint and removes superseded
     await store.compactRun("run_1");
     store.close();
 
-    store = new SqliteAgentSessionStore(database, artifacts);
+    store = new SqliteAgentSessionStore(database, artifacts, cleanup);
     assert.deepEqual(
       (await store.transcript("run_1", 0)).turns.map((turn) => turn.text),
       ["Durable response 1", "Durable response 2", "Durable response 3"]
@@ -415,26 +422,83 @@ test("compacting a run retains its latest full checkpoint and removes superseded
   }
 });
 
-test("compaction retries durable artifact cleanup after a removal failure", async () => {
+test("compaction retains candidates without global proof and retries false decisions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-global-proof-"));
+  const database = join(root, "sessions.sqlite");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessionId = "worker:run_1:task_1:1";
+  let store = new SqliteAgentSessionStore(database, artifacts);
+  try {
+    await store.create({
+      sessionId,
+      runId: "run_1",
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-07-14T02:00:00.000Z",
+    });
+    await store.checkpoint(
+      sessionId,
+      {
+        messages: [{ id: "turn-1", role: "assistant", content: "one" }],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-07-14T02:00:01.000Z"
+    );
+    await store.checkpoint(
+      sessionId,
+      {
+        messages: [{ id: "turn-2", role: "assistant", content: "two" }],
+        turns: 2,
+        seenCallIds: [],
+      },
+      "2026-07-14T02:00:02.000Z"
+    );
+    const candidateHash = store.events(sessionId)[1]!.artifactHash!;
+
+    await store.compactRun("run_1");
+    await artifacts.verify(candidateHash);
+    store.close();
+
+    store = new SqliteAgentSessionStore(database, artifacts, {
+      deleteArtifactIfGloballyUnreachable: async () => false,
+    });
+    await store.compactRun("run_1");
+    await artifacts.verify(candidateHash);
+    store.close();
+
+    store = new SqliteAgentSessionStore(database, artifacts, {
+      deleteArtifactIfGloballyUnreachable: async (hash) => {
+        await artifacts.remove(hash);
+        return true;
+      },
+    });
+    await store.compactRun("run_1");
+    await assert.rejects(
+      artifacts.get(candidateHash),
+      (error: unknown) => error instanceof ArtifactNotFoundError
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compaction retries durable global deletion after a callback failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-agent-cleanup-retry-"));
   const database = join(root, "sessions.sqlite");
   const artifactRoot = join(root, "artifacts");
-
-  class FailOnceArtifactStore extends ArtifactStore {
-    failHash?: string;
-    failed = false;
-
-    override async remove(hash: string): Promise<void> {
-      if (hash === this.failHash && !this.failed) {
-        this.failed = true;
-        throw new Error("injected artifact removal failure");
+  const artifacts = new ArtifactStore(artifactRoot);
+  let fail = true;
+  let store = new SqliteAgentSessionStore(database, artifacts, {
+    deleteArtifactIfGloballyUnreachable: async (hash) => {
+      if (fail) {
+        fail = false;
+        throw new Error("injected global deletion failure");
       }
-      await super.remove(hash);
-    }
-  }
-
-  const failingArtifacts = new FailOnceArtifactStore(artifactRoot);
-  let store = new SqliteAgentSessionStore(database, failingArtifacts);
+      await artifacts.remove(hash);
+      return true;
+    },
+  });
   const sessionId = "worker:run_1:task_1:1";
   try {
     await store.create({
@@ -465,20 +529,22 @@ test("compaction retries durable artifact cleanup after a removal failure", asyn
       "2026-07-14T02:00:02.000Z"
     );
     const supersededHash = store.events(sessionId)[1]!.artifactHash!;
-    failingArtifacts.failHash = supersededHash;
-
     await assert.rejects(
       store.compactRun("run_1"),
-      /injected artifact removal failure/
+      /injected global deletion failure/
     );
-    assert.equal((await failingArtifacts.get(supersededHash)).byteLength > 0, true);
+    assert.equal((await artifacts.get(supersededHash)).byteLength > 0, true);
     store.close();
 
-    const recoveredArtifacts = new ArtifactStore(artifactRoot);
-    store = new SqliteAgentSessionStore(database, recoveredArtifacts);
+    store = new SqliteAgentSessionStore(database, artifacts, {
+      deleteArtifactIfGloballyUnreachable: async (hash) => {
+        await artifacts.remove(hash);
+        return true;
+      },
+    });
     await store.compactRun("run_1");
     await assert.rejects(
-      recoveredArtifacts.get(supersededHash),
+      artifacts.get(supersededHash),
       (error: unknown) => error instanceof ArtifactNotFoundError
     );
   } finally {
@@ -526,6 +592,155 @@ test("compaction preserves fallback checkpoints when the latest artifact is corr
     );
     await artifacts.verify(checkpoints[0]!.artifactHash!);
     await artifacts.verify(checkpoints[1]!.artifactHash!);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("compaction aborts if the validated latest checkpoint changes before deletion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-compaction-race-"));
+  const database = join(root, "sessions.sqlite");
+  const sessionId = "worker:run_1:task_1:1";
+
+  class CheckpointOnVerifyArtifactStore extends ArtifactStore {
+    triggerHash?: string;
+    onTrigger?: () => Promise<void>;
+    triggered = false;
+
+    override async verify(hash: string) {
+      const record = await super.verify(hash);
+      if (hash === this.triggerHash && !this.triggered) {
+        this.triggered = true;
+        await this.onTrigger?.();
+      }
+      return record;
+    }
+  }
+
+  const artifacts = new CheckpointOnVerifyArtifactStore(join(root, "artifacts"));
+  const compactor = new SqliteAgentSessionStore(database, artifacts);
+  const writer = new SqliteAgentSessionStore(database, artifacts);
+  try {
+    await compactor.create({
+      sessionId,
+      runId: "run_1",
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-07-14T04:00:00.000Z",
+    });
+    await compactor.checkpoint(
+      sessionId,
+      {
+        messages: [{ id: "turn-1", role: "assistant", content: "one" }],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-07-14T04:00:01.000Z"
+    );
+    await compactor.checkpoint(
+      sessionId,
+      {
+        messages: [{ id: "turn-2", role: "assistant", content: "two" }],
+        turns: 2,
+        seenCallIds: [],
+      },
+      "2026-07-14T04:00:02.000Z"
+    );
+    artifacts.triggerHash = compactor.events(sessionId)[2]!.artifactHash!;
+    artifacts.onTrigger = async () => {
+      await writer.checkpoint(
+        sessionId,
+        {
+          messages: [{ id: "turn-3", role: "assistant", content: "three" }],
+          turns: 3,
+          seenCallIds: [],
+        },
+        "2026-07-14T04:00:03.000Z"
+      );
+    };
+
+    await assert.rejects(
+      compactor.compactRun("run_1"),
+      /changed during compaction/i
+    );
+    assert.equal(
+      compactor
+        .events(sessionId)
+        .filter((event) => event.type === "session.checkpointed").length,
+      3
+    );
+  } finally {
+    writer.close();
+    compactor.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("idempotent checkpoint replay preserves the durable event timestamp", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-replay-time-"));
+  const database = join(root, "sessions.sqlite");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessionId = "worker:run_1:task_1:1";
+  const checkpoint = {
+    messages: [{ id: "turn-1", role: "assistant" as const, content: "one" }],
+    turns: 1,
+    seenCallIds: [],
+  };
+  let store = new SqliteAgentSessionStore(database, artifacts);
+  try {
+    await store.create({
+      sessionId,
+      runId: "run_1",
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-07-14T05:00:00.000Z",
+    });
+    await store.checkpoint(
+      sessionId,
+      checkpoint,
+      "2026-07-14T05:00:01.000Z"
+    );
+    store.close();
+
+    const databaseHandle = new DatabaseSync(database);
+    databaseHandle.exec(`
+      DELETE FROM agent_transcript_turns;
+      DELETE FROM agent_transcript_checkpoints;
+    `);
+    databaseHandle.close();
+
+    store = new SqliteAgentSessionStore(database, artifacts);
+    await store.checkpoint(
+      sessionId,
+      checkpoint,
+      "2026-07-14T05:59:59.000Z"
+    );
+    assert.equal(
+      (await store.transcript("run_1", 0)).turns[0]!.occurredAt,
+      "2026-07-14T05:00:01.000Z"
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint rejects an unknown session before writing an artifact", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-missing-session-"));
+  const artifactRoot = join(root, "artifacts");
+  const store = new SqliteAgentSessionStore(
+    join(root, "sessions.sqlite"),
+    new ArtifactStore(artifactRoot)
+  );
+  try {
+    await assert.rejects(
+      store.checkpoint(
+        "missing-session",
+        { messages: [], turns: 0, seenCallIds: [] },
+        "2026-07-14T06:00:00.000Z"
+      ),
+      /unknown agent session/i
+    );
+    assert.equal(existsSync(artifactRoot), false);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
