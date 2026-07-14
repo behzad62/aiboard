@@ -281,6 +281,13 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         occurredAt: new Date().toISOString(),
       });
     });
+    session.page.on("pageerror", (error) => {
+      pushBounded(session.console, {
+        type: "error",
+        text: error.stack || error.message,
+        occurredAt: new Date().toISOString(),
+      });
+    });
     session.page.on("response", (response) => {
       pushBounded(session.network, {
         method: response.request().method(),

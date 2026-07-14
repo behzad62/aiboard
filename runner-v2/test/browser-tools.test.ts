@@ -291,6 +291,39 @@ test("Playwright open settles delayed dynamic imports before acceptance tools co
   }
 });
 
+test("Playwright events captures uncaught page exceptions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-pageerror-"));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<!doctype html><body><script>
+      window.addEventListener("load", () => {
+        setTimeout(() => { throw new Error("uncaught render failure"); }, 0);
+      });
+    </script></body>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const backend = new PlaywrightBrowserBackend(join(root, "sessions"));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    await backend.open("run:pageerror", {
+      url: `http://127.0.0.1:${address.port}/`,
+      width: 800,
+      height: 600,
+    });
+    const events = await backend.events("run:pageerror");
+    const pageError = events.console.find(
+      (event) => event.type === "error" && event.text.includes("uncaught render failure")
+    );
+    assert.ok(pageError);
+    assert.match(pageError.occurredAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  } finally {
+    await backend.closeAll();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function call(callId: string, name: string, arguments_: unknown) {
   return { type: "tool_call" as const, callId, name, arguments: arguments_ };
 }
