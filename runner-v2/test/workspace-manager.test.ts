@@ -265,6 +265,44 @@ test("cleanup rejects a task worktree whose ownership no longer matches", async 
   }
 });
 
+test("cleanup rejects a missing descriptor associated with another worktree path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-associated-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const unexpectedPath = join(root, "unexpected-task-path");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_associated",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_associated",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await manager.createTaskWorkspace("task");
+    await runGit({
+      cwd: project,
+      args: ["worktree", "move", workspace.path, unexpectedPath],
+    });
+    assert.equal(existsSync(workspace.path), false);
+
+    await assert.rejects(manager.cleanup(), /unexpected worktree path/i);
+    assert.equal(existsSync(unexpectedPath), true);
+    assert.equal(
+      await gitText(project, ["rev-parse", "--verify", workspace.branch]),
+      baseline.revision
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();
 }

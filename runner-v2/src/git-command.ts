@@ -19,6 +19,16 @@ export interface GitCommandResult {
   stderr: string;
 }
 
+export interface GitBinaryCommandResult {
+  exitCode: number;
+  stdout: Buffer;
+  stderr: string;
+}
+
+export type GitBinaryRunner = (
+  options: GitCommandOptions
+) => Promise<GitBinaryCommandResult>;
+
 export class GitCommandError extends Error {
   constructor(
     readonly code: GitCommandErrorCode,
@@ -33,6 +43,34 @@ export class GitCommandError extends Error {
 export async function runGit(
   options: GitCommandOptions
 ): Promise<GitCommandResult> {
+  const result = await runGitRaw(options);
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString("utf8"),
+    stderr: result.stderr.toString("utf8"),
+  };
+}
+
+export async function runGitBytes(
+  options: GitCommandOptions
+): Promise<GitBinaryCommandResult> {
+  const result = await runGitRaw(options);
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr.toString("utf8"),
+  };
+}
+
+interface RawGitCommandResult {
+  exitCode: number;
+  stdout: Buffer;
+  stderr: Buffer;
+}
+
+async function runGitRaw(
+  options: GitCommandOptions
+): Promise<RawGitCommandResult> {
   const maximum = options.maxOutputBytes ?? 4 * 1024 * 1024;
   if (!Number.isSafeInteger(maximum) || maximum < 1) {
     throw new Error("maxOutputBytes must be a positive integer.");
@@ -46,27 +84,24 @@ export async function runGit(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
     let outputBytes = 0;
     let exceeded = false;
     let settled = false;
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    const capture = (target: "stdout" | "stderr", chunk: string) => {
+    const capture = (target: Buffer[], chunk: Buffer) => {
       if (exceeded) return;
-      outputBytes += Buffer.byteLength(chunk);
+      outputBytes += chunk.length;
       if (outputBytes > maximum) {
         exceeded = true;
         child.kill("SIGTERM");
         return;
       }
-      if (target === "stdout") stdout += chunk;
-      else stderr += chunk;
+      target.push(chunk);
     };
-    child.stdout.on("data", (chunk: string) => capture("stdout", chunk));
-    child.stderr.on("data", (chunk: string) => capture("stderr", chunk));
+    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk));
     child.once("error", (error: NodeJS.ErrnoException) => {
       if (settled) return;
       settled = true;
@@ -80,7 +115,16 @@ export async function runGit(
     child.once("close", (exitCode) => {
       if (settled) return;
       settled = true;
-      const result = { exitCode: exitCode ?? 1, stdout, stderr };
+      const rawResult = {
+        exitCode: exitCode ?? 1,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
+      };
+      const result = {
+        exitCode: rawResult.exitCode,
+        stdout: rawResult.stdout.toString("utf8"),
+        stderr: rawResult.stderr.toString("utf8"),
+      };
       if (exceeded) {
         reject(
           new GitCommandError(
@@ -101,7 +145,7 @@ export async function runGit(
         );
         return;
       }
-      resolve(result);
+      resolve(rawResult);
     });
   });
 }

@@ -296,6 +296,8 @@ test("files returns bounded tracked UTF-8 content from the integration revision"
   writeFileSync(join(project, "00-readable.txt"), "hello, revision\n");
   writeFileSync(join(project, "01-binary.bin"), Buffer.from([0, 1, 2, 255]));
   writeFileSync(join(project, "02-oversized.txt"), "x".repeat(1024 * 1024 + 1));
+  writeFileSync(join(project, "03-valid-replacement.txt"), "kept \uFFFD\n");
+  writeFileSync(join(project, "04-invalid-utf8.txt"), Buffer.from([0xc3, 0x28]));
   for (let index = 0; index < 11; index += 1) {
     writeFileSync(
       join(project, `budget-${String(index).padStart(2, "0")}.txt`),
@@ -330,6 +332,14 @@ test("files returns bounded tracked UTF-8 content from the integration revision"
       snapshot.files.some((file) => file.path === "02-oversized.txt"),
       false
     );
+    assert.deepEqual(
+      snapshot.files.find((file) => file.path === "03-valid-replacement.txt"),
+      { path: "03-valid-replacement.txt", content: "kept \uFFFD\n" }
+    );
+    assert.equal(
+      snapshot.files.some((file) => file.path === "04-invalid-utf8.txt"),
+      false
+    );
     assert.equal(
       snapshot.files.some((file) => file.path === "budget-09.txt"),
       false
@@ -338,7 +348,45 @@ test("files returns bounded tracked UTF-8 content from the integration revision"
       snapshot.files.some((file) => file.path === "budget-10.txt"),
       false
     );
-    assert.equal(snapshot.omittedFileCount, 4);
+    assert.equal(snapshot.omittedFileCount, 5);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("files budgets the serialized JSON envelope including control-character escaping", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-integration-json-budget-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "control-a.txt"), Buffer.alloc(1024 * 1024, 1));
+  writeFileSync(join(project, "control-b.txt"), Buffer.alloc(1024 * 1024, 1));
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_json_budget",
+    });
+    const integration = new IntegrationManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_json_budget",
+      baselineRevision: baseline.revision,
+    });
+    await integration.initialize();
+
+    const snapshot = await integration.files("integration");
+
+    assert.equal(
+      snapshot.files.filter((file) => file.path.startsWith("control-")).length,
+      1
+    );
+    assert.equal(snapshot.omittedFileCount, 1);
+    assert.equal(
+      Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= 10 * 1024 * 1024,
+      true
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

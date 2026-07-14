@@ -173,14 +173,48 @@ export class WorkspaceManager {
         if (ancestry.exitCode !== 0) {
           throw new Error(`Task branch ${branch} escaped its run baseline.`);
         }
-        if (await pathExists(workspace.path)) {
+        const descriptorExists = await pathExists(workspace.path);
+        if (descriptorExists) {
           await this.assertOwnedWorkspace(workspace);
+        }
+        const associations = parseWorktreeAssociations(
+          (
+            await this.git(this.repositoryRoot, [
+              "worktree",
+              "list",
+              "--porcelain",
+              "-z",
+            ])
+          ).stdout
+        ).filter((association) => association.branch === branch);
+        if (
+          associations.length !== (descriptorExists ? 1 : 0) ||
+          associations.some(
+            (association) => resolve(association.path) !== workspace.path
+          )
+        ) {
+          throw new Error(`Task branch ${branch} has an unexpected worktree path.`);
+        }
+        if (descriptorExists) {
           await this.git(this.repositoryRoot, [
             "worktree",
             "remove",
             "--force",
             workspace.path,
           ]);
+        }
+        const remainingAssociations = parseWorktreeAssociations(
+          (
+            await this.git(this.repositoryRoot, [
+              "worktree",
+              "list",
+              "--porcelain",
+              "-z",
+            ])
+          ).stdout
+        ).filter((association) => association.branch === branch);
+        if (remainingAssociations.length > 0) {
+          throw new Error(`Task branch ${branch} still has an unexpected worktree path.`);
         }
         await this.git(this.repositoryRoot, [
           "update-ref",
@@ -383,4 +417,28 @@ function safeName(value: string): string {
     .slice(0, 40) || "item";
   const hash = createHash("sha256").update(value).digest("hex").slice(0, 10);
   return `${readable}-${hash}`;
+}
+
+interface WorktreeAssociation {
+  path: string;
+  branch?: string;
+}
+
+function parseWorktreeAssociations(output: string): WorktreeAssociation[] {
+  const associations: WorktreeAssociation[] = [];
+  let current: WorktreeAssociation | undefined;
+  for (const field of output.split("\0")) {
+    if (!field) {
+      if (current) associations.push(current);
+      current = undefined;
+      continue;
+    }
+    if (field.startsWith("worktree ")) {
+      current = { path: field.slice("worktree ".length) };
+    } else if (field.startsWith("branch ") && current) {
+      current.branch = field.slice("branch ".length);
+    }
+  }
+  if (current) associations.push(current);
+  return associations;
 }

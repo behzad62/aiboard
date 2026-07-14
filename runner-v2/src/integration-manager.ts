@@ -3,7 +3,12 @@ import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import {
+  runGit,
+  runGitBytes,
+  type GitBinaryRunner,
+  type GitCommandOptions,
+} from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
@@ -20,6 +25,7 @@ export interface IntegrationManagerOptions {
   runId: string;
   baselineRevision: string;
   execute?: GitRunner;
+  executeBytes?: GitBinaryRunner;
 }
 
 export type IntegrationResult =
@@ -75,6 +81,7 @@ export class IntegrationManager {
   private readonly baselineRevision: string;
   private readonly branch: string;
   private readonly execute: GitRunner;
+  private readonly executeBytes: GitBinaryRunner;
   private operationQueue: Promise<void> = Promise.resolve();
   private currentRevision: string | undefined;
 
@@ -91,6 +98,7 @@ export class IntegrationManager {
     this.baselineRevision = options.baselineRevision;
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
     this.execute = options.execute ?? runGit;
+    this.executeBytes = options.executeBytes ?? runGitBytes;
   }
 
   get revision(): string {
@@ -144,40 +152,50 @@ export class IntegrationManager {
       const revision = await this.fileRevision(source);
       const tree = await this.execute({
         cwd: this.repositoryRoot,
-        args: ["ls-tree", "-r", "-z", "--name-only", revision],
+        args: [
+          "ls-tree",
+          "-r",
+          "-z",
+          "--format=%(objecttype)%x1f%(objectsize)%x1f%(path)",
+          revision,
+        ],
         maxOutputBytes: MAX_FILE_RESPONSE_BYTES,
       });
+      const entries = parseTreeEntries(tree.stdout);
       const files: IntegrationFile[] = [];
-      let responseBytes = 0;
       let omittedFileCount = 0;
-      for (const path of tree.stdout.split("\0").filter(Boolean)) {
-        const object = `${revision}:${path}`;
-        const sizeResult = await this.git(this.repositoryRoot, [
-          "cat-file",
-          "-s",
-          object,
-        ]);
-        const size = Number(sizeResult.stdout.trim());
+      let responseBytes = snapshotBytes(source, revision, entries.length, []);
+      for (const entry of entries) {
+        const { path, size } = entry;
         if (
+          entry.type !== "blob" ||
           !Number.isSafeInteger(size) ||
           size < 0 ||
-          size > MAX_FILE_BYTES ||
-          responseBytes + size > MAX_FILE_RESPONSE_BYTES
+          size > MAX_FILE_BYTES
         ) {
           omittedFileCount += 1;
           continue;
         }
-        const content = await this.execute({
+        const object = `${revision}:${path}`;
+        const content = await this.executeBytes({
           cwd: this.repositoryRoot,
           args: ["show", object],
           maxOutputBytes: MAX_FILE_BYTES + 4096,
         });
-        if (!isUtf8Text(content.stdout, size)) {
+        const text = decodeUtf8Text(content.stdout, size);
+        if (text === null) {
           omittedFileCount += 1;
           continue;
         }
-        files.push({ path, content: content.stdout });
-        responseBytes += size;
+        const candidate = { path, content: text };
+        const candidateBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+        const separatorBytes = files.length === 0 ? 0 : 1;
+        if (responseBytes + separatorBytes + candidateBytes > MAX_FILE_RESPONSE_BYTES) {
+          omittedFileCount += 1;
+          continue;
+        }
+        files.push(candidate);
+        responseBytes += separatorBytes + candidateBytes;
       }
       return {
         source,
@@ -608,11 +626,54 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-function isUtf8Text(content: string, objectBytes: number): boolean {
-  return (
-    !content.includes("\0") &&
-    !content.includes("\uFFFD") &&
-    Buffer.byteLength(content, "utf8") === objectBytes
+function decodeUtf8Text(bytes: Buffer, objectBytes: number): string | null {
+  if (bytes.length !== objectBytes || bytes.includes(0)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+interface TreeEntry {
+  type: string;
+  size: number;
+  path: string;
+}
+
+function parseTreeEntries(output: string): TreeEntry[] {
+  return output
+    .split("\0")
+    .filter(Boolean)
+    .map((record) => {
+      const firstSeparator = record.indexOf("\x1f");
+      const secondSeparator = record.indexOf("\x1f", firstSeparator + 1);
+      if (firstSeparator < 1 || secondSeparator < 0) {
+        throw new Error("Git returned malformed tree metadata.");
+      }
+      return {
+        type: record.slice(0, firstSeparator),
+        size: Number(record.slice(firstSeparator + 1, secondSeparator)),
+        path: record.slice(secondSeparator + 1),
+      };
+    });
+}
+
+function snapshotBytes(
+  source: IntegrationFileSource,
+  revision: string,
+  maximumOmittedFileCount: number,
+  files: IntegrationFile[]
+): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      source,
+      revision,
+      appliedToProject: source === "project",
+      omittedFileCount: maximumOmittedFileCount,
+      files,
+    }),
+    "utf8"
   );
 }
 
