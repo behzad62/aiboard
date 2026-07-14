@@ -464,7 +464,7 @@ export class ControlServer {
         sendJson(
           response,
           200,
-          this.requireBuilds().selectArchitectHandoff(
+          await this.requireBuilds().selectArchitectHandoff(
             runId,
             body.runtimeId,
             body.idempotencyKey
@@ -661,10 +661,10 @@ export class ControlServer {
       try {
         this.builds.projection(runId);
         if (body.command === "start" || body.command === "resume") {
-          this.builds.resume(runId, `build:${body.idempotencyKey}`);
+          await this.builds.resume(runId, `build:${body.idempotencyKey}`);
           this.builds.activate(runId);
         } else {
-          this.builds.pause(
+          await this.builds.pause(
             runId,
             body.reason ?? "user",
             `build:${body.idempotencyKey}`

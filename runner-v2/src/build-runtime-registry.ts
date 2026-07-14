@@ -22,13 +22,13 @@ export interface BuildControlPlane {
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
   activate(runId: string): void;
-  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection;
-  resume(runId: string, idempotencyKey: string): SchedulerProjection;
+  pause(runId: string, reason: string, idempotencyKey: string): Promise<SchedulerProjection>;
+  resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection>;
   selectArchitectHandoff(
     runId: string,
     runtimeId: string,
     idempotencyKey: string
-  ): SchedulerProjection;
+  ): Promise<SchedulerProjection>;
   selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,
@@ -121,19 +121,19 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     void pump.catch(() => undefined);
   }
 
-  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {
+  async pause(runId: string, reason: string, idempotencyKey: string): Promise<SchedulerProjection> {
     return this.require(runId).pause(reason, idempotencyKey);
   }
 
-  resume(runId: string, idempotencyKey: string): SchedulerProjection {
+  async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
     return this.require(runId).resume(idempotencyKey);
   }
 
-  selectArchitectHandoff(
+  async selectArchitectHandoff(
     runId: string,
     runtimeId: string,
     idempotencyKey: string
-  ): SchedulerProjection {
+  ): Promise<SchedulerProjection> {
     return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey);
   }
 

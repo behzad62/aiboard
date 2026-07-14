@@ -60,13 +60,11 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async recover(): Promise<void> {
     const active: string[] = [];
-    const nonRunning: Array<[string, NativeBuildRuntimeHandle]> = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
         const handle = await this.ensureRuntime(spec);
         const status = handle.runtime.projection().status;
-        if (status !== "running") nonRunning.push([spec.runId, handle]);
         if (status === "completed") {
           settled.push([spec.runId, handle]);
         }
@@ -74,11 +72,11 @@ export class NativeBuildManager implements BuildControlPlane {
       }
     });
     const compactAndCleanup = async () => {
-      await this.compactRuns(nonRunning);
+      await this.compactEligibleRuns();
       if (this.options.prepareArtifactCleanup) {
         try {
           await this.options.prepareArtifactCleanup();
-          await this.compactRuns(nonRunning);
+          await this.compactEligibleRuns();
         } catch (error) {
           this.options.onPumpError?.("startup-artifact-reachability", error);
         }
@@ -143,12 +141,20 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async step(runId: string): Promise<BuildStepResult> {
-    return await this.withRuntimeActivity(() => this.require(runId).runtime.step());
+    const handle = this.require(runId);
+    return await this.executeWithFinalization(
+      runId,
+      handle,
+      () => handle.runtime.step()
+    );
   }
 
   async runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult> {
-    return await this.withRuntimeActivity(
-      () => this.require(runId).runtime.runUntilBlocked(maxSteps)
+    const handle = this.require(runId);
+    return await this.executeWithFinalization(
+      runId,
+      handle,
+      () => handle.runtime.runUntilBlocked(maxSteps)
     );
   }
 
@@ -178,22 +184,32 @@ export class NativeBuildManager implements BuildControlPlane {
     await Promise.all([...this.pumps.values()]);
   }
 
-  pause(runId: string, reason: string, idempotencyKey: string): SchedulerProjection {
-    return this.require(runId).runtime.pause(reason, idempotencyKey);
+  async pause(
+    runId: string,
+    reason: string,
+    idempotencyKey: string
+  ): Promise<SchedulerProjection> {
+    const handle = this.require(runId);
+    return await this.withRuntimeActivity(async () =>
+      handle.runtime.pause(reason, idempotencyKey)
+    );
   }
 
-  resume(runId: string, idempotencyKey: string): SchedulerProjection {
-    return this.require(runId).runtime.resume(idempotencyKey);
+  async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
+    const handle = this.require(runId);
+    return await this.withRuntimeActivity(async () =>
+      handle.runtime.resume(idempotencyKey)
+    );
   }
 
-  selectArchitectHandoff(
+  async selectArchitectHandoff(
     runId: string,
     runtimeId: string,
     idempotencyKey: string
-  ): SchedulerProjection {
-    return this.require(runId).runtime.selectArchitectHandoff(
-      runtimeId,
-      idempotencyKey
+  ): Promise<SchedulerProjection> {
+    const handle = this.require(runId);
+    return await this.withRuntimeActivity(async () =>
+      handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey)
     );
   }
 
@@ -351,40 +367,13 @@ export class NativeBuildManager implements BuildControlPlane {
         }
         result = { status: "paused", action: "no_mechanical_progress" };
       }
-      const projection = handle.runtime.projection();
-      if (
-        projection.projectHandoff?.status === "requested" &&
-        (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
-      ) {
-        try {
-          compaction = this.requestLiveCompaction();
-          await this.selectProjectHandoffInsideActivity(
-            runId,
-            "apply_to_project",
-            "automatic-project-handoff",
-            { role: "runner", id: "native-build-manager" }
-          );
-          result = {
-            status: "completed",
-            action: "automatic_project_handoff_applied",
-          };
-        } catch (error) {
-          this.options.onPumpError?.(runId, error);
-          this.options.onPumpResult?.(runId, {
-            status: "paused",
-            action: "automatic_project_handoff_failed",
-          });
-          return;
-        }
-      } else if (projection.status === "completed") {
-        compaction = this.requestLiveCompaction();
-        try {
-          await this.cleanupSettledRun(runId, handle);
-        } catch (error) {
-          this.options.onPumpError?.(runId, error);
-        }
-        result = { status: "completed", action: result.action };
-      }
+      const finalized = await this.finalizeExecutionInsideActivity(
+        runId,
+        handle,
+        result
+      );
+      result = finalized.result;
+      compaction = finalized.compaction;
       this.options.onPumpResult?.(runId, result);
     } catch (error) {
       const projection = handle.runtime.projection();
@@ -405,6 +394,86 @@ export class NativeBuildManager implements BuildControlPlane {
     }
   }
 
+  private async executeWithFinalization(
+    runId: string,
+    handle: NativeBuildRuntimeHandle,
+    execute: () => Promise<BuildStepResult>
+  ): Promise<BuildStepResult> {
+    const releaseActivity = await this.acquireRuntimeActivity();
+    let result!: BuildStepResult;
+    let compaction: Promise<void> | undefined;
+    try {
+      const finalized = await this.finalizeExecutionInsideActivity(
+        runId,
+        handle,
+        await execute()
+      );
+      result = finalized.result;
+      compaction = finalized.compaction;
+    } finally {
+      releaseActivity();
+      if (compaction) await compaction;
+    }
+    return result;
+  }
+
+  private async finalizeExecutionInsideActivity(
+    runId: string,
+    handle: NativeBuildRuntimeHandle,
+    result: BuildStepResult
+  ): Promise<{ result: BuildStepResult; compaction?: Promise<void> }> {
+    const projection = handle.runtime.projection();
+    if (
+      projection.projectHandoff?.status === "requested" &&
+      (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
+    ) {
+      if (this.settledRuns.has(runId)) {
+        return {
+          result: {
+            status: "completed",
+            action: "automatic_project_handoff_applied",
+          },
+        };
+      }
+      const compaction = this.requestLiveCompaction();
+      try {
+        await this.selectProjectHandoffInsideActivity(
+          runId,
+          "apply_to_project",
+          "automatic-project-handoff",
+          { role: "runner", id: "native-build-manager" }
+        );
+        return {
+          result: {
+            status: "completed",
+            action: "automatic_project_handoff_applied",
+          },
+          compaction,
+        };
+      } catch (error) {
+        this.options.onPumpError?.(runId, error);
+        return {
+          result: {
+            status: "paused",
+            action: "automatic_project_handoff_failed",
+          },
+          compaction,
+        };
+      }
+    }
+    if (projection.status === "completed") {
+      if (this.settledRuns.has(runId)) return { result };
+      const compaction = this.requestLiveCompaction();
+      try {
+        await this.cleanupSettledRun(runId, handle);
+      } catch (error) {
+        this.options.onPumpError?.(runId, error);
+      }
+      return { result: { status: "completed", action: result.action }, compaction };
+    }
+    return { result };
+  }
+
   private requestLiveCompaction(): Promise<void> {
     if (!this.options.runArtifactCompaction || !this.options.prepareArtifactCleanup) {
       return Promise.resolve();
@@ -418,12 +487,9 @@ export class NativeBuildManager implements BuildControlPlane {
       await this.waitForRuntimeActivityIdle();
       try {
         await this.options.runArtifactCompaction!(async () => {
-          const nonRunning = [...this.handles.entries()].filter(
-            ([, candidate]) => candidate.runtime.projection().status !== "running"
-          );
-          await this.compactRuns(nonRunning);
+          await this.compactEligibleRuns();
           await this.options.prepareArtifactCleanup!();
-          await this.compactRuns(nonRunning);
+          await this.compactEligibleRuns();
         });
       } catch (error) {
         this.options.onPumpError?.("live-artifact-reachability", error);
@@ -513,6 +579,14 @@ export class NativeBuildManager implements BuildControlPlane {
         this.options.onPumpError?.(runId, error);
       }
     }
+  }
+
+  private async compactEligibleRuns(): Promise<void> {
+    await this.compactRuns(
+      [...this.handles.entries()].filter(
+        ([, handle]) => handle.runtime.projection().status !== "running"
+      )
+    );
   }
 
   private async tryCleanupSettledRun(

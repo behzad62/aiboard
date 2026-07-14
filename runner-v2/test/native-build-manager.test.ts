@@ -786,6 +786,250 @@ test("settlement requests live compaction after releasing its own activity lease
   }
 });
 
+test("public step auto-applies Finish handoff and finalizes cleanup once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-manual-step-finalize-"));
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let handoffCalls = 0;
+  let cleanupCalls = 0;
+  let scans = 0;
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => { scans += 1; },
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        step: async () => {
+          if (projection.projectHandoff?.status === "selected") {
+            return { status: "completed" as const, action: "already_completed" };
+          }
+          projection = requestedHandoffProjection("finish");
+          return { status: "paused" as const, action: "completion_decision_required" };
+        },
+        selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+          projection = selectedHandoffProjection(projection, choice);
+          return projection;
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => {
+        handoffCalls += 1;
+        return {
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: true,
+          projectRevision: "project_revision",
+        };
+      },
+      cleanup: () => { cleanupCalls += 1; },
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    const result = await manager.step("run_1");
+    assert.deepEqual(result, {
+      status: "completed",
+      action: "automatic_project_handoff_applied",
+    });
+    assert.equal(handoffCalls, 1);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(scans, 1);
+
+    await manager.step("run_1");
+    assert.equal(handoffCalls, 1);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(scans, 1);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("public runUntilBlocked performs live physical cleanup after completion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-manual-run-gc-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const guard = new ArtifactReachabilityGuard(root, artifacts);
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts, {
+    deleteArtifactIfGloballyUnreachable: (hash) => guard.removeIfGloballyUnreachable(hash),
+  });
+  let manager: NativeBuildManager | undefined;
+  try {
+    const obsolete = await checkpointTwice(sessions, "run_1");
+    let projection = fakeRuntime("run_1").projection();
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      runArtifactCompaction: (operation) => guard.runQuiescent(operation),
+      prepareArtifactCleanup: () => guard.prepareReachabilityIndex(),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"),
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = { ...projection, status: "completed" };
+            return { status: "completed" as const, action: "architect_completed" };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        compact: () => sessions.compactRun("run_1"),
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => sessions.compactRun("run_1"),
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const result = await manager.runUntilBlocked("run_1");
+    assert.deepEqual(result, { status: "completed", action: "architect_completed" });
+    await assert.rejects(artifacts.verify(obsolete), /not found/i);
+    assert.equal(guard.scanCount, 1);
+  } finally {
+    await manager?.close();
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("public step leaves Plan-only handoff requested without mutation or cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-manual-plan-only-"));
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let handoffCalls = 0;
+  let cleanupCalls = 0;
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        step: async () => {
+          projection = requestedHandoffProjection("plan_only");
+          return { status: "paused" as const, action: "plan_handoff_required" };
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => {
+        handoffCalls += 1;
+        throw new Error("must remain explicit");
+      },
+      cleanup: () => { cleanupCalls += 1; },
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "plan_only", budgetLimits: {} });
+    const result = await manager.step("run_1");
+    assert.deepEqual(result, { status: "paused", action: "plan_handoff_required" });
+    assert.equal(handoffCalls, 0);
+    assert.equal(cleanupCalls, 0);
+    assert.equal(manager.projection("run_1").projectHandoff?.status, "requested");
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("lifecycle mutations wait during live compaction and pass two recomputes eligibility", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-resume-race-"));
+  let firstCompactStarted!: () => void;
+  const firstCompact = new Promise<void>((resolve) => { firstCompactStarted = resolve; });
+  let releaseFirstCompact!: () => void;
+  const firstCompactRelease = new Promise<void>((resolve) => { releaseFirstCompact = resolve; });
+  const projections = new Map<string, SchedulerProjection>();
+  let pausedCompactCalls = 0;
+  let resumeCalls = 0;
+  let pauseCalls = 0;
+  let architectHandoffCalls = 0;
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    runArtifactCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => undefined,
+    createRuntime: async (input) => {
+      let projection: SchedulerProjection = {
+        ...fakeRuntime(input.runId).projection(),
+        status: input.runId === "run_paused" ? "paused" : "running",
+      };
+      projections.set(input.runId, projection);
+      return {
+        ...handleProjections(input.runId),
+        runtime: {
+          ...fakeRuntime(input.runId),
+          projection: () => projections.get(input.runId)!,
+          resume: () => {
+            resumeCalls += 1;
+            projection = { ...projection, status: "running" };
+            projections.set(input.runId, projection);
+            return projection;
+          },
+          pause: () => {
+            pauseCalls += 1;
+            projection = { ...projection, status: "paused" };
+            projections.set(input.runId, projection);
+            return projection;
+          },
+          selectArchitectHandoff: () => {
+            architectHandoffCalls += 1;
+            return projection;
+          },
+          runUntilBlocked: async () => {
+            projection = { ...projection, status: "completed" };
+            projections.set(input.runId, projection);
+            return { status: "completed" as const };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        compact: async () => {
+          if (input.runId !== "run_paused") return;
+          pausedCompactCalls += 1;
+          if (pausedCompactCalls === 1) {
+            firstCompactStarted();
+            await firstCompactRelease;
+            projection = { ...projection, status: "running" };
+            projections.set(input.runId, projection);
+          }
+        },
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runId: "run_paused", idempotencyKey: "paused" });
+    await manager.create({ ...spec, runId: "run_settled", idempotencyKey: "settled" });
+    manager.activate("run_settled");
+    await firstCompact;
+    const resuming = manager.resume("run_paused", "resume-during-gc");
+    const pausing = manager.pause("run_paused", "pause-during-gc", "pause-during-gc");
+    const selecting = manager.selectArchitectHandoff(
+      "run_paused",
+      "chatgpt:gpt-5.4",
+      "handoff-during-gc"
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(resumeCalls, 0);
+    assert.equal(pauseCalls, 0);
+    assert.equal(architectHandoffCalls, 0);
+    releaseFirstCompact();
+    await manager.awaitIdle("run_settled");
+    await Promise.all([resuming, pausing, selecting]);
+    assert.equal(resumeCalls, 1);
+    assert.equal(pauseCalls, 1);
+    assert.equal(architectHandoffCalls, 1);
+    assert.equal(pausedCompactCalls, 1);
+  } finally {
+    releaseFirstCompact();
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("live compaction waits for active work, blocks new work, and scans once", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-live-gc-gate-"));
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));

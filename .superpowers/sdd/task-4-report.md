@@ -20,6 +20,8 @@
   - WAL/SHM bytes count toward the bound, while orphan companion files are scanned conservatively.
 - Restricted cleanup/idempotency-table exclusions to SQLite databases matching the complete five-table Runner session schema; unknown and near-miss SQLite schemas remain conservative roots.
 - Shutdown now rejects activity queued behind compaction, prevents new leases, and waits for already-running operations before closing stores.
+- Unified post-execution finalization across autonomous pumps and public `step` / `runUntilBlocked`: Finish and Budgeted handoffs auto-apply, completed runs clean up and request live GC, Plan-only remains explicit, and repeated settlement does not duplicate handoff or cleanup.
+- Moved pause, resume, and Architect-handoff lifecycle mutations behind the same asynchronous activity admission gate. Calls wait transparently during compaction, and both compaction passes recompute eligibility from current projections.
 - Settled cleanup now attempts checkpoint compaction, task-worktree cleanup, and integration-worktree cleanup independently and aggregates failures for retry.
 
 ## Test-first evidence
@@ -36,7 +38,7 @@ Observed RED before implementation:
 GREEN verification:
 
 - Focused Runner tests: 50/50 passed for reachability, control server, native manager, and integration manager.
-- Full Runner test set: 288/288 Runner tests plus all nine client/contract scripts passed.
+- Full Runner test set: 292/292 passed. All nine client/contract scripts passed.
 - `npx tsc -p runner-v2/tsconfig.json --noEmit`: passed.
 - `npx tsc --noEmit`: passed.
 - Targeted ESLint for every changed source/test file: passed with zero warnings.
