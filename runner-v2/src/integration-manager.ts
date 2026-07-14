@@ -20,6 +20,7 @@ import {
 } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
+  classifyOwnedWorktreeAssociations,
   isEmptyDirectory,
   parseWorktreeAssociations,
 } from "./worktree-state.js";
@@ -322,16 +323,19 @@ export class IntegrationManager {
             "-z",
           ])
         ).stdout
-      ).filter((association) => association.branch === this.branch);
-      const exactStaleAssociation =
-        branchRevision !== null &&
-        associations.length === 1 &&
-        resolve(associations[0]!.path) === this.path &&
-        associations[0]!.prunable;
-      let removedStaleAssociation = false;
+      );
+      const associationState = classifyOwnedWorktreeAssociations(
+        associations,
+        this.branch,
+        this.path
+      );
+      const descriptorIsEmpty =
+        descriptorExists && (await isEmptyDirectory(this.path));
+      let recoveredInvalidWorkspace = false;
       if (
-        exactStaleAssociation &&
-        (!descriptorExists || (await isEmptyDirectory(this.path)))
+        branchRevision !== null &&
+        associationState !== "unexpected" &&
+        (!descriptorExists || descriptorIsEmpty)
       ) {
         if (descriptorExists) {
           await rmdir(this.path);
@@ -342,7 +346,7 @@ export class IntegrationManager {
           "--expire",
           "now",
         ]);
-        removedStaleAssociation = true;
+        recoveredInvalidWorkspace = true;
         associations = parseWorktreeAssociations(
           (
             await this.git(this.repositoryRoot, [
@@ -352,21 +356,26 @@ export class IntegrationManager {
               "-z",
             ])
           ).stdout
-        ).filter((association) => association.branch === this.branch);
+        );
+        if (
+          classifyOwnedWorktreeAssociations(
+            associations,
+            this.branch,
+            this.path
+          ) !== "none"
+        ) {
+          throw new Error("Integration branch still has an unexpected worktree path.");
+        }
       } else if (descriptorExists) {
         await this.assertWorkspace();
         this.currentRevision ??= await this.head();
-      }
-      if (
-        associations.length !==
-          (descriptorExists && !removedStaleAssociation ? 1 : 0) ||
-        associations.some(
-          (association) => resolve(association.path) !== this.path
-        )
-      ) {
+        if (associationState !== "exact") {
+          throw new Error("Integration branch has an unexpected worktree path.");
+        }
+      } else if (associationState !== "none") {
         throw new Error("Integration branch has an unexpected worktree path.");
       }
-      if (descriptorExists && !removedStaleAssociation) {
+      if (descriptorExists && !recoveredInvalidWorkspace) {
         await this.git(this.repositoryRoot, [
           "worktree",
           "remove",

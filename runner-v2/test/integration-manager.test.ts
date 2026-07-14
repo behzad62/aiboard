@@ -1341,8 +1341,25 @@ test("cleanup removes the owned integration worktree but retains its audit branc
   }
 });
 
-test("cleanup removes an empty integration directory with its exact stale worktree record", async () => {
-  const fixture = await createFixture("cleanup-empty-stale");
+test("cleanup removes an exact empty integration directory without a prunable marker", async () => {
+  const executeWithoutPrunableMarker: GitRunner = async (options) => {
+    const result = await runGit(options);
+    if (
+      options.args[0] === "worktree" &&
+      options.args[1] === "list" &&
+      options.args.includes("--porcelain")
+    ) {
+      return {
+        ...result,
+        stdout: result.stdout.replace(/prunable(?: [^\0]*)?\0/g, ""),
+      };
+    }
+    return result;
+  };
+  const fixture = await createFixture(
+    "cleanup-empty-stale-unmarked",
+    executeWithoutPrunableMarker
+  );
   try {
     const revision = fixture.integration.revision;
     const branch = fixture.integration.integrationBranch;

@@ -5,6 +5,7 @@ import { relative, resolve } from "node:path";
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
+  classifyOwnedWorktreeAssociations,
   isEmptyDirectory,
   parseWorktreeAssociations,
 } from "./worktree-state.js";
@@ -192,15 +193,18 @@ export class WorkspaceManager {
               "-z",
             ])
           ).stdout
-        ).filter((association) => association.branch === branch);
-        const exactStaleAssociation =
-          associations.length === 1 &&
-          resolve(associations[0]!.path) === workspace.path &&
-          associations[0]!.prunable;
-        let removedStaleAssociation = false;
+        );
+        const associationState = classifyOwnedWorktreeAssociations(
+          associations,
+          branch,
+          workspace.path
+        );
+        const descriptorIsEmpty =
+          descriptorExists && (await isEmptyDirectory(workspace.path));
+        let recoveredInvalidWorkspace = false;
         if (
-          exactStaleAssociation &&
-          (!descriptorExists || (await isEmptyDirectory(workspace.path)))
+          associationState !== "unexpected" &&
+          (!descriptorExists || descriptorIsEmpty)
         ) {
           if (descriptorExists) {
             await rmdir(workspace.path);
@@ -211,7 +215,7 @@ export class WorkspaceManager {
             "--expire",
             "now",
           ]);
-          removedStaleAssociation = true;
+          recoveredInvalidWorkspace = true;
           associations = parseWorktreeAssociations(
             (
               await this.git(this.repositoryRoot, [
@@ -221,20 +225,25 @@ export class WorkspaceManager {
                 "-z",
               ])
             ).stdout
-          ).filter((association) => association.branch === branch);
+          );
+          if (
+            classifyOwnedWorktreeAssociations(
+              associations,
+              branch,
+              workspace.path
+            ) !== "none"
+          ) {
+            throw new Error(`Task branch ${branch} still has an unexpected worktree path.`);
+          }
         } else if (descriptorExists) {
           await this.assertOwnedWorkspace(workspace);
-        }
-        if (
-          associations.length !==
-            (descriptorExists && !removedStaleAssociation ? 1 : 0) ||
-          associations.some(
-            (association) => resolve(association.path) !== workspace.path
-          )
-        ) {
+          if (associationState !== "exact") {
+            throw new Error(`Task branch ${branch} has an unexpected worktree path.`);
+          }
+        } else {
           throw new Error(`Task branch ${branch} has an unexpected worktree path.`);
         }
-        if (descriptorExists && !removedStaleAssociation) {
+        if (descriptorExists && !recoveredInvalidWorkspace) {
           await this.git(this.repositoryRoot, [
             "worktree",
             "remove",
@@ -251,8 +260,14 @@ export class WorkspaceManager {
               "-z",
             ])
           ).stdout
-        ).filter((association) => association.branch === branch);
-        if (remainingAssociations.length > 0) {
+        );
+        if (
+          classifyOwnedWorktreeAssociations(
+            remainingAssociations,
+            branch,
+            workspace.path
+          ) !== "none"
+        ) {
           throw new Error(`Task branch ${branch} still has an unexpected worktree path.`);
         }
         await this.git(this.repositoryRoot, [

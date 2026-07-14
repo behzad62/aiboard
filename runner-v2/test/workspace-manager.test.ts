@@ -273,7 +273,7 @@ test("cleanup preserves a file created immediately before workspace root removal
   }
 });
 
-test("cleanup removes an empty task directory with its exact stale worktree record", async () => {
+test("cleanup removes an empty task directory after its stale worktree record was pruned", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-empty-stale-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -294,6 +294,16 @@ test("cleanup removes an empty task directory with its exact stale worktree reco
     });
     const workspace = await manager.createTaskWorkspace("task");
     rmSync(workspace.path, { recursive: true, force: true });
+    await runGit({
+      cwd: project,
+      args: ["worktree", "prune", "--expire", "now"],
+    });
+    assert.equal(
+      (await gitText(project, ["worktree", "list", "--porcelain"]))
+        .replaceAll("\\", "/")
+        .includes(workspace.path.replaceAll("\\", "/")),
+      false
+    );
     mkdirSync(workspace.path);
 
     await manager.cleanup();
