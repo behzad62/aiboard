@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
+import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import { runGit, type GitCommandOptions } from "./git-command.js";
@@ -22,6 +22,9 @@ export interface WorkspaceManagerOptions {
   runId: string;
   baselineRevision: string;
   execute?: GitRunner;
+  beforeWorkspaceRootRemoval?: (
+    workspaceRoot: string
+  ) => void | Promise<void>;
 }
 
 export interface TaskWorkspace {
@@ -61,6 +64,7 @@ export class WorkspaceManager {
   private readonly runSegment: string;
   private readonly baselineRevision: string;
   private readonly execute: GitRunner;
+  private readonly beforeWorkspaceRootRemoval?: WorkspaceManagerOptions["beforeWorkspaceRootRemoval"];
   private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(options: WorkspaceManagerOptions) {
@@ -74,6 +78,7 @@ export class WorkspaceManager {
     );
     this.baselineRevision = options.baselineRevision;
     this.execute = options.execute ?? runGit;
+    this.beforeWorkspaceRootRemoval = options.beforeWorkspaceRootRemoval;
   }
 
   async createTaskWorkspace(
@@ -259,11 +264,8 @@ export class WorkspaceManager {
       }
       await this.git(this.repositoryRoot, ["worktree", "prune", "--expire", "now"]);
       if (await pathExists(this.workspaceRoot)) {
-        const unexpected = await readdir(this.workspaceRoot);
-        if (unexpected.length > 0) {
-          throw new Error("Task workspace root contains unexpected entries.");
-        }
-        await rm(this.workspaceRoot, { recursive: true, force: true });
+        await this.beforeWorkspaceRootRemoval?.(this.workspaceRoot);
+        await rmdir(this.workspaceRoot);
       }
     });
   }

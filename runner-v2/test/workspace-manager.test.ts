@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
@@ -206,6 +206,7 @@ test("cleanup removes every owned task worktree and branch, prunes, and is idemp
 
     assert.equal(existsSync(first.path), false);
     assert.equal(existsSync(second.path), false);
+    assert.equal(existsSync(dirname(first.path)), false);
     assert.equal(
       await gitText(project, [
         "for-each-ref",
@@ -224,6 +225,49 @@ test("cleanup removes every owned task worktree and branch, prunes, and is idemp
     await manager.cleanup();
     assert.equal(existsSync(first.path), false);
     assert.equal(existsSync(second.path), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup preserves a file created immediately before workspace root removal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-root-race-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_root_race",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_root_race",
+      baselineRevision: baseline.revision,
+      beforeWorkspaceRootRemoval: (workspaceRoot) => {
+        writeFileSync(join(workspaceRoot, "raced.txt"), "preserve me\n");
+      },
+    });
+    const workspace = await manager.createTaskWorkspace("task");
+    const workspaceRoot = dirname(workspace.path);
+
+    await assert.rejects(
+      manager.cleanup(),
+      (error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOTEMPTY"
+    );
+
+    assert.equal(existsSync(workspaceRoot), true);
+    assert.equal(
+      readFileSync(join(workspaceRoot, "raced.txt"), "utf8"),
+      "preserve me\n"
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
