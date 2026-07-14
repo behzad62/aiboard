@@ -65,6 +65,14 @@ export interface IntegrationManagerOptions {
     targetCommit: string;
     journalPath: string;
   }) => void | Promise<void>;
+  afterAbandonedProjectAppliesRetired?: (input: {
+    targetCommit: string;
+  }) => void | Promise<void>;
+  afterProjectApplyOwnershipReleased?: (input: {
+    expectedOwnershipRevision: string;
+    targetCommit: string;
+    journalPath: string;
+  }) => void | Promise<void>;
 }
 
 export type IntegrationResult =
@@ -123,6 +131,8 @@ export class IntegrationManager {
   private readonly executeBytes: GitBinaryRunner;
   private readonly afterProjectApplyJournalWritten?: IntegrationManagerOptions["afterProjectApplyJournalWritten"];
   private readonly afterProjectRefAdvanced?: IntegrationManagerOptions["afterProjectRefAdvanced"];
+  private readonly afterAbandonedProjectAppliesRetired?: IntegrationManagerOptions["afterAbandonedProjectAppliesRetired"];
+  private readonly afterProjectApplyOwnershipReleased?: IntegrationManagerOptions["afterProjectApplyOwnershipReleased"];
   private operationQueue: Promise<void> = Promise.resolve();
   private currentRevision: string | undefined;
 
@@ -142,6 +152,8 @@ export class IntegrationManager {
     this.executeBytes = options.executeBytes ?? runGitBytes;
     this.afterProjectApplyJournalWritten = options.afterProjectApplyJournalWritten;
     this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
+    this.afterAbandonedProjectAppliesRetired = options.afterAbandonedProjectAppliesRetired;
+    this.afterProjectApplyOwnershipReleased = options.afterProjectApplyOwnershipReleased;
   }
 
   get revision(): string {
@@ -635,11 +647,6 @@ export class IntegrationManager {
               `The committed result could not be checked out safely: ${checkout.stderr.trim()}`
             );
           }
-          await this.cleanupOwnedProjectApply(
-            { path: journalPath, journal },
-            committedRevision
-          );
-          await this.retireAbandonedProjectApplies(committedRevision);
         } catch (error) {
           const rollback = await this.git(
             this.repositoryRoot,
@@ -665,6 +672,13 @@ export class IntegrationManager {
           }
           throw error;
         }
+        preserveHandoffFiles = true;
+        await this.retireAbandonedBeforeWinnerCleanup(committedRevision);
+        await this.cleanupOwnedProjectApply(
+          { path: journalPath, journal },
+          committedRevision,
+          true
+        );
         return this.descriptor(true, committedRevision);
       } finally {
         if (!preserveHandoffFiles) {
@@ -729,7 +743,9 @@ export class IntegrationManager {
     ) {
       fail("the checked-out branch does not match the journal.");
     }
-    let recoveredRetiringWinner: OwnedProjectApplyJournal | undefined;
+    let recoveredRetiringWinner:
+      | { path: string; journal: OwnedProjectApplyJournal }
+      | undefined;
     for (const record of records) {
       const journal = record.journal;
       if (journal.version !== 2 || journal.state !== "retiring") continue;
@@ -741,7 +757,11 @@ export class IntegrationManager {
         ) {
           fail("a retiring winning transition no longer matches the project state.");
         }
-        recoveredRetiringWinner = journal;
+        recoveredRetiringWinner = record as {
+          path: string;
+          journal: OwnedProjectApplyJournal;
+        };
+        continue;
       } else if (head === journal.targetCommit) {
         fail("a retiring abandoned transition unexpectedly became the project head.");
       }
@@ -751,8 +771,15 @@ export class IntegrationManager {
       );
     }
     if (recoveredRetiringWinner) {
-      await this.retireAbandonedProjectApplies(recoveredRetiringWinner.targetCommit);
-      return this.descriptor(true, recoveredRetiringWinner.targetCommit);
+      await this.retireAbandonedBeforeWinnerCleanup(
+        recoveredRetiringWinner.journal.targetCommit
+      );
+      await this.cleanupOwnedProjectApply(
+        recoveredRetiringWinner,
+        recoveredRetiringWinner.journal.targetCommit,
+        true
+      );
+      return this.descriptor(true, recoveredRetiringWinner.journal.targetCommit);
     }
     records = await this.readProjectApplyJournals();
     if (records.length === 0) return null;
@@ -781,8 +808,8 @@ export class IntegrationManager {
     }
 
     if (await this.projectMatchesRevision(journal.targetCommit)) {
+      await this.retireAbandonedBeforeWinnerCleanup(journal.targetCommit);
       await this.completeRecoveredProjectApply(record);
-      await this.retireAbandonedProjectApplies(journal.targetCommit);
       return this.descriptor(true, journal.targetCommit);
     }
     if (!await this.projectMatchesRevision(journal.expectedParent)) {
@@ -796,8 +823,8 @@ export class IntegrationManager {
     if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit)) {
       fail(`the exact journaled checkout could not be repaired: ${repaired.stderr.trim()}`);
     }
+    await this.retireAbandonedBeforeWinnerCleanup(journal.targetCommit);
     await this.completeRecoveredProjectApply(record);
-    await this.retireAbandonedProjectApplies(journal.targetCommit);
     return this.descriptor(true, journal.targetCommit);
   }
 
@@ -924,7 +951,8 @@ export class IntegrationManager {
 
   private async cleanupOwnedProjectApply(
     record: { path: string; journal: OwnedProjectApplyJournal },
-    expectedOwnershipRevision: string
+    expectedOwnershipRevision: string,
+    interruptibleWinnerCleanup = false
   ): Promise<void> {
     let journal = record.journal;
     const { patchPath, indexPath } = this.ownedProjectApplyPaths(journal);
@@ -972,6 +1000,13 @@ export class IntegrationManager {
       if (released.exitCode !== 0) {
         throw new Error("Project apply transition ownership could not be released.");
       }
+      if (interruptibleWinnerCleanup && this.afterProjectApplyOwnershipReleased) {
+        await this.afterProjectApplyOwnershipReleased({
+          expectedOwnershipRevision,
+          targetCommit: journal.targetCommit,
+          journalPath: record.path,
+        });
+      }
     }
     await rm(patchPath, { force: true });
     await rm(indexPath, { force: true });
@@ -1002,7 +1037,14 @@ export class IntegrationManager {
     await this.cleanupOwnedProjectApply(record as {
       path: string;
       journal: OwnedProjectApplyJournal;
-    }, revision);
+    }, revision, true);
+  }
+
+  private async retireAbandonedBeforeWinnerCleanup(
+    currentHead: string
+  ): Promise<void> {
+    await this.retireAbandonedProjectApplies(currentHead);
+    await this.afterAbandonedProjectAppliesRetired?.({ targetCommit: currentHead });
   }
 
   private async retireAbandonedProjectApplies(currentHead: string): Promise<void> {

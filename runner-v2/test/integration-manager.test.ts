@@ -666,6 +666,82 @@ test("retiring an abandoned transition resumes after its ownership ref was relea
   }
 });
 
+test("winner journal survives death after adjacent abandoned transitions retire", async () => {
+  const fixture = await createFixture("handoff-winner-anchor");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const abandoned = freshIntegration(fixture, {
+      afterProjectApplyJournalWritten: async () => {
+        throw new Error("leave adjacent abandoned transition");
+      },
+    });
+    await abandoned.initialize();
+    await assert.rejects(
+      () => abandoned.applyToProject(),
+      /leave adjacent abandoned transition/i
+    );
+
+    const winner = freshIntegration(fixture, {
+      afterAbandonedProjectAppliesRetired: async () => {
+        throw new Error("die before winning transition cleanup");
+      },
+    });
+    await winner.initialize();
+    await assert.rejects(
+      () => winner.applyToProject(),
+      /die before winning transition cleanup/i
+    );
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 1, "only the winning journal remains");
+    assert.equal(await handoffRefCount(fixture), 1, "winning ownership remains durable");
+
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(applyJournalPaths(fixture).length, 0);
+    assert.equal(await handoffRefCount(fixture), 0);
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("winner cleanup resumes after death immediately after ownership release", async () => {
+  const fixture = await createFixture("handoff-winner-release-death");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const winner = freshIntegration(fixture, {
+      afterProjectApplyOwnershipReleased: async ({
+        expectedOwnershipRevision,
+        targetCommit,
+      }) => {
+        if (expectedOwnershipRevision === targetCommit) {
+          throw new Error("die after winning ownership release");
+        }
+      },
+    });
+    await winner.initialize();
+    await assert.rejects(
+      () => winner.applyToProject(),
+      /die after winning ownership release/i
+    );
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 1);
+    assert.equal(await handoffRefCount(fixture), 0, "ownership release completed before death");
+
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(applyJournalPaths(fixture).length, 0);
+    assert.equal(await handoffRefCount(fixture), 0);
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("journal recovery blocks mismatches and preserves post-crash user edits", async () => {
   const fixture = await createFixture("handoff-crash-mismatch");
   try {

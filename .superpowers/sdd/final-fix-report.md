@@ -118,3 +118,32 @@ All required verification completed successfully after the final source change: 
 - Runner V2 TypeScript and root TypeScript checks passed.
 - `npm run build` passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
 - `npm run lint` and `git diff --check` passed.
+
+## Final winning-journal ordering follow-up
+
+### RED evidence
+
+- The real success path removed its winning journal before retiring adjacent abandoned transitions. Both new process-death seams initially failed with `Missing expected rejection` because the required boundaries were not observable and the winner was already gone.
+
+### Implementation
+
+- Normal success now retires every mechanically proven abandoned transition before cleaning the winning transition.
+- Both prepared-winner recovery paths likewise retain the winner, retire adjacent losers, and clean the winner last.
+- A retiring winner is deferred while recovery finishes retiring loser records; its journal remains the durable recovery anchor throughout.
+- Once the applied checkout is exact, cleanup failures no longer roll the project branch back merely because durable bookkeeping was interrupted. The winner journal and owned artifacts remain for exact restart recovery.
+
+### Actual-path crash regressions
+
+- A pre-CAS abandoned transition is created through the real journal hook, then the winning apply is interrupted after loser retirement but before winner cleanup. A fresh manager completes winner cleanup idempotently and the next apply succeeds.
+- A winning cleanup is interrupted immediately after its ownership ref is released. A fresh manager resumes from the durable `retiring` journal, removes the remaining artifacts/journal, and the next apply succeeds.
+- Neither regression manually manufactures journal state.
+
+### Fresh final verification
+
+- Focused handoff recovery set: **7/7 passed**.
+- Full integration-manager suite: **30/30 passed**.
+- Full Runner V2 suite serialized on Windows: **307/307 passed**.
+- All 11 Runner/client contract scripts passed.
+- Runner V2 TypeScript and root TypeScript checks passed.
+- `npm run build` passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
+- `npm run lint` and `git diff --check` passed.
