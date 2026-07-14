@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import {
   existsSync,
   readdirSync,
@@ -1381,6 +1383,119 @@ test("cleanup removes an exact empty integration directory without a prunable ma
     );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("active initialization restores an exact empty legacy integration directory as a working worktree", async () => {
+  const fixture = await createFixture("initialize-empty-legacy");
+  try {
+    const revision = fixture.integration.revision;
+    rmSync(fixture.integration.path, { recursive: true, force: true });
+    mkdirSync(fixture.integration.path);
+    const recovered = freshIntegration(fixture, { initializationMode: "active" });
+
+    await recovered.initialize();
+
+    assert.equal(recovered.revision, revision);
+    assert.equal(
+      (await gitText(recovered.path, ["rev-parse", "--show-toplevel"]))
+        .replaceAll("\\", "/"),
+      recovered.path.replaceAll("\\", "/")
+    );
+    assert.equal(
+      await gitText(recovered.path, ["symbolic-ref", "--quiet", "HEAD"]),
+      `refs/heads/${recovered.integrationBranch}`
+    );
+
+    const workspace = await fixture.workspaces.createTaskWorkspace("after-recovery");
+    writeFileSync(join(workspace.path, "after-recovery.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask(
+      "after-recovery",
+      "Integrate after recovery"
+    );
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+
+    const result = await recovered.integrate(changeSet);
+
+    assert.equal(result.status, "integrated");
+    assert.equal(
+      readFileSync(join(recovered.path, "after-recovery.txt"), "utf8").trim(),
+      "integrated"
+    );
+  } finally {
+    rmSync(fixture.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  }
+});
+
+test("cleanup-only initialization retains a locked empty legacy integration directory until cleanup can retry", async () => {
+  const fixture = await createFixture("initialize-empty-legacy-cleanup-only");
+  let cwdHolder: ChildProcess | undefined;
+  let settled: IntegrationManager | undefined;
+  try {
+    const revision = fixture.integration.revision;
+    const branch = fixture.integration.integrationBranch;
+    rmSync(fixture.integration.path, { recursive: true, force: true });
+    mkdirSync(fixture.integration.path);
+    cwdHolder = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::Out.WriteLine('ready'); Start-Sleep -Seconds 60",
+      ],
+      {
+        cwd: fixture.integration.path,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      }
+    );
+    await Promise.race([
+      once(cwdHolder.stdout!, "data"),
+      once(cwdHolder, "error").then(([error]) => Promise.reject(error)),
+    ]);
+    settled = freshIntegration(fixture, {
+      initializationMode: "cleanup-only",
+    });
+
+    await settled.initialize();
+
+    assert.equal(settled.revision, revision);
+    assert.deepEqual(readdirSync(settled.path), []);
+    assert.deepEqual(await settled.history(), []);
+    await assert.rejects(settled.cleanup());
+    assert.equal(existsSync(settled.path), true);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "--verify", branch]),
+      revision
+    );
+
+    cwdHolder.kill();
+    await once(cwdHolder, "exit");
+    cwdHolder = undefined;
+    await settled.cleanup();
+    assert.equal(existsSync(settled.path), false);
+  } finally {
+    if (cwdHolder?.exitCode === null) {
+      cwdHolder.kill();
+      await once(cwdHolder, "exit");
+    }
+    rmSync(fixture.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
   }
 });
 

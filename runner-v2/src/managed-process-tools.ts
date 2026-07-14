@@ -25,7 +25,7 @@ export function createManagedProcessTools(
       }),
       execute: async (input, context) => {
         try {
-          const snapshot = service.start(
+          const snapshot = await service.start(
             {
               command: input.command as string,
               args: (input.args as string[] | undefined) ?? [],

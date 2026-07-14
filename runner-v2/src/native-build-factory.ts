@@ -125,6 +125,7 @@ export class NativeBuildFactory {
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    const schedulerEvents = schedulerStore.readRun(spec.runId);
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
       this.artifacts,
@@ -156,6 +157,7 @@ export class NativeBuildFactory {
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       baselineRevision,
+      initializationMode: integrationInitializationModeFromEvents(schedulerEvents),
     });
     await integrationManager.initialize();
     const initialHealth = providerHealthFromSchedulerEvents(
@@ -350,24 +352,15 @@ export class NativeBuildFactory {
           ? await integrationManager.applyToProject()
           : integrationManager.descriptor(false),
       cleanup: async () => {
-        const failures: unknown[] = [];
-        for (const operation of [
-          () => sessions.compactRun(spec.runId),
-          () => workspaceManager.cleanup(),
-          () => integrationManager.cleanup(),
-        ]) {
-          try {
-            await operation();
-          } catch (error) {
-            failures.push(error);
-          }
-        }
-        if (failures.length > 0) {
-          throw new AggregateError(
-            failures,
-            `Could not clean settled Build ${spec.runId}.`
-          );
-        }
+        await cleanupSettledNativeBuild(
+          () => this.managedProcesses.stopRun(spec.runId),
+          [
+            () => sessions.compactRun(spec.runId),
+            () => workspaceManager.cleanup(),
+            () => integrationManager.cleanup(),
+          ],
+          spec.runId
+        );
       },
       close: () => {
         if (closed) return;
@@ -397,6 +390,37 @@ export class NativeBuildFactory {
   async prepareArtifactCleanup(): Promise<void> {
     await this.artifactReachability.prepareReachabilityIndex();
   }
+}
+
+export async function cleanupSettledNativeBuild(
+  stopManagedProcesses: () => Promise<void>,
+  operations: readonly (() => Promise<unknown>)[],
+  runId = "run"
+): Promise<void> {
+  await stopManagedProcesses();
+  const failures: unknown[] = [];
+  for (const operation of operations) {
+    try {
+      await operation();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Could not clean settled Build ${runId}.`
+    );
+  }
+}
+
+export function integrationInitializationModeFromEvents(
+  events: readonly SchedulerEvent[]
+): "active" | "cleanup-only" {
+  if (events.length === 0) return "active";
+  return rebuildSchedulerProjection(events).status === "completed"
+    ? "cleanup-only"
+    : "active";
 }
 
 function summarizeToolCalls(

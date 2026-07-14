@@ -128,6 +128,22 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       }
     }
 
+    for (const sourcePath of [
+      "managed-process-supervisor.mjs",
+      "managed-process-job-host.ps1",
+    ]) {
+      const archivePath = `src/${sourcePath}`;
+      const sourceFile = archive.file(archivePath);
+      check(`${path} contains ${archivePath}`, sourceFile !== null);
+      const archivedSource = sourceFile
+        ? await sourceFile.async("nodebuffer")
+        : undefined;
+      check(
+        `${path} ${archivePath} bytes match Runner V2 source`,
+        archivedSource?.equals(readFileSync(`runner-v2/src/${sourcePath}`)) === true
+      );
+    }
+
     for (const skillPath of textFilePaths("runner-v2/skills", ".md")) {
       const archivePath = `skills/${skillPath}`;
       const skillFile = archive.file(archivePath);

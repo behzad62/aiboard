@@ -67,6 +67,7 @@ export interface IntegrationManagerOptions {
   stateDirectory: string;
   runId: string;
   baselineRevision: string;
+  initializationMode?: "active" | "cleanup-only";
   execute?: GitRunner;
   executeBytes?: GitBinaryRunner;
   afterProjectApplyJournalWritten?: (input: {
@@ -149,6 +150,7 @@ export class IntegrationManager {
   private readonly runId: string;
   private readonly runSegment: string;
   private readonly baselineRevision: string;
+  private readonly initializationMode: "active" | "cleanup-only";
   private readonly branch: string;
   private readonly execute: GitRunner;
   private readonly executeBytes: GitBinaryRunner;
@@ -171,6 +173,7 @@ export class IntegrationManager {
       throw new Error("Integration workspace escaped the runner state directory.");
     }
     this.baselineRevision = options.baselineRevision;
+    this.initializationMode = options.initializationMode ?? "active";
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
     this.execute = options.execute ?? runGit;
     this.executeBytes = options.executeBytes ?? runGitBytes;
@@ -296,6 +299,13 @@ export class IntegrationManager {
 
   async initialize(): Promise<void> {
     await this.serialized(async () => {
+      if (
+        this.initializationMode === "cleanup-only"
+          ? await this.retainEmptyLegacyWorkspaceForCleanup()
+          : await this.recoverEmptyLegacyWorkspace()
+      ) {
+        return;
+      }
       await this.ensureIntegrationWorkspace();
     });
   }
@@ -1298,6 +1308,90 @@ export class IntegrationManager {
     }
     await this.assertWorkspace();
     this.currentRevision = await this.head();
+  }
+
+  private async recoverEmptyLegacyWorkspace(): Promise<boolean> {
+    const branchRevision = await this.verifiedEmptyLegacyRevision();
+    if (!branchRevision) return false;
+    await rmdir(this.path);
+    await this.git(this.repositoryRoot, [
+      "worktree",
+      "prune",
+      "--expire",
+      "now",
+    ]);
+    const remainingAssociations = parseWorktreeAssociations(
+      (
+        await this.git(this.repositoryRoot, [
+          "worktree",
+          "list",
+          "--porcelain",
+          "-z",
+        ])
+      ).stdout
+    );
+    if (
+      classifyOwnedWorktreeAssociations(
+        remainingAssociations,
+        this.branch,
+        this.path
+      ) !== "none"
+    ) {
+      throw new Error("Integration branch still has an unexpected worktree path.");
+    }
+    await this.git(this.repositoryRoot, [
+      "worktree",
+      "add",
+      this.path,
+      this.branch.slice("refs/heads/".length),
+    ]);
+    await this.assertWorkspace();
+    const restoredRevision = await this.head();
+    if (restoredRevision !== branchRevision) {
+      throw new Error("Integration branch changed during workspace recovery.");
+    }
+    this.currentRevision = restoredRevision;
+    return true;
+  }
+
+  private async retainEmptyLegacyWorkspaceForCleanup(): Promise<boolean> {
+    const branchRevision = await this.verifiedEmptyLegacyRevision();
+    if (!branchRevision) return false;
+    this.currentRevision = branchRevision;
+    return true;
+  }
+
+  private async verifiedEmptyLegacyRevision(): Promise<string | null> {
+    if (!(await pathExists(this.path)) || !(await isEmptyDirectory(this.path))) {
+      return null;
+    }
+    const branchRevision = await this.resolveRef(this.branch);
+    if (!branchRevision) return null;
+    const associations = parseWorktreeAssociations(
+      (
+        await this.git(this.repositoryRoot, [
+          "worktree",
+          "list",
+          "--porcelain",
+          "-z",
+        ])
+      ).stdout
+    );
+    if (
+      classifyOwnedWorktreeAssociations(associations, this.branch, this.path) ===
+      "unexpected"
+    ) {
+      throw new Error("Integration branch has an unexpected worktree path.");
+    }
+    const ancestry = await this.git(
+      this.repositoryRoot,
+      ["merge-base", "--is-ancestor", this.baselineRevision, branchRevision],
+      true
+    );
+    if (ancestry.exitCode !== 0) {
+      throw new Error("Integration branch escaped its run baseline.");
+    }
+    return branchRevision;
   }
 
   private async fileRevision(
