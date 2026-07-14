@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, open, readdir } from "node:fs/promises";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 
 import { runGit } from "./git-command.js";
@@ -99,6 +99,10 @@ export class RepositoryIntelligence {
       maxOutputBytes: 16 * 1024,
     });
     if (repositoryCheck.exitCode !== 0) {
+      if (!/not a git repository/i.test(repositoryCheck.stderr)) {
+        const detail = repositoryCheck.stderr.trim() || repositoryCheck.stdout.trim();
+        throw new Error(`Repository scan failed: ${detail || "git rev-parse failed"}`);
+      }
       return await this.filesystemSnapshot(workspaceRoot, maxEntries, signal);
     }
 
@@ -371,8 +375,19 @@ async function classifyEntry(
 }
 
 async function readPrefix(path: string): Promise<Buffer> {
-  const bytes = await readFile(path);
-  return bytes.subarray(0, MAX_CLASSIFICATION_PREFIX_BYTES);
+  const handle = await open(path, "r");
+  try {
+    const bytes = Buffer.allocUnsafe(MAX_CLASSIFICATION_PREFIX_BYTES);
+    const { bytesRead } = await handle.read(
+      bytes,
+      0,
+      MAX_CLASSIFICATION_PREFIX_BYTES,
+      0,
+    );
+    return bytes.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 function isUtf8Text(bytes: Buffer): boolean {
