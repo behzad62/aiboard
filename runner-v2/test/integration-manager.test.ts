@@ -648,6 +648,7 @@ test("retiring an abandoned transition resumes after its ownership ref was relea
     };
     journal.state = "retiring";
     journal.retiringOwnershipRevision = journal.expectedParent;
+    Object.assign(journal, { retirementKind: "abandoned" });
     writeFileSync(journalPath, `${JSON.stringify(journal)}\n`);
     await runGit({
       cwd: fixture.project,
@@ -730,6 +731,81 @@ test("winner cleanup resumes after death immediately after ownership release", a
     assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
     assert.equal(applyJournalPaths(fixture).length, 1);
     assert.equal(await handoffRefCount(fixture), 0, "ownership release completed before death");
+
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(applyJournalPaths(fixture).length, 0);
+    assert.equal(await handoffRefCount(fixture), 0);
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("winner classification survives branch-CAS death and cleanup-release death", async () => {
+  const fixture = await createFixture("handoff-winner-parent-ownership");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const branchCasCrash = freshIntegration(fixture, {
+      afterProjectBranchAdvanced: async () => {
+        throw new Error("die after branch CAS before ownership advance");
+      },
+    });
+    await branchCasCrash.initialize();
+    await assert.rejects(
+      () => branchCasCrash.applyToProject(),
+      /die after branch CAS before ownership advance/i
+    );
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+    assert.equal(applyJournalPaths(fixture).length, 1);
+    assert.equal(await handoffRefCount(fixture), 1);
+
+    const cleanupCrash = freshIntegration(fixture, {
+      afterProjectApplyOwnershipReleased: async ({ retirementKind }) => {
+        if (retirementKind === "winner") {
+          throw new Error("die after parent ownership release during winner cleanup");
+        }
+      },
+    });
+    await cleanupCrash.initialize();
+    await assert.rejects(
+      () => cleanupCrash.applyToProject(),
+      /die after parent ownership release during winner cleanup/i
+    );
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 1);
+    assert.equal(await handoffRefCount(fixture), 0);
+
+    const journalPath = applyJournalPaths(fixture)[0]!;
+    const winnerJournal = JSON.parse(readFileSync(journalPath, "utf8")) as Record<string, unknown>;
+    const parent = await gitText(fixture.project, ["rev-parse", `${target}^`]);
+    assert.equal(winnerJournal.state, "retiring");
+    assert.equal(winnerJournal.retirementKind, "winner");
+    assert.equal(winnerJournal.winningRevision, target);
+    assert.equal(winnerJournal.retiringOwnershipRevision, parent);
+
+    writeFileSync(journalPath, `${JSON.stringify({
+      ...winnerJournal,
+      winningRevision: parent,
+    })}\n`);
+    await assert.rejects(
+      () => freshIntegration(fixture).applyToProject(),
+      /transition ownership metadata is invalid/i
+    );
+
+    const forgedLoser: Record<string, unknown> = {
+      ...winnerJournal,
+      retirementKind: "abandoned",
+    };
+    delete forgedLoser.winningRevision;
+    writeFileSync(journalPath, `${JSON.stringify(forgedLoser)}\n`);
+    await assert.rejects(
+      () => freshIntegration(fixture).applyToProject(),
+      /retiring abandoned transition unexpectedly became the project head/i
+    );
+    writeFileSync(journalPath, `${JSON.stringify(winnerJournal)}\n`);
 
     const recovered = freshIntegration(fixture);
     await recovered.initialize();

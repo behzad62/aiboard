@@ -147,3 +147,35 @@ All required verification completed successfully after the final source change: 
 - Runner V2 TypeScript and root TypeScript checks passed.
 - `npm run build` passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
 - `npm run lint` and `git diff --check` passed.
+
+## Final recovered-winner classification follow-up
+
+### RED evidence
+
+- The actual branch-CAS/pre-ownership crash seam was initially ignored, so the required two-crash regression failed with `Missing expected rejection`.
+- Ownership revision alone was insufficient: a real winner can begin cleanup while its transition ownership ref still records the expected parent.
+
+### Implementation
+
+- Retiring version 2 journals now persist an explicit `retirementKind` and, for winners, an exact `winningRevision` equal to the journaled target commit.
+- Recovery classifies a retiring transition from that durable identity rather than inferring winner status from the ownership revision.
+- A retiring winner is accepted only when its durable winner revision equals its target, project HEAD equals that target, and the index/worktree exactly match it.
+- A retiring abandoned transition remains forbidden from becoming project HEAD.
+- Winner cleanup resumes with the exact recorded ownership revision, whether the ref advanced to target or remained at parent before the first recovery released it.
+
+### Actual-path and adversarial regression
+
+- First process dies after the project branch CAS and before transition ownership advances.
+- A fresh manager repairs the exact checkout and begins durably classified winner cleanup; a second injected death occurs immediately after releasing the still-parent ownership ref.
+- A third manager accepts the exact durable winner identity, completes cleanup idempotently, and the next apply succeeds.
+- The same real crash state rejects a mismatched `winningRevision` and rejects a forged abandoned classification while its target is HEAD.
+
+### Fresh final verification
+
+- Focused handoff recovery set: **8/8 passed**.
+- Full integration-manager suite: **31/31 passed**.
+- Full Runner V2 suite serialized on Windows: **308/308 passed**.
+- All 11 Runner/client contract scripts passed.
+- Runner V2 TypeScript and root TypeScript checks passed.
+- `npm run build` passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
+- `npm run lint` and `git diff --check` passed.

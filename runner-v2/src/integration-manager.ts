@@ -38,6 +38,8 @@ interface OwnedProjectApplyJournal extends ProjectApplyJournalBase {
   version: 2;
   state: "prepared" | "retiring";
   retiringOwnershipRevision?: string;
+  retirementKind?: "winner" | "abandoned";
+  winningRevision?: string;
   transitionId: string;
   transitionRef: string;
   patchFile: string;
@@ -65,11 +67,18 @@ export interface IntegrationManagerOptions {
     targetCommit: string;
     journalPath: string;
   }) => void | Promise<void>;
+  afterProjectBranchAdvanced?: (input: {
+    projectBranch: string;
+    expectedParent: string;
+    targetCommit: string;
+    journalPath: string;
+  }) => void | Promise<void>;
   afterAbandonedProjectAppliesRetired?: (input: {
     targetCommit: string;
   }) => void | Promise<void>;
   afterProjectApplyOwnershipReleased?: (input: {
     expectedOwnershipRevision: string;
+    retirementKind: "winner" | "abandoned";
     targetCommit: string;
     journalPath: string;
   }) => void | Promise<void>;
@@ -131,6 +140,7 @@ export class IntegrationManager {
   private readonly executeBytes: GitBinaryRunner;
   private readonly afterProjectApplyJournalWritten?: IntegrationManagerOptions["afterProjectApplyJournalWritten"];
   private readonly afterProjectRefAdvanced?: IntegrationManagerOptions["afterProjectRefAdvanced"];
+  private readonly afterProjectBranchAdvanced?: IntegrationManagerOptions["afterProjectBranchAdvanced"];
   private readonly afterAbandonedProjectAppliesRetired?: IntegrationManagerOptions["afterAbandonedProjectAppliesRetired"];
   private readonly afterProjectApplyOwnershipReleased?: IntegrationManagerOptions["afterProjectApplyOwnershipReleased"];
   private operationQueue: Promise<void> = Promise.resolve();
@@ -152,6 +162,7 @@ export class IntegrationManager {
     this.executeBytes = options.executeBytes ?? runGitBytes;
     this.afterProjectApplyJournalWritten = options.afterProjectApplyJournalWritten;
     this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
+    this.afterProjectBranchAdvanced = options.afterProjectBranchAdvanced;
     this.afterAbandonedProjectAppliesRetired = options.afterAbandonedProjectAppliesRetired;
     this.afterProjectApplyOwnershipReleased = options.afterProjectApplyOwnershipReleased;
   }
@@ -595,6 +606,19 @@ export class IntegrationManager {
           await this.cleanupOwnedProjectApply({ path: journalPath, journal }, projectRevision);
           throw new Error("The project changed during automatic handoff.");
         }
+        if (this.afterProjectBranchAdvanced) {
+          try {
+            await this.afterProjectBranchAdvanced({
+              projectBranch: projectBranch.stdout.trim(),
+              expectedParent: projectRevision,
+              targetCommit: committedRevision,
+              journalPath,
+            });
+          } catch (error) {
+            preserveHandoffFiles = true;
+            throw error;
+          }
+        }
         const ownershipAdvanced = await this.git(
           this.repositoryRoot,
           ["update-ref", transitionRef, committedRevision, projectRevision],
@@ -677,7 +701,7 @@ export class IntegrationManager {
         await this.cleanupOwnedProjectApply(
           { path: journalPath, journal },
           committedRevision,
-          true
+          "winner"
         );
         return this.descriptor(true, committedRevision);
       } finally {
@@ -714,13 +738,25 @@ export class IntegrationManager {
       if (journal.version === 2) {
         try {
           this.ownedProjectApplyPaths(journal);
+          const preparedStateIsValid =
+            journal.state === "prepared" &&
+            journal.retiringOwnershipRevision === undefined &&
+            journal.retirementKind === undefined &&
+            journal.winningRevision === undefined;
+          const retiringStateIsValid =
+            journal.state === "retiring" &&
+            [journal.expectedParent, journal.targetCommit].includes(
+              journal.retiringOwnershipRevision ?? ""
+            ) &&
+            (
+              (journal.retirementKind === "winner" &&
+                journal.winningRevision === journal.targetCommit) ||
+              (journal.retirementKind === "abandoned" &&
+                journal.winningRevision === undefined)
+            );
           if (
-            !["prepared", "retiring"].includes(journal.state) ||
-            (journal.state === "prepared" && journal.retiringOwnershipRevision !== undefined) ||
-            (journal.state === "retiring" &&
-              ![journal.expectedParent, journal.targetCommit].includes(
-                journal.retiringOwnershipRevision ?? ""
-              ))
+            !preparedStateIsValid &&
+            !retiringStateIsValid
           ) {
             throw new Error("Invalid transition retirement state.");
           }
@@ -750,7 +786,7 @@ export class IntegrationManager {
       const journal = record.journal;
       if (journal.version !== 2 || journal.state !== "retiring") continue;
       const retirementRevision = journal.retiringOwnershipRevision!;
-      if (retirementRevision === journal.targetCommit) {
+      if (journal.retirementKind === "winner") {
         if (
           head !== journal.targetCommit ||
           !await this.projectMatchesRevision(journal.targetCommit)
@@ -776,8 +812,8 @@ export class IntegrationManager {
       );
       await this.cleanupOwnedProjectApply(
         recoveredRetiringWinner,
-        recoveredRetiringWinner.journal.targetCommit,
-        true
+        recoveredRetiringWinner.journal.retiringOwnershipRevision!,
+        "winner"
       );
       return this.descriptor(true, recoveredRetiringWinner.journal.targetCommit);
     }
@@ -952,7 +988,7 @@ export class IntegrationManager {
   private async cleanupOwnedProjectApply(
     record: { path: string; journal: OwnedProjectApplyJournal },
     expectedOwnershipRevision: string,
-    interruptibleWinnerCleanup = false
+    retirementKind: "winner" | "abandoned" = "abandoned"
   ): Promise<void> {
     let journal = record.journal;
     const { patchPath, indexPath } = this.ownedProjectApplyPaths(journal);
@@ -972,10 +1008,17 @@ export class IntegrationManager {
         ...journal,
         state: "retiring",
         retiringOwnershipRevision: expectedOwnershipRevision,
+        retirementKind,
+        ...(retirementKind === "winner"
+          ? { winningRevision: journal.targetCommit }
+          : {}),
       };
       record.journal = journal;
       await this.persistProjectApplyJournal(record.path, journal);
-    } else if (journal.retiringOwnershipRevision !== expectedOwnershipRevision) {
+    } else if (
+      journal.retiringOwnershipRevision !== expectedOwnershipRevision ||
+      journal.retirementKind !== retirementKind
+    ) {
       throw new Error("Project apply transition retirement ownership is ambiguous.");
     }
     const ownership = await this.git(
@@ -1000,9 +1043,10 @@ export class IntegrationManager {
       if (released.exitCode !== 0) {
         throw new Error("Project apply transition ownership could not be released.");
       }
-      if (interruptibleWinnerCleanup && this.afterProjectApplyOwnershipReleased) {
+      if (this.afterProjectApplyOwnershipReleased) {
         await this.afterProjectApplyOwnershipReleased({
           expectedOwnershipRevision,
+          retirementKind,
           targetCommit: journal.targetCommit,
           journalPath: record.path,
         });
@@ -1037,7 +1081,7 @@ export class IntegrationManager {
     await this.cleanupOwnedProjectApply(record as {
       path: string;
       journal: OwnedProjectApplyJournal;
-    }, revision, true);
+    }, revision, "winner");
   }
 
   private async retireAbandonedBeforeWinnerCleanup(
