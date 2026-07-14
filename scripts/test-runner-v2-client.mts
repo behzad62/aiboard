@@ -410,11 +410,11 @@ assert.equal(
 
 const newerCrashReferenceFetch: typeof fetch = async (input) => {
   const url = String(input);
-  if (url.endsWith("/v2/runs/native-missing-after-crash/build")) {
-    return Response.json(
-      { error: "Unknown build runtime native-missing-after-crash." },
-      { status: 404 }
-    );
+  if (url.endsWith("/v2/runs/native-reserved-in-other-tab/build")) {
+    return Response.json({
+      runId: "native-reserved-in-other-tab",
+      status: "created",
+    });
   }
   if (url.endsWith("/v2/builds?projectId=discussion_newer_crash_reference")) {
     return Response.json({ builds: [
@@ -439,13 +439,13 @@ const newerCrashReferenceFetch: typeof fetch = async (input) => {
 assert.equal(
   await resolveNativeBuildRunId(
     connection,
-    "native-missing-after-crash",
+    "native-reserved-in-other-tab",
     "discussion_newer_crash_reference",
     newerCrashReferenceFetch,
     { allowMissing: true, requestedAt: freshPassRequestedAt }
   ),
   "run_created_after_request",
-  "a reference created at the request boundary is authoritative crash recovery"
+  "a newer eligible two-tab reference wins even when the reserved run also exists"
 );
 
 const crashedProvisioningFetch: typeof fetch = async (input) => {

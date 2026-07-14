@@ -355,3 +355,56 @@ git diff --check                                                 PASS
 ```
 
 `npm run build` was not run because the active development server makes it unsafe under `AGENTS.md`.
+
+## Final provenance attachment ordering fixes
+
+### Newest eligible reference precedence
+
+RED after adding a two-tab case where both the reserved run and a newer eligible reference exist:
+
+```text
+npx tsx scripts/test-runner-v2-client.mts
+AssertionError: a newer eligible two-tab reference wins even when the reserved run also exists
+actual: native-reserved-in-other-tab
+expected: run_created_after_request
+exit 1
+```
+
+GREEN after resolving in the required order — newest eligible reference, existing saved run, then provisioning:
+
+```text
+npx tsx scripts/test-runner-v2-client.mts
+PASS runner-v2 client
+exit 0
+```
+
+### Snapshot-gated provenance clearing
+
+RED before the authoritative snapshot loader existed:
+
+```text
+npx tsx scripts/test-native-build-pause-gates.mts
+SyntaxError: native-build-engine does not provide loadNativeBuildAuthoritativeSnapshot
+exit 1
+```
+
+GREEN after gating the resolved-run identity patch on successful `getNativeRun` and `getNativeBuild` results:
+
+```text
+npx tsx scripts/test-native-build-pause-gates.mts
+PASS native Build pause gates
+exit 0
+```
+
+The regression makes the Build snapshot fail once and proves the attachment callback is not invoked; a subsequent successful retry loads both snapshots and invokes it exactly once. Newly created exact-reserved runs retain the earlier rule: successful durable creation is sufficient to clear provisional provenance.
+
+### Final verification
+
+```text
+12 covering client/contract scripts                              PASS
+npx tsc --noEmit                                                 PASS
+npx -y node@24.18.0 node_modules/typescript/bin/tsc \
+  -p runner-v2/tsconfig.json --noEmit                            PASS
+npm run lint                                                     PASS, zero warnings
+git diff --check                                                 PASS
+```

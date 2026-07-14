@@ -1,9 +1,39 @@
 import assert from "node:assert/strict";
 
 import {
+  loadNativeBuildAuthoritativeSnapshot,
   nativeBuildAttachAction,
   nativeBuildPauseGate,
 } from "../lib/client/native-build-engine";
+
+let attachedSnapshots = 0;
+await assert.rejects(
+  () => loadNativeBuildAuthoritativeSnapshot({
+    loadRun: async () => ({ runId: "run-vanished" }),
+    loadBuild: async () => {
+      throw new Error("referenced Build vanished");
+    },
+    onAttached: () => { attachedSnapshots += 1; },
+  }),
+  /referenced Build vanished/
+);
+assert.equal(
+  attachedSnapshots,
+  0,
+  "failed authoritative snapshot loading preserves requested-at provenance for retry"
+);
+const recoveredSnapshot = await loadNativeBuildAuthoritativeSnapshot({
+  loadRun: async () => ({ runId: "run-recovered" }),
+  loadBuild: async () => ({ runId: "run-recovered", status: "running" }),
+  onAttached: () => { attachedSnapshots += 1; },
+});
+assert.equal(recoveredSnapshot.run.runId, "run-recovered");
+assert.equal(recoveredSnapshot.build.runId, "run-recovered");
+assert.equal(
+  attachedSnapshots,
+  1,
+  "retry clears provenance only after both authoritative snapshots load"
+);
 
 assert.equal(nativeBuildAttachAction("created"), "start");
 assert.equal(nativeBuildAttachAction("running"), "observe");

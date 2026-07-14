@@ -85,6 +85,19 @@ export function nativeBuildProvisioningRunId(
   return reservedRunId ?? `native-${crypto.randomUUID()}`;
 }
 
+export async function loadNativeBuildAuthoritativeSnapshot<TRun, TBuild>(options: {
+  loadRun: () => Promise<TRun>;
+  loadBuild: () => Promise<TBuild>;
+  onAttached: () => void | Promise<void>;
+}): Promise<{ run: TRun; build: TBuild }> {
+  const [run, build] = await Promise.all([
+    options.loadRun(),
+    options.loadBuild(),
+  ]);
+  await options.onAttached();
+  return { run, build };
+}
+
 export async function runNativeBuildDiscussion(
   discussion: Discussion,
   emit: Emit,
@@ -137,15 +150,10 @@ export async function runNativeBuildDiscussion(
           discussion.id
         )
     : undefined;
-  if (
+  const shouldPersistResolvedIdentity = Boolean(
     runId &&
     (runId !== discussion.nativeBuildRunId || discussion.nativeBuildRequestedAt)
-  ) {
-    updateDiscussion(
-      discussion.id,
-      nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
-    );
-  }
+  );
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
   if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
@@ -189,8 +197,18 @@ export async function runNativeBuildDiscussion(
       nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
     );
   }
-  const run = await getNativeRun(connection, runId);
-  const initialProjection = await getNativeBuild(connection, runId);
+  const { run, build: initialProjection } =
+    await loadNativeBuildAuthoritativeSnapshot({
+      loadRun: async () => await getNativeRun(connection, runId),
+      loadBuild: async () => await getNativeBuild(connection, runId),
+      onAttached: () => {
+        if (!shouldPersistResolvedIdentity) return;
+        updateDiscussion(
+          discussion.id,
+          nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
+        );
+      },
+    });
   syncDurablePolicy(initialProjection);
   emit({
     type: "build_usage",

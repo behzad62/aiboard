@@ -557,7 +557,6 @@ export async function resolveNativeBuildRunId(
     if (left.runId === right.runId) return 0;
     return left.runId < right.runId ? 1 : -1;
   })[0];
-  if (intentionalNewPass && savedExists) return savedRunId;
   if (newestReference) return newestReference.runId;
   if (savedExists) return savedRunId;
   if (options.allowMissing) return undefined;
