@@ -138,6 +138,7 @@ export interface NativeBuildProjection {
     appliedToProject?: boolean;
     projectRevision?: string;
   };
+  integrationRevision?: string;
   lastSequence: number;
 }
 

@@ -72,4 +72,3 @@ Startup also compacts non-running historical runs so existing installations recl
 - Workspace/integration tests prove settled cleanup removes only owned worktrees and is idempotent.
 - A compaction test creates multiple large checkpoints, compacts them, verifies the full final transcript remains, and verifies superseded artifact files are deleted.
 - UI contract tests prove refresh attaches the newest run and displays Runner transcript/file revisions.
-

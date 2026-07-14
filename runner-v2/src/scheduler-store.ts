@@ -130,6 +130,7 @@ export interface SchedulerProjection {
   guidance: Record<string, GuidanceProjection>;
   reviews: Record<string, ReviewProjection>;
   runtime: RuntimeProjection;
+  integrationRevision?: string;
   projectHandoff?: ProjectHandoffProjection;
   lastSequence: number;
 }
@@ -314,6 +315,10 @@ export function reduceSchedulerEvent(
         status,
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {}
       );
+      if (status === "integrated") {
+        const integrationRevision = next.tasks[taskId].integrationRevision;
+        if (integrationRevision) next.integrationRevision = integrationRevision;
+      }
       break;
     }
     case "guidance.requested": {

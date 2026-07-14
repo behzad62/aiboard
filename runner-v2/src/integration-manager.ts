@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
@@ -20,6 +20,16 @@ const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FILE_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+interface ProjectApplyJournal {
+  version: 1;
+  runId: string;
+  projectIdentity: string;
+  projectBranch: string;
+  expectedParent: string;
+  targetCommit: string;
+  integrationRevision: string;
+}
 
 export interface IntegrationManagerOptions {
   repositoryRoot: string;
@@ -345,6 +355,8 @@ export class IntegrationManager {
   async applyToProject(): Promise<ProjectHandoffResult> {
     return await this.serialized(async () => {
       await this.ensureIntegrationWorkspace();
+      const recovered = await this.recoverProjectApply();
+      if (recovered) return recovered;
       const projectBranch = await this.git(
         this.repositoryRoot,
         ["symbolic-ref", "--quiet", "HEAD"],
@@ -458,6 +470,22 @@ export class IntegrationManager {
         }
         const committedRevision = commit.stdout.trim();
         await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
+        const journal: ProjectApplyJournal = {
+          version: 1,
+          runId: this.runId,
+          projectIdentity: await this.projectIdentity(),
+          projectBranch: projectBranch.stdout.trim(),
+          expectedParent: projectRevision,
+          targetCommit: committedRevision,
+          integrationRevision: this.revision,
+        };
+        await this.writeProjectApplyJournal(journal);
+        try {
+          await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
+        } catch (error) {
+          await this.clearProjectApplyJournal();
+          throw error;
+        }
         const advanced = await this.git(
           this.repositoryRoot,
           [
@@ -469,6 +497,7 @@ export class IntegrationManager {
           true
         );
         if (advanced.exitCode !== 0) {
+          await this.clearProjectApplyJournal();
           throw new Error("The project changed during automatic handoff.");
         }
         try {
@@ -497,6 +526,7 @@ export class IntegrationManager {
               `The committed result could not be checked out safely: ${checkout.stderr.trim()}`
             );
           }
+          await this.clearProjectApplyJournal();
         } catch (error) {
           const rollback = await this.git(
             this.repositoryRoot,
@@ -514,6 +544,9 @@ export class IntegrationManager {
               "Automatic handoff failed after advancing the project branch and could not roll it back."
             );
           }
+          if (await this.projectMatchesRevision(projectRevision)) {
+            await this.clearProjectApplyJournal();
+          }
           throw error;
         }
         return this.descriptor(true, committedRevision);
@@ -523,6 +556,142 @@ export class IntegrationManager {
         await rm(`${indexPath}.lock`, { force: true });
       }
     });
+  }
+
+  private async recoverProjectApply(): Promise<ProjectHandoffResult | null> {
+    const journal = await this.readProjectApplyJournal();
+    if (!journal) return null;
+    const fail = (reason: string): never => {
+      throw new Error(
+        `The journaled automatic handoff cannot be recovered safely: ${reason}`
+      );
+    };
+    if (
+      journal.version !== 1 ||
+      journal.runId !== this.runId ||
+      journal.integrationRevision !== this.revision ||
+      journal.projectIdentity !== await this.projectIdentity() ||
+      !journal.projectBranch.startsWith("refs/heads/") ||
+      !isRevision(journal.expectedParent) ||
+      !isRevision(journal.targetCommit)
+    ) {
+      fail("its recorded project or run identity does not match.");
+    }
+    const branch = await this.git(
+      this.repositoryRoot,
+      ["symbolic-ref", "--quiet", "HEAD"],
+      true
+    );
+    const head = (
+      await this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
+    ).stdout.trim();
+    if (branch.exitCode !== 0 || branch.stdout.trim() !== journal.projectBranch) {
+      fail("the checked-out branch does not match the journal.");
+    }
+    const parent = await this.git(
+      this.repositoryRoot,
+      ["rev-parse", "--verify", `${journal.targetCommit}^`],
+      true
+    );
+    if (parent.exitCode !== 0 || parent.stdout.trim() !== journal.expectedParent) {
+      fail("the target commit parent does not match the journal.");
+    }
+    if (!await this.isAppliedProjectCommit(journal.targetCommit)) {
+      fail("the target commit is not this run's integrated result.");
+    }
+
+    if (head === journal.expectedParent) {
+      if (!await this.projectMatchesRevision(journal.expectedParent)) {
+        fail("the pre-advance project state contains unrelated changes.");
+      }
+      await this.clearProjectApplyJournal();
+      return null;
+    }
+    if (head !== journal.targetCommit) {
+      fail("the project ref moved after the journal was written.");
+    }
+    if (await this.projectMatchesRevision(journal.targetCommit)) {
+      await this.clearProjectApplyJournal();
+      return this.descriptor(true, journal.targetCommit);
+    }
+    if (!await this.projectMatchesRevision(journal.expectedParent)) {
+      fail("the post-advance index or worktree contains unrelated changes.");
+    }
+    const repaired = await this.git(
+      this.repositoryRoot,
+      ["read-tree", "-u", "-m", journal.expectedParent, journal.targetCommit],
+      true
+    );
+    if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit)) {
+      fail(`the exact journaled checkout could not be repaired: ${repaired.stderr.trim()}`);
+    }
+    await this.clearProjectApplyJournal();
+    return this.descriptor(true, journal.targetCommit);
+  }
+
+  private async projectMatchesRevision(revision: string): Promise<boolean> {
+    const [indexTree, revisionTree, worktree, untracked] = await Promise.all([
+      this.git(this.repositoryRoot, ["write-tree"], true),
+      this.git(this.repositoryRoot, ["rev-parse", `${revision}^{tree}`], true),
+      this.git(this.repositoryRoot, ["diff", "--quiet"], true),
+      this.git(this.repositoryRoot, ["ls-files", "--others", "--exclude-standard", "-z"], true),
+    ]);
+    return (
+      indexTree.exitCode === 0 &&
+      revisionTree.exitCode === 0 &&
+      indexTree.stdout.trim() === revisionTree.stdout.trim() &&
+      worktree.exitCode === 0 &&
+      untracked.exitCode === 0 &&
+      untracked.stdout.length === 0
+    );
+  }
+
+  private async projectIdentity(): Promise<string> {
+    const gitDirectory = (
+      await this.git(this.repositoryRoot, ["rev-parse", "--absolute-git-dir"])
+    ).stdout.trim();
+    return createHash("sha256")
+      .update(`${this.repositoryRoot}\0${gitDirectory}`)
+      .digest("hex");
+  }
+
+  private projectApplyJournalPath(): string {
+    const directory = resolve(this.stateDirectory, "handoff");
+    const path = resolve(directory, `${this.runSegment}.apply.json`);
+    if (relative(directory, path).startsWith("..")) {
+      throw new Error("Project apply journal escaped the runner state directory.");
+    }
+    return path;
+  }
+
+  private async readProjectApplyJournal(): Promise<ProjectApplyJournal | null> {
+    const path = this.projectApplyJournalPath();
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Project apply journal must be an object.");
+      }
+      return parsed as ProjectApplyJournal;
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return null;
+      throw new Error("The project apply journal is unreadable.", { cause: error });
+    }
+  }
+
+  private async writeProjectApplyJournal(journal: ProjectApplyJournal): Promise<void> {
+    const path = this.projectApplyJournalPath();
+    const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+    await mkdir(resolve(path, ".."), { recursive: true });
+    try {
+      await writeFile(temporary, `${JSON.stringify(journal)}\n`, { flag: "wx" });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+
+  private async clearProjectApplyJournal(): Promise<void> {
+    await rm(this.projectApplyJournalPath(), { force: true });
   }
 
   private async assertProjectUnchanged(
@@ -821,6 +990,14 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isRevision(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{40,64}$/.test(value);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function decodeUtf8Text(bytes: Buffer, objectBytes: number): string | null {

@@ -93,9 +93,11 @@ import {
   buildStopFallbackMessage,
   createNativeBuildAttachmentPoller,
   createNativeBuildAttachmentRefresh,
+  createNativeBuildFileLoader,
   durableBuildHandoffPanels,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
+  nativeBuildFileIdentity,
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
@@ -922,6 +924,9 @@ function DiscussionPageInner() {
     let hasPendingProvenance = Boolean(initialRequestedAt);
     let persistedStatus = discussion.status;
     let persistedPolicy = discussion.buildRunPolicy;
+    const fileLoader = createNativeBuildFileLoader({
+      load: async (runId) => await getNativeBuildFiles(connection, runId),
+    });
     const refreshAttachment = createNativeBuildAttachmentRefresh({
       savedRunId: initialRunId,
       resolveRunId: async (savedRunId) => {
@@ -948,7 +953,7 @@ function DiscussionPageInner() {
         const cursor = nativeTranscriptRef.current?.runId === runId
           ? nativeTranscriptRef.current.cursor
           : 0;
-        const [projection, usage, run, events, observability, transcript, files] =
+        const [projection, usage, run, events, observability, transcript] =
           await Promise.all([
             getNativeBuild(connection, runId),
             getNativeBuildUsage(connection, runId),
@@ -956,8 +961,8 @@ function DiscussionPageInner() {
             getNativeBuildEvents(connection, runId, 0),
             getNativeBuildObservability(connection, runId),
             getNativeBuildTranscript(connection, runId, cursor),
-            getNativeBuildFiles(connection, runId),
           ]);
+        const files = await fileLoader.load(runId, nativeBuildFileIdentity(projection));
         return {
           runState: run.state,
           projection,

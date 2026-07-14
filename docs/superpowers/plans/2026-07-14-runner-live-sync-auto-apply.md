@@ -140,4 +140,3 @@
 - [ ] Merge the feature branch into `main`, push `main`, restart Runner V2 from the new main checkout, and verify `/health` reports Node 24.18.0.
 - [ ] Measure `C:\Users\b_a_s\source\runner-state` before/after startup migration and confirm obsolete checkpoints and settled worktrees are reclaimed without losing the latest run transcript/evidence.
 - [ ] Refresh `http://localhost:3000/discussion?id=c26f473d-cc2d-4687-8dc4-a30530ece947` and verify it attaches the newest run, shows current model-only transcript/files, and no longer presents an unnecessary successful handoff prompt.
-

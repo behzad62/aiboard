@@ -404,6 +404,29 @@ test("plan reconciliation rejects live dependencies on cancelled tasks", () => {
   }
 });
 
+test("projection records the most recently integrated revision", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-integration-revision-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append(event("run_revision", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [task("T1", "integrating", [])],
+    }));
+    store.append(event("run_revision", "task.transitioned", "integrated:1", {
+      taskId: "T1",
+      status: "integrated",
+      patch: { integrationRevision: "a".repeat(40) },
+    }));
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun("run_revision")).integrationRevision,
+      "a".repeat(40)
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function event(
   runId: string,
   type: NewSchedulerEvent["type"],

@@ -19,6 +19,8 @@ import {
   nextNativeBuildPoll,
   createNativeBuildAttachmentPoller,
   createNativeBuildAttachmentRefresh,
+  createNativeBuildFileLoader,
+  nativeBuildFileIdentity,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -455,7 +457,58 @@ let poll = nextNativeBuildPoll(pollState, "running");
 assert.equal(poll.action, "poll");
 pollState = poll.state;
 poll = nextNativeBuildPoll(pollState, "paused");
-assert.equal(poll.action, "poll", "paused/recoverable native runs continue polling");
+assert.equal(poll.action, "stop", "running-to-paused performs one final reconciliation and stops");
+
+const initiallyPausedQueue: Array<() => Promise<void>> = [];
+const initiallyPausedPoller = createNativeBuildAttachmentPoller({
+  refresh: async () => ({ runState: "paused" as const }),
+  apply: () => undefined,
+  schedule: (callback) => {
+    initiallyPausedQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+await initiallyPausedPoller.start();
+assert.equal(initiallyPausedQueue.length, 0, "an initially paused run reconciles once and stops");
+
+let fileFetches = 0;
+const fileLoader = createNativeBuildFileLoader({
+  load: async (runId, identity) => {
+    fileFetches += 1;
+    return {
+      source: identity?.source ?? "integration" as const,
+      revision: identity?.revision ?? (runId === "run_b" ? "b".repeat(40) : "a".repeat(40)),
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    };
+  },
+});
+const revisionA = { source: "integration" as const, revision: "a".repeat(40) };
+await fileLoader.load("run_a", revisionA);
+await fileLoader.load("run_a", revisionA);
+assert.equal(fileFetches, 1, "an unchanged run/source/revision does not refetch files");
+await fileLoader.load("run_a", { source: "integration", revision: "c".repeat(40) });
+await fileLoader.load("run_a", { source: "integration", revision: "c".repeat(40) });
+assert.equal(fileFetches, 2, "a revision change fetches files once");
+await fileLoader.load("run_a", { source: "project", revision: "c".repeat(40) });
+assert.equal(fileFetches, 3, "a source change fetches files once");
+await fileLoader.load("run_b", { source: "integration", revision: "b".repeat(40) });
+assert.equal(fileFetches, 4, "a run switch invalidates the old file snapshot");
+
+assert.deepEqual(
+  nativeBuildFileIdentity({
+    tasks: {},
+    projectHandoff: {
+      status: "selected",
+      appliedToProject: true,
+      projectRevision: "d".repeat(40),
+    },
+  } as never),
+  { source: "project", revision: "d".repeat(40) }
+);
 pollState = poll.state;
 poll = nextNativeBuildPoll(pollState, "completed");
 assert.equal(poll.action, "terminal_refresh", "active-to-terminal schedules one final refresh");

@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createChangeSet } from "../src/change-set.js";
@@ -334,6 +335,117 @@ test("final handoff rejects dirty projects without changing their worktree, inde
 
     await assert.rejects(
       () => fixture.integration.applyToProject(),
+      /clean project worktree and index/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a fresh manager repairs the exact journaled post-ref crash state", async () => {
+  const fixture = await createFixture("handoff-crash-repair");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const applied = await fixture.integration.applyToProject();
+    const target = applied.projectRevision!;
+    const parent = await gitText(fixture.project, ["rev-parse", `${target}^`]);
+    const branch = await gitText(fixture.project, ["symbolic-ref", "HEAD"]);
+    await writeApplyJournal(fixture, { branch, parent, target });
+    await runGit({ cwd: fixture.project, args: ["read-tree", "--reset", "-u", parent] });
+
+    const recovered = freshIntegration(fixture);
+    const result = await recovered.applyToProject();
+    assert.equal(result.projectRevision, target);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(await gitText(fixture.project, ["status", "--porcelain=v1"]), "");
+    assert.equal(existsSync(applyJournalPath(fixture)), false);
+
+    const repeated = freshIntegration(fixture);
+    assert.equal((await repeated.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("journal recovery blocks mismatches and preserves post-crash user edits", async () => {
+  const fixture = await createFixture("handoff-crash-mismatch");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const applied = await fixture.integration.applyToProject();
+    const target = applied.projectRevision!;
+    const parent = await gitText(fixture.project, ["rev-parse", `${target}^`]);
+    const branch = await gitText(fixture.project, ["symbolic-ref", "HEAD"]);
+    await writeApplyJournal(fixture, { branch, parent, target });
+    await runGit({ cwd: fixture.project, args: ["read-tree", "--reset", "-u", parent] });
+    writeFileSync(join(fixture.project, "user-after-crash.txt"), "preserve me\n");
+    const before = await projectState(fixture.project);
+
+    await assert.rejects(
+      () => freshIntegration(fixture).applyToProject(),
+      /journaled automatic handoff.*does not match|cannot be recovered safely/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+    assert.equal(readFileSync(join(fixture.project, "user-after-crash.txt"), "utf8"), "preserve me\n");
+    assert.equal(existsSync(applyJournalPath(fixture)), true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("journal recovery never mutates a branch whose ref moved elsewhere", async () => {
+  const fixture = await createFixture("handoff-crash-ref-moved");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const applied = await fixture.integration.applyToProject();
+    const target = applied.projectRevision!;
+    const parent = await gitText(fixture.project, ["rev-parse", `${target}^`]);
+    const branch = await gitText(fixture.project, ["symbolic-ref", "HEAD"]);
+    await writeApplyJournal(fixture, { branch, parent, target });
+    const alternate = (await runGit({
+      cwd: fixture.project,
+      args: [
+        "commit-tree",
+        `${parent}^{tree}`,
+        "-p",
+        parent,
+        "-m",
+        "Unrelated ref movement",
+      ],
+      env: {
+        GIT_AUTHOR_NAME: "User",
+        GIT_AUTHOR_EMAIL: "user@example.com",
+        GIT_COMMITTER_NAME: "User",
+        GIT_COMMITTER_EMAIL: "user@example.com",
+      },
+    })).stdout.trim();
+    await runGit({ cwd: fixture.project, args: ["update-ref", branch, alternate, target] });
+    await runGit({ cwd: fixture.project, args: ["read-tree", "--reset", "-u", alternate] });
+    const before = await projectState(fixture.project);
+
+    await assert.rejects(
+      () => freshIntegration(fixture).applyToProject(),
+      /project ref moved/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+    assert.equal(existsSync(applyJournalPath(fixture)), true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("normal success clears its apply journal and unjournaled dirty state stays blocked", async () => {
+  const fixture = await createFixture("handoff-journal-lifecycle");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const result = await fixture.integration.applyToProject();
+    assert.ok(result.projectRevision);
+    assert.equal(existsSync(applyJournalPath(fixture)), false);
+
+    writeFileSync(join(fixture.project, "user.txt"), "unrelated\n");
+    const before = await projectState(fixture.project);
+    await assert.rejects(
+      () => freshIntegration(fixture).applyToProject(),
       /clean project worktree and index/i
     );
     assert.deepEqual(await projectState(fixture.project), before);
@@ -785,16 +897,17 @@ async function createFixture(label: string, execute?: GitRunner) {
   const state = join(root, "state");
   mkdirSync(project);
   mkdirSync(state);
+  const runId = `run_${label}`;
   writeFileSync(join(project, "shared.txt"), "baseline\n");
   const baseline = await captureGitBaseline({
     projectPath: project,
     stateDirectory: state,
-    runId: `run_${label}`,
+    runId,
   });
   const workspaces = new WorkspaceManager({
     repositoryRoot: project,
     stateDirectory: state,
-    runId: `run_${label}`,
+    runId,
     baselineRevision: baseline.revision,
   });
   const artifacts = new ArtifactStore(join(state, "artifacts"));
@@ -806,7 +919,7 @@ async function createFixture(label: string, execute?: GitRunner) {
   const integration = new IntegrationManager({
     repositoryRoot: project,
     stateDirectory: state,
-    runId: `run_${label}`,
+    runId,
     baselineRevision: baseline.revision,
     ...(execute ? { execute } : {}),
   });
@@ -815,6 +928,7 @@ async function createFixture(label: string, execute?: GitRunner) {
     root,
     project,
     state,
+    runId,
     baseline,
     workspaces,
     artifacts,
@@ -842,6 +956,43 @@ async function integrateFeature(
     evidenceArtifactHashes: [fixture.evidence.hash],
   });
   await fixture.integration.integrate(changeSet);
+}
+
+function freshIntegration(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  return new IntegrationManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    baselineRevision: fixture.baseline.revision,
+  });
+}
+
+function applyJournalPath(fixture: Awaited<ReturnType<typeof createFixture>>): string {
+  const runId = fixture.integration.integrationBranch.split("/")[1];
+  return join(fixture.state, "handoff", `${runId}.apply.json`);
+}
+
+async function writeApplyJournal(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  revisions: { branch: string; parent: string; target: string }
+): Promise<void> {
+  const gitDirectory = await gitText(fixture.project, ["rev-parse", "--absolute-git-dir"]);
+  const projectIdentity = createHash("sha256")
+    .update(`${fixture.project}\0${gitDirectory}`)
+    .digest("hex");
+  mkdirSync(join(fixture.state, "handoff"), { recursive: true });
+  writeFileSync(
+    applyJournalPath(fixture),
+    `${JSON.stringify({
+      version: 1,
+      runId: fixture.runId,
+      projectIdentity,
+      projectBranch: revisions.branch,
+      expectedParent: revisions.parent,
+      targetCommit: revisions.target,
+      integrationRevision: fixture.integration.revision,
+    })}\n`
+  );
 }
 
 async function projectState(cwd: string) {

@@ -272,11 +272,70 @@ export function reconcileNativeBuildFiles(
     : { runId, key, snapshot };
 }
 
+export interface NativeBuildFileIdentity {
+  source: NativeBuildFileSnapshot["source"];
+  revision: string;
+}
+
+export function nativeBuildFileIdentity(
+  projection: Pick<
+    NativeBuildProjection,
+    "tasks" | "projectHandoff" | "integrationRevision"
+  >
+): NativeBuildFileIdentity | undefined {
+  const handoff = projection.projectHandoff;
+  if (handoff?.appliedToProject && handoff.projectRevision) {
+    return { source: "project", revision: handoff.projectRevision };
+  }
+  if (handoff?.integrationRevision) {
+    return { source: "integration", revision: handoff.integrationRevision };
+  }
+  if (projection.integrationRevision) {
+    return { source: "integration", revision: projection.integrationRevision };
+  }
+  const revision = Object.values(projection.tasks)
+    .map((task) => task.integrationRevision)
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .at(-1);
+  return revision ? { source: "integration", revision } : undefined;
+}
+
+export function createNativeBuildFileLoader(options: {
+  load: (
+    runId: string,
+    identity?: NativeBuildFileIdentity
+  ) => Promise<NativeBuildFileSnapshot>;
+}): {
+  load: (
+    runId: string,
+    identity?: NativeBuildFileIdentity
+  ) => Promise<NativeBuildFileSnapshot>;
+} {
+  let cached: { key: string; snapshot: NativeBuildFileSnapshot } | undefined;
+  return {
+    load: async (runId, identity) => {
+      const requestedKey = identity
+        ? `${runId}:${identity.source}:${identity.revision}`
+        : undefined;
+      if (cached && (requestedKey ? cached.key === requestedKey : cached.key.startsWith(`${runId}:`))) {
+        return cached.snapshot;
+      }
+      const snapshot = await options.load(runId, identity);
+      cached = {
+        key: `${runId}:${snapshot.source}:${snapshot.revision}`,
+        snapshot,
+      };
+      return snapshot;
+    },
+  };
+}
+
 export function nextNativeBuildPoll(
   state: NativeBuildPollState,
   runState: NativeRunProjection["state"]
 ): { state: NativeBuildPollState; action: "poll" | "terminal_refresh" | "stop" } {
-  if (["created", "running", "paused", "stopping"].includes(runState)) {
+  if (runState === "paused") return { state, action: "stop" };
+  if (["created", "running", "stopping"].includes(runState)) {
     return {
       state: { observedActive: true, terminalRefreshScheduled: false },
       action: "poll",
