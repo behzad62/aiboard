@@ -58,6 +58,7 @@ test("native Build manager recreates persisted runtimes and closes resources", a
             integrationBranch: "aiboard/run/integration",
             appliedToProject: false,
           }),
+          cleanup: () => undefined,
           close: () => {
             closed.push(input.runId);
           },
@@ -101,6 +102,7 @@ test("native Build manager owns one autonomous pump per active run", async () =>
           integrationBranch: "aiboard/run/integration",
           appliedToProject: false,
         }),
+        cleanup: () => undefined,
         close: () => undefined,
       }),
     });
@@ -141,6 +143,7 @@ test("recovery autonomously restarts only runs the supervisor still marks active
           integrationBranch: "aiboard/run/integration",
           appliedToProject: false,
         }),
+        cleanup: () => undefined,
         close: () => undefined,
       }),
     });
@@ -156,6 +159,7 @@ test("recovery autonomously restarts only runs the supervisor still marks active
 test("completed project handoff replays without applying the project twice", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-handoff-replay-"));
   let handoffCalls = 0;
+  const selectionActors: unknown[] = [];
   let manager: NativeBuildManager | undefined;
   let projection: SchedulerProjection = {
     ...fakeRuntime("run_1").projection(),
@@ -173,7 +177,13 @@ test("completed project handoff replays without applying the project twice", asy
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
-          selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+          selectProjectHandoff: (
+            choice: "keep_integration_branch" | "apply_to_project",
+            _result: unknown,
+            _idempotencyKey: string,
+            actor: unknown
+          ) => {
+            selectionActors.push(actor);
             projection = {
               ...projection,
               status: "completed",
@@ -200,18 +210,19 @@ test("completed project handoff replays without applying the project twice", asy
             appliedToProject: true,
           };
         },
+        cleanup: () => undefined,
         close: () => undefined,
       }),
     });
     await manager.create(spec);
-    await manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:apply");
-    const replay = await manager.selectProjectHandoff(
-      "run_1",
-      "apply_to_project",
-      "handoff:apply"
-    );
+    const [selected, replay] = await Promise.all([
+      manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:apply"),
+      manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:apply"),
+    ]);
+    assert.equal(selected.status, "completed");
     assert.equal(replay.status, "completed");
     assert.equal(handoffCalls, 1);
+    assert.deepEqual(selectionActors, [{ role: "user", id: "local-user" }]);
   } finally {
     await manager?.close();
     rmSync(root, { recursive: true, force: true });
@@ -282,6 +293,7 @@ test("autonomous pump continues after bounded progress without user Resume", asy
           integrationBranch: "aiboard/run/integration",
           appliedToProject: false,
         }),
+        cleanup: () => undefined,
         close: () => undefined,
       }),
     });
@@ -291,6 +303,429 @@ test("autonomous pump continues after bounded progress without user Resume", asy
     assert.equal(pumpCalls, 2);
   } finally {
     await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("requested Finish or Budgeted handoff auto-applies once and cleans up after settlement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-auto-handoff-"));
+  let handoffCalls = 0;
+  let cleanupCalls = 0;
+  const results: string[] = [];
+  const selectionActors: unknown[] = [];
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => results.push(result.status),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = requestedHandoffProjection("budgeted");
+            return { status: "paused" as const, action: "completion_decision_required" };
+          },
+          selectProjectHandoff: (
+            choice: "keep_integration_branch" | "apply_to_project",
+            _result: unknown,
+            _idempotencyKey: string,
+            actor: unknown
+          ) => {
+            selectionActors.push(actor);
+            projection = selectedHandoffProjection(projection, choice);
+            return projection;
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async (choice) => {
+          handoffCalls += 1;
+          assert.equal(choice, "apply_to_project");
+          return {
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: true,
+            projectRevision: "project_revision",
+          };
+        },
+        cleanup: async () => {
+          cleanupCalls += 1;
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+
+    assert.equal(handoffCalls, 1);
+    assert.equal(cleanupCalls, 1);
+    assert.deepEqual(selectionActors, [
+      { role: "runner", id: "native-build-manager" },
+    ]);
+    assert.deepEqual(results, ["completed"]);
+    assert.equal(manager.projection("run_1").status, "completed");
+    assert.equal(
+      manager.projection("run_1").projectHandoff?.choice,
+      "apply_to_project"
+    );
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Plan-only requested handoff remains paused for the user", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-plan-handoff-"));
+  let handoffCalls = 0;
+  let cleanupCalls = 0;
+  const results: string[] = [];
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => results.push(result.status),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = requestedHandoffProjection("plan_only");
+            return { status: "paused" as const, action: "completion_decision_required" };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          handoffCalls += 1;
+          throw new Error("must not auto-apply");
+        },
+        cleanup: async () => {
+          cleanupCalls += 1;
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.create({
+      ...spec,
+      runPolicy: "plan_only",
+      budgetLimits: {},
+    });
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+
+    assert.equal(handoffCalls, 0);
+    assert.equal(cleanupCalls, 0);
+    assert.deepEqual(results, ["paused"]);
+    assert.equal(manager.projection("run_1").projectHandoff?.status, "requested");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a requested handoff without a durable policy is not auto-applied", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-missing-policy-"));
+  let handoffCalls = 0;
+  const results: string[] = [];
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => results.push(result.status),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = requestedHandoffProjection(undefined);
+            return { status: "paused" as const, action: "completion_decision_required" };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          handoffCalls += 1;
+          throw new Error("must not auto-apply");
+        },
+        cleanup: () => undefined,
+        close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+
+    assert.equal(handoffCalls, 0);
+    assert.deepEqual(results, ["paused"]);
+    assert.equal(manager.projection("run_1").projectHandoff?.status, "requested");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic apply failure leaves requested handoff paused without cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-failed-handoff-"));
+  let cleanupCalls = 0;
+  const results: string[] = [];
+  const errors: unknown[] = [];
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) =>
+        results.push(`${result.status}:${result.action}`),
+      onPumpError: (_runId, error) => errors.push(error),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = requestedHandoffProjection("finish");
+            return { status: "paused" as const, action: "completion_decision_required" };
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          throw new Error("project is dirty");
+        },
+        cleanup: async () => {
+          cleanupCalls += 1;
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+
+    assert.equal(errors.length, 1);
+    assert.deepEqual(results, ["paused:automatic_project_handoff_failed"]);
+    assert.equal(cleanupCalls, 0);
+    assert.equal(manager.projection("run_1").status, "paused");
+    assert.equal(manager.projection("run_1").projectHandoff?.status, "requested");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup failure does not reclassify an already settled handoff as paused", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-cleanup-failure-"));
+  const results: string[] = [];
+  const errors: unknown[] = [];
+  let cleanupCalls = 0;
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => results.push(result.status),
+      onPumpError: (_runId, error) => errors.push(error),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            projection = requestedHandoffProjection("finish");
+            return { status: "paused" as const, action: "completion_decision_required" };
+          },
+          selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+            projection = selectedHandoffProjection(projection, choice);
+            return projection;
+          },
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: true,
+          projectRevision: "project_revision",
+        }),
+        cleanup: async () => {
+          cleanupCalls += 1;
+          if (cleanupCalls === 1) throw new Error("cleanup failed");
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+
+    assert.equal(errors.length, 1);
+    assert.deepEqual(results, ["completed"]);
+    assert.equal(manager.projection("run_1").status, "completed");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery retries cleanup for a durably settled Build", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recover-cleanup-"));
+  let cleanupCalls = 0;
+  const results: string[] = [];
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  specs.save(spec);
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs,
+      shouldAutoRun: () => true,
+      onPumpResult: (_runId, result) => results.push(result.status),
+      createRuntime: async () => ({
+        runtime: {
+          ...fakeRuntime("run_1"),
+          projection: () => selectedHandoffProjection(
+            requestedHandoffProjection("budgeted"),
+            "apply_to_project"
+          ),
+          runUntilBlocked: async () => ({ status: "completed" as const }),
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          throw new Error("already settled");
+        },
+        cleanup: async () => {
+          cleanupCalls += 1;
+        },
+        close: () => undefined,
+      }),
+    });
+    await manager.recover();
+    assert.equal(cleanupCalls, 1);
+    assert.deepEqual(results, ["completed"]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("close retries cleanup that failed after settlement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-close-cleanup-"));
+  let cleanupCalls = 0;
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    createRuntime: async () => ({
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        runUntilBlocked: async () => {
+          projection = requestedHandoffProjection("finish");
+          return { status: "paused" as const, action: "completion_decision_required" };
+        },
+        selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+          projection = selectedHandoffProjection(projection, choice);
+          return projection;
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => ({
+        integrationRevision: "revision_final",
+        integrationBranch: "aiboard/run/integration",
+        appliedToProject: true,
+        projectRevision: "project_revision",
+      }),
+      cleanup: async () => {
+        cleanupCalls += 1;
+        if (cleanupCalls === 1) throw new Error("transient cleanup failure");
+      },
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    manager.activate("run_1");
+    await manager.awaitIdle("run_1");
+    assert.equal(cleanupCalls, 1);
+    await manager.close();
+    assert.equal(cleanupCalls, 2);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("close waits for an in-flight automatic handoff before closing resources", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-close-handoff-"));
+  let releasePump!: () => void;
+  let markPumpStarted!: () => void;
+  const pumpStarted = new Promise<void>((resolve) => {
+    markPumpStarted = resolve;
+  });
+  const pumpRelease = new Promise<void>((resolve) => {
+    releasePump = resolve;
+  });
+  let handoffCalls = 0;
+  let cleanupCalls = 0;
+  let closedCalls = 0;
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    createRuntime: async () => ({
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        runUntilBlocked: async () => {
+          markPumpStarted();
+          await pumpRelease;
+          projection = requestedHandoffProjection("finish");
+          return { status: "paused" as const, action: "completion_decision_required" };
+        },
+        selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+          projection = selectedHandoffProjection(projection, choice);
+          return projection;
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => {
+        handoffCalls += 1;
+        return {
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: true,
+          projectRevision: "project_revision",
+        };
+      },
+      cleanup: async () => {
+        cleanupCalls += 1;
+      },
+      close: () => {
+        closedCalls += 1;
+      },
+    }),
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    manager.activate("run_1");
+    await pumpStarted;
+    const closing = manager.close();
+    releasePump();
+    await closing;
+
+    assert.equal(handoffCalls, 1);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(closedCalls, 1);
+    assert.equal(projection.status, "completed");
+  } finally {
+    releasePump();
+    await manager.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -383,4 +818,38 @@ function fakeRuntime(runId: string): BuildRuntime {
       throw new Error("unused");
     },
   } as unknown as BuildRuntime;
+}
+
+function requestedHandoffProjection(
+  runPolicy: "finish" | "budgeted" | "plan_only" | undefined
+): SchedulerProjection {
+  return {
+    ...fakeRuntime("run_1").projection(),
+    ...(runPolicy ? { runPolicy } : {}),
+    status: "paused",
+    projectHandoff: {
+      status: "requested",
+      summary: "Ready",
+      options: ["keep_integration_branch", "apply_to_project"],
+    },
+  };
+}
+
+function selectedHandoffProjection(
+  projection: SchedulerProjection,
+  choice: "keep_integration_branch" | "apply_to_project"
+): SchedulerProjection {
+  return {
+    ...projection,
+    status: "completed",
+    projectHandoff: {
+      status: "selected",
+      summary: "Ready",
+      options: ["keep_integration_branch", "apply_to_project"],
+      choice,
+      integrationRevision: "revision_final",
+      integrationBranch: "aiboard/run/integration",
+      appliedToProject: choice === "apply_to_project",
+    },
+  };
 }

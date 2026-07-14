@@ -329,7 +329,7 @@ test("only Architect tools can approve, request integration, and complete", asyn
       actor: { role: "architect", id: "architect_1" },
       idempotencyKey: "handoff:invalid-authority",
       payload: { choice: "keep_integration_branch" },
-    }), /requires the user/i);
+    }), /requires the user or runner/i);
 
     store.append({
       runId: "run_1",

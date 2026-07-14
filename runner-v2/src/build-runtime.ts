@@ -6,6 +6,7 @@ import { createArchitectTools } from "./architect-tools.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   ProjectHandoffChoice,
+  SchedulerActor,
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
@@ -192,14 +193,16 @@ export class BuildRuntime {
       integrationRevision: string;
       integrationBranch: string;
       appliedToProject: boolean;
+      projectRevision?: string;
     },
-    idempotencyKey: string
+    idempotencyKey: string,
+    actor: SchedulerActor = { role: "user", id: "local-user" }
   ): SchedulerProjection {
     this.store.append({
       runId: this.runId,
       type: "project.handoff_selected",
       occurredAt: this.clock(),
-      actor: { role: "user", id: "local-user" },
+      actor,
       idempotencyKey,
       payload: { choice, ...result },
     });

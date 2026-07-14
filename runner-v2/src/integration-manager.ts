@@ -12,6 +12,8 @@ import {
 import type { GitRunner } from "./git-repository.js";
 
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
+  GIT_AUTHOR_NAME: "AIBoard Integrator",
+  GIT_AUTHOR_EMAIL: "integrator@aiboard.local",
   GIT_COMMITTER_NAME: "AIBoard Integrator",
   GIT_COMMITTER_EMAIL: "integrator@aiboard.local",
 };
@@ -112,11 +114,15 @@ export class IntegrationManager {
     return this.branch.slice("refs/heads/".length);
   }
 
-  descriptor(appliedToProject = false): ProjectHandoffResult {
+  descriptor(
+    appliedToProject = false,
+    projectRevision?: string
+  ): ProjectHandoffResult {
     return {
       integrationRevision: this.revision,
       integrationBranch: this.integrationBranch,
       appliedToProject,
+      ...(projectRevision ? { projectRevision } : {}),
     };
   }
 
@@ -125,13 +131,13 @@ export class IntegrationManager {
       throw new Error("Integration history limit must be an integer from 1 to 100.");
     }
     return await this.serialized(async () => {
-      await this.ensureIntegrationWorkspace();
-      const result = await this.git(this.path, [
+      const revision = await this.fileRevision("integration");
+      const result = await this.git(this.repositoryRoot, [
         "log",
         "-n",
         String(limit),
         "--format=%H%x1f%P%x1f%s%x1e",
-        `${this.baselineRevision}..HEAD`,
+        `${this.baselineRevision}..${revision}`,
       ]);
       const commits: IntegrationCommit[] = [];
       for (const record of result.stdout.split("\x1e").map((item) => item.trim()).filter(Boolean)) {
@@ -336,6 +342,35 @@ export class IntegrationManager {
   async applyToProject(): Promise<ProjectHandoffResult> {
     return await this.serialized(async () => {
       await this.ensureIntegrationWorkspace();
+      const projectBranch = await this.git(
+        this.repositoryRoot,
+        ["symbolic-ref", "--quiet", "HEAD"],
+        true
+      );
+      if (
+        projectBranch.exitCode !== 0 ||
+        !projectBranch.stdout.trim().startsWith("refs/heads/")
+      ) {
+        throw new Error("Automatic project handoff requires a named branch.");
+      }
+      const projectRevision = (
+        await this.git(this.repositoryRoot, [
+          "rev-parse",
+          "--verify",
+          "HEAD^{commit}",
+        ])
+      ).stdout.trim();
+      const status = await this.git(this.repositoryRoot, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ]);
+      if (status.stdout.length > 0) {
+        throw new Error(
+          "Automatic project handoff requires a clean project worktree and index."
+        );
+      }
       const diff = await this.git(this.path, [
         "diff",
         "--binary",
@@ -344,41 +379,182 @@ export class IntegrationManager {
         this.revision,
         "--",
       ]);
-      if (!diff.stdout) return this.descriptor(true);
+      if (!diff.stdout) return this.descriptor(true, projectRevision);
+      if (await this.isAppliedProjectCommit(projectRevision)) {
+        return this.descriptor(true, projectRevision);
+      }
 
       const handoffDirectory = resolve(this.stateDirectory, "handoff");
       const patchPath = resolve(handoffDirectory, `${this.runSegment}.patch`);
-      if (relative(handoffDirectory, patchPath).startsWith("..")) {
-        throw new Error("Project handoff patch escaped the runner state directory.");
+      const indexPath = resolve(handoffDirectory, `${this.runSegment}.index`);
+      if (
+        relative(handoffDirectory, patchPath).startsWith("..") ||
+        relative(handoffDirectory, indexPath).startsWith("..")
+      ) {
+        throw new Error("Project handoff files escaped the runner state directory.");
       }
       await mkdir(handoffDirectory, { recursive: true });
+      await rm(indexPath, { force: true });
+      await rm(`${indexPath}.lock`, { force: true });
       await writeFile(patchPath, diff.stdout, "utf8");
       try {
-        const check = await this.git(
-          this.repositoryRoot,
-          ["apply", "--check", "--binary", patchPath],
-          true
-        );
+        const isolatedIndex = { GIT_INDEX_FILE: indexPath };
+        await this.execute({
+          cwd: this.repositoryRoot,
+          args: ["read-tree", projectRevision],
+          env: isolatedIndex,
+        });
+        const check = await this.execute({
+          cwd: this.repositoryRoot,
+          args: ["apply", "--check", "--cached", "--binary", patchPath],
+          env: isolatedIndex,
+          allowFailure: true,
+        });
         if (check.exitCode !== 0) {
           throw new Error(
             `The integrated result cannot be applied safely to the project: ${check.stderr.trim()}`
           );
         }
-        const applied = await this.git(
-          this.repositoryRoot,
-          ["apply", "--binary", patchPath],
-          true
-        );
+        const applied = await this.execute({
+          cwd: this.repositoryRoot,
+          args: ["apply", "--cached", "--binary", patchPath],
+          env: isolatedIndex,
+          allowFailure: true,
+        });
         if (applied.exitCode !== 0) {
           throw new Error(
             `The integrated result could not be applied to the project: ${applied.stderr.trim()}`
           );
         }
-        return this.descriptor(true);
+        const treeRevision = (
+          await this.execute({
+            cwd: this.repositoryRoot,
+            args: ["write-tree"],
+            env: isolatedIndex,
+          })
+        ).stdout.trim();
+        const commit = await this.execute({
+          cwd: this.repositoryRoot,
+          args: [
+            "commit-tree",
+            treeRevision,
+            "-p",
+            projectRevision,
+            "-m",
+            "Apply completed AIBoard build",
+            "-m",
+            `AIBoard-Run: ${this.runId}\nAIBoard-Integration: ${this.revision}`,
+          ],
+          env: RUNNER_IDENTITY,
+          allowFailure: true,
+        });
+        if (commit.exitCode !== 0) {
+          throw new Error(
+            `The integrated result could not be committed to the project: ${commit.stderr.trim()}`
+          );
+        }
+        const committedRevision = commit.stdout.trim();
+        await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
+        const advanced = await this.git(
+          this.repositoryRoot,
+          [
+            "update-ref",
+            projectBranch.stdout.trim(),
+            committedRevision,
+            projectRevision,
+          ],
+          true
+        );
+        if (advanced.exitCode !== 0) {
+          throw new Error("The project changed during automatic handoff.");
+        }
+        try {
+          const currentBranch = await this.git(
+            this.repositoryRoot,
+            ["symbolic-ref", "--quiet", "HEAD"],
+            true
+          );
+          const currentRevision = (
+            await this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD"])
+          ).stdout.trim();
+          if (
+            currentBranch.exitCode !== 0 ||
+            currentBranch.stdout.trim() !== projectBranch.stdout.trim() ||
+            currentRevision !== committedRevision
+          ) {
+            throw new Error("The project changed during automatic handoff.");
+          }
+          const checkout = await this.git(
+            this.repositoryRoot,
+            ["read-tree", "-u", "-m", projectRevision, committedRevision],
+            true
+          );
+          if (checkout.exitCode !== 0) {
+            throw new Error(
+              `The committed result could not be checked out safely: ${checkout.stderr.trim()}`
+            );
+          }
+        } catch (error) {
+          const rollback = await this.git(
+            this.repositoryRoot,
+            [
+              "update-ref",
+              projectBranch.stdout.trim(),
+              projectRevision,
+              committedRevision,
+            ],
+            true
+          );
+          if (rollback.exitCode !== 0) {
+            throw new AggregateError(
+              [error, new Error(rollback.stderr.trim())],
+              "Automatic handoff failed after advancing the project branch and could not roll it back."
+            );
+          }
+          throw error;
+        }
+        return this.descriptor(true, committedRevision);
       } finally {
         await rm(patchPath, { force: true });
+        await rm(indexPath, { force: true });
+        await rm(`${indexPath}.lock`, { force: true });
       }
     });
+  }
+
+  private async assertProjectUnchanged(
+    branch: string,
+    revision: string
+  ): Promise<void> {
+    const [currentBranch, currentRevision, status] = await Promise.all([
+      this.git(this.repositoryRoot, ["symbolic-ref", "--quiet", "HEAD"], true),
+      this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD"]),
+      this.git(this.repositoryRoot, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ]),
+    ]);
+    if (
+      currentBranch.exitCode !== 0 ||
+      currentBranch.stdout.trim() !== branch ||
+      currentRevision.stdout.trim() !== revision ||
+      status.stdout.length > 0
+    ) {
+      throw new Error("The project changed during automatic handoff.");
+    }
+  }
+
+  private async isAppliedProjectCommit(revision: string): Promise<boolean> {
+    const message = (
+      await this.git(this.repositoryRoot, ["show", "-s", "--format=%B", revision])
+    ).stdout;
+    const lines = message.split(/\r?\n/);
+    return (
+      lines.includes(`AIBoard-Run: ${this.runId}`) &&
+      lines.includes(`AIBoard-Integration: ${this.revision}`)
+    );
   }
 
   private async ensureIntegrationWorkspace(): Promise<void> {

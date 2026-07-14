@@ -323,6 +323,10 @@ export class NativeBuildFactory {
         choice === "apply_to_project"
           ? await integrationManager.applyToProject()
           : integrationManager.descriptor(false),
+      cleanup: async () => {
+        await workspaceManager.cleanup();
+        await integrationManager.cleanup();
+      },
       close: () => {
         if (closed) return;
         closed = true;

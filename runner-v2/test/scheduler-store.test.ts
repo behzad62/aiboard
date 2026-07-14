@@ -94,6 +94,26 @@ test("durable plan-only policy requires a plan and survives handoff replay", () 
     assert.equal(recovered.planRevision, 1);
     assert.equal(recovered.tasks.task_1.status, "planned");
     assert.equal(recovered.projectHandoff?.status, "requested");
+    store.append({
+      runId: "run_plan_only",
+      type: "project.handoff_selected",
+      occurredAt: "2026-07-13T00:01:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "project-handoff-selected",
+      payload: {
+        choice: "apply_to_project",
+        integrationRevision: "integration_revision",
+        integrationBranch: "aiboard/run/integration",
+        appliedToProject: true,
+        projectRevision: "project_revision",
+      },
+    });
+    store.close();
+
+    store = new SqliteSchedulerStore(database);
+    const settled = rebuildSchedulerProjection(store.readRun("run_plan_only"));
+    assert.equal(settled.status, "completed");
+    assert.equal(settled.projectHandoff?.projectRevision, "project_revision");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

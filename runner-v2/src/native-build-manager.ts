@@ -5,6 +5,7 @@ import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
   ProjectHandoffChoice,
+  SchedulerActor,
   SchedulerEvent,
   SchedulerProjection,
 } from "./scheduler-store.js";
@@ -15,6 +16,7 @@ export interface NativeBuildRuntimeHandle {
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
+  cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
 }
 
@@ -29,20 +31,38 @@ export interface NativeBuildManagerOptions {
 export class NativeBuildManager implements BuildControlPlane {
   private readonly handles = new Map<string, NativeBuildRuntimeHandle>();
   private readonly pumps = new Map<string, Promise<void>>();
+  private readonly settledRuns = new Set<string>();
   private operationQueue = Promise.resolve();
+  private closePromise: Promise<void> | undefined;
   private closed = false;
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
   async recover(): Promise<void> {
     const active: string[] = [];
+    const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
-        await this.ensureRuntime(spec);
+        const handle = await this.ensureRuntime(spec);
+        if (handle.runtime.projection().status === "completed") {
+          settled.push([spec.runId, handle]);
+        }
         if (this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
       }
     });
-    for (const runId of active) this.activate(runId);
+    for (const [runId, handle] of settled) {
+      await this.tryCleanupSettledRun(runId, handle);
+    }
+    for (const runId of active) {
+      if (this.require(runId).runtime.projection().status === "completed") {
+        this.options.onPumpResult?.(runId, {
+          status: "completed",
+          action: "recovered_settled_build",
+        });
+      } else {
+        this.activate(runId);
+      }
+    }
   }
 
   async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
@@ -87,7 +107,12 @@ export class NativeBuildManager implements BuildControlPlane {
     this.assertOpen();
     if (this.pumps.has(runId)) return;
     const handle = this.require(runId);
-    if (handle.runtime.projection().status !== "running") return;
+    const projection = handle.runtime.projection();
+    if (
+      projection.status !== "running" &&
+      projection.projectHandoff?.status !== "requested" &&
+      !(projection.status === "completed" && !this.settledRuns.has(runId))
+    ) return;
     const pump = this.pump(runId, handle).finally(() => {
       this.pumps.delete(runId);
     });
@@ -128,32 +153,67 @@ export class NativeBuildManager implements BuildControlPlane {
     choice: ProjectHandoffChoice,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
-    const projection = handle.runtime.projection();
-    if (projection.projectHandoff?.status === "selected") {
-      if (projection.projectHandoff.choice !== choice) {
-        throw new Error(
-          `Final project handoff already selected ${projection.projectHandoff.choice}.`
-        );
+    return await this.selectProjectHandoffAs(
+      runId,
+      choice,
+      idempotencyKey,
+      { role: "user", id: "local-user" }
+    );
+  }
+
+  private async selectProjectHandoffAs(
+    runId: string,
+    choice: ProjectHandoffChoice,
+    idempotencyKey: string,
+    actor: SchedulerActor
+  ): Promise<SchedulerProjection> {
+    return await this.serialized(async () => {
+      const handle = this.require(runId);
+      const projection = handle.runtime.projection();
+      if (projection.projectHandoff?.status === "selected") {
+        if (projection.projectHandoff.choice !== choice) {
+          throw new Error(
+            `Final project handoff already selected ${projection.projectHandoff.choice}.`
+          );
+        }
+        await this.tryCleanupSettledRun(runId, handle);
+        return projection;
       }
-      return projection;
-    }
-    if (projection.projectHandoff?.status !== "requested") {
-      throw new Error("Final project handoff is not awaiting user selection.");
-    }
-    const result = await handle.projectHandoff(choice);
-    return handle.runtime.selectProjectHandoff(choice, result, idempotencyKey);
+      if (projection.projectHandoff?.status !== "requested") {
+        throw new Error("Final project handoff is not awaiting user selection.");
+      }
+      const result = await handle.projectHandoff(choice);
+      const selected = handle.runtime.selectProjectHandoff(
+        choice,
+        result,
+        idempotencyKey,
+        actor
+      );
+      await this.tryCleanupSettledRun(runId, handle);
+      return selected;
+    });
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
+    this.closePromise ??= this.closeAfterPumps();
+    await this.closePromise;
+  }
+
+  private async closeAfterPumps(): Promise<void> {
     await this.awaitIdle();
+    this.closed = true;
     await this.serialized(async () => {
       const handles = [...this.handles.values()];
       this.handles.clear();
       const failures: unknown[] = [];
       for (const handle of handles) {
+        if (handle.runtime.projection().status === "completed") {
+          try {
+            await this.cleanupSettledRun(handle.runtime.id, handle);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
         try {
           await handle.close();
         } catch (error) {
@@ -203,6 +263,38 @@ export class NativeBuildManager implements BuildControlPlane {
         }
         result = { status: "paused", action: "no_mechanical_progress" };
       }
+      const projection = handle.runtime.projection();
+      if (
+        projection.projectHandoff?.status === "requested" &&
+        (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
+      ) {
+        try {
+          await this.selectProjectHandoffAs(
+            runId,
+            "apply_to_project",
+            "automatic-project-handoff",
+            { role: "runner", id: "native-build-manager" }
+          );
+          result = {
+            status: "completed",
+            action: "automatic_project_handoff_applied",
+          };
+        } catch (error) {
+          this.options.onPumpError?.(runId, error);
+          this.options.onPumpResult?.(runId, {
+            status: "paused",
+            action: "automatic_project_handoff_failed",
+          });
+          return;
+        }
+      } else if (projection.status === "completed") {
+        try {
+          await this.cleanupSettledRun(runId, handle);
+        } catch (error) {
+          this.options.onPumpError?.(runId, error);
+        }
+        result = { status: "completed", action: result.action };
+      }
       this.options.onPumpResult?.(runId, result);
     } catch (error) {
       const projection = handle.runtime.projection();
@@ -217,6 +309,26 @@ export class NativeBuildManager implements BuildControlPlane {
         status: "paused",
         action: "autonomous_pump_error",
       });
+    }
+  }
+
+  private async cleanupSettledRun(
+    runId: string,
+    handle: NativeBuildRuntimeHandle
+  ): Promise<void> {
+    if (this.settledRuns.has(runId)) return;
+    await handle.cleanup();
+    this.settledRuns.add(runId);
+  }
+
+  private async tryCleanupSettledRun(
+    runId: string,
+    handle: NativeBuildRuntimeHandle
+  ): Promise<void> {
+    try {
+      await this.cleanupSettledRun(runId, handle);
+    } catch (error) {
+      this.options.onPumpError?.(runId, error);
     }
   }
 

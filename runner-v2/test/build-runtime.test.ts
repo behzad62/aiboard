@@ -94,16 +94,23 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     assert.equal(architect.planCalls, 1);
     assert.equal(architect.completeCalls, 1);
     const selected = recovered.selectProjectHandoff(
-      "keep_integration_branch",
+      "apply_to_project",
       {
         integrationRevision: "revision_task_b",
         integrationBranch: "aiboard/integration/run_1",
-        appliedToProject: false,
+        appliedToProject: true,
+        projectRevision: "project_revision",
       },
-      "handoff:keep"
+      "handoff:apply",
+      { role: "runner", id: "native-build-manager" }
     );
     assert.equal(selected.status, "completed");
-    assert.equal(selected.projectHandoff?.choice, "keep_integration_branch");
+    assert.equal(selected.projectHandoff?.choice, "apply_to_project");
+    assert.equal(selected.projectHandoff?.projectRevision, "project_revision");
+    assert.deepEqual(recovered.events().at(-1)?.actor, {
+      role: "runner",
+      id: "native-build-manager",
+    });
     recoveredStore.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -118,6 +118,7 @@ export interface ProjectHandoffProjection {
   integrationRevision?: string;
   integrationBranch?: string;
   appliedToProject?: boolean;
+  projectRevision?: string;
 }
 
 export interface SchedulerProjection {
@@ -494,8 +495,8 @@ export function reduceSchedulerEvent(
       break;
     }
     case "project.handoff_selected": {
-      if (event.actor.role !== "user") {
-        throw new Error("Final project handoff selection requires the user.");
+      if (event.actor.role !== "user" && event.actor.role !== "runner") {
+        throw new Error("Final project handoff selection requires the user or runner.");
       }
       if (current.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
@@ -504,6 +505,16 @@ export function reduceSchedulerEvent(
       if (choice !== "keep_integration_branch" && choice !== "apply_to_project") {
         throw new Error(`Final project handoff choice ${choice} is invalid.`);
       }
+      if (event.actor.role === "runner" && choice !== "apply_to_project") {
+        throw new Error("Automatic project handoff must apply to the project.");
+      }
+      const projectRevision = event.payload.projectRevision;
+      if (
+        projectRevision !== undefined &&
+        (typeof projectRevision !== "string" || !projectRevision.trim())
+      ) {
+        throw new Error("Final project handoff projectRevision is invalid.");
+      }
       next.projectHandoff = {
         ...current.projectHandoff,
         status: "selected",
@@ -511,6 +522,7 @@ export function reduceSchedulerEvent(
         integrationRevision: requiredString(event.payload, "integrationRevision"),
         integrationBranch: requiredString(event.payload, "integrationBranch"),
         appliedToProject: event.payload.appliedToProject === true,
+        ...(typeof projectRevision === "string" ? { projectRevision } : {}),
       };
       next.status = "completed";
       break;

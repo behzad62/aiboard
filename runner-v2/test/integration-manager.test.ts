@@ -15,6 +15,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { createChangeSet } from "../src/change-set.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { runGit } from "../src/git-command.js";
+import type { GitRunner } from "../src/git-repository.js";
 import { IntegrationManager } from "../src/integration-manager.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 
@@ -235,8 +236,10 @@ test("evidence-backed no-change tasks integrate without fabricating commits", as
 test("final handoff applies the integrated diff only after a successful dry run", async () => {
   const fixture = await createFixture("handoff-apply");
   try {
+    const projectBefore = await gitText(fixture.project, ["rev-parse", "HEAD"]);
     const workspace = await fixture.workspaces.createTaskWorkspace("feature");
     writeFileSync(join(workspace.path, "feature.txt"), "integrated\n");
+    writeFileSync(join(workspace.path, "binary.bin"), Buffer.from([0, 1, 2, 255]));
     const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
     const changeSet = await createChangeSet({
       workspacePath: workspace.path,
@@ -250,17 +253,68 @@ test("final handoff applies the integrated diff only after a successful dry run"
     assert.equal(result.appliedToProject, true);
     assert.equal(result.integrationRevision, fixture.integration.revision);
     assert.match(result.integrationBranch, /^aiboard\//);
+    assert.ok(result.projectRevision);
+    assert.notEqual(result.projectRevision, projectBefore);
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "HEAD"]),
+      result.projectRevision
+    );
+    assert.equal(
+      await gitText(fixture.project, [
+        "rev-list",
+        "--count",
+        `${projectBefore}..HEAD`,
+      ]),
+      "1"
+    );
+    assert.equal(
+      await gitText(fixture.project, [
+        "diff",
+        "--name-only",
+        "HEAD",
+        result.integrationRevision,
+      ]),
+      ""
+    );
+    assert.equal(await gitText(fixture.project, ["status", "--porcelain=v1"]), "");
+    assert.equal(
+      await gitText(fixture.project, [
+        "show",
+        "-s",
+        "--format=%an <%ae>%n%cn <%ce>%n%B",
+        "HEAD",
+      ]),
+      [
+        "AIBoard Integrator <integrator@aiboard.local>",
+        "AIBoard Integrator <integrator@aiboard.local>",
+        "Apply completed AIBoard build",
+        "",
+        "AIBoard-Run: run_handoff-apply",
+        `AIBoard-Integration: ${result.integrationRevision}`,
+      ].join("\n")
+    );
     assert.equal(
       readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(),
       "integrated"
+    );
+    assert.deepEqual(
+      readFileSync(join(fixture.project, "binary.bin")),
+      Buffer.from([0, 1, 2, 255])
+    );
+    const replay = await fixture.integration.applyToProject();
+    assert.equal(replay.projectRevision, result.projectRevision);
+    assert.equal(await gitText(fixture.project, ["rev-parse", "HEAD"]), result.projectRevision);
+    assert.equal(
+      await gitText(fixture.project, ["rev-list", "--count", `${projectBefore}..HEAD`]),
+      "1"
     );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-test("final handoff conflicts leave the original project unchanged", async () => {
-  const fixture = await createFixture("handoff-conflict");
+test("final handoff rejects dirty projects without changing their worktree, index, or revision", async () => {
+  const fixture = await createFixture("handoff-dirty");
   try {
     const workspace = await fixture.workspaces.createTaskWorkspace("feature");
     writeFileSync(join(workspace.path, "shared.txt"), "integrated\n");
@@ -273,15 +327,234 @@ test("final handoff conflicts leave the original project unchanged", async () =>
     });
     await fixture.integration.integrate(changeSet);
     writeFileSync(join(fixture.project, "shared.txt"), "user changed this\n");
+    writeFileSync(join(fixture.project, "staged.txt"), "staged by user\n");
+    await runGit({ cwd: fixture.project, args: ["add", "staged.txt"] });
+    writeFileSync(join(fixture.project, "untracked.txt"), "untracked by user\n");
+    const before = await projectState(fixture.project);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /clean project worktree and index/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("final handoff rejects a detached project without changing it", async () => {
+  const fixture = await createFixture("handoff-detached");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "feature.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+    await runGit({ cwd: fixture.project, args: ["checkout", "--detach", "HEAD"] });
+    const before = await projectState(fixture.project);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /named branch/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("final handoff conflicts leave a clean project branch unchanged", async () => {
+  const fixture = await createFixture("handoff-conflict");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "shared.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Change shared");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+    writeFileSync(join(fixture.project, "shared.txt"), "user committed this\n");
+    await runGit({ cwd: fixture.project, args: ["add", "shared.txt"] });
+    await runGit({
+      cwd: fixture.project,
+      args: ["commit", "-m", "User change"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const before = await projectState(fixture.project);
 
     await assert.rejects(
       () => fixture.integration.applyToProject(),
       /cannot be applied safely/i
     );
-    assert.equal(
-      readFileSync(join(fixture.project, "shared.txt"), "utf8"),
-      "user changed this\n"
+    assert.deepEqual(await projectState(fixture.project), before);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("failed project commit rolls back only the Runner patch", async () => {
+  const execute: GitRunner = async (options) => {
+    if (
+      (options.args[0] === "commit" || options.args[0] === "commit-tree") &&
+      options.env?.GIT_AUTHOR_NAME === "AIBoard Integrator"
+    ) {
+      writeFileSync(join(options.cwd, "user-during-commit.txt"), "preserve me\n");
+      return { exitCode: 1, stdout: "", stderr: "commit rejected" };
+    }
+    return await runGit(options);
+  };
+  const fixture = await createFixture("handoff-rollback", execute);
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "feature.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+    const beforeRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /could not be committed[\s\S]*commit rejected/i
     );
+    assert.equal(
+      await gitText(fixture.project, ["rev-parse", "HEAD"]),
+      beforeRevision
+    );
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+    assert.equal(
+      readFileSync(join(fixture.project, "user-during-commit.txt"), "utf8"),
+      "preserve me\n"
+    );
+    assert.equal(
+      (await runGit({
+        cwd: fixture.project,
+        args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      })).stdout,
+      "?? user-during-commit.txt\u0000"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent staged user changes are not swept into the AIBoard commit", async () => {
+  let raced = false;
+  const execute: GitRunner = async (options) => {
+    if (
+      !raced &&
+      (options.args[0] === "commit" || options.args[0] === "commit-tree") &&
+      options.env?.GIT_AUTHOR_NAME === "AIBoard Integrator"
+    ) {
+      raced = true;
+      writeFileSync(join(options.cwd, "user-staged.txt"), "user staged\n");
+      await runGit({ cwd: options.cwd, args: ["add", "user-staged.txt"] });
+    }
+    return await runGit(options);
+  };
+  const fixture = await createFixture("handoff-stage-race", execute);
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const beforeRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /project changed during automatic handoff/i
+    );
+    assert.equal(await gitText(fixture.project, ["rev-parse", "HEAD"]), beforeRevision);
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+    assert.equal(
+      (await runGit({ cwd: fixture.project, args: ["diff", "--cached", "--name-only"] }))
+        .stdout.trim(),
+      "user-staged.txt"
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a concurrent project commit wins the branch compare-and-swap", async () => {
+  let raced = false;
+  const execute: GitRunner = async (options) => {
+    if (
+      !raced &&
+      (options.args[0] === "commit" || options.args[0] === "commit-tree") &&
+      options.env?.GIT_AUTHOR_NAME === "AIBoard Integrator"
+    ) {
+      raced = true;
+      writeFileSync(join(options.cwd, "user-commit.txt"), "user commit\n");
+      await runGit({ cwd: options.cwd, args: ["add", "user-commit.txt"] });
+      await runGit({
+        cwd: options.cwd,
+        args: ["commit", "-m", "Concurrent user commit"],
+        env: {
+          GIT_AUTHOR_NAME: "User",
+          GIT_AUTHOR_EMAIL: "user@example.com",
+          GIT_COMMITTER_NAME: "User",
+          GIT_COMMITTER_EMAIL: "user@example.com",
+        },
+      });
+    }
+    return await runGit(options);
+  };
+  const fixture = await createFixture("handoff-ref-race", execute);
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const beforeRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /project changed during automatic handoff/i
+    );
+    assert.notEqual(await gitText(fixture.project, ["rev-parse", "HEAD"]), beforeRevision);
+    assert.equal(
+      await gitText(fixture.project, ["show", "-s", "--format=%s", "HEAD"]),
+      "Concurrent user commit"
+    );
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a thrown commit executor leaves the project unchanged", async () => {
+  const execute: GitRunner = async (options) => {
+    if (
+      (options.args[0] === "commit" || options.args[0] === "commit-tree") &&
+      options.env?.GIT_AUTHOR_NAME === "AIBoard Integrator"
+    ) {
+      throw new Error("executor exploded");
+    }
+    return await runGit(options);
+  };
+  const fixture = await createFixture("handoff-throw", execute);
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const before = await projectState(fixture.project);
+
+    await assert.rejects(
+      () => fixture.integration.applyToProject(),
+      /executor exploded/i
+    );
+    assert.deepEqual(await projectState(fixture.project), before);
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -442,12 +715,15 @@ test("cleanup removes the owned integration worktree but retains its audit branc
       await gitText(fixture.project, ["rev-parse", "--verify", branch]),
       revision
     );
+    const history = await fixture.integration.history();
+    assert.deepEqual(history, []);
+    assert.equal(existsSync(fixture.integration.path), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-async function createFixture(label: string) {
+async function createFixture(label: string, execute?: GitRunner) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-integration-${label}-`));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -476,6 +752,7 @@ async function createFixture(label: string) {
     stateDirectory: state,
     runId: `run_${label}`,
     baselineRevision: baseline.revision,
+    ...(execute ? { execute } : {}),
   });
   await integration.initialize();
   return {
@@ -492,4 +769,48 @@ async function createFixture(label: string) {
 
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();
+}
+
+async function integrateFeature(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  path: string,
+  content: string
+): Promise<void> {
+  const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+  writeFileSync(join(workspace.path, path), content);
+  const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
+  const changeSet = await createChangeSet({
+    workspacePath: workspace.path,
+    taskCommit,
+    artifacts: fixture.artifacts,
+    evidenceArtifactHashes: [fixture.evidence.hash],
+  });
+  await fixture.integration.integrate(changeSet);
+}
+
+async function projectState(cwd: string) {
+  return {
+    head: await gitText(cwd, ["rev-parse", "HEAD"]),
+    branch: (await runGit({
+      cwd,
+      args: ["symbolic-ref", "--quiet", "HEAD"],
+      allowFailure: true,
+    })).stdout,
+    status: (await runGit({
+      cwd,
+      args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    })).stdout,
+    unstaged: (await runGit({ cwd, args: ["diff", "--binary", "--full-index"] })).stdout,
+    staged: (await runGit({
+      cwd,
+      args: ["diff", "--cached", "--binary", "--full-index"],
+    })).stdout,
+    shared: readFileSync(join(cwd, "shared.txt")),
+    stagedFile: existsSync(join(cwd, "staged.txt"))
+      ? readFileSync(join(cwd, "staged.txt"))
+      : undefined,
+    untrackedFile: existsSync(join(cwd, "untracked.txt"))
+      ? readFileSync(join(cwd, "untracked.txt"))
+      : undefined,
+  };
 }

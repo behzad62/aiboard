@@ -3,6 +3,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
@@ -90,21 +91,8 @@ async function main(): Promise<void> {
       ),
       createRuntime: (spec) => buildFactory.create(spec),
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
-      onPumpResult: (runId, result) => {
-        const run = supervisor.getRun(runId);
-        if (result.status === "completed" && run.state === "running") {
-          supervisor.complete(
-            runId,
-            `autonomous-build-completed:${run.lastSequence}`
-          );
-        } else if (result.status === "paused" && run.state === "running") {
-          supervisor.pause(
-            runId,
-            `autonomous-build-paused:${run.lastSequence}`,
-            result.action ?? "native-build"
-          );
-        }
-      },
+      onPumpResult: (runId, result) =>
+        syncAutonomousBuildLifecycle(supervisor, runId, result),
     });
     const server = new ControlServer({
       supervisor,
@@ -174,6 +162,26 @@ async function main(): Promise<void> {
     await closeResources(resources);
     writeStartupError(error);
     process.exitCode = 1;
+  }
+}
+
+function syncAutonomousBuildLifecycle(
+  supervisor: RunSupervisor,
+  runId: string,
+  result: BuildStepResult
+): void {
+  const run = supervisor.getRun(runId);
+  if (result.status === "completed" && run.state === "running") {
+    supervisor.complete(
+      runId,
+      `autonomous-build-completed:${run.lastSequence}`
+    );
+  } else if (result.status === "paused" && run.state === "running") {
+    supervisor.pause(
+      runId,
+      `autonomous-build-paused:${run.lastSequence}`,
+      result.action ?? "native-build"
+    );
   }
 }
 
