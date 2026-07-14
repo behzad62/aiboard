@@ -606,6 +606,32 @@ test("native Build projections and pump controls are runner-owned API routes", a
   const builds = {
     projection: () => projection,
     events: () => [],
+    transcript: (runId: string, afterSequence = 0) => {
+      if (runId !== "run_1") throw new Error(`Unknown build runtime ${runId}.`);
+      return {
+        turns: afterSequence < 8
+          ? [{
+            id: "architect:run_1:message_1",
+            sessionId: "architect:run_1",
+            actor: { role: "architect", id: "architect_1" },
+            sequence: 8,
+            occurredAt: "2026-07-12T00:00:00.000Z",
+            text: "The implementation is ready for review.",
+            }]
+          : [],
+        cursor: 8,
+      };
+    },
+    files: async (runId: string) => {
+      if (runId !== "run_1") throw new Error(`Unknown build runtime ${runId}.`);
+      return {
+        source: "integration" as const,
+        revision: "c".repeat(40),
+        appliedToProject: false,
+        omittedFileCount: 1,
+        files: [{ path: "src/index.ts", content: "export {};\n" }],
+      };
+    },
     usage: () => ({
       scopeId: "run_1",
       reservations: {},
@@ -764,6 +790,59 @@ test("native Build projections and pump controls are runner-owned API routes", a
     const observed = await json(observability);
     assert.equal((observed.agents as unknown[]).length, 1);
     assert.equal((observed.tools as unknown[]).length, 1);
+
+    const completeTranscript = await fetch(
+      `${url}/v2/runs/run_1/build/transcript`,
+      authorized()
+    );
+    assert.equal(completeTranscript.status, 200);
+    assert.deepEqual(await completeTranscript.json(), {
+      turns: [{
+        id: "architect:run_1:message_1",
+        sessionId: "architect:run_1",
+        actor: { role: "architect", id: "architect_1" },
+        sequence: 8,
+        occurredAt: "2026-07-12T00:00:00.000Z",
+        text: "The implementation is ready for review.",
+      }],
+      cursor: 8,
+    });
+    assert.deepEqual(
+      await (await fetch(
+        `${url}/v2/runs/run_1/build/transcript?after=8`,
+        authorized()
+      )).json(),
+      { turns: [], cursor: 8 }
+    );
+    for (const after of ["-1", "1.5", "not-a-number", "1&after=2"]) {
+      const invalid = await fetch(
+        `${url}/v2/runs/run_1/build/transcript?after=${after}`,
+        authorized()
+      );
+      assert.equal(invalid.status, 400, after);
+      assert.equal((await json(invalid)).code, "invalid_after", after);
+    }
+
+    const files = await fetch(
+      `${url}/v2/runs/run_1/build/files`,
+      authorized()
+    );
+    assert.equal(files.status, 200);
+    assert.deepEqual(await files.json(), {
+      source: "integration",
+      revision: "c".repeat(40),
+      appliedToProject: false,
+      omittedFileCount: 1,
+      files: [{ path: "src/index.ts", content: "export {};\n" }],
+    });
+    for (const endpoint of ["transcript", "files"]) {
+      const missing = await fetch(
+        `${url}/v2/runs/missing/build/${endpoint}`,
+        authorized()
+      );
+      assert.equal(missing.status, 404);
+      assert.equal((await json(missing)).code, "build_runtime_not_found");
+    }
 
     const auditResponse = await fetch(
       `${url}/v2/runs/run_1/build/audit`,

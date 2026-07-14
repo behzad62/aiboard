@@ -153,9 +153,12 @@ export class IntegrationManager {
     });
   }
 
-  async files(source: IntegrationFileSource): Promise<IntegrationFileSnapshot> {
+  async files(
+    source: IntegrationFileSource,
+    projectRevision?: string
+  ): Promise<IntegrationFileSnapshot> {
     return await this.serialized(async () => {
-      const revision = await this.fileRevision(source);
+      const revision = await this.fileRevision(source, projectRevision);
       const tree = await this.execute({
         cwd: this.repositoryRoot,
         args: [
@@ -591,14 +594,32 @@ export class IntegrationManager {
     this.currentRevision = await this.head();
   }
 
-  private async fileRevision(source: IntegrationFileSource): Promise<string> {
+  private async fileRevision(
+    source: IntegrationFileSource,
+    projectRevision?: string
+  ): Promise<string> {
     if (source === "project") {
+      if (projectRevision !== undefined) {
+        if (!/^[a-f0-9]{40,64}$/.test(projectRevision)) {
+          throw new Error("Project file revision is invalid.");
+        }
+        return (
+          await this.git(this.repositoryRoot, [
+            "rev-parse",
+            "--verify",
+            `${projectRevision}^{commit}`,
+          ])
+        ).stdout.trim();
+      }
       return (
         await this.git(this.repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
       ).stdout.trim();
     }
     if (source !== "integration") {
       throw new Error(`Unknown file source: ${String(source)}`);
+    }
+    if (projectRevision !== undefined) {
+      throw new Error("An explicit revision is valid only for project files.");
     }
     if (this.currentRevision) return this.currentRevision;
     const branchRevision = await this.resolveRef(this.branch);

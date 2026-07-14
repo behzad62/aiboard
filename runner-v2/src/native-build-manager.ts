@@ -1,5 +1,8 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
-import type { BuildObservabilitySnapshot } from "./build-observability.js";
+import type {
+  BuildObservabilitySnapshot,
+  BuildTranscriptPage,
+} from "./build-observability.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
@@ -9,12 +12,18 @@ import type {
   SchedulerEvent,
   SchedulerProjection,
 } from "./scheduler-store.js";
-import type { ProjectHandoffResult } from "./integration-manager.js";
+import type {
+  IntegrationFileSnapshot,
+  ProjectHandoffResult,
+} from "./integration-manager.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
+  transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
+  files(): Promise<IntegrationFileSnapshot>;
+  compact(): void | Promise<void>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
@@ -26,6 +35,8 @@ export interface NativeBuildManagerOptions {
   shouldAutoRun?(runId: string): boolean;
   onPumpResult?(runId: string, result: BuildStepResult): void;
   onPumpError?(runId: string, error: unknown): void;
+  runStartupCompaction?(operation: () => Promise<void>): Promise<void>;
+  prepareArtifactCleanup?(): Promise<void>;
 }
 
 export class NativeBuildManager implements BuildControlPlane {
@@ -40,18 +51,37 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async recover(): Promise<void> {
     const active: string[] = [];
+    const nonRunning: Array<[string, NativeBuildRuntimeHandle]> = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
         const handle = await this.ensureRuntime(spec);
-        if (handle.runtime.projection().status === "completed") {
+        const status = handle.runtime.projection().status;
+        if (status !== "running") nonRunning.push([spec.runId, handle]);
+        if (status === "completed") {
           settled.push([spec.runId, handle]);
         }
         if (this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
       }
     });
-    for (const [runId, handle] of settled) {
-      await this.tryCleanupSettledRun(runId, handle);
+    const compactAndCleanup = async () => {
+      await this.compactRuns(nonRunning);
+      if (this.options.prepareArtifactCleanup) {
+        try {
+          await this.options.prepareArtifactCleanup();
+          await this.compactRuns(nonRunning);
+        } catch (error) {
+          this.options.onPumpError?.("startup-artifact-reachability", error);
+        }
+      }
+      for (const [runId, handle] of settled) {
+        await this.tryCleanupSettledRun(runId, handle);
+      }
+    };
+    if (this.options.runStartupCompaction) {
+      await this.options.runStartupCompaction(compactAndCleanup);
+    } else {
+      await compactAndCleanup();
     }
     for (const runId of active) {
       if (this.require(runId).runtime.projection().status === "completed") {
@@ -89,6 +119,14 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async observability(runId: string): Promise<BuildObservabilitySnapshot> {
     return await this.require(runId).observability();
+  }
+
+  async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
+    return await this.require(runId).transcript(afterSequence);
+  }
+
+  async files(runId: string): Promise<IntegrationFileSnapshot> {
+    return await this.require(runId).files();
   }
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {
@@ -319,6 +357,18 @@ export class NativeBuildManager implements BuildControlPlane {
     if (this.settledRuns.has(runId)) return;
     await handle.cleanup();
     this.settledRuns.add(runId);
+  }
+
+  private async compactRuns(
+    runs: Array<[string, NativeBuildRuntimeHandle]>
+  ): Promise<void> {
+    for (const [runId, handle] of runs) {
+      try {
+        await handle.compact();
+      } catch (error) {
+        this.options.onPumpError?.(runId, error);
+      }
+    }
   }
 
   private async tryCleanupSettledRun(

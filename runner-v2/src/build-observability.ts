@@ -1,4 +1,5 @@
 import type { AgentActor } from "./agent-contracts.js";
+import type { AgentTranscriptPage } from "./agent-session-store.js";
 import type { BudgetProjection } from "./budget-ledger.js";
 import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
@@ -31,6 +32,8 @@ export interface BuildToolObservation {
   isError?: boolean;
   errorCode?: string;
 }
+
+export type BuildTranscriptPage = AgentTranscriptPage;
 
 export interface BuildObservabilitySnapshot {
   runId: string;

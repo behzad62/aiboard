@@ -696,6 +696,62 @@ test("files reads the committed project revision when project is the source", as
   }
 });
 
+test("files reads the exact applied project revision when the project has additional history", async () => {
+  const fixture = await createFixture("project-files-pinned");
+  try {
+    const workspace = await fixture.workspaces.createTaskWorkspace("feature");
+    writeFileSync(join(workspace.path, "feature.txt"), "integrated\n");
+    const taskCommit = await fixture.workspaces.commitTask("feature", "Add feature");
+    const changeSet = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit,
+      artifacts: fixture.artifacts,
+      evidenceArtifactHashes: [fixture.evidence.hash],
+    });
+    await fixture.integration.integrate(changeSet);
+
+    writeFileSync(join(fixture.project, "user-history.txt"), "preserved\n");
+    await runGit({ cwd: fixture.project, args: ["add", "user-history.txt"] });
+    await runGit({
+      cwd: fixture.project,
+      args: ["commit", "-m", "User history"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const handoff = await fixture.integration.applyToProject();
+    assert.ok(handoff.projectRevision);
+    writeFileSync(join(fixture.project, "user-history.txt"), "later\n");
+    await runGit({ cwd: fixture.project, args: ["add", "user-history.txt"] });
+    await runGit({
+      cwd: fixture.project,
+      args: ["commit", "-m", "Later project work"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+
+    const snapshot = await fixture.integration.files("project", handoff.projectRevision);
+    assert.equal(snapshot.revision, handoff.projectRevision);
+    assert.deepEqual(
+      snapshot.files.find((file) => file.path === "user-history.txt"),
+      { path: "user-history.txt", content: "preserved\n" }
+    );
+    assert.deepEqual(
+      snapshot.files.find((file) => file.path === "feature.txt"),
+      { path: "feature.txt", content: "integrated\n" }
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("cleanup removes the owned integration worktree but retains its audit branch", async () => {
   const fixture = await createFixture("cleanup");
   try {

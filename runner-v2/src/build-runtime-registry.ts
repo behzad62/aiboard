@@ -1,6 +1,10 @@
 import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
 import { emptyUsage } from "./budget-ledger.js";
-import type { BuildObservabilitySnapshot } from "./build-observability.js";
+import type {
+  BuildObservabilitySnapshot,
+  BuildTranscriptPage,
+} from "./build-observability.js";
+import type { IntegrationFileSnapshot } from "./integration-manager.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
   ProjectHandoffChoice,
@@ -12,6 +16,8 @@ export interface BuildControlPlane {
   projection(runId: string): SchedulerProjection;
   usage(runId: string): NativeBuildUsageProjection;
   observability(runId: string): Promise<BuildObservabilitySnapshot>;
+  transcript(runId: string, afterSequence?: number): Promise<BuildTranscriptPage>;
+  files(runId: string): Promise<IntegrationFileSnapshot>;
   events(runId: string, afterSequence?: number): SchedulerEvent[];
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
@@ -79,6 +85,16 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
     };
+  }
+
+  async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
+    this.require(runId);
+    return { turns: [], cursor: afterSequence };
+  }
+
+  async files(runId: string): Promise<IntegrationFileSnapshot> {
+    this.require(runId);
+    throw new Error("Revision-backed files require the native Build manager.");
   }
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {

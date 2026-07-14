@@ -50,6 +50,7 @@ test("native Build manager recreates persisted runtimes and closes resources", a
       createRuntime: async (input) => {
         created.push(input.runId);
         return {
+          ...handleProjections(input.runId),
           runtime: fakeRuntime(input.runId),
           usage: () => emptyBudget(input.runId),
           observability: async () => emptyObservability(input.runId),
@@ -87,6 +88,7 @@ test("native Build manager owns one autonomous pump per active run", async () =>
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       onPumpResult: (runId, result) => results.push(`${runId}:${result.status}`),
       createRuntime: async (input) => ({
+        ...handleProjections(input.runId),
         runtime: {
           ...fakeRuntime(input.runId),
           runUntilBlocked: async () => {
@@ -129,6 +131,7 @@ test("recovery autonomously restarts only runs the supervisor still marks active
       specs,
       shouldAutoRun: (runId) => runId === "run_1",
       createRuntime: async (input) => ({
+        ...handleProjections(input.runId),
         runtime: {
           ...fakeRuntime(input.runId),
           runUntilBlocked: async () => {
@@ -174,6 +177,7 @@ test("completed project handoff replays without applying the project twice", asy
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -274,6 +278,7 @@ test("autonomous pump continues after bounded progress without user Resume", asy
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       createRuntime: async (input) => ({
+        ...handleProjections(input.runId),
         runtime: {
           ...fakeRuntime(input.runId),
           projection: () => projection,
@@ -320,6 +325,7 @@ test("requested Finish or Budgeted handoff auto-applies once and cleans up after
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       onPumpResult: (_runId, result) => results.push(result.status),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -392,6 +398,7 @@ test("Plan-only requested handoff remains paused for the user", async () => {
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       onPumpResult: (_runId, result) => results.push(result.status),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -441,6 +448,7 @@ test("a requested handoff without a durable policy is not auto-applied", async (
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
       onPumpResult: (_runId, result) => results.push(result.status),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -486,6 +494,7 @@ test("automatic apply failure leaves requested handoff paused without cleanup", 
         results.push(`${result.status}:${result.action}`),
       onPumpError: (_runId, error) => errors.push(error),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -533,6 +542,7 @@ test("cleanup failure does not reclassify an already settled handoff as paused",
       onPumpResult: (_runId, result) => results.push(result.status),
       onPumpError: (_runId, error) => errors.push(error),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => projection,
@@ -586,6 +596,7 @@ test("recovery retries cleanup for a durably settled Build", async () => {
       shouldAutoRun: () => true,
       onPumpResult: (_runId, result) => results.push(result.status),
       createRuntime: async () => ({
+        ...handleProjections("run_1"),
         runtime: {
           ...fakeRuntime("run_1"),
           projection: () => selectedHandoffProjection(
@@ -614,6 +625,125 @@ test("recovery retries cleanup for a durably settled Build", async () => {
   }
 });
 
+test("recovery compacts every non-running Build, skips active Builds, and continues after one compaction error", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recover-compact-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  for (const runId of ["run_paused", "run_completed", "run_active"]) {
+    specs.save({ ...spec, runId, idempotencyKey: `build:${runId}` });
+  }
+  const compacted: string[] = [];
+  const errors: Array<{ runId: string; message: string }> = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs,
+      shouldAutoRun: (runId) => runId === "run_active",
+      onPumpError: (runId, error) => errors.push({
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      createRuntime: async (buildSpec) => ({
+        ...handleProjections(buildSpec.runId),
+        runtime: {
+          ...fakeRuntime(buildSpec.runId),
+          projection: () => ({
+            ...fakeRuntime(buildSpec.runId).projection(),
+            status: buildSpec.runId === "run_completed"
+              ? "completed"
+              : buildSpec.runId === "run_active"
+                ? "running"
+                : "paused",
+          }),
+          runUntilBlocked: async () => ({ status: "paused" as const }),
+        } as unknown as BuildRuntime,
+        usage: () => emptyBudget(buildSpec.runId),
+        observability: async () => emptyObservability(buildSpec.runId),
+        transcript: async () => ({ turns: [], cursor: 0 }),
+        files: async () => ({
+          source: "integration" as const,
+          revision: "a".repeat(40),
+          appliedToProject: false,
+          omittedFileCount: 0,
+          files: [],
+        }),
+        compact: async () => {
+          compacted.push(buildSpec.runId);
+          if (buildSpec.runId === "run_paused") throw new Error("compact failed");
+        },
+        projectHandoff: async () => {
+          throw new Error("not awaiting handoff");
+        },
+        cleanup: () => undefined,
+        close: () => undefined,
+      }),
+    });
+    await manager.recover();
+    await manager.awaitIdle();
+
+    assert.deepEqual(compacted.sort(), ["run_completed", "run_paused"]);
+    assert.deepEqual(errors, [{ runId: "run_paused", message: "compact failed" }]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery reports a global reachability scan failure and still activates recoverable work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recover-scan-error-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  specs.save({ ...spec, idempotencyKey: "build:scan-error" });
+  const errors: Array<{ runId: string; message: string }> = [];
+  let pumpCalls = 0;
+  const manager = new NativeBuildManager({
+    specs,
+    shouldAutoRun: () => true,
+    onPumpError: (runId, error) => errors.push({
+      runId,
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    runStartupCompaction: async (operation) => await operation(),
+    prepareArtifactCleanup: async () => {
+      throw new Error("reachability scan failed");
+    },
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        runUntilBlocked: async () => {
+          pumpCalls += 1;
+          return { status: "paused" as const };
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      transcript: async () => ({ turns: [], cursor: 0 }),
+      files: async () => ({
+        source: "integration" as const,
+        revision: "a".repeat(40),
+        appliedToProject: false,
+        omittedFileCount: 0,
+        files: [],
+      }),
+      compact: () => undefined,
+      projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+      cleanup: () => undefined,
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.recover();
+    await manager.awaitIdle();
+    assert.equal(pumpCalls, 1);
+    assert.deepEqual(errors, [{
+      runId: "startup-artifact-reachability",
+      message: "reachability scan failed",
+    }]);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("close retries cleanup that failed after settlement", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-close-cleanup-"));
   let cleanupCalls = 0;
@@ -621,6 +751,7 @@ test("close retries cleanup that failed after settlement", async () => {
   const manager = new NativeBuildManager({
     specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
     createRuntime: async () => ({
+      ...handleProjections("run_1"),
       runtime: {
         ...fakeRuntime("run_1"),
         projection: () => projection,
@@ -678,6 +809,7 @@ test("close waits for an in-flight automatic handoff before closing resources", 
   const manager = new NativeBuildManager({
     specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
     createRuntime: async () => ({
+      ...handleProjections("run_1"),
       runtime: {
         ...fakeRuntime("run_1"),
         projection: () => projection,
@@ -818,6 +950,20 @@ function fakeRuntime(runId: string): BuildRuntime {
       throw new Error("unused");
     },
   } as unknown as BuildRuntime;
+}
+
+function handleProjections(_runId: string) {
+  return {
+    transcript: async () => ({ turns: [], cursor: 0 }),
+    files: async () => ({
+      source: "integration" as const,
+      revision: "a".repeat(40),
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    }),
+    compact: async () => undefined,
+  };
 }
 
 function requestedHandoffProjection(

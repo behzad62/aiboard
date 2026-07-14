@@ -9,6 +9,7 @@ import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
+import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
 import type { ModelCostEstimator } from "./budgeted-model.js";
@@ -70,6 +71,7 @@ export interface NativeBuildFactoryOptions {
 
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
+  private readonly artifactReachability: ArtifactReachabilityGuard;
   private readonly memoryStore: SqliteProjectMemoryStore;
   private readonly browserBackend: PlaywrightBrowserBackend;
   private readonly managedProcesses: ManagedProcessService;
@@ -77,6 +79,10 @@ export class NativeBuildFactory {
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
     this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
+    this.artifactReachability = new ArtifactReachabilityGuard(
+      options.stateDirectory,
+      this.artifacts
+    );
     this.memoryStore = new SqliteProjectMemoryStore(
       join(options.stateDirectory, "project-memory.sqlite")
     );
@@ -121,7 +127,11 @@ export class NativeBuildFactory {
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
-      this.artifacts
+      this.artifacts,
+      {
+        deleteArtifactIfGloballyUnreachable: (hash) =>
+          this.artifactReachability.removeIfGloballyUnreachable(hash),
+      }
     );
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
     const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
@@ -319,13 +329,45 @@ export class NativeBuildFactory {
           },
         };
       },
+      transcript: async (afterSequence = 0) =>
+        await sessions.transcript(spec.runId, afterSequence),
+      files: async () => {
+        const handoff = runtime.projection().projectHandoff;
+        if (
+          handoff?.status === "selected" &&
+          handoff.appliedToProject &&
+          handoff.projectRevision
+        ) {
+          return await integrationManager.files("project", handoff.projectRevision);
+        }
+        return await integrationManager.files("integration");
+      },
+      compact: async () => {
+        await sessions.compactRun(spec.runId);
+      },
       projectHandoff: async (choice) =>
         choice === "apply_to_project"
           ? await integrationManager.applyToProject()
           : integrationManager.descriptor(false),
       cleanup: async () => {
-        await workspaceManager.cleanup();
-        await integrationManager.cleanup();
+        const failures: unknown[] = [];
+        for (const operation of [
+          () => sessions.compactRun(spec.runId),
+          () => workspaceManager.cleanup(),
+          () => integrationManager.cleanup(),
+        ]) {
+          try {
+            await operation();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            `Could not clean settled Build ${spec.runId}.`
+          );
+        }
       },
       close: () => {
         if (closed) return;
@@ -346,6 +388,14 @@ export class NativeBuildFactory {
     this.options.providerConfigs.close();
     this.managedProcesses.close();
     await this.browserBackend.closeAll();
+  }
+
+  async runStartupCompaction<T>(operation: () => Promise<T>): Promise<T> {
+    return await this.artifactReachability.runQuiescent(operation);
+  }
+
+  async prepareArtifactCleanup(): Promise<void> {
+    await this.artifactReachability.prepareReachabilityIndex();
   }
 }
 

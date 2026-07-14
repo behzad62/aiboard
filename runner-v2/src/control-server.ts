@@ -389,6 +389,28 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "transcript" &&
+        request.method === "GET"
+      ) {
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().transcript(runId, readAfterSequence(url))
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "files" &&
+        request.method === "GET"
+      ) {
+        sendJson(response, 200, await this.requireBuilds().files(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "usage" &&
         request.method === "GET"
       ) {
@@ -907,7 +929,11 @@ function invalidBody(): never {
 }
 
 function readAfterSequence(url: URL): number {
-  const raw = url.searchParams.get("after") ?? "0";
+  const values = url.searchParams.getAll("after");
+  if (values.length > 1) {
+    throw new HttpError(400, "invalid_after", "after must be provided at most once.");
+  }
+  const raw = values[0] ?? "0";
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new HttpError(400, "invalid_after", "after must be a non-negative integer.");

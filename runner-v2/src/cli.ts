@@ -93,6 +93,10 @@ async function main(): Promise<void> {
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
         syncAutonomousBuildLifecycle(supervisor, runId, result),
+      onPumpError: (runId, error) => writeRunnerWarning(runId, error),
+      runStartupCompaction: (operation) =>
+        buildFactory.runStartupCompaction(operation),
+      prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
     const server = new ControlServer({
       supervisor,
@@ -267,4 +271,11 @@ async function closeResources(resources: RunnerResources | undefined): Promise<v
 function writeStartupError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${JSON.stringify({ error: message })}\n`);
+}
+
+function writeRunnerWarning(runId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(
+    `${JSON.stringify({ warning: "runner_cleanup", runId, error: message })}\n`
+  );
 }
