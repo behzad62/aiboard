@@ -118,6 +118,20 @@ export function selectBuildTranscriptMessages(
     .flatMap(([, roundMessages]) => roundMessages);
 }
 
+export function buildBuildTranscriptMarkdown(
+  title: string,
+  messages: TimelineMessage[]
+): string {
+  const lines = [`# ${title}`, ""];
+  for (const message of [...messages].sort(
+    (left, right) => left.round - right.round || left.id.localeCompare(right.id)
+  )) {
+    if (!message.content || message.streaming) continue;
+    lines.push(`## ${message.modelName}`, "", message.content, "");
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
 function countTranscriptRounds(messages: TimelineMessage[]): number {
   return new Set(messages.map((message) => message.round)).size;
 }

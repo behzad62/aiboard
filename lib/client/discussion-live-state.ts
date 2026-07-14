@@ -7,8 +7,11 @@ import type {
 } from "@/lib/db/schema";
 import type {
   NativeBuildProjection,
+  NativeBuildFileSnapshot,
+  NativeBuildTranscriptPage,
   NativeBuildUsageProjection,
   NativeProjectHandoffChoice,
+  NativeRunProjection,
 } from "@/lib/client/runner-v2";
 import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
 
@@ -75,11 +78,172 @@ export function shouldShowBuildStopFallback(input: {
 export function shouldRestoreDurableBuildProjection(
   status: string
 ): boolean {
-  return status === "stopped" || status === "failed";
+  return status !== "loading" && status !== "locked";
+}
+
+export interface NativeBuildTimelineMessage {
+  id: string;
+  round: number;
+  modelId: string;
+  modelName: string;
+  content: string;
+  streaming?: boolean;
+}
+
+export interface NativeBuildTranscriptAttachment {
+  runId: string;
+  cursor: number;
+  messages: NativeBuildTimelineMessage[];
+}
+
+export function reconcileNativeBuildTranscript(
+  current: NativeBuildTranscriptAttachment | null,
+  runId: string,
+  page: NativeBuildTranscriptPage,
+  projection: Pick<NativeBuildProjection, "runtime">,
+  usage: Pick<NativeBuildUsageProjection, "models">
+): NativeBuildTranscriptAttachment {
+  const retained = current?.runId === runId ? current.messages : [];
+  const byId = new Map(retained.map((message) => [message.id, message]));
+  for (const turn of page.turns) {
+    if (
+      !["architect", "worker", "subagent"].includes(turn.actor.role) ||
+      !turn.text.trim()
+    ) continue;
+    const runtimeId = nativeActorRuntimeId(turn.actor, projection);
+    const runtime = usage.models?.find((model) => model.runtimeId === runtimeId);
+    const actorName = turn.actor.role === "architect"
+      ? "Architect"
+      : `${capitalize(turn.actor.role)} ${turn.actor.id}`;
+    byId.set(turn.id, {
+      id: turn.id,
+      round: turn.sequence,
+      modelId: runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
+      modelName: runtimeId
+        ? `${actorName} · ${runtime?.displayName ?? runtime?.modelId ?? runtimeId}`
+        : actorName,
+      content: turn.text,
+    });
+  }
+  return {
+    runId,
+    cursor: Math.max(current?.runId === runId ? current.cursor : 0, page.cursor),
+    messages: [...byId.values()].sort(
+      (left, right) => left.round - right.round || left.id.localeCompare(right.id)
+    ),
+  };
+}
+
+function nativeActorRuntimeId(
+  actor: { role: "architect" | "worker" | "subagent"; id: string },
+  projection: Pick<NativeBuildProjection, "runtime">
+): string | undefined {
+  if (actor.role === "architect") return projection.runtime.architect.runtimeId;
+  const assignments = projection.runtime.workerAssignments;
+  const workerId = Object.keys(assignments)
+    .filter((candidate) => actor.id === candidate || actor.id.startsWith(`${candidate}:`))
+    .sort((left, right) => right.length - left.length)[0];
+  if (workerId) return assignments[workerId]?.runtimeId;
+  return actor.role === "subagent"
+    ? projection.runtime.architect.runtimeId
+    : undefined;
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+export interface NativeBuildPollState {
+  observedActive: boolean;
+  terminalRefreshScheduled: boolean;
+}
+
+export interface NativeBuildFileAttachment {
+  runId: string;
+  key: string;
+  snapshot: NativeBuildFileSnapshot;
+}
+
+export function reconcileNativeBuildFiles(
+  current: NativeBuildFileAttachment | null,
+  runId: string,
+  snapshot: NativeBuildFileSnapshot
+): NativeBuildFileAttachment {
+  const key = `${runId}:${snapshot.source}:${snapshot.revision}`;
+  return current?.key === key
+    ? current
+    : { runId, key, snapshot };
+}
+
+export function nextNativeBuildPoll(
+  state: NativeBuildPollState,
+  runState: NativeRunProjection["state"]
+): { state: NativeBuildPollState; action: "poll" | "terminal_refresh" | "stop" } {
+  if (["created", "running", "paused", "stopping"].includes(runState)) {
+    return {
+      state: { observedActive: true, terminalRefreshScheduled: false },
+      action: "poll",
+    };
+  }
+  if (state.observedActive && !state.terminalRefreshScheduled) {
+    return {
+      state: { ...state, terminalRefreshScheduled: true },
+      action: "terminal_refresh",
+    };
+  }
+  return { state, action: "stop" };
+}
+
+export function createNativeBuildAttachmentPoller<
+  TSnapshot extends { runState: NativeRunProjection["state"] },
+>(options: {
+  refresh: () => Promise<TSnapshot>;
+  apply: (snapshot: TSnapshot) => void;
+  schedule: (callback: () => Promise<void>, delayMs: number) => unknown;
+  cancelScheduled: (handle: unknown) => void;
+  intervalMs: number;
+  onError?: (error: unknown) => void;
+}): { start: () => Promise<void>; cancel: () => void } {
+  let cancelled = false;
+  let scheduled: unknown;
+  let pollState: NativeBuildPollState = {
+    observedActive: false,
+    terminalRefreshScheduled: false,
+  };
+
+  const schedule = (delayMs: number) => {
+    if (cancelled) return;
+    scheduled = options.schedule(run, delayMs);
+  };
+  const run = async (): Promise<void> => {
+    scheduled = undefined;
+    try {
+      const snapshot = await options.refresh();
+      if (cancelled) return;
+      options.apply(snapshot);
+      const next = nextNativeBuildPoll(pollState, snapshot.runState);
+      pollState = next.state;
+      if (next.action === "poll") schedule(options.intervalMs);
+      if (next.action === "terminal_refresh") schedule(0);
+    } catch (error) {
+      if (cancelled) return;
+      options.onError?.(error);
+      schedule(options.intervalMs);
+    }
+  };
+
+  return {
+    start: run,
+    cancel: () => {
+      cancelled = true;
+      if (scheduled !== undefined) options.cancelScheduled(scheduled);
+    },
+  };
 }
 
 export function durableBuildHandoffPanels(
-  projection: NativeBuildProjection
+  projection: NativeBuildProjection,
+  runState?: NativeRunProjection["state"]
 ): {
   architect: { reason: string; candidateRuntimeIds: string[] } | null;
   project: {
@@ -89,6 +253,12 @@ export function durableBuildHandoffPanels(
 } {
   const projectHandoff = projection.projectHandoff;
   if (projectHandoff?.status === "requested") {
+    if (
+      runState === "running" &&
+      (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
+    ) {
+      return { architect: null, project: null };
+    }
     return {
       architect: null,
       project: {

@@ -4,6 +4,8 @@ import {
   configureNativeProviders,
   createNativeBuild,
   getNativeBuildAudit,
+  getNativeBuildFiles,
+  getNativeBuildTranscript,
   getNativeBuildUsage,
   getNativeBuildObservability,
   resolveNativeBuildRunId,
@@ -188,6 +190,50 @@ const audit = await getNativeBuildAudit(connection, "run_1", fetchImpl);
 assert.equal(audit.protocolVersion, 2);
 assert.equal(audit.runEvents.length, 1);
 
+const attachmentCalls: string[] = [];
+const attachmentFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  attachmentCalls.push(url);
+  if (url.endsWith("/build/transcript?after=17")) {
+    return Response.json({
+      turns: [{
+        id: "turn_18",
+        sessionId: "architect:run_1",
+        actor: { role: "architect", id: "architect" },
+        sequence: 18,
+        occurredAt: "2026-07-14T00:00:00.000Z",
+        text: "Native model response",
+      }],
+      cursor: 18,
+    });
+  }
+  if (url.endsWith("/build/files")) {
+    return Response.json({
+      source: "project",
+      revision: "1234567890abcdef1234567890abcdef12345678",
+      appliedToProject: true,
+      omittedFileCount: 2,
+      files: [{ path: "src/index.ts", content: "export {};" }],
+    });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+const transcript = await getNativeBuildTranscript(
+  connection,
+  "run_1",
+  17,
+  attachmentFetch
+);
+assert.equal(transcript.turns[0].id, "turn_18");
+assert.equal(transcript.cursor, 18);
+const fileSnapshot = await getNativeBuildFiles(connection, "run_1", attachmentFetch);
+assert.equal(fileSnapshot.source, "project");
+assert.equal(fileSnapshot.omittedFileCount, 2);
+assert.deepEqual(attachmentCalls, [
+  "http://127.0.0.1:8787/v2/runs/run_1/build/transcript?after=17",
+  "http://127.0.0.1:8787/v2/runs/run_1/build/files",
+]);
+
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
 assert.equal(JSON.parse(String(calls[1].init.body)).configs[0].secret, "provider-secret");
@@ -288,5 +334,104 @@ assert.equal(
   ),
   undefined,
   "a deliberately new follow-up may proceed to native provisioning"
+);
+
+const newestReferenceCalls: string[] = [];
+const newestReferenceFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  newestReferenceCalls.push(url);
+  if (url.endsWith("/v2/runs/run_saved/build")) {
+    return Response.json({ runId: "run_saved", status: "completed" });
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_newest")) {
+    return Response.json({ builds: [
+      {
+        runId: "run_saved",
+        projectId: "discussion_newest",
+        state: "completed",
+        createdAt: "2026-07-13T00:00:00.000Z",
+        updatedAt: "2026-07-13T01:00:00.000Z",
+      },
+      {
+        runId: "run_running",
+        projectId: "discussion_newest",
+        state: "running",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T01:00:00.000Z",
+      },
+    ] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "run_saved",
+    "discussion_newest",
+    newestReferenceFetch
+  ),
+  "run_running",
+  "the newest project reference replaces an older saved completed run"
+);
+assert.ok(
+  newestReferenceCalls.some((url) => url.endsWith("/v2/builds?projectId=discussion_newest")),
+  "project references are queried even when the saved run still exists"
+);
+
+const emptyReferenceFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/run_orphaned_reference/build")) {
+    return Response.json({ runId: "run_orphaned_reference", status: "paused" });
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_empty")) {
+    return Response.json({ builds: [] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "run_orphaned_reference",
+    "discussion_empty",
+    emptyReferenceFetch
+  ),
+  "run_orphaned_reference",
+  "an existing saved run remains authoritative when the reference list is empty"
+);
+
+const tiedReferenceFetch: typeof fetch = async (input) => {
+  const url = String(input);
+  if (url.endsWith("/v2/runs/run_Z/build")) {
+    return Response.json({ runId: "run_Z", status: "completed" });
+  }
+  if (url.endsWith("/v2/builds?projectId=discussion_tied")) {
+    return Response.json({ builds: [
+      {
+        runId: "run_Z",
+        projectId: "discussion_tied",
+        state: "completed",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T01:00:00.000Z",
+      },
+      {
+        runId: "run_a",
+        projectId: "discussion_tied",
+        state: "paused",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T02:00:00.000Z",
+      },
+    ] });
+  }
+  return Response.json({ error: "Unexpected request" }, { status: 500 });
+};
+assert.equal(
+  await resolveNativeBuildRunId(
+    connection,
+    "run_Z",
+    "discussion_tied",
+    tiedReferenceFetch
+  ),
+  "run_a",
+  "equal creation times resolve to the code-unit lexicographically greatest run id"
 );
 console.log("PASS runner-v2 client");

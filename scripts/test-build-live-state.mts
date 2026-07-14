@@ -12,6 +12,9 @@ import {
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
   nativeBuildRestorationPolicyPatch,
+  reconcileNativeBuildTranscript,
+  nextNativeBuildPoll,
+  createNativeBuildAttachmentPoller,
   nativeBuildUsageWindow,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
@@ -107,6 +110,25 @@ assert.deepEqual(
     },
   }
 );
+const automaticHandoffProjection = {
+  runPolicy: "finish",
+  projectHandoff: {
+    status: "requested",
+    summary: "Automatic apply pending",
+    options: ["keep_integration_branch", "apply_to_project"],
+  },
+  runtime: { architect: {} },
+} as never;
+assert.equal(
+  durableBuildHandoffPanels(automaticHandoffProjection, "running").project,
+  null,
+  "an in-flight successful automatic handoff does not flash a manual decision",
+);
+assert.notEqual(
+  durableBuildHandoffPanels(automaticHandoffProjection, "paused").project,
+  null,
+  "a failed/recoverable automatic handoff remains actionable once the run pauses",
+);
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");
@@ -143,8 +165,214 @@ assert.deepEqual(
 );
 assert.equal(shouldRestoreDurableBuildProjection("stopped"), true);
 assert.equal(shouldRestoreDurableBuildProjection("failed"), true);
-assert.equal(shouldRestoreDurableBuildProjection("running"), false);
-assert.equal(shouldRestoreDurableBuildProjection("completed"), false);
+assert.equal(shouldRestoreDurableBuildProjection("running"), true);
+assert.equal(shouldRestoreDurableBuildProjection("completed"), true);
+assert.equal(shouldRestoreDurableBuildProjection("pending"), true);
+
+const transcriptProjection = {
+  runtime: {
+    architect: { runtimeId: "runtime-architect" },
+    workerAssignments: {
+      worker_T1_1: { runtimeId: "runtime-worker" },
+    },
+  },
+} as never;
+const transcriptUsage = {
+  models: [
+    {
+      runtimeId: "runtime-architect",
+      modelId: "architect-model",
+      displayName: "Architect Model",
+    },
+    {
+      runtimeId: "runtime-worker",
+      modelId: "worker-model",
+      displayName: "Worker Model",
+    },
+  ],
+} as never;
+const nativeTranscript = reconcileNativeBuildTranscript(
+  null,
+  "run_native",
+  {
+    turns: [
+      {
+        id: "native-1",
+        sessionId: "architect:run_native",
+        actor: { role: "architect", id: "architect" },
+        sequence: 1,
+        occurredAt: "2026-07-14T00:00:01.000Z",
+        text: "Architect response",
+      },
+      {
+        id: "native-user",
+        sessionId: "user:run_native",
+        actor: { role: "user", id: "local-user" },
+        sequence: 2,
+        occurredAt: "2026-07-14T00:00:02.000Z",
+        text: "User note must not appear",
+      },
+      {
+        id: "native-3",
+        sessionId: "worker:run_native:T1:1",
+        actor: { role: "worker", id: "worker_T1_1" },
+        sequence: 3,
+        occurredAt: "2026-07-14T00:00:03.000Z",
+        text: "Worker response",
+      },
+      {
+        id: "native-blank",
+        sessionId: "worker:run_native:T1:1",
+        actor: { role: "worker", id: "worker_T1_1" },
+        sequence: 4,
+        occurredAt: "2026-07-14T00:00:04.000Z",
+        text: "   ",
+      },
+    ],
+    cursor: 4,
+  } as never,
+  transcriptProjection,
+  transcriptUsage,
+);
+assert.deepEqual(
+  nativeTranscript.messages.map((message) => ({
+    id: message.id,
+    round: message.round,
+    modelId: message.modelId,
+    modelName: message.modelName,
+    content: message.content,
+  })),
+  [
+    {
+      id: "native-1",
+      round: 1,
+      modelId: "runtime-architect",
+      modelName: "Architect · Architect Model",
+      content: "Architect response",
+    },
+    {
+      id: "native-3",
+      round: 3,
+      modelId: "runtime-worker",
+      modelName: "Worker worker_T1_1 · Worker Model",
+      content: "Worker response",
+    },
+  ],
+  "native attachment maps only textual assistant model turns with actor/runtime names",
+);
+const reconnectedTranscript = reconcileNativeBuildTranscript(
+  nativeTranscript,
+  "run_native",
+  {
+    turns: [
+      {
+        id: "native-3",
+        sessionId: "worker:run_native:T1:1",
+        actor: { role: "worker", id: "worker_T1_1" },
+        sequence: 3,
+        occurredAt: "2026-07-14T00:00:03.000Z",
+        text: "Worker response",
+      },
+      {
+        id: "native-5",
+        sessionId: "subagent:run_native:T1:1",
+        actor: { role: "subagent", id: "worker_T1_1:call_1" },
+        sequence: 5,
+        occurredAt: "2026-07-14T00:00:05.000Z",
+        text: "Subagent response",
+      },
+      {
+        id: "native-6",
+        sessionId: "subagent:run_native:architect",
+        actor: { role: "subagent", id: "architect_1:call_2" },
+        sequence: 6,
+        occurredAt: "2026-07-14T00:00:06.000Z",
+        text: "Architect subagent response",
+      },
+    ],
+    cursor: 5,
+  },
+  transcriptProjection,
+  transcriptUsage,
+);
+assert.deepEqual(
+  reconnectedTranscript.messages.map((message) => message.id),
+  ["native-1", "native-3", "native-5", "native-6"],
+  "overlapping reconnect pages deduplicate by stable native turn id",
+);
+assert.equal(
+  reconnectedTranscript.messages.find((message) => message.id === "native-6")?.modelName,
+  "Subagent architect_1:call_2 · Architect Model",
+  "Architect subagents inherit the Architect runtime display name",
+);
+assert.equal(reconnectedTranscript.cursor, 5);
+assert.equal(
+  reconnectedTranscript.messages.find((message) => message.id === "native-5")?.modelName,
+  "Subagent worker_T1_1:call_1 · Worker Model",
+  "subagents inherit their parent worker runtime display name",
+);
+const replacedLegacyMessages = reconnectedTranscript.messages;
+assert.equal(
+  replacedLegacyMessages.some((message) => message.id === "legacy-browser-message"),
+  false,
+  "native attachment replaces rather than appends legacy Build messages",
+);
+
+let pollState = { observedActive: false, terminalRefreshScheduled: false };
+let poll = nextNativeBuildPoll(pollState, "running");
+assert.equal(poll.action, "poll");
+pollState = poll.state;
+poll = nextNativeBuildPoll(pollState, "paused");
+assert.equal(poll.action, "poll", "paused/recoverable native runs continue polling");
+pollState = poll.state;
+poll = nextNativeBuildPoll(pollState, "completed");
+assert.equal(poll.action, "terminal_refresh", "active-to-terminal schedules one final refresh");
+pollState = poll.state;
+poll = nextNativeBuildPoll(pollState, "completed");
+assert.equal(poll.action, "stop", "the terminal refresh is performed only once");
+
+const queuedPolls: Array<() => Promise<void>> = [];
+const observedPollStates: string[] = [];
+const pollSnapshots = [
+  { runState: "running" as const },
+  { runState: "completed" as const },
+  { runState: "completed" as const },
+];
+const attachmentPoller = createNativeBuildAttachmentPoller({
+  refresh: async () => pollSnapshots.shift()!,
+  apply: (snapshot) => observedPollStates.push(snapshot.runState),
+  schedule: (callback) => {
+    queuedPolls.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+await attachmentPoller.start();
+assert.equal(queuedPolls.length, 1);
+await queuedPolls.shift()!();
+assert.equal(queuedPolls.length, 1, "terminal transition queues one final reconciliation");
+await queuedPolls.shift()!();
+assert.deepEqual(observedPollStates, ["running", "completed", "completed"]);
+assert.equal(queuedPolls.length, 0, "polling stops after the final terminal refresh");
+
+let releaseStale!: (snapshot: { runState: "running" }) => void;
+const staleSnapshot = new Promise<{ runState: "running" }>((resolve) => {
+  releaseStale = resolve;
+});
+let staleApplyCount = 0;
+const stalePoller = createNativeBuildAttachmentPoller({
+  refresh: async () => await staleSnapshot,
+  apply: () => { staleApplyCount += 1; },
+  schedule: () => 1,
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+const staleStart = stalePoller.start();
+stalePoller.cancel();
+releaseStale({ runState: "running" });
+await staleStart;
+assert.equal(staleApplyCount, 0, "cancelled old-run responses cannot overwrite a newer attachment");
 assert.deepEqual(
   nativeBuildUsageWindow({
     scopeId: "run_1",

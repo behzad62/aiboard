@@ -393,6 +393,30 @@ export interface NativeBuildReference {
   updatedAt: string;
 }
 
+export type NativeBuildActorRole = "architect" | "worker" | "subagent";
+
+export interface NativeBuildTranscriptTurn {
+  id: string;
+  sessionId: string;
+  actor: { role: NativeBuildActorRole; id: string };
+  sequence: number;
+  occurredAt: string;
+  text: string;
+}
+
+export interface NativeBuildTranscriptPage {
+  turns: NativeBuildTranscriptTurn[];
+  cursor: number;
+}
+
+export interface NativeBuildFileSnapshot {
+  source: "integration" | "project";
+  revision: string;
+  appliedToProject: boolean;
+  omittedFileCount: number;
+  files: Array<{ path: string; content: string }>;
+}
+
 export class NativeRunnerError extends Error {
   constructor(
     message: string,
@@ -507,34 +531,57 @@ export async function resolveNativeBuildRunId(
   fetchImpl: typeof fetch = fetch,
   options: { allowMissing?: boolean } = {}
 ): Promise<string | undefined> {
-  try {
-    await getNativeBuild(connection, savedRunId, fetchImpl);
-    return savedRunId;
-  } catch (error) {
-    if (!(error instanceof NativeRunnerError) || error.status !== 404) throw error;
-  }
-
-  const references = await getNativeBuildReferences(connection, projectId, fetchImpl);
-  const awaitingHandoff: string[] = [];
-  for (const reference of references) {
-    try {
-      const projection = await getNativeBuild(connection, reference.runId, fetchImpl);
-      if (projection.projectHandoff?.status === "requested") {
-        awaitingHandoff.push(reference.runId);
+  const [references, savedExists] = await Promise.all([
+    getNativeBuildReferences(connection, projectId, fetchImpl),
+    getNativeBuild(connection, savedRunId, fetchImpl).then(
+      () => true,
+      (error: unknown) => {
+        if (error instanceof NativeRunnerError && error.status === 404) return false;
+        throw error;
       }
-    } catch (error) {
-      if (!(error instanceof NativeRunnerError) || error.status !== 404) throw error;
+    ),
+  ]);
+
+  if (!savedExists && options.allowMissing) return undefined;
+
+  const newestReference = [...references].sort((left, right) => {
+    if (left.createdAt !== right.createdAt) {
+      return left.createdAt < right.createdAt ? 1 : -1;
     }
-  }
-  if (awaitingHandoff.length === 1) return awaitingHandoff[0];
-  if (awaitingHandoff.length > 1) {
-    throw new Error(
-      `Runner V2 found multiple Builds for this discussion awaiting project handoff; select the intended run explicitly.`
-    );
-  }
-  if (options.allowMissing) return undefined;
+    if (left.runId === right.runId) return 0;
+    return left.runId < right.runId ? 1 : -1;
+  })[0];
+  if (newestReference) return newestReference.runId;
+  if (savedExists) return savedRunId;
   throw new Error(
-    `The saved Runner V2 Build ${savedRunId} no longer exists, and no matching Build is awaiting project handoff.`
+    `The saved Runner V2 Build ${savedRunId} no longer exists, and this project has no matching Build reference.`
+  );
+}
+
+export async function getNativeBuildTranscript(
+  connection: NativeRunnerConnection,
+  runId: string,
+  afterSequence = 0,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildTranscriptPage> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/transcript?after=${afterSequence}`,
+    {},
+    fetchImpl
+  );
+}
+
+export async function getNativeBuildFiles(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<NativeBuildFileSnapshot> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/files`,
+    {},
+    fetchImpl
   );
 }
 

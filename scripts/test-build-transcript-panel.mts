@@ -2,6 +2,7 @@
 import {
   BUILD_TRANSCRIPT_ROUND_INCREMENT,
   BUILD_TRANSCRIPT_INITIAL_ROUNDS,
+  buildBuildTranscriptMarkdown,
   selectBuildTranscriptMessages,
 } from "../components/BuildTranscriptPanel";
 import type { TimelineMessage } from "../components/DiscussionTimeline";
@@ -47,6 +48,20 @@ check(
   "loading more appends older rounds after the recent window",
   expanded.map((m) => m.id).join(",") === "7-a,7-b,6-a,5-a,4-a,3-a,2-a,1-a,1-b",
   expanded.map((m) => m.id),
+);
+
+const exported = buildBuildTranscriptMarkdown("Native Build", expanded);
+check(
+  "Build transcript export contains exactly the displayed native turns",
+  expanded.every((item) => exported.includes(item.content)) &&
+    !exported.includes("Your note") &&
+    !exported.includes("Final answer"),
+  exported,
+);
+check(
+  "Build transcript export preserves durable native order",
+  exported.indexOf("Round 1 a") < exported.indexOf("Round 7 b"),
+  exported,
 );
 
 process.exit(failed === 0 ? 0 : 1);

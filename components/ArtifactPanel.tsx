@@ -6,6 +6,7 @@ import type { ExtractedFile } from "@/lib/artifacts/extract";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, Download, FileCode2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { NativeBuildFileSnapshot } from "@/lib/client/runner-v2";
 
 function basename(path: string): string {
   return path.split("/").pop() || path;
@@ -25,11 +26,30 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function ArtifactPanel({ files }: { files: ExtractedFile[] }) {
+type ArtifactSnapshotMetadata = Pick<
+  NativeBuildFileSnapshot,
+  "source" | "revision" | "appliedToProject" | "omittedFileCount"
+>;
+
+export function artifactSourceLabel(snapshot: ArtifactSnapshotMetadata): string {
+  return snapshot.source === "project" ? "Applied project" : "Proposed integration";
+}
+
+export function abbreviateArtifactRevision(revision: string): string {
+  return revision.slice(0, 12);
+}
+
+export function ArtifactPanel({
+  files,
+  snapshot,
+}: {
+  files: ExtractedFile[];
+  snapshot?: ArtifactSnapshotMetadata;
+}) {
   const [openPath, setOpenPath] = useState<string | null>(files[0]?.path ?? null);
   const [zipping, setZipping] = useState(false);
 
-  if (files.length === 0) return null;
+  if (files.length === 0 && !snapshot) return null;
 
   const downloadOne = (file: ExtractedFile) => {
     downloadBlob(
@@ -53,18 +73,30 @@ export function ArtifactPanel({ files }: { files: ExtractedFile[] }) {
   return (
     <section className="overflow-hidden rounded-2xl border bg-card shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-5 py-4">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <FileCode2 className="h-5 w-5 text-primary" />
           <h3 className="font-display text-lg font-semibold">Project files</h3>
           <span className="font-mono text-xs text-muted-foreground">
             {files.length}
           </span>
+          {snapshot && (
+            <span className="rounded-full border bg-background px-2 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
+              {artifactSourceLabel(snapshot)} · {abbreviateArtifactRevision(snapshot.revision)}
+            </span>
+          )}
         </div>
-        <Button size="sm" onClick={downloadZip} disabled={zipping}>
+        <Button size="sm" onClick={downloadZip} disabled={zipping || files.length === 0}>
           <Download className="mr-1 h-4 w-4" />
           {zipping ? "Zipping…" : "Download .zip"}
         </Button>
       </header>
+
+      {snapshot && snapshot.omittedFileCount > 0 && (
+        <p className="border-b bg-amber-50 px-5 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          {snapshot.omittedFileCount} {snapshot.omittedFileCount === 1 ? "file" : "files"} omitted.
+          Runner leaves files out when they are binary, oversized, or outside the snapshot budget.
+        </p>
+      )}
 
       <ul className="divide-y">
         {files.map((file) => {
