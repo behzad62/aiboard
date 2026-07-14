@@ -21,8 +21,7 @@ const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FILE_RESPONSE_BYTES = 10 * 1024 * 1024;
 
-interface ProjectApplyJournal {
-  version: 1;
+interface ProjectApplyJournalBase {
   runId: string;
   projectIdentity: string;
   projectBranch: string;
@@ -31,6 +30,22 @@ interface ProjectApplyJournal {
   integrationRevision: string;
 }
 
+interface LegacyProjectApplyJournal extends ProjectApplyJournalBase {
+  version: 1;
+}
+
+interface OwnedProjectApplyJournal extends ProjectApplyJournalBase {
+  version: 2;
+  state: "prepared" | "retiring";
+  retiringOwnershipRevision?: string;
+  transitionId: string;
+  transitionRef: string;
+  patchFile: string;
+  indexFile: string;
+}
+
+type ProjectApplyJournal = LegacyProjectApplyJournal | OwnedProjectApplyJournal;
+
 export interface IntegrationManagerOptions {
   repositoryRoot: string;
   stateDirectory: string;
@@ -38,6 +53,12 @@ export interface IntegrationManagerOptions {
   baselineRevision: string;
   execute?: GitRunner;
   executeBytes?: GitBinaryRunner;
+  afterProjectApplyJournalWritten?: (input: {
+    projectBranch: string;
+    expectedParent: string;
+    targetCommit: string;
+    journalPath: string;
+  }) => void | Promise<void>;
   afterProjectRefAdvanced?: (input: {
     projectBranch: string;
     expectedParent: string;
@@ -100,6 +121,7 @@ export class IntegrationManager {
   private readonly branch: string;
   private readonly execute: GitRunner;
   private readonly executeBytes: GitBinaryRunner;
+  private readonly afterProjectApplyJournalWritten?: IntegrationManagerOptions["afterProjectApplyJournalWritten"];
   private readonly afterProjectRefAdvanced?: IntegrationManagerOptions["afterProjectRefAdvanced"];
   private operationQueue: Promise<void> = Promise.resolve();
   private currentRevision: string | undefined;
@@ -118,6 +140,7 @@ export class IntegrationManager {
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
     this.execute = options.execute ?? runGit;
     this.executeBytes = options.executeBytes ?? runGitBytes;
+    this.afterProjectApplyJournalWritten = options.afterProjectApplyJournalWritten;
     this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
   }
 
@@ -410,14 +433,18 @@ export class IntegrationManager {
       const handoffDirectory = resolve(this.stateDirectory, "handoff");
       const transitionId = randomUUID();
       const transitionSegment = safeName(transitionId);
+      const transitionRef = `refs/aiboard/runs/${this.runSegment}/handoff/${transitionSegment}`;
+      const patchFile = `${this.runSegment}.${transitionSegment}.patch`;
+      const indexFile = `${this.runSegment}.${transitionSegment}.index`;
       const patchPath = resolve(
         handoffDirectory,
-        `${this.runSegment}.${transitionSegment}.patch`
+        patchFile
       );
       const indexPath = resolve(
         handoffDirectory,
-        `${this.runSegment}.${transitionSegment}.index`
+        indexFile
       );
+      let preserveHandoffFiles = false;
       if (
         relative(handoffDirectory, patchPath).startsWith("..") ||
         relative(handoffDirectory, indexPath).startsWith("..")
@@ -474,7 +501,7 @@ export class IntegrationManager {
             "-m",
             "Apply completed AIBoard build",
             "-m",
-            `AIBoard-Run: ${this.runId}\nAIBoard-Integration: ${this.revision}`,
+            `AIBoard-Run: ${this.runId}\nAIBoard-Integration: ${this.revision}\nAIBoard-Transition: ${transitionId}`,
           ],
           env: RUNNER_IDENTITY,
           allowFailure: true,
@@ -486,24 +513,60 @@ export class IntegrationManager {
         }
         const committedRevision = commit.stdout.trim();
         await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
-        const journal: ProjectApplyJournal = {
-          version: 1,
+        const journal: OwnedProjectApplyJournal = {
+          version: 2,
+          state: "prepared",
           runId: this.runId,
           projectIdentity: await this.projectIdentity(),
           projectBranch: projectBranch.stdout.trim(),
           expectedParent: projectRevision,
           targetCommit: committedRevision,
           integrationRevision: this.revision,
+          transitionId,
+          transitionRef,
+          patchFile,
+          indexFile,
         };
         await this.assertCheckoutWillNotOverwriteUntracked(
           projectRevision,
           committedRevision
         );
-        const journalPath = await this.writeProjectApplyJournal(journal, transitionId);
+        const ownership = await this.git(
+          this.repositoryRoot,
+          ["update-ref", transitionRef, projectRevision, ""],
+          true
+        );
+        if (ownership.exitCode !== 0) {
+          throw new Error("The automatic handoff transition could not claim ownership.");
+        }
+        let journalPath: string;
+        try {
+          journalPath = await this.writeProjectApplyJournal(journal, transitionId);
+        } catch (error) {
+          await this.git(
+            this.repositoryRoot,
+            ["update-ref", "-d", transitionRef, projectRevision],
+            true
+          );
+          throw error;
+        }
+        if (this.afterProjectApplyJournalWritten) {
+          try {
+            await this.afterProjectApplyJournalWritten({
+              projectBranch: projectBranch.stdout.trim(),
+              expectedParent: projectRevision,
+              targetCommit: committedRevision,
+              journalPath,
+            });
+          } catch (error) {
+            preserveHandoffFiles = true;
+            throw error;
+          }
+        }
         try {
           await this.assertProjectUnchanged(projectBranch.stdout.trim(), projectRevision);
         } catch (error) {
-          await this.clearProjectApplyJournal(journalPath);
+          await this.cleanupOwnedProjectApply({ path: journalPath, journal }, projectRevision);
           throw error;
         }
         const advanced = await this.git(
@@ -517,15 +580,31 @@ export class IntegrationManager {
           true
         );
         if (advanced.exitCode !== 0) {
-          await this.clearProjectApplyJournal(journalPath);
+          await this.cleanupOwnedProjectApply({ path: journalPath, journal }, projectRevision);
           throw new Error("The project changed during automatic handoff.");
         }
-        await this.afterProjectRefAdvanced?.({
-          projectBranch: projectBranch.stdout.trim(),
-          expectedParent: projectRevision,
-          targetCommit: committedRevision,
-          journalPath,
-        });
+        const ownershipAdvanced = await this.git(
+          this.repositoryRoot,
+          ["update-ref", transitionRef, committedRevision, projectRevision],
+          true
+        );
+        if (ownershipAdvanced.exitCode !== 0) {
+          preserveHandoffFiles = true;
+          throw new Error("The automatic handoff transition ownership could not advance.");
+        }
+        if (this.afterProjectRefAdvanced) {
+          try {
+            await this.afterProjectRefAdvanced({
+              projectBranch: projectBranch.stdout.trim(),
+              expectedParent: projectRevision,
+              targetCommit: committedRevision,
+              journalPath,
+            });
+          } catch (error) {
+            preserveHandoffFiles = true;
+            throw error;
+          }
+        }
         try {
           await this.assertCheckoutWillNotOverwriteUntracked(
             projectRevision,
@@ -556,7 +635,11 @@ export class IntegrationManager {
               `The committed result could not be checked out safely: ${checkout.stderr.trim()}`
             );
           }
-          await this.clearProjectApplyJournal(journalPath);
+          await this.cleanupOwnedProjectApply(
+            { path: journalPath, journal },
+            committedRevision
+          );
+          await this.retireAbandonedProjectApplies(committedRevision);
         } catch (error) {
           const rollback = await this.git(
             this.repositoryRoot,
@@ -575,21 +658,26 @@ export class IntegrationManager {
             );
           }
           if (await this.projectMatchesRevision(projectRevision)) {
-            await this.clearProjectApplyJournal(journalPath);
+            await this.cleanupOwnedProjectApply(
+              { path: journalPath, journal },
+              committedRevision
+            );
           }
           throw error;
         }
         return this.descriptor(true, committedRevision);
       } finally {
-        await rm(patchPath, { force: true });
-        await rm(indexPath, { force: true });
-        await rm(`${indexPath}.lock`, { force: true });
+        if (!preserveHandoffFiles) {
+          await rm(patchPath, { force: true });
+          await rm(indexPath, { force: true });
+          await rm(`${indexPath}.lock`, { force: true });
+        }
       }
     });
   }
 
   private async recoverProjectApply(): Promise<ProjectHandoffResult | null> {
-    const records = await this.readProjectApplyJournals();
+    let records = await this.readProjectApplyJournals();
     if (records.length === 0) return null;
     const fail = (reason: string): never => {
       throw new Error(
@@ -599,7 +687,7 @@ export class IntegrationManager {
     const projectIdentity = await this.projectIdentity();
     for (const { journal } of records) {
       if (
-        journal.version !== 1 ||
+        ![1, 2].includes(journal.version) ||
         journal.runId !== this.runId ||
         journal.integrationRevision !== this.revision ||
         journal.projectIdentity !== projectIdentity ||
@@ -608,6 +696,23 @@ export class IntegrationManager {
         !isRevision(journal.targetCommit)
       ) {
         fail("its recorded project or run identity does not match.");
+      }
+      if (journal.version === 2) {
+        try {
+          this.ownedProjectApplyPaths(journal);
+          if (
+            !["prepared", "retiring"].includes(journal.state) ||
+            (journal.state === "prepared" && journal.retiringOwnershipRevision !== undefined) ||
+            (journal.state === "retiring" &&
+              ![journal.expectedParent, journal.targetCommit].includes(
+                journal.retiringOwnershipRevision ?? ""
+              ))
+          ) {
+            throw new Error("Invalid transition retirement state.");
+          }
+        } catch {
+          fail("its transition ownership metadata is invalid.");
+        }
       }
     }
     const branch = await this.git(
@@ -624,6 +729,33 @@ export class IntegrationManager {
     ) {
       fail("the checked-out branch does not match the journal.");
     }
+    let recoveredRetiringWinner: OwnedProjectApplyJournal | undefined;
+    for (const record of records) {
+      const journal = record.journal;
+      if (journal.version !== 2 || journal.state !== "retiring") continue;
+      const retirementRevision = journal.retiringOwnershipRevision!;
+      if (retirementRevision === journal.targetCommit) {
+        if (
+          head !== journal.targetCommit ||
+          !await this.projectMatchesRevision(journal.targetCommit)
+        ) {
+          fail("a retiring winning transition no longer matches the project state.");
+        }
+        recoveredRetiringWinner = journal;
+      } else if (head === journal.targetCommit) {
+        fail("a retiring abandoned transition unexpectedly became the project head.");
+      }
+      await this.cleanupOwnedProjectApply(
+        record as { path: string; journal: OwnedProjectApplyJournal },
+        retirementRevision
+      );
+    }
+    if (recoveredRetiringWinner) {
+      await this.retireAbandonedProjectApplies(recoveredRetiringWinner.targetCommit);
+      return this.descriptor(true, recoveredRetiringWinner.targetCommit);
+    }
+    records = await this.readProjectApplyJournals();
+    if (records.length === 0) return null;
     const matching = records.filter(({ journal }) => journal.targetCommit === head);
     if (matching.length === 0) {
       if (records.every(({ journal }) => journal.expectedParent === head)) {
@@ -634,7 +766,8 @@ export class IntegrationManager {
       }
       fail("the project ref moved after the journal was written.");
     }
-    const { journal, path: journalPath } = matching[0];
+    const record = matching[0];
+    const { journal } = record;
     const parent = await this.git(
       this.repositoryRoot,
       ["rev-parse", "--verify", `${journal.targetCommit}^`],
@@ -648,7 +781,8 @@ export class IntegrationManager {
     }
 
     if (await this.projectMatchesRevision(journal.targetCommit)) {
-      await this.clearProjectApplyJournal(journalPath);
+      await this.completeRecoveredProjectApply(record);
+      await this.retireAbandonedProjectApplies(journal.targetCommit);
       return this.descriptor(true, journal.targetCommit);
     }
     if (!await this.projectMatchesRevision(journal.expectedParent)) {
@@ -662,7 +796,8 @@ export class IntegrationManager {
     if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit)) {
       fail(`the exact journaled checkout could not be repaired: ${repaired.stderr.trim()}`);
     }
-    await this.clearProjectApplyJournal(journalPath);
+    await this.completeRecoveredProjectApply(record);
+    await this.retireAbandonedProjectApplies(journal.targetCommit);
     return this.descriptor(true, journal.targetCommit);
   }
 
@@ -738,12 +873,19 @@ export class IntegrationManager {
     transitionId: string
   ): Promise<string> {
     const path = this.projectApplyJournalPath(transitionId);
+    await this.persistProjectApplyJournal(path, journal);
+    return path;
+  }
+
+  private async persistProjectApplyJournal(
+    path: string,
+    journal: ProjectApplyJournal
+  ): Promise<void> {
     const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
     await mkdir(resolve(path, ".."), { recursive: true });
     try {
       await writeFile(temporary, `${JSON.stringify(journal)}\n`, { flag: "wx" });
       await rename(temporary, path);
-      return path;
     } finally {
       await rm(temporary, { force: true });
     }
@@ -751,6 +893,144 @@ export class IntegrationManager {
 
   private async clearProjectApplyJournal(path: string): Promise<void> {
     await rm(path, { force: true });
+  }
+
+  private ownedProjectApplyPaths(journal: OwnedProjectApplyJournal): {
+    patchPath: string;
+    indexPath: string;
+  } {
+    const transitionSegment = safeName(journal.transitionId);
+    const expectedRef = `refs/aiboard/runs/${this.runSegment}/handoff/${transitionSegment}`;
+    const expectedPatch = `${this.runSegment}.${transitionSegment}.patch`;
+    const expectedIndex = `${this.runSegment}.${transitionSegment}.index`;
+    if (
+      journal.transitionRef !== expectedRef ||
+      journal.patchFile !== expectedPatch ||
+      journal.indexFile !== expectedIndex
+    ) {
+      throw new Error("Project apply transition ownership metadata is invalid.");
+    }
+    const directory = resolve(this.stateDirectory, "handoff");
+    const patchPath = resolve(directory, journal.patchFile);
+    const indexPath = resolve(directory, journal.indexFile);
+    if (
+      relative(directory, patchPath).startsWith("..") ||
+      relative(directory, indexPath).startsWith("..")
+    ) {
+      throw new Error("Project apply transition artifacts escaped runner state.");
+    }
+    return { patchPath, indexPath };
+  }
+
+  private async cleanupOwnedProjectApply(
+    record: { path: string; journal: OwnedProjectApplyJournal },
+    expectedOwnershipRevision: string
+  ): Promise<void> {
+    let journal = record.journal;
+    const { patchPath, indexPath } = this.ownedProjectApplyPaths(journal);
+    if (journal.state === "prepared") {
+      const ownership = await this.git(
+        this.repositoryRoot,
+        ["rev-parse", "--verify", journal.transitionRef],
+        true
+      );
+      if (
+        ownership.exitCode !== 0 ||
+        ownership.stdout.trim() !== expectedOwnershipRevision
+      ) {
+        throw new Error("Project apply transition ownership changed unexpectedly.");
+      }
+      journal = {
+        ...journal,
+        state: "retiring",
+        retiringOwnershipRevision: expectedOwnershipRevision,
+      };
+      record.journal = journal;
+      await this.persistProjectApplyJournal(record.path, journal);
+    } else if (journal.retiringOwnershipRevision !== expectedOwnershipRevision) {
+      throw new Error("Project apply transition retirement ownership is ambiguous.");
+    }
+    const ownership = await this.git(
+      this.repositoryRoot,
+      ["rev-parse", "--verify", journal.transitionRef],
+      true
+    );
+    if (ownership.exitCode === 0 && ownership.stdout.trim() !== expectedOwnershipRevision) {
+      throw new Error("Project apply transition ownership changed unexpectedly.");
+    }
+    if (ownership.exitCode === 0) {
+      const released = await this.git(
+        this.repositoryRoot,
+        [
+          "update-ref",
+          "-d",
+          journal.transitionRef,
+          expectedOwnershipRevision,
+        ],
+        true
+      );
+      if (released.exitCode !== 0) {
+        throw new Error("Project apply transition ownership could not be released.");
+      }
+    }
+    await rm(patchPath, { force: true });
+    await rm(indexPath, { force: true });
+    await rm(`${indexPath}.lock`, { force: true });
+    await this.clearProjectApplyJournal(record.path);
+  }
+
+  private async completeRecoveredProjectApply(record: {
+    path: string;
+    journal: ProjectApplyJournal;
+  }): Promise<void> {
+    if (record.journal.version === 1) {
+      await this.clearProjectApplyJournal(record.path);
+      return;
+    }
+    const ownership = await this.git(
+      this.repositoryRoot,
+      ["rev-parse", "--verify", record.journal.transitionRef],
+      true
+    );
+    const revision = ownership.stdout.trim();
+    if (
+      ownership.exitCode !== 0 ||
+      ![record.journal.expectedParent, record.journal.targetCommit].includes(revision)
+    ) {
+      throw new Error("The winning project apply transition ownership is ambiguous.");
+    }
+    await this.cleanupOwnedProjectApply(record as {
+      path: string;
+      journal: OwnedProjectApplyJournal;
+    }, revision);
+  }
+
+  private async retireAbandonedProjectApplies(currentHead: string): Promise<void> {
+    const records = await this.readProjectApplyJournals();
+    for (const record of records) {
+      const journal = record.journal;
+      if (
+        journal.version !== 2 ||
+        journal.targetCommit === currentHead ||
+        journal.expectedParent === currentHead
+      ) continue;
+      this.ownedProjectApplyPaths(journal);
+      const ownership = await this.git(
+        this.repositoryRoot,
+        ["rev-parse", "--verify", journal.transitionRef],
+        true
+      );
+      if (
+        ownership.exitCode !== 0 ||
+        ownership.stdout.trim() !== journal.expectedParent
+      ) {
+        throw new Error("An abandoned project apply transition cannot be retired safely.");
+      }
+      await this.cleanupOwnedProjectApply(record as {
+        path: string;
+        journal: OwnedProjectApplyJournal;
+      }, journal.expectedParent);
+    }
   }
 
   private async assertCheckoutWillNotOverwriteUntracked(

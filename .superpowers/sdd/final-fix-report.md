@@ -86,3 +86,35 @@ All required verification completed successfully after the final source change: 
 - `npm run build`: passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
 - Runner V2 TypeScript, root TypeScript, ESLint, and `git diff --check`: passed.
 - The default concurrent full-suite command was also run twice. Its product assertions passed, but Windows intermittently returned `EPERM` while test cleanup deleted temporary directories (`recovery-smoke` once, then `managed-process` plus `recovery-smoke`). Each affected test passed in isolation, and the complete 302-test serialized run passed without failures.
+
+## Final abandoned-transition and controller-generation follow-up
+
+### RED evidence
+
+- A manager terminated after writing its transition journal but before the branch CAS left a valid pre-CAS journal that recovery treated as permanently blocking.
+- When that abandoned journal existed beside a winning post-ref crash journal, recovery completed the winner but retained the loser, so the next automatic apply remained blocked.
+- A rejected discovery promise from before an explicit Resume wake still reached `onError` and scheduled another loop after the newer generation had started.
+
+### Implementation
+
+- Version 2 automatic-apply journals now record exact transition-owned patch/index paths and a unique ownership ref. Recovery retires only a transition whose ownership marker proves it never advanced, while retaining any ambiguous or potentially winning transition.
+- Cleanup is a durable two-phase operation: `prepared` journals are atomically rewritten to `retiring` with the exact ownership revision before the ownership ref or artifacts are removed. A fresh manager can therefore finish cleanup idempotently even if the process died after releasing the ref.
+- Recovery can complete a winning post-ref transition and safely retire adjacent pre-CAS losers, or retire a standalone pre-CAS abandonment before the next apply. Transition-specific commit trailers keep independently prepared targets distinguishable.
+- The stable attachment controller now checks both cancellation and generation in its rejection path before reporting errors or scheduling work, so a stale pre-Resume rejection is inert.
+
+### Regression coverage
+
+- Abandoned pre-CAS journal beside a crashed winner: recovery completes the winner, retires both journals/refs, and the next apply is idempotent.
+- Standalone abandoned pre-CAS journal: a replacement apply succeeds and leaves no journal/ref residue.
+- Mid-retirement process death after ownership-ref release: recovery finishes artifact/journal cleanup and proceeds with the replacement apply.
+- Stale rejected discovery after Resume: no stale error, no stale apply, and exactly one current-generation loop remains.
+
+### Fresh final verification
+
+- Focused Git recovery/concurrency regressions: **5/5 passed**.
+- Full integration-manager suite: **28/28 passed**.
+- Full Runner V2 suite serialized on Windows: **305/305 passed**.
+- All 11 Runner/client contract scripts passed.
+- Runner V2 TypeScript and root TypeScript checks passed.
+- `npm run build` passed, generated all 14 static pages, and refreshed `public/aiboard-runner-v2.zip`.
+- `npm run lint` and `git diff --check` passed.

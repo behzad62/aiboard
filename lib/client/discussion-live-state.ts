@@ -440,7 +440,7 @@ export function createNativeBuildAttachmentController<
       options.apply({ ...snapshot, runId });
       schedule();
     } catch (error) {
-      if (cancelled) return;
+      if (cancelled || runGeneration !== generation) return;
       options.onError?.(error);
       schedule();
     }

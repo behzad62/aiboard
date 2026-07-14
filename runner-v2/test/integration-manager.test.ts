@@ -279,21 +279,21 @@ test("final handoff applies the integrated diff only after a successful dry run"
       ""
     );
     assert.equal(await gitText(fixture.project, ["status", "--porcelain=v1"]), "");
-    assert.equal(
+    assert.match(
       await gitText(fixture.project, [
         "show",
         "-s",
         "--format=%an <%ae>%n%cn <%ce>%n%B",
         "HEAD",
       ]),
-      [
-        "AIBoard Integrator <integrator@aiboard.local>",
-        "AIBoard Integrator <integrator@aiboard.local>",
-        "Apply completed AIBoard build",
-        "",
-        "AIBoard-Run: run_handoff-apply",
-        `AIBoard-Integration: ${result.integrationRevision}`,
-      ].join("\n")
+      new RegExp(
+        `^AIBoard Integrator <integrator@aiboard\\.local>\\n` +
+        `AIBoard Integrator <integrator@aiboard\\.local>\\n` +
+        `Apply completed AIBoard build\\n\\n` +
+        `AIBoard-Run: run_handoff-apply\\n` +
+        `AIBoard-Integration: ${result.integrationRevision}\\n` +
+        `AIBoard-Transition: [0-9a-f-]{36}$`
+      )
     );
     assert.equal(
       readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(),
@@ -375,7 +375,11 @@ test("the real apply path leaves a recoverable journal when the process dies aft
     await integrateFeature(fixture, "feature.txt", "integrated\n");
     let journalExistedBeforeRef = false;
     const execute: GitRunner = async (options) => {
-      if (options.args[0] === "update-ref" && options.args.length === 4) {
+      if (
+        options.args[0] === "update-ref" &&
+        options.args[1]?.startsWith("refs/heads/") &&
+        options.args.length === 4
+      ) {
         journalExistedBeforeRef = applyJournalPaths(fixture).length === 1;
       }
       return await runGit(options);
@@ -496,7 +500,11 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
     };
     const winnerExecute: GitRunner = async (options) => {
       if (options.args[0] === "commit-tree") return await createCommitTogether(options);
-      if (options.args[0] === "update-ref" && options.args.length === 4) {
+      if (
+        options.args[0] === "update-ref" &&
+        options.args[1]?.startsWith("refs/heads/") &&
+        options.args.length === 4
+      ) {
         if (!await waitForTwoJournals()) {
           releaseWinner();
           releaseLoser();
@@ -510,7 +518,11 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
     };
     const loserExecute: GitRunner = async (options) => {
       if (options.args[0] === "commit-tree") return await createCommitTogether(options);
-      if (options.args[0] === "update-ref" && options.args.length === 4) {
+      if (
+        options.args[0] === "update-ref" &&
+        options.args[1]?.startsWith("refs/heads/") &&
+        options.args.length === 4
+      ) {
         if (!await waitForTwoJournals()) {
           releaseWinner();
           releaseLoser();
@@ -549,6 +561,106 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
     assert.equal((await recovered.applyToProject()).projectRevision, target);
     assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
     assert.equal(applyJournalPaths(fixture).length, 0);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("recovery retires an abandoned pre-CAS transition beside a crashed winner", async () => {
+  const fixture = await createFixture("handoff-abandoned-and-winner");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const abandoned = freshIntegration(fixture, {
+      afterProjectApplyJournalWritten: async () => {
+        throw new Error("abandoned before project ref CAS");
+      },
+    });
+    await abandoned.initialize();
+    await assert.rejects(() => abandoned.applyToProject(), /abandoned before/i);
+    assert.equal(applyJournalPaths(fixture).length, 1);
+
+    const winner = freshIntegration(fixture, {
+      afterProjectRefAdvanced: async () => {
+        throw new Error("winner terminated after project ref CAS");
+      },
+    });
+    await winner.initialize();
+    await assert.rejects(() => winner.applyToProject(), /winner terminated/i);
+    assert.equal(applyJournalPaths(fixture).length, 2);
+    const target = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+    assert.equal(existsSync(join(fixture.project, "feature.txt")), false);
+
+    const recovered = freshIntegration(fixture);
+    await recovered.initialize();
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 0, "winner and abandoned journals retire");
+    assert.equal(await handoffRefCount(fixture), 0, "transition ownership refs retire");
+    assert.equal((await recovered.applyToProject()).projectRevision, target);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a standalone abandoned pre-CAS journal does not block the next apply", async () => {
+  const fixture = await createFixture("handoff-standalone-abandoned");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const abandoned = freshIntegration(fixture, {
+      afterProjectApplyJournalWritten: async () => {
+        throw new Error("standalone pre-CAS death");
+      },
+    });
+    await abandoned.initialize();
+    await assert.rejects(() => abandoned.applyToProject(), /standalone pre-CAS death/i);
+    assert.equal(applyJournalPaths(fixture).length, 1);
+
+    const replacement = freshIntegration(fixture);
+    await replacement.initialize();
+    const applied = await replacement.applyToProject();
+    assert.ok(applied.projectRevision);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 0);
+    assert.equal(await handoffRefCount(fixture), 0);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("retiring an abandoned transition resumes after its ownership ref was released", async () => {
+  const fixture = await createFixture("handoff-retirement-resume");
+  try {
+    await integrateFeature(fixture, "feature.txt", "integrated\n");
+    const abandoned = freshIntegration(fixture, {
+      afterProjectApplyJournalWritten: async () => {
+        throw new Error("die before project ref CAS");
+      },
+    });
+    await abandoned.initialize();
+    await assert.rejects(() => abandoned.applyToProject(), /die before project ref CAS/i);
+
+    const journalPath = applyJournalPaths(fixture)[0]!;
+    const journal = JSON.parse(readFileSync(journalPath, "utf8")) as {
+      state: string;
+      expectedParent: string;
+      transitionRef: string;
+      retiringOwnershipRevision?: string;
+    };
+    journal.state = "retiring";
+    journal.retiringOwnershipRevision = journal.expectedParent;
+    writeFileSync(journalPath, `${JSON.stringify(journal)}\n`);
+    await runGit({
+      cwd: fixture.project,
+      args: ["update-ref", "-d", journal.transitionRef, journal.expectedParent],
+    });
+
+    const replacement = freshIntegration(fixture);
+    await replacement.initialize();
+    const applied = await replacement.applyToProject();
+    assert.ok(applied.projectRevision);
+    assert.equal(readFileSync(join(fixture.project, "feature.txt"), "utf8").trim(), "integrated");
+    assert.equal(applyJournalPaths(fixture).length, 0);
+    assert.equal(await handoffRefCount(fixture), 0);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1165,6 +1277,16 @@ function applyJournalPaths(
   return readdirSync(directory)
     .filter((name) => name.endsWith(".apply.json"))
     .map((name) => join(directory, name));
+}
+
+async function handoffRefCount(
+  fixture: Awaited<ReturnType<typeof createFixture>>
+): Promise<number> {
+  return (await gitText(fixture.project, [
+    "for-each-ref",
+    "--format=%(refname)",
+    `refs/aiboard/runs/${fixture.integration.integrationBranch.split("/")[1]}/handoff/`,
+  ])).split(/\r?\n/).filter(Boolean).length;
 }
 
 function applyJournalPath(fixture: Awaited<ReturnType<typeof createFixture>>): string {

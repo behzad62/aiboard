@@ -668,6 +668,39 @@ assert.deepEqual(
 );
 wakeRaceController.cancel();
 
+const staleErrorQueue: Array<() => Promise<void>> = [];
+let rejectStaleResolution!: (error: Error) => void;
+const staleResolutionFailure = new Promise<string>((_, reject) => {
+  rejectStaleResolution = reject;
+});
+let staleErrorAttempt = 0;
+const staleErrors: string[] = [];
+const staleErrorApplies: string[] = [];
+const staleErrorController = createNativeBuildAttachmentController({
+  initialSavedRunId: "run_error_old",
+  resolveRunId: async () => ++staleErrorAttempt === 1
+    ? await staleResolutionFailure
+    : "run_error_new",
+  load: async (runId) => ({ runState: "paused" as const, marker: runId }),
+  apply: (snapshot) => staleErrorApplies.push(snapshot.marker),
+  onError: (error) => staleErrors.push(String(error)),
+  schedule: (callback) => {
+    staleErrorQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+});
+const staleErrorStart = staleErrorController.start();
+staleErrorController.wake();
+await staleErrorQueue.shift()!();
+rejectStaleResolution(new Error("stale discovery failed"));
+await staleErrorStart;
+assert.deepEqual(staleErrors, [], "a stale pre-Resume rejection is not reported");
+assert.deepEqual(staleErrorApplies, ["run_error_new"]);
+assert.equal(staleErrorQueue.length, 1, "the stale rejection does not schedule a duplicate loop");
+staleErrorController.cancel();
+
 const discussionClientSource = readFileSync(
   new URL("../app/discussion/discussion-client.tsx", import.meta.url),
   "utf8"
