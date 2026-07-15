@@ -4,6 +4,7 @@
  * reference classifier. It also re-checks reachability, no-immediate-win depth
  * predicates, answer-leak resistance, and the partial-credit grading contract.
  */
+import { performance } from "node:perf_hooks";
 import { getLegalColumns } from "../lib/games/connect-four/engine";
 import type {
   ConnectFourBoard,
@@ -173,8 +174,10 @@ for (const scenario of scenarios) {
   const state = scenario.initialState as ConnectFourGameState;
   const board = state.board;
   const keyed = expectedColumns(scenario);
-  const reference = referenceClassify(board, state.turn, 5);
+  const productionStartedAt = performance.now();
   const production = classifyConnectFourColumns(board, state.turn);
+  const productionSolveMs = performance.now() - productionStartedAt;
+  const reference = referenceClassify(board, state.turn, 5);
   const referenceByColumn = [...reference].sort((left, right) => left.column - right.column);
   const productionByColumn = [...production].sort((left, right) => left.column - right.column);
   const bestRank = Math.max(...reference.map((entry) => classRank(entry.moveClass)));
@@ -195,6 +198,11 @@ for (const scenario of scenarios) {
     (term) => title.includes(term) || instruction.includes(term)
   );
 
+  check(
+    `${scenario.id}: first production classification ${Math.round(productionSolveMs)}ms <= 1000ms`,
+    productionSolveMs <= 1_000,
+    { productionSolveMs: Math.round(productionSolveMs) }
+  );
   check(
     `${scenario.id}: reference classifier agrees with production on every legal column`,
     JSON.stringify(referenceByColumn) === JSON.stringify(productionByColumn),

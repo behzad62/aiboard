@@ -8,12 +8,12 @@ import type {
   ConnectFourPlayer,
 } from "@/lib/games/connect-four/types";
 
-// Generated from deterministic miner seeds 1, 2, 3, 4, and 6 (with --want 24
-// for seed 1 and --want 6 for the remaining seeds). Candidates were sorted by
-// disc count and alternated while selecting to cap each keyed column at three,
-// represent both movers at least four times, and retain solver win/draw/loss
-// grading rows. Never hand-edit these boards or keyed columns: re-mine and run
-// scripts/test-gameiq-c4-v2-pack.mts instead.
+// Generated from deterministic miner seeds 1, 3, 4, 8, 9, 10, and 12. The
+// performance replacement pool used --want 24 for seeds 8-10 and --want 12 for
+// seed 12; candidates were selected by solver-derived key only, then sorted by
+// depth and timing while capping each keyed column at three and representing
+// both movers at least four times. Never hand-edit these boards or keyed
+// columns: re-mine and run scripts/test-gameiq-c4-v2-pack.mts instead.
 
 const EMPTY_CLOCK = {
   redElapsedMs: 0,
@@ -98,16 +98,16 @@ function scenario(
 }
 
 export const CONNECT_FOUR_V2_GAMEIQ_SCENARIOS: ConnectFourGameIqScenario[] = [
-  scenario(1, "red", ["RY", "Y", "Y", "RYRYRY", "YRRY", "RRYRY", "R"], 2),
-  scenario(2, "red", ["", "YR", "Y", "RRYRYR", "RYRRYR", "Y", "YRYY"], 0),
-  scenario(3, "yellow", ["RY", "YYR", "RYRY", "YRYRYR", "YR", "RYR", "R"], 5),
-  scenario(4, "yellow", ["YRYR", "R", "YY", "RRY", "RRYRY", "YYRY", "RR"], 2),
-  scenario(5, "yellow", ["RRY", "RYYRRY", "YYR", "RYYRYR", "RR", "", "Y"], 2),
-  scenario(6, "red", ["Y", "RY", "RYRYY", "RRYR", "YR", "YYRYRY", "RR"], 3),
+  scenario(1, "yellow", ["R", "YRYYR", "RYR", "RYRYRR", "RY", "YRYRYY", "YR"], 2),
+  scenario(2, "yellow", ["RYRR", "Y", "RRY", "YYRRYR", "RYRYY", "", "YR"], 0),
+  scenario(3, "yellow", ["YR", "RRYRRY", "RY", "YYRY", "RRYR", "YRYRYR", "Y"], 4),
+  scenario(4, "yellow", ["RY", "RRY", "RYRR", "YYRYR", "RRYRY", "YRRYY", "YYR"], 3),
+  scenario(5, "red", ["", "RRY", "YRYY", "RRYRRR", "YYRYRY", "R", "YY"], 2),
+  scenario(6, "yellow", ["RRY", "RYYRRY", "YYR", "RYYRYR", "RR", "", "Y"], 2),
   scenario(7, "red", ["RRY", "RYY", "YRYRRR", "RYRYYY", "RY", "YRRRY", "Y"], 1),
-  scenario(8, "red", ["YR", "YRR", "RY", "YRYRY", "RYYR", "YY", "RR"], 1),
-  scenario(9, "yellow", ["YR", "RRYRRY", "RY", "YYRY", "RRYR", "YRYRYR", "Y"], 4),
-  scenario(10, "yellow", ["RYR", "YRY", "RYRRYR", "RYRYRY", "", "YRY", ""], 5),
-  scenario(11, "red", ["YR", "R", "RYRYRY", "RYRY", "YRY", "RY", "RYRY"], 0),
-  scenario(12, "red", ["R", "R", "YRYRYY", "RRYY", "YYR", "RY", "RRY"], 3),
+  scenario(8, "red", ["", "RRYY", "YRYRY", "YRYRRY", "", "RYRY", "YRR"], 5),
+  scenario(9, "red", ["Y", "YRR", "RRYRR", "RYRYYY", "R", "YYRYY", "R"], 4),
+  scenario(10, "yellow", ["RYRY", "R", "YYR", "RRY", "RYRYYR", "RY", "YYRR"], 3),
+  scenario(11, "red", ["R", "R", "YRRRYY", "RYY", "RYR", "RY", "YRYYYR"], 4),
+  scenario(12, "yellow", ["YR", "RRYR", "YYRYR", "RRYRY", "YR", "RYY", ""], 5),
 ];
