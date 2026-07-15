@@ -32,12 +32,17 @@ function parseRequiredFen(fen: string) {
 const morphyState = parseRequiredFen(morphyFen);
 
 const morphyMateInTwo = movesForcingMateWithin(morphyState, 3);
+const morphyMove = morphyMateInTwo[0];
 check(
   "Morphy quiet mate-in-2 has exactly Ra6",
-  morphyMateInTwo.length === 1 && moveKey(morphyMateInTwo[0]) === "a1->a6",
+  morphyMateInTwo.length === 1 && morphyMove !== undefined && moveKey(morphyMove) === "a1->a6",
   morphyMateInTwo.map(moveKey)
 );
-check("Morphy Ra6 is quiet", isQuietMove(morphyState, morphyMateInTwo[0]), morphyMateInTwo[0]);
+check(
+  "Morphy Ra6 is quiet",
+  morphyMove !== undefined && isQuietMove(morphyState, morphyMove),
+  morphyMove
+);
 check(
   "Morphy position has no mate-in-1",
   movesForcingMateWithin(morphyState, 1).length === 0,
@@ -62,6 +67,19 @@ check(
   "initial chess position has no forced mate within three plies",
   movesForcingMateWithin(createInitialState(), 3).length === 0,
   movesForcingMateWithin(createInitialState(), 3).map(moveKey)
+);
+
+const seedOneFirstScan = fromFEN(
+  "rnb1kb2/p3nppr/B1pp4/1p2p2p/1P1PP1Qq/P5PN/2P2P1P/RNB1K2R w KQq b6 0 11"
+);
+const broadStartedAt = performance.now();
+const broadMateInTwo = movesForcingMateWithin(seedOneFirstScan, 3);
+const broadElapsedMs = performance.now() - broadStartedAt;
+check("seed-1 first scanned position has no forced mate in two", broadMateInTwo.length === 0, broadMateInTwo);
+check(
+  "seed-1 first scanned position stays within the bounded-search budget",
+  broadElapsedMs < 750,
+  { elapsedMs: Number(broadElapsedMs.toFixed(1)), budgetMs: 750 }
 );
 
 const enPassantState = fromFEN("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");

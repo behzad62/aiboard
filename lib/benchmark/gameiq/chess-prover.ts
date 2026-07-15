@@ -29,18 +29,28 @@ function forcesMateWithin(state: GameState, plies: number): boolean {
   if (plies < 1) return false;
   const mover = sideToMove(state);
   const moves = generateLegalMoves(state, mover);
+
+  // Leaf searches only need to find an immediate mate. Check ordering cannot
+  // prune anything here, so avoid the transition-heavy sort entirely.
+  if (plies < 3) {
+    return moves.some((move) => isMate(makeMove(state, move)));
+  }
+
   // Order checks first: massive pruning for mate search.
-  const ordered = [...moves].sort((a, b) => {
-    const ca = givesCheck(state, a) ? 0 : 1;
-    const cb = givesCheck(state, b) ? 0 : 1;
-    return ca - cb;
-  });
-  for (const move of ordered) {
-    const next = makeMove(state, move);
-    if (isMate(next)) return true;
-    if (plies >= 3 && !isTerminal(next)) {
-      if (everyReplyLoses(next, plies - 2)) return true;
-    }
+  const ordered = moves
+    .map((move) => {
+      const next = makeMove(state, move);
+      const mate = isMate(next);
+      return {
+        next,
+        mate,
+        givesCheck: mate || isInCheck(next, sideToMove(next)),
+      };
+    })
+    .sort((a, b) => Number(b.givesCheck) - Number(a.givesCheck));
+  for (const { next, mate } of ordered) {
+    if (mate) return true;
+    if (!isTerminal(next) && everyReplyLoses(next, plies - 2)) return true;
   }
   return false;
 }
