@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { decideCandidateHit } from "./generate-gameiq-chess-depth.mts";
 
 const script = "scripts/generate-gameiq-chess-depth.mts";
 const args = [
@@ -31,6 +32,17 @@ function runMiner(extraArgs: string[] = []): {
 function fail(message: string): never {
   console.error(`FAIL ${message}`);
   process.exit(1);
+}
+
+const placement = "8/8/8/8/8/8/8/K6k";
+const duplicateHit = decideCandidateHit(`${placement} w - - 0 1`, new Set([placement]));
+if (duplicateHit.emit || !duplicateHit.stopGame) {
+  fail(`duplicate proven candidate is not emitted but stops the game: ${JSON.stringify(duplicateHit)}`);
+}
+
+const novelHit = decideCandidateHit(`${placement} b - - 0 1`, new Set());
+if (!novelHit.emit || !novelHit.stopGame || novelHit.placement !== placement) {
+  fail(`novel proven candidate is emitted and stops the game: ${JSON.stringify(novelHit)}`);
 }
 
 const first = runMiner();

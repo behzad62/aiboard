@@ -109,6 +109,18 @@ function keyFor(move: Move): Move {
     : { from: move.from, to: move.to };
 }
 
+export function decideCandidateHit(
+  fen: string,
+  seenPlacements: ReadonlySet<string>
+): { placement: string; emit: boolean; stopGame: true } {
+  const placement = fen.split(" ")[0];
+  return {
+    placement,
+    emit: !seenPlacements.has(placement),
+    stopGame: true,
+  };
+}
+
 function isTerminal(state: GameState): boolean {
   return state.status !== "playing" && state.status !== "check";
 }
@@ -215,11 +227,12 @@ function main(): void {
       const candidate = scanPosition(state, diagnostics);
       if (!candidate) continue;
 
-      const placement = candidate.fen.split(" ")[0];
-      if (seenPlacements.has(placement)) continue;
-      seenPlacements.add(placement);
-      found.push(candidate);
-      break;
+      const decision = decideCandidateHit(candidate.fen, seenPlacements);
+      if (decision.emit) {
+        seenPlacements.add(decision.placement);
+        found.push(candidate);
+      }
+      if (decision.stopGame) break;
     }
   }
 
@@ -256,4 +269,4 @@ function main(): void {
   }
 }
 
-main();
+if (import.meta.main) main();
