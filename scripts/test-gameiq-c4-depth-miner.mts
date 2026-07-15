@@ -33,6 +33,7 @@ try {
   check("same seed emits byte-identical output", first === second, { first, second });
   const lines = first.trim().split(/\r?\n/);
   check("miner prints its seed summary", lines[0]?.startsWith("seed=1 "), lines[0]);
+  check("seed 1 reaches the depth window and emits a candidate", lines.length >= 2, lines[0]);
   for (const line of lines.slice(1).filter(Boolean)) {
     const candidate = JSON.parse(line) as {
       turn?: string;

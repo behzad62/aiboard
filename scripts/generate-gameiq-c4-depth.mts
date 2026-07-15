@@ -201,7 +201,7 @@ function main(): void {
       if (legalColumns.length === 0) break;
 
       const weights = legalColumns.map((column) => 4 - Math.abs(3 - column) + 1);
-      let pick = random * weights.reduce((sum, weight) => sum + weight, 0);
+      let pick = random() * weights.reduce((sum, weight) => sum + weight, 0);
       let randomColumn = legalColumns[0];
       for (let index = 0; index < legalColumns.length; index++) {
         pick -= weights[index];
