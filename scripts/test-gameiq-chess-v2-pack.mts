@@ -132,6 +132,12 @@ for (const scenario of scenarios) {
   const legalNonKeyed = keyed
     ? legalMoves.find((move) => !sameMove(move, keyed))
     : undefined;
+  const keyedWithNullPromotion = keyed
+    ? { from: keyed.from, to: keyed.to, promotion: null }
+    : undefined;
+  const legalNonKeyedWithNullPromotion = legalNonKeyed
+    ? { from: legalNonKeyed.from, to: legalNonKeyed.to, promotion: null }
+    : undefined;
   const expectedPlacement = scenario.initialState.fen.split(" ")[0];
   const roundTrippedPlacement = toFEN(state).split(" ")[0];
 
@@ -183,6 +189,18 @@ for (const scenario of scenarios) {
     `${scenario.id}: legal non-keyed move grades 0.15`,
     legalNonKeyed !== undefined && actionMatchesExpected(scenario, legalNonKeyed) === 0.15,
     legalNonKeyed
+  );
+  check(
+    `${scenario.id}: model-facing keyed move with null promotion grades 1.0`,
+    keyedWithNullPromotion !== undefined &&
+      actionMatchesExpected(scenario, keyedWithNullPromotion) === 1,
+    { submittedPromotion: null, action: keyedWithNullPromotion }
+  );
+  check(
+    `${scenario.id}: model-facing legal non-keyed move with null promotion grades 0.15`,
+    legalNonKeyedWithNullPromotion !== undefined &&
+      actionMatchesExpected(scenario, legalNonKeyedWithNullPromotion) === 0.15,
+    { submittedPromotion: null, action: legalNonKeyedWithNullPromotion }
   );
   check(
     `${scenario.id}: illegal move grades 0`,

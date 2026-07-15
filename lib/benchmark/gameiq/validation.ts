@@ -92,9 +92,14 @@ const CHESS_PROMOTION_SYNONYMS: Record<string, PieceType> = {
 // string, in place. Runs candidate-side only (at the isStructuredGameIqAction
 // gate that every scoring path shares) so downstream legality
 // (validateChessAction) and equality (actionsEqual) see one canonical value.
-// A no-op for already-canonical values and for unrecognized strings (those
-// stay as-is and correctly fail legality).
+// Null/undefined means "no promotion" in model-facing JSON, so omit the field
+// before engine legality/equality. Already-canonical values stay unchanged;
+// unrecognized strings stay as-is and correctly fail legality.
 function normalizeChessPromotion(action: Record<string, unknown>): void {
+  if (action.promotion == null) {
+    delete action.promotion;
+    return;
+  }
   if (typeof action.promotion !== "string") return;
   const canonical = CHESS_PROMOTION_SYNONYMS[action.promotion.trim().toLowerCase()];
   if (canonical) action.promotion = canonical;
