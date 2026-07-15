@@ -58,6 +58,7 @@ import {
   gameIqStructuredOutputForScenario,
 } from "../lib/benchmark/gameiq/certified-runner";
 import { anthropicProvider } from "../lib/providers/anthropic";
+import { chatgptProvider } from "../lib/providers/chatgpt";
 import { xaiProvider } from "../lib/providers/xai";
 import { nvidiaProvider } from "../lib/providers/nvidia";
 import {
@@ -84,6 +85,7 @@ const GAMEIQ_PROBE_RETRY_DELAYS_MS = [2_000, 8_000];
 
 const SUPPORTED_PROVIDERS: Record<string, AIProvider> = {
   anthropic: anthropicProvider,
+  chatgpt: chatgptProvider,
   xai: xaiProvider,
   nvidia: nvidiaProvider,
 };
