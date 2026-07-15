@@ -293,4 +293,4 @@ if (failures === 0) {
   console.log(`FAIL ${failures} check(s) failed`);
 }
 
-process.exit(failures === 0 ? 0 : 1);
+process.exitCode = failures === 0 ? 0 : 1;
