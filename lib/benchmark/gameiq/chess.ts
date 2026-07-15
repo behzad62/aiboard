@@ -35,8 +35,8 @@ function expected(
 // deep tactical assertions live in the pack test. The weak "legal-tactic"
 // category is deliberately unused by this pack (its validator was removed
 // 2026-07-02).
-const WHITE_MOVE_PROMPT = "It is White to move. Return White's single best move as JSON.";
-const BLACK_MOVE_PROMPT = "It is Black to move. Return Black's single best move as JSON.";
+export const WHITE_MOVE_PROMPT = "It is White to move. Return White's single best move as JSON.";
+export const BLACK_MOVE_PROMPT = "It is Black to move. Return Black's single best move as JSON.";
 
 const CHESS_BASE_SCENARIOS: ChessGameIqScenario[] = [
   // ---- mate-in-one: White ----

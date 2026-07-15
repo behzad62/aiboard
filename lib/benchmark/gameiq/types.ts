@@ -56,6 +56,7 @@ export type GameIqScenarioCategory =
   | "avoid-losing-move"
   | "depth-only-move"
   | "mate-in-one"
+  | "quiet-mate"
   | "legal-tactic"
   | "target-priority"
   | "clue-selection"

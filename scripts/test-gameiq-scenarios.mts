@@ -34,7 +34,9 @@ check(
   "GameIQ exposes shipped game packs",
   [
     "gameiq-v0.1-connect-four",
+    "gameiq-v0.2-connect-four",
     "gameiq-v0.1-chess",
+    "gameiq-v0.2-chess",
     "gameiq-v0.1-battleship",
     "gameiq-v0.1-codenames",
     "gameiq-fireworks-basic-v1",
@@ -48,6 +50,7 @@ const expectedPackCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
   ["gameiq-v0.2-connect-four", 12],
   ["gameiq-v0.1-chess", 15],
+  ["gameiq-v0.2-chess", 12],
   ["gameiq-v0.1-battleship", 11],
   ["gameiq-v0.2-battleship", 15],
   ["gameiq-v0.1-codenames", 10],
@@ -105,7 +108,7 @@ const connectFourCategories = new Set(
 );
 check(
   "Connect Four covers required categories",
-  ["win-in-one", "block-win", "trap-setup", "avoid-losing-move"].every(
+  (["win-in-one", "block-win", "trap-setup", "avoid-losing-move"] as const).every(
     (category) => connectFourCategories.has(category)
   ),
   Array.from(connectFourCategories)
@@ -115,7 +118,7 @@ for (const category of [
   "block-win",
   "trap-setup",
   "avoid-losing-move",
-]) {
+] as const) {
   check(
     `Connect Four has 10 ${category} scenarios`,
     connectFourPack?.scenarios.filter((scenario) => scenario.category === category)

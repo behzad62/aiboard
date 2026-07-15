@@ -35,6 +35,7 @@ import type {
   BattleshipGameIqAction,
   BattleshipGameIqScenario,
   ChessGameIqAction,
+  ChessGameIqScenario,
   CodenamesGameIqAction,
   ConnectFourGameIqAction,
   ConnectFourGameIqScenario,
@@ -402,6 +403,10 @@ export function actionMatchesExpected(
     );
   }
 
+  if (scenario.gameId === "chess" && scenario.category === "quiet-mate") {
+    return gradeChessQuietMate(scenario as ChessGameIqScenario, action);
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {
@@ -409,6 +414,26 @@ export function actionMatchesExpected(
     }
   }
   return Math.min(1, Math.max(0, bestWeight));
+}
+
+// Quiet-mate scenarios: the unique keyed move = 1.0; any other LEGAL move
+// = 0.15 (a lost forced mate is a near-total quality failure, but legality
+// is not the thing under test); illegal moves fall to the legality gate.
+function gradeChessQuietMate(
+  scenario: ChessGameIqScenario,
+  action: GameIqAction
+): number {
+  const candidate = action as ChessGameIqAction;
+  let state;
+  try {
+    state = fromFEN(scenario.initialState.fen);
+  } catch {
+    return 0;
+  }
+  if (!isLegalMove(state, candidate)) return 0;
+  const expected = scenario.expectedActions[0]?.action;
+  if (!expected) return 0;
+  return candidate.from === expected.from && candidate.to === expected.to ? 1 : 0.15;
 }
 
 // Depth scenarios: quality = solver class distance. Keyed column = 1.0;
