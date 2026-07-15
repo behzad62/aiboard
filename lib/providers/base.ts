@@ -117,6 +117,8 @@ export interface StreamChunk {
   toolCall?: NativeToolCall;
   /** Present on `type: "usage"` chunks (and optionally alongside `done`). */
   usage?: StreamUsage;
+  /** Provider-native completion reason, e.g. `end_turn` or `max_tokens`. */
+  finishReason?: string;
 }
 
 export interface AIProvider {

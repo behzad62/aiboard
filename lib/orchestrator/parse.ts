@@ -4,6 +4,40 @@ export interface JudgeResult {
   dissent: string[];
 }
 
+export type JudgeOutputAssessment =
+  | { complete: true }
+  | {
+      complete: false;
+      reason: "empty_response" | "provider_length_limit" | "missing_metadata_footer";
+    };
+
+/**
+ * A judge response is only safe to persist when it finished normally and
+ * emitted the metadata footer required by the judge prompt.
+ */
+export function assessJudgeOutput(
+  raw: string,
+  finishReason?: string
+): JudgeOutputAssessment {
+  const text = (raw ?? "").trim();
+  if (!text) return { complete: false, reason: "empty_response" };
+
+  const normalizedFinishReason = finishReason?.trim().toLowerCase();
+  if (
+    normalizedFinishReason === "max_tokens" ||
+    normalizedFinishReason === "max_output_tokens" ||
+    normalizedFinishReason === "length"
+  ) {
+    return { complete: false, reason: "provider_length_limit" };
+  }
+
+  if (!extractMetaFooter(text)) {
+    return { complete: false, reason: "missing_metadata_footer" };
+  }
+
+  return { complete: true };
+}
+
 const DEFAULT_CONFIDENCE = 7;
 
 /**

@@ -18,9 +18,15 @@ async function captureFoundryBody(input: {
   reasoningEffort: ReasoningEffort;
   maxTokens: number;
   structuredOutput?: boolean;
-}): Promise<{ body: Record<string, unknown>; headers: http.IncomingHttpHeaders }> {
+  stopReason?: string;
+}): Promise<{
+  body: Record<string, unknown>;
+  headers: http.IncomingHttpHeaders;
+  finishReason?: string;
+}> {
   let capturedBody = "";
   let capturedHeaders: http.IncomingHttpHeaders = {};
+  const stopReason = input.stopReason ?? "end_turn";
 
   const server = http.createServer((req, res) => {
     capturedHeaders = req.headers;
@@ -39,7 +45,11 @@ async function captureFoundryBody(input: {
           'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
           'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}',
           'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
-          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+          `event: message_delta\ndata: ${JSON.stringify({
+            type: "message_delta",
+            delta: { stop_reason: stopReason, stop_sequence: null },
+            usage: { output_tokens: 1 },
+          })}`,
           'event: message_stop\ndata: {"type":"message_stop"}',
           "",
         ].join("\n\n")
@@ -56,6 +66,7 @@ async function captureFoundryBody(input: {
 
   try {
     const chunks: string[] = [];
+    let finishReason: string | undefined;
     for await (const chunk of foundryProvider.streamChat({
       apiKey: "test-key",
       baseURL: `http://127.0.0.1:${address.port}`,
@@ -68,12 +79,14 @@ async function captureFoundryBody(input: {
         : {}),
     })) {
       if (chunk.type === "token") chunks.push(chunk.content);
+      if (chunk.type === "done") finishReason = chunk.finishReason;
       if (chunk.type === "error") throw new Error(chunk.error);
     }
     check("fake Foundry stream returns token text", chunks.join("") === "ok", chunks);
     return {
       body: JSON.parse(capturedBody) as Record<string, unknown>,
       headers: capturedHeaders,
+      finishReason,
     };
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -90,6 +103,22 @@ check(
   "Foundry Opus 4.5 high sends output_config effort high",
   JSON.stringify(opusHigh.body.output_config) === JSON.stringify({ effort: "high" }),
   opusHigh
+);
+check(
+  "Foundry Anthropic-compatible stream preserves end_turn finish reason",
+  opusHigh.finishReason === "end_turn",
+  opusHigh.finishReason
+);
+const maxTokenResponse = await captureFoundryBody({
+  model: "claude-fable-5",
+  reasoningEffort: "none",
+  maxTokens: 4096,
+  stopReason: "max_tokens",
+});
+check(
+  "Foundry Anthropic-compatible stream preserves max_tokens finish reason",
+  maxTokenResponse.finishReason === "max_tokens",
+  maxTokenResponse.finishReason
 );
 check(
   "Foundry Opus 4.5 high enables manual thinking with a bounded budget",
@@ -156,4 +185,4 @@ if (failures === 0) {
   console.log(`FAIL ${failures} check(s) failed`);
 }
 
-process.exit(failures === 0 ? 0 : 1);
+process.exitCode = failures === 0 ? 0 : 1;

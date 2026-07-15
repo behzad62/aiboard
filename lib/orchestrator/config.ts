@@ -28,7 +28,7 @@ export const EFFORT_CONFIG: Record<EffortLevel, EffortConfig> = {
   low: {
     maxRounds: 2,
     maxTokens: 2048,
-    judgeMaxTokens: 8192,
+    judgeMaxTokens: 24_576,
     convergenceThreshold: 7,
     skipConvergenceVote: true,
     temperature: 0.6,
@@ -36,7 +36,7 @@ export const EFFORT_CONFIG: Record<EffortLevel, EffortConfig> = {
   medium: {
     maxRounds: 4,
     maxTokens: 4096,
-    judgeMaxTokens: 12288,
+    judgeMaxTokens: 49_152,
     convergenceThreshold: 7.5,
     skipConvergenceVote: false,
     temperature: 0.7,
@@ -44,12 +44,28 @@ export const EFFORT_CONFIG: Record<EffortLevel, EffortConfig> = {
   high: {
     maxRounds: 6,
     maxTokens: 8192,
-    judgeMaxTokens: 16384,
+    judgeMaxTokens: 65_536,
     convergenceThreshold: 8,
     skipConvergenceVote: false,
     temperature: 0.75,
   },
 };
+
+/** Keep the configured judge ceiling within a model's declared hard limit. */
+export function clampJudgeMaxTokens(
+  requested: number,
+  modelMaxOutputTokens?: number
+): number {
+  const safeRequested = Math.max(256, Math.floor(requested));
+  if (
+    modelMaxOutputTokens == null ||
+    !Number.isFinite(modelMaxOutputTokens) ||
+    modelMaxOutputTokens <= 0
+  ) {
+    return safeRequested;
+  }
+  return Math.min(safeRequested, Math.max(256, Math.floor(modelMaxOutputTokens)));
+}
 
 // Build mode emits multi-file code, so it gets extra headroom on top of the
 // effort budget. These are ceilings; verbosity still governs prose length.

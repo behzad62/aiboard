@@ -285,6 +285,7 @@ export async function* streamAnthropicChat(
       let reportedOutputTokens: number | undefined;
       let reportedCachedInputTokens: number | undefined;
       let reportedCacheWriteInputTokens: number | undefined;
+      let finishReason: string | undefined;
       for await (const event of stream) {
         if (event.type === "message_start") {
           const usage = (
@@ -314,6 +315,9 @@ export async function* streamAnthropicChat(
         } else if (event.type === "message_delta") {
           const usage = (
             event as unknown as {
+              delta?: {
+                stop_reason?: string | null;
+              };
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
@@ -322,6 +326,14 @@ export async function* streamAnthropicChat(
               };
             }
           ).usage;
+          const stopReason = (
+            event as unknown as {
+              delta?: { stop_reason?: string | null };
+            }
+          ).delta?.stop_reason;
+          if (typeof stopReason === "string") {
+            finishReason = stopReason;
+          }
           if (typeof usage?.input_tokens === "number") {
             reportedInputTokens = usage.input_tokens;
           }
@@ -405,7 +417,10 @@ export async function* streamAnthropicChat(
           },
         };
       }
-      yield { type: "done" };
+      yield {
+        type: "done",
+        ...(finishReason ? { finishReason } : {}),
+      };
     } catch (err) {
       yield {
         type: "error",

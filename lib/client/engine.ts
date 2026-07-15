@@ -42,8 +42,14 @@ import {
   type StreamUsage,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
-import { EFFORT_CONFIG } from "@/lib/orchestrator/config";
-import { extractJudgeResult } from "@/lib/orchestrator/parse";
+import {
+  clampJudgeMaxTokens,
+  EFFORT_CONFIG,
+} from "@/lib/orchestrator/config";
+import {
+  assessJudgeOutput,
+  extractJudgeResult,
+} from "@/lib/orchestrator/parse";
 import {
   buildConvergencePrompt,
   buildConvergenceVoteResponseFormat,
@@ -86,6 +92,7 @@ type StructuredTraceValidation =
 export interface CollectedStreamResult {
   content: string;
   reportedUsage?: StreamUsage;
+  finishReason?: string;
 }
 
 const runningDiscussions = new Set<string>();
@@ -248,6 +255,7 @@ export async function collectStreamWithUsage(
     let customContent = "";
     let customNativeActionContent = "";
     let customReportedUsage: StreamUsage | undefined;
+    let customFinishReason: string | undefined;
     return withTransientRetry(
       async () => {
         for await (const chunk of streamCustomChat(customModel, {
@@ -292,6 +300,9 @@ export async function collectStreamWithUsage(
               chunk.usage
             );
           }
+          if (chunk.type === "done" && chunk.finishReason) {
+            customFinishReason = chunk.finishReason;
+          }
           if (chunk.type === "error") {
             throw new Error(chunk.error ?? "Stream error");
           }
@@ -299,6 +310,7 @@ export async function collectStreamWithUsage(
         return {
           content: customContent,
           ...(customReportedUsage ? { reportedUsage: customReportedUsage } : {}),
+          ...(customFinishReason ? { finishReason: customFinishReason } : {}),
         };
       },
       () => customContent.length > 0,
@@ -336,6 +348,7 @@ export async function collectStreamWithUsage(
   let content = "";
   let nativeActionContent = "";
   let reportedUsage: StreamUsage | undefined;
+  let finishReason: string | undefined;
   return withTransientRetry(
     async () => {
       for await (const chunk of provider.streamChat({
@@ -377,6 +390,9 @@ export async function collectStreamWithUsage(
         if (chunk.type === "usage") {
           reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
         }
+        if (chunk.type === "done" && chunk.finishReason) {
+          finishReason = chunk.finishReason;
+        }
         if (chunk.type === "error") {
           throw new Error(chunk.error ?? "Stream error");
         }
@@ -384,6 +400,7 @@ export async function collectStreamWithUsage(
       return {
         content,
         ...(reportedUsage ? { reportedUsage } : {}),
+        ...(finishReason ? { finishReason } : {}),
       };
     },
     () => content.length > 0,
@@ -479,7 +496,7 @@ export async function runDiscussion(
     const reasoningEffort = (discussion.reasoningEffort ??
       "default") as ReasoningEffort;
     const roundMaxTokens = config.maxTokens;
-    const finalMaxTokens = config.judgeMaxTokens;
+    const configuredJudgeMaxTokens = config.judgeMaxTokens;
     const skipConvergenceVote = config.skipConvergenceVote;
     const modelNames = Object.fromEntries(
       models.map((m) => [m.modelId, m.displayName])
@@ -532,7 +549,11 @@ export async function runDiscussion(
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
       validateStructuredOutput?: (output: string) => StructuredTraceValidation;
-    }): Promise<{ output: string; usage: ResolvedTokenUsage }> => {
+    }): Promise<{
+      output: string;
+      usage: ResolvedTokenUsage;
+      finishReason?: string;
+    }> => {
       const startedAt = new Date().toISOString();
       const startMs = Date.now();
       const promptText = input.messages
@@ -608,7 +629,7 @@ export async function runDiscussion(
             error: validation?.ok === false ? validation.message : undefined,
           })
         );
-        return { output, usage };
+        return { output, usage, finishReason: collected.finishReason };
       } catch (error) {
         await recordBenchmarkModelCallTrace(
           createGameModelCallTrace({
@@ -974,6 +995,11 @@ export async function runDiscussion(
     const judgeFullId = discussion.judgeModelId ?? modelIds[0];
     const { providerId: judgeProviderId, model: judgeModel } =
       parseModelId(judgeFullId);
+    const judgeContextProfile = resolveClientModelContextProfile(judgeFullId);
+    const finalMaxTokens = clampJudgeMaxTokens(
+      configuredJudgeMaxTokens,
+      judgeContextProfile.maxOutputTokens
+    );
     const finalTranscript = buildTranscriptFromMessages(allMessages, modelNames);
     const judgeMessages: ChatMessage[] = [
       {
@@ -992,7 +1018,7 @@ export async function runDiscussion(
       },
     ];
 
-    const { output: judgeRaw, usage: judgeUsage } = await runTracedModelCall({
+    const initialJudge = await runTracedModelCall({
       modelId: judgeFullId,
       providerId: judgeProviderId,
       rawModel: judgeModel,
@@ -1011,8 +1037,60 @@ export async function runDiscussion(
       providerId: judgeProviderId,
       round: config.maxRounds + 1,
       label: "Judge synthesis",
-      usage: judgeUsage,
+      usage: initialJudge.usage,
     });
+
+    let judgeRaw = initialJudge.output;
+    let judgeFinishReason = initialJudge.finishReason;
+    let judgeAssessment = assessJudgeOutput(judgeRaw, judgeFinishReason);
+
+    if (!judgeAssessment.complete) {
+      emit({
+        type: "diagnostic",
+        phase: "judge_retrying",
+        message: `Judge response was incomplete (${judgeAssessment.reason}); retrying with a concise completion instruction`,
+      });
+
+      const retryJudgeMessages: ChatMessage[] = judgeMessages.map(
+        (message, index) =>
+          index === judgeMessages.length - 1
+            ? {
+                ...message,
+                content: `${message.content}\n\nIMPORTANT: Your previous generation was incomplete. Regenerate the final answer concisely, finish every section, and append the exact metadata footer before stopping.`,
+              }
+            : message
+      );
+      const retryJudge = await runTracedModelCall({
+        modelId: judgeFullId,
+        providerId: judgeProviderId,
+        rawModel: judgeModel,
+        label: "Judge synthesis retry",
+        messages: retryJudgeMessages,
+        maxTokens: finalMaxTokens,
+        temperature: 0.3,
+        reasoningEffort,
+        attachments: allAttachments,
+        signal,
+      });
+      emitTokenUsage({
+        messageId: uuidv4(),
+        modelId: judgeFullId,
+        modelName: modelNames[judgeFullId] ?? judgeFullId,
+        providerId: judgeProviderId,
+        round: config.maxRounds + 1,
+        label: "Judge synthesis retry",
+        usage: retryJudge.usage,
+      });
+      judgeRaw = retryJudge.output;
+      judgeFinishReason = retryJudge.finishReason;
+      judgeAssessment = assessJudgeOutput(judgeRaw, judgeFinishReason);
+    }
+
+    if (!judgeAssessment.complete) {
+      throw new Error(
+        `Judge response remained incomplete after retry (${judgeAssessment.reason})`
+      );
+    }
 
     const { answer, confidence, dissent } = extractJudgeResult(judgeRaw);
 

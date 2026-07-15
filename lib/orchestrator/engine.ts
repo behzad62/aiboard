@@ -59,6 +59,7 @@ export type OrchestratorEvent =
         | "model_failed"
         | "convergence_voting"
         | "judging"
+        | "judge_retrying"
         | "finished";
       message: string;
       modelId?: string;
