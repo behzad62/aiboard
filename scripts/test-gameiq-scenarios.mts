@@ -46,6 +46,7 @@ check(
 
 const expectedPackCounts = new Map([
   ["gameiq-v0.1-connect-four", 40],
+  ["gameiq-v0.2-connect-four", 12],
   ["gameiq-v0.1-chess", 15],
   ["gameiq-v0.1-battleship", 11],
   ["gameiq-v0.2-battleship", 15],

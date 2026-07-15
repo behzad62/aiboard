@@ -3,6 +3,7 @@ import { BATTLESHIP_V2_GAMEIQ_SCENARIOS } from "./battleship-v2";
 import { CHESS_GAMEIQ_SCENARIOS } from "./chess";
 import { CODENAMES_GAMEIQ_SCENARIOS } from "./codenames";
 import { CONNECT_FOUR_GAMEIQ_SCENARIOS } from "./connect-four";
+import { CONNECT_FOUR_V2_GAMEIQ_SCENARIOS } from "./connect-four-v2";
 import {
   FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
   FIREWORKS_GAMEIQ_HARD_SCENARIOS,
@@ -53,6 +54,14 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     version: "0.2.1",
     certificationTier: "first-class",
     scenarios: CONNECT_FOUR_GAMEIQ_SCENARIOS,
+  },
+  {
+    id: "gameiq-v0.2-connect-four",
+    gameId: "connect-four",
+    label: "Certified GameIQ v2: Connect Four Depth",
+    version: "0.1.0",
+    certificationTier: "first-class",
+    scenarios: CONNECT_FOUR_V2_GAMEIQ_SCENARIOS,
   },
   {
     id: "gameiq-v0.1-chess",

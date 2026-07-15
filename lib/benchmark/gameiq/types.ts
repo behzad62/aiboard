@@ -54,6 +54,7 @@ export type GameIqScenarioCategory =
   | "block-win"
   | "trap-setup"
   | "avoid-losing-move"
+  | "depth-only-move"
   | "mate-in-one"
   | "legal-tactic"
   | "target-priority"

@@ -20,6 +20,7 @@ import type {
   BattleshipGameState,
 } from "@/lib/games/battleship/types";
 import { battleshipCellRatios } from "./battleship-oracle";
+import { classifyConnectFourColumns } from "./connect-four-solver";
 import {
   submitCodenamesGuess,
   validateCodenamesClue,
@@ -36,6 +37,7 @@ import type {
   ChessGameIqAction,
   CodenamesGameIqAction,
   ConnectFourGameIqAction,
+  ConnectFourGameIqScenario,
   FireworksGameIqScenario,
   GameIqAction,
   GameIqScenario,
@@ -393,6 +395,13 @@ export function actionMatchesExpected(
     return gradeBattleshipAction(scenario as BattleshipGameIqScenario, action);
   }
 
+  if (scenario.gameId === "connect-four" && scenario.category === "depth-only-move") {
+    return gradeConnectFourDepthAction(
+      scenario as ConnectFourGameIqScenario,
+      action
+    );
+  }
+
   let bestWeight = 0;
   for (const expectedAction of scenario.expectedActions) {
     if (actionsEqual(scenario.gameId, action, expectedAction.action)) {
@@ -400,6 +409,32 @@ export function actionMatchesExpected(
     }
   }
   return Math.min(1, Math.max(0, bestWeight));
+}
+
+// Depth scenarios: quality = solver class distance. Keyed column = 1.0;
+// a legal column exactly one class-step worse = 0.3; two steps = 0.0.
+// Illegality stays a gate upstream (statusFromScore), mirroring battleship.
+function gradeConnectFourDepthAction(
+  scenario: ConnectFourGameIqScenario,
+  action: GameIqAction
+): number {
+  const column = Number((action as { column?: unknown }).column);
+  if (!Number.isInteger(column)) return 0;
+  const board = scenario.initialState.board;
+  const turn = scenario.initialState.turn;
+  let classes;
+  try {
+    classes = classifyConnectFourColumns(board, turn);
+  } catch {
+    return 0;
+  }
+  const rank = (moveClass: string) =>
+    moveClass === "win" ? 2 : moveClass === "draw" ? 1 : 0;
+  const bestRank = Math.max(...classes.map((entry) => rank(entry.moveClass)));
+  const chosen = classes.find((entry) => entry.column === column);
+  if (!chosen) return 0;
+  const gap = bestRank - rank(chosen.moveClass);
+  return gap === 0 ? 1 : gap === 1 ? 0.3 : 0;
 }
 
 // Sub-bar partial-credit grades for fireworks actions. Both values must stay
