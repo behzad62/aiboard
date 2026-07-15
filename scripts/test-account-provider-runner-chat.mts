@@ -1,5 +1,6 @@
 /** Account-provider runner ChatGPT chat regression (run: npx tsx scripts/test-account-provider-runner-chat.mts) */
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -49,6 +50,11 @@ const runnerPort = await getFreePort();
 const fakeBackendPort = await getFreePort();
 const authFile = path.join(tmp, "auth.json");
 const capturedRequests: CapturedRequest[] = [];
+const longSessionId = `worker:${"native-run-".repeat(7)}task:1`;
+const expectedSessionId = `aiboard-${createHash("sha256")
+  .update(longSessionId)
+  .digest("hex")
+  .slice(0, 56)}`;
 
 fs.writeFileSync(
   authFile,
@@ -75,6 +81,17 @@ const fakeBackend = http.createServer(async (req, res) => {
     headers: req.headers,
     body,
   });
+  if (String(req.headers["session-id"] ?? "").length > 64) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: {
+          message: "Invalid 'prompt_cache_key': string too long.",
+        },
+      })
+    );
+    return;
+  }
   if (Object.prototype.hasOwnProperty.call(body, "max_output_tokens")) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(
@@ -182,6 +199,7 @@ try {
     headers,
     body: JSON.stringify({
       model: "gpt-5.5",
+      sessionId: longSessionId,
       maxTokens: 1234,
       reasoningEffort: "high",
       messages: [
@@ -239,6 +257,11 @@ try {
   );
   check("runner sends account id header", captured?.headers["chatgpt-account-id"] === "fake-account-id", captured?.headers);
   check("runner sends bearer token header", captured?.headers.authorization === "Bearer fake-access-token", captured?.headers);
+  check(
+    "runner bounds long ChatGPT session ids deterministically",
+    captured?.headers["session-id"] === expectedSessionId,
+    captured?.headers["session-id"]
+  );
 
   const reasoningCases = [
     { input: "default", expected: undefined },
