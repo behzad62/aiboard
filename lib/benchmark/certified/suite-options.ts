@@ -21,16 +21,19 @@ export function isGameIqBundleSuite(suiteId: string): boolean {
   return suiteId === GAMEIQ_ALL_PACKS_SUITE_ID;
 }
 
-// battleship: 11/11 saturated across all four 2026-07 reference models (see
-// lib/benchmark/gameiq/saturation.ts) — zero discrimination; excluded from
-// the default bundle. Standalone battleship runs remain available until the
-// pack is re-authored (Phase D charter).
-const GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS = new Set(["gameiq-v0.1-battleship"]);
+// v0.1 Battleship is 11/11 saturated across all four 2026-07 reference models
+// (see lib/benchmark/gameiq/saturation.ts) — zero discrimination. The v0.1
+// Chess and Connect Four packs remain standalone-selectable while their v0.2
+// depth packs supply the bundle's current versions.
+const GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS = new Set([
+  "gameiq-v0.1-battleship",
+  "gameiq-v0.1-chess",
+  "gameiq-v0.1-connect-four",
+]);
 
 // The concrete GameIQ pack ids a suite selection expands to: the bundle
-// expands to every pack except the excluded (saturated) ones above; any
-// single-pack selection — including battleship — stays itself, so battleship
-// is still selectable as a standalone pack.
+// expands to every pack except the excluded v0.1 ones above; any single-pack
+// selection — including each excluded v0.1 pack — stays itself.
 export function gameIqBundlePackIds(suiteId: string): string[] {
   if (isGameIqBundleSuite(suiteId)) {
     return listGameIqScenarioPacks()

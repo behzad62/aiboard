@@ -7,13 +7,13 @@
  * budget. Uses the same fake/oracle model path as
  * scripts/test-certified-e2e-gameiq.mts.
  *
- * The bundle excludes only the saturated v1 Battleship pack (11/11 across
- * all four 2026-07 reference models — see lib/benchmark/gameiq/saturation.ts);
- * v2 Battleship (gameiq-v0.2-battleship, oracle-graded, unsaturated) rejoined
- * the bundle when it shipped, so the default bundle is 7 of the 8 catalog
- * packs. v1 Battleship stays in the full pack catalog and remains selectable
- * as its own standalone suite option; this file checks both halves of that
- * split. Pack counts below are computed from the live catalog/bundle
+ * The bundle excludes the saturated v1 Battleship pack (11/11 across all four
+ * 2026-07 reference models — see lib/benchmark/gameiq/saturation.ts), plus
+ * the standalone-selectable v1 Chess and Connect Four packs. Their v2 depth
+ * packs join the bundle, keeping the default at 7 of the 10 catalog packs.
+ * All excluded packs remain in the full pack catalog as standalone suite
+ * options; this file checks both halves of that split. Pack counts below are
+ * computed from the live catalog/bundle
  * expansion, not hardcoded, so this file does not need updating every time a
  * pack is added or removed -- only this comment's prose does.
  */
@@ -54,18 +54,20 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-// The full pack CATALOG still includes every pack (battleship included) —
-// standalone single-pack selection must keep working for all of them. The
-// BUNDLE ("All GameIQ packs") excludes battleship: it is 11/11 saturated
-// across all four 2026-07 reference models (see
-// lib/benchmark/gameiq/saturation.ts), so it carries zero discrimination
-// signal in an aggregate run. Battleship stays selectable as its own
-// standalone suite option — only the bundle expansion drops it.
+// The full pack CATALOG still includes every pack — standalone single-pack
+// selection must keep working for all of them. The BUNDLE ("All GameIQ packs")
+// excludes the three v0.1 packs that have been superseded in the depth bundle:
+// saturated Battleship and standalone-selectable Chess/Connect Four. Their v2
+// packs remain in the aggregate run.
 const packs = listGameIqScenarioPacks();
 const packIds = packs.map((pack) => pack.id);
-const GAMEIQ_BUNDLE_EXCLUDED_PACK_ID = "gameiq-v0.1-battleship";
+const GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS = new Set([
+  "gameiq-v0.1-battleship",
+  "gameiq-v0.1-chess",
+  "gameiq-v0.1-connect-four",
+]);
 const bundlePacks = packs.filter(
-  (pack) => pack.id !== GAMEIQ_BUNDLE_EXCLUDED_PACK_ID
+  (pack) => !GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS.has(pack.id)
 );
 const bundlePackIds = bundlePacks.map((pack) => pack.id);
 const totalScenarios = bundlePacks.reduce(
@@ -74,8 +76,8 @@ const totalScenarios = bundlePacks.reduce(
 );
 
 check(
-  "battleship stays in the full pack catalog (only excluded from the bundle)",
-  packIds.includes(GAMEIQ_BUNDLE_EXCLUDED_PACK_ID),
+  "all excluded v0.1 packs stay in the full catalog",
+  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every((packId) => packIds.includes(packId)),
   packIds
 );
 
@@ -88,7 +90,7 @@ check(
   suiteOptions[0]
 );
 check(
-  "bundle label states what it actually runs (7 packs, v1 battleship excluded)",
+  "bundle label states what it actually runs (7 packs)",
   suiteOptions[0]?.label ===
     `All GameIQ packs (${bundlePackIds.length} packs - one run per pack)`,
   suiteOptions[0]?.label
@@ -101,11 +103,11 @@ check(
   suiteOptions.map((option) => option.id)
 );
 check(
-  "bundle suite expands to every GameIQ pack id EXCEPT battleship",
+  "bundle suite expands to every GameIQ pack id EXCEPT the three v0.1 exclusions",
   gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).join(",") ===
     bundlePackIds.join(",") &&
-    !gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).includes(
-      GAMEIQ_BUNDLE_EXCLUDED_PACK_ID
+    [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
+      (packId) => !gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).includes(packId)
     ),
   gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID)
 );
@@ -115,10 +117,11 @@ check(
   gameIqBundlePackIds(bundlePackIds[0]!)
 );
 check(
-  "battleship remains standalone-selectable: expands to itself, not swallowed by the bundle exclusion",
-  gameIqBundlePackIds(GAMEIQ_BUNDLE_EXCLUDED_PACK_ID).join(",") ===
-    GAMEIQ_BUNDLE_EXCLUDED_PACK_ID,
-  gameIqBundlePackIds(GAMEIQ_BUNDLE_EXCLUDED_PACK_ID)
+  "all excluded v0.1 packs remain standalone-selectable",
+  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
+    (packId) => gameIqBundlePackIds(packId).join(",") === packId
+  ),
+  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].map((packId) => gameIqBundlePackIds(packId))
 );
 
 // --- Build one case per pack (mirrors the panel's caseRecords). --------------
@@ -148,8 +151,8 @@ function caseForPack(packId: string, label: string): BenchmarkCaseV2 {
   };
 }
 // Mirrors CertifiedRunPanel: caseRecords are built from gameIqBundlePackIds
-// (the bundle's expansion), not from the raw pack catalog — so battleship
-// (excluded from the bundle) gets no case here, matching real behavior.
+// (the bundle's expansion), not from the raw pack catalog — so excluded v0.1
+// packs get no case here, matching real behavior.
 const caseRecords = bundlePacks.map((pack) => caseForPack(pack.id, pack.label));
 
 function sumBudgetField(
@@ -210,7 +213,7 @@ const passingCertification = {
 
 // Flat oracle queue in run order (packs run sequentially; each pack iterates its
 // own scenarios in order), so each model call pops the matching expected action.
-// Scoped to bundlePacks (battleship excluded), matching what the bundle
+// Scoped to bundlePacks (the three v0.1 packs excluded), matching what the bundle
 // actually runs.
 const oracleQueue = bundlePacks.flatMap((pack) =>
   pack.scenarios.map((scenario) => scenario.expectedActions[0]?.action)
@@ -272,7 +275,7 @@ check(
   { callIndex, totalScenarios }
 );
 check(
-  "bundle produces one attempt per pack (v1 battleship excluded, 7 packs)",
+  "bundle produces one attempt per pack (three v0.1 packs excluded, 7 packs)",
   attempts.length === bundlePacks.length &&
     summary.attemptCount === bundlePacks.length,
   { attemptCount: attempts.length, packs: bundlePacks.length }
@@ -283,14 +286,14 @@ check(
   attempts.map((attempt) => attempt.caseId)
 );
 check(
-  "bundle attempts cover every bundle pack id (and never include battleship)",
+  "bundle attempts cover every bundle pack id (and never include excluded v0.1 packs)",
   new Set(attempts.map((attempt) => attempt.caseId)).size ===
     bundlePacks.length &&
     bundlePackIds.every((packId) =>
       attempts.some((attempt) => attempt.caseId === packId)
     ) &&
-    !attempts.some(
-      (attempt) => attempt.caseId === GAMEIQ_BUNDLE_EXCLUDED_PACK_ID
+    [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
+      (packId) => !attempts.some((attempt) => attempt.caseId === packId)
     ),
   { caseIds: attempts.map((attempt) => attempt.caseId), bundlePackIds }
 );
