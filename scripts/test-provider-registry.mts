@@ -3,6 +3,7 @@ import { getAllProviders } from "../lib/client/providers";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { PROVIDER_IDS } from "../lib/providers/constants";
 import {
+  getProviderDefinition,
   providerSupportsHostedBuildToolsFeature,
   providerSupportsMaxTokensFeature,
   providerSupportsNativeBuildToolsFeature,
@@ -92,6 +93,11 @@ check(
   null
 );
 check(
+  "GitHub Copilot Gemini 3.5 Flash supports reasoning effort",
+  providerSupportsReasoning("github-copilot:gemini-3.5-flash"),
+  null
+);
+check(
   "GitHub Copilot Claude chat-completions models do not claim reasoning effort",
   !providerSupportsReasoning("github-copilot:claude-sonnet-4.5"),
   null
@@ -128,10 +134,18 @@ check(
   null
 );
 check(
-  "GitHub Copilot account runner does not claim provider-native web search",
-  !shouldEnableProviderNativeWebSearch({
+  "GitHub Copilot GPT uses the SDK-backed provider-native web search",
+  shouldEnableProviderNativeWebSearch({
     providerId: "github-copilot",
     model: "gpt-5.4",
+  }),
+  null
+);
+check(
+  "GitHub Copilot Gemini uses the SDK-backed provider-native web search",
+  shouldEnableProviderNativeWebSearch({
+    providerId: "github-copilot",
+    model: "gemini-3.5-flash",
   }),
   null
 );
@@ -140,10 +154,31 @@ check(
   !providerSupportsMaxTokensFeature("chatgpt", "gpt-5.4"),
   null
 );
+const chatGptDefinition = getProviderDefinition("chatgpt");
+check(
+  "ChatGPT downloads the standalone account runner script",
+  chatGptDefinition?.accountRunner?.downloadHref === "/account-provider-runner.mjs" &&
+    chatGptDefinition.accountRunner.command === "node account-provider-runner.mjs",
+  chatGptDefinition?.accountRunner
+);
 check(
   "GitHub Copilot account runner keeps max-token request support",
   providerSupportsMaxTokensFeature("github-copilot", "gpt-5.4"),
   null
+);
+const copilotDefinition = getProviderDefinition("github-copilot");
+check(
+  "GitHub Copilot downloads the SDK runner package",
+  copilotDefinition?.accountRunner?.downloadHref === "/aiboard-account-provider-runner.zip" &&
+    copilotDefinition.accountRunner.command === "npm install; npm start",
+  copilotDefinition?.accountRunner
+);
+const nvidiaDefinition = getProviderDefinition("nvidia");
+check(
+  "NVIDIA exposes a standalone account runner download",
+  nvidiaDefinition?.runnerDownload?.downloadHref === "/account-provider-runner.mjs" &&
+    nvidiaDefinition.runnerDownload.command === "node account-provider-runner.mjs",
+  nvidiaDefinition?.runnerDownload
 );
 check(
   "NVIDIA NIM provider supports max-token request caps",

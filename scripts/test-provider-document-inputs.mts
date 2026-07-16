@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { buildOpenAIMessages } from "../lib/providers/openai-compat";
@@ -261,11 +261,23 @@ async function testAccountRunnerRawDocumentInputFile(): Promise<void> {
       upstreamBody
     );
   } finally {
-    child?.kill();
+    const upstreamClosed = once(upstream, "close");
+    const childClosed = child ? once(child, "close") : Promise.resolve();
+    if (child && child.exitCode === null) {
+      if (process.platform === "win32" && child.pid) {
+        spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        child.kill("SIGTERM");
+      }
+    }
+    upstream.closeAllConnections?.();
     upstream.close();
     await Promise.allSettled([
-      once(upstream, "close"),
-      child ? once(child, "exit") : Promise.resolve(),
+      upstreamClosed,
+      childClosed,
     ]);
     await rm(tmp, { recursive: true, force: true });
   }

@@ -87,6 +87,7 @@ export class AccountRunnerModel implements AgentModel {
       reasoningEffort: this.options.reasoningEffort,
       attachments,
       sessionId: request.sessionId,
+      runtimeMode: "build",
       stream: true,
     });
     const response = await this.fetchImpl(

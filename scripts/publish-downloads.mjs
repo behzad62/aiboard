@@ -11,8 +11,10 @@ const root = path.resolve(scripts, "..");
 const publicDirectory = path.join(root, "public");
 const runnerDirectory = path.join(root, "runner-v2");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const accountRunnerSource = path.join(root, "lib", "account-provider-runner.mjs");
+const accountSdkSource = path.join(root, "lib", "account-provider-copilot-sdk.mjs");
 const downloads = [
-  [path.join(root, "lib", "account-provider-runner.mjs"), path.join(publicDirectory, "account-provider-runner.mjs")],
+  [accountRunnerSource, path.join(publicDirectory, "account-provider-runner.mjs")],
   [path.join(scripts, "bench-runner.mjs"), path.join(publicDirectory, "bench-runner.mjs")],
 ];
 
@@ -127,6 +129,56 @@ Runner V2 prints its localhost URL and control token. Paste both into AI Board B
   console.log(`Published ${path.relative(root, destination)}.`);
 }
 
+async function publishAccountRunner() {
+  if (!fs.existsSync(accountRunnerSource) || !fs.existsSync(accountSdkSource)) return;
+  const sdkVersion = pinnedVersion(rootPackage.dependencies?.["@github/copilot-sdk"], "@github/copilot-sdk");
+  const zip = new JSZip();
+  zip.file("account-provider-runner.mjs", archiveFileContent(accountRunnerSource), { date: new Date(0), createFolders: false });
+  zip.file("account-provider-copilot-sdk.mjs", archiveFileContent(accountSdkSource), { date: new Date(0), createFolders: false });
+  zip.file("package.json", `${JSON.stringify({
+    name: "aiboard-account-provider-runner",
+    version: rootPackage.version,
+    private: true,
+    license: rootPackage.license,
+    type: "module",
+    engines: { node: ">=20.19.0" },
+    scripts: { start: "node account-provider-runner.mjs" },
+    dependencies: { "@github/copilot-sdk": sdkVersion },
+  }, null, 2)}\n`, { date: new Date(0), createFolders: false });
+  zip.file("README.md", `# AI Board account-provider runner
+
+This package runs the local account bridge for ChatGPT Plus/Pro, GitHub Copilot,
+and NVIDIA NIM. The GitHub Copilot discussion transport uses the official
+Copilot SDK and its built-in web_search/web_fetch tools.
+
+## Install and start
+
+1. Extract this ZIP to a directory.
+2. Open a terminal in that directory.
+3. Install the runner dependencies:
+
+   \`\`\`powershell
+   npm install
+   \`\`\`
+
+4. Start the runner:
+
+   \`\`\`powershell
+   npm start
+   \`\`\`
+
+The runner prints the local URL and token to paste into AI Board Settings.
+`, { date: new Date(0), createFolders: false });
+  zip.file("LICENSE", normalizedTextFile(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
+  const destination = path.join(publicDirectory, "aiboard-account-provider-runner.zip");
+  fs.writeFileSync(destination, await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+  }));
+  console.log(`Published ${path.relative(root, destination)}.`);
+}
+
 fs.mkdirSync(publicDirectory, { recursive: true });
 for (const retired of ["runner.mjs", "runner-manifest.json"]) {
   fs.rmSync(path.join(publicDirectory, retired), { force: true });
@@ -136,4 +188,5 @@ for (const [source, destination] of downloads) {
   fs.copyFileSync(source, destination);
   console.log(`Published ${path.relative(root, destination)}.`);
 }
+await publishAccountRunner();
 await publishNativeRunner();
