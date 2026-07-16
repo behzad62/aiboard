@@ -1,6 +1,7 @@
 /* Bounded chess mate-prover fixtures for the GameIQ depth track. */
 import { createInitialState, fromFEN } from "../lib/games/chess/engine";
 import {
+  everyReplyLoses,
   givesCheck,
   isCaptureMove,
   isQuietMove,
@@ -89,6 +90,17 @@ check("en-passant capture is classified as a capture", isCaptureMove(enPassantSt
 const checkingState = fromFEN("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1");
 const checkingMove = { from: "e2", to: "e7" };
 check("checking move is recognized as check", givesCheck(checkingState, checkingMove));
+
+// Direct zero-reply coverage: a stalemated opponent has no legal replies, and
+// that must NEVER count as "every reply loses" (stalemate is a draw, not a
+// mate). Unreachable via the public API today (call sites gate on terminal
+// status), pinned here against future engine drift.
+const stalematedState = fromFEN("k7/2Q5/8/8/8/8/8/K7 b - - 0 1");
+check(
+  "stalemated opponent (zero replies) is never 'every reply loses'",
+  everyReplyLoses(stalematedState, 3) === false,
+  { fen: "k7/2Q5/8/8/8/8/8/K7 b - - 0 1" }
+);
 
 if (failures === 0) {
   console.log("PASS");

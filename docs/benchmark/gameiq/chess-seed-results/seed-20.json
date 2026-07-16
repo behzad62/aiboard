@@ -1,0 +1,9 @@
+{
+  "seed": 20,
+  "code": 0,
+  "signal": null,
+  "startedAt": "2026-07-15T13:09:48.583Z",
+  "finishedAt": "2026-07-15T15:09:52.085Z",
+  "stdout": "seed=20 games=331 scanned=20000 candidates=1\n{\"fen\":\"r5nr/q1p1b1pp/ppPk1p2/nP1pp2Q/P2P3P/4NP1R/R3P1P1/2B1KBN1 w - - 5 29\",\"key\":{\"from\":\"h5\",\"to\":\"f7\"},\"legalMoveCount\":34,\"forcingBaitCount\":8}\n",
+  "stderr": ""
+}

@@ -1,0 +1,9 @@
+{
+  "seed": 15,
+  "code": 0,
+  "signal": null,
+  "startedAt": "2026-07-15T13:09:48.555Z",
+  "finishedAt": "2026-07-15T15:08:33.358Z",
+  "stdout": "seed=15 games=332 scanned=20000 candidates=2\n{\"fen\":\"4k3/1b3p2/Q3pP1r/Pp5N/2p3p1/Pn3PPp/2RP2NP/2B1KB1R w - - 3 37\",\"key\":{\"from\":\"a6\",\"to\":\"d6\"},\"legalMoveCount\":30,\"forcingBaitCount\":9}\n{\"fen\":\"r1q2bnr/1p2pN2/2n1bppp/p1pp4/3k2P1/3B1P1N/PPPP3P/R1BQK2R w K - 6 16\",\"key\":{\"from\":\"d1\",\"to\":\"e2\"},\"legalMoveCount\":34,\"forcingBaitCount\":4}\n",
+  "stderr": ""
+}

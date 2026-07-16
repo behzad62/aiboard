@@ -17,7 +17,9 @@ function expected(
 //
 // Provenance and immutable-evidence rule:
 // - Source records are the JSON lines captured in
-//   .superpowers/sdd/chess-seed-results/seed-1.json through seed-30.json.
+//   docs/benchmark/gameiq/chess-seed-results/seed-1.json through seed-30.json
+//   (committed; regenerate any seed with scripts/generate-gameiq-chess-depth.mts
+//   --seed <n> and diff — miner output is byte-deterministic).
 // - The 20 exact candidates were de-duplicated by FEN + keyed move. Selection
 //   then maximized represented keyed piece types, minimized the largest
 //   piece-type bucket, balanced side-to-move, maximized forcing-bait count,

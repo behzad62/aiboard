@@ -1,0 +1,9 @@
+{
+  "seed": 16,
+  "code": 0,
+  "signal": null,
+  "startedAt": "2026-07-15T13:09:48.560Z",
+  "finishedAt": "2026-07-15T15:08:27.260Z",
+  "stdout": "seed=16 games=330 scanned=20000 candidates=0\n",
+  "stderr": ""
+}

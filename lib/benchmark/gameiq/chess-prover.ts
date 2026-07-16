@@ -56,8 +56,11 @@ function forcesMateWithin(state: GameState, plies: number): boolean {
 }
 
 // Opponent to move: true iff EVERY legal reply leaves a position where we
-// still force mate within `plies`.
-function everyReplyLoses(state: GameState, plies: number): boolean {
+// still force mate within `plies`. Exported for direct fixture coverage: both
+// internal call sites gate on !isTerminal(next), so the zero-reply branch is
+// unreachable through the public API — the fixture pins its behavior anyway in
+// case a future engine change lets status drift from move generation.
+export function everyReplyLoses(state: GameState, plies: number): boolean {
   const opponent = sideToMove(state);
   const replies = generateLegalMoves(state, opponent);
   if (replies.length === 0) return false; // stalemate (mate was checked upstream)
