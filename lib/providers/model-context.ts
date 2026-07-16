@@ -276,6 +276,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     promptCaching: false,
     recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
+  "github-copilot:gemini-3.5-flash": {
+    contextWindowTokens: 1_048_576,
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: false,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
   "github-copilot:claude-sonnet-4.5": {
     contextWindowTokens: 200_000,
     maxOutputTokens: 32_768,

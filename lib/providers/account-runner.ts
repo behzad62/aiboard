@@ -82,6 +82,7 @@ function buildAccountRunnerRequestBody(
     nativeTools: params.nativeTools,
     webSearch: params.webSearch,
     attachments: params.attachments ?? [],
+    runtimeMode: "discussion",
     stream: true,
   };
 }

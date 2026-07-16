@@ -77,6 +77,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const runnerTokenField = providerDefinition?.runnerTokenField;
   const modelIdsField = providerDefinition?.modelIdsField;
   const accountRunner = providerDefinition?.accountRunner;
+  const runnerDownload = providerDefinition?.runnerDownload;
 
   const parsedModelIds = modelIdsText
     .split(/[\n,]/)
@@ -380,9 +381,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       {accountRunner && (
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Account runner and login</p>
-          <p className="mt-1">
-            Download the runner, run it with Node, paste its current URL/session token above, save, then authorize your account if it is not already connected.
-          </p>
+          <p className="mt-1">{accountRunner.setupHint}</p>
           <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
             {accountRunner.command}
           </p>
@@ -418,6 +417,25 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               </Button>
             </div>
           )}
+        </div>
+      )}
+
+      {runnerDownload && !accountRunner && (
+        <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Account runner</p>
+          <p className="mt-1">{runnerDownload.hint}</p>
+          <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
+            {runnerDownload.command}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a
+              href={runnerDownload.downloadHref}
+              download
+              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              Download account runner
+            </a>
+          </div>
         </div>
       )}
 

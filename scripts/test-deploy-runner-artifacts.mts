@@ -1,7 +1,7 @@
 /* Static deploy runner artifact checks (run after npm run build). */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 import JSZip from "jszip";
 
@@ -33,6 +33,8 @@ const sourceAccountRunner = "lib/account-provider-runner.mjs";
 const sourceBenchRunner = "scripts/bench-runner.mjs";
 const publicAccountRunner = "public/account-provider-runner.mjs";
 const exportedAccountRunner = "out/account-provider-runner.mjs";
+const publicAccountRunnerZip = "public/aiboard-account-provider-runner.zip";
+const exportedAccountRunnerZip = "out/aiboard-account-provider-runner.zip";
 const publicBenchRunner = "public/bench-runner.mjs";
 const exportedBenchRunner = "out/bench-runner.mjs";
 const publicRunner = "public/runner.mjs";
@@ -162,14 +164,57 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
   }
 }
 
+async function checkAccountRunnerArchive(path: string): Promise<void> {
+  if (!existsSync(path)) return;
+  try {
+    const archive = await JSZip.loadAsync(readFileSync(path));
+    const packageFile = archive.file("package.json");
+    const runnerFile = archive.file("account-provider-runner.mjs");
+    const sdkFile = archive.file("account-provider-copilot-sdk.mjs");
+    const readmeFile = archive.file("README.md");
+    check(`${path} contains account-provider-runner.mjs`, runnerFile !== null);
+    check(`${path} contains account-provider-copilot-sdk.mjs`, sdkFile !== null);
+    check(`${path} contains package.json`, packageFile !== null);
+    check(`${path} contains README.md`, readmeFile !== null);
+    if (packageFile) {
+      const packageJson = JSON.parse(await packageFile.async("string")) as {
+        dependencies?: Record<string, string>;
+        scripts?: Record<string, string>;
+      };
+      check(`${path} pins the Copilot SDK dependency`, packageJson.dependencies?.["@github/copilot-sdk"] === "1.0.6", packageJson);
+      check(`${path} starts the account runner`, packageJson.scripts?.start === "node account-provider-runner.mjs", packageJson);
+    }
+    if (runnerFile && existsSync(sourceAccountRunner)) {
+      check(`${path} account runner source matches`, await runnerFile.async("string") === read(sourceAccountRunner));
+    }
+    if (sdkFile) {
+      const tempPath = await writeTempFile(path, sdkFile);
+      check(`${path} SDK adapter is valid JavaScript`, nodeCheck(tempPath), path);
+      unlinkSync(tempPath);
+    }
+  } catch (error) {
+    check(`${path} is a readable Copilot account-runner ZIP`, false, error instanceof Error ? error.message : error);
+  }
+}
+
+async function writeTempFile(archivePath: string, file: { async(type: "nodebuffer"): Promise<Buffer> }): Promise<string> {
+  const tempPath = `${archivePath}.sdk-check.mjs`;
+  writeFileSync(tempPath, await file.async("nodebuffer"));
+  return tempPath;
+}
+
 for (const path of [
   publicAccountRunner,
   exportedAccountRunner,
+  publicAccountRunnerZip,
+  exportedAccountRunnerZip,
   publicBenchRunner,
   exportedBenchRunner,
 ]) {
   check(`${path} exists`, existsSync(path));
 }
+await checkAccountRunnerArchive(publicAccountRunnerZip);
+await checkAccountRunnerArchive(exportedAccountRunnerZip);
 for (const path of [publicRunner, exportedRunner, publicManifest, exportedManifest]) {
   check(`${path} is retired`, !existsSync(path));
 }

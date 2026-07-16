@@ -183,7 +183,11 @@ for (const model of MODEL_CATALOG) {
     continue;
   }
 
-  if (model.providerId === "github-copilot" && !/^gpt-\d+|auto$/i.test(model.id)) {
+  if (
+    model.providerId === "github-copilot" &&
+    !/^gpt-\d+|auto$/i.test(model.id) &&
+    model.id !== "gemini-3.5-flash"
+  ) {
     check(
       `${fullModelId} is not advertised as reasoning-controllable`,
       !supportsReasoning,

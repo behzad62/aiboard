@@ -148,6 +148,15 @@ export const MODEL_CATALOG: CatalogModel[] = [
     validationCandidate: true,
   },
   {
+    id: "gemini-3.5-flash",
+    name: "Gemini 3.5 Flash (Copilot)",
+    providerId: "github-copilot",
+    description:
+      "Fast Gemini multimodal model exposed through GitHub Copilot",
+    capabilities: { image: true, document: true, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
     id: "claude-sonnet-4.5",
     name: "Claude Sonnet 4.5 (Copilot)",
     providerId: "github-copilot",

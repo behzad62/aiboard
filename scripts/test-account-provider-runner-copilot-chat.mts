@@ -145,6 +145,7 @@ try {
     method: "POST",
     headers,
     body: JSON.stringify({
+      runtimeMode: "build",
       model: "claude-sonnet-4.5",
       maxTokens: 321,
       reasoningEffort: "high",
@@ -200,6 +201,7 @@ try {
     method: "POST",
     headers,
     body: JSON.stringify({
+      runtimeMode: "build",
       model: "gpt-5.4-mini",
       maxTokens: 654,
       reasoningEffort: "max",
@@ -261,6 +263,7 @@ try {
       method: "POST",
       headers,
       body: JSON.stringify({
+        runtimeMode: "build",
         model: "gpt-5.4-mini",
         reasoningEffort: reasoningCase.input,
         messages: [{ role: "user", content: "Reply with exactly: ok" }],

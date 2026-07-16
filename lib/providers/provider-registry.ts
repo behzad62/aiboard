@@ -26,6 +26,13 @@ export interface AccountRunnerProviderSetup {
   tokenHint: string;
   command: string;
   downloadHref: string;
+  setupHint: string;
+}
+
+export interface ProviderRunnerDownload {
+  command: string;
+  downloadHref: string;
+  hint: string;
 }
 
 export interface ModelRuntimeBehavior {
@@ -50,6 +57,7 @@ export interface ProviderDefinition {
   runnerTokenRequiredMessage?: string;
   modelIdsField?: ProviderSetupField;
   accountRunner?: AccountRunnerProviderSetup;
+  runnerDownload?: ProviderRunnerDownload;
   nativeWebSearch: boolean | ((modelId: string) => boolean);
   reasoningEffort: boolean | ((modelId: string) => boolean);
   maxTokens: boolean | ((modelId: string) => boolean);
@@ -64,6 +72,7 @@ type ModelToolFeature =
 type ModelToolRule = boolean | readonly string[] | ((modelId: string) => boolean);
 
 const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/account-provider-runner.mjs";
+const COPILOT_ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
 
 function normalizedModelId(modelId = ""): string {
   return modelId.trim().toLowerCase();
@@ -190,7 +199,10 @@ const MODEL_TOOL_SUPPORT: Partial<
     hostedBuildTools: false,
   },
   "github-copilot": {
-    nativeWebSearch: false,
+    nativeWebSearch: (modelId: string) =>
+      normalizedModelId(modelId) === "auto" ||
+      /^gpt-\d+/i.test(modelId) ||
+      normalizedModelId(modelId) === "gemini-3.5-flash",
     nativeBuildTools: false,
     hostedBuildTools: false,
   },
@@ -331,7 +343,7 @@ export const PROVIDER_DEFINITIONS = {
     baseURLField: {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
-      hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
+      hint: "Run node account-provider-runner.mjs, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
@@ -343,6 +355,8 @@ export const PROVIDER_DEFINITIONS = {
         "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved ChatGPT login stays in the auth file.",
       command: "node account-provider-runner.mjs",
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
+      setupHint:
+        "Download the standalone runner file, run it with Node, then paste its printed local URL and session token above. Authorize ChatGPT if it is not already connected.",
     },
     nativeWebSearch: true,
     reasoningEffort: true,
@@ -370,7 +384,7 @@ export const PROVIDER_DEFINITIONS = {
     baseURLField: {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
-      hint: "Run account-provider-runner.mjs with Node, then paste its printed local URL here.",
+      hint: "Extract the downloaded runner ZIP, run npm install and npm start, then paste its printed local URL here.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
@@ -380,17 +394,21 @@ export const PROVIDER_DEFINITIONS = {
       tokenPlaceholder: "Paste the current token printed by the account runner",
       tokenHint:
         "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved GitHub login stays in the auth file.",
-      command: "node account-provider-runner.mjs",
-      downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
+      command: "npm install; npm start",
+      downloadHref: COPILOT_ACCOUNT_RUNNER_DOWNLOAD_HREF,
+      setupHint:
+        "Download and extract the SDK runner ZIP, run npm install and npm start, then paste its printed local URL and session token above. Authorize GitHub if it is not already connected.",
     },
-    nativeWebSearch: false,
+    nativeWebSearch: true,
     reasoningEffort: (modelId: string) =>
-      modelId === "auto" || /^gpt-\d+/i.test(modelId),
+      normalizedModelId(modelId) === "auto" ||
+      /^gpt-\d+/i.test(modelId) ||
+      normalizedModelId(modelId) === "gemini-3.5-flash",
     maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Route-dependent",
       temperatureNote:
-        "GitHub Copilot account mode sends prompts through the local account runner. GPT-class Responses routes omit temperature; chat-completions routes forward temperature when accepted by Copilot.",
+        "Discussion calls use the Copilot SDK; structured-output, attachment, and Build calls use the compatible raw account route. The SDK owns model defaults and does not expose a temperature control.",
       promptCachingLabel: "Account-provider dependent",
       promptCachingNote:
         "Caching and rate limits are controlled by GitHub Copilot, not by AI Board.",
@@ -413,6 +431,12 @@ export const PROVIDER_DEFINITIONS = {
       hint: "Run account-provider-runner.mjs locally, then paste its printed URL here. NVIDIA requests are proxied through the runner because the browser cannot call the NVIDIA API directly.",
     },
     baseURLRequiredMessage: "This provider needs the local provider runner URL",
+    runnerDownload: {
+      command: "node account-provider-runner.mjs",
+      downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
+      hint:
+        "Download the standalone runner file, run it with Node, then paste its printed local URL and token above. The runner proxies NVIDIA requests because browsers cannot call the NVIDIA API directly.",
+    },
     runnerTokenField: {
       label: "Local runner token",
       placeholder: "Paste the current token printed by the account runner",
