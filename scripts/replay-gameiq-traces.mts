@@ -29,6 +29,19 @@ for (const file of runFiles) {
   const traces: TraceRow[] = run.traces;
   const perCase: Record<string, unknown> = {};
 
+  // Graceful unknown-caseId guard: a historical run file can still carry
+  // traces for a pack that has since been hard-deleted (e.g. the v0.1
+  // battleship/chess/connect-four packs removed 2026-07-17). SKIP them with a
+  // clear console note instead of throwing — there is no pack left to replay
+  // them against.
+  const knownPackIds = new Set(packs.map((pack) => pack.id));
+  const traceCaseIds = new Set(traces.map((trace) => trace.caseId));
+  for (const caseId of traceCaseIds) {
+    if (knownPackIds.has(caseId)) continue;
+    const traceCount = traces.filter((trace) => trace.caseId === caseId).length;
+    console.log(`pack ${caseId} no longer exists — skipped ${traceCount} traces`);
+  }
+
   for (const pack of packs) {
     const packTraces = traces.filter((t) => t.caseId === pack.id);
     if (packTraces.length === 0) continue;

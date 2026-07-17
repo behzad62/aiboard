@@ -61,10 +61,25 @@ export interface SkippedPackReport {
   reason: "incomplete" | "no-traces";
 }
 
+/**
+ * A trace caseId that does not resolve to any currently-registered GameIQ
+ * pack — e.g. a historical run file that still carries traces for a
+ * hard-deleted v0.1 pack (battleship/chess/connect-four, removed 2026-07-17).
+ * Recovery SKIPS these gracefully (with a console note) rather than throwing;
+ * the traces are unrecoverable (there is no pack left to replay them
+ * against) but their presence must never crash the tool.
+ */
+export interface UnknownPackReport {
+  caseId: string;
+  traceCount: number;
+}
+
 export interface RecoverBundleResult {
   bundle: BenchmarkReportBundleV2;
   recoveredPacks: RecoveredPackReport[];
   skipped: SkippedPackReport[];
+  /** Trace caseIds that reference a pack no longer in the registry. */
+  unknownPacks: UnknownPackReport[];
   /** Count of pre-existing attemptsV2 entries the recover REPLACED (removed). */
   replacedAttempts: number;
   /** Count of pre-existing failures the recover dropped (recovered packs). */
@@ -81,6 +96,8 @@ interface BundleRecoveryMeta {
   recoveredPacks: string[];
   skippedIncomplete: string[];
   skippedNoTraces: string[];
+  /** caseIds whose traces reference a pack no longer in the registry. */
+  skippedUnknownPack: string[];
   tool: string;
   note: string;
 }
@@ -129,6 +146,22 @@ export async function recoverBundle(
   const { runId, modelId, teamCompositionId } = resolveRunIdentity(bundle);
   const packs = listGameIqScenarioPacks();
   const traces = bundle.traces as PackTraceRow[];
+
+  // Graceful unknown-caseId guard: a historical run file can still carry
+  // traces for a pack that has since been hard-deleted (e.g. the v0.1
+  // battleship/chess/connect-four packs removed 2026-07-17). Those traces are
+  // unrecoverable — there is no pack left to replay them against — but their
+  // presence must never crash the tool. Detect and SKIP them with a clear
+  // console note instead of throwing.
+  const knownPackIds = new Set(packs.map((pack) => pack.id));
+  const traceCaseIds = new Set(traces.map((trace) => trace.caseId));
+  const unknownPacks: UnknownPackReport[] = [];
+  for (const caseId of traceCaseIds) {
+    if (knownPackIds.has(caseId)) continue;
+    const traceCount = traces.filter((trace) => trace.caseId === caseId).length;
+    unknownPacks.push({ caseId, traceCount });
+    console.log(`pack ${caseId} no longer exists — skipped ${traceCount} traces`);
+  }
 
   const recoveredPacks: RecoveredPackReport[] = [];
   const skipped: SkippedPackReport[] = [];
@@ -208,6 +241,7 @@ export async function recoverBundle(
     skippedNoTraces: skipped
       .filter((pack) => pack.reason === "no-traces")
       .map((pack) => pack.packId),
+    skippedUnknownPack: unknownPacks.map((entry) => entry.caseId),
     tool: "recover-gameiq-run",
     note: "pack scores rebuilt from recorded traces; run status left 'failed'",
   };
@@ -269,6 +303,7 @@ export async function recoverBundle(
     bundle: nextBundle,
     recoveredPacks,
     skipped,
+    unknownPacks,
     replacedAttempts: removedAttempts.length,
     droppedFailures,
   };
@@ -352,6 +387,7 @@ async function main(): Promise<void> {
     bundle: nextBundle,
     recoveredPacks,
     skipped,
+    unknownPacks,
     replacedAttempts,
     droppedFailures,
   } = await recoverBundle(bundle, { recoveredAt });
@@ -378,6 +414,13 @@ async function main(): Promise<void> {
     console.log(
       `  ${label} ${pack.reason === "incomplete" ? `incomplete ${pack.replayed}/${pack.total}` : "no traces"} — not recovered`
     );
+  }
+
+  if (unknownPacks.length > 0) {
+    console.log(`\nUnknown packs (${unknownPacks.length}, no longer registered):`);
+    for (const entry of unknownPacks) {
+      console.log(`  ${entry.caseId} — skipped ${entry.traceCount} traces`);
+    }
   }
 
   const prunePlan = planIndexPrune(filePath);

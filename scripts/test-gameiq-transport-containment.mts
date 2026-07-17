@@ -31,7 +31,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 }
 
 const pack = listGameIqScenarioPacks().find(
-  (p) => p.id === "gameiq-v0.1-connect-four"
+  (p) => p.id === "gameiq-v0.2-connect-four"
 );
 if (!pack) throw new Error("Connect Four GameIQ pack is required for this test.");
 const scenarios: GameIqScenario[] = pack.scenarios.slice(0, 10);

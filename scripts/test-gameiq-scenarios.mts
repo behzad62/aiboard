@@ -1,16 +1,13 @@
 /* Certified GameIQ scenario pack checks (run: npx tsx scripts/test-gameiq-scenarios.mts) */
 import {
-  actionMatchesExpected,
   getGameIqScenarioPack,
   listGameIqScenarioPacks,
   stableStringify,
   stableGameIqScenarioPackDigest,
-  validateGameIqAction,
   validateGameIqScenario,
 } from "../lib/benchmark/gameiq";
 import { FIREWORKS_TACTICS_SCENARIOS } from "../lib/benchmark/fireworks/scenario-packs";
 import { toGameIqScenario } from "../lib/benchmark/gameiq/fireworks";
-import { fromFEN, getPiece } from "../lib/games/chess/engine";
 
 let failures = 0;
 
@@ -33,11 +30,9 @@ const packIds = firstListing.map((pack) => pack.id);
 check(
   "GameIQ exposes shipped game packs",
   [
-    "gameiq-v0.1-connect-four",
     "gameiq-v0.2-connect-four",
-    "gameiq-v0.1-chess",
     "gameiq-v0.2-chess",
-    "gameiq-v0.1-battleship",
+    "gameiq-v0.2-battleship",
     "gameiq-v0.1-codenames",
     "gameiq-fireworks-basic-v1",
     "gameiq-fireworks-hard-v1",
@@ -47,11 +42,8 @@ check(
 );
 
 const expectedPackCounts = new Map([
-  ["gameiq-v0.1-connect-four", 40],
   ["gameiq-v0.2-connect-four", 12],
-  ["gameiq-v0.1-chess", 15],
   ["gameiq-v0.2-chess", 12],
-  ["gameiq-v0.1-battleship", 11],
   ["gameiq-v0.2-battleship", 15],
   ["gameiq-v0.1-codenames", 10],
   ["gameiq-fireworks-basic-v1", 20],
@@ -67,8 +59,6 @@ for (const pack of firstListing) {
 }
 
 const distinctFloor = new Map([
-  ["gameiq-v0.1-chess", 12],
-  ["gameiq-v0.1-battleship", 11],
   ["gameiq-v0.1-codenames", 10],
 ]);
 for (const pack of firstListing) {
@@ -94,12 +84,14 @@ const chessPack = getGameIqScenarioPack("chess");
 const battleshipPack = getGameIqScenarioPack("battleship");
 const fireworksPack = firstListing.find((pack) => pack.id === "gameiq-fireworks-basic-v1");
 check(
-  "Connect Four and re-authored Chess are both first-class (Chess grew to 15 engine-verified distinct decisions and passes the rigor floor)",
+  "Connect Four, Chess, and Battleship (the sole v0.2 pack per game) are all first-class",
   connectFourPack?.certificationTier === "first-class" &&
-    chessPack?.certificationTier === "first-class",
+    chessPack?.certificationTier === "first-class" &&
+    battleshipPack?.certificationTier === "first-class",
   {
     connectFour: connectFourPack?.certificationTier,
     chess: chessPack?.certificationTier,
+    battleship: battleshipPack?.certificationTier,
   }
 );
 
@@ -107,95 +99,18 @@ const connectFourCategories = new Set(
   connectFourPack?.scenarios.map((scenario) => scenario.category) ?? []
 );
 check(
-  "Connect Four covers required categories",
-  (["win-in-one", "block-win", "trap-setup", "avoid-losing-move"] as const).every(
-    (category) => connectFourCategories.has(category)
-  ),
+  "Connect Four v2 uses the solver-keyed depth-only-move category",
+  connectFourCategories.has("depth-only-move") && connectFourCategories.size === 1,
   Array.from(connectFourCategories)
 );
-for (const category of [
-  "win-in-one",
-  "block-win",
-  "trap-setup",
-  "avoid-losing-move",
-] as const) {
-  check(
-    `Connect Four has 10 ${category} scenarios`,
-    connectFourPack?.scenarios.filter((scenario) => scenario.category === category)
-      .length === 10,
-    connectFourPack?.scenarios.map((scenario) => scenario.category)
-  );
-}
 
 const chessCategories = new Set(
   chessPack?.scenarios.map((scenario) => scenario.category) ?? []
 );
 check(
-  "Chess covers mate-in-one plus defensive/material decisions (avoid-losing-move), and no longer uses the weak legal-tactic category",
-  chessCategories.has("mate-in-one") &&
-    chessCategories.has("avoid-losing-move") &&
-    !chessCategories.has("legal-tactic"),
+  "Chess v2 uses the prover-keyed quiet-mate category",
+  chessCategories.has("quiet-mate") && chessCategories.size === 1,
   Array.from(chessCategories)
-);
-check(
-  "Chess has both white-to-move and black-to-move mate-in-one scenarios",
-  (chessPack?.scenarios.filter((scenario) => scenario.category === "mate-in-one")
-    .length ?? 0) >= 6 &&
-    (chessPack?.scenarios.filter(
-      (scenario) => scenario.category === "mate-in-one"
-    ).length ?? 0) > 0,
-  chessPack?.scenarios.map((scenario) => scenario.category)
-);
-const firstChessMate = chessPack?.scenarios.find(
-  (scenario) => scenario.category === "mate-in-one"
-);
-if (!firstChessMate) {
-  check("Chess mate-in-one scenario is present", false);
-} else {
-  const expectedAction = firstChessMate.expectedActions[0]?.action;
-  const nullPromotionAction =
-    expectedAction && "from" in expectedAction
-      ? { ...expectedAction, promotion: null }
-      : null;
-  const validation = validateGameIqAction(firstChessMate, nullPromotionAction);
-check(
-  "Chess mate-in-one accepts structured-output null promotion",
-  validation.ok &&
-      actionMatchesExpected(firstChessMate, nullPromotionAction) === 1,
-    { nullPromotionAction, validation }
-  );
-}
-
-const battleshipFollowLine = battleshipPack?.scenarios.find(
-  (scenario) => scenario.id === "gameiq-v0.1-battleship-follow-line"
-);
-const battleshipFollowState = battleshipFollowLine?.initialState as
-  | {
-      turn?: unknown;
-      boards?: {
-        orange?: {
-          shotsReceived?: Array<{ target?: { row?: number; column?: number }; result?: string; shipId?: string }>;
-        };
-      };
-    }
-  | undefined;
-const carrierLineHits =
-  battleshipFollowState?.boards?.orange?.shotsReceived?.filter(
-    (shot) =>
-      shot.shipId === "carrier" &&
-      shot.result === "hit" &&
-      shot.target?.row === 0 &&
-      (shot.target.column === 0 || shot.target.column === 1)
-  ) ?? [];
-const battleshipFollowExpected = battleshipFollowLine?.expectedActions[0]
-  ?.action as { target?: { row?: number; column?: number } } | undefined;
-check(
-  "Battleship follow-line scenario requires continuing a known carrier line",
-  battleshipFollowState?.turn === "blue" &&
-    carrierLineHits.length === 2 &&
-    battleshipFollowExpected?.target?.row === 0 &&
-    battleshipFollowExpected.target.column === 2,
-  { state: battleshipFollowState, expected: battleshipFollowExpected }
 );
 
 check(
@@ -299,56 +214,11 @@ if (fireworksTwoActionSource) {
   );
 }
 
-const connectFourTrapPack = firstListing.find(
-  (pack) => pack.id === "gameiq-v0.1-connect-four"
-);
-const connectFourTraps = (connectFourTrapPack?.scenarios ?? []).filter(
-  (scenario) => scenario.category === "trap-setup"
-);
-check(
-  "Connect Four trap-setup scenarios all create a genuine double threat",
-  connectFourTraps.length > 0 &&
-    connectFourTraps.every((scenario) => validateGameIqScenario(scenario).ok),
-  connectFourTraps
-    .filter((scenario) => !validateGameIqScenario(scenario).ok)
-    .map((scenario) => scenario.id)
-);
-const baseTrap = connectFourTraps[0];
-const brokenTrap = baseTrap
-  ? {
-      ...baseTrap,
-      id: `${baseTrap.id}-broken`,
-      expectedActions: [
-        { ...baseTrap.expectedActions[0], action: { column: 0 } },
-      ],
-    }
-  : null;
-check(
-  "Connect Four trap-setup validator rejects a non-double-threat answer",
-  brokenTrap != null && validateGameIqScenario(brokenTrap).ok === false,
-  brokenTrap ? validateGameIqScenario(brokenTrap) : "no base trap"
-);
-
-const knightQueenTactic = chessPack?.scenarios.find(
-  (scenario) => scenario.id === "gameiq-v0.1-chess-knight-wins-queen"
-);
-if (!knightQueenTactic) {
-  check("Chess knight tactic scenario is present", false);
-} else {
-  const expectedAction = knightQueenTactic.expectedActions[0]?.action;
-  const targetPiece =
-    expectedAction && "to" in expectedAction
-      ? getPiece(
-          fromFEN((knightQueenTactic.initialState as { fen: string }).fen),
-          expectedAction.to
-        )
-      : null;
-  check(
-    "Chess knight tactic expected action captures the loose queen",
-    targetPiece?.color === "black" && targetPiece.type === "queen",
-    { expectedAction, targetPiece }
-  );
-}
+// The v0.1 connect-four trap-setup / chess knight-wins-queen scenarios these
+// checks used to exercise were hard-deleted 2026-07-17; the "trap-setup"
+// validator itself is untouched (lib/benchmark/gameiq/validation.ts) but no
+// live pack uses that category anymore, so there is no scenario left to
+// spot-check it against.
 
 for (const pack of firstListing) {
   const digestA = stableGameIqScenarioPackDigest(pack);

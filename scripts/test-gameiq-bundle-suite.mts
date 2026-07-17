@@ -7,15 +7,13 @@
  * budget. Uses the same fake/oracle model path as
  * scripts/test-certified-e2e-gameiq.mts.
  *
- * The bundle excludes the saturated v1 Battleship pack (11/11 across all four
- * 2026-07 reference models — see lib/benchmark/gameiq/saturation.ts), plus
- * the standalone-selectable v1 Chess and Connect Four packs. Their v2 depth
- * packs join the bundle, keeping the default at 7 of the 10 catalog packs.
- * All excluded packs remain in the full pack catalog as standalone suite
- * options; this file checks both halves of that split. Pack counts below are
- * computed from the live catalog/bundle
- * expansion, not hardcoded, so this file does not need updating every time a
- * pack is added or removed -- only this comment's prose does.
+ * The saturated v0.1 battleship/chess/connect-four packs were hard-deleted
+ * 2026-07-17 (their v0.2 depth/quiet-mate/hunt packs are the sole surviving
+ * pack per game), so there is no exclusion mechanism left: the bundle IS the
+ * full pack catalog, full stop. Pack counts below are computed from the live
+ * catalog/bundle expansion, not hardcoded, so this file does not need
+ * updating every time a pack is added or removed -- only this comment's
+ * prose does.
  */
 import {
   __resetBenchmarkStoreForTests,
@@ -54,31 +52,16 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-// The full pack CATALOG still includes every pack — standalone single-pack
-// selection must keep working for all of them. The BUNDLE ("All GameIQ packs")
-// excludes the three v0.1 packs that have been superseded in the depth bundle:
-// saturated Battleship and standalone-selectable Chess/Connect Four. Their v2
-// packs remain in the aggregate run.
+// The BUNDLE ("All GameIQ packs") is now simply the full pack CATALOG — the
+// v0.1 battleship/chess/connect-four packs it used to exclude are hard-deleted,
+// so there is nothing left to filter out.
 const packs = listGameIqScenarioPacks();
 const packIds = packs.map((pack) => pack.id);
-const GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS = new Set([
-  "gameiq-v0.1-battleship",
-  "gameiq-v0.1-chess",
-  "gameiq-v0.1-connect-four",
-]);
-const bundlePacks = packs.filter(
-  (pack) => !GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS.has(pack.id)
-);
+const bundlePacks = packs;
 const bundlePackIds = bundlePacks.map((pack) => pack.id);
 const totalScenarios = bundlePacks.reduce(
   (sum, pack) => sum + pack.scenarios.length,
   0
-);
-
-check(
-  "all excluded v0.1 packs stay in the full catalog",
-  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every((packId) => packIds.includes(packId)),
-  packIds
 );
 
 // --- Suite-option shape: bundle is first + default, single packs follow. -----
@@ -96,32 +79,22 @@ check(
   suiteOptions[0]?.label
 );
 check(
-  "single-pack options follow the bundle unchanged and still list every pack (incl. battleship)",
+  "single-pack options follow the bundle unchanged and still list every pack",
   suiteOptions.length === packs.length + 1 &&
     suiteOptions.slice(1).map((option) => option.id).join(",") ===
       packIds.join(","),
   suiteOptions.map((option) => option.id)
 );
 check(
-  "bundle suite expands to every GameIQ pack id EXCEPT the three v0.1 exclusions",
+  "bundle suite expands to every GameIQ pack id (no exclusions left)",
   gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).join(",") ===
-    bundlePackIds.join(",") &&
-    [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
-      (packId) => !gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID).includes(packId)
-    ),
+    bundlePackIds.join(","),
   gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID)
 );
 check(
   "single-pack suite expands to just itself",
   gameIqBundlePackIds(bundlePackIds[0]!).join(",") === bundlePackIds[0],
   gameIqBundlePackIds(bundlePackIds[0]!)
-);
-check(
-  "all excluded v0.1 packs remain standalone-selectable",
-  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
-    (packId) => gameIqBundlePackIds(packId).join(",") === packId
-  ),
-  [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].map((packId) => gameIqBundlePackIds(packId))
 );
 
 // --- Build one case per pack (mirrors the panel's caseRecords). --------------
@@ -151,8 +124,7 @@ function caseForPack(packId: string, label: string): BenchmarkCaseV2 {
   };
 }
 // Mirrors CertifiedRunPanel: caseRecords are built from gameIqBundlePackIds
-// (the bundle's expansion), not from the raw pack catalog — so excluded v0.1
-// packs get no case here, matching real behavior.
+// (the bundle's expansion), which is now just every registered pack.
 const caseRecords = bundlePacks.map((pack) => caseForPack(pack.id, pack.label));
 
 function sumBudgetField(
@@ -213,7 +185,7 @@ const passingCertification = {
 
 // Flat oracle queue in run order (packs run sequentially; each pack iterates its
 // own scenarios in order), so each model call pops the matching expected action.
-// Scoped to bundlePacks (the three v0.1 packs excluded), matching what the bundle
+// Scoped to bundlePacks (every registered pack), matching what the bundle
 // actually runs.
 const oracleQueue = bundlePacks.flatMap((pack) =>
   pack.scenarios.map((scenario) => scenario.expectedActions[0]?.action)
@@ -275,7 +247,7 @@ check(
   { callIndex, totalScenarios }
 );
 check(
-  "bundle produces one attempt per pack (three v0.1 packs excluded, 7 packs)",
+  "bundle produces one attempt per pack (7 packs, the full catalog)",
   attempts.length === bundlePacks.length &&
     summary.attemptCount === bundlePacks.length,
   { attemptCount: attempts.length, packs: bundlePacks.length }
@@ -286,14 +258,11 @@ check(
   attempts.map((attempt) => attempt.caseId)
 );
 check(
-  "bundle attempts cover every bundle pack id (and never include excluded v0.1 packs)",
+  "bundle attempts cover every bundle pack id",
   new Set(attempts.map((attempt) => attempt.caseId)).size ===
     bundlePacks.length &&
     bundlePackIds.every((packId) =>
       attempts.some((attempt) => attempt.caseId === packId)
-    ) &&
-    [...GAMEIQ_BUNDLE_EXCLUDED_PACK_IDS].every(
-      (packId) => !attempts.some((attempt) => attempt.caseId === packId)
     ),
   { caseIds: attempts.map((attempt) => attempt.caseId), bundlePackIds }
 );

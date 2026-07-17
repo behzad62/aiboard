@@ -20,9 +20,9 @@ import {
 } from "../lib/benchmark/gameiq/chess-prover";
 import {
   BLACK_MOVE_PROMPT,
+  CHESS_V2_GAMEIQ_SCENARIOS,
   WHITE_MOVE_PROMPT,
-} from "../lib/benchmark/gameiq/chess";
-import { CHESS_V2_GAMEIQ_SCENARIOS } from "../lib/benchmark/gameiq/chess-v2";
+} from "../lib/benchmark/gameiq/chess-v2";
 import {
   gameIqDecisionKey,
   gameIqPackFirstClassFloor,

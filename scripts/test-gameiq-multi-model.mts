@@ -7,12 +7,12 @@
  * one model throwing does not abort the others. Uses the same fake/oracle model
  * path as scripts/test-certified-e2e-gameiq.mts / test-gameiq-bundle-suite.mts.
  *
- * The bundle excludes the saturated v1 Battleship pack (see
- * lib/benchmark/gameiq/saturation.ts / gameIqBundlePackIds) and the
- * standalone-selectable v1 Chess/Connect Four packs. Their v2 depth packs
- * join the bundle, so this test's per-run pack count is bundlePacks.length
- * (7), not the full catalog (10). Pack counts below are computed from the
- * live catalog/bundle expansion, not hardcoded.
+ * The saturated v0.1 battleship/chess/connect-four packs were hard-deleted
+ * (their v0.2 depth/quiet-mate/hunt packs are the sole surviving pack per
+ * game), so the bundle IS the full catalog now (see
+ * lib/benchmark/gameiq/saturation.ts / gameIqBundlePackIds): this test's
+ * per-run pack count is bundlePacks.length (7), computed from the live
+ * catalog/bundle expansion, not hardcoded.
  */
 import {
   __resetBenchmarkStoreForTests,
@@ -281,7 +281,7 @@ check(
 );
 
 check(
-  "each passing model has one scored attempt per bundle pack (model x pack, three v0.1 packs excluded)",
+  "each passing model has one scored attempt per bundle pack (model x pack, full catalog)",
   passedRuns.every((run) => {
     const runAttempts = attempts.filter(
       (attempt) => attempt.runId === run.runId

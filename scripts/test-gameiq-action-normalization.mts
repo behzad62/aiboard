@@ -30,8 +30,8 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   );
 }
 
-// White pawn on a7, expected promotion to queen at a8. Mirrors the real
-// gameiq-v0.1-chess-promotion-tactic scenario shape.
+// White pawn on a7, expected promotion to queen at a8. Mirrors a typical
+// chess GameIQ promotion scenario shape.
 const whitePromotion: ChessGameIqScenario = {
   id: "test-chess-white-promotion",
   gameId: "chess",
