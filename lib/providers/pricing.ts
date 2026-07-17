@@ -229,6 +229,14 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://openrouter.ai/moonshotai/kimi-k2.7-code",
     verifiedAt: "2026-06-29",
   },
+  [formatModelId("openrouter", "moonshotai/kimi-k3")]: {
+    inputUsdPer1M: 3,
+    cachedInputUsdPer1M: 0.3,
+    outputUsdPer1M: 15,
+    sourceLabel: "OpenRouter model pricing",
+    sourceUrl: "https://openrouter.ai/moonshotai/kimi-k3",
+    verifiedAt: "2026-07-17",
+  },
 
   [formatModelId("xai", "grok-4.5")]: {
     inputUsdPer1M: 2,

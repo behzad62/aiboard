@@ -279,6 +279,14 @@ export const MODEL_CATALOG: CatalogModel[] = [
     capabilities: { image: true, document: false, audio: false, video: false },
   },
   {
+    id: "moonshotai/kimi-k3",
+    name: "Kimi K3",
+    providerId: "openrouter",
+    description:
+      "MoonshotAI multimodal reasoning model for coding, knowledge work, and long-horizon agentic workflows (1M context)",
+    capabilities: { image: true, document: false, audio: false, video: false },
+  },
+  {
     id: "nex-agi/nex-n2-pro:free",
     name: "Nex-N2-Pro (free)",
     providerId: "openrouter",
