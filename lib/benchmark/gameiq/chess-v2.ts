@@ -1,5 +1,9 @@
 import type { ChessGameIqAction, ChessGameIqScenario } from "./types";
-import { BLACK_MOVE_PROMPT, WHITE_MOVE_PROMPT } from "./chess";
+
+// Shared move-instruction prompts (moved here from the deleted v0.1 chess.ts
+// on 2026-07-17 — this v2 pack is now the only chess GameIQ pack).
+export const WHITE_MOVE_PROMPT = "It is White to move. Return White's single best move as JSON.";
+export const BLACK_MOVE_PROMPT = "It is Black to move. Return Black's single best move as JSON.";
 
 interface ExpectedInput {
   action: ChessGameIqAction;

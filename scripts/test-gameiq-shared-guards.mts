@@ -120,22 +120,31 @@ check(
   conventionCellExpected.length === 0,
   conventionCellExpected.map((scenario) => scenario.id)
 );
-const followLine = battleshipScenarios.find(
-  (scenario) => scenario.id === "gameiq-v0.1-battleship-follow-line"
-);
-const followLineView = followLine
-  ? (gameIqModelStateView(followLine) as {
-      youAre?: string;
-      yourShots?: Array<{ result?: string; label?: string }>;
-    })
-  : undefined;
+// Generic (not id-pinned, so it survives pack churn): every battleship
+// scenario's redacted view must retain the mover's OWN full shot history —
+// same length, same results in the same order as the underlying state's
+// opponent-board shotsReceived — proving the redaction never strips it.
+const shotHistoryMismatches = battleshipScenarios.filter((scenario) => {
+  const state = scenario.initialState as {
+    turn: "blue" | "orange";
+    boards: Record<"blue" | "orange", { shotsReceived: Array<{ result: string }> }>;
+  };
+  const opponent = state.turn === "blue" ? "orange" : "blue";
+  const expectedShots = state.boards[opponent].shotsReceived;
+  const view = gameIqModelStateView(scenario) as {
+    youAre?: string;
+    yourShots?: Array<{ result?: string }>;
+  };
+  return (
+    view.youAre !== state.turn ||
+    view.yourShots?.length !== expectedShots.length ||
+    !view.yourShots.every((shot, index) => shot.result === expectedShots[index].result)
+  );
+});
 check(
-  "battleship redacted view keeps the model's own shot history",
-  followLineView?.youAre === "blue" &&
-    followLineView.yourShots?.length === 2 &&
-    followLineView.yourShots.every((shot) => shot.result === "hit") &&
-    followLineView.yourShots.map((shot) => shot.label).join(",") === "A1,A2",
-  followLineView
+  "battleship redacted view keeps the mover's own full shot history (every scenario)",
+  shotHistoryMismatches.length === 0,
+  shotHistoryMismatches.map((scenario) => scenario.id)
 );
 
 // 4. Codenames placeholder clue word is rejected (any casing).
@@ -172,12 +181,15 @@ if (!codenamesScenario) {
 }
 
 // 5. Decision key: note prose does not split groups; state differences do.
+// gameiq-v0.2-connect-four-depth-1 and -depth-5 are distinct boards that both
+// key column 2 (see connect-four-v2.ts) — the same "same action, different
+// board" shape the old v0.1 win-horizontal/block-horizontal pair exercised.
 const connectFourPack = packs.find((pack) => pack.gameId === "connect-four");
 const winHorizontal = connectFourPack?.scenarios.find(
-  (scenario) => scenario.id === "gameiq-v0.1-connect-four-win-horizontal"
+  (scenario) => scenario.id === "gameiq-v0.2-connect-four-depth-1"
 );
 const blockHorizontal = connectFourPack?.scenarios.find(
-  (scenario) => scenario.id === "gameiq-v0.1-connect-four-block-horizontal"
+  (scenario) => scenario.id === "gameiq-v0.2-connect-four-depth-5"
 );
 if (!winHorizontal || !blockHorizontal) {
   check("connect-four scenarios available for decision-key guard", false);
@@ -261,10 +273,10 @@ for (const pack of packs) {
 // re-authored, and the generic first-class-implies-floor guard above already
 // prevents a dishonest promotion. Codenames was UN-pinned on 2026-07-02: it
 // was re-authored from 25 legality clones into 10 distinct skill-binding
-// decisions, now passes the rigor floor, and is honestly first-class. Chess was
-// UN-pinned on 2026-07-02: it was re-authored from 4 prompt-leaked
-// micro-positions into 15 distinct engine-verified decisions, now passes the
-// rigor floor, and is honestly first-class — see scripts/test-gameiq-chess-pack.mts.)
+// decisions, now passes the rigor floor, and is honestly first-class. The v0.1
+// Chess pack was similarly UN-pinned on 2026-07-02 before being hard-deleted
+// 2026-07-17 in favor of the v0.2 quiet-mate pack, which is honestly
+// first-class and verified by scripts/test-gameiq-chess-v2-pack.mts.)
 const lightweightPinnedPackIds: string[] = [];
 for (const packId of lightweightPinnedPackIds) {
   const pack = packs.find((candidate) => candidate.id === packId);

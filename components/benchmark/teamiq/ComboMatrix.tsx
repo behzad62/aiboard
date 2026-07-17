@@ -8,8 +8,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { duration, formatNormalizedScore, usd } from "@/components/benchmark/format";
+import { trackLabelFor } from "@/components/benchmark/certified/CertifiedResultTables";
 import type { TeamIqComboMatrixRow } from "@/lib/benchmark/teamiq";
 
+// Rows can come from any track that runs team compositions (TeamIQ,
+// WorkBench, ...) since the benchmark UX overhaul's team-lift generalization
+// (Task 6) — the Track column disambiguates which pack a row's lift number
+// was computed against.
 export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
   if (rows.length === 0) {
     return (
@@ -17,8 +22,8 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
         <CardHeader>
           <CardTitle>Combo matrix</CardTitle>
           <CardDescription>
-            TeamIQ combo rows appear after team attempts and complete solo
-            baselines exist for the same case and harness.
+            Combo rows appear after team attempts (TeamIQ or WorkBench) and
+            complete solo baselines exist for the same case pack.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -35,10 +40,11 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[820px] text-sm">
           <thead>
             <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pr-3 font-medium">Team</th>
+              <th className="px-3 py-2 text-left font-medium">Track</th>
               <th className="px-3 py-2 text-right font-medium">Attempts</th>
               <th className="px-3 py-2 text-right font-medium">Quality</th>
               <th className="px-3 py-2 text-right font-medium">Team lift</th>
@@ -56,13 +62,25 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
                     {row.modelIds.join(" + ")}
                   </div>
                 </td>
+                <td className="px-3 py-3">
+                  <span className="rounded-sm border px-2 py-1 text-xs uppercase tracking-wide text-muted-foreground">
+                    {trackLabelFor(row.track)}
+                  </span>
+                </td>
                 <td className="px-3 py-3 text-right tabular-nums">
                   {row.attempts}
                 </td>
                 <td className="px-3 py-3 text-right tabular-nums">
                   {formatNormalizedScore(row.verifiedQuality)}
                 </td>
-                <td className="px-3 py-3 text-right tabular-nums">
+                <td
+                  className="px-3 py-3 text-right tabular-nums"
+                  title={
+                    row.teamLift == null
+                      ? "No solo baseline for this pack"
+                      : undefined
+                  }
+                >
                   {formatLift(row.teamLift)}
                 </td>
                 <td className="px-3 py-3 text-right tabular-nums">
@@ -85,8 +103,8 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
   );
 }
 
-function formatLift(value: number | null): string {
-  if (value == null) return "n/a";
+export function formatLift(value: number | null): string {
+  if (value == null) return "–";
   const rounded = Math.round(value * 10) / 10;
   return `${rounded > 0 ? "+" : ""}${rounded}`;
 }

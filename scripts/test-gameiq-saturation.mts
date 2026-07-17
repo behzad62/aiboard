@@ -3,19 +3,17 @@
  *
  * lib/benchmark/gameiq/saturation.ts is AUTO-GENERATED (originally clean-slate
  * from the four 2026-07 reference runs, then refined by evidence-cumulative
- * pruning against fresh runs via --prior) and committed as code. This test
- * pins the invariants a future regeneration must not silently break:
+ * pruning against fresh runs via --prior) and committed as code. On
+ * 2026-07-17 the saturated v0.1 battleship/chess/connect-four packs were
+ * hard-deleted, and their scenario ids were pruned from the registry by hand
+ * (not regeneration): 44 ids -> 18 survivors (fireworks 16 + codenames 2).
+ * This test pins the invariants a future regeneration must not silently
+ * break:
  *  - every id in the set is a REAL scenario id (exists in listGameIqScenarios),
  *    so renaming/removing a scenario surfaces a stale saturation entry here
  *    instead of leaking a dead id into the C2 frontier report;
- *  - the set is non-empty and within a sane bound (the C1 collection produced
- *    108; the E3 fresh-run refresh pruned it to 44 — weaker fresh models like
- *    DeepSeek V4 Flash / MiniMax M3 / GLM 5.2 de-saturated 64 scenarios;
- *    anything outside 20-140 means the verdict collection or the registry
- *    drifted);
- *  - battleship is FULLY saturated (all 11 ids present) — the documented C2
- *    rationale for dropping battleship from the default bundle; battleship has
- *    no fresh traces (it left the default bundle), so its prior status stands.
+ *  - the set is EXACTLY the 18-id post-prune registry (fireworks + codenames
+ *    only — no battleship/chess/connect-four ids survive the hard delete).
  */
 import {
   GAMEIQ_SATURATED_SCENARIO_IDS,
@@ -35,6 +33,8 @@ const scenarios = listGameIqScenarios();
 const realIds = new Set(scenarios.map((scenario) => scenario.id));
 const saturatedIds = [...GAMEIQ_SATURATED_SCENARIO_IDS];
 
+const EXPECTED_SATURATION_COUNT = 18;
+
 check("min-models constant is 3", GAMEIQ_SATURATION_MIN_MODELS === 3, {
   GAMEIQ_SATURATION_MIN_MODELS,
 });
@@ -44,32 +44,33 @@ check("every saturated id is a real scenario id", bogus.length === 0, {
   bogus,
 });
 
-check("saturation set is non-empty", saturatedIds.length > 0, {
-  size: saturatedIds.length,
-});
-
-// Lower bound honestly relaxed 50 -> 20 with the E3 fresh-evidence pruning:
-// the refresh removes saturation for every scenario ANY fresh model failed,
-// and the fresh cohort includes much weaker models than the four reference
-// models, so 108 dropped to 44. The registry is NOT padded to meet a bound.
 check(
-  "saturation count within sane bound (20-140)",
-  saturatedIds.length >= 20 && saturatedIds.length <= 140,
-  { size: saturatedIds.length }
+  `saturation set has exactly ${EXPECTED_SATURATION_COUNT} ids (the post-hard-delete survivor count)`,
+  saturatedIds.length === EXPECTED_SATURATION_COUNT,
+  { size: saturatedIds.length, expected: EXPECTED_SATURATION_COUNT }
 );
 
-// Battleship: every battleship scenario is saturated (11/11) — documents that
-// the pack has zero discrimination across the four reference models.
-const battleshipIds = scenarios
-  .filter((scenario) => scenario.id.startsWith("gameiq-v0.1-battleship"))
-  .map((scenario) => scenario.id);
-const battleshipMissing = battleshipIds.filter(
-  (id) => !GAMEIQ_SATURATED_SCENARIO_IDS.has(id)
+// No battleship/chess/connect-four ids survive the 2026-07-17 hard delete —
+// only fireworks and codenames ids remain.
+const deletedGamePrefixes = [
+  "gameiq-v0.1-battleship",
+  "gameiq-v0.1-chess",
+  "gameiq-v0.1-connect-four",
+];
+const revivedDeletedIds = saturatedIds.filter((id) =>
+  deletedGamePrefixes.some((prefix) => id.startsWith(prefix))
 );
 check(
-  `all ${battleshipIds.length} battleship scenarios are saturated`,
-  battleshipIds.length === 11 && battleshipMissing.length === 0,
-  { total: battleshipIds.length, missing: battleshipMissing }
+  "no battleship/chess/connect-four ids remain in the saturation registry",
+  revivedDeletedIds.length === 0,
+  revivedDeletedIds
+);
+check(
+  "every saturated id is fireworks or codenames",
+  saturatedIds.every(
+    (id) => id.startsWith("gameiq-fireworks-") || id.startsWith("gameiq-v0.1-codenames")
+  ),
+  saturatedIds
 );
 
 console.log(failures === 0 ? "PASS" : `FAIL (${failures})`);

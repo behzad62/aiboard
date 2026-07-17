@@ -1,10 +1,35 @@
 "use client";
 
+import type { ReactNode } from "react";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { BenchmarkLab } from "@/components/BenchmarkLab";
-import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
+import { BenchmarkHeadToHeadTable } from "@/components/benchmark/BenchmarkHeadToHeadTable";
+import { CapabilityRadarChart } from "@/components/benchmark/CapabilityRadarChart";
+import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
+import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
+import { VerdictStrip } from "@/components/benchmark/results/VerdictStrip";
+import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
 
 export function BenchmarkPage() {
+  const {
+    dashboard,
+    certifiedDashboard,
+    reportCounts,
+    corruptRunFileCount,
+    locked,
+    loading,
+    message,
+    refresh,
+    setMessage,
+  } = useBenchmarkDashboard();
+
   return (
     <div className="mx-auto max-w-7xl space-y-8">
       <header>
@@ -17,56 +42,119 @@ export function BenchmarkPage() {
         </p>
       </header>
 
-      <Tabs defaultValue="overview" className="space-y-6">
+      <Tabs defaultValue="run" className="space-y-6">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="lab-evidence">Lab Evidence</TabsTrigger>
-          <TabsTrigger value="certified">Certified</TabsTrigger>
-          <TabsTrigger value="workbench">WorkBench</TabsTrigger>
-          <TabsTrigger value="gameiq">GameIQ</TabsTrigger>
-          <TabsTrigger value="teamiq">TeamIQ</TabsTrigger>
-          <TabsTrigger value="toolreliability">Tool Reliability</TabsTrigger>
-          <TabsTrigger value="build-lab">Build Lab</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
+          <TabsTrigger value="run">Run</TabsTrigger>
+          <TabsTrigger value="results">Results</TabsTrigger>
+          <TabsTrigger value="data">Data</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          <BenchmarkLab view="overview" />
+        <TabsContent value="run" className="space-y-6">
+          <DashboardGate locked={locked} loading={loading}>
+            {message && <MessageBanner message={message} />}
+            <CertifiedRunPanel
+              track="all"
+              onComplete={refresh}
+              setMessage={setMessage}
+            />
+          </DashboardGate>
         </TabsContent>
 
-        <TabsContent value="lab-evidence" className="space-y-6">
-          <BenchmarkLab view="lab-evidence" />
+        <TabsContent value="results" className="space-y-6">
+          <DashboardGate locked={locked} loading={loading}>
+            {message && <MessageBanner message={message} />}
+            <VerdictStrip certified={certifiedDashboard} />
+            <CertifiedBenchmarkOverview
+              certified={certifiedDashboard}
+              counts={reportCounts}
+              track="all"
+              corruptRunFileCount={corruptRunFileCount}
+              onRefresh={refresh}
+              setMessage={setMessage}
+            />
+            <AnalysisSection dashboard={dashboard} />
+          </DashboardGate>
         </TabsContent>
 
-        <TabsContent value="certified" className="space-y-6">
-          <BenchmarkLab view="certified" />
-        </TabsContent>
-
-        <TabsContent value="workbench" className="space-y-6">
-          <BenchmarkLab view="workbench" />
-        </TabsContent>
-
-        <TabsContent value="gameiq" className="space-y-6">
-          <BenchmarkLab view="gameiq" />
-        </TabsContent>
-
-        <TabsContent value="teamiq" className="space-y-6">
-          <BenchmarkLab view="teamiq" />
-        </TabsContent>
-
-        <TabsContent value="toolreliability" className="space-y-6">
-          <BenchmarkLab view="toolreliability" />
-        </TabsContent>
-
-        <TabsContent value="build-lab" className="space-y-6">
-          <BuildLeaderboard />
-        </TabsContent>
-
-        <TabsContent value="reports" className="space-y-6">
-          <BenchmarkLab view="reports" />
+        <TabsContent value="data" className="space-y-6">
+          <BenchmarkLab />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function DashboardGate({
+  locked,
+  loading,
+  children,
+}: {
+  locked: boolean;
+  loading: boolean;
+  children: ReactNode;
+}) {
+  if (locked) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Benchmark</CardTitle>
+          <CardDescription>
+            Unlock storage to load benchmark data.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Benchmark</CardTitle>
+          <CardDescription>Loading benchmark evidence...</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function MessageBanner({ message }: { message: string }) {
+  return (
+    <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      {message}
+    </div>
+  );
+}
+
+// Collapsed by default (design doc: Results tab item 3). Head-to-head table
+// and capability radar survived the Task 3 IA collapse unimported — they
+// remount here with the same useBenchmarkDashboard() data BenchmarkLab used
+// to feed them under the old "lab-evidence" view.
+function AnalysisSection({
+  dashboard,
+}: {
+  dashboard: BenchmarkDashboardData | null;
+}) {
+  return (
+    <details className="rounded-md border">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
+        Analysis: head-to-head outcomes and capability profile
+      </summary>
+      <div className="grid gap-4 border-t p-4 xl:grid-cols-2">
+        {dashboard ? (
+          <>
+            <BenchmarkHeadToHeadTable rows={dashboard.headToHeadRows} />
+            <CapabilityRadarChart dashboard={dashboard} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground xl:col-span-2">
+            Loading benchmark evidence...
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 

@@ -40,9 +40,12 @@ const MODEL_ID = "fake:recover-model";
 
 const packs = listGameIqScenarioPacks();
 // Smallest first-class pack (10 scenarios) as the COMPLETE pack; a large pack
-// (connect-four, 40) as the PARTIAL pack with only a few traces.
+// (fireworks-hard, 40) as the PARTIAL pack with only a few traces.
 const completePack = packs.find((pack) => pack.id === "gameiq-v0.1-codenames")!;
-const partialPack = packs.find((pack) => pack.id === "gameiq-v0.1-connect-four")!;
+const partialPack = packs.find((pack) => pack.id === "gameiq-fireworks-hard-v1")!;
+// A bogus/deleted pack id — mirrors a historical run file that still carries
+// traces for the hard-deleted (2026-07-17) v0.1 chess pack.
+const UNKNOWN_PACK_ID = "gameiq-v0.1-chess";
 
 let traceSeq = 0;
 function traceFor(
@@ -90,6 +93,13 @@ partialPack.scenarios.slice(0, 3).forEach((scenario, index) => {
     )
   );
 });
+// UNKNOWN pack: two traces for a caseId no longer in the registry (the
+// hard-deleted v0.1 chess pack) — mirrors the user's real historical AIBoard
+// run files. recoverBundle must SKIP these gracefully, never throw.
+traces.push(
+  traceFor(UNKNOWN_PACK_ID, { from: "a7", to: "a8", promotion: "queen" }, "2026-07-03T02:00:00.000Z"),
+  traceFor(UNKNOWN_PACK_ID, { from: "e1", to: "e8" }, "2026-07-03T02:00:01.000Z")
+);
 
 function failedAttempt(caseId: string): BenchmarkAttemptV2 {
   return {
@@ -209,9 +219,10 @@ const bundle: BenchmarkReportBundleV2 = {
 };
 
 const RECOVERED_AT = "2026-07-03T03:00:00.000Z";
-const { bundle: out, recoveredPacks, skipped } = await recoverBundle(bundle, {
-  recoveredAt: RECOVERED_AT,
-});
+const { bundle: out, recoveredPacks, skipped, unknownPacks } = await recoverBundle(
+  bundle,
+  { recoveredAt: RECOVERED_AT }
+);
 
 // ── Recovered pack ────────────────────────────────────────────────────────────
 check(
@@ -353,9 +364,9 @@ check(
 );
 
 // ── Zero-trace packs (early-skip branch) ──────────────────────────────────────
-// Every pack other than codenames (complete) and connect-four (partial) has NO
-// traces in the fixture; the chess pack exercises the no-traces early-skip.
-const zeroTracePack = packs.find((pack) => pack.id === "gameiq-v0.1-chess")!;
+// Every pack other than codenames (complete) and fireworks-hard (partial) has
+// NO traces in the fixture; the chess v2 pack exercises the no-traces early-skip.
+const zeroTracePack = packs.find((pack) => pack.id === "gameiq-v0.2-chess")!;
 check(
   "zero-trace pack skipped cleanly with reason no-traces (0/total)",
   skipped.some(
@@ -388,6 +399,42 @@ check(
     (recovery?.skippedNoTraces as string[]).includes(zeroTracePack.id) &&
     !(recovery?.skippedNoTraces as string[]).includes(partialPack.id),
   recovery?.skippedNoTraces
+);
+
+// ── Unknown pack (deleted pack id) — graceful skip, never throw ───────────────
+// A run file that still carries traces for the hard-deleted v0.1 chess pack
+// must not crash recoverBundle; it must be reported and excluded from the
+// pack loop entirely (it never becomes a "recovered" or "skipped" pack —
+// there is no pack to recover it against).
+check(
+  "recoverBundle did not throw despite the unknown-pack traces (implicit: we got here)",
+  true
+);
+check(
+  "unknown pack is reported with its trace count",
+  unknownPacks.some(
+    (entry) => entry.caseId === UNKNOWN_PACK_ID && entry.traceCount === 2
+  ),
+  unknownPacks
+);
+check(
+  "unknown pack never appears in recoveredPacks",
+  !recoveredPacks.some((pack) => pack.packId === UNKNOWN_PACK_ID)
+);
+check(
+  "unknown pack never appears in the known-pack skipped list",
+  !skipped.some((pack) => pack.packId === UNKNOWN_PACK_ID)
+);
+check(
+  "recovery.skippedUnknownPack lists the deleted pack id",
+  Array.isArray(recovery?.skippedUnknownPack) &&
+    (recovery?.skippedUnknownPack as string[]).includes(UNKNOWN_PACK_ID),
+  recovery?.skippedUnknownPack
+);
+check(
+  "unknown pack's traces produce no attemptsV2/verifier entries at all",
+  !out.attemptsV2.some((attempt) => attempt.caseId === UNKNOWN_PACK_ID) &&
+    !out.verifierResults.some((verifier) => verifier.caseId === UNKNOWN_PACK_ID)
 );
 
 // ── recoveredAt omitted when not passed ───────────────────────────────────────

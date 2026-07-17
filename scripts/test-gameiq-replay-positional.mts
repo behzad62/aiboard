@@ -223,43 +223,14 @@ for (const ref of REFERENCE_RUNS) {
 }
 
 // ── Named regression pins the review called out explicitly ───────────────────
-// Prove the two headline numbers: Spark chess 14/15 (was 2/15) and Spark
-// connect-four 37/40, computed straight from the resolver + scorer.
-{
-  const bundle = JSON.parse(
-    readFileSync(AIBOARD_RUNS + REFERENCE_RUNS[0].file, "utf8")
-  ) as BenchmarkReportBundleV2;
-  const model = bundle.runs[0].modelIds[0];
-  const traces = bundle.traces as PackTraceRow[];
-
-  async function correctOf(packId: string): Promise<number> {
-    const pack = packs.find((p) => p.id === packId)!;
-    const packTraces = traces.filter((t) => t.caseId === pack.id);
-    const { replayScenarios, actions } = resolvePackTraceReplay(pack, packTraces);
-    let cursor = 0;
-    const result = await runGameIqScenarios({
-      runId: "positional-headline",
-      modelId: model,
-      teamCompositionId: "positional-headline",
-      scenarios: replayScenarios,
-      moveProvider: () => ({ action: actions[cursor++] }),
-    });
-    return result.caseResults.filter((r) => r.legal && r.correct).length;
-  }
-
-  const chessCorrect = await correctOf("gameiq-v0.1-chess");
-  check(
-    "Spark chess replays to 14 correct (was 2/15 under the mid-gap bug)",
-    chessCorrect === 14,
-    chessCorrect
-  );
-  const cfCorrect = await correctOf("gameiq-v0.1-connect-four");
-  check(
-    "Spark connect-four replays to 37 correct (dup collapsed 41→40)",
-    cfCorrect === 37,
-    cfCorrect
-  );
-}
+// This used to prove two headline numbers (Spark chess 14/15, Spark
+// connect-four 37/40) by replaying the v0.1 chess/connect-four packs by id.
+// Those packs were hard-deleted 2026-07-17 — the design's accepted tradeoff
+// is that historical v0.1 traces become unreplayable, so this specific pin no
+// longer has a pack to replay against. The main loop above already proves the
+// resolver's pairing/dedup correctness generically for every pack still
+// registered (and for whichever reference-run packs still exist); it does not
+// need this pack-id-specific pin to stay meaningful.
 
 console.log(failures === 0 ? "\nPASS" : `\nFAIL (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

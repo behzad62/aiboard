@@ -3,7 +3,7 @@ import type {
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
-import { scoreTeamLift } from "./teamiq";
+import { computeTeamLift } from "@/lib/benchmark/certified/team-lift";
 import type { CertifiedAggregateInput, CertifiedRunScore } from "./types";
 import { finiteOrNull, round } from "./types";
 
@@ -542,21 +542,8 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
 
   for (const row of rows) {
     if (row.modelIds.length <= 1) continue;
-    const soloRows = row.modelIds
-      .map((modelId) => soloScoreByModel.get(modelId))
-      .filter((solo): solo is CertifiedRunScore => Boolean(solo));
-    if (soloRows.length !== row.modelIds.length) continue;
-    const bestSolo = soloRows.reduce((best, solo) =>
-      solo.jobSuccessScore > best.jobSuccessScore ? solo : best
-    );
-    const lift = scoreTeamLift({
-      teamScore: row.jobSuccessScore,
-      memberSoloScores: soloRows.map((solo) => solo.jobSuccessScore),
-      teamCostUsd: row.averageCostUsd,
-      bestSoloCostUsd: bestSolo.averageCostUsd,
-      teamDurationMs: row.durationMs,
-      bestSoloDurationMs: bestSolo.durationMs,
-    });
+    const lift = computeTeamLift(row, soloScoreByModel);
+    if (!lift) continue;
     row.bestSoloScore = lift.bestSoloScore;
     row.teamLift = lift.teamLift;
     row.teamLiftLabel = lift.label;
