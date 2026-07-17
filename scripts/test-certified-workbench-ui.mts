@@ -467,6 +467,14 @@ const certifiedRunPanelSource = readFileSync(
   "components/benchmark/certified/CertifiedRunPanel.tsx",
   "utf8"
 );
+// The run-execution helpers (runSelected/runGameIqMultiModel + their pure
+// helpers) were extracted out of CertifiedRunPanel.tsx into run-execution.ts
+// (2026-07-17 benchmark UX overhaul, Task 4 Step 1) — the WorkBench
+// pack-batching evidence below now lives there, not in the panel.
+const runExecutionSource = readFileSync(
+  "lib/benchmark/certified/run-execution.ts",
+  "utf8"
+);
 check(
   "WorkBench runner panel links the generated benchmark runner download",
   runnerStatusSource.includes('href="/bench-runner.mjs"') &&
@@ -492,12 +500,12 @@ check(
 check(
   "certified WorkBench UI runs packs instead of individual cases",
   certifiedRunPanelSource.includes("getWorkBenchCasePack(suiteId)") &&
-    certifiedRunPanelSource.includes("selectedWorkBenchPack.cases.map") &&
-    certifiedRunPanelSource.includes("caseRecords.map((caseRecord) => caseRecord.id)") &&
-    certifiedRunPanelSource.includes("cases: selectedWorkBenchPack.cases.map") &&
+    runExecutionSource.includes("selectedWorkBenchPack.cases.map") &&
+    runExecutionSource.includes("caseRecords.map((caseRecord) => caseRecord.id)") &&
+    runExecutionSource.includes("cases: selectedWorkBenchPack.cases.map") &&
     !certifiedRunPanelSource.includes("getWorkBenchCaseOption(suiteId)") &&
     !certifiedRunPanelSource.includes("selectedCaseId={suiteId}"),
-  certifiedRunPanelSource
+  { certifiedRunPanelSource, runExecutionSource }
 );
 
 if (failures === 0) {
