@@ -37,6 +37,7 @@ import {
   buildTeamIqRecommendationCards,
 } from "@/lib/benchmark/teamiq";
 import { MIN_CONFIDENT_ATTEMPTS } from "@/lib/benchmark/teamiq/recommendations";
+import { sortRowsByTeamLift } from "@/lib/benchmark/certified/team-lift";
 import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
 import { partitionBenchmarkCases } from "@/lib/benchmark/build-cases";
 
@@ -495,11 +496,31 @@ export function buildCertifiedBenchmarkDashboardData(
       value: (item) => item.speedPerPassMs ?? Number.POSITIVE_INFINITY,
     },
   ]);
-  const teamIqComboMatrixRows = buildTeamIqComboMatrixRows({
-    attempts: scoredAttempts,
-    teamCompositions: input.teamCompositions,
-    track: "teamiq",
-  });
+  // Team-lift generalization (benchmark UX overhaul Task 6): the combo matrix
+  // + Pareto frontier the Results "Teams" lens renders is no longer TeamIQ-
+  // only. TeamIQ's own row-building call is UNCHANGED (same function, same
+  // args, same per-track Pareto computation); WorkBench gets an identical
+  // second call — buildTeamIqComboMatrixRows/linkTeamLiftBaselines are
+  // already track-generic (matched per attempt by caseId+track+
+  // harnessVersion+scoringVersion, i.e. "the same case pack") and share the
+  // ONE lift formula (scoreTeamLift) computeTeamLift now also wraps for the
+  // cross-track leaderboard. A team row with no complete solo baseline for
+  // its pack keeps teamLift: null, same as TeamIQ's existing behavior — the
+  // ComboMatrix renders that as a dash. Merged and re-sorted by lift so a
+  // mixed TeamIQ/WorkBench list ranks consistently regardless of which track
+  // produced more rows.
+  const teamIqComboMatrixRows = sortRowsByTeamLift([
+    ...buildTeamIqComboMatrixRows({
+      attempts: scoredAttempts,
+      teamCompositions: input.teamCompositions,
+      track: "teamiq",
+    }),
+    ...buildTeamIqComboMatrixRows({
+      attempts: scoredAttempts,
+      teamCompositions: input.teamCompositions,
+      track: "workbench",
+    }),
+  ]);
   // Summary quality/pass/cost/duration averages MERGE every track into one set
   // of headline numbers, so the same underlying decision reached via two tracks
   // must count once here too (leaderboard rows already dedupe internally).
