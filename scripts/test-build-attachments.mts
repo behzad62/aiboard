@@ -11,6 +11,11 @@ import type { AttachmentPayload, AttachmentRecord } from "../lib/attachments/typ
 import type { Discussion } from "../lib/db/schema";
 import type { OrchestratorEvent } from "../lib/orchestrator/engine";
 import type { ChatMessage, SelectedModel } from "../lib/providers/base";
+import {
+  BUILD_INTEGRATOR_MIN_TOKENS,
+  BUILD_ROUND_MIN_TOKENS,
+  EFFORT_CONFIG,
+} from "../lib/orchestrator/config";
 
 const require = createRequire(import.meta.url);
 const storeApi = require("../lib/client/store") as {
@@ -32,6 +37,32 @@ type ModelOverrideCall = {
   messages: ChatMessage[];
   maxTokens: number;
   attachments?: AttachmentPayload[];
+};
+
+/**
+ * A worker whose active skills require evidence must close with this report, or
+ * the engine spends an extra "finalizing" turn asking for it
+ * (shouldRequestWorkerFinalOutput / hasWorkerFinalEvidenceResponse in
+ * lib/orchestrator/build.ts). These fixtures stub a well-behaved worker, so
+ * they emit it alongside the file block and the wave proceeds straight to
+ * review. The exact headings and the 80-character floor are what the engine
+ * matches on.
+ */
+const FINAL_EVIDENCE_RESPONSE = [
+  "Task result: Created the requested file with the imported requirement text.",
+  "Verification evidence: Reviewed the generated file contents; the requirement is present.",
+  "Skill evidence: Kept the change scoped to the single declared output path.",
+];
+
+/**
+ * The pre-wave plan critique (pickPlanCritic) runs whenever a distinct second
+ * model exists and the run is not a benchmark attempt. An approving verdict
+ * carries no blocking issues, so the Architect's plan stands unrevised.
+ */
+const APPROVING_PLAN_CRITIQUE = {
+  verdict: "approve",
+  issues: [],
+  missingWork: [],
 };
 
 function installIndexedDbStub(): void {
@@ -196,6 +227,13 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
               expectedOutputs: "A text file containing the imported requirement.",
               dependsOn: [],
               difficulty: 1,
+              // Matches this plan's spec ("Review generated file contents"):
+              // reviewing the file is enough, no command runs. Without this,
+              // outputPaths defaults the policy to "tool", and the plan
+              // contract rejects a tool-policy task that names no verifier —
+              // sending the Architect into a contract revision this fixture
+              // does not stub.
+              verificationPolicy: "architect",
             },
           ],
           notes: "Use the provided attachment only during planning.",
@@ -203,12 +241,17 @@ const hooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
+    if (input.label.endsWith("critiquing the plan")) {
+      return ["```json", JSON.stringify(APPROVING_PLAN_CRITIQUE), "```"].join("\n");
+    }
     if (input.label.startsWith("Test Worker working on T1")) {
       return [
         "Implemented.",
         "```txt path=src/requirement.txt",
         "visible imported requirement",
         "```",
+        "",
+        ...FINAL_EVIDENCE_RESPONSE,
       ].join("\n");
     }
     if (
@@ -358,6 +401,8 @@ const fallbackHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
               expectedOutputs: "A fallback file.",
               dependsOn: [],
               difficulty: 1,
+              // See the note on the first fixture's task.
+              verificationPolicy: "architect",
             },
           ],
           notes: "Use default budgets.",
@@ -365,12 +410,17 @@ const fallbackHooks: NonNullable<Parameters<typeof runBuildDiscussion>[3]> = {
         "```",
       ].join("\n");
     }
+    if (input.label.endsWith("critiquing the plan")) {
+      return ["```json", JSON.stringify(APPROVING_PLAN_CRITIQUE), "```"].join("\n");
+    }
     if (input.label.startsWith("Fallback Worker working on T1")) {
       return [
         "Implemented.",
         "```txt path=src/fallback.txt",
         "fallback",
         "```",
+        "",
+        ...FINAL_EVIDENCE_RESPONSE,
       ].join("\n");
     }
     if (
@@ -402,19 +452,39 @@ await runBuildDiscussion(
   () => undefined,
   fallbackHooks
 );
+// A model with no contextProfile falls back to the effort/Build floor rather
+// than any profiled ceiling. Derived from the same constants the engine reads
+// so retuning an effort tier does not rot this fixture; the profiled-ceiling
+// check above still pins concrete numbers from this file's own profiles.
+const effortConfig = EFFORT_CONFIG[discussion.effort];
+const expectedFallbackArchitectTokens = Math.max(
+  effortConfig.judgeMaxTokens,
+  BUILD_INTEGRATOR_MIN_TOKENS
+);
+const expectedFallbackWorkerTokens = Math.max(
+  effortConfig.maxTokens,
+  BUILD_ROUND_MIN_TOKENS
+);
 check(
   "Build model calls without explicit profiles keep Build minimum budgets",
   fallbackCalls.some(
     (call) =>
       call.label === "Architect is writing the build spec" &&
-      call.maxTokens === 16_384
+      call.maxTokens === expectedFallbackArchitectTokens
   ) &&
     fallbackCalls.some(
       (call) =>
         call.label.startsWith("Fallback Worker working on T1") &&
-        call.maxTokens === 8_192
-    ),
-  fallbackCalls.map((call) => ({ label: call.label, maxTokens: call.maxTokens }))
+        call.maxTokens === expectedFallbackWorkerTokens
+    ) &&
+    // The floor must not silently become a profiled ceiling.
+    expectedFallbackArchitectTokens !== 32_768 &&
+    expectedFallbackWorkerTokens !== 24_576,
+  {
+    expectedFallbackArchitectTokens,
+    expectedFallbackWorkerTokens,
+    calls: fallbackCalls.map((call) => ({ label: call.label, maxTokens: call.maxTokens })),
+  }
 );
 
 if (failed === 0) {
