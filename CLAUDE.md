@@ -23,6 +23,9 @@ npx tsx scripts/test-review-diff-pack.mts       # wave-diff review pack renderin
 npx tsx scripts/test-model-stats-tokens.mts     # token accumulation + tokens-per-approval KPI
 npx tsx scripts/test-runner-mcp-image.mts       # MCP screenshot image passthrough (runner-lib)
 
+# Benchmark UI cross-track suite (also in the test:benchmark:unit group):
+npx tsx scripts/test-benchmark-team-lift.mts    # team-lift generalization: TeamIQ formula unchanged + WorkBench team/solo lift + null baseline + mixed-track sort
+
 # Benchmark/certified suites run via npm groups:
 npm run test:benchmark   # unit + tracks + workbench + e2e (the certified gate)
 
@@ -31,7 +34,7 @@ npx tsx scripts/test-gameiq-fireworks-pack.mts        # fireworks pack completen
 npx tsx scripts/test-gameiq-battleship-v2-pack.mts    # battleship v2 oracle-graded pack guard (independent enumerator; completeness, chains, floor)
 npx tsx scripts/test-gameiq-chess-v2-pack.mts         # chess v2 quiet-mate prover-keyed pack guard
 npx tsx scripts/test-gameiq-c4-v2-pack.mts            # connect-four v2 solver-keyed depth-pack guard
-npx tsx scripts/test-gameiq-saturation.mts            # saturation registry sanity (e.g. all 11 battleship scenarios saturated)
+npx tsx scripts/test-gameiq-saturation.mts            # saturation registry sanity (exactly the 18-id post-hard-delete survivor set, all ids resolve to registered scenarios)
 npx tsx scripts/test-gameiq-replay-positional.mts     # gap/duplicate-aware legacy trace pairing
 npx tsx scripts/test-gameiq-transport-containment.mts # unscored-transport math (no NaN, provider_unavailable threshold)
 npx tsx scripts/test-certified-model-call-retry.mts   # transient-error retry/backoff + abort
@@ -95,7 +98,12 @@ Each provider implements `AIProvider` from `lib/providers/base.ts` (`listModels`
 `scripts/runner.mjs` — zero-dependency Node 18+ HTTP server the **user** starts (`node runner.mjs <project-folder>`), bound to 127.0.0.1 with a token. Gives the Architect real file read/write/search, shell commands (per-command approval unless "Full access"), and stdio-MCP bridges (`--mcp "name=command"`), plus convenience registrations for Context7 (`--context7`, API key via `--context7-key`/`CONTEXT7_API_KEY`) and SearXNG (`--searxng --searxng-url <url>`). It is copied to `public/runner.mjs` by `predev`/`prebuild` (the copy is gitignored) so the hosted app serves it for download. Client side: `lib/client/runner.ts`.
 
 ### App layer
-Static pages: dashboard `app/page.tsx`, `app/discussion/page.tsx` (id via `?id=` query param — static export forbids dynamic route segments), `app/settings/page.tsx` (Providers / Pricing / Defaults / Storage / Security tabs), and `app/benchmark/page.tsx` (global Build-mode model leaderboard — detailed/sortable view backed by `lib/client/model-stats.ts` over `getModelStats()`). Header in `app/layout.tsx`. UI uses Radix primitives + Tailwind under `components/ui/`.
+Static pages: dashboard `app/page.tsx`, `app/discussion/page.tsx` (id via `?id=` query param — static export forbids dynamic route segments), `app/settings/page.tsx` (Providers / Pricing / Defaults / Storage / Security tabs), and `app/benchmark/page.tsx` → `components/BenchmarkPage.tsx` (global benchmark surface, collapsed 2026-07-17 to exactly three tabs — do not reintroduce per-track tabs):
+  - **Run** — `CertifiedRunPanel` (`components/benchmark/certified/`): a shared `ModelChecklist` (`components/benchmark/run/ModelChecklist.tsx`, selection persisted in localStorage) feeds a `TeamCompositionBuilder` (renders only when the active preset has a team leg) and `PresetCards` (`components/benchmark/run/PresetCards.tsx`) — three preset cards **Model IQ** (GameIQ bundle + Tool Reliability, solo), **Team benchmark** (TeamIQ compositions + solo baselines), **Full certified** (Model IQ + Team benchmark + WorkBench, WorkBench leg skipped with a visible note when no bench runner is connected) — defined declaratively in `lib/benchmark/certified/run-presets.ts` and sequenced by `runPreset()` in `lib/benchmark/certified/run-execution.ts` (one `AbortController` per preset run). Progress renders per-leg/per-model/per-pack in `RunProgressList` (`components/benchmark/run/RunProgressList.tsx`). An **Advanced** `<details>` expander keeps the original single-suite/pack picker flow (`CaseSuitePicker`, per-track dropdowns) unchanged for one-off runs.
+  - **Results** — `VerdictStrip` (`components/benchmark/results/VerdictStrip.tsx`: Smartest model / Best team / Most efficient / Best value team cards) above `CertifiedBenchmarkOverview`, which renders the stat grid then `LensTabs` (`components/benchmark/results/LensTabs.tsx`) — a segmented **Solo / Teams / Roles / Live builds** control over one shared "all tracks" leaderboard: Solo filters to single-model rows; Teams shows team rows (roster chips) + `ComboMatrix` + `ParetoFrontier` (now fed by any track via `computeTeamLift` in `lib/benchmark/certified/team-lift.ts`, not just TeamIQ — the TeamIQ formula is unchanged, verbatim-extracted); Roles shows `WorkBenchRoleLeaderboards`; Live builds shows `BuildLeaderboard` with an "uncertified — live Build usage" caption. A collapsed `<details>` Analysis section at the bottom holds the head-to-head table and capability radar.
+  - **Data** — `BenchmarkLab` (`components/BenchmarkLab.tsx`): run history counts, JSON/Markdown export/import, and the danger-zone bulk-delete (game match history and Build Lab stats are explicitly kept, not deleted).
+
+Header in `app/layout.tsx`. UI uses Radix primitives + Tailwind under `components/ui/`.
 
 ### GameIQ certified benchmark (`lib/benchmark/gameiq/`)
 Scenario-based game-decision benchmark; one certified attempt per pack, scored deterministically. Constants live in `gameiq/types.ts`, scoring in `scoring/gameiq.ts`, the runner in `gameiq/runner.ts`, the certified wrapper in `gameiq/certified-runner.ts`.
