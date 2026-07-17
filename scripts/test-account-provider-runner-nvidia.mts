@@ -259,7 +259,7 @@ try {
   const events = parseNormalizedSse(text);
   const tools = capturedBody?.tools as Array<Record<string, unknown>> | undefined;
   const responseFormat = capturedBody?.response_format as
-    | { type?: string; json_schema?: { name?: string } }
+    | { type?: string; json_schema?: { name?: string; strict?: boolean; schema?: unknown } }
     | undefined;
 
   check(
@@ -292,6 +292,19 @@ try {
         return tool.type === "function" && fn?.name === "echo_tool";
       }),
     capturedBody
+  );
+  check(
+    "NVIDIA runner response_format follows the OpenAI chat-completions spec (schema/strict under json_schema, no inner type)",
+    responseFormat?.json_schema?.strict === true &&
+      JSON.stringify(responseFormat.json_schema.schema) ===
+        JSON.stringify({
+          type: "object",
+          additionalProperties: false,
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+        }) &&
+      !Object.prototype.hasOwnProperty.call(responseFormat.json_schema, "type"),
+    responseFormat
   );
   check(
     "NVIDIA runner emits token, tool-call, usage, and done events",
