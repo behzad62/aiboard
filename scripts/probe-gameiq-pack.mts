@@ -168,13 +168,17 @@ interface CliArgs {
   scenarios?: string;
   dryRun: boolean;
   selfTest: boolean;
+  /** Per-call timeout override (ms); defaults to GAMEIQ_PROBE_TIMEOUT_MS.
+   * Reasoning-heavy account models (chatgpt gpt-5.5) can exceed 120s on hard
+   * scenarios — verified live 2026-07-16. */
+  timeoutMs?: number;
 }
 
 function printUsage(): void {
   console.log(
     [
       "Usage:",
-      "  npx tsx scripts/probe-gameiq-pack.mts --pack <packId> --models <id,id,...> --store <path-to-store.json> --out <dir> [--scenarios <id,id>] [--dry-run]",
+      "  npx tsx scripts/probe-gameiq-pack.mts --pack <packId> --models <id,id,...> --store <path-to-store.json> --out <dir> [--scenarios <id,id>] [--timeout-ms <n>] [--dry-run]",
       "  npx tsx scripts/probe-gameiq-pack.mts --self-test --pack <packId> --out <dir>",
     ].join("\n")
   );
@@ -215,6 +219,16 @@ function parseArgs(argv: string[]): CliArgs {
       case "--self-test":
         args.selfTest = true;
         break;
+      case "--timeout-ms": {
+        const raw = takeValue(argv, ++i, "--timeout-ms");
+        const parsed = Number(raw);
+        if (!Number.isInteger(parsed) || parsed < 1_000) {
+          console.error(`--timeout-ms must be an integer >= 1000, got: ${raw}`);
+          process.exit(2);
+        }
+        args.timeoutMs = parsed;
+        break;
+      }
       default:
         console.error(`Unknown argument: ${arg}`);
         printUsage();
@@ -456,6 +470,8 @@ async function callScenario(input: {
   /** Override the retry backoff (self-test's throwing scrub check passes []
    * so it doesn't sleep out the real 2s/8s delays). */
   retryDelaysMs?: number[];
+  /** Per-call timeout override (--timeout-ms). */
+  timeoutMs?: number;
 }): Promise<ProbeTraceRow> {
   const startedAt = new Date().toISOString();
   const messages: ChatMessage[] = [
@@ -486,7 +502,7 @@ async function callScenario(input: {
       input.provider,
       params,
       input.retryDelaysMs ?? GAMEIQ_PROBE_RETRY_DELAYS_MS,
-      GAMEIQ_PROBE_TIMEOUT_MS
+      input.timeoutMs ?? GAMEIQ_PROBE_TIMEOUT_MS
     );
   } catch (error) {
     // The single choke point where a caught provider error becomes output
@@ -502,7 +518,24 @@ async function callScenario(input: {
       JSON.parse(rawResponse);
       parsedResponseJson = rawResponse; // raw response, only when it parses
     } catch {
-      // Not valid JSON: leave parsedResponseJson unset. resolvePackTraceReplay
+      // Fence tolerance (probe-only, WIDER than certified): some account-bridge
+      // models (github-copilot gemini, verified live 2026-07-16) return the
+      // structured answer wrapped in a ```json fence even though the bridge
+      // sends response_format. The certified scorer's strict JSON.parse would
+      // gate that as failed_tool_use — a provider/format artifact. This probe
+      // measures scenario DIFFICULTY, so we accept a single well-formed fenced
+      // JSON block; the divergence from certified strictness is deliberate and
+      // scoped to this tool.
+      const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(rawResponse);
+      if (fenced) {
+        try {
+          JSON.parse(fenced[1]);
+          parsedResponseJson = fenced[1];
+        } catch {
+          // Fenced but not JSON either: leave unset (unusable trace).
+        }
+      }
+      // Otherwise leave parsedResponseJson unset. resolvePackTraceReplay
       // treats this scenario as unusable (same as a transport gap) rather
       // than crashing.
     }
@@ -535,6 +568,7 @@ async function probeModel(input: {
   providerId: string;
   pack: GameIqScenarioPack;
   scenarios: GameIqScenario[];
+  timeoutMs?: number;
   onBeforeScenario?: (scenario: GameIqScenario) => void;
 }): Promise<ProbeRunFile> {
   const runStartedAt = new Date().toISOString();
@@ -554,6 +588,7 @@ async function probeModel(input: {
       scenario,
       scenarioIndex: i,
       totalScenarios: input.scenarios.length,
+      timeoutMs: input.timeoutMs,
     });
     traces.push(trace);
     const outcome = trace.parsedResponseJson
@@ -876,6 +911,7 @@ async function main(): Promise<void> {
       providerId: model.providerId,
       pack,
       scenarios,
+      timeoutMs: args.timeoutMs,
     });
     const outPath = join(args.out, `probe-${pack.id}-${slug(model.fullModelId)}.json`);
     writeFileSync(outPath, JSON.stringify(runFile, null, 2));
