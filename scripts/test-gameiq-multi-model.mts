@@ -7,12 +7,12 @@
  * one model throwing does not abort the others. Uses the same fake/oracle model
  * path as scripts/test-certified-e2e-gameiq.mts / test-gameiq-bundle-suite.mts.
  *
- * The bundle excludes only the saturated v1 Battleship pack (see
- * lib/benchmark/gameiq/saturation.ts / gameIqBundlePackIds); v2 Battleship
- * (gameiq-v0.2-battleship) rejoined the bundle when it shipped, so this
- * test's per-run pack count is bundlePacks.length (7), not the full catalog
- * (8). Pack counts below are computed from the live catalog/bundle expansion,
- * not hardcoded.
+ * The bundle excludes the saturated v1 Battleship pack (see
+ * lib/benchmark/gameiq/saturation.ts / gameIqBundlePackIds) and the
+ * standalone-selectable v1 Chess/Connect Four packs. Their v2 depth packs
+ * join the bundle, so this test's per-run pack count is bundlePacks.length
+ * (7), not the full catalog (10). Pack counts below are computed from the
+ * live catalog/bundle expansion, not hardcoded.
  */
 import {
   __resetBenchmarkStoreForTests,
@@ -51,12 +51,11 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-// Full pack CATALOG (8 packs, both battleship packs included) vs the BUNDLE
-// expansion (7 packs — only v1 battleship excluded: 11/11 saturated across
-// all four 2026-07 reference models, see lib/benchmark/gameiq/saturation.ts).
-// Mirrors CertifiedRunPanel: caseRecords/oracle/run loop are all scoped to
-// the bundle's pack ids, not the raw catalog, so v1 battleship never gets a
-// case or a call in this bundle-driven run (v2 battleship does).
+// Full pack CATALOG (10 packs) vs the BUNDLE expansion (7 packs — v1
+// Battleship, Chess, and Connect Four excluded). Mirrors CertifiedRunPanel:
+// caseRecords/oracle/run loop are all scoped to the bundle's pack ids, not the
+// raw catalog, so no excluded v1 pack gets a case or call in this bundle-driven
+// run (all three v2 replacements do).
 const packs = listGameIqScenarioPacks();
 const packIdsInRunOrder = gameIqBundlePackIds(GAMEIQ_ALL_PACKS_SUITE_ID);
 const bundlePacks = packs.filter((pack) => packIdsInRunOrder.includes(pack.id));
@@ -282,7 +281,7 @@ check(
 );
 
 check(
-  "each passing model has one scored attempt per bundle pack (model x pack, battleship excluded)",
+  "each passing model has one scored attempt per bundle pack (model x pack, three v0.1 packs excluded)",
   passedRuns.every((run) => {
     const runAttempts = attempts.filter(
       (attempt) => attempt.runId === run.runId

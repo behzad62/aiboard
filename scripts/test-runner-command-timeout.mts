@@ -118,15 +118,20 @@ async function stopRunner(): Promise<void> {
 }
 
 async function removeTempDir(): Promise<void> {
+  const retryableRemovalCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
   for (let i = 0; i < 10; i += 1) {
     try {
       fs.rmSync(tmp, { recursive: true, force: true });
       return;
     } catch (err) {
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? (err as { code?: string }).code
+          : undefined;
       if (
         i === 9 ||
-        !(err && typeof err === "object" && "code" in err) ||
-        (err as { code?: string }).code !== "EBUSY"
+        !code ||
+        !retryableRemovalCodes.has(code)
       ) {
         throw err;
       }
