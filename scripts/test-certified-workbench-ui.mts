@@ -482,14 +482,21 @@ check(
     runnerStatusSource.includes("Download bench runner"),
   runnerStatusSource
 );
+// RunProgressTimeline (the Certify/Run/Persist step UI this check used to
+// read off CertifiedRunPanel.tsx's source) was deleted in the 2026-07-17
+// benchmark UX overhaul Task 4 re-skin — the Advanced flow no longer renders
+// a phase timeline. The distinct-phase state machine itself lives on inside
+// run-execution.ts's runSelected/runGameIqMultiModel (setRunPhase still
+// walks certifying -> running -> persisting -> done); this check now guards
+// THAT — the same regression it always guarded (a timeline/consumer that
+// collapses these into one shared boolean) would still be visible there.
 check(
-  "certified run timeline uses distinct phase state",
-  certifiedRunPanelSource.includes("runPhase") &&
-    certifiedRunPanelSource.includes('"certifying"') &&
-    certifiedRunPanelSource.includes('"persisting"') &&
-    !certifiedRunPanelSource.includes('{ label: "Certify", status: running ? "running" : summary ? "done" : "idle" }') &&
-    !certifiedRunPanelSource.includes('{ label: "Run", status: running ? "running" : summary ? "done" : "idle" }'),
-  certifiedRunPanelSource
+  "certified run lifecycle tracks distinct phase state",
+  runExecutionSource.includes('setRunPhase("certifying")') &&
+    runExecutionSource.includes('setRunPhase("running")') &&
+    runExecutionSource.includes('setRunPhase("persisting")') &&
+    runExecutionSource.includes('setRunPhase("done")'),
+  runExecutionSource
 );
 check(
   "certified WorkBench UI derives harness profile from role mode",

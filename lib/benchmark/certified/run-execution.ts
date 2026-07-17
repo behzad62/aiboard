@@ -29,7 +29,13 @@ import {
   type CertifiedRunnableTrack,
 } from "@/lib/benchmark/certified/suite-options";
 import { isFireworksSuite } from "@/lib/benchmark/certified/ui-gates";
+import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
+import {
+  checkBenchRunner,
+  type BenchRunnerConfig,
+} from "@/lib/client/bench-runner";
+import type { BenchmarkPreset, BenchmarkPresetLeg } from "./run-presets";
 import type {
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
@@ -71,6 +77,7 @@ import {
   runCertifiedWorkBench,
   runWorkBenchBuild,
   workBenchCaseToBenchmarkCaseV2,
+  workBenchHarnessProfileForRoleMode,
   workBenchRoleCount,
   type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
@@ -575,8 +582,9 @@ export async function runGameIqMultiModel(
 
 // Runs `mapper` over `items` with at most `limit` in flight at once, preserving
 // input order in the returned array. Used to cap how many GameIQ model runs open
-// their provider calls simultaneously (see MAX_PARALLEL_GAMEIQ_MODELS).
-async function mapWithConcurrency<T, R>(
+// their provider calls simultaneously (see MAX_PARALLEL_GAMEIQ_MODELS), and
+// reused by runPreset's solo legs for non-GameIQ tracks (ToolReliability).
+export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
   mapper: (item: T, index: number) => Promise<R>
@@ -901,4 +909,326 @@ export function workBenchRoleFor(
   if (index === 0) return "architect";
   if (index === 1) return "worker";
   return "reviewer";
+}
+
+// ---------------------------------------------------------------------------
+// Preset orchestration (2026-07-17 benchmark UX overhaul, Task 4 Step 3).
+// runPreset SEQUENCES the existing per-track run functions above — it does
+// not add a new run engine. Each leg reuses runSelected (single model at a
+// time, looped with a concurrency cap for solo legs) or runGameIqMultiModel
+// (already a multi-model batch) exactly as the Advanced/old flow does; the
+// only new logic here is: iterate legs in order, skip legs whose `requires`
+// is unmet, and translate each leg's progress into PresetProgressEvents for
+// RunProgressList instead of the single-flow's runPhase/summary state.
+// ---------------------------------------------------------------------------
+
+/** Caps how many models run in parallel within one solo preset leg. */
+const MAX_PARALLEL_PRESET_LEG_MODELS = MAX_PARALLEL_GAMEIQ_MODELS;
+
+export type PresetLegStatus =
+  | "queued"
+  | "running"
+  | "passed"
+  | "partial"
+  | "failed"
+  | "skipped";
+
+export interface PresetLegProgress {
+  type: "leg";
+  legIndex: number;
+  leg: BenchmarkPresetLeg;
+  status: PresetLegStatus;
+  detail?: string;
+}
+
+export interface PresetModelProgress {
+  type: "model";
+  legIndex: number;
+  leg: BenchmarkPresetLeg;
+  modelId: string;
+  displayName: string;
+  status: GameIqModelRunStatus;
+  detail?: string;
+}
+
+export type PresetProgressEvent = PresetLegProgress | PresetModelProgress;
+
+// Everything runPreset needs across every leg kind: the shared model
+// checklist (solo legs), the shared team builder's role selections (team
+// legs — the same selection maps onto both TeamIQ and WorkBench role slots,
+// per the plan's "one builder, both tracks"), and the WorkBench runner
+// connection used both for the `requires: "bench-runner"` gate and the
+// WorkBench run itself.
+export interface RunPresetContext {
+  models: SelectedModel[];
+  /** Model ids checked in the shared ModelChecklist; drives every solo leg. */
+  soloModelIds: string[];
+  /** Team builder's role-ordered model ids, reused for TeamIQ AND WorkBench. */
+  teamModelIds: string[];
+  teamIqStrategy: TeamIqUiStrategy;
+  workBenchRoleMode: WorkBenchRoleMode;
+  workBenchRunnerUrl: string;
+  workBenchRunnerToken: string;
+  fireworksPlayerCount: 2 | 3;
+  /** Cancel flag the panel's Cancel button flips; checked between legs AND
+   * before starting each model within a leg so a cancel takes effect promptly
+   * without needing a second AbortController plumbed through every helper. */
+  cancelledRef: MutableRefObject<boolean>;
+  /** Whichever leg/model call is currently in flight; Cancel aborts this. */
+  runAbortRef: MutableRefObject<AbortController | null>;
+  onComplete: () => Promise<void>;
+}
+
+export async function runPreset(
+  preset: BenchmarkPreset,
+  ctx: RunPresetContext,
+  onProgress: (event: PresetProgressEvent) => void
+): Promise<void> {
+  ctx.cancelledRef.current = false;
+  for (let legIndex = 0; legIndex < preset.legs.length; legIndex++) {
+    const leg = preset.legs[legIndex]!;
+    if (ctx.cancelledRef.current) {
+      onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
+      continue;
+    }
+    if (leg.requires === "bench-runner") {
+      const health = await checkBenchRunnerForLeg({
+        url: ctx.workBenchRunnerUrl,
+        token: ctx.workBenchRunnerToken,
+      });
+      if (!health.ok) {
+        onProgress({
+          type: "leg",
+          legIndex,
+          leg,
+          status: "skipped",
+          detail: health.error
+            ? `Bench runner offline — WorkBench skipped (${health.error}).`
+            : "Bench runner offline — WorkBench skipped.",
+        });
+        continue;
+      }
+    }
+    onProgress({ type: "leg", legIndex, leg, status: "running" });
+    try {
+      const result =
+        leg.mode === "solo"
+          ? await runSoloLeg(leg, legIndex, ctx, onProgress)
+          : await runTeamLeg(leg, legIndex, ctx, onProgress);
+      onProgress({ type: "leg", legIndex, leg, status: result.status, detail: result.detail });
+    } catch (error) {
+      onProgress({
+        type: "leg",
+        legIndex,
+        leg,
+        status: "failed",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  await ctx.onComplete();
+}
+
+async function checkBenchRunnerForLeg(
+  config: BenchRunnerConfig
+): Promise<{ ok: boolean; error?: string }> {
+  if (!config.url.trim() || !config.token.trim()) {
+    return { ok: false, error: "Bench runner not configured." };
+  }
+  const health = await checkBenchRunner(config);
+  return { ok: health.ok, error: health.error };
+}
+
+interface PresetLegResult {
+  status: PresetLegStatus;
+  detail?: string;
+}
+
+async function runSoloLeg(
+  leg: BenchmarkPresetLeg,
+  legIndex: number,
+  ctx: RunPresetContext,
+  onProgress: (event: PresetProgressEvent) => void
+): Promise<PresetLegResult> {
+  const selectedModels = ctx.soloModelIds
+    .map((id) => ctx.models.find((candidate) => candidate.modelId === id))
+    .filter((model): model is SelectedModel => Boolean(model));
+  if (selectedModels.length === 0) {
+    return { status: "skipped", detail: "No models selected." };
+  }
+
+  if (leg.track === "gameiq") {
+    let latestRuns: GameIqModelRunState[] = [];
+    const setGameIqModelRuns: Dispatch<SetStateAction<GameIqModelRunState[]>> = (
+      updater
+    ) => {
+      latestRuns =
+        typeof updater === "function"
+          ? (updater as (prev: GameIqModelRunState[]) => GameIqModelRunState[])(
+              latestRuns
+            )
+          : updater;
+      for (const run of latestRuns) {
+        onProgress({
+          type: "model",
+          legIndex,
+          leg,
+          modelId: run.modelId,
+          displayName: run.displayName,
+          status: run.status,
+          detail: run.error,
+        });
+      }
+    };
+    await runGameIqMultiModel({
+      models: ctx.models,
+      gameIqModelIds: ctx.soloModelIds,
+      suiteId: leg.suiteId,
+      fireworksPlayerCount: ctx.fireworksPlayerCount,
+      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      runAbortRef: ctx.runAbortRef,
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: () => {},
+      setMessage: () => {},
+      setGameIqModelRuns,
+      onComplete: async () => {},
+    });
+    return { status: legStatusFromModelRuns(latestRuns) };
+  }
+
+  // Every other solo track (currently only ToolReliability) runs one model
+  // at a time via runSelected — there is no multi-model batch entry point
+  // for it the way GameIQ has — so loop with the same concurrency cap.
+  const modelStatuses = await mapWithConcurrency(
+    selectedModels,
+    MAX_PARALLEL_PRESET_LEG_MODELS,
+    async (model): Promise<GameIqModelRunStatus> => {
+      onProgress({
+        type: "model",
+        legIndex,
+        leg,
+        modelId: model.modelId,
+        displayName: model.displayName,
+        status: "running",
+      });
+      // A plain `let` here gets over-narrowed by TS across the nested
+      // setSummary closure below; a boxed container reads back cleanly.
+      const outcome: { summary: CertifiedRunSummary | null; error?: string } = {
+        summary: null,
+      };
+      try {
+        await runSelected({
+          selectedTrack: leg.track,
+          suiteId: leg.suiteId,
+          models: ctx.models,
+          modelId: model.modelId,
+          teamModelIds: [],
+          teamIqStrategy: ctx.teamIqStrategy,
+          fireworksPlayerCount: ctx.fireworksPlayerCount,
+          includeSoloBaselines: true,
+          workBenchModelIds: [],
+          workBenchRoleMode: ctx.workBenchRoleMode,
+          workBenchRunnerUrl: ctx.workBenchRunnerUrl,
+          workBenchRunnerToken: ctx.workBenchRunnerToken,
+          effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
+          certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+          runAbortRef: ctx.runAbortRef,
+          setRunning: () => {},
+          setRunPhase: () => {},
+          setSummary: (summary) => {
+            outcome.summary = summary;
+          },
+          setMessage: (message) => {
+            if (message) outcome.error = message;
+          },
+          onComplete: async () => {},
+        });
+      } catch (error) {
+        outcome.error = error instanceof Error ? error.message : String(error);
+      }
+      const status: GameIqModelRunStatus =
+        outcome.summary?.status === "completed" ? "passed" : "failed";
+      onProgress({
+        type: "model",
+        legIndex,
+        leg,
+        modelId: model.modelId,
+        displayName: model.displayName,
+        status,
+        detail: status === "failed" ? outcome.error : undefined,
+      });
+      return status;
+    }
+  );
+  return { status: legStatusFromStatuses(modelStatuses) };
+}
+
+async function runTeamLeg(
+  leg: BenchmarkPresetLeg,
+  _legIndex: number,
+  ctx: RunPresetContext,
+  _onProgress: (event: PresetProgressEvent) => void
+): Promise<PresetLegResult> {
+  if (ctx.teamModelIds.length === 0) {
+    return { status: "skipped", detail: "No team composition selected." };
+  }
+  const effectiveHarnessProfile =
+    leg.track === "workbench"
+      ? workBenchHarnessProfileForRoleMode(ctx.workBenchRoleMode)
+      : TEAM_HARNESS;
+  // A plain `let` here gets over-narrowed by TS across the nested setSummary
+  // closure below; a boxed container reads back cleanly (see runSoloLeg).
+  const outcome: { summary: CertifiedRunSummary | null; error?: string } = {
+    summary: null,
+  };
+  try {
+    await runSelected({
+      selectedTrack: leg.track,
+      suiteId: leg.suiteId,
+      models: ctx.models,
+      modelId: "",
+      teamModelIds: ctx.teamModelIds,
+      teamIqStrategy: ctx.teamIqStrategy,
+      fireworksPlayerCount: ctx.fireworksPlayerCount,
+      includeSoloBaselines: leg.includeSoloBaselines ?? true,
+      workBenchModelIds: ctx.teamModelIds,
+      workBenchRoleMode: ctx.workBenchRoleMode,
+      workBenchRunnerUrl: ctx.workBenchRunnerUrl,
+      workBenchRunnerToken: ctx.workBenchRunnerToken,
+      effectiveHarnessProfile,
+      certification: runHarnessCertification(effectiveHarnessProfile),
+      runAbortRef: ctx.runAbortRef,
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: (summary) => {
+        outcome.summary = summary;
+      },
+      setMessage: (message) => {
+        if (message) outcome.error = message;
+      },
+      onComplete: async () => {},
+    });
+  } catch (error) {
+    outcome.error = error instanceof Error ? error.message : String(error);
+  }
+  const status: PresetLegStatus =
+    outcome.summary?.status === "completed" ? "passed" : "failed";
+  return { status, detail: status === "failed" ? outcome.error : undefined };
+}
+
+function legStatusFromModelRuns(runs: GameIqModelRunState[]): PresetLegStatus {
+  if (runs.length === 0) return "skipped";
+  return legStatusFromStatuses(runs.map((run) => run.status));
+}
+
+function legStatusFromStatuses(
+  statuses: GameIqModelRunStatus[]
+): PresetLegStatus {
+  if (statuses.length === 0) return "skipped";
+  const passed = statuses.filter((status) => status === "passed").length;
+  const partial = statuses.filter((status) => status === "partial").length;
+  if (passed === statuses.length) return "passed";
+  if (passed > 0 || partial > 0) return "partial";
+  return "failed";
 }

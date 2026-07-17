@@ -12,10 +12,19 @@ import {
 } from "@/components/ui/card";
 import { CaseSuitePicker } from "./CaseSuitePicker";
 import { ModelTeamPicker } from "./ModelTeamPicker";
-import { RunProgressTimeline } from "./RunProgressTimeline";
 import { AttemptDetailPanel } from "./AttemptDetailPanel";
 import { TeamCompositionBuilder } from "@/components/benchmark/teamiq/TeamCompositionBuilder";
 import { WorkBenchRunPanel } from "@/components/benchmark/workbench/WorkBenchRunPanel";
+import {
+  ModelChecklist,
+  persistModelChecklistSelection,
+  readPersistedModelChecklistSelection,
+} from "@/components/benchmark/run/ModelChecklist";
+import { PresetCards, type PresetCardGate } from "@/components/benchmark/run/PresetCards";
+import {
+  RunProgressList,
+  type RunProgressLegRow,
+} from "@/components/benchmark/run/RunProgressList";
 import type { CertifiedTrackView } from "./CertifiedBenchmarkOverview";
 import {
   checkBenchRunner,
@@ -40,14 +49,19 @@ import {
   fireworksCasesForSuiteId,
   isTeamIqToolReliabilityAllModesSuite,
   runGameIqMultiModel as runGameIqMultiModelExec,
+  runPreset,
   runSelected as runSelectedTrack,
   workBenchModelsForRun,
   workBenchRoleFor,
-  type CertifiedRunPhase,
   type GameIqModelRunState,
+  type PresetProgressEvent,
   type RunnableTrack,
   type TeamIqUiStrategy,
 } from "@/lib/benchmark/certified/run-execution";
+import {
+  BENCHMARK_PRESETS,
+  type BenchmarkPreset,
+} from "@/lib/benchmark/certified/run-presets";
 import type {
   HarnessProfile,
 } from "@/lib/benchmark/types";
@@ -75,8 +89,32 @@ export function CertifiedRunPanel({
 }) {
   const lockedTrack = track === "all" ? null : (track as RunnableTrack);
   const initialTrack: RunnableTrack = lockedTrack ?? "gameiq";
-  const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
+
+  // --- Shared: which provider models exist, at all -------------------------
   const [models, setModels] = useState<SelectedModel[]>([]);
+
+  // --- New preset-card flow state (2026-07-17 UX overhaul, Task 4 Step 4) --
+  // One model checklist, reused by every preset; persisted so repeat runs
+  // don't require re-checking models every visit.
+  const [soloModelIds, setSoloModelIds] = useState<string[]>(() =>
+    readPersistedModelChecklistSelection()
+  );
+  // One team builder, reused for the TeamIQ leg AND (by model-count mapping;
+  // see workBenchRoleModeFromCount below) the WorkBench leg's roles.
+  const [sharedTeamModelIds, setSharedTeamModelIds] = useState<string[]>([]);
+  const [sharedTeamIqStrategy, setSharedTeamIqStrategy] =
+    useState<TeamIqUiStrategy>("architect_worker_reviewer");
+  const [focusedPresetId, setFocusedPresetId] =
+    useState<BenchmarkPreset["id"]>("model-iq");
+  const [presetRunning, setPresetRunning] = useState(false);
+  const [runningPresetId, setRunningPresetId] =
+    useState<BenchmarkPreset["id"] | null>(null);
+  const [presetLegRows, setPresetLegRows] = useState<RunProgressLegRow[]>([]);
+  const presetCancelledRef = useRef(false);
+  const presetAbortRef = useRef<AbortController | null>(null);
+
+  // --- Advanced (old single-suite/pack flow) state — UNCHANGED behavior ----
+  const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
   const [modelId, setModelId] = useState("");
   const [gameIqModelIds, setGameIqModelIds] = useState<string[]>([]);
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
@@ -90,6 +128,8 @@ export function CertifiedRunPanel({
   const [suiteId, setSuiteId] = useState("");
   const [harnessProfile, setHarnessProfile] =
     useState<HarnessProfile>(DIRECT_MODEL_HARNESS);
+  // WorkBench runner connection is shared: both the Advanced WorkBench flow
+  // and the Full certified preset card's bench-runner gate/note read it.
   const [workBenchRunnerUrl, setWorkBenchRunnerUrl] = useState(
     DEFAULT_BENCH_RUNNER_URL
   );
@@ -98,7 +138,6 @@ export function CertifiedRunPanel({
     useState<BenchRunnerHealth | null>(null);
   const [checkingWorkBenchRunner, setCheckingWorkBenchRunner] = useState(false);
   const [running, setRunning] = useState(false);
-  const [runPhase, setRunPhase] = useState<CertifiedRunPhase>("idle");
   const [summary, setSummary] = useState<CertifiedRunSummary | null>(null);
   const [gameIqModelRuns, setGameIqModelRuns] = useState<GameIqModelRunState[]>(
     []
@@ -138,6 +177,22 @@ export function CertifiedRunPanel({
     }));
     setModels(enabled);
     setModelId((current) => current || enabled[0]?.modelId || "");
+    setSoloModelIds((current) =>
+      current.length > 0
+        ? current.filter((soloModelId) =>
+            enabled.some((model) => model.modelId === soloModelId)
+          )
+        : enabled[0]
+          ? [enabled[0].modelId]
+          : []
+    );
+    setSharedTeamModelIds((current) =>
+      current.length > 0
+        ? current.filter((sharedTeamModelId) =>
+            enabled.some((model) => model.modelId === sharedTeamModelId)
+          )
+        : enabled.slice(0, 3).map((model) => model.modelId)
+    );
     setGameIqModelIds((current) =>
       current.length > 0
         ? current.filter((gameIqModelId) =>
@@ -162,6 +217,10 @@ export function CertifiedRunPanel({
         : enabled.slice(0, 3).map((model) => model.modelId)
     );
   }, []);
+
+  useEffect(() => {
+    persistModelChecklistSelection(soloModelIds);
+  }, [soloModelIds]);
 
   useEffect(() => {
     setSuiteId(suites[0]?.id ?? "");
@@ -207,247 +266,70 @@ export function CertifiedRunPanel({
   });
   const canRun = runGate.canRun;
 
+  const workBenchRunnerReady = Boolean(
+    workBenchRunnerUrl.trim() &&
+      workBenchRunnerToken.trim() &&
+      workBenchRunnerHealth?.ok
+  );
+  const focusedPreset =
+    BENCHMARK_PRESETS.find((preset) => preset.id === focusedPresetId) ??
+    BENCHMARK_PRESETS[0]!;
+  const focusedPresetHasTeamLeg = focusedPreset.legs.some(
+    (leg) => leg.mode === "team"
+  );
+  const presetGates = presetCardGates({
+    models,
+    soloModelIds,
+    sharedTeamModelIds,
+    workBenchRunnerReady,
+  });
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+    <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Run certified benchmark</CardTitle>
+          <CardTitle>Run a certified benchmark</CardTitle>
           <CardDescription>
-            Certified scores come from current cases and deterministic
-            verifiers. Lab scores remain exploratory evidence.
+            Check the models you want to measure, then run a preset. Certified
+            scores come from current cases and deterministic verifiers.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div
-            className={`grid gap-3 ${lockedTrack ? "md:grid-cols-3" : "md:grid-cols-4"}`}
-          >
-            {!lockedTrack && (
-              <CaseSuitePicker
-                value={selectedTrack}
-                options={TRACK_OPTIONS}
-                ariaLabel="Track"
-                onChange={(value) => setSelectedTrack(value as RunnableTrack)}
-              />
-            )}
-            <CaseSuitePicker
-              value={suiteId}
-              options={suites}
-              ariaLabel={
-                selectedTrack === "workbench" ? "WorkBench case pack" : "Case suite"
-              }
-              onChange={setSuiteId}
-            />
-            {selectedTrack === "gameiq" ? (
-              <StaticField
-                label="Models"
-                value={
-                  gameIqModelIds.length >= 1
-                    ? `${gameIqModelIds.length} model${
-                        gameIqModelIds.length === 1 ? "" : "s"
-                      } selected`
-                    : "Select at least one model"
-                }
-              />
-            ) : selectedTrack === "teamiq" ? (
-              <StaticField
-                label="Models"
-                value={teamIqSelectionSummary({
-                  models,
-                  selectedModelIds: teamModelIds,
-                  suiteId,
-                  strategy: teamIqStrategy,
-                  fireworksPlayerCount,
-                })}
-              />
-            ) : selectedTrack === "workbench" ? (
-              <StaticField
-                label="Models"
-                value={workBenchRoleSummary(
-                  models,
-                  workBenchModelIds,
-                  workBenchRoleMode
-                )}
-              />
-            ) : (
-              <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
-            )}
-            {selectedTrack === "workbench" ? (
-              <StaticField
-                label="Harness"
-                value={executionMode.title}
-                description={executionMode.description}
-              />
-            ) : (
-              <StaticField
-                label="Execution"
-                value={executionMode.title}
-                description={executionMode.description}
-              />
-            )}
-          </div>
-          {selectedTrack === "gameiq" && (
-            <GameIqModelChecklist
-              models={models}
-              selectedModelIds={gameIqModelIds}
-              onChange={setGameIqModelIds}
-            />
-          )}
-          {selectedTrack === "teamiq" && (
-            <div className="space-y-4">
+          <ModelChecklist
+            models={models}
+            selectedModelIds={soloModelIds}
+            onChange={setSoloModelIds}
+          />
+          {focusedPresetHasTeamLeg && (
+            <div className="space-y-2 rounded-md border p-3">
+              <div className="text-sm font-medium">Team composition</div>
+              <p className="text-xs text-muted-foreground">
+                Used for the TeamIQ leg; the same role slots (architect /
+                worker / reviewer) also drive the WorkBench leg when the
+                preset includes one.
+              </p>
               <TeamCompositionBuilder
                 models={models}
-                selectedModelIds={teamModelIds}
-                strategy={teamIqStrategy}
-                roleMode={
-                  isFireworksSuite(suiteId) ? "fireworks_players" : "default"
-                }
-                playerCount={fireworksPlayerCount}
-                allModes={isTeamIqToolReliabilityAllModesSuite(suiteId)}
-                onChange={setTeamModelIds}
-                onStrategyChange={setTeamIqStrategy}
-              />
-              {isFireworksSuite(suiteId) && (
-                <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
-                  <label className="space-y-1">
-                    <span className="font-medium">Players</span>
-                    <select
-                      value={fireworksPlayerCount}
-                      onChange={(event) => {
-                        const nextPlayerCount = Number(event.target.value) as 2 | 3;
-                        setFireworksPlayerCount(nextPlayerCount);
-                        setTeamModelIds((current) =>
-                          adjustFireworksPlayerSelectionForPlayerCount(
-                            current,
-                            nextPlayerCount
-                          )
-                        );
-                      }}
-                      className="w-full rounded-md border bg-background px-3 py-2"
-                    >
-                      <option value={2}>2-player</option>
-                      <option value={3}>3-player</option>
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-2 pt-6">
-                    <input
-                      type="checkbox"
-                      checked={includeSoloBaselines}
-                      onChange={(event) =>
-                        setIncludeSoloBaselines(event.target.checked)
-                      }
-                    />
-                    <span>Run solo self-play baselines</span>
-                  </label>
-                  <div className="pt-6 text-muted-foreground">
-                    {fireworksCaseCountForSuite(suiteId, fireworksPlayerCount)} Fireworks cases
-                  </div>
-                  <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground md:col-span-3">
-                    {fireworksPlayerAssignments(
-                      models,
-                      teamModelIds,
-                      fireworksPlayerCount
-                    ).join(" / ")}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {selectedTrack === "workbench" && (
-            <div className="space-y-4">
-              <WorkBenchRunPanel
-                selectedPack={selectedWorkBenchPack}
-                runnerUrl={workBenchRunnerUrl}
-                runnerToken={workBenchRunnerToken}
-                runnerHealth={workBenchRunnerHealth}
-                checkingRunner={checkingWorkBenchRunner}
-                onRunnerUrlChange={(value) => {
-                  setWorkBenchRunnerUrl(value);
-                  setWorkBenchRunnerHealth(null);
-                }}
-                onRunnerTokenChange={(value) => {
-                  setWorkBenchRunnerToken(value);
-                  setWorkBenchRunnerHealth(null);
-                }}
-                onCheckRunner={() => void checkWorkBenchRunner()}
-              />
-              <WorkBenchTeamBuilder
-                models={models}
-                roleMode={workBenchRoleMode}
-                selectedModelIds={workBenchModelIds}
-                onRoleModeChange={(next) => {
-                  setWorkBenchRoleMode(next);
-                  setWorkBenchModelIds((current) =>
-                    normalizeWorkBenchModelSelection({
-                      models,
-                      selectedModelIds: current,
-                      roleMode: next,
-                    })
-                  );
-                }}
-                onChange={setWorkBenchModelIds}
+                selectedModelIds={sharedTeamModelIds}
+                strategy={sharedTeamIqStrategy}
+                onChange={setSharedTeamModelIds}
+                onStrategyChange={setSharedTeamIqStrategy}
               />
             </div>
           )}
-          {selectedTrack === "gameiq" ? (
-            <GameIqModelRunProgress runs={gameIqModelRuns} />
-          ) : (
-            <RunProgressTimeline
-              items={[
-                {
-                  label: "Select",
-                  status:
-                    canRun || runPhase !== "idle" || summary ? "done" : "idle",
-                },
-                {
-                  label: "Certify",
-                  status:
-                    runPhase === "certifying"
-                      ? "running"
-                      : runPhase === "running" ||
-                          runPhase === "persisting" ||
-                          runPhase === "done" ||
-                          summary
-                        ? "done"
-                        : "idle",
-                },
-                {
-                  label: "Run",
-                  status:
-                    runPhase === "running"
-                      ? "running"
-                      : runPhase === "persisting" ||
-                          runPhase === "done" ||
-                          summary
-                        ? "done"
-                        : "idle",
-                },
-                {
-                  label: "Persist",
-                  status:
-                    runPhase === "persisting"
-                      ? "running"
-                      : runPhase === "done" || summary
-                        ? "done"
-                        : "idle",
-                },
-              ]}
-            />
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={!canRun} onClick={() => void runSelected()}>
-              {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              Run selected benchmark
-            </Button>
-            {running && (
-              <Button variant="outline" onClick={cancelRun}>
-                <Square className="h-4 w-4" />
-                Cancel
-              </Button>
-            )}
-          </div>
-          {!canRun && runGate.reason && (
-            <p className="text-sm text-muted-foreground">{runGate.reason}</p>
-          )}
+          <PresetCards
+            running={presetRunning}
+            runningPresetId={runningPresetId}
+            focusedPresetId={focusedPresetId}
+            gates={presetGates}
+            onFocus={setFocusedPresetId}
+            onRun={(preset) => void runPresetFromUi(preset)}
+          />
+          <RunProgressList
+            rows={presetLegRows}
+            running={presetRunning}
+            onCancel={cancelPresetRun}
+          />
           {models.length === 0 && (
             <p className="text-sm text-muted-foreground">
               Add and enable at least one provider key in Settings to run
@@ -456,15 +338,311 @@ export function CertifiedRunPanel({
           )}
         </CardContent>
       </Card>
-      <div className="space-y-4">
-        {selectedTrack === "gameiq" ? (
-          <GameIqModelRunSummaryPanel runs={gameIqModelRuns} models={models} />
-        ) : (
-          <AttemptDetailPanel summary={summary} />
-        )}
-      </div>
+
+      <details className="rounded-md border">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
+          Advanced: run a single suite or pack
+        </summary>
+        <div className="grid gap-4 border-t p-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Run certified benchmark</CardTitle>
+              <CardDescription>
+                Certified scores come from current cases and deterministic
+                verifiers. Lab scores remain exploratory evidence.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div
+                className={`grid gap-3 ${lockedTrack ? "md:grid-cols-3" : "md:grid-cols-4"}`}
+              >
+                {!lockedTrack && (
+                  <CaseSuitePicker
+                    value={selectedTrack}
+                    options={TRACK_OPTIONS}
+                    ariaLabel="Track"
+                    onChange={(value) => setSelectedTrack(value as RunnableTrack)}
+                  />
+                )}
+                <CaseSuitePicker
+                  value={suiteId}
+                  options={suites}
+                  ariaLabel={
+                    selectedTrack === "workbench" ? "WorkBench case pack" : "Case suite"
+                  }
+                  onChange={setSuiteId}
+                />
+                {selectedTrack === "gameiq" ? (
+                  <StaticField
+                    label="Models"
+                    value={
+                      gameIqModelIds.length >= 1
+                        ? `${gameIqModelIds.length} model${
+                            gameIqModelIds.length === 1 ? "" : "s"
+                          } selected`
+                        : "Select at least one model"
+                    }
+                  />
+                ) : selectedTrack === "teamiq" ? (
+                  <StaticField
+                    label="Models"
+                    value={teamIqSelectionSummary({
+                      models,
+                      selectedModelIds: teamModelIds,
+                      suiteId,
+                      strategy: teamIqStrategy,
+                      fireworksPlayerCount,
+                    })}
+                  />
+                ) : selectedTrack === "workbench" ? (
+                  <StaticField
+                    label="Models"
+                    value={workBenchRoleSummary(
+                      models,
+                      workBenchModelIds,
+                      workBenchRoleMode
+                    )}
+                  />
+                ) : (
+                  <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
+                )}
+                {selectedTrack === "workbench" ? (
+                  <StaticField
+                    label="Harness"
+                    value={executionMode.title}
+                    description={executionMode.description}
+                  />
+                ) : (
+                  <StaticField
+                    label="Execution"
+                    value={executionMode.title}
+                    description={executionMode.description}
+                  />
+                )}
+              </div>
+              {selectedTrack === "gameiq" && (
+                <GameIqModelChecklist
+                  models={models}
+                  selectedModelIds={gameIqModelIds}
+                  onChange={setGameIqModelIds}
+                />
+              )}
+              {selectedTrack === "teamiq" && (
+                <div className="space-y-4">
+                  <TeamCompositionBuilder
+                    models={models}
+                    selectedModelIds={teamModelIds}
+                    strategy={teamIqStrategy}
+                    roleMode={
+                      isFireworksSuite(suiteId) ? "fireworks_players" : "default"
+                    }
+                    playerCount={fireworksPlayerCount}
+                    allModes={isTeamIqToolReliabilityAllModesSuite(suiteId)}
+                    onChange={setTeamModelIds}
+                    onStrategyChange={setTeamIqStrategy}
+                  />
+                  {isFireworksSuite(suiteId) && (
+                    <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
+                      <label className="space-y-1">
+                        <span className="font-medium">Players</span>
+                        <select
+                          value={fireworksPlayerCount}
+                          onChange={(event) => {
+                            const nextPlayerCount = Number(event.target.value) as 2 | 3;
+                            setFireworksPlayerCount(nextPlayerCount);
+                            setTeamModelIds((current) =>
+                              adjustFireworksPlayerSelectionForPlayerCount(
+                                current,
+                                nextPlayerCount
+                              )
+                            );
+                          }}
+                          className="w-full rounded-md border bg-background px-3 py-2"
+                        >
+                          <option value={2}>2-player</option>
+                          <option value={3}>3-player</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2 pt-6">
+                        <input
+                          type="checkbox"
+                          checked={includeSoloBaselines}
+                          onChange={(event) =>
+                            setIncludeSoloBaselines(event.target.checked)
+                          }
+                        />
+                        <span>Run solo self-play baselines</span>
+                      </label>
+                      <div className="pt-6 text-muted-foreground">
+                        {fireworksCaseCountForSuite(suiteId, fireworksPlayerCount)} Fireworks cases
+                      </div>
+                      <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground md:col-span-3">
+                        {fireworksPlayerAssignments(
+                          models,
+                          teamModelIds,
+                          fireworksPlayerCount
+                        ).join(" / ")}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {selectedTrack === "workbench" && (
+                <div className="space-y-4">
+                  <WorkBenchRunPanel
+                    selectedPack={selectedWorkBenchPack}
+                    runnerUrl={workBenchRunnerUrl}
+                    runnerToken={workBenchRunnerToken}
+                    runnerHealth={workBenchRunnerHealth}
+                    checkingRunner={checkingWorkBenchRunner}
+                    onRunnerUrlChange={(value) => {
+                      setWorkBenchRunnerUrl(value);
+                      setWorkBenchRunnerHealth(null);
+                    }}
+                    onRunnerTokenChange={(value) => {
+                      setWorkBenchRunnerToken(value);
+                      setWorkBenchRunnerHealth(null);
+                    }}
+                    onCheckRunner={() => void checkWorkBenchRunner()}
+                  />
+                  <WorkBenchTeamBuilder
+                    models={models}
+                    roleMode={workBenchRoleMode}
+                    selectedModelIds={workBenchModelIds}
+                    onRoleModeChange={(next) => {
+                      setWorkBenchRoleMode(next);
+                      setWorkBenchModelIds((current) =>
+                        normalizeWorkBenchModelSelection({
+                          models,
+                          selectedModelIds: current,
+                          roleMode: next,
+                        })
+                      );
+                    }}
+                    onChange={setWorkBenchModelIds}
+                  />
+                </div>
+              )}
+              {selectedTrack === "gameiq" && (
+                <GameIqModelRunProgress runs={gameIqModelRuns} />
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={!canRun} onClick={() => void runSelected()}>
+                  {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  Run selected benchmark
+                </Button>
+                {running && (
+                  <Button variant="outline" onClick={cancelRun}>
+                    <Square className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                )}
+              </div>
+              {!canRun && runGate.reason && (
+                <p className="text-sm text-muted-foreground">{runGate.reason}</p>
+              )}
+              {models.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  Add and enable at least one provider key in Settings to run
+                  certified model calls.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+          <div className="space-y-4">
+            {selectedTrack === "gameiq" ? (
+              <GameIqModelRunSummaryPanel runs={gameIqModelRuns} models={models} />
+            ) : (
+              <AttemptDetailPanel summary={summary} />
+            )}
+          </div>
+        </div>
+      </details>
     </div>
   );
+
+  // Sequences runPreset (run-execution.ts) against the shared checklist/team
+  // builder above, translating its progress events into RunProgressList rows.
+  async function runPresetFromUi(preset: BenchmarkPreset) {
+    if (presetRunning) return;
+    setFocusedPresetId(preset.id);
+    setRunningPresetId(preset.id);
+    setPresetRunning(true);
+    presetCancelledRef.current = false;
+    setPresetLegRows(
+      preset.legs.map((leg, legIndex) => ({
+        legIndex,
+        leg,
+        status: "queued",
+        models: [],
+      }))
+    );
+    setMessage(null);
+    try {
+      await runPreset(
+        preset,
+        {
+          models,
+          soloModelIds,
+          teamModelIds: sharedTeamModelIds,
+          teamIqStrategy: sharedTeamIqStrategy,
+          workBenchRoleMode: workBenchRoleModeFromCount(
+            sharedTeamModelIds.length
+          ),
+          workBenchRunnerUrl,
+          workBenchRunnerToken,
+          fireworksPlayerCount: 2,
+          cancelledRef: presetCancelledRef,
+          runAbortRef: presetAbortRef,
+          onComplete,
+        },
+        handlePresetProgress
+      );
+    } finally {
+      setPresetRunning(false);
+      setRunningPresetId(null);
+    }
+  }
+
+  function handlePresetProgress(event: PresetProgressEvent) {
+    setPresetLegRows((current) => {
+      const next = [...current];
+      if (event.type === "leg") {
+        const existing = next[event.legIndex];
+        next[event.legIndex] = {
+          legIndex: event.legIndex,
+          leg: event.leg,
+          status: event.status,
+          detail: event.detail,
+          models: existing?.models ?? [],
+        };
+      } else {
+        const existing = next[event.legIndex] ?? {
+          legIndex: event.legIndex,
+          leg: event.leg,
+          status: "running" as const,
+          models: [],
+        };
+        const models = existing.models.filter(
+          (model) => model.modelId !== event.modelId
+        );
+        models.push({
+          modelId: event.modelId,
+          displayName: event.displayName,
+          status: event.status,
+          detail: event.detail,
+        });
+        next[event.legIndex] = { ...existing, models };
+      }
+      return next;
+    });
+  }
+
+  function cancelPresetRun() {
+    presetCancelledRef.current = true;
+    presetAbortRef.current?.abort("Cancelled from preset run.");
+    setMessage("Cancelling preset run...");
+  }
 
   // Dispatches to the extracted run-execution.ts implementations, mirroring
   // the original combined entry point: gameiq always ran as a multi-model
@@ -482,7 +660,10 @@ export function CertifiedRunPanel({
         certification,
         runAbortRef,
         setRunning,
-        setRunPhase,
+        // The Advanced flow no longer renders a phase timeline (deleted with
+        // RunProgressTimeline); running/summary/message state still drives
+        // the button + AttemptDetailPanel.
+        setRunPhase: () => {},
         setSummary,
         setMessage,
         setGameIqModelRuns,
@@ -507,7 +688,7 @@ export function CertifiedRunPanel({
       certification,
       runAbortRef,
       setRunning,
-      setRunPhase,
+      setRunPhase: () => {},
       setSummary,
       setMessage,
       onComplete,
@@ -537,6 +718,59 @@ export function CertifiedRunPanel({
       setCheckingWorkBenchRunner(false);
     }
   }
+}
+
+// WorkBench doesn't have TeamIQ's five strategies (panel/debate/swarm/...) —
+// only solo/architect+worker/architect+worker+reviewer — so the shared team
+// builder's role slots map onto it purely by how many distinct models are
+// selected. This keeps "one builder, both tracks" correct regardless of
+// which TeamIQ strategy the user picked for the TeamIQ leg itself.
+function workBenchRoleModeFromCount(count: number): WorkBenchRoleMode {
+  if (count >= 3) return "architect_worker_reviewer";
+  if (count === 2) return "architect_worker";
+  return "solo";
+}
+
+function presetCardGates(input: {
+  models: SelectedModel[];
+  soloModelIds: string[];
+  sharedTeamModelIds: string[];
+  workBenchRunnerReady: boolean;
+}): Record<BenchmarkPreset["id"], PresetCardGate> {
+  const noModels = input.models.length === 0;
+  const soloGate: PresetCardGate =
+    noModels || input.soloModelIds.length === 0
+      ? {
+          disabled: true,
+          reason: noModels
+            ? "Add and enable a provider model in Settings first."
+            : "Select at least one model in the checklist above.",
+        }
+      : { disabled: false };
+  const teamGate: PresetCardGate =
+    noModels || input.sharedTeamModelIds.length === 0
+      ? {
+          disabled: true,
+          reason: noModels
+            ? "Add and enable a provider model in Settings first."
+            : "Select a team composition below.",
+        }
+      : { disabled: false };
+  const fullGate: PresetCardGate = soloGate.disabled
+    ? soloGate
+    : teamGate.disabled
+      ? teamGate
+      : {
+          disabled: false,
+          note: input.workBenchRunnerReady
+            ? "Bench runner connected — all four legs will run."
+            : "Bench runner offline — the WorkBench leg will be skipped.",
+        };
+  return {
+    "model-iq": soloGate,
+    "team-benchmark": teamGate,
+    "full-certified": fullGate,
+  };
 }
 
 function teamIqSelectionSummary(input: {
