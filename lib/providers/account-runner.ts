@@ -21,6 +21,14 @@ interface AccountRunnerProviderOptions {
   runnerPath: string;
   models: ModelInfo[];
   credentialMode?: "runner-token" | "provider-api-key-with-runner-token";
+  /**
+   * Unwrap a whole-reply markdown fence when structuredOutput was requested.
+   * Copilot-served non-OpenAI models (observed live: gemini) can ignore
+   * response_format and fence the JSON reply; strict JSON.parse consumers
+   * (the certified scorer) would score that failed_tool_use. Runner v16+
+   * strips bridge-side too — this heals responses from older runners.
+   */
+  stripStructuredOutputFences?: boolean;
 }
 
 interface AccountRunnerResponse {
@@ -85,6 +93,39 @@ function buildAccountRunnerRequestBody(
     runtimeMode: "discussion",
     stream: true,
   };
+}
+
+/** Keep in sync with stripStructuredOutputFence in lib/account-provider-runner.mjs. */
+function stripStructuredOutputFence(text: string): string {
+  const trimmed = text.trim();
+  const match = /^```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/.exec(trimmed);
+  return match ? match[1].trim() : text;
+}
+
+/**
+ * Buffers token chunks and re-emits them as one fence-stripped token before
+ * done. Only used for structured-output requests, whose replies are parsed
+ * whole — losing token-by-token streaming there is harmless.
+ */
+async function* stripFencesFromTokenStream(
+  chunks: AsyncIterable<StreamChunk>
+): AsyncIterable<StreamChunk> {
+  let buffered = "";
+  for await (const chunk of chunks) {
+    if (chunk.type === "token" && chunk.content) {
+      buffered += chunk.content;
+      continue;
+    }
+    if (chunk.type === "done" || chunk.type === "error") {
+      // Only a complete reply can be a whole-reply fence; flush a partial
+      // (errored) reply untouched.
+      const content = chunk.type === "done" ? stripStructuredOutputFence(buffered) : buffered;
+      if (content) yield { type: "token", content };
+      buffered = "";
+    }
+    yield chunk;
+  }
+  if (buffered) yield { type: "token", content: buffered };
 }
 
 function parseSseBlock(block: string): AccountRunnerEvent | null {
@@ -229,11 +270,14 @@ export function createAccountRunnerProvider(
             signal: params.signal,
           }
         );
+        const normalizeFences =
+          options.stripStructuredOutputFences === true && !!params.structuredOutput;
         if (
           response.ok &&
           response.headers.get("content-type")?.includes("text/event-stream")
         ) {
-          yield* streamRunnerEvents(response);
+          if (normalizeFences) yield* stripFencesFromTokenStream(streamRunnerEvents(response));
+          else yield* streamRunnerEvents(response);
           return;
         }
         const data = await parseRunnerResponse(response);
@@ -245,7 +289,8 @@ export function createAccountRunnerProvider(
           return;
         }
 
-        const content = data.content ?? "";
+        const raw = data.content ?? "";
+        const content = normalizeFences ? stripStructuredOutputFence(raw) : raw;
         if (content) yield { type: "token", content };
         yield { type: "done" };
       } catch (err) {
