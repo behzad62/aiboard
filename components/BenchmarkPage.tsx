@@ -8,14 +8,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { BenchmarkLab } from "@/components/BenchmarkLab";
-import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
+import { BenchmarkHeadToHeadTable } from "@/components/benchmark/BenchmarkHeadToHeadTable";
+import { CapabilityRadarChart } from "@/components/benchmark/CapabilityRadarChart";
 import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
 import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
+import { VerdictStrip } from "@/components/benchmark/results/VerdictStrip";
 import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
 
 export function BenchmarkPage() {
   const {
+    dashboard,
     certifiedDashboard,
     reportCounts,
     corruptRunFileCount,
@@ -59,6 +63,7 @@ export function BenchmarkPage() {
         <TabsContent value="results" className="space-y-6">
           <DashboardGate locked={locked} loading={loading}>
             {message && <MessageBanner message={message} />}
+            <VerdictStrip certified={certifiedDashboard} />
             <CertifiedBenchmarkOverview
               certified={certifiedDashboard}
               counts={reportCounts}
@@ -67,8 +72,8 @@ export function BenchmarkPage() {
               onRefresh={refresh}
               setMessage={setMessage}
             />
+            <AnalysisSection dashboard={dashboard} />
           </DashboardGate>
-          <BuildLeaderboard />
         </TabsContent>
 
         <TabsContent value="data" className="space-y-6">
@@ -120,6 +125,36 @@ function MessageBanner({ message }: { message: string }) {
     <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
       {message}
     </div>
+  );
+}
+
+// Collapsed by default (design doc: Results tab item 3). Head-to-head table
+// and capability radar survived the Task 3 IA collapse unimported — they
+// remount here with the same useBenchmarkDashboard() data BenchmarkLab used
+// to feed them under the old "lab-evidence" view.
+function AnalysisSection({
+  dashboard,
+}: {
+  dashboard: BenchmarkDashboardData | null;
+}) {
+  return (
+    <details className="rounded-md border">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
+        Analysis: head-to-head outcomes and capability profile
+      </summary>
+      <div className="grid gap-4 border-t p-4 xl:grid-cols-2">
+        {dashboard ? (
+          <>
+            <BenchmarkHeadToHeadTable rows={dashboard.headToHeadRows} />
+            <CapabilityRadarChart dashboard={dashboard} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground xl:col-span-2">
+            Loading benchmark evidence...
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 

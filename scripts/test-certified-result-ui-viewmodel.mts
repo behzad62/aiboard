@@ -23,17 +23,22 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-const certifiedOverviewSource = readFileSync(
-  "components/benchmark/certified/CertifiedBenchmarkOverview.tsx",
+// CertifiedLeaderboard (the table this check guards) was extracted out of
+// CertifiedBenchmarkOverview.tsx into CertifiedResultTables.tsx (2026-07-17
+// benchmark UX overhaul, Task 5) so both CertifiedBenchmarkOverview.tsx
+// (legacy single-track rendering) and the Results tab's LensTabs.tsx
+// (Solo/Teams lenses) can reuse the same table without a circular import.
+const certifiedResultTablesSource = readFileSync(
+  "components/benchmark/certified/CertifiedResultTables.tsx",
   "utf8"
 );
 
 check(
   "certified leaderboard table exposes a visible Time column",
-  certifiedOverviewSource.includes(">Time</th>") &&
-    certifiedOverviewSource.includes("formatDuration(row.durationMs)") &&
-    certifiedOverviewSource.includes("formatDuration(row.speedPerPassMs)") &&
-    certifiedOverviewSource.includes("/pass"),
+  certifiedResultTablesSource.includes(">Time</th>") &&
+    certifiedResultTablesSource.includes("formatDuration(row.durationMs)") &&
+    certifiedResultTablesSource.includes("formatDuration(row.speedPerPassMs)") &&
+    certifiedResultTablesSource.includes("/pass"),
   null
 );
 
