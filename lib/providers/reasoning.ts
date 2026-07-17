@@ -74,10 +74,21 @@ export function xAIReasoningEffort(
   }
 }
 
+function isKimiK3Model(model = ""): boolean {
+  const normalized = model.trim().toLowerCase();
+  return normalized === "moonshotai/kimi-k3" || normalized === "kimi-k3";
+}
+
 /** OpenRouter `reasoning_effort` string, or null to omit. */
 export function openRouterReasoningEffort(
-  effort: ReasoningEffort
+  effort: ReasoningEffort,
+  model = ""
 ): string | null {
+  if (isKimiK3Model(model)) {
+    if (effort === "none" || effort === "default") return null;
+    return "max";
+  }
+
   switch (effort) {
     case "none":
       return "none";

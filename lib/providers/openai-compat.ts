@@ -176,6 +176,10 @@ export function openAICompatibleStreamOptionsField(
   return { stream_options: { include_usage: true } };
 }
 
+function isKimiK3Model(model: string): boolean {
+  return model.trim().toLowerCase() === "moonshotai/kimi-k3";
+}
+
 /**
  * Mark the stable prompt prefix of the last user message as ephemeral
  * cacheable content (mirrors the native Anthropic provider's split at the
@@ -284,7 +288,10 @@ export async function* streamOpenAICompatibleChat(
     providerId === "openai"
       ? openAIReasoningEffort(params.reasoningEffort ?? "default")
       : providerId === "openrouter"
-        ? openRouterReasoningEffort(params.reasoningEffort ?? "default")
+        ? openRouterReasoningEffort(
+            params.reasoningEffort ?? "default",
+            params.model
+          )
         : null;
   const reasoningField: Record<string, string> = reasoningValue
     ? { reasoning_effort: reasoningValue }
@@ -295,7 +302,9 @@ export async function* streamOpenAICompatibleChat(
   // support it, and local OpenAI-compatible servers (Ollama, LM Studio)
   // honor it.
   const temperatureField =
-    providerId !== "openai" && params.temperature != null
+    providerId !== "openai" &&
+    !isKimiK3Model(params.model) &&
+    params.temperature != null
       ? { temperature: params.temperature }
       : {};
 

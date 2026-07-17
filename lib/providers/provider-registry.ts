@@ -130,6 +130,7 @@ const OPENROUTER_MODELS_WITH_FUNCTION_TOOLS = [
   "minimax/minimax-m3",
   "z-ai/glm-5.2",
   "moonshotai/kimi-k2.7-code",
+  "moonshotai/kimi-k3",
 ] as const;
 
 // NVIDIA model ids are user-defined in Settings, so fail closed for unknown ids
