@@ -1,10 +1,31 @@
 "use client";
 
+import type { ReactNode } from "react";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { BenchmarkLab } from "@/components/BenchmarkLab";
 import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
+import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
+import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
+import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function BenchmarkPage() {
+  const {
+    certifiedDashboard,
+    reportCounts,
+    corruptRunFileCount,
+    locked,
+    loading,
+    message,
+    refresh,
+    setMessage,
+  } = useBenchmarkDashboard();
+
   return (
     <div className="mx-auto max-w-7xl space-y-8">
       <header>
@@ -17,55 +38,87 @@ export function BenchmarkPage() {
         </p>
       </header>
 
-      <Tabs defaultValue="overview" className="space-y-6">
+      <Tabs defaultValue="run" className="space-y-6">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="lab-evidence">Lab Evidence</TabsTrigger>
-          <TabsTrigger value="certified">Certified</TabsTrigger>
-          <TabsTrigger value="workbench">WorkBench</TabsTrigger>
-          <TabsTrigger value="gameiq">GameIQ</TabsTrigger>
-          <TabsTrigger value="teamiq">TeamIQ</TabsTrigger>
-          <TabsTrigger value="toolreliability">Tool Reliability</TabsTrigger>
-          <TabsTrigger value="build-lab">Build Lab</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
+          <TabsTrigger value="run">Run</TabsTrigger>
+          <TabsTrigger value="results">Results</TabsTrigger>
+          <TabsTrigger value="data">Data</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          <BenchmarkLab view="overview" />
+        <TabsContent value="run" className="space-y-6">
+          <DashboardGate locked={locked} loading={loading}>
+            {message && <MessageBanner message={message} />}
+            <CertifiedRunPanel
+              track="all"
+              onComplete={refresh}
+              setMessage={setMessage}
+            />
+          </DashboardGate>
         </TabsContent>
 
-        <TabsContent value="lab-evidence" className="space-y-6">
-          <BenchmarkLab view="lab-evidence" />
-        </TabsContent>
-
-        <TabsContent value="certified" className="space-y-6">
-          <BenchmarkLab view="certified" />
-        </TabsContent>
-
-        <TabsContent value="workbench" className="space-y-6">
-          <BenchmarkLab view="workbench" />
-        </TabsContent>
-
-        <TabsContent value="gameiq" className="space-y-6">
-          <BenchmarkLab view="gameiq" />
-        </TabsContent>
-
-        <TabsContent value="teamiq" className="space-y-6">
-          <BenchmarkLab view="teamiq" />
-        </TabsContent>
-
-        <TabsContent value="toolreliability" className="space-y-6">
-          <BenchmarkLab view="toolreliability" />
-        </TabsContent>
-
-        <TabsContent value="build-lab" className="space-y-6">
+        <TabsContent value="results" className="space-y-6">
+          <DashboardGate locked={locked} loading={loading}>
+            {message && <MessageBanner message={message} />}
+            <CertifiedBenchmarkOverview
+              certified={certifiedDashboard}
+              counts={reportCounts}
+              track="all"
+              corruptRunFileCount={corruptRunFileCount}
+              onRefresh={refresh}
+              setMessage={setMessage}
+            />
+          </DashboardGate>
           <BuildLeaderboard />
         </TabsContent>
 
-        <TabsContent value="reports" className="space-y-6">
-          <BenchmarkLab view="reports" />
+        <TabsContent value="data" className="space-y-6">
+          <BenchmarkLab />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function DashboardGate({
+  locked,
+  loading,
+  children,
+}: {
+  locked: boolean;
+  loading: boolean;
+  children: ReactNode;
+}) {
+  if (locked) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Benchmark</CardTitle>
+          <CardDescription>
+            Unlock storage to load benchmark data.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Benchmark</CardTitle>
+          <CardDescription>Loading benchmark evidence...</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function MessageBanner({ message }: { message: string }) {
+  return (
+    <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      {message}
     </div>
   );
 }
