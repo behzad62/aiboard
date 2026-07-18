@@ -108,9 +108,8 @@ export function BenchmarkLab() {
           <div className="text-sm">
             <p className="font-medium text-foreground">Danger zone</p>
             <p className="text-muted-foreground">
-              Permanently delete every benchmark record. Game match history,
-              Build Lab stats, and settings are kept. Export a bundle first if
-              you might need this data later.
+              Permanently delete every benchmark record and run file. Export a
+              bundle first if you might need this data later.
             </p>
           </div>
           <Button
@@ -150,8 +149,7 @@ export function BenchmarkLab() {
       setMessage(
         `Cleared all benchmark data: ${records} record${
           records === 1 ? "" : "s"
-        } and ${runFiles} run file${runFiles === 1 ? "" : "s"} deleted. Game ` +
-          `match history, Build Lab stats, and settings were kept.`
+        } and ${runFiles} run file${runFiles === 1 ? "" : "s"} deleted.`
       );
     } catch (error) {
       reportError(error);

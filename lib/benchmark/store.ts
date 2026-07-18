@@ -30,9 +30,6 @@ import {
   getBenchmarkVerifierResults,
   initStore,
   isInitialized,
-  getBuildCheckpoints,
-  getGenericGameMatchRecords,
-  getModelStats,
   replaceStore,
   upsertBenchmarkArtifact,
   upsertBenchmarkAttempt,
@@ -643,11 +640,6 @@ export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
     toolCallTraces: [...getBenchmarkToolCallTraces()],
     teamCompositions: [...getBenchmarkTeamCompositions()],
     harnessCertifications: [...getBenchmarkHarnessCertifications()],
-    sourceEvidence: {
-      gameMatches: [...getGenericGameMatchRecords()],
-      buildCheckpoints: [...getBuildCheckpoints()],
-      buildStats: getModelStats(),
-    },
   };
   const redacted = redactBenchmarkBundle(bundle);
 
@@ -712,24 +704,6 @@ async function mergeBenchmarkReportBundle(
       current.benchmarkTraces ?? [],
       bundle.traces,
       completedOrStartedAt
-    ),
-    gameMatchRecords: mergeByIdKeepExisting(
-      current.gameMatchRecords ?? [],
-      bundle.sourceEvidence?.gameMatches ?? []
-    ),
-    buildCheckpoints: mergeByKeyPreferNewer(
-      current.buildCheckpoints ?? [],
-      bundle.sourceEvidence?.buildCheckpoints ?? [],
-      (checkpoint) => checkpoint.discussionId,
-      (checkpoint) => checkpoint.updatedAt
-    ),
-    // Model stats are cumulative aggregates; updatedAt is the best available
-    // proportional import heuristic short of re-aggregating raw build evidence.
-    modelStats: mergeByKeyPreferNewer(
-      current.modelStats ?? [],
-      bundle.sourceEvidence?.buildStats ?? [],
-      (stat) => stat.modelId,
-      (stat) => stat.updatedAt
     ),
   };
 

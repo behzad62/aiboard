@@ -22,9 +22,6 @@ export function BenchmarkReportSummary({
     ["Metric values", counts.metricValues],
     ["Artifacts", counts.artifacts],
     ["Failures", counts.failures],
-    ["Game match records", counts.gameMatches],
-    ["Build checkpoints", counts.buildCheckpoints],
-    ["Build model stats", counts.buildStats],
   ] as const;
   const certifiedRows = [
     ["Certified cases", counts.certifiedCases],

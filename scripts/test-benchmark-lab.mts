@@ -270,27 +270,13 @@ check(
     terminalFailureTrace.retryHistory.at(-1)?.message === "Final provider failure",
   terminalFailureTrace.retryHistory
 );
-check(
-  "bundle exports game match source evidence",
-  bundle.sourceEvidence?.gameMatches.length === 1,
-  bundle.sourceEvidence
-);
-check(
-  "bundle exports build checkpoint source evidence",
-  bundle.sourceEvidence?.buildCheckpoints.length === 1,
-  bundle.sourceEvidence
-);
-check(
-  "bundle exports build model stats source evidence",
-  bundle.sourceEvidence?.buildStats.length === 1,
-  bundle.sourceEvidence
-);
+check("bundle excludes unrelated source evidence", bundle.sourceEvidence === undefined, bundle);
 check("markdown report includes scorecards", markdown.includes("Model Scorecards"), markdown);
 check(
-  "markdown report includes source evidence counts",
-  markdown.includes("Game match records: 1") &&
-    markdown.includes("Build checkpoints: 1") &&
-    markdown.includes("Build model stats: 1"),
+  "markdown excludes unrelated source evidence counts",
+  !markdown.includes("Game match records:") &&
+    !markdown.includes("Build checkpoints:") &&
+    !markdown.includes("Build model stats:"),
   markdown
 );
 
@@ -300,18 +286,18 @@ const importedCases = await listBenchmarkCases();
 const importedStore = __exportBenchmarkStoreForTests();
 check("bundle import restores case", importedCases.length === 1, importedCases);
 check(
-  "bundle import restores game match source evidence",
-  importedStore.gameMatchRecords.length === 1,
+  "bundle import ignores game source evidence",
+  importedStore.gameMatchRecords.length === 0,
   importedStore.gameMatchRecords
 );
 check(
-  "bundle import restores build checkpoint source evidence",
-  importedStore.buildCheckpoints.length === 1,
+  "bundle import ignores Build checkpoint source evidence",
+  importedStore.buildCheckpoints.length === 0,
   importedStore.buildCheckpoints
 );
 check(
-  "bundle import restores build model stats source evidence",
-  importedStore.modelStats.some((stat) => stat.modelId === buildStat.modelId),
+  "bundle import ignores Build model-stat source evidence",
+  importedStore.modelStats.length === 0,
   importedStore.modelStats
 );
 
