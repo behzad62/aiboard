@@ -1712,21 +1712,6 @@ function mergeByIdPreferNewer<T extends { id: string }>(
   return Array.from(map.values());
 }
 
-function mergeByKeyPreferNewer<T>(
-  current: T[],
-  incoming: T[],
-  keyFor: (item: T) => string,
-  tsFor: (item: T) => string
-): T[] {
-  const map = new Map(current.map((item) => [keyFor(item), item]));
-  for (const item of incoming) {
-    const key = keyFor(item);
-    const existing = map.get(key);
-    if (!existing || tsFor(item) >= tsFor(existing)) map.set(key, item);
-  }
-  return Array.from(map.values());
-}
-
 function completedOrStartedAt(record: {
   completedAt?: string;
   startedAt?: string;

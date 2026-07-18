@@ -808,125 +808,6 @@ function finiteMetric(value: number | null | undefined): number | null {
  * games (chess/connect-four/battleship) use the participant id as the token, so
  * exact match still applies.
  */
-function participantIsWinner(
-  participantId: string,
-  winnerId: string | null | undefined
-): boolean {
-  if (!winnerId) return false;
-  return participantId === winnerId || participantId.startsWith(`${winnerId}-`);
-}
-
-function addGameMatch(input: {
-  match: GenericGameMatchRecord;
-  scoreFor: (modelId: string, displayName?: string) => MutableScore;
-  evidenceByModel: Record<string, BenchmarkEvidenceItem[]>;
-  headToHead: Map<string, BenchmarkHeadToHeadRow>;
-  trends: Map<string, BenchmarkTrendRow>;
-  failures: Map<string, BenchmarkFailureChartRow>;
-}): void {
-  const result = parseObject(input.match.resultJson);
-  const stats = parseObject(input.match.statsJson);
-  const aiParticipants = input.match.participants.filter((p) => p.modelId);
-  const moves = readNumber(stats.moves);
-  const invalidResponses = readNumber(stats.invalidResponses);
-  const fallbackMoves = readNumber(stats.fallbackMoves);
-  const durationMs = readNumber(stats.durationMs);
-  const avgAiResponseMs = readNumber(stats.avgAiResponseMs);
-  const winnerId =
-    readString(result.winner) ?? readString(result.result) ?? readString(result.victor);
-  const isDraw = Boolean(result.draw) || winnerId === "draw";
-
-  // Collapse seats by distinct modelId so a model occupying multiple seats in a
-  // team game (e.g. Codenames red-spymaster + red-operative) counts the match
-  // once, not once per seat. Distribute move/invalid/fallback counts over
-  // distinct models, not raw seats, so legalActions/invalidActions aren't
-  // inflated.
-  const distinctModelIds = Array.from(
-    new Set(
-      aiParticipants
-        .map((participant) => participant.modelId)
-        .filter((modelId): modelId is string => Boolean(modelId))
-    )
-  );
-  const perModelMoves = Math.max(
-    1,
-    Math.ceil(moves / Math.max(1, distinctModelIds.length))
-  );
-  const perModelInvalid = distributeCount(invalidResponses, distinctModelIds.length);
-  const perModelFallback = distributeCount(fallbackMoves, distinctModelIds.length);
-
-  const trend = trendFor(input.trends, input.match.timestamp);
-  trend.games += 1;
-
-  for (let i = 0; i < distinctModelIds.length; i++) {
-    const modelId = distinctModelIds[i];
-    const seats = aiParticipants.filter(
-      (participant) => participant.modelId === modelId
-    );
-    const firstSeat = seats[0];
-    const modelWon =
-      !isDraw &&
-      seats.some((seat) => participantIsWinner(seat.id, winnerId));
-    const score = input.scoreFor(modelId);
-    score.games += 1;
-    score.completions += 1;
-    score.legalActions += perModelMoves;
-    score.invalidActions += perModelInvalid[i] ?? 0;
-    score.schemaValid += perModelMoves;
-    score.schemaInvalid += perModelInvalid[i] ?? 0;
-    score.fallbackActions += perModelFallback[i] ?? 0;
-    if (avgAiResponseMs > 0) {
-      score.latencyMs += avgAiResponseMs;
-      score.latencySamples += 1;
-    } else if (durationMs > 0 && moves > 0) {
-      score.latencyMs += durationMs / moves;
-      score.latencySamples += 1;
-    }
-    if (isDraw) score.draws += 1;
-    else if (modelWon) score.wins += 1;
-    else score.losses += 1;
-    trend.quality = (trend.quality ?? 0) + (isDraw ? 50 : modelWon ? 100 : 0);
-    trend.qualitySamples += 1;
-
-    if (invalidResponses > 0) incrementFailure(input.failures, modelId, "invalid_action");
-    if (fallbackMoves > 0) incrementFailure(input.failures, modelId, "fallback_action");
-
-    addEvidence(input.evidenceByModel, modelId, {
-      id: `game-match:${input.match.gameId}:${input.match.id}:${modelId}`,
-      title: `${input.match.gameId} match`,
-      domain: "game",
-      timestamp: input.match.timestamp,
-      summary: `${firstSeat?.label ?? modelId}: ${isDraw ? "draw" : modelWon ? "win" : "loss"} in ${moves} moves.`,
-      detailsJson: JSON.stringify(input.match, null, 2),
-    });
-  }
-
-  if (distinctModelIds.length === 2) {
-    const [modelA, modelB] = distinctModelIds;
-    const key = [modelA, modelB].sort().join("::");
-    const row =
-      input.headToHead.get(key) ??
-      createHeadToHeadRow(
-        modelA,
-        modelB,
-        displayModelName(modelA),
-        displayModelName(modelB)
-      );
-    row.games += 1;
-    const winnerParticipant = aiParticipants.find((participant) =>
-      participantIsWinner(participant.id, winnerId)
-    );
-    const winningModelId = winnerParticipant?.modelId ?? null;
-    if (isDraw || !winningModelId) row.draws += 1;
-    else if (winningModelId === row.modelA) {
-      row.modelAWins += 1;
-    } else if (winningModelId === row.modelB) {
-      row.modelBWins += 1;
-    }
-    input.headToHead.set(key, row);
-  }
-}
-
 function finalizeScore(
   row: MutableScore,
   maxCost: number,
@@ -1060,36 +941,6 @@ function buildRadarRows(models: BenchmarkModelScore[]) {
   });
 }
 
-function createHeadToHeadRow(
-  modelA: string,
-  modelB: string,
-  modelADisplay: string,
-  modelBDisplay: string
-): BenchmarkHeadToHeadRow {
-  return {
-    modelA,
-    modelB,
-    modelADisplay,
-    modelBDisplay,
-    modelAWins: 0,
-    modelBWins: 0,
-    draws: 0,
-    games: 0,
-  };
-}
-
-function trendFor(
-  trends: Map<string, BenchmarkTrendRow>,
-  timestamp: string
-): BenchmarkTrendRow {
-  const date = timestamp.slice(0, 10);
-  const existing = trends.get(date);
-  if (existing) return existing;
-  const created = { date, games: 0, buildAttempts: 0, quality: 0, qualitySamples: 0 };
-  trends.set(date, created);
-  return created;
-}
-
 function incrementFailure(
   failures: Map<string, BenchmarkFailureChartRow>,
   modelId: string,
@@ -1130,34 +981,6 @@ function addEvidence(
   }
 }
 
-function distributeCount(total: number, buckets: number): number[] {
-  if (buckets <= 0) return [];
-  const base = Math.floor(total / buckets);
-  const remainder = total % buckets;
-  return Array.from({ length: buckets }, (_, index) =>
-    index < remainder ? base + 1 : base
-  );
-}
-
-function parseObject(json: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(json);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-function readNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
 function rate(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
 }
@@ -1188,10 +1011,6 @@ function displayModelName(modelId: string): string {
   if (modelId === "unknown") return "Unknown";
   const parts = modelId.split(":");
   return parts[parts.length - 1] || modelId;
-}
-
-function formatUsd(value: number | null): string {
-  return value == null ? "unknown cost" : `$${value.toFixed(3)}`;
 }
 
 // ---------------------------------------------------------------------------
