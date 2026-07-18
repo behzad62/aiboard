@@ -801,13 +801,6 @@ function finiteMetric(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/**
- * A participant won if its id equals the winner token, or — for team games like
- * Codenames where the winner is a team token ("red"/"blue") and seats are
- * role-suffixed ("red-spymaster") — if its id is on the winning team. 2-player
- * games (chess/connect-four/battleship) use the participant id as the token, so
- * exact match still applies.
- */
 function finalizeScore(
   row: MutableScore,
   maxCost: number,
