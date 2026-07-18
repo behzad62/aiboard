@@ -467,6 +467,10 @@ const certifiedRunPanelSource = readFileSync(
   "components/benchmark/certified/CertifiedRunPanel.tsx",
   "utf8"
 );
+const presetCardsSource = readFileSync(
+  "components/benchmark/run/PresetCards.tsx",
+  "utf8"
+);
 // The run-execution helpers (runSelected/runGameIqMultiModel + their pure
 // helpers) were extracted out of CertifiedRunPanel.tsx into run-execution.ts
 // (2026-07-17 benchmark UX overhaul, Task 4 Step 1) — the WorkBench
@@ -481,6 +485,14 @@ check(
     runnerStatusSource.includes('download="bench-runner.mjs"') &&
     runnerStatusSource.includes("Download bench runner"),
   runnerStatusSource
+);
+check(
+  "selected Full certified preset links the bench runner download",
+  presetCardsSource.includes('preset.id === "full-certified" && focused') &&
+    presetCardsSource.includes('href="/bench-runner.mjs"') &&
+    presetCardsSource.includes('download="bench-runner.mjs"') &&
+    presetCardsSource.includes("Download bench runner"),
+  presetCardsSource
 );
 // RunProgressTimeline (the Certify/Run/Persist step UI this check used to
 // read off CertifiedRunPanel.tsx's source) was deleted in the 2026-07-17

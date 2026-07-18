@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, RefreshCw } from "lucide-react";
+import { Download, Play, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -74,6 +74,14 @@ export function PresetCards({
             <CardContent className="space-y-2">
               {gate.note && (
                 <p className="text-xs text-muted-foreground">{gate.note}</p>
+              )}
+              {preset.id === "full-certified" && focused && (
+                <Button type="button" variant="outline" className="w-full" asChild>
+                  <a href="/bench-runner.mjs" download="bench-runner.mjs">
+                    <Download className="h-4 w-4" />
+                    Download bench runner
+                  </a>
+                </Button>
               )}
               <Button
                 className="w-full"
