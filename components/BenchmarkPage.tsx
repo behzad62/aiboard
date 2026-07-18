@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { BenchmarkLab } from "@/components/BenchmarkLab";
+import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
 import { BenchmarkHeadToHeadTable } from "@/components/benchmark/BenchmarkHeadToHeadTable";
 import { CapabilityRadarChart } from "@/components/benchmark/CapabilityRadarChart";
 import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
@@ -37,8 +38,8 @@ export function BenchmarkPage() {
           Model benchmark
         </h1>
         <p className="mt-1 max-w-2xl text-muted-foreground">
-          Compare local benchmark evidence across saved cases, Build runs, and
-          AI-vs-AI game benchmarks without sending data to a server.
+          Run, compare, and manage local benchmark evidence without sending
+          data to a server.
         </p>
       </header>
 
@@ -47,6 +48,7 @@ export function BenchmarkPage() {
           <TabsTrigger value="run">Run</TabsTrigger>
           <TabsTrigger value="results">Results</TabsTrigger>
           <TabsTrigger value="data">Data</TabsTrigger>
+          <TabsTrigger value="build">Build</TabsTrigger>
         </TabsList>
 
         <TabsContent value="run" className="space-y-6">
@@ -78,6 +80,10 @@ export function BenchmarkPage() {
 
         <TabsContent value="data" className="space-y-6">
           <BenchmarkLab />
+        </TabsContent>
+
+        <TabsContent value="build" className="space-y-6">
+          <BuildLeaderboard />
         </TabsContent>
       </Tabs>
     </div>

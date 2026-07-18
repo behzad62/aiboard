@@ -8,7 +8,6 @@
 // 2026-07-17 benchmark UX overhaul, Task 5.
 import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
 import { ComboMatrix } from "@/components/benchmark/teamiq/ComboMatrix";
 import { ParetoFrontier } from "@/components/benchmark/teamiq/ParetoFrontier";
 import {
@@ -28,13 +27,12 @@ import type {
   TeamIqRecommendationCard,
 } from "@/lib/benchmark/teamiq";
 
-type Lens = "solo" | "teams" | "roles" | "live";
+type Lens = "solo" | "teams" | "roles";
 
 const LENSES: Array<{ key: Lens; label: string }> = [
   { key: "solo", label: "Solo" },
   { key: "teams", label: "Teams" },
   { key: "roles", label: "Roles" },
-  { key: "live", label: "Live builds" },
 ];
 
 export function LensTabs({
@@ -156,15 +154,6 @@ export function LensTabs({
           <LensEmptyState text="No WorkBench role attempts yet — run a WorkBench team to populate the architect, worker, and reviewer boards." />
         ))}
 
-      {lens === "live" && (
-        <div className="space-y-2">
-          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-300">
-            Uncertified — live Build usage. These numbers accumulate from
-            Build-mode discussions in this browser, not the certified harness.
-          </p>
-          <BuildLeaderboard />
-        </div>
-      )}
     </div>
   );
 }
