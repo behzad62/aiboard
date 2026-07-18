@@ -1,9 +1,4 @@
 import type {
-  BuildCheckpoint,
-  GenericGameMatchRecord,
-  ModelBuildStat,
-} from "@/lib/db/schema";
-import type {
   BenchmarkCase,
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -181,9 +176,6 @@ export interface BenchmarkDashboardData {
 }
 
 export interface BenchmarkMetricInputs {
-  gameMatches: GenericGameMatchRecord[];
-  buildStats: ModelBuildStat[];
-  buildCheckpoints: BuildCheckpoint[];
   benchmarkRuns: BenchmarkRun[];
   benchmarkCases: BenchmarkCase[];
   benchmarkMetricValues: BenchmarkMetricValue[];
@@ -271,102 +263,6 @@ export function buildBenchmarkDashboardData(
     scores.set(modelId, created);
     return created;
   };
-
-  for (const stat of input.buildStats) {
-    const score = scoreFor(stat.modelId, stat.displayName);
-    score.buildAttempts += stat.attempts;
-    score.buildApprovals += stat.approvals;
-    score.buildFixes += stat.fixes;
-    score.buildBadOutput += stat.badOutput;
-    score.providerErrors += stat.unavailable;
-    score.completions += Math.max(0, stat.attempts - stat.unavailable);
-    // Build stats do not record independent schema/tool/verifier outcomes —
-    // they expose only approvals/fixes/badOutput, so deriving structuredOutput,
-    // toolUse, AND verifier axes from those same three tallies would make the
-    // radar look multi-dimensional while all three axes were near-perfectly
-    // correlated by construction. Keep bad output in the build outcome fields
-    // instead of fanning it out into three separate reliability axes; those
-    // axes stay reserved for signals that actually measure them (game matches,
-    // certified verifier results).
-    if (stat.responseMs > 0) {
-      score.latencyMs += stat.responseMs;
-      score.latencySamples += Math.max(1, stat.approvals + stat.fixes);
-    }
-
-    addEvidence(evidenceByModel, stat.modelId, {
-      id: `build-stat:${stat.modelId}`,
-      title: "Build model aggregate",
-      domain: "build",
-      timestamp: stat.updatedAt,
-      summary: `${stat.approvals} approvals, ${stat.fixes} fixes, ${stat.badOutput} bad output, ${stat.unavailable} unavailable.`,
-      detailsJson: JSON.stringify(stat, null, 2),
-    });
-  }
-
-  for (const checkpoint of input.buildCheckpoints) {
-    const trend = trendFor(trends, checkpoint.updatedAt);
-    trend.buildAttempts += checkpoint.usageWindow.models.reduce(
-      (sum, model) => sum + model.calls,
-      0
-    );
-
-    for (const usage of checkpoint.usageWindow.models) {
-      const score = scoreFor(usage.modelId, usage.modelName);
-      score.estimatedUsd += usage.estimatedUsd ?? 0;
-      if (usage.estimatedUsd != null) score.costSamples += 1;
-      score.inputTokens += usage.inputTokens;
-      score.outputTokens += usage.outputTokens;
-      addEvidence(evidenceByModel, usage.modelId, {
-        id: `build-usage:${checkpoint.discussionId}:${usage.modelId}`,
-        title: "Build usage window",
-        domain: "build",
-        timestamp: checkpoint.updatedAt,
-        summary: `${usage.calls} calls, ${usage.totalTokens.toLocaleString()} tokens, ${formatUsd(usage.estimatedUsd)}.`,
-        detailsJson: JSON.stringify(
-          {
-            discussionId: checkpoint.discussionId,
-            status: checkpoint.status,
-            stopReason: checkpoint.stopReason,
-            usage,
-          },
-          null,
-          2
-        ),
-      });
-    }
-
-    for (const problem of [
-      ...(checkpoint.buildProblems ?? []),
-      ...(checkpoint.stopReport?.problems ?? []),
-      ...(checkpoint.toolReviewReport?.problems ?? []),
-    ]) {
-      const modelId = problem.modelId ?? "unknown";
-      if (problem.modelId) incrementFailure(failures, problem.modelId, problem.code);
-      if (problem.modelId) {
-        addEvidence(evidenceByModel, problem.modelId, {
-          id: `build-problem:${problem.id}`,
-          title: problem.code,
-          domain: "build",
-          timestamp: problem.createdAt,
-          summary: problem.message,
-          detailsJson: JSON.stringify(problem, null, 2),
-        });
-      } else {
-        incrementFailure(failures, modelId, problem.code);
-      }
-    }
-  }
-
-  for (const match of input.gameMatches) {
-    addGameMatch({
-      match,
-      scoreFor,
-      evidenceByModel,
-      headToHead,
-      trends,
-      failures,
-    });
-  }
 
   for (const metric of input.benchmarkMetricValues) {
     if (!metric.modelId) continue;
@@ -1127,7 +1023,7 @@ function summarize(
     partitionBenchmarkCases(input.benchmarkCases);
 
   return {
-    totalRuns: input.benchmarkRuns.length + input.gameMatches.length + input.buildCheckpoints.length,
+    totalRuns: input.benchmarkRuns.length,
     totalCases: runnableCases.length,
     capturedCases: capturedCases.length,
     totalModels: models.length,

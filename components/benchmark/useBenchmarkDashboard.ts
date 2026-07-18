@@ -11,10 +11,7 @@ import {
   getBenchmarkRuns,
   getBenchmarkSuites,
   getBenchmarkTraces,
-  getBuildCheckpoints,
   getCorruptBenchmarkRunCount,
-  getGenericGameMatchRecords,
-  getModelStats,
   rescanBenchmarkRunFiles,
 } from "@/lib/client/store";
 import {
@@ -63,9 +60,6 @@ export interface BenchmarkReportCounts {
   artifacts: number;
   failures: number;
   traces: number;
-  gameMatches: number;
-  buildCheckpoints: number;
-  buildStats: number;
   certifiedCases: number;
   certifiedAttempts: number;
   verifierResults: number;
@@ -84,9 +78,6 @@ const EMPTY_REPORT_COUNTS: BenchmarkReportCounts = {
   artifacts: 0,
   failures: 0,
   traces: 0,
-  gameMatches: 0,
-  buildCheckpoints: 0,
-  buildStats: 0,
   certifiedCases: 0,
   certifiedAttempts: 0,
   verifierResults: 0,
@@ -127,9 +118,6 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
 
     setLocked(false);
     await reconcileStaleCertifiedRuns();
-    const gameMatches = [...getGenericGameMatchRecords()];
-    const buildStats = getModelStats();
-    const buildCheckpoints = [...getBuildCheckpoints()];
     const benchmarkRuns = [...getBenchmarkRuns()];
     const benchmarkCases = [...getBenchmarkCases()];
     const benchmarkMetricValues = [...getBenchmarkMetricValues()];
@@ -157,9 +145,6 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     ]);
     setDashboard(
       buildBenchmarkDashboardData({
-        gameMatches,
-        buildStats,
-        buildCheckpoints,
         benchmarkRuns,
         benchmarkCases,
         benchmarkMetricValues,
@@ -187,9 +172,6 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       artifacts: benchmarkArtifacts.length,
       failures: benchmarkFailures.length,
       traces: benchmarkTraces.length,
-      gameMatches: gameMatches.length,
-      buildCheckpoints: buildCheckpoints.length,
-      buildStats: buildStats.length,
       certifiedCases: benchmarkCaseV2.length,
       certifiedAttempts: benchmarkAttemptsV2.filter(
         (attempt) => attempt.mode === "certified"

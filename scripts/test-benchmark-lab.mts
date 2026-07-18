@@ -150,54 +150,18 @@ const checkpoint: BuildCheckpoint = {
 };
 
 const dashboard = buildBenchmarkDashboardData({
-  gameMatches: [match],
-  buildStats: [buildStat],
-  buildCheckpoints: [checkpoint],
   benchmarkRuns: [],
   benchmarkCases: [],
   benchmarkMetricValues: [],
   benchmarkFailures: [],
 });
 
-const gemini = dashboard.models.find((model) => model.modelId === "google:gemini-test");
-const gpt = dashboard.models.find((model) => model.modelId === "openai:gpt-test");
-
-check("dashboard tracks both game models", dashboard.models.length === 2, dashboard.models);
-check("winner model receives game win", gemini?.wins === 1, gemini);
-check("losing model receives game loss", gpt?.losses === 1, gpt);
-check("fallback rate is represented", (gemini?.fallbackRate ?? 0) > 0, gemini);
-check("build failures are categorized", dashboard.failureRows[0]?.tool === 1, dashboard.failureRows);
-check("head-to-head result is tracked", dashboard.headToHeadRows[0]?.modelAWins + dashboard.headToHeadRows[0]?.modelBWins === 1, dashboard.headToHeadRows);
-check("summary includes cost", dashboard.summary.averageCostUsd === 0.12, dashboard.summary);
-const mixedTrendRow = dashboard.trendRows.find((row) => row.date === "2026-06-24");
+check("empty benchmark dashboard has no models", dashboard.models.length === 0, dashboard.models);
+check("empty benchmark dashboard has no runs", dashboard.summary.totalRuns === 0, dashboard.summary);
 check(
-  "trend quality averages game outcomes independently of build attempts",
-  mixedTrendRow?.quality === 50,
-  mixedTrendRow
-);
-const buildOnlyTrendDashboard = buildBenchmarkDashboardData({
-  gameMatches: [],
-  buildStats: [],
-  buildCheckpoints: [
-    {
-      ...checkpoint,
-      discussionId: "discussion-build-only",
-      updatedAt: "2026-06-25T10:06:00.000Z",
-      buildProblems: [],
-    },
-  ],
-  benchmarkRuns: [],
-  benchmarkCases: [],
-  benchmarkMetricValues: [],
-  benchmarkFailures: [],
-});
-const buildOnlyTrendRow = buildOnlyTrendDashboard.trendRows.find(
-  (row) => row.games === 0 && row.buildAttempts > 0
-);
-check(
-  "build-only trend quality is null",
-  buildOnlyTrendRow?.quality === null,
-  buildOnlyTrendRow
+  "empty benchmark dashboard has no latency",
+  dashboard.summary.averageLatencyMs === null,
+  dashboard.summary
 );
 
 __resetBenchmarkStoreForTests();
