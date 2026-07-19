@@ -15,7 +15,6 @@ import { CodenamesMoveHistory } from "@/components/games/codenames/CodenamesMove
 import { CodenamesSetup } from "@/components/games/codenames/CodenamesSetup";
 import { CodenamesTeamPanel } from "@/components/games/codenames/CodenamesTeamPanel";
 import {
-  modeLabel,
   roleLabel,
   teamLabel,
 } from "@/components/games/codenames/view-helpers";
@@ -49,11 +48,19 @@ import {
   type CodenamesPrivateView,
   type CodenamesSessionSnapshot,
 } from "@/lib/games/codenames/session";
+import {
+  DEFAULT_CODENAMES_SEAT_ASSIGNMENTS,
+  codenamesCompositionLabel,
+  everySeatAI,
+  seatKindFor,
+} from "@/lib/games/codenames/seats";
 import type {
   CodenamesClue,
-  CodenamesGameMode,
   CodenamesGameState,
   CodenamesPlayerRole,
+  CodenamesSeatAssignments,
+  CodenamesSeatId,
+  CodenamesSeatKind,
   CodenamesTeam,
 } from "@/lib/games/codenames/types";
 import {
@@ -65,7 +72,6 @@ import type { GameAIInteraction } from "@/lib/games/core/types";
 import { cn } from "@/lib/utils";
 
 type AIConfig = GameAIConfigValue;
-type SeatKind = "human" | "ai";
 
 const EMPTY_AI_CONFIG: AIConfig = {
   modelId: "",
@@ -85,16 +91,6 @@ function samePrivateView(
   right: CodenamesPrivateView | null
 ): boolean {
   return left?.team === right?.team && left?.role === right?.role;
-}
-
-function seatKind(
-  mode: CodenamesGameMode,
-  humanTeam: CodenamesTeam,
-  team: CodenamesTeam
-): SeatKind {
-  if (mode === "aivai") return "ai";
-  if (mode === "pvai" && team !== humanTeam) return "ai";
-  return "human";
 }
 
 function requiredSeat(state: CodenamesGameState): CodenamesPrivateView | null {
@@ -164,8 +160,7 @@ function shouldPersistCodenamesSnapshot(snapshot: CodenamesSessionSnapshot): boo
 
 function createSnapshot(params: {
   gameState: CodenamesGameState;
-  gameMode: CodenamesGameMode;
-  humanTeam: CodenamesTeam;
+  seatAssignments: CodenamesSeatAssignments;
   redSpymasterAI: AIConfig;
   redOperativeAI: AIConfig;
   blueSpymasterAI: AIConfig;
@@ -179,8 +174,7 @@ function createSnapshot(params: {
 }): CodenamesSessionSnapshot {
   return {
     gameState: params.gameState,
-    gameMode: params.gameMode,
-    humanTeam: params.humanTeam,
+    seatAssignments: params.seatAssignments,
     redSpymasterAI: params.redSpymasterAI,
     redOperativeAI: params.redOperativeAI,
     blueSpymasterAI: params.blueSpymasterAI,
@@ -251,8 +245,9 @@ export function CodenamesGameClient({
   onBackToGames?: () => void;
 }) {
   const [gameStarted, setGameStarted] = useState(false);
-  const [gameMode, setGameMode] = useState<CodenamesGameMode>("pvp");
-  const [humanTeam, setHumanTeam] = useState<CodenamesTeam>("red");
+  const [seatAssignments, setSeatAssignments] = useState<CodenamesSeatAssignments>(
+    () => ({ ...DEFAULT_CODENAMES_SEAT_ASSIGNMENTS })
+  );
   const [redSpymasterAI, setRedSpymasterAI] = useState<AIConfig>(EMPTY_AI_CONFIG);
   const [redOperativeAI, setRedOperativeAI] = useState<AIConfig>(EMPTY_AI_CONFIG);
   const [blueSpymasterAI, setBlueSpymasterAI] =
@@ -291,8 +286,9 @@ export function CodenamesGameClient({
   const activeGame = isCodenamesActiveStatus(gameState.status);
   const neededSeat = useMemo(() => requiredSeat(gameState), [gameState]);
   const neededSeatKind = neededSeat
-    ? seatKind(gameMode, humanTeam, neededSeat.team)
+    ? seatKindFor(seatAssignments, neededSeat.team, neededSeat.role)
     : "human";
+  const everyAI = everySeatAI(seatAssignments);
   const showHandoff =
     gameStarted &&
     !isPaused &&
@@ -301,7 +297,7 @@ export function CodenamesGameClient({
     !samePrivateView(currentPrivateView, neededSeat);
   const currentSeatIsAI = neededSeat !== null && neededSeatKind === "ai";
   const canSeeSpymasterBoard =
-    gameMode === "aivai" ||
+    everyAI ||
     gameState.status === "win" ||
     currentPrivateView?.role === "spymaster";
   const boardCards = useMemo(
@@ -324,8 +320,7 @@ export function CodenamesGameClient({
     () =>
       createSnapshot({
         gameState,
-        gameMode,
-        humanTeam,
+        seatAssignments,
         redSpymasterAI,
         redOperativeAI,
         blueSpymasterAI,
@@ -344,13 +339,12 @@ export function CodenamesGameClient({
       blueOperativeAI,
       blueSpymasterAI,
       currentPrivateView,
-      gameMode,
       gameState,
-      humanTeam,
       isPaused,
       lastAiInteraction,
       redOperativeAI,
       redSpymasterAI,
+      seatAssignments,
     ]
   );
   const aiDiagnosticsText = useMemo(
@@ -359,10 +353,10 @@ export function CodenamesGameClient({
   );
   const canShowAIDiagnostics =
     aiDiagnostics.length > 0 &&
-    (gameMode === "aivai" ||
+    (everyAI ||
       gameState.status === "win" ||
       currentPrivateView?.role === "spymaster");
-  const canExportFullSnapshot = gameState.status === "win" || gameMode === "aivai";
+  const canExportFullSnapshot = gameState.status === "win" || everyAI;
   const visibleInteractionForRole = (
     team: CodenamesTeam,
     role: CodenamesPlayerRole
@@ -372,7 +366,7 @@ export function CodenamesGameClient({
     if (
       activeGame &&
       role === "spymaster" &&
-      gameMode !== "aivai" &&
+      !everyAI &&
       currentPrivateView?.role !== "spymaster"
     ) {
       return null;
@@ -522,8 +516,7 @@ export function CodenamesGameClient({
     (snapshot: CodenamesSessionSnapshot, createdAt: string | null = null) => {
       invalidateAIRequests();
       invalidatePersistence();
-      setGameMode(snapshot.gameMode);
-      setHumanTeam(snapshot.humanTeam);
+      setSeatAssignments(snapshot.seatAssignments);
       setRedSpymasterAI(snapshot.redSpymasterAI);
       setRedOperativeAI(snapshot.redOperativeAI);
       setBlueSpymasterAI(snapshot.blueSpymasterAI);
@@ -573,6 +566,13 @@ export function CodenamesGameClient({
     if (!restoreSnapshot) return;
     applySnapshot(restoreSnapshot, restoreCreatedAt);
   }, [applySnapshot, restoreCreatedAt, restoreSnapshot]);
+
+  const handleSeatKindChange = useCallback(
+    (seat: CodenamesSeatId, kind: CodenamesSeatKind) => {
+      setSeatAssignments((prev) => ({ ...prev, [seat]: kind }));
+    },
+    []
+  );
 
   const handleImport = useCallback(
     (snapshot: CodenamesSessionSnapshot) => {
@@ -740,7 +740,7 @@ export function CodenamesGameClient({
           }
 
           const fallbackClue =
-            gameMode === "aivai" && !isNonrecoverableGameAIError(result.error)
+            everyAI && !isNonrecoverableGameAIError(result.error)
               ? chooseFallbackClue(requestState)
               : null;
           if (fallbackClue) {
@@ -796,7 +796,7 @@ export function CodenamesGameClient({
         }
 
         const fallbackCard =
-          gameMode === "aivai" && !isNonrecoverableGameAIError(result.error)
+          everyAI && !isNonrecoverableGameAIError(result.error)
             ? chooseFallbackGuess(requestState)
             : null;
         if (fallbackCard) {
@@ -842,7 +842,7 @@ export function CodenamesGameClient({
     blueOperativeAI,
     blueSpymasterAI,
     currentSeatIsAI,
-    gameMode,
+    everyAI,
     gameStarted,
     gameState,
     isPaused,
@@ -859,8 +859,10 @@ export function CodenamesGameClient({
     };
   }, [flushLatestActiveSession]);
 
-  const redKind = seatKind(gameMode, humanTeam, "red");
-  const blueKind = seatKind(gameMode, humanTeam, "blue");
+  const redSpymasterKind = seatKindFor(seatAssignments, "red", "spymaster");
+  const redOperativeKind = seatKindFor(seatAssignments, "red", "operative");
+  const blueSpymasterKind = seatKindFor(seatAssignments, "blue", "spymaster");
+  const blueOperativeKind = seatKindFor(seatAssignments, "blue", "operative");
   const redRemaining = getRemainingCodenamesCards(gameState, "red");
   const blueRemaining = getRemainingCodenamesCards(gameState, "blue");
   const statusMessage =
@@ -887,16 +889,14 @@ export function CodenamesGameClient({
             </button>
           )}
           <CodenamesSetup
-            gameMode={gameMode}
-            humanTeam={humanTeam}
+            seatAssignments={seatAssignments}
             redSpymasterAI={redSpymasterAI}
             redOperativeAI={redOperativeAI}
             blueSpymasterAI={blueSpymasterAI}
             blueOperativeAI={blueOperativeAI}
             models={availableModels}
             restoreMoves={restoreSnapshot?.gameState.moveHistory.length ?? null}
-            onModeChange={setGameMode}
-            onHumanTeamChange={setHumanTeam}
+            onSeatKindChange={handleSeatKindChange}
             onRedSpymasterAIChange={setRedSpymasterAI}
             onRedOperativeAIChange={setRedOperativeAI}
             onBlueSpymasterAIChange={setBlueSpymasterAI}
@@ -932,7 +932,7 @@ export function CodenamesGameClient({
           </p>
           <h1 className="mt-2 text-3xl font-bold">Codenames</h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            {modeLabel(gameMode)}
+            {codenamesCompositionLabel(seatAssignments)}
           </p>
         </header>
 
@@ -949,16 +949,16 @@ export function CodenamesGameClient({
                 <CodenamesTeamPanel
                   team="red"
                   active={activeGame && gameState.turnTeam === "red"}
-                  spymasterKind={redKind}
-                  operativeKind={redKind}
+                  spymasterKind={redSpymasterKind}
+                  operativeKind={redOperativeKind}
                   remaining={redRemaining}
                   spymasterModelLabel={
-                    redKind === "ai"
+                    redSpymasterKind === "ai"
                       ? modelLabel(availableModels, redSpymasterAI.modelId)
                       : undefined
                   }
                   operativeModelLabel={
-                    redKind === "ai"
+                    redOperativeKind === "ai"
                       ? modelLabel(availableModels, redOperativeAI.modelId)
                       : undefined
                   }
@@ -979,16 +979,16 @@ export function CodenamesGameClient({
                 <CodenamesTeamPanel
                   team="blue"
                   active={activeGame && gameState.turnTeam === "blue"}
-                  spymasterKind={blueKind}
-                  operativeKind={blueKind}
+                  spymasterKind={blueSpymasterKind}
+                  operativeKind={blueOperativeKind}
                   remaining={blueRemaining}
                   spymasterModelLabel={
-                    blueKind === "ai"
+                    blueSpymasterKind === "ai"
                       ? modelLabel(availableModels, blueSpymasterAI.modelId)
                       : undefined
                   }
                   operativeModelLabel={
-                    blueKind === "ai"
+                    blueOperativeKind === "ai"
                       ? modelLabel(availableModels, blueOperativeAI.modelId)
                       : undefined
                   }
