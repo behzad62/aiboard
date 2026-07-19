@@ -92,6 +92,9 @@ export function CodenamesSetup({
     },
   ];
 
+  const anySeatAI = Object.values(seatAssignments).some((kind) => kind === "ai");
+  const startDisabled = anySeatAI && models.length === 0;
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-950">
       <div className="text-center">
@@ -130,11 +133,18 @@ export function CodenamesSetup({
         />
       </div>
 
+      {startDisabled && (
+        <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
+          Configure at least one model in Settings before starting an AI game.
+        </div>
+      )}
+
       <div className="mt-6 flex flex-wrap justify-center gap-3">
         <button
           type="button"
           onClick={onStart}
-          className="rounded-lg bg-amber-500 px-5 py-3 text-sm font-black text-slate-950 transition hover:bg-amber-400 active:scale-95"
+          disabled={startDisabled}
+          className="rounded-lg bg-amber-500 px-5 py-3 text-sm font-black text-slate-950 transition hover:bg-amber-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="codenames-start"
         >
           Start game
@@ -202,6 +212,7 @@ function TeamColumn({
             kind={seatAssignments[seat.id]}
             models={models}
             onSeatKindChange={onSeatKindChange}
+            team={team}
           />
         ))}
       </div>
@@ -214,11 +225,13 @@ function SeatControl({
   kind,
   models,
   onSeatKindChange,
+  team,
 }: {
   seat: SeatDef;
   kind: CodenamesSeatKind;
   models: GameAIModelOption[];
   onSeatKindChange: (seat: CodenamesSeatId, kind: CodenamesSeatKind) => void;
+  team: CodenamesTeam;
 }) {
   return (
     <div className="rounded-lg border border-white/70 bg-white/80 p-3 dark:border-slate-800 dark:bg-slate-950/50">
@@ -227,7 +240,7 @@ function SeatControl({
         <div
           className="inline-flex overflow-hidden rounded-lg border border-slate-300 text-xs font-bold dark:border-slate-700"
           role="group"
-          aria-label={`${seat.roleLabel} player type`}
+          aria-label={`${team === "red" ? "Red" : "Blue"} ${seat.roleLabel} player type`}
         >
           <button
             type="button"
