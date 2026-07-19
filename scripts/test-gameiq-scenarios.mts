@@ -33,7 +33,6 @@ check(
     "gameiq-v0.2-connect-four",
     "gameiq-v0.2-chess",
     "gameiq-v0.2-battleship",
-    "gameiq-v0.1-codenames",
     "gameiq-fireworks-basic-v1",
     "gameiq-fireworks-hard-v1",
     "gameiq-fireworks-memory-v1",
@@ -45,7 +44,6 @@ const expectedPackCounts = new Map([
   ["gameiq-v0.2-connect-four", 12],
   ["gameiq-v0.2-chess", 12],
   ["gameiq-v0.2-battleship", 15],
-  ["gameiq-v0.1-codenames", 10],
   ["gameiq-fireworks-basic-v1", 20],
   ["gameiq-fireworks-hard-v1", 40],
   ["gameiq-fireworks-memory-v1", 30],
@@ -59,7 +57,6 @@ for (const pack of firstListing) {
 }
 
 const distinctFloor = new Map([
-  ["gameiq-v0.1-codenames", 10],
 ]);
 for (const pack of firstListing) {
   const floor = distinctFloor.get(pack.id);

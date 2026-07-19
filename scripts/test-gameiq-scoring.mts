@@ -206,46 +206,9 @@ if (!firstChessScenario || !distinctChessScenario) {
   );
 }
 
-const codenamesScenario = getGameIqScenarioPack("codenames")?.scenarios[0];
-if (!codenamesScenario) {
-  check("Codenames scenarios available for behavioral clue scoring", false);
-} else {
-  // Since the 2026-07-02 re-authoring, codenames clue scenarios are
-  // skill-binding ("hidden-cooperation"): a legal but board-blind clue that is
-  // not in the scenario's defensible allowlist must count as LEGAL yet score
-  // ZERO correctness. GALAXY is not a board word on any codenames board.
-  const legalBoardBlindClue = await runGameIqScenarios({
-    runId: "gameiq-test-run-codenames-legal-board-blind-clue",
-    modelId: "fake:codenames",
-    teamCompositionId: "team-fake-codenames",
-    scenarios: [codenamesScenario],
-    moveProvider: () => ({
-      action: {
-        type: "clue",
-        clue: { word: "GALAXY", count: 2 },
-        cardId: null,
-      },
-      rawResponse: JSON.stringify({
-        action: {
-          type: "clue",
-          clue: { word: "GALAXY", count: 2 },
-          cardId: null,
-        },
-      }),
-      latencyMs: 0,
-    }),
-  });
-
-  check(
-    "Codenames binding clue: legal board-blind clue is legal but scores zero",
-    legalBoardBlindClue.metrics.structuredReliability === 1 &&
-      legalBoardBlindClue.metrics.legalActionRate === 1 &&
-      legalBoardBlindClue.metrics.outcomeScore === 0 &&
-      legalBoardBlindClue.metrics.moveQuality === 0 &&
-      legalBoardBlindClue.attempt.status !== "passed",
-    legalBoardBlindClue
-  );
-}
+// The codenames behavioral clue-scoring section was removed 2026-07-20 when
+// codenames was dropped from the benchmark (no packs remain; the shared
+// clue-legality gate is still covered by test-gameiq-shared-guards.mts).
 
 // --- v0.3 scoring: graded fireworks quality + correct bar + reweight ---
 const hard27 = scenarios.find(

@@ -41,7 +41,7 @@ const MODEL_ID = "fake:recover-model";
 const packs = listGameIqScenarioPacks();
 // Smallest first-class pack (10 scenarios) as the COMPLETE pack; a large pack
 // (fireworks-hard, 40) as the PARTIAL pack with only a few traces.
-const completePack = packs.find((pack) => pack.id === "gameiq-v0.1-codenames")!;
+const completePack = packs.find((pack) => pack.id === "gameiq-fireworks-basic-v1")!;
 const partialPack = packs.find((pack) => pack.id === "gameiq-fireworks-hard-v1")!;
 // A bogus/deleted pack id — mirrors a historical run file that still carries
 // traces for the hard-deleted (2026-07-17) v0.1 chess pack.

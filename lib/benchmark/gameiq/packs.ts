@@ -1,6 +1,5 @@
 import { BATTLESHIP_V2_GAMEIQ_SCENARIOS } from "./battleship-v2";
 import { CHESS_V2_GAMEIQ_SCENARIOS } from "./chess-v2";
-import { CODENAMES_GAMEIQ_SCENARIOS } from "./codenames";
 import { CONNECT_FOUR_V2_GAMEIQ_SCENARIOS } from "./connect-four-v2";
 import {
   FIREWORKS_GAMEIQ_BASIC_SCENARIOS,
@@ -61,19 +60,13 @@ const GAMEIQ_SCENARIO_PACKS: GameIqScenarioPack[] = [
     certificationTier: "first-class",
     scenarios: BATTLESHIP_V2_GAMEIQ_SCENARIOS,
   },
-  {
-    id: "gameiq-v0.1-codenames",
-    gameId: "codenames",
-    label: "Certified GameIQ v1: Codenames Clues",
-    // 0.2.0: re-authored 2026-07-02 — replaced the 25 re-skinned legality
-    // clones with 10 distinct skill-binding decisions (6 deduced guesses, 4
-    // binding clues). Passes gameIqPackFirstClassFloor (>=10 distinct
-    // decisions, 0% constant-answer rate), so first-class is now honest.
-    // 0.2.1: removed dead maxResponseMs field (never enforced, never model-visible)
-    version: "0.2.1",
-    certificationTier: "first-class",
-    scenarios: CODENAMES_GAMEIQ_SCENARIOS,
-  },
+  // codenames was DROPPED from the benchmark entirely 2026-07-20 (user
+  // decision): its hand-judged v0.1 keys violated the exact-key standard, and
+  // the CSP-deduction v2 replacement (archived unmerged on branch
+  // gameiq-codenames-deduction) proved frontier-saturated across two live-gated
+  // difficulty iterations — GPT-5.5 solved 12/12 then 11/12. Bounded formal
+  // deduction cannot challenge frontier models, so running it wastes benchmark
+  // tokens. The playable codenames game (lib/games/codenames/) is unaffected.
   {
     id: "gameiq-fireworks-basic-v1",
     gameId: "fireworks",
