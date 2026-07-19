@@ -1,6 +1,5 @@
 import type {
   CodenamesCardRole,
-  CodenamesGameMode,
   CodenamesPlayerRole,
   CodenamesTeam,
 } from "@/lib/games/codenames/types";
@@ -11,12 +10,6 @@ export function teamLabel(team: CodenamesTeam): string {
 
 export function roleLabel(role: CodenamesPlayerRole): string {
   return role === "spymaster" ? "Spymaster" : "Operative";
-}
-
-export function modeLabel(mode: CodenamesGameMode): string {
-  if (mode === "pvai") return "Player vs AI";
-  if (mode === "aivai") return "AI vs AI";
-  return "Player vs Player";
 }
 
 export function roleText(role: CodenamesCardRole | null): string {
