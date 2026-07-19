@@ -47,8 +47,12 @@ function createProgressState(): CodenamesGameState {
 function createSnapshot(): CodenamesSessionSnapshot {
   return {
     gameState: createProgressState(),
-    gameMode: "pvai",
-    humanTeam: "red",
+    seatAssignments: {
+      redSpymaster: "human",
+      redOperative: "human",
+      blueSpymaster: "ai",
+      blueOperative: "ai",
+    },
     redSpymasterAI: { modelId: "openai:gpt-4.1", reasoningEffort: "medium" },
     redOperativeAI: { modelId: "openai:gpt-4.1", reasoningEffort: "medium" },
     blueSpymasterAI: {
@@ -113,6 +117,37 @@ check(
     JSON.stringify(parsed) === JSON.stringify(snapshot) &&
     parsed.gameState.moveHistory.length === 3,
   parsed
+);
+
+const legacyRecord = {
+  ...record,
+  stateJson: JSON.stringify({
+    gameState: snapshot.gameState,
+    gameMode: "pvai",
+    humanTeam: "red",
+    redSpymasterAI: snapshot.redSpymasterAI,
+    redOperativeAI: snapshot.redOperativeAI,
+    blueSpymasterAI: snapshot.blueSpymasterAI,
+    blueOperativeAI: snapshot.blueOperativeAI,
+    isPaused: false,
+    currentPrivateView: null,
+    lastAiInteraction: null,
+    aiWarning: null,
+    aiError: null,
+  }),
+};
+const legacyParsed = parseCodenamesSessionRecord(legacyRecord);
+check(
+  "legacy gameMode+humanTeam snapshot migrates to seat assignments",
+  legacyParsed !== null &&
+    JSON.stringify(legacyParsed.seatAssignments) ===
+      JSON.stringify({
+        redSpymaster: "human",
+        redOperative: "human",
+        blueSpymaster: "ai",
+        blueOperative: "ai",
+      }),
+  legacyParsed
 );
 
 const diagnosticSnapshot: CodenamesSessionSnapshot = {
@@ -231,7 +266,15 @@ check("json export parser rejects missing snapshot", missingSnapshot.ok === fals
 const malformedSnapshot = parseCodenamesJsonExport(
   JSON.stringify({
     export: jsonContent.export,
-    snapshot: { ...snapshot, gameMode: "bad-mode" },
+    snapshot: {
+      ...snapshot,
+      seatAssignments: {
+        redSpymaster: "robot",
+        redOperative: "human",
+        blueSpymaster: "ai",
+        blueOperative: "ai",
+      },
+    },
   })
 );
 check("json export parser rejects malformed snapshot", malformedSnapshot.ok === false);

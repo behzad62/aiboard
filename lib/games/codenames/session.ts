@@ -10,6 +10,7 @@ import type {
   CodenamesGuessResult,
   CodenamesPhase,
   CodenamesPlayerRole,
+  CodenamesSeatAssignments,
   CodenamesStatus,
   CodenamesTeam,
 } from "@/lib/games/codenames/types";
@@ -19,6 +20,11 @@ import type {
   GameSessionRecord,
   GameSessionStatus,
 } from "@/lib/games/core/types";
+import {
+  codenamesCompositionLabel,
+  isCodenamesSeatAssignments,
+  seatAssignmentsFromLegacyMode,
+} from "@/lib/games/codenames/seats";
 
 export const CODENAMES_ACTIVE_SESSION_ID = "codenames-active-session";
 
@@ -36,8 +42,7 @@ export interface CodenamesPrivateView {
 
 export interface CodenamesSessionSnapshot {
   gameState: CodenamesGameState;
-  gameMode: CodenamesGameMode;
-  humanTeam: CodenamesTeam;
+  seatAssignments: CodenamesSeatAssignments;
   redSpymasterAI: CodenamesSessionAIConfig;
   redOperativeAI: CodenamesSessionAIConfig;
   blueSpymasterAI: CodenamesSessionAIConfig;
@@ -62,7 +67,7 @@ export function createCodenamesSessionRecord(
   return {
     id: CODENAMES_ACTIVE_SESSION_ID,
     gameId: "codenames",
-    title: codenamesSessionTitle(snapshot.gameMode),
+    title: codenamesSessionTitle(snapshot.seatAssignments),
     status: codenamesSessionStatus(snapshot),
     participants: codenamesParticipants(snapshot),
     stateJson: JSON.stringify(snapshot),
@@ -92,8 +97,17 @@ export function parseCodenamesSessionRecord(
   const parsed = parseJson(record.stateJson);
   if (!isPlainObject(parsed)) return null;
   if (!isCodenamesGameState(parsed.gameState)) return null;
-  if (!isGameMode(parsed.gameMode)) return null;
-  if (!isTeam(parsed.humanTeam)) return null;
+  let seatAssignments: CodenamesSeatAssignments;
+  if (isCodenamesSeatAssignments(parsed.seatAssignments)) {
+    seatAssignments = parsed.seatAssignments;
+  } else if (isGameMode(parsed.gameMode) && isTeam(parsed.humanTeam)) {
+    seatAssignments = seatAssignmentsFromLegacyMode(
+      parsed.gameMode,
+      parsed.humanTeam
+    );
+  } else {
+    return null;
+  }
   if (
     !isAIConfig(parsed.redSpymasterAI) ||
     !isAIConfig(parsed.redOperativeAI) ||
@@ -126,8 +140,7 @@ export function parseCodenamesSessionRecord(
 
   return {
     gameState: parsed.gameState,
-    gameMode: parsed.gameMode,
-    humanTeam: parsed.humanTeam,
+    seatAssignments,
     redSpymasterAI: parsed.redSpymasterAI,
     redOperativeAI: parsed.redOperativeAI,
     blueSpymasterAI: parsed.blueSpymasterAI,
@@ -143,16 +156,8 @@ export function parseCodenamesSessionRecord(
   };
 }
 
-function codenamesSessionTitle(mode: CodenamesGameMode): string {
-  switch (mode) {
-    case "pvai":
-      return "Codenames: Player vs AI";
-    case "aivai":
-      return "Codenames: AI vs AI";
-    case "pvp":
-    default:
-      return "Codenames: Player vs Player";
-  }
+function codenamesSessionTitle(assignments: CodenamesSeatAssignments): string {
+  return `Codenames: ${codenamesCompositionLabel(assignments)}`;
 }
 
 function codenamesSessionStatus(
@@ -168,41 +173,13 @@ function codenamesSessionStatus(
 }
 
 function codenamesParticipants(snapshot: CodenamesSessionSnapshot): GameParticipant[] {
+  const seats = snapshot.seatAssignments;
   return [
-    seatParticipant(
-      "red",
-      "spymaster",
-      seatKind(snapshot, "red"),
-      snapshot.redSpymasterAI
-    ),
-    seatParticipant(
-      "red",
-      "operative",
-      seatKind(snapshot, "red"),
-      snapshot.redOperativeAI
-    ),
-    seatParticipant(
-      "blue",
-      "spymaster",
-      seatKind(snapshot, "blue"),
-      snapshot.blueSpymasterAI
-    ),
-    seatParticipant(
-      "blue",
-      "operative",
-      seatKind(snapshot, "blue"),
-      snapshot.blueOperativeAI
-    ),
+    seatParticipant("red", "spymaster", seats.redSpymaster, snapshot.redSpymasterAI),
+    seatParticipant("red", "operative", seats.redOperative, snapshot.redOperativeAI),
+    seatParticipant("blue", "spymaster", seats.blueSpymaster, snapshot.blueSpymasterAI),
+    seatParticipant("blue", "operative", seats.blueOperative, snapshot.blueOperativeAI),
   ];
-}
-
-function seatKind(
-  snapshot: CodenamesSessionSnapshot,
-  team: CodenamesTeam
-): GameParticipant["kind"] {
-  if (snapshot.gameMode === "aivai") return "ai";
-  if (snapshot.gameMode === "pvai" && team !== snapshot.humanTeam) return "ai";
-  return "human";
 }
 
 function seatParticipant(
