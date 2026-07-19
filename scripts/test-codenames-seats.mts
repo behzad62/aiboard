@@ -39,6 +39,8 @@ const classicPvai: CodenamesSeatAssignments = {
 
 check("seatId maps red spymaster", seatId("red", "spymaster") === "redSpymaster");
 check("seatId maps blue operative", seatId("blue", "operative") === "blueOperative");
+check("seatId maps red operative", seatId("red", "operative") === "redOperative");
+check("seatId maps blue spymaster", seatId("blue", "spymaster") === "blueSpymaster");
 
 check(
   "default is AI spymaster + human operative on red, AI blue",
@@ -84,6 +86,15 @@ check(
 check("label all human", codenamesCompositionLabel(allHuman) === "Player vs Player");
 check("label all ai", codenamesCompositionLabel(allAI) === "AI vs AI");
 check("label classic pvai", codenamesCompositionLabel(classicPvai) === "Player vs AI");
+check(
+  "label mirrored pvai (red ai / blue human)",
+  codenamesCompositionLabel({
+    redSpymaster: "ai",
+    redOperative: "ai",
+    blueSpymaster: "human",
+    blueOperative: "human",
+  }) === "Player vs AI"
+);
 check(
   "label mixed default",
   codenamesCompositionLabel(DEFAULT_CODENAMES_SEAT_ASSIGNMENTS) === "1 Human · 3 AI",

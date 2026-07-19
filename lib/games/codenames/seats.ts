@@ -63,7 +63,7 @@ export function seatAssignmentsFromLegacyMode(
 export function isCodenamesSeatAssignments(
   value: unknown
 ): value is CodenamesSeatAssignments {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return SEAT_IDS.every(
     (id) => record[id] === "human" || record[id] === "ai"
