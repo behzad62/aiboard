@@ -45,5 +45,15 @@ assert(
   "Codenames AI turn effect should mark the request active before setting UI thinking state."
 );
 
+assert(
+  /const fallbackClue = !isNonrecoverableGameAIError\(result\.error\)/.test(source) &&
+    /const fallbackCard = !isNonrecoverableGameAIError\(result\.error\)/.test(source),
+  "Recoverable AI-seat errors should always fall back to a legal move (AI allies auto-recover in mixed games)."
+);
+assert(
+  !/everyAI && !isNonrecoverableGameAIError/.test(source),
+  "AI fallback should no longer gate on everyAI (all-AI games only)."
+);
+
 if (process.exitCode) process.exit(process.exitCode);
 console.log("PASS codenames AI turn effect regression");

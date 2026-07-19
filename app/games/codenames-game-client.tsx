@@ -739,10 +739,12 @@ export function CodenamesGameClient({
             return;
           }
 
-          const fallbackClue =
-            everyAI && !isNonrecoverableGameAIError(result.error)
-              ? chooseFallbackClue(requestState)
-              : null;
+          // Any AI seat recovers from a recoverable error with a legal fallback
+          // move (a dismissable warning still surfaces) so a mixed game with AI
+          // allies never stalls. Non-recoverable errors still hard-fail.
+          const fallbackClue = !isNonrecoverableGameAIError(result.error)
+            ? chooseFallbackClue(requestState)
+            : null;
           if (fallbackClue) {
             const interaction = fallbackInteraction(seat.team, seat.role, result.error);
             setAiDiagnostics(result.diagnostics ?? []);
@@ -795,10 +797,9 @@ export function CodenamesGameClient({
           return;
         }
 
-        const fallbackCard =
-          everyAI && !isNonrecoverableGameAIError(result.error)
-            ? chooseFallbackGuess(requestState)
-            : null;
+        const fallbackCard = !isNonrecoverableGameAIError(result.error)
+          ? chooseFallbackGuess(requestState)
+          : null;
         if (fallbackCard) {
           const interaction = fallbackInteraction(seat.team, seat.role, result.error);
           setAiDiagnostics(result.diagnostics ?? []);
@@ -842,7 +843,6 @@ export function CodenamesGameClient({
     blueOperativeAI,
     blueSpymasterAI,
     currentSeatIsAI,
-    everyAI,
     gameStarted,
     gameState,
     isPaused,
