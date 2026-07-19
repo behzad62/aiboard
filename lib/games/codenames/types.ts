@@ -4,6 +4,13 @@ export type CodenamesTeam = "red" | "blue";
 export type CodenamesCardRole = CodenamesTeam | "neutral" | "assassin";
 export type CodenamesPlayerRole = "spymaster" | "operative";
 export type CodenamesGameMode = "pvp" | "pvai" | "aivai";
+export type CodenamesSeatKind = "human" | "ai";
+export type CodenamesSeatId =
+  | "redSpymaster"
+  | "redOperative"
+  | "blueSpymaster"
+  | "blueOperative";
+export type CodenamesSeatAssignments = Record<CodenamesSeatId, CodenamesSeatKind>;
 export type CodenamesPhase = "clue" | "guess" | "finished";
 export type CodenamesStatus = "playing" | "paused" | "win";
 
