@@ -98,7 +98,8 @@ export function parseCodenamesSessionRecord(
   if (!isPlainObject(parsed)) return null;
   if (!isCodenamesGameState(parsed.gameState)) return null;
   let seatAssignments: CodenamesSeatAssignments;
-  if (isCodenamesSeatAssignments(parsed.seatAssignments)) {
+  if (parsed.seatAssignments !== undefined) {
+    if (!isCodenamesSeatAssignments(parsed.seatAssignments)) return null;
     seatAssignments = parsed.seatAssignments;
   } else if (isGameMode(parsed.gameMode) && isTeam(parsed.humanTeam)) {
     seatAssignments = seatAssignmentsFromLegacyMode(

@@ -150,6 +150,56 @@ check(
   legacyParsed
 );
 
+const conflictingRecord = {
+  ...record,
+  stateJson: JSON.stringify({
+    gameState: snapshot.gameState,
+    seatAssignments: {
+      redSpymaster: "robot",
+      redOperative: "human",
+      blueSpymaster: "ai",
+      blueOperative: "ai",
+    },
+    gameMode: "pvai",
+    humanTeam: "red",
+    redSpymasterAI: snapshot.redSpymasterAI,
+    redOperativeAI: snapshot.redOperativeAI,
+    blueSpymasterAI: snapshot.blueSpymasterAI,
+    blueOperativeAI: snapshot.blueOperativeAI,
+    isPaused: false,
+    currentPrivateView: null,
+    lastAiInteraction: null,
+    aiWarning: null,
+    aiError: null,
+  }),
+};
+check(
+  "session parser rejects invalid seatAssignments even with valid legacy fields",
+  parseCodenamesSessionRecord(conflictingRecord) === null
+);
+
+const legacyBadModeRecord = {
+  ...record,
+  stateJson: JSON.stringify({
+    gameState: snapshot.gameState,
+    gameMode: "bad-mode",
+    humanTeam: "red",
+    redSpymasterAI: snapshot.redSpymasterAI,
+    redOperativeAI: snapshot.redOperativeAI,
+    blueSpymasterAI: snapshot.blueSpymasterAI,
+    blueOperativeAI: snapshot.blueOperativeAI,
+    isPaused: false,
+    currentPrivateView: null,
+    lastAiInteraction: null,
+    aiWarning: null,
+    aiError: null,
+  }),
+};
+check(
+  "session parser rejects legacy record with invalid mode",
+  parseCodenamesSessionRecord(legacyBadModeRecord) === null
+);
+
 const diagnosticSnapshot: CodenamesSessionSnapshot = {
   ...snapshot,
   aiError: "Failed to parse AI response after multiple attempts",
