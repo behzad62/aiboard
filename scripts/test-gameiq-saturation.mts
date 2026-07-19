@@ -6,13 +6,13 @@
  * pruning against fresh runs via --prior) and committed as code. On
  * 2026-07-17 the saturated v0.1 battleship/chess/connect-four packs were
  * hard-deleted, and their scenario ids were pruned from the registry by hand
- * (not regeneration): 44 ids -> 18 survivors (fireworks 16 + codenames 2).
+ * (not regeneration): 44 ids -> 18 survivors, then 16 after codenames was dropped from the benchmark 2026-07-20 (fireworks only).
  * This test pins the invariants a future regeneration must not silently
  * break:
  *  - every id in the set is a REAL scenario id (exists in listGameIqScenarios),
  *    so renaming/removing a scenario surfaces a stale saturation entry here
  *    instead of leaking a dead id into the C2 frontier report;
- *  - the set is EXACTLY the 18-id post-prune registry (fireworks + codenames
+ *  - the set is EXACTLY the 16-id post-prune registry (fireworks
  *    only — no battleship/chess/connect-four ids survive the hard delete).
  */
 import {
@@ -33,7 +33,7 @@ const scenarios = listGameIqScenarios();
 const realIds = new Set(scenarios.map((scenario) => scenario.id));
 const saturatedIds = [...GAMEIQ_SATURATED_SCENARIO_IDS];
 
-const EXPECTED_SATURATION_COUNT = 18;
+const EXPECTED_SATURATION_COUNT = 16;
 
 check("min-models constant is 3", GAMEIQ_SATURATION_MIN_MODELS === 3, {
   GAMEIQ_SATURATION_MIN_MODELS,
@@ -51,7 +51,7 @@ check(
 );
 
 // No battleship/chess/connect-four ids survive the 2026-07-17 hard delete —
-// only fireworks and codenames ids remain.
+// only fireworks ids remain.
 const deletedGamePrefixes = [
   "gameiq-v0.1-battleship",
   "gameiq-v0.1-chess",
@@ -66,9 +66,9 @@ check(
   revivedDeletedIds
 );
 check(
-  "every saturated id is fireworks or codenames",
+  "every saturated id is fireworks",
   saturatedIds.every(
-    (id) => id.startsWith("gameiq-fireworks-") || id.startsWith("gameiq-v0.1-codenames")
+    (id) => id.startsWith("gameiq-fireworks-")
   ),
   saturatedIds
 );

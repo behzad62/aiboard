@@ -32,6 +32,8 @@ import {
 import { runGameIqScenarios } from "../lib/benchmark/gameiq/runner";
 import { GAMEIQ_CORRECT_QUALITY_BAR } from "../lib/benchmark/gameiq/types";
 import type { GameIqScenario } from "../lib/benchmark/gameiq/types";
+import { createCodenamesStateFromBoard } from "../lib/games/codenames/engine";
+import type { CodenamesCard, CodenamesCardRole } from "../lib/games/codenames/types";
 
 let failures = 0;
 
@@ -147,13 +149,36 @@ check(
   shotHistoryMismatches.map((scenario) => scenario.id)
 );
 
-// 4. Codenames placeholder clue word is rejected (any casing).
-const codenamesScenario = allScenarios.find(
-  (scenario) => scenario.gameId === "codenames"
-);
-if (!codenamesScenario) {
-  check("codenames scenario available for placeholder guard", false);
-} else {
+// 4. Codenames placeholder clue word is rejected (any casing). Codenames has
+// no benchmark packs anymore (dropped 2026-07-20 — frontier-saturated axis),
+// but validation.ts's shared clue-legality gate is still live game-generic
+// code, so it is exercised against a synthetic clue-phase board built through
+// the real engine.
+const guardCodenamesRoles: CodenamesCardRole[] = [
+  ...Array<CodenamesCardRole>(9).fill("red"),
+  ...Array<CodenamesCardRole>(8).fill("blue"),
+  ...Array<CodenamesCardRole>(7).fill("neutral"),
+  "assassin",
+];
+const guardCodenamesCards: CodenamesCard[] = guardCodenamesRoles.map((role, index) => ({
+  id: `guard-card-${index + 1}`,
+  word: `GUARDWORD${index + 1}`,
+  role,
+  revealed: false,
+}));
+const codenamesScenario: GameIqScenario = {
+  id: "test-gameiq-shared-guards-codenames-clue-phase",
+  gameId: "codenames",
+  title: "shared-guard synthetic clue-phase state",
+  category: "clue-selection",
+  difficulty: "easy",
+  version: "0.1.0",
+  prompt: "shared-guard synthetic state",
+  initialState: createCodenamesStateFromBoard(guardCodenamesCards, "red"),
+  expectedActions: [],
+  tags: ["test"],
+};
+{
   const rejections = ["example", "EXAMPLE", "Example", ` ${GAMEIQ_PLACEHOLDER_CLUE_WORD} `].map(
     (word) => {
       const action = { type: "clue", clue: { word, count: 1 }, cardId: null };

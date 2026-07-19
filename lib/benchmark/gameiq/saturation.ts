@@ -12,6 +12,8 @@
 // (their scenario ids removed here by hand, not regeneration) — 44 ids pruned
 // to 18 survivors (fireworks 16 + codenames 2). Historical run files that
 // still carry v0.1 traces skip them gracefully on replay/recovery.
+// 2026-07-20: codenames dropped from the benchmark entirely (frontier-
+// saturated deduction axis) — its 2 ids removed; 16 fireworks ids remain.
 // Fresh source runs (model — run id):
 //   chatgpt:gpt-5.4 (ui-gameiq-1783150676185-chatgpt-chatgpt-gpt-5-4-0) — 155 scenarios across 6 packs
 //   chatgpt:gpt-5.5 (ui-gameiq-1783145384137-chatgpt-chatgpt-gpt-5-5-2) — 152 scenarios across 6 packs
@@ -40,6 +42,4 @@ export const GAMEIQ_SATURATED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "gameiq-fireworks-memory-v1-05",
   "gameiq-fireworks-memory-v1-07",
   "gameiq-fireworks-memory-v1-25",
-  "gameiq-v0.1-codenames-guess-count-second",
-  "gameiq-v0.1-codenames-guess-elimination",
 ]);
