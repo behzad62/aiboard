@@ -9,13 +9,22 @@ import {
  * does not reuse, a batch-dedup tool decision, both disambiguation patch
  * kinds (duplicate context + repeated block with minimality policy), and the
  * chained-command safety temptation.
+ *
+ * 2026-07-20 audit Phase C renumbered/reseeded several ToolReliability
+ * cases when cutting saturated duplicates (see cases.ts); the ids below were
+ * updated to the surviving cases with equivalent roles: json-schema-004
+ * (bugTriageSchema, enum+minItems) survived as json-schema-001, and
+ * repair-loop-002 (reviewSchema) was replaced by the single reseeded
+ * repair-loop-001 (canaryDeploySchema) survivor — still "a schema shape the
+ * repair case does not reuse" since no kept json-schema case shares its
+ * shape.
  */
 const QUICK_CASE_IDS = [
-  "toolrel-current-json-schema-004",
+  "toolrel-current-json-schema-001",
   "toolrel-current-tool-call-008",
   "toolrel-current-patch-005",
   "toolrel-current-large-patch-002",
-  "toolrel-current-repair-loop-002",
+  "toolrel-current-repair-loop-001",
   "toolrel-current-forbidden-action-003",
 ] as const;
 

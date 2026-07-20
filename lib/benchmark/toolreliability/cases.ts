@@ -11,49 +11,27 @@ import {
  * Pack content version. Bump whenever case prompts, fixtures, expectations,
  * or the case list change (v0.2.0: de-templated the pack — every case is a
  * distinct decision, answer leaks removed, minimality policies enforced,
- * forbidden-action scenarios diversified).
+ * forbidden-action scenarios diversified. v0.3.0, 2026-07-20 track-audit
+ * Phase C: cut saturated/duplicate cases (json-schema 6->2, tool-call 10->7,
+ * large-patch 10->5, repair-loop 4->1 reseeded so the repair path actually
+ * fires) — the parity guard (scripts/test-toolreliability-parity.mts) proved
+ * no coverage was lost before any case was cut.
  */
-export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.2.0";
+export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.3.0";
 
-// --- JSON schema cases: six distinct schema shapes, six distinct scenarios ---
-
-const approvalSchema = {
-  required: {
-    decision: { type: "string", enum: ["approve", "reject"] },
-    confidence: { type: "number", min: 0, max: 1 },
-    risks: { type: "string-array", minItems: 1 },
-  },
-} as const;
-
-const deployStatusSchema = {
-  required: {
-    status: { type: "string", enum: ["ok", "blocked", "needs-review"] },
-    confidence: { type: "number", min: 0, max: 1 },
-    notes: { type: "string-array", minItems: 1 },
-  },
-} as const;
-
-const patchTriageSchema = {
-  required: {
-    file: { type: "string" },
-    safe: { type: "boolean" },
-    summary: { type: "string" },
-  },
-} as const;
+// --- JSON schema cases: two distinct schema shapes (2026-07-20 audit Phase C
+// cut six near-duplicate enum+array shapes down to the two structurally
+// distinct survivors: one shape with NO enum at all (plain strings + a
+// larger minItems array) and one enum+minItems shape. The four cut shapes
+// (approval/deployStatus/patchTriage/rollout) were the same
+// enum+number-or-boolean+minItems:1-array skeleton wearing different field
+// names — redundant coverage, not redundant difficulty. ---
 
 const bugTriageSchema = {
   required: {
     severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
     reproducible: { type: "boolean" },
     affectedAreas: { type: "string-array", minItems: 2 },
-  },
-} as const;
-
-const rolloutSchema = {
-  required: {
-    stage: { type: "string", enum: ["canary", "beta", "general"] },
-    percentage: { type: "number", min: 0, max: 100 },
-    blockers: { type: "string-array", minItems: 1 },
   },
 } as const;
 
@@ -71,29 +49,9 @@ const JSON_SCHEMA_SCENARIOS: Array<{
   prompt: string;
 }> = [
   {
-    schema: approvalSchema,
-    prompt:
-      "A teammate asks you to sign off on merging a refactor of the retry helper. Summarize your verdict as JSON only, matching the requested schema. No prose or markdown.",
-  },
-  {
-    schema: deployStatusSchema,
-    prompt:
-      "The Friday deploy train is waiting on your readiness call for the payments service. Answer with one JSON object matching the requested schema. Do not add prose, markdown, or extra keys.",
-  },
-  {
-    schema: patchTriageSchema,
-    prompt:
-      "Triage an incoming hotfix patch for the session-token parser: name the file it touches, whether it is safe to land, and a one-line summary. Reply with JSON only, matching the requested schema.",
-  },
-  {
     schema: bugTriageSchema,
     prompt:
       "A user reports that exported CSV files drop the header row on locales using semicolon separators. Classify the bug as JSON only, matching the requested schema exactly.",
-  },
-  {
-    schema: rolloutSchema,
-    prompt:
-      "Plan the next step of the dark-mode feature rollout. Respond with one JSON object matching the requested schema — nothing before or after it.",
   },
   {
     schema: migrationSchema,
@@ -124,6 +82,9 @@ const JSON_SCHEMA_CASES: ToolReliabilityCase[] = JSON_SCHEMA_SCENARIOS.map(
 
 const TOOL_CALL_CASES: ToolReliabilityCase[] = [
   // Targeted read_range: the needed line range is stated as project knowledge.
+  // (2026-07-20 audit Phase C: four near-identical "targeted read of a
+  // documented location" cases — same decision shape regardless of which
+  // file/range is named — collapsed to this one representative echo.)
   {
     id: "toolrel-current-tool-call-001",
     category: "tool-call",
@@ -139,60 +100,6 @@ const TOOL_CALL_CASES: ToolReliabilityCase[] = [
         mustCoverStartLine: 214,
         mustCoverEndLine: 241,
         maxLineCount: 120,
-      },
-    ],
-  },
-  {
-    id: "toolrel-current-tool-call-002",
-    category: "tool-call",
-    title: "Targeted read of a config block",
-    prompt:
-      "config/regions.yaml is 2,240 lines. The deployment runbook says the eu-west overrides block spans lines 902-905. Emit exactly one JSON tool action that reads that block; request at most 60 lines.",
-    canary: "AIBENCH-TOOLREL-TOOL-002",
-    metrics: ["tool", "firstAttempt", "forbiddenAction"],
-    expectedActions: [
-      {
-        kind: "read_range",
-        path: "config/regions.yaml",
-        mustCoverStartLine: 902,
-        mustCoverEndLine: 905,
-        maxLineCount: 60,
-      },
-    ],
-  },
-  {
-    id: "toolrel-current-tool-call-003",
-    category: "tool-call",
-    title: "Targeted read of a migration",
-    prompt:
-      "A failing migration lives in db/migrations/0147_split_addresses.sql (610 lines). The error log points at the statement batch on lines 45-88. Emit exactly one JSON tool action that reads that batch; do not request more than 150 lines.",
-    canary: "AIBENCH-TOOLREL-TOOL-003",
-    metrics: ["tool", "firstAttempt", "forbiddenAction"],
-    expectedActions: [
-      {
-        kind: "read_range",
-        path: "db/migrations/0147_split_addresses.sql",
-        mustCoverStartLine: 45,
-        mustCoverEndLine: 88,
-        maxLineCount: 150,
-      },
-    ],
-  },
-  {
-    id: "toolrel-current-tool-call-004",
-    category: "tool-call",
-    title: "Targeted read near end of file",
-    prompt:
-      "src/components/LedgerTable.tsx is 1,350 lines long. The a11y audit flags the footer render helper on lines 1301-1344. Emit exactly one JSON tool action that reads that helper; request at most 90 lines.",
-    canary: "AIBENCH-TOOLREL-TOOL-004",
-    metrics: ["tool", "firstAttempt", "forbiddenAction"],
-    expectedActions: [
-      {
-        kind: "read_range",
-        path: "src/components/LedgerTable.tsx",
-        mustCoverStartLine: 1301,
-        mustCoverEndLine: 1344,
-        maxLineCount: 90,
       },
     ],
   },
@@ -511,49 +418,25 @@ const BASIC_PATCH_CASES: ToolReliabilityCase[] = [
   patchPathSelectionCase,
 ];
 
-// --- Large-file patch cases: ten distinct surgical-edit decisions, several
-// with enforced minimality policies (ported from the retired stress pack) ---
+// --- Large-file patch cases: five distinct surgical-edit decisions, several
+// with enforced minimality policies (ported from the retired stress pack).
+// 2026-07-20 audit Phase C cut five trivial one-line named-target-sentinel
+// clones (the removed 001/003/004/007/010: each was a single AIBENCH_TARGET
+// marker with no ambiguity and no structural distinctiveness beyond "find
+// the marker, change the line") down to the five that each test a distinct
+// mechanic: 002 disambiguation among 90 IDENTICAL function bodies, 005 the
+// free-form aria-label attribute-order case, 006 a coordinated 3-hunk edit,
+// 008 JSON insertion with trailing-comma handling, 009 multi-line block
+// deletion. Every surviving id keeps its original number for traceability
+// (design docs and commit history already refer to "large-patch-005" etc). ---
 
 const LARGE_FILE_PATCH_CASES: ToolReliabilityCase[] = [
-  largeSentinelReplaceCase(),
   largeRepeatedBlockCase(),
-  largeRangePreservingCase(),
-  largeJsonFlagFlipCase(),
   largeReactAriaCase(),
   largeMultiHunkCase(),
-  largeNoRewriteCase(),
   largeJsonInsertKeyCase(),
   largeDeletionCase(),
-  largeInsertionCase(),
 ];
-
-function largeSentinelReplaceCase(): PatchReliabilityCase {
-  const before = numberedFillerFile("feature", 480, {
-    117: 'export const AIBENCH_TARGET_001 = "old-large-001";',
-  });
-  const after = numberedFillerFile("feature", 480, {
-    117: 'export const AIBENCH_TARGET_001 = "new-large-001";',
-  });
-  return {
-    id: "toolrel-current-large-patch-001",
-    category: "patch",
-    title: "Large-file surgical SEARCH/REPLACE 001",
-    prompt:
-      'Patch src/large/feature-001.ts, a 480-line file, with a minimal SEARCH/REPLACE edit. Change only the line marked AIBENCH_TARGET_001: replace "old-large-001" with "new-large-001". Preserve every other line exactly. Do not emit a whole-file rewrite.',
-    canary: "AIBENCH-TOOLREL-LARGE-PATCH-001",
-    metrics: ["patch", "firstAttempt"],
-    path: "src/large/feature-001.ts",
-    originalContent: before,
-    expectedContent: after,
-    policy: { maxSearchLines: 12, disallowWholeFileRewrite: true },
-    referenceOps: [
-      {
-        search: 'export const AIBENCH_TARGET_001 = "old-large-001";',
-        replace: 'export const AIBENCH_TARGET_001 = "new-large-001";',
-      },
-    ],
-  };
-}
 
 function largeRepeatedBlockCase(): PatchReliabilityCase {
   // 90 normalizer functions whose bodies are textually IDENTICAL; only a
@@ -609,72 +492,6 @@ function largeRepeatedBlockCase(): PatchReliabilityCase {
           "  }",
           "  return value.trim().toLowerCase();",
         ].join("\n"),
-      },
-    ],
-  };
-}
-
-function largeRangePreservingCase(): PatchReliabilityCase {
-  const before = numberedFillerFile("windows", 580, {
-    371: "const AIBENCH_TARGET_003 = computeWindow(input, 30);",
-  });
-  const after = numberedFillerFile("windows", 580, {
-    371: "const AIBENCH_TARGET_003 = computeWindow(input, 45);",
-  });
-  return {
-    id: "toolrel-current-large-patch-003",
-    category: "patch",
-    title: "Range-preserving large-file edit 003",
-    prompt:
-      "Patch src/large/windows-003.ts, a 580-line file: on the line marked AIBENCH_TARGET_003, change the computeWindow size argument from 30 to 45. Preserve the file's length and every unrelated line exactly; use a minimal SEARCH/REPLACE edit.",
-    canary: "AIBENCH-TOOLREL-LARGE-PATCH-003",
-    metrics: ["patch", "firstAttempt"],
-    path: "src/large/windows-003.ts",
-    originalContent: before,
-    expectedContent: after,
-    policy: { maxSearchLines: 12, disallowWholeFileRewrite: true },
-    referenceOps: [
-      {
-        search: "const AIBENCH_TARGET_003 = computeWindow(input, 30);",
-        replace: "const AIBENCH_TARGET_003 = computeWindow(input, 45);",
-      },
-    ],
-  };
-}
-
-function largeJsonFlagFlipCase(): PatchReliabilityCase {
-  const build = (patched: boolean): string => {
-    const entries: string[] = [];
-    for (let index = 1; index <= 420; index++) {
-      entries.push(`    "sentinel_${String(index).padStart(3, "0")}": "keep",`);
-    }
-    return [
-      "{",
-      '  "features": {',
-      '    "legacyCheckout": false,',
-      `    "betaCheckout": ${patched ? "true" : "false"},`,
-      ...entries.slice(0, -1),
-      entries[entries.length - 1].replace(/,$/, ""),
-      "  }",
-      "}",
-    ].join("\n");
-  };
-  return {
-    id: "toolrel-current-large-patch-004",
-    category: "patch",
-    title: "Large JSON nested flag flip 004",
-    prompt:
-      "Patch config/flags-004.json: flip ONLY the nested betaCheckout flag to true. The similarly named legacyCheckout flag and every sentinel entry must not change, and the JSON must remain valid. Use a minimal SEARCH/REPLACE edit.",
-    canary: "AIBENCH-TOOLREL-LARGE-PATCH-004",
-    metrics: ["patch", "firstAttempt"],
-    path: "config/flags-004.json",
-    originalContent: build(false),
-    expectedContent: build(true),
-    policy: { maxSearchLines: 16, disallowWholeFileRewrite: true },
-    referenceOps: [
-      {
-        search: '    "betaCheckout": false,',
-        replace: '    "betaCheckout": true,',
       },
     ],
   };
@@ -810,51 +627,6 @@ function largeMultiHunkCase(): PatchReliabilityCase {
   };
 }
 
-function largeNoRewriteCase(): PatchReliabilityCase {
-  const build = (patched: boolean): string => {
-    const lines = [
-      "export function clamp(value: number, min: number, max: number): number {",
-      "  return Math.max(min, Math.min(max, value));",
-      "}",
-      "",
-    ];
-    for (let index = 1; index <= 440; index++) {
-      lines.push(
-        `export const NO_REWRITE_SENTINEL_${String(index).padStart(3, "0")} = true;`
-      );
-    }
-    lines.push("export function normalizePercent(value: number): number {");
-    lines.push(patched ? "  return clamp(value, 0, 100);" : "  return value;");
-    lines.push("}");
-    return lines.join("\n");
-  };
-  return {
-    id: "toolrel-current-large-patch-007",
-    category: "patch",
-    title: "Minimal patch required 007",
-    prompt:
-      "Patch src/large/no-rewrite-007.ts: normalizePercent must return `clamp(value, 0, 100);` instead of the raw value. A whole-file rewrite or a giant SEARCH block fails this case even if the final text is equivalent — keep the SEARCH section to a few lines.",
-    canary: "AIBENCH-TOOLREL-LARGE-PATCH-007",
-    metrics: ["patch", "firstAttempt"],
-    path: "src/large/no-rewrite-007.ts",
-    originalContent: build(false),
-    expectedContent: build(true),
-    policy: { maxSearchLines: 8, disallowWholeFileRewrite: true },
-    referenceOps: [
-      {
-        search: [
-          "export function normalizePercent(value: number): number {",
-          "  return value;",
-        ].join("\n"),
-        replace: [
-          "export function normalizePercent(value: number): number {",
-          "  return clamp(value, 0, 100);",
-        ].join("\n"),
-      },
-    ],
-  };
-}
-
 function largeJsonInsertKeyCase(): PatchReliabilityCase {
   const build = (patched: boolean): string => {
     const entries: string[] = [];
@@ -928,34 +700,6 @@ function largeDeletionCase(): PatchReliabilityCase {
   };
 }
 
-function largeInsertionCase(): PatchReliabilityCase {
-  const anchor = "// AIBENCH_TARGET_010: register additional locales below";
-  const inserted = 'registerLocale("pt-BR");';
-  const before = numberedFillerFile("locales", 440, { 305: anchor });
-  const after = numberedFillerFile("locales", 440, {
-    305: [anchor, inserted].join("\n"),
-  });
-  return {
-    id: "toolrel-current-large-patch-010",
-    category: "patch",
-    title: "Large-file anchored insertion 010",
-    prompt:
-      'Patch src/large/locales-010.ts: insert the line `registerLocale("pt-BR");` immediately after the anchor comment marked AIBENCH_TARGET_010. Every existing line must stay exactly as it is; use a minimal SEARCH/REPLACE edit.',
-    canary: "AIBENCH-TOOLREL-LARGE-PATCH-010",
-    metrics: ["patch", "firstAttempt"],
-    path: "src/large/locales-010.ts",
-    originalContent: before,
-    expectedContent: after,
-    policy: { maxSearchLines: 8, disallowWholeFileRewrite: true },
-    referenceOps: [
-      {
-        search: anchor,
-        replace: [anchor, inserted].join("\n"),
-      },
-    ],
-  };
-}
-
 /**
  * Deterministic filler file: unique numbered lines, with specific line numbers
  * overridden (string) or removed (null).
@@ -979,23 +723,24 @@ function numberedFillerFile(
   return lines.join("\n");
 }
 
-// --- Repair-loop cases: four distinct schemas, none shared with json-schema ---
-
-const incidentSchema = {
-  required: {
-    severity: { type: "string", enum: ["sev1", "sev2", "sev3"] },
-    acknowledged: { type: "boolean" },
-    followUps: { type: "string-array", minItems: 1 },
-  },
-} as const;
-
-const reviewSchema = {
-  required: {
-    verdict: { type: "string", enum: ["approve", "request-changes"] },
-    score: { type: "number", min: 0, max: 10 },
-    comments: { type: "string-array", minItems: 2 },
-  },
-} as const;
+// --- Repair-loop case: ONE genuinely hard schema. 2026-07-20 audit Phase C
+// cut four near-duplicate simple schemas down to one, and RESEEDED the
+// survivor: the original four's bounds were easy enough that a competent
+// model basically never violated them, so the first attempt was (almost)
+// always already valid and metrics.repair stayed permanently unobserved
+// (undefined) across every real run — the repair machinery was measured in
+// name only. This survivor keeps the same bound (canaryPercent max 50) but
+// the prompt now primes a strong "historical/aggressive" anchor (75-100%)
+// that competes with the explicit policy cap — a documented LLM failure
+// mode (a strong contextual anchor overriding an explicit numeric
+// constraint), NOT withheld information: the cap is stated in prose AND
+// shown verbatim in the JSON schema sent to the model (schemaContext() in
+// certified-runner.ts). scripts/test-toolreliability-parity.mts's
+// repairLoopAnswers hermetically proves the trap is reachable — a realistic
+// near-miss answer (a plausible "aggressive" value that overshoots 50) fails
+// validation and is then correctly repaired — the actual LIVE trigger rate
+// is for the coordinator's live gate to measure, not something provable
+// without live calls. ---
 
 const canaryDeploySchema = {
   required: {
@@ -1005,37 +750,14 @@ const canaryDeploySchema = {
   },
 } as const;
 
-const auditSchema = {
-  required: {
-    framework: { type: "string", enum: ["soc2", "iso27001", "hipaa"] },
-    compliant: { type: "boolean" },
-    gaps: { type: "string-array", minItems: 1 },
-  },
-} as const;
-
 const REPAIR_SCENARIOS: Array<{
   schema: ToolReliabilityJsonSchema;
   prompt: string;
 }> = [
   {
-    schema: incidentSchema,
-    prompt:
-      "File the after-action record for last night's queue backlog incident. Answer with one JSON object matching the requested schema. If your answer fails validation you will receive the parser feedback and must repair it.",
-  },
-  {
-    schema: reviewSchema,
-    prompt:
-      "Record your code-review verdict for the pagination rewrite as JSON only, matching the requested schema. Invalid answers get deterministic parser feedback and one repair attempt.",
-  },
-  {
     schema: canaryDeploySchema,
     prompt:
-      "Propose the canary rollout parameters for the search-indexer release. Reply with one schema-valid JSON object only; a failed parse returns feedback for a single repair attempt.",
-  },
-  {
-    schema: auditSchema,
-    prompt:
-      "Summarize the access-control audit outcome as JSON matching the requested schema, and nothing else. Parser feedback follows any invalid answer for one repair attempt.",
+      "The search-indexer release is high priority and the on-call lead wants an aggressive canary: this team has historically pushed canaries to 75-100% of traffic once confident. Company policy for THIS service caps any single canary step at 50% of traffic, full stop -- exceeding it needs a change-review meeting that is not scheduled. Propose canary rollout parameters that are as aggressive as policy allows. Answer with one JSON object matching the requested schema. If your answer fails validation you will receive the parser feedback and must repair it.",
   },
 ];
 
