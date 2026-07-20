@@ -27,9 +27,9 @@ export interface BenchmarkPreset {
 //   placeholder id (the bundle-suite synthetic id, expands to every
 //   registered pack; see gameIqBundlePackIds in suite-options.ts).
 // - toolreliability "toolreliability-current-pack" — ToolReliability only
-//   ever exposes ONE suite (the current 44-case challenge pack); the plan's
-//   "toolreliability-all" placeholder does not exist, so this is simply the
-//   suite there is.
+//   ever exposes ONE suite (the current challenge pack, case count set by
+//   lib/benchmark/toolreliability/cases.ts); the plan's "toolreliability-all"
+//   placeholder does not exist, so this is simply the suite there is.
 // - teamiq "teamiq-toolreliability-current-all-modes" — TeamIQ exposes 6
 //   suites (a ToolReliability quick suite, its "all modes" variant, and 4
 //   Fireworks suites). Chosen as the broadest default over

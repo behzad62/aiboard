@@ -67,8 +67,8 @@ function runRuntimeVerifier(
 }
 
 check(
-  "WorkBench has 20 current verified challenges",
-  listWorkBenchChallenges().length === 20,
+  "WorkBench has 19 current verified challenges",
+  listWorkBenchChallenges().length === 19,
   listWorkBenchChallenges().map((item) => item.id)
 );
 

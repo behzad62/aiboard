@@ -202,8 +202,8 @@ const firstJsonUserPrompt = firstJsonCall?.params.messages.find((message) => mes
 const firstJsonStructured = firstJsonCall?.params.structuredOutput as StructuredOutputFormat | undefined;
 check(
   "certified ToolReliability states the JSON schema in the prompt without provider enforcement",
-  firstJsonUserPrompt.includes('"decision"') &&
-    firstJsonUserPrompt.includes('"risks"') &&
+  firstJsonUserPrompt.includes('"severity"') &&
+    firstJsonUserPrompt.includes('"affectedAreas"') &&
     firstJsonStructured === undefined,
   {
     userPrompt: firstJsonUserPrompt,

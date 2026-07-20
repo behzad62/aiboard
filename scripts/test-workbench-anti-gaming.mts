@@ -218,7 +218,7 @@ if (csRole) {
 
 // The oracle must not ship in the model-visible fixture workspace.
 const options = listWorkBenchCaseOptions();
-check("WorkBench exposes 20 case options", options.length === 20, options.map((item) => item.id));
+check("WorkBench exposes 19 case options", options.length === 19, options.map((item) => item.id));
 for (const option of options) {
   const fixtureFiles = option.case.fixtureFiles ?? {};
   check(

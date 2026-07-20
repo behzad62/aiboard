@@ -76,16 +76,16 @@ for (const pack of gamePacks) {
 
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack validates", toolValidation.valid, toolValidation);
-check("ToolReliability has 44 distinct cases", TOOL_RELIABILITY_CASES.length === 44, TOOL_RELIABILITY_CASES.length);
+check("ToolReliability has 33 distinct cases", TOOL_RELIABILITY_CASES.length === 33, TOOL_RELIABILITY_CASES.length);
 check(
-  "ToolReliability has 10 large-file patch cases",
-  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 10,
+  "ToolReliability has 5 large-file patch cases",
+  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 5,
   TOOL_RELIABILITY_CASES.map((item) => item.id)
 );
 for (const category of TOOL_RELIABILITY_CASE_CATEGORIES) {
   check(
-    `ToolReliability ${category} has at least 4 cases`,
-    TOOL_RELIABILITY_CASES.filter((item) => item.category === category).length >= 4,
+    `ToolReliability ${category} has at least 1 case`,
+    TOOL_RELIABILITY_CASES.filter((item) => item.category === category).length >= 1,
     TOOL_RELIABILITY_CASES.map((item) => item.category)
   );
 }

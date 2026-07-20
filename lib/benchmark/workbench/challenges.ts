@@ -102,29 +102,24 @@ interface LargeNormalizerVariant {
   calls: Array<{ args: unknown[]; expected: unknown }>;
 }
 
+// 2026-07-20 audit Phase W3: this family's ONLY real difficulty mechanic is
+// "find the one branch out of 220 marked by a sentinel comment amid 219
+// identical-looking `return raw;` branches, then stay within the 4-line diff
+// budget" — that mechanic is identical across all four original variants
+// (23/117/181/209), so three were redundant one-line-edit clones whose only
+// difficulty was the diff budget, not the transformation itself. Verified
+// each pairwise: 23 (trim+lowercase) and 209 (trim+uppercase) are the same
+// two-call chain with the case direction flipped; 117 (trim+collapse
+// whitespace runs) is a second unconditional two-call chain, distinguished
+// from 23/209 only by which built-in/regex it composes with trim. 181 (strip
+// a leading "legacy:" prefix, conditionally, then trim) is the one survivor
+// with genuine additional reasoning: it is the only variant whose behavior
+// BRANCHES on the input (prefix present vs absent) rather than applying an
+// unconditional transform, and its regex must be correctly anchored
+// (`^legacy:`) rather than a bare `.includes()` check, which a plausible-but-
+// wrong implementation would get wrong on inputs containing "legacy:" but
+// not literally at position 0. Kept 181 as sole survivor; cut 23/117/209.
 const LARGE_NORMALIZER_VARIANTS: LargeNormalizerVariant[] = [
-  {
-    target: 23,
-    behaviorSummary: "trims surrounding whitespace and lowercases the value",
-    fixedReturn: "return raw.trim().toLowerCase();",
-    negativeReturn: "return raw.toLowerCase();",
-    alternateReturn: "return raw.toLowerCase().trim();",
-    calls: [
-      { args: ["  Mixed CASE  "], expected: "mixed case" },
-      { args: ["ALPHA"], expected: "alpha" },
-    ],
-  },
-  {
-    target: 117,
-    behaviorSummary: "trims the value and collapses internal whitespace runs to single spaces",
-    fixedReturn: 'return raw.trim().replace(/\\s+/g, " ");',
-    negativeReturn: 'return raw.replace(/\\s+/g, " ");',
-    alternateReturn: 'return raw.split(/\\s+/).filter(Boolean).join(" ");',
-    calls: [
-      { args: ["  alpha   beta "], expected: "alpha beta" },
-      { args: ["one\ttwo  three"], expected: "one two three" },
-    ],
-  },
   {
     target: 181,
     behaviorSummary: 'strips a leading "legacy:" prefix when present and trims the result',
@@ -136,27 +131,18 @@ const LARGE_NORMALIZER_VARIANTS: LargeNormalizerVariant[] = [
       { args: ["  main  "], expected: "main" },
     ],
   },
-  {
-    target: 209,
-    behaviorSummary: "trims surrounding whitespace and uppercases the value",
-    fixedReturn: "return raw.trim().toUpperCase();",
-    negativeReturn: "return raw.toUpperCase();",
-    alternateReturn: "return raw.toUpperCase().trim();",
-    calls: [
-      { args: ["  ship it "], expected: "SHIP IT" },
-      { args: ["Warn"], expected: "WARN" },
-    ],
-  },
 ];
 
 export const WORKBENCH_CHALLENGES: WorkBenchChallenge[] = [
-  ...Array.from({ length: 4 }, (_, index) => largeFileSurgicalPatch(index + 1)),
+  ...Array.from({ length: 1 }, (_, index) => largeFileSurgicalPatch(index + 1)),
   ...Array.from({ length: 2 }, (_, index) => multiFileContract(index + 1)),
   ...Array.from({ length: 2 }, (_, index) => parserEdgeCase(index + 1)),
   ...Array.from({ length: 2 }, (_, index) => reactAccessibilityCase(index + 1)),
   largeJsonConfigCase(1),
   noWholeFileRewriteCase(1),
   pipelineBehaviorCase(1),
+  pipelineCacheScopeCase(1),
+  pipelineInventoryReservationCase(1),
 ];
 
 export function runWorkBenchChallengeVerifier(input: {
@@ -415,16 +401,30 @@ function multiFileContract(number: number): WorkBenchChallenge {
       ? {
           field: "currency",
           typeLine: `  currency: "USD" | "EUR";`,
+          // 2026-07-20 audit Phase W1: a union type's member order is free —
+          // "EUR" | "USD" is exactly as correct as "USD" | "EUR" — so the
+          // accepted-forms list must cover both orderings, not just
+          // quote/spacing variants of one ordering (the gap this audit's
+          // ToolReliability large-patch-005 aria-label case named).
+          alternateTypeLine: `  currency: "EUR" | "USD";`,
           typeVariants: [
             `currency: "USD" | "EUR";`,
             `currency: 'USD' | 'EUR';`,
             `currency: "USD"|"EUR";`,
+            `currency: "EUR" | "USD";`,
+            `currency: 'EUR' | 'USD';`,
+            `currency: "EUR"|"USD";`,
           ],
           describe: `a required currency field typed "USD" | "EUR"`,
         }
       : {
           field: "dueDate",
           typeLine: "  dueDate: string;",
+          // No union to reorder for a single scalar type — the alternate
+          // stays identical to the reference type line by design; this
+          // variant's alternate coverage comes entirely from the service
+          // file's field-order swap below.
+          alternateTypeLine: "  dueDate: string;",
           typeVariants: ["dueDate: string;", "dueDate: string"],
           describe: "a required dueDate field typed string (an ISO-8601 date)",
         };
@@ -441,7 +441,7 @@ function multiFileContract(number: number): WorkBenchChallenge {
     [servicePath]: baseFiles[servicePath],
   };
   const alternateFiles = {
-    [typesPath]: referenceFiles[typesPath],
+    [typesPath]: `export interface Invoice_${id} {\n  id: string;\n  totalCents: number;\n${variant.alternateTypeLine}\n}\n`,
     [servicePath]: `import type { Invoice_${id} } from "../contracts/invoice-${id}";\nexport function summarize_${id}(invoice: Invoice_${id}) {\n  return { ${variant.field}: invoice.${variant.field}, id: invoice.id, total: invoice.totalCents };\n}\n`,
   };
   return challenge({
@@ -474,7 +474,13 @@ function parserBoolCase(number: number): WorkBenchChallenge {
   const path = `src/parser/flags-${id}.py`;
   const base = `def parse_flag_${id}(raw):\n    if raw == "true":\n        return True\n    if raw == "false":\n        return False\n    return None\n`;
   const reference = `def parse_flag_${id}(raw):\n    value = str(raw).strip().lower()\n    if value in ("true", "1", "yes"):\n        return True\n    if value in ("false", "0", "no"):\n        return False\n    return None\n`;
-  const alternate = `def parse_flag_${id}(raw):\n    value = str(raw).strip().lower()\n    if value in {'true', '1', 'yes'}:\n        return True\n    if value in {'false', '0', 'no'}:\n        return False\n    return None\n`;
+  // 2026-07-20 audit Phase W1: .lower().strip() is EQUALLY correct (trim only
+  // removes whitespace, which has no case, so the two calls commute) — this
+  // is the exact false-negative class the audit named (parserBoolCase
+  // .lower().strip() vs .strip().lower()). The alternate now exercises the
+  // reordering directly, on top of the pre-existing tuple->set-literal
+  // variation, instead of only varying the literal syntax.
+  const alternate = `def parse_flag_${id}(raw):\n    value = str(raw).lower().strip()\n    if value in {'true', '1', 'yes'}:\n        return True\n    if value in {'false', '0', 'no'}:\n        return False\n    return None\n`;
   const negative = `def parse_flag_${id}(raw):\n    if raw:\n        return True\n    return False\n`;
   return challenge({
     id: `workbench-parser-${id}`,
@@ -489,7 +495,7 @@ function parserBoolCase(number: number): WorkBenchChallenge {
     maxChangedLines: 10,
     requiredSnippets: {
       [path]: [
-        "strip().lower()",
+        { anyOf: ["strip().lower()", "lower().strip()"] },
         {
           anyOf: [
             `("true", "1", "yes")`,
@@ -519,7 +525,11 @@ function parserLevelCase(number: number): WorkBenchChallenge {
   const path = `src/parser/levels-${id}.py`;
   const base = `def parse_level_${id}(raw):\n    if raw == "debug":\n        return 10\n    if raw == "info":\n        return 20\n    return 0\n`;
   const reference = `def parse_level_${id}(raw):\n    value = str(raw).strip().lower()\n    levels = {"debug": 10, "info": 20, "warn": 30, "error": 40}\n    return levels.get(value)\n`;
-  const alternate = `def parse_level_${id}(raw):\n    value = str(raw).strip().lower()\n    if value == "debug":\n        return 10\n    if value == "info":\n        return 20\n    if value == "warn":\n        return 30\n    if value == "error":\n        return 40\n    return None\n`;
+  // 2026-07-20 audit Phase W1: same .lower().strip() vs .strip().lower()
+  // reordering as parserBoolCase — the alternate now exercises it directly
+  // (previously it kept the reference's exact order and only varied the
+  // dict-vs-if/elif structure, so this false-negative class went untested).
+  const alternate = `def parse_level_${id}(raw):\n    value = str(raw).lower().strip()\n    if value == "debug":\n        return 10\n    if value == "info":\n        return 20\n    if value == "warn":\n        return 30\n    if value == "error":\n        return 40\n    return None\n`;
   const negative = `def parse_level_${id}(raw):\n    value = str(raw).strip().lower()\n    if value == "debug":\n        return 10\n    if value == "info":\n        return 20\n    return 0\n`;
   return challenge({
     id: `workbench-parser-${id}`,
@@ -534,7 +544,7 @@ function parserLevelCase(number: number): WorkBenchChallenge {
     maxChangedLines: 14,
     requiredSnippets: {
       [path]: [
-        "strip().lower()",
+        { anyOf: ["strip().lower()", "lower().strip()"] },
         { anyOf: [`"warn"`, `'warn'`] },
         { anyOf: [`"error"`, `'error'`] },
       ],
@@ -790,6 +800,158 @@ function pipelineBehaviorCase(number: number): WorkBenchChallenge {
         args: [{ name: " Pad ", qty: 5 }],
         expected: { name: "Pad", qty: 5 },
         label: `normalizeRecord_${id} behavior is unchanged`,
+      },
+    ],
+  });
+}
+
+// 2026-07-20 audit Phase W2: two more pipeline-style multi-step challenges,
+// modeled on pipelineBehaviorCase above — diagnose across files (which file
+// actually causes the observed bug), fix the ONE right one, and prove it
+// with an end-to-end behavioral check, not just a unit check on the fixed
+// file in isolation. Both keep every behavioral-check argument JSON-
+// serializable (functions cannot cross the runtime verifier's child-process
+// boundary — see runJsProbe/WORKBENCH_PROBE_CALLS in corpus.ts), and both
+// use requiredUnchangedSnippets to force the fix into the diagnosed file
+// specifically, not just "wherever makes the behavioral check pass".
+
+function pipelineCacheScopeCase(number: number): WorkBenchChallenge {
+  const id = String(number).padStart(4, "0");
+  const keysPath = `src/pipeline/cache-keys_${id}.mjs`;
+  const storePath = `src/pipeline/cache-store_${id}.mjs`;
+  const servicePath = `src/pipeline/profile-service_${id}.mjs`;
+  const storeSource = `const DATA_${id} = new Map();\nexport function cacheGet_${id}(key) {\n  return DATA_${id}.has(key) ? DATA_${id}.get(key) : undefined;\n}\nexport function cacheSet_${id}(key, value) {\n  DATA_${id}.set(key, value);\n}\n`;
+  const keysBase = `export function profileCacheKey_${id}(userId, locale) {\n  return \`profile:\${userId}\`;\n}\n`;
+  const keysReference = `export function profileCacheKey_${id}(userId, locale) {\n  return \`profile:\${userId}:\${locale}\`;\n}\n`;
+  const keysAlternate = `export function profileCacheKey_${id}(userId, locale) {\n  return ["profile", userId, locale].join(":");\n}\n`;
+  const serviceSource = `import { cacheGet_${id}, cacheSet_${id} } from "./cache-store_${id}.mjs";\nimport { profileCacheKey_${id} } from "./cache-keys_${id}.mjs";\nexport function getProfileView_${id}(userId, locale, freshValue) {\n  const key = profileCacheKey_${id}(userId, locale);\n  const cached = cacheGet_${id}(key);\n  if (cached !== undefined) return cached;\n  cacheSet_${id}(key, freshValue);\n  return freshValue;\n}\n`;
+  return challenge({
+    id: `workbench-pipeline-cache-${id}`,
+    title: `Cache key locale scoping pipeline ${id}`,
+    kind: "multi-file-contract",
+    difficulty: "hard",
+    prompt: `Users of getProfileView_${id} in ${servicePath} see the WRONG locale's cached greeting after another locale was viewed first: calling getProfileView_${id}("u1", "en", { greeting: "Hello" }) and then getProfileView_${id}("u1", "fr", { greeting: "Bonjour" }) both return { greeting: "Hello" } — the French call incorrectly hits the English cache entry. Diagnose which file causes this cache collision and fix ONLY that file so the cache key varies by both userId and locale (repeat calls for the SAME userId+locale must still hit the cache, so do not disable caching). Do not change cache-store or profile-service.`,
+    files: {
+      [keysPath]: keysBase,
+      [storePath]: storeSource,
+      [servicePath]: serviceSource,
+    },
+    referenceFiles: {
+      [keysPath]: keysReference,
+      [storePath]: storeSource,
+      [servicePath]: serviceSource,
+    },
+    negativeFiles: {
+      [keysPath]: keysBase,
+      [storePath]: storeSource,
+      [servicePath]: serviceSource,
+    },
+    alternateFiles: {
+      [keysPath]: keysAlternate,
+      [storePath]: storeSource,
+      [servicePath]: serviceSource,
+    },
+    maxChangedLines: 6,
+    requiredSnippets: {},
+    requiredUnchangedSnippets: {
+      [storePath]: [`DATA_${id}.set(key, value);`],
+      [servicePath]: [`cacheSet_${id}(key, freshValue);`],
+    },
+    behavioralChecks: [
+      {
+        kind: "js-call",
+        path: servicePath,
+        functionName: `getProfileView_${id}`,
+        args: ["u1", "en", { greeting: "Hello" }],
+        expected: { greeting: "Hello" },
+        label: `getProfileView_${id} caches a fresh (u1, en) value`,
+      },
+      {
+        kind: "js-call",
+        path: servicePath,
+        functionName: `getProfileView_${id}`,
+        args: ["u1", "fr", { greeting: "Bonjour" }],
+        expected: { greeting: "Bonjour" },
+        label: `getProfileView_${id} does not leak the (u1, en) cache entry into (u1, fr)`,
+      },
+      {
+        kind: "js-call",
+        path: servicePath,
+        functionName: `getProfileView_${id}`,
+        args: ["u1", "en", { greeting: "SHOULD NOT APPEAR" }],
+        expected: { greeting: "Hello" },
+        label: `getProfileView_${id} still hits the cache for a repeat (u1, en) call`,
+      },
+    ],
+  });
+}
+
+function pipelineInventoryReservationCase(number: number): WorkBenchChallenge {
+  const id = String(number).padStart(4, "0");
+  const stockPath = `src/pipeline/stock_${id}.mjs`;
+  const rulesPath = `src/pipeline/reservation-rules_${id}.mjs`;
+  const checkoutPath = `src/pipeline/checkout_${id}.mjs`;
+  const stockSource = `const LEVELS_${id} = { widget: 5, gadget: 2 };\nexport function availableStock_${id}(sku) {\n  return LEVELS_${id}[sku] ?? 0;\n}\nexport function commitReservation_${id}(sku, qty) {\n  LEVELS_${id}[sku] = availableStock_${id}(sku) - qty;\n  return LEVELS_${id}[sku];\n}\n`;
+  const rulesBase = `export function canReserve_${id}(available, requested) {\n  return available > requested;\n}\n`;
+  const rulesReference = `export function canReserve_${id}(available, requested) {\n  return available >= requested;\n}\n`;
+  const rulesAlternate = `export function canReserve_${id}(available, requested) {\n  return requested <= available;\n}\n`;
+  const checkoutSource = `import { availableStock_${id}, commitReservation_${id} } from "./stock_${id}.mjs";\nimport { canReserve_${id} } from "./reservation-rules_${id}.mjs";\nexport function reserveItems_${id}(items) {\n  return items.map((item) => {\n    const available = availableStock_${id}(item.sku);\n    if (!canReserve_${id}(available, item.qty)) {\n      return { sku: item.sku, reserved: false };\n    }\n    commitReservation_${id}(item.sku, item.qty);\n    return { sku: item.sku, reserved: true };\n  });\n}\n`;
+  return challenge({
+    id: `workbench-pipeline-inventory-${id}`,
+    title: `Inventory reservation boundary pipeline ${id}`,
+    kind: "multi-file-contract",
+    difficulty: "hard",
+    prompt: `reserveItems_${id} in ${checkoutPath} wrongly rejects an order that reserves EXACTLY the remaining stock: with widget stock at 5, reserveItems_${id}([{ sku: "widget", qty: 5 }]) currently returns [{ sku: "widget", reserved: false }] even though reserving all 5 remaining units should succeed. An order for MORE than available stock (e.g. gadget qty 3 when only 2 remain) correctly stays rejected. Diagnose which file has the off-by-one boundary bug and fix ONLY that file. Do not change stock or checkout.`,
+    files: {
+      [stockPath]: stockSource,
+      [rulesPath]: rulesBase,
+      [checkoutPath]: checkoutSource,
+    },
+    referenceFiles: {
+      [stockPath]: stockSource,
+      [rulesPath]: rulesReference,
+      [checkoutPath]: checkoutSource,
+    },
+    negativeFiles: {
+      [stockPath]: stockSource,
+      [rulesPath]: rulesBase,
+      [checkoutPath]: checkoutSource,
+    },
+    alternateFiles: {
+      [stockPath]: stockSource,
+      [rulesPath]: rulesAlternate,
+      [checkoutPath]: checkoutSource,
+    },
+    maxChangedLines: 3,
+    requiredSnippets: {},
+    requiredUnchangedSnippets: {
+      [stockPath]: [`LEVELS_${id}[sku] = availableStock_${id}(sku) - qty;`],
+      [checkoutPath]: [`commitReservation_${id}(item.sku, item.qty);`],
+    },
+    behavioralChecks: [
+      {
+        kind: "js-call",
+        path: checkoutPath,
+        functionName: `reserveItems_${id}`,
+        args: [[{ sku: "widget", qty: 5 }]],
+        expected: [{ sku: "widget", reserved: true }],
+        label: `reserveItems_${id} allows reserving exactly the remaining stock`,
+      },
+      {
+        kind: "js-call",
+        path: checkoutPath,
+        functionName: `reserveItems_${id}`,
+        args: [[{ sku: "gadget", qty: 3 }]],
+        expected: [{ sku: "gadget", reserved: false }],
+        label: `reserveItems_${id} still rejects a request that exceeds available stock`,
+      },
+      {
+        kind: "js-call",
+        path: checkoutPath,
+        functionName: `reserveItems_${id}`,
+        args: [[{ sku: "gadget", qty: 2 }]],
+        expected: [{ sku: "gadget", reserved: true }],
+        label: `reserveItems_${id} allows reserving exactly the remaining stock on a second SKU`,
       },
     ],
   });

@@ -4,7 +4,11 @@
  * `scripts/test-workbench-current-challenges.mts:100-135` (WorkBench's proven
  * per-challenge reference/alternate/negative pattern), extended to run through
  * the REAL ToolReliability verifier (`runToolReliabilityPack`) for EVERY
- * current case, across every category.
+ * current case, across every category. Fully data-driven off
+ * TOOL_RELIABILITY_CASES — case count changes (2026-07-20 audit Phase C cut
+ * 44 -> 29; Phase H then added new hard patch cases) are picked up
+ * automatically except for the per-id fixture tables below, which must list
+ * exactly the surviving ids.
  *
  * For every case this asserts, through the real verifier:
  *   1. Reference:  the case's own shipped correct answer scores pass.
@@ -132,42 +136,17 @@ function pathFirstFencedBlock(path: string, ops: PatchOp[]): string {
   ].join("\n");
 }
 
-// --- json-schema (6 cases): hand-authored reference/alternate/negative
-// objects per case. Alternates vary enum choice and/or reorder keys and/or
-// vary array content/length; negatives violate exactly one required field. ---
+// --- json-schema (2 cases, 2026-07-20 audit Phase C cut from six near-
+// duplicate enum+array shapes down to two structurally distinct survivors):
+// hand-authored reference/alternate/negative objects per case. Alternates
+// vary enum choice and/or reorder keys and/or vary array content/length;
+// negatives violate exactly one required field. ---
 
 const JSON_SCHEMA_ANSWERS: Record<
   string,
   { reference: Record<string, unknown>; alternate: Record<string, unknown>; negative: Record<string, unknown> }
 > = {
   "toolrel-current-json-schema-001": {
-    reference: { decision: "approve", confidence: 0.9, risks: ["retry storm risk"] },
-    alternate: { risks: ["needs load test", "rollback plan missing"], confidence: 0.4, decision: "reject" },
-    negative: { decision: "maybe", confidence: 0.9, risks: ["x"] }, // invalid enum value
-  },
-  "toolrel-current-json-schema-002": {
-    reference: { status: "ok", confidence: 0.95, notes: ["all checks green"] },
-    alternate: {
-      notes: ["waiting on payments partner ack", "canary metrics pending"],
-      confidence: 0.55,
-      status: "needs-review",
-    },
-    negative: { status: "ok", confidence: 1.4, notes: ["all good"] }, // confidence out of [0,1]
-  },
-  "toolrel-current-json-schema-003": {
-    reference: {
-      file: "src/auth/session-token-parser.ts",
-      safe: true,
-      summary: "Hotfix only tightens token expiry parsing; safe to land.",
-    },
-    alternate: {
-      summary: "Patch narrows a session-token parsing edge case; recommend a follow-up review.",
-      safe: false,
-      file: "src/auth/session-token-parser.ts",
-    },
-    negative: { file: "src/auth/session-token-parser.ts", safe: "yes", summary: "typo'd boolean" }, // safe not boolean
-  },
-  "toolrel-current-json-schema-004": {
     reference: { severity: "medium", reproducible: true, affectedAreas: ["csv export", "locale settings"] },
     alternate: {
       affectedAreas: ["export pipeline", "i18n formatting", "support docs"],
@@ -176,16 +155,7 @@ const JSON_SCHEMA_ANSWERS: Record<
     },
     negative: { severity: "medium", reproducible: true, affectedAreas: ["csv export"] }, // minItems 2 violated
   },
-  "toolrel-current-json-schema-005": {
-    reference: { stage: "beta", percentage: 25, blockers: ["awaiting perf signoff"] },
-    alternate: {
-      blockers: ["theme regression on old browsers", "designer signoff pending"],
-      percentage: 10,
-      stage: "canary",
-    },
-    negative: { stage: "beta", percentage: 150, blockers: ["x"] }, // percentage out of [0,100]
-  },
-  "toolrel-current-json-schema-006": {
+  "toolrel-current-json-schema-002": {
     reference: {
       fromVersion: "3.4.0",
       toVersion: "4.0.0",
@@ -224,46 +194,31 @@ function jsonSchemaAnswers(benchmarkCase: JsonSchemaToolReliabilityCase): Parity
   };
 }
 
-// --- repair-loop (4 cases): reference exercises a genuine repair (malformed
-// seed -> valid JSON); alternate exercises repair with a DIFFERENT malformed
-// first attempt and a DIFFERENT valid second attempt; negative never
-// recovers (both attempts stay schema-invalid). ---
+// --- repair-loop (1 case, 2026-07-20 audit Phase C cut from four near-
+// duplicate schemas down to one RESEEDED survivor — see cases.ts's comment
+// on canaryDeploySchema for why): reference exercises a genuine repair
+// (malformed seed -> valid JSON); alternate exercises repair from a
+// REALISTIC near-miss (schema-shaped JSON that overshoots the 50% cap —
+// exactly the trap the survivor is designed around, proving it is reachable)
+// into a DIFFERENT valid second attempt; negative never recovers (both
+// attempts stay schema-invalid, the second by re-overshooting the cap). ---
 
 const REPAIR_LOOP_ANSWERS: Record<
   string,
   { validA: Record<string, unknown>; validB: Record<string, unknown>; invalidB: Record<string, unknown> }
 > = {
   "toolrel-current-repair-loop-001": {
-    validA: { severity: "sev2", acknowledged: true, followUps: ["page on-call lead"] },
-    validB: {
-      followUps: ["add a backlog alert threshold", "schedule a retro"],
-      acknowledged: false,
-      severity: "sev1",
+    validA: {
+      environment: "production",
+      canaryPercent: 50,
+      checks: ["error rate under threshold", "latency p99 stable"],
     },
-    invalidB: { severity: "sev9", acknowledged: true, followUps: ["x"] }, // invalid enum
-  },
-  "toolrel-current-repair-loop-002": {
-    validA: { verdict: "approve", score: 8, comments: ["clean diff", "tests cover the regression"] },
     validB: {
-      comments: ["needs a changelog entry", "split into two commits"],
-      score: 4,
-      verdict: "request-changes",
+      checks: ["rollback rehearsed", "on-call briefed"],
+      canaryPercent: 25,
+      environment: "staging",
     },
-    invalidB: { verdict: "approve", score: 42, comments: ["x", "y"] }, // score out of [0,10]
-  },
-  "toolrel-current-repair-loop-003": {
-    validA: { environment: "staging", canaryPercent: 10, checks: ["error rate under threshold"] },
-    validB: { checks: ["latency p99 stable", "no alert noise"], canaryPercent: 25, environment: "production" },
-    invalidB: { environment: "prod", canaryPercent: 10, checks: ["x"] }, // invalid enum
-  },
-  "toolrel-current-repair-loop-004": {
-    validA: { framework: "soc2", compliant: true, gaps: ["none outstanding"] },
-    validB: {
-      gaps: ["access review overdue", "missing encryption-at-rest doc"],
-      compliant: false,
-      framework: "iso27001",
-    },
-    invalidB: { framework: "hipaa2", compliant: true, gaps: ["x"] }, // invalid enum
+    invalidB: { environment: "production", canaryPercent: 75, checks: ["x"] }, // exceeds the 50% cap
   },
 };
 
@@ -272,15 +227,25 @@ function repairLoopAnswers(benchmarkCase: RepairLoopReliabilityCase): ParityAnsw
   if (!table) throw new Error(`no repair-loop parity fixture for ${benchmarkCase.id}`);
   const seed = malformedToolReliabilityRepairSeed(benchmarkCase);
   // A DIFFERENT flavor of malformed first attempt from the seed helper's
-  // colon-separated non-JSON text: syntactically valid JSON that is missing
-  // every required field but the first (schema-invalid all the same).
-  const firstRequiredKey = Object.keys(benchmarkCase.schema.required)[0];
-  const alternateFirst = JSON.stringify({ [firstRequiredKey]: table.validA[firstRequiredKey] });
+  // colon-separated non-JSON text: a REALISTIC near-miss — syntactically
+  // valid, schema-shaped JSON that violates only the numeric policy cap this
+  // survivor is specifically reseeded to trap. This is the hermetic proof
+  // the trap is reachable: a plausible "aggressive" answer a model might
+  // genuinely produce fails validation and is then correctly repaired — not
+  // just the seed helper's obviously-non-JSON text. (Whether real models hit
+  // this often enough live is for the coordinator's live gate, not provable
+  // hermetically.)
+  const realisticNearMiss = JSON.stringify({
+    environment: "production",
+    canaryPercent: 100,
+    checks: ["ramping to full confidence per historical pace"],
+  });
   return {
     reference: [seed, JSON.stringify(table.validA)],
-    alternate: [alternateFirst, JSON.stringify(table.validB)],
+    alternate: [realisticNearMiss, JSON.stringify(table.validB)],
     negative: ["not valid json at all", JSON.stringify(table.invalidB)],
-    alternateNote: "a different malformed first attempt, repaired into a different but schema-valid answer",
+    alternateNote:
+      "a realistic near-miss first attempt (schema-shaped JSON overshooting the 50% cap) repaired into a different but schema-valid answer",
     negativeNote: "neither attempt is ever schema-valid, so repair never succeeds",
   };
 }
@@ -476,18 +441,6 @@ function patchAlternateAndNegative(
         ]),
         negativeNote: "explicitly patches the distractor test file instead of the implementation",
       };
-    case "toolrel-current-large-patch-001":
-      return {
-        alternateText: bareSearchReplaceBlock(refOps),
-        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
-        negativeText: fencedEditBlock(benchmarkCase.path, [
-          {
-            search: refOps[0].search,
-            replace: refOps[0].replace.replace("new-large-001", "new-large-999"),
-          },
-        ]),
-        negativeNote: "writes the wrong sentinel value",
-      };
     case "toolrel-current-large-patch-002":
       return {
         alternateText: bareSearchReplaceBlock(refOps),
@@ -499,27 +452,6 @@ function patchAlternateAndNegative(
           },
         ]),
         negativeNote: "drops the required .trim() call",
-      };
-    case "toolrel-current-large-patch-003":
-      return {
-        alternateText: bareSearchReplaceBlock(refOps),
-        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
-        negativeText: fencedEditBlock(benchmarkCase.path, [
-          { search: refOps[0].search, replace: refOps[0].replace.replace("45", "99") },
-        ]),
-        negativeNote: "writes the wrong window size",
-      };
-    case "toolrel-current-large-patch-004":
-      return {
-        alternateText: bareSearchReplaceBlock(refOps),
-        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
-        negativeText: fencedEditBlock(benchmarkCase.path, [
-          {
-            search: refOps[0].search,
-            replace: refOps[0].replace.replace('"betaCheckout": true,', '"betaCheckout": "true",'),
-          },
-        ]),
-        negativeNote: "writes the flag as a string instead of a boolean literal",
       };
     case "toolrel-current-large-patch-005":
       return {
@@ -546,18 +478,6 @@ function patchAlternateAndNegative(
         negativeText: fencedEditBlock(benchmarkCase.path, refOps.slice(0, 2)),
         negativeNote: "applies only 2 of the 3 required hunks; renderInvoice still calls formatCurrency directly",
       };
-    case "toolrel-current-large-patch-007":
-      return {
-        alternateText: bareSearchReplaceBlock(refOps),
-        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
-        negativeText: fencedEditBlock(benchmarkCase.path, [
-          {
-            search: refOps[0].search,
-            replace: refOps[0].replace.replace("clamp(value, 0, 100)", "clamp(value, -100, 200)"),
-          },
-        ]),
-        negativeNote: "clamps to the wrong bounds",
-      };
     case "toolrel-current-large-patch-008":
       return {
         alternateText: bareSearchReplaceBlock(refOps),
@@ -574,17 +494,65 @@ function patchAlternateAndNegative(
         negativeText: fencedEditBlock(benchmarkCase.path, [{ search: refOps[0].search, replace: refOps[0].search }]),
         negativeNote: "a no-op patch that leaves the deprecated block in place instead of deleting it",
       };
-    case "toolrel-current-large-patch-010":
+    case "toolrel-current-hard-patch-001":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, [
+          {
+            search: [
+              "export function processShippingWebhook(event: WebhookEvent): void {",
+              "  const attempts = getAttempts(event.id);",
+              "  if (attempts >= 3) {",
+            ].join("\n"),
+            replace: [
+              "export function processShippingWebhook(event: WebhookEvent): void {",
+              "  const attempts = getAttempts(event.id);",
+              "  if (attempts >= 5) {",
+            ].join("\n"),
+          },
+        ]),
+        negativeNote: "raises the ceiling on the wrong handler (shipping instead of payment)",
+      };
+    case "toolrel-current-hard-patch-002":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same four hunks expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, refOps.slice(0, 3)),
+        negativeNote:
+          "applies only 3 of the 4 required hunks; quoteBulkOrder is left calling calculateShippingCost with no region argument",
+      };
+    case "toolrel-current-hard-patch-003":
       return {
         alternateText: bareSearchReplaceBlock(refOps),
         alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
         negativeText: fencedEditBlock(benchmarkCase.path, [
           {
             search: refOps[0].search,
-            replace: refOps[0].replace.replace('registerLocale("pt-BR");', 'registerLocale("PT-br");'),
+            replace: refOps[0].replace.replace("return 0.2;", "return 0.15;"),
           },
         ]),
-        negativeNote: "registers the locale with the wrong casing/format",
+        negativeNote: "copies the gold tier's rate (0.15) instead of the contract's platinum rate (0.2)",
+      };
+    case "toolrel-current-hard-patch-004":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, [
+          {
+            search: [
+              "export function formatDateTime(iso: string): string {",
+              "  return new Date(iso).toLocaleString();",
+              "}",
+            ].join("\n"),
+            replace: [
+              "export function formatDateTime(iso: string): string {",
+              '  return new Date(iso).toLocaleString() + " UTC";',
+              "}",
+            ].join("\n"),
+          },
+        ]),
+        negativeNote: "appends the suffix to the wrong helper (formatDateTime, not the audit log's formatAuditTimestamp)",
       };
     default:
       throw new Error(`no patch parity handler for ${benchmarkCase.id}`);
@@ -732,7 +700,7 @@ for (const fixture of syntheticNormalizationFixtures) {
 const patchCases = TOOL_RELIABILITY_CASES.filter(
   (item): item is PatchReliabilityCase => item.category === "patch"
 );
-check("patch comparator cross-check covers every patch case", patchCases.length === 16, patchCases.length);
+check("patch comparator cross-check covers every patch case", patchCases.length === 15, patchCases.length);
 for (const benchmarkCase of patchCases) {
   const contents = [
     benchmarkCase.originalContent,
