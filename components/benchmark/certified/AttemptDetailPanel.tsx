@@ -112,6 +112,10 @@ export function AttemptDetailPanel({
         {toolRel ? (
           <Section title="ToolReliability diagnosis">
             <div className="grid gap-2 md:grid-cols-4">
+              <Detail
+                label="Cases passed"
+                value={formatCasePassFraction(attempt, toolRel.summary)}
+              />
               {toolRel.accountabilityRows.map((row) => (
                 <Detail key={row.accountability} label={row.label} value={String(row.count)} />
               ))}
@@ -329,6 +333,23 @@ function TraceList({
       )}
     </div>
   );
+}
+
+/**
+ * Task G (pass-fraction status): prefers the attempt-level
+ * `toolReliabilityCasePassFraction` (present on every ToolReliability run
+ * built after this change, solo or TeamIQ-wrapped) and falls back to the
+ * verifier-derived diagnostics summary's `passed`/`total` for older
+ * persisted attempts that predate the attempt-level field.
+ */
+function formatCasePassFraction(
+  attempt: { toolReliabilityCasePassFraction?: { passed: number; total: number } },
+  summary: { passed: number; total: number }
+): string {
+  const fraction = attempt.toolReliabilityCasePassFraction;
+  return fraction
+    ? `${fraction.passed}/${fraction.total}`
+    : `${summary.passed}/${summary.total}`;
 }
 
 function formatCost(value: number | null): string {

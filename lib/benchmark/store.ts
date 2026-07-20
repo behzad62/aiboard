@@ -1147,6 +1147,7 @@ function validateBenchmarkAttemptV2(record: BenchmarkAttemptV2): void {
     !isOptionalFiniteNumber(record.gameIqScore) ||
     !isOptionalFiniteNumber(record.teamLift) ||
     !isOptionalFiniteNumber(record.toolReliabilityScore) ||
+    !isOptionalCasePassFraction(record.toolReliabilityCasePassFraction) ||
     !(record.costUsd === null || isFiniteNumber(record.costUsd)) ||
     !isFiniteNumber(record.inputTokens) ||
     !isFiniteNumber(record.outputTokens) ||
@@ -1660,6 +1661,18 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isOptionalFiniteNumber(value: unknown): boolean {
   return value === undefined || isFiniteNumber(value);
+}
+
+/** BenchmarkAttemptV2.toolReliabilityCasePassFraction: optional, but when
+ * present both `passed` and `total` are required finite numbers (they are
+ * always computed together in the ToolReliability runner). */
+function isOptionalCasePassFraction(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isPlainObject(value) &&
+    isFiniteNumber(value.passed) &&
+    isFiniteNumber(value.total)
+  );
 }
 
 function hasOnlyOptionalFiniteNumbers(value: unknown, keys: string[]): boolean {

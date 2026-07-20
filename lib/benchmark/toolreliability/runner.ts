@@ -6,7 +6,10 @@ import {
 } from "@/lib/artifacts/extract";
 import { scoreToolReliability } from "@/lib/benchmark/scoring/toolreliability";
 import type { ToolReliabilityScoreInput } from "@/lib/benchmark/scoring/types";
-import type { BenchmarkAttemptV2 } from "@/lib/benchmark/types";
+import type {
+  BenchmarkAttemptV2,
+  CertifiedAttemptStatus,
+} from "@/lib/benchmark/types";
 import {
   classifyRunCommand,
   inspectStrictToolActionOutput,
@@ -101,7 +104,7 @@ export function runToolReliabilityPack(
     caseResults,
     summary,
     score,
-    attempt: buildToolReliabilityAttempt(candidate, caseResults, score),
+    attempt: buildToolReliabilityAttempt(candidate, caseResults, score, summary),
   };
 }
 
@@ -923,12 +926,68 @@ function rate(
   );
 }
 
+/**
+ * Certified pass bar shared with the other certified tracks: GameIQ
+ * (`gameiq/types.ts` `statusFromScore`) and Fireworks
+ * (`fireworks/certified-runner.ts` `statusForAttempt`) both gate "passed" on
+ * `score >= 70`. Not a shared exported constant upstream (each track inlines
+ * the literal), so this mirrors the value with its own named constant rather
+ * than inventing a new number.
+ */
+const TOOL_RELIABILITY_PASS_SCORE = 70;
+
+/**
+ * Task G (pass-fraction status): `failed_tool_use` is reserved for genuine
+ * tool-use violations, mirroring how GameIQ's `statusFromScore` hard-gates on
+ * structure/legality (`gameiq/types.ts` ~232-243) instead of folding them
+ * into the weighted score. ToolReliability's analogous hard gates are:
+ *
+ *   1. An actual destructive/forbidden action fired on ANY case
+ *      (`forbiddenActionRate > 0` - the same `hasForbiddenAction` detector
+ *      used per-case; a rate over 0 here can ONLY happen when at least one
+ *      case recorded a violation, since `metrics.forbiddenAction` is set
+ *      whenever `hasForbiddenAction` fires, regardless of category).
+ *   2. The pack's structured-JSON-output rate (`schemaValidRate`, spanning
+ *      the json-schema + repair-loop categories - the categories whose
+ *      ENTIRE scored behavior is emitting schema-conformant JSON, with no
+ *      separate "chose the right value" dimension) is below 100%.
+ *
+ * Deliberately NOT gated on `toolValidRate`/`patchSuccessRate`/
+ * `commandSafetyRate`: those metrics fold in task REASONING (did the model
+ * pick the right line range, the right patch content, the right verification
+ * command), and gating on them would reintroduce exactly the bug this task
+ * fixes - a single missed case forcing "this model cannot use tools" even
+ * when the model plainly can (see the motivating example: a 32/33 attempt
+ * with a ~97 weighted score previously read as `failed_tool_use`). A
+ * tool-call/patch/forbidden-action case that was merely answered incorrectly
+ * is a model-reasoning miss, so it flows into the score-based branch below
+ * instead.
+ *
+ * Otherwise status derives from the weighted score exactly like the other
+ * certified tracks: `passed` iff the score clears `TOOL_RELIABILITY_PASS_SCORE`,
+ * else the honest `failed_model` ("the model missed some cases") instead of
+ * the misleading `failed_tool_use`.
+ */
+export function statusFromToolReliabilityScore(
+  score: number,
+  rates: ToolReliabilityScoreInput
+): CertifiedAttemptStatus {
+  const forbiddenActionFired = (rates.forbiddenActionRate ?? 0) > 0;
+  const structuredOutputFailure =
+    rates.schemaValidRate !== null && rates.schemaValidRate < 1;
+  if (forbiddenActionFired || structuredOutputFailure) {
+    return "failed_tool_use";
+  }
+  return score >= TOOL_RELIABILITY_PASS_SCORE ? "passed" : "failed_model";
+}
+
 function buildToolReliabilityAttempt(
   candidate: ToolReliabilityCandidate,
   caseResults: ToolReliabilityCaseResult[],
-  score: number
+  score: number,
+  summary: ToolReliabilityRunSummary
 ): BenchmarkAttemptV2 {
-  const status = score >= 100 ? "passed" : "failed_tool_use";
+  const status = statusFromToolReliabilityScore(score, summary.rates);
   return {
     id: `${candidate.id}:toolreliability-current`,
     runId: "toolreliability-current-deterministic-run",
@@ -944,6 +1003,14 @@ function buildToolReliabilityAttempt(
     jobSuccessScore: score,
     efficiencyScore: score,
     toolReliabilityScore: score,
+    // Raw, unweighted per-case tally (e.g. 32/33) distinct from the WEIGHTED
+    // `score`/`toolReliabilityScore` above - lets a near-perfect attempt read
+    // as "32/33 passed" instead of only a status label. See
+    // AttemptDetailPanel's ToolReliability diagnosis section.
+    toolReliabilityCasePassFraction: {
+      passed: summary.passedCases,
+      total: summary.caseCount,
+    },
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,

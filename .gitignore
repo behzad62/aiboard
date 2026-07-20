@@ -13,6 +13,10 @@
 /test-results/
 /playwright-report/
 
+# default --out for scripts/probe-toolreliability-pack.mts / probe-gameiq-pack.mts
+# style live probes (model prompts/responses, never meant to be committed)
+/probe-runs/
+
 # next.js
 /.next/
 /out/
