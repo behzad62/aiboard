@@ -494,6 +494,66 @@ function patchAlternateAndNegative(
         negativeText: fencedEditBlock(benchmarkCase.path, [{ search: refOps[0].search, replace: refOps[0].search }]),
         negativeNote: "a no-op patch that leaves the deprecated block in place instead of deleting it",
       };
+    case "toolrel-current-hard-patch-001":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, [
+          {
+            search: [
+              "export function processShippingWebhook(event: WebhookEvent): void {",
+              "  const attempts = getAttempts(event.id);",
+              "  if (attempts >= 3) {",
+            ].join("\n"),
+            replace: [
+              "export function processShippingWebhook(event: WebhookEvent): void {",
+              "  const attempts = getAttempts(event.id);",
+              "  if (attempts >= 5) {",
+            ].join("\n"),
+          },
+        ]),
+        negativeNote: "raises the ceiling on the wrong handler (shipping instead of payment)",
+      };
+    case "toolrel-current-hard-patch-002":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same four hunks expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, refOps.slice(0, 3)),
+        negativeNote:
+          "applies only 3 of the 4 required hunks; quoteBulkOrder is left calling calculateShippingCost with no region argument",
+      };
+    case "toolrel-current-hard-patch-003":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, [
+          {
+            search: refOps[0].search,
+            replace: refOps[0].replace.replace("return 0.2;", "return 0.15;"),
+          },
+        ]),
+        negativeNote: "copies the gold tier's rate (0.15) instead of the contract's platinum rate (0.2)",
+      };
+    case "toolrel-current-hard-patch-004":
+      return {
+        alternateText: bareSearchReplaceBlock(refOps),
+        alternateNote: "the same edit expressed as bare SEARCH/REPLACE/END text with no code fence",
+        negativeText: fencedEditBlock(benchmarkCase.path, [
+          {
+            search: [
+              "export function formatDateTime(iso: string): string {",
+              "  return new Date(iso).toLocaleString();",
+              "}",
+            ].join("\n"),
+            replace: [
+              "export function formatDateTime(iso: string): string {",
+              '  return new Date(iso).toLocaleString() + " UTC";',
+              "}",
+            ].join("\n"),
+          },
+        ]),
+        negativeNote: "appends the suffix to the wrong helper (formatDateTime, not the audit log's formatAuditTimestamp)",
+      };
     default:
       throw new Error(`no patch parity handler for ${benchmarkCase.id}`);
   }
@@ -640,7 +700,7 @@ for (const fixture of syntheticNormalizationFixtures) {
 const patchCases = TOOL_RELIABILITY_CASES.filter(
   (item): item is PatchReliabilityCase => item.category === "patch"
 );
-check("patch comparator cross-check covers every patch case", patchCases.length === 11, patchCases.length);
+check("patch comparator cross-check covers every patch case", patchCases.length === 15, patchCases.length);
 for (const benchmarkCase of patchCases) {
   const contents = [
     benchmarkCase.originalContent,

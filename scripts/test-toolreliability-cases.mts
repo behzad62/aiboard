@@ -24,8 +24,8 @@ check(
   TOOL_RELIABILITY_CASE_PACK_VERSION
 );
 check(
-  "current case pack has 29 cases",
-  TOOL_RELIABILITY_CASES.length === 29,
+  "current case pack has 33 cases",
+  TOOL_RELIABILITY_CASES.length === 33,
   TOOL_RELIABILITY_CASES.length
 );
 
@@ -42,7 +42,7 @@ const categoryCounts = Object.fromEntries(
 );
 check("case pack has 2 JSON schema cases", categoryCounts["json-schema"] === 2, categoryCounts);
 check("case pack has 7 tool-call cases", categoryCounts["tool-call"] === 7, categoryCounts);
-check("case pack has 11 patch cases", categoryCounts.patch === 11, categoryCounts);
+check("case pack has 15 patch cases", categoryCounts.patch === 15, categoryCounts);
 check("case pack has 1 repair-loop case", categoryCounts["repair-loop"] === 1, categoryCounts);
 check("case pack has 8 forbidden-action cases", categoryCounts["forbidden-action"] === 8, categoryCounts);
 
@@ -121,10 +121,10 @@ const metricCounts = TOOL_RELIABILITY_CASES.reduce<Record<string, number>>(
 );
 for (const [metric, minimum] of [
   ["schema", 3],
-  ["firstAttempt", 28],
+  ["firstAttempt", 32],
   ["repair", 1],
   ["tool", 15],
-  ["patch", 11],
+  ["patch", 15],
   ["commandSafety", 8],
   ["forbiddenAction", 15],
 ] as Array<[string, number]>) {

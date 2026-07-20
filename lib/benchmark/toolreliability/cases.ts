@@ -15,9 +15,12 @@ import {
  * Phase C: cut saturated/duplicate cases (json-schema 6->2, tool-call 10->7,
  * large-patch 10->5, repair-loop 4->1 reseeded so the repair path actually
  * fires) — the parity guard (scripts/test-toolreliability-parity.mts) proved
- * no coverage was lost before any case was cut.
+ * no coverage was lost before any case was cut. v0.4.0, same day, Phase H:
+ * added four reasoning-required hard patch cases — ambiguous multi-
+ * occurrence target, coordinated multi-hunk parameter threading, cross-file
+ * contract consistency, and function-level location choice.
  */
-export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.3.0";
+export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.4.0";
 
 // --- JSON schema cases: two distinct schema shapes (2026-07-20 audit Phase C
 // cut six near-duplicate enum+array shapes down to the two structurally
@@ -723,6 +726,304 @@ function numberedFillerFile(
   return lines.join("\n");
 }
 
+// --- Hard patch cases: 2026-07-20 audit Phase H. Four genuinely hard,
+// reasoning-required cases (not scale/minimality like the large-patch
+// family) — an ambiguous multi-occurrence target, a coordinated multi-hunk
+// signature change, a cross-file-referenced consistency fix, and a
+// function-level location-choice case. The runner does NOT support scoring
+// edits across multiple actual target files (PatchReliabilityCase has one
+// path/originalContent/expectedContent; extractPatchForCase rejects any
+// edit naming an unexpected path) — verified before writing hard-patch-003,
+// which uses the design's documented fallback: a single scored file with a
+// second, reference-only file's content embedded directly in the prompt
+// text, never as a real (and therefore falsely editable) second target. ---
+
+function hardAmbiguousRetryCeilingCase(): PatchReliabilityCase {
+  const build = (paymentCeiling: number): string =>
+    [
+      "export function processPaymentWebhook(event: WebhookEvent): void {",
+      "  const attempts = getAttempts(event.id);",
+      `  if (attempts >= ${paymentCeiling}) {`,
+      "    markFailed(event.id);",
+      "    return;",
+      "  }",
+      "  handleWebhook(event);",
+      "}",
+      "",
+      "export function processShippingWebhook(event: WebhookEvent): void {",
+      "  const attempts = getAttempts(event.id);",
+      "  if (attempts >= 3) {",
+      "    markFailed(event.id);",
+      "    return;",
+      "  }",
+      "  handleWebhook(event);",
+      "}",
+      "",
+      "export function processInventoryWebhook(event: WebhookEvent): void {",
+      "  const attempts = getAttempts(event.id);",
+      "  if (attempts >= 3) {",
+      "    markFailed(event.id);",
+      "    return;",
+      "  }",
+      "  handleWebhook(event);",
+      "}",
+    ].join("\n");
+  return {
+    id: "toolrel-current-hard-patch-001",
+    category: "patch",
+    title: "Ambiguous multi-occurrence retry ceiling",
+    prompt:
+      "Patch src/webhooks/retry-ceiling.ts: raise the retry ceiling from 3 to 5 attempts, but ONLY inside processPaymentWebhook. The shipping and inventory webhook handlers must keep their ceiling at 3 attempts (cost-control policy) and must NOT be touched, even though their retry-check code is byte-for-byte identical to the payment handler's. Include enough surrounding context in your SEARCH text to target the right occurrence; use SEARCH/REPLACE edit ops.",
+    canary: "AIBENCH-TOOLREL-HARD-PATCH-001",
+    metrics: ["patch", "firstAttempt"],
+    path: "src/webhooks/retry-ceiling.ts",
+    originalContent: build(3),
+    expectedContent: build(5),
+    policy: { maxSearchLines: 8, disallowWholeFileRewrite: true },
+    referenceOps: [
+      {
+        search: [
+          "export function processPaymentWebhook(event: WebhookEvent): void {",
+          "  const attempts = getAttempts(event.id);",
+          "  if (attempts >= 3) {",
+        ].join("\n"),
+        replace: [
+          "export function processPaymentWebhook(event: WebhookEvent): void {",
+          "  const attempts = getAttempts(event.id);",
+          "  if (attempts >= 5) {",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function hardMultiHunkRegionThreadCase(): PatchReliabilityCase {
+  const build = (patched: boolean): string => {
+    const sig = (name: string, params: string) =>
+      patched
+        ? `export function ${name}(${params}, region: Region): number {`
+        : `export function ${name}(${params}): number {`;
+    return [
+      'export type Region = "us" | "eu" | "apac";',
+      "",
+      "const REGION_MULTIPLIER: Record<Region, number> = { us: 1, eu: 1.2, apac: 1.35 };",
+      "",
+      sig("calculateShippingCost", "weightKg: number"),
+      patched
+        ? "  return weightKg * 2.5 * REGION_MULTIPLIER[region];"
+        : "  return weightKg * 2.5;",
+      "}",
+      "",
+      sig("quoteDomesticOrder", "weightKg: number"),
+      patched
+        ? "  return calculateShippingCost(weightKg, region) + 1.99;"
+        : "  return calculateShippingCost(weightKg) + 1.99;",
+      "}",
+      "",
+      sig("quoteInternationalOrder", "weightKg: number"),
+      patched
+        ? "  return calculateShippingCost(weightKg, region) * 1.5;"
+        : "  return calculateShippingCost(weightKg) * 1.5;",
+      "}",
+      "",
+      sig("quoteBulkOrder", "weightKg: number, unitCount: number"),
+      patched
+        ? "  return calculateShippingCost(weightKg, region) * unitCount;"
+        : "  return calculateShippingCost(weightKg) * unitCount;",
+      "}",
+    ].join("\n");
+  };
+  return {
+    id: "toolrel-current-hard-patch-002",
+    category: "patch",
+    title: "Coordinated multi-hunk parameter threading",
+    prompt: [
+      "Patch src/pricing/shipping.ts with minimal SEARCH/REPLACE hunks. calculateShippingCost must start applying a region multiplier: add a `region: Region` parameter as its LAST parameter and multiply the result by REGION_MULTIPLIER[region] (the Region type and REGION_MULTIPLIER table already exist in the file).",
+      "Every caller of calculateShippingCost in this file — quoteDomesticOrder, quoteInternationalOrder, and quoteBulkOrder — must ALSO gain its own `region: Region` parameter as ITS last parameter, and pass it through to calculateShippingCost.",
+      "This is four separate hunks; all four must land or the file is left inconsistent (a caller passing no region, or calculateShippingCost still taking only one argument). The file is intentionally spread out — do not rewrite unrelated sections.",
+    ].join("\n"),
+    canary: "AIBENCH-TOOLREL-HARD-PATCH-002",
+    metrics: ["patch", "firstAttempt"],
+    path: "src/pricing/shipping.ts",
+    originalContent: build(false),
+    expectedContent: build(true),
+    policy: { maxSearchLines: 8, disallowWholeFileRewrite: true },
+    referenceOps: [
+      {
+        search: [
+          "export function calculateShippingCost(weightKg: number): number {",
+          "  return weightKg * 2.5;",
+          "}",
+        ].join("\n"),
+        replace: [
+          "export function calculateShippingCost(weightKg: number, region: Region): number {",
+          "  return weightKg * 2.5 * REGION_MULTIPLIER[region];",
+          "}",
+        ].join("\n"),
+      },
+      {
+        search: [
+          "export function quoteDomesticOrder(weightKg: number): number {",
+          "  return calculateShippingCost(weightKg) + 1.99;",
+          "}",
+        ].join("\n"),
+        replace: [
+          "export function quoteDomesticOrder(weightKg: number, region: Region): number {",
+          "  return calculateShippingCost(weightKg, region) + 1.99;",
+          "}",
+        ].join("\n"),
+      },
+      {
+        search: [
+          "export function quoteInternationalOrder(weightKg: number): number {",
+          "  return calculateShippingCost(weightKg) * 1.5;",
+          "}",
+        ].join("\n"),
+        replace: [
+          "export function quoteInternationalOrder(weightKg: number, region: Region): number {",
+          "  return calculateShippingCost(weightKg, region) * 1.5;",
+          "}",
+        ].join("\n"),
+      },
+      {
+        search: [
+          "export function quoteBulkOrder(weightKg: number, unitCount: number): number {",
+          "  return calculateShippingCost(weightKg) * unitCount;",
+          "}",
+        ].join("\n"),
+        replace: [
+          "export function quoteBulkOrder(weightKg: number, unitCount: number, region: Region): number {",
+          "  return calculateShippingCost(weightKg, region) * unitCount;",
+          "}",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function hardCrossFileConsistencyCase(): PatchReliabilityCase {
+  const build = (rate: string): string =>
+    [
+      "export function platinumDiscountRate(): number {",
+      "  // NOTE: keep in sync with DISCOUNT_TIERS.platinum in src/api/discount-contract.ts",
+      `  return ${rate};`,
+      "}",
+      "",
+      "export function applyDiscount(amountCents: number, tier: string): number {",
+      '  if (tier === "platinum") {',
+      "    return Math.round(amountCents * (1 - platinumDiscountRate()));",
+      "  }",
+      "  return amountCents;",
+      "}",
+    ].join("\n");
+  return {
+    id: "toolrel-current-hard-patch-003",
+    category: "patch",
+    title: "Cross-file contract consistency (reference file shown, not scored)",
+    prompt: [
+      "The canonical discount-tier contract in src/api/discount-contract.ts is shown below for REFERENCE ONLY (it is a different file from the one you are patching, and editing it will not be scored):",
+      "```ts",
+      "export const DISCOUNT_TIERS: Record<string, number> = {",
+      "  bronze: 0.05,",
+      "  silver: 0.1,",
+      "  gold: 0.15,",
+      "  platinum: 0.2,",
+      "};",
+      "```",
+      "src/pricing/discounts.ts's platinumDiscountRate() has drifted from this contract. Patch src/pricing/discounts.ts so platinumDiscountRate() returns the contract's canonical platinum value exactly. Use SEARCH/REPLACE edit ops and change nothing else.",
+    ].join("\n"),
+    canary: "AIBENCH-TOOLREL-HARD-PATCH-003",
+    metrics: ["patch", "firstAttempt"],
+    path: "src/pricing/discounts.ts",
+    originalContent: build("0.18"),
+    expectedContent: build("0.2"),
+    // 0.2 and 0.20 are the identical numeric literal; a model that keeps a
+    // trailing zero (matching the other tiers' two-decimal style) is equally
+    // correct.
+    acceptableContents: [build("0.2"), build("0.20")],
+    policy: { maxSearchLines: 6, disallowWholeFileRewrite: true },
+    referenceOps: [
+      {
+        search: [
+          "export function platinumDiscountRate(): number {",
+          "  // NOTE: keep in sync with DISCOUNT_TIERS.platinum in src/api/discount-contract.ts",
+          "  return 0.18;",
+        ].join("\n"),
+        replace: [
+          "export function platinumDiscountRate(): number {",
+          "  // NOTE: keep in sync with DISCOUNT_TIERS.platinum in src/api/discount-contract.ts",
+          "  return 0.2;",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function hardLocationChoiceCase(): PatchReliabilityCase {
+  const build = (fixed: boolean, templateForm = false): string => {
+    const auditLine = !fixed
+      ? '  return new Date(iso).toISOString().replace("T", " ").slice(0, 16);'
+      : templateForm
+        ? '  return `${new Date(iso).toISOString().replace("T", " ").slice(0, 16)} UTC`;'
+        : '  return new Date(iso).toISOString().replace("T", " ").slice(0, 16) + " UTC";';
+    return [
+      "export function formatDate(iso: string): string {",
+      "  return new Date(iso).toLocaleDateString();",
+      "}",
+      "",
+      "export function formatDateTime(iso: string): string {",
+      "  return new Date(iso).toLocaleString();",
+      "}",
+      "",
+      "// Renders the timestamp column in the audit log (src/audit/AuditLogTable.tsx).",
+      "export function formatAuditTimestamp(iso: string): string {",
+      auditLine,
+      "}",
+      "",
+      "export function formatShortDate(iso: string): string {",
+      '  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });',
+      "}",
+    ].join("\n");
+  };
+  return {
+    id: "toolrel-current-hard-patch-004",
+    category: "patch",
+    title: "Location choice among plausible formatting functions",
+    prompt:
+      "Users viewing the audit log see timestamps with no timezone indication, causing support confusion across regions. Below are several date-formatting helpers in src/format/dates.ts; each documents (in a comment) which part of the app actually calls it. Find the ONE helper the audit log's timestamp column uses and append the literal suffix \" UTC\" to its returned string (its underlying value is already UTC, via toISOString) — do not touch any other helper, and do not change any other part of its behavior.",
+    canary: "AIBENCH-TOOLREL-HARD-PATCH-004",
+    metrics: ["patch", "firstAttempt"],
+    path: "src/format/dates.ts",
+    originalContent: build(false),
+    expectedContent: build(true),
+    // Appending via string concatenation or a template literal are equally
+    // correct, equally common styles for this exact edit.
+    acceptableContents: [build(true), build(true, true)],
+    policy: { maxSearchLines: 6, disallowWholeFileRewrite: true },
+    referenceOps: [
+      {
+        search: [
+          "export function formatAuditTimestamp(iso: string): string {",
+          '  return new Date(iso).toISOString().replace("T", " ").slice(0, 16);',
+          "}",
+        ].join("\n"),
+        replace: [
+          "export function formatAuditTimestamp(iso: string): string {",
+          '  return new Date(iso).toISOString().replace("T", " ").slice(0, 16) + " UTC";',
+          "}",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+const HARD_PATCH_CASES: ToolReliabilityCase[] = [
+  hardAmbiguousRetryCeilingCase(),
+  hardMultiHunkRegionThreadCase(),
+  hardCrossFileConsistencyCase(),
+  hardLocationChoiceCase(),
+];
+
 // --- Repair-loop case: ONE genuinely hard schema. 2026-07-20 audit Phase C
 // cut four near-duplicate simple schemas down to one, and RESEEDED the
 // survivor: the original four's bounds were easy enough that a competent
@@ -854,6 +1155,7 @@ export const TOOL_RELIABILITY_CASES: ToolReliabilityCase[] = [
   ...TOOL_CALL_CASES,
   ...BASIC_PATCH_CASES,
   ...LARGE_FILE_PATCH_CASES,
+  ...HARD_PATCH_CASES,
   ...REPAIR_CASES,
   ...FORBIDDEN_ACTION_CASES,
 ];

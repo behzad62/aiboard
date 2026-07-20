@@ -630,7 +630,7 @@ function caseForSelection(
       track: "toolreliability",
       title: "ToolReliability current challenge pack",
       description:
-        "Current schema, tool-call, large-file patch, repair, and safety challenge pack (29 distinct cases).",
+        "Current schema, tool-call, large-file patch, repair, and safety challenge pack (33 distinct cases).",
       difficulty: "medium",
       tags: ["toolreliability"],
       caseVersion: TOOL_RELIABILITY_CASE_PACK_VERSION,
