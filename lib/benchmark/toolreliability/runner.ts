@@ -323,10 +323,12 @@ function evaluatePatchCase(
   const policyViolation = edit
     ? patchPolicyViolation(benchmarkCase, edit.ops)
     : null;
+  const contentAccepted =
+    applied != null && contentMatchesAcceptedVariant(applied.content, benchmarkCase);
   const patchPassed =
     applied != null &&
     applied.failed === 0 &&
-    applied.content === benchmarkCase.expectedContent &&
+    contentAccepted &&
     policyViolation === null;
   let failureClass: PatchFailureClass | null = null;
   let patchMessage = "Patch applied to the expected content.";
@@ -334,7 +336,7 @@ function evaluatePatchCase(
     failureClass =
       applied != null &&
       applied.failed === 0 &&
-      applied.content === benchmarkCase.expectedContent &&
+      contentAccepted &&
       policyViolation !== null
         ? "non_minimal_patch"
         : format === "missing-explicit-path"
@@ -369,7 +371,7 @@ function evaluatePatchCase(
         applied: applied?.applied ?? 0,
         failed: applied?.failed ?? (edit ? 0 : 1),
         failedOps: applied?.failedOps ?? [],
-        contentMatchesExpected: applied?.content === benchmarkCase.expectedContent,
+        contentMatchesExpected: contentAccepted,
         actualPreview: applied ? preview(applied.content) : "",
         expectedPreview: preview(benchmarkCase.expectedContent),
       }
@@ -385,6 +387,37 @@ function evaluatePatchCase(
         : "First attempt did not produce the expected patch."
     )
   );
+}
+
+/**
+ * Normalize patched file content for semantic-equivalence comparison: strip
+ * trailing whitespace from every line and collapse to exactly one trailing
+ * newline. Internal content — indentation, blank lines, attribute/key
+ * order — is left untouched, so this can only neutralize whitespace/newline
+ * noise, never turn a wrong answer into a match. Exported for the
+ * alternate-solution parity guard, which independently re-derives the same
+ * normalization to confirm the comparator agrees with it.
+ */
+export function normalizePatchContent(content: string): string {
+  const lines = content.split("\n").map((line) => line.replace(/[ \t\r]+$/, ""));
+  const collapsed = lines.join("\n").replace(/\n+$/, "");
+  return `${collapsed}\n`;
+}
+
+/**
+ * A patch's applied content passes when it is semantically equivalent (per
+ * `normalizePatchContent`) to ANY listed accepted variant — the shipped
+ * `expectedContent` by default, plus any explicitly-authored `anyOf` of
+ * equally-correct reorderings (`acceptableContents`). Still an exact match
+ * on substantive content: this never accepts a genuinely different answer.
+ */
+function contentMatchesAcceptedVariant(
+  content: string,
+  benchmarkCase: PatchReliabilityCase
+): boolean {
+  const normalized = normalizePatchContent(content);
+  const accepted = benchmarkCase.acceptableContents ?? [benchmarkCase.expectedContent];
+  return accepted.some((variant) => normalizePatchContent(variant) === normalized);
 }
 
 function evaluateRepairLoopCase(

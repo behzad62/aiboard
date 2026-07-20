@@ -238,10 +238,25 @@ function fuzzyFindLines(
   const hLines = haystack.split("\n");
   const nLines = needle.split("\n").map((l) => l.trim());
   if (nLines.length === 0) return null;
-  for (let i = 0; i + nLines.length <= hLines.length; i++) {
+  // A needle ending in a trailing newline (common model formatting) splits
+  // into a final empty element. If the needle's real content otherwise runs
+  // to the haystack's last line, that phantom empty line has no haystack
+  // line "after EOF" to compare against — tolerate it there (and ONLY
+  // there: `hLine === undefined` is impossible for any other i, since the
+  // old bound already guarantees every other index is in range) instead of
+  // rejecting an exact match one line short of the end of the file.
+  for (let i = 0; i + nLines.length <= hLines.length + 1; i++) {
     let ok = true;
     for (let k = 0; k < nLines.length; k++) {
-      if (hLines[i + k].trim() !== nLines[k]) {
+      const hLine = hLines[i + k];
+      if (hLine === undefined) {
+        if (nLines[k] !== "") {
+          ok = false;
+          break;
+        }
+        continue;
+      }
+      if (hLine.trim() !== nLines[k]) {
         ok = false;
         break;
       }

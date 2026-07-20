@@ -7,6 +7,7 @@ export {
   buildForbiddenToolReliabilityCandidate,
   buildPerfectToolReliabilityCandidate,
   malformedToolReliabilityRepairSeed,
+  normalizePatchContent,
   runToolReliability,
   runToolReliabilityPack,
   validateToolReliabilityJsonOutput,
