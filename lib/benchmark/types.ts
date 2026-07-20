@@ -260,6 +260,16 @@ export interface BenchmarkAttemptV2 {
   gameIqScore?: number;
   teamLift?: number;
   toolReliabilityScore?: number;
+  /**
+   * ToolReliability (solo + TeamIQ-wrapped): raw, unweighted case pass
+   * fraction, e.g. `{ passed: 32, total: 33 }`. Distinct from the WEIGHTED
+   * `toolReliabilityScore` above - this is the plain per-case tally so a
+   * near-perfect attempt can be surfaced as "32/33 passed" instead of only a
+   * status label (Task G: pass-fraction status). Optional/additive; only set
+   * for toolreliability-track attempts (solo or TeamIQ-wrapped), so existing
+   * records and other tracks are unaffected.
+   */
+  toolReliabilityCasePassFraction?: { passed: number; total: number };
   costUsd: number | null;
   inputTokens: number;
   outputTokens: number;

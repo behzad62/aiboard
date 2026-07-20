@@ -10,6 +10,7 @@ export {
   normalizePatchContent,
   runToolReliability,
   runToolReliabilityPack,
+  statusFromToolReliabilityScore,
   validateToolReliabilityJsonOutput,
 } from "./runner";
 export { runCertifiedToolReliability } from "./certified-runner";

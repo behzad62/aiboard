@@ -11,7 +11,6 @@ import type {
   BenchmarkTeamCompositionRole,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
-  CertifiedAttemptStatus,
 } from "@/lib/benchmark/types";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
@@ -227,12 +226,18 @@ async function runTeamIqToolReliabilityAttempt(
     caseResults: result.caseResults,
     score: result.score,
   });
-  const status = teamIqToolReliabilityStatus(result.caseResults);
   await input.context.recordVerifier(verifier);
   for (const trace of toolCallTracesForResult(attemptId, result.caseResults)) {
     await input.context.recordToolCall(trace);
   }
 
+  // `status` (and `toolReliabilityCasePassFraction`) come from
+  // `...result.attempt` below, unmodified: `runToolReliabilityPack` already
+  // runs the same `statusFromToolReliabilityScore` gate the solo
+  // ToolReliability path uses (Task G), so TeamIQ's ToolReliability wrapping
+  // reports status identically instead of through a separate, looser
+  // per-category override (the old `teamIqToolReliabilityStatus`, which had
+  // the same "one miss forces failed_tool_use" problem Task G fixes).
   return {
     ...result.attempt,
     id: attemptId,
@@ -240,7 +245,6 @@ async function runTeamIqToolReliabilityAttempt(
     caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack",
     teamCompositionId: team.id,
     track: "teamiq",
-    status,
     harnessProfile: input.context.harnessProfile,
     startedAt: input.context.startedAt,
     completedAt: new Date().toISOString(),
@@ -514,25 +518,6 @@ function createTeamIqVerifierResult(input: {
     assertionResults: assertions,
     artifactIds: [],
   };
-}
-
-function teamIqToolReliabilityStatus(
-  caseResults: ToolReliabilityCaseResult[]
-): CertifiedAttemptStatus {
-  if (caseResults.every((result) => result.passed)) return "passed";
-  const failedCategories = new Set(
-    caseResults
-      .filter((result) => !result.passed)
-      .map((result) => result.category)
-  );
-  if (
-    failedCategories.has("tool-call") ||
-    failedCategories.has("patch") ||
-    failedCategories.has("forbidden-action")
-  ) {
-    return "failed_tool_use";
-  }
-  return "failed_model";
 }
 
 function toolCallTracesForResult(
