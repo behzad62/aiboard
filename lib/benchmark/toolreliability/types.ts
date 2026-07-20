@@ -86,6 +86,14 @@ export interface PatchReliabilityCase extends BaseToolReliabilityCase {
   path: string;
   originalContent: string;
   expectedContent: string;
+  /**
+   * Alternate fully-correct final contents that must also pass (an `anyOf`
+   * of accepted variants) — e.g. a legitimate JSX attribute or JSON key
+   * reordering. Compared via `normalizePatchContent` (trailing whitespace
+   * and final-newline insensitive, never a looser content check). Defaults
+   * to `[expectedContent]` when omitted.
+   */
+  acceptableContents?: string[];
   policy?: PatchMinimalityPolicy;
   /** Second candidate file shown in the prompt for path-selection cases. */
   distractorPath?: string;

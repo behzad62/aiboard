@@ -681,7 +681,7 @@ function largeJsonFlagFlipCase(): PatchReliabilityCase {
 }
 
 function largeReactAriaCase(): PatchReliabilityCase {
-  const build = (patched: boolean): string => {
+  const build = (patched: boolean, reorderedAttrs = false): string => {
     const lines: string[] = [
       'import React from "react";',
       "",
@@ -693,7 +693,9 @@ function largeReactAriaCase(): PatchReliabilityCase {
       if (index === 73) {
         lines.push(
           patched
-            ? '      <button type="button" aria-label="Save changes" data-testid="primary-save"><SaveIcon /></button>'
+            ? reorderedAttrs
+              ? '      <button type="button" data-testid="primary-save" aria-label="Save changes"><SaveIcon /></button>'
+              : '      <button type="button" aria-label="Save changes" data-testid="primary-save"><SaveIcon /></button>'
             : '      <button type="button" data-testid="primary-save"><SaveIcon /></button>'
         );
         lines.push(
@@ -724,6 +726,11 @@ function largeReactAriaCase(): PatchReliabilityCase {
     path: "src/components/LargeToolbar005.tsx",
     originalContent: build(false),
     expectedContent: build(true),
+    // Attribute order on the added aria-label is free — a model that emits
+    // `data-testid` before `aria-label` (the reverse of the reference
+    // ordering above) is equally correct and must not be scored a
+    // content_mismatch (2026-07-20 audit: this false-negatived Spark).
+    acceptableContents: [build(true), build(true, true)],
     policy: { maxSearchLines: 14, disallowWholeFileRewrite: true },
     referenceOps: [
       {
