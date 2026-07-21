@@ -24,10 +24,12 @@ import {
   runToolReliabilityPack,
   validateToolReliabilityJsonOutput,
 } from "./runner";
+import { createStatefulEnv } from "./stateful-env";
 
 export { malformedToolReliabilityRepairSeed } from "./runner";
 import type {
   PatchReliabilityCase,
+  StatefulToolReliabilityCase,
   ToolReliabilityCandidate,
   ToolReliabilityCase,
   ToolReliabilityCaseResult,
@@ -124,7 +126,48 @@ async function runCertifiedToolReliabilityAttempt(
       return call.rawResponse;
     };
 
-    if (benchmarkCase.category === "repair-loop") {
+    if (benchmarkCase.category === "stateful") {
+      // Generalized repair-loop: drive a turn loop over the case's scripted
+      // env — call model, parse action, env step, append the rendered tool
+      // result to the transcript, repeat until the env reports done or the
+      // case's maxTurns is exhausted. The prompt each turn is the FULL
+      // rendered transcript so far (transcript-in-prompt; a documented
+      // deliberate simplification of Build's ChatMessage[] — see the design
+      // doc — acceptable because these scenarios are tiny and the transcript
+      // is never truncated, so state discipline stays fully visible).
+      const env = createStatefulEnv(benchmarkCase);
+      let transcript = "";
+      for (let turn = 0; turn < benchmarkCase.maxTurns; turn++) {
+        throwIfCertifiedRunAborted(input.signal);
+        const call = await callCertifiedModel({
+          model: input.model,
+          system:
+            "You are a certified ToolReliability benchmark participant operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+          user: buildStatefulTurnPrompt(benchmarkCase, transcript),
+          maxTokens: input.maxTokens ?? maxTokensForCase(benchmarkCase),
+          temperature: 0,
+          allowInvalidStructuredOutput: true,
+          context: input.context,
+          caseId: benchmarkCase.id,
+          attemptId,
+          participantId: input.teamCompositionId,
+          pricing: input.pricing,
+          streamChat: input.streamChat,
+          signal: input.signal,
+        });
+        calls.push({
+          traceId: call.traceId,
+          latencyMs: call.latencyMs,
+          inputTokens: call.inputTokens,
+          outputTokens: call.outputTokens,
+          estimatedUsd: call.estimatedUsd,
+        });
+        caseOutputs.push(call.rawResponse);
+        const stepResult = env.step(call.rawResponse);
+        transcript += `\n\nTurn ${turn + 1} - you replied:\n${call.rawResponse}\n\nTurn ${turn + 1} - tool result:\n${stepResult.renderedResult}`;
+        if (stepResult.done) break;
+      }
+    } else if (benchmarkCase.category === "repair-loop") {
       // Genuine repair loop: the model's OWN first attempt is validated
       // post-hoc; only when it fails does the model get one repair attempt
       // that shows its own failed output plus the specific parser feedback.
@@ -532,6 +575,37 @@ function patchContext(benchmarkCase: ToolReliabilityCase): string {
 
 function maxTokensForCase(benchmarkCase: ToolReliabilityCase): number {
   return benchmarkCase.category === "patch" ? 1024 : 512;
+}
+
+/**
+ * Per-turn prompt for a stateful case: task brief + the generic action
+ * protocol (every action kind used across the six stateful kinds, so a
+ * single generic doc string covers all of them without leaking which action
+ * a specific case actually expects) + the full rendered transcript so far.
+ * Transcript-in-prompt is a documented deliberate simplification (see the
+ * design doc) — acceptable because these scenarios are tiny and the
+ * transcript is never truncated.
+ */
+export function buildStatefulTurnPrompt(
+  benchmarkCase: StatefulToolReliabilityCase,
+  transcript: string
+): string {
+  return [
+    benchmarkCase.prompt,
+    [
+      "Available JSON tool actions (emit exactly one per turn):",
+      '{"action":"read_range","path":"<file path>","startLine":<n>,"lineCount":<n>} - read a bounded slice of an existing file.',
+      '{"action":"patch","path":"<file path>","ops":[{"search":"<exact current text>","replace":"<replacement>"}]} - apply exact SEARCH/REPLACE edits to an existing file.',
+      '{"action":"append","path":"<file path>","content":"<text>","reset":true|false} - append (or, with reset:true, start) a bounded content chunk.',
+      '{"action":"run","command":"<shell command>"} - run a read-only verification command.',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target":"<ref>","element":"<label>"}} - interact with an element from the current page snapshot.',
+      "Once the task is fully complete, reply with a short final plain-text answer instead of a JSON action - that ends your turn loop.",
+    ].join("\n"),
+    `Canary: ${benchmarkCase.canary}`,
+    transcript ? `Transcript so far:${transcript}` : "This is your first turn.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function costTotal(values: Array<number | null>): number | null {

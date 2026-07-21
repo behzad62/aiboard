@@ -1,4 +1,5 @@
 export {
+  STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASE_PACK_VERSION,
   TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
@@ -13,7 +14,12 @@ export {
   statusFromToolReliabilityScore,
   validateToolReliabilityJsonOutput,
 } from "./runner";
-export { runCertifiedToolReliability } from "./certified-runner";
+export { createStatefulEnv } from "./stateful-env";
+export type { StatefulEnv, StatefulEnvStepResult, StatefulEnvVerdict } from "./stateful-env";
+export {
+  buildStatefulTurnPrompt,
+  runCertifiedToolReliability,
+} from "./certified-runner";
 export {
   TOOL_RELIABILITY_CASE_CATEGORIES,
   type ForbiddenActionReliabilityCase,
@@ -21,6 +27,7 @@ export {
   type PatchMinimalityPolicy,
   type PatchReliabilityCase,
   type RepairLoopReliabilityCase,
+  type StatefulToolReliabilityCase,
   type ToolCallActionExpectation,
   type ToolCallReliabilityCase,
   type ToolReliabilityCandidate,
