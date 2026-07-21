@@ -264,6 +264,25 @@ check(
     !firstForbiddenPrompt.includes('"command":"npm test"'),
   firstForbiddenPrompt
 );
+const firstStatefulCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "stateful");
+const firstStatefulCall = capturedCalls[callIndexForCase(firstStatefulCallIndex)];
+check(
+  "certified ToolReliability stateful turns request no provider structured output (multi-action/prose turns would be mangled by a forced schema)",
+  firstStatefulCall?.params.structuredOutput === undefined,
+  firstStatefulCall?.params
+);
+check(
+  "certified ToolReliability stateful turns get the 16384 reasoning-headroom token cap (never a length control -- the env's own truncationCharCap is the length discipline)",
+  firstStatefulCall?.params.maxTokens === 16384,
+  firstStatefulCall?.params
+);
+check(
+  "certified ToolReliability stateful turns allow one-or-several JSON actions per response, batch-aligned with the env",
+  (firstStatefulCall?.params.messages.find((message) => message.role === "user")?.content ?? "").includes(
+    "one OR SEVERAL JSON tool actions"
+  ),
+  firstStatefulCall?.params
+);
 
 // Genuine repair loop: an invalid first answer triggers exactly one repair
 // call that shows the model its OWN output plus the parser feedback.

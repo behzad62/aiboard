@@ -95,6 +95,25 @@ interface ParityAnswers {
    */
   batchedNegative?: string[];
   batchedNegativeNote?: string;
+  /**
+   * Stateful-only, optional: a 2026-07-22 gate-2 fix. Turn 1 is a genuinely
+   * malformed/incomplete JSON action attempt (for stale-patch-001, spark's
+   * OWN recorded unterminated patch JSON, missing one closing brace); the
+   * env must recognize this as an attempted-but-malformed action (reusing
+   * the real engine's own detection/message), consume the turn WITHOUT
+   * firing any scheduled event, and give the model a real second chance —
+   * the rest of the transcript then recovers and completes correctly. MUST
+   * PASS within the case's own maxTurns (no maxTurns bump).
+   */
+  malformedRecovery?: string[];
+  malformedRecoveryNote?: string;
+  /**
+   * Stateful-only, optional: emits malformed JSON every turn until maxTurns
+   * (never a real action) — MUST FAIL (the final state never changes from
+   * initial, so it can never match any accepted content/answer).
+   */
+  malformedNegative?: string[];
+  malformedNegativeNote?: string;
 }
 
 // --- Tool-action output builders (match ArchitectAction / RunAction shapes
@@ -639,6 +658,10 @@ const STATEFUL_ANSWERS: Record<
     batchedAlternateNote: string;
     batchedNegative?: string[];
     batchedNegativeNote?: string;
+    malformedRecovery?: string[];
+    malformedRecoveryNote?: string;
+    malformedNegative?: string[];
+    malformedNegativeNote?: string;
   }
 > = {
   "toolrel-current-stateful-redundant-read-001": {
@@ -683,6 +706,28 @@ const STATEFUL_ANSWERS: Record<
     ],
     batchedNegativeNote:
       "an overlapping duplicate read_range within the SAME batched response (non-identical JSON text, so only the interval-coverage tracker — not exact-string dedup — catches it)",
+    // 2026-07-22 gate-2 fix: turn 1 is a genuinely malformed/incomplete
+    // read_range attempt (truncated mid-value, no closing brace) that the
+    // env must recognize as an ATTEMPTED action (not a final answer),
+    // reject with the real engine's own message, and give the model
+    // another turn — with room to spare within maxTurns (3) by covering the
+    // whole file in ONE batched read on the recovery turn.
+    malformedRecovery: [
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      readRangeAction("src/config/limits.ts", 1, 200),
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete read_range attempt (no closing brace); after the rejection, one batched whole-file read plus the final answer complete the case within the 3-turn budget",
+    // Malformed every turn until maxTurns (3) -- never a real action, so no
+    // read ever happens.
+    malformedNegative: [
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+    ],
+    malformedNegativeNote:
+      "emits the same truncated/incomplete action every turn until the budget is exhausted -- no read ever actually happens, so the case cannot pass",
   },
   "toolrel-current-stateful-stale-patch-001": {
     alternate: [
@@ -737,6 +782,42 @@ const STATEFUL_ANSWERS: Record<
     ],
     batchedAlternateNote:
       "every turn batches its action(s) with trailing spark-style commentary in the same response; recovers from the expected rejection within the 4-turn budget",
+    // 2026-07-22 gate-2 VOID FIX: turn 1 is spark's OWN recorded output,
+    // VERBATIM, from probe-runs/toolreliability/probe-toolreliability-
+    // stateful-gate2-spark-chatgpt-gpt-5.3-codex-spark.json (252 output
+    // tokens; the model stopped on its own with one closing brace missing
+    // from the top-level action object). The old env saw zero parsable
+    // actions and voided the case as a premature final answer; the fixed
+    // env recognizes this as an attempted-but-malformed patch, serves the
+    // real engine's rejection text, and gives the model a real second
+    // chance. The recovery then follows the SAME 4-turn shape as the
+    // reference (the malformed turn simply takes the place of the
+    // reference's opening exploratory read, which was never load-bearing):
+    // patch-against-original (turn 2, mutation fires, rejected), read
+    // (turn 3), patch-against-evolved (turn 4, succeeds) -- fits exactly
+    // within maxTurns (4).
+    malformedRecovery: [
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      readRangeAction("src/pricing/surcharge.ts", 1, 5),
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
+      ]),
+    ],
+    malformedRecoveryNote:
+      "turn 1 is spark's OWN recorded unterminated patch JSON (missing one closing brace) from the gate-2 void; after the rejection, the SAME recovery shape as the reference completes within the 4-turn budget",
+    // Malformed every turn until maxTurns (4) -- the file is never touched,
+    // so the final state can never match either accepted variant.
+    malformedNegative: [
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+    ],
+    malformedNegativeNote:
+      "emits the same malformed unterminated patch JSON every turn until the budget is exhausted -- the file is never actually patched, so the final content can never match",
   },
 };
 
@@ -753,6 +834,10 @@ function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnsw
     batchedAlternateNote: table.batchedAlternateNote,
     batchedNegative: table.batchedNegative,
     batchedNegativeNote: table.batchedNegativeNote,
+    malformedRecovery: table.malformedRecovery,
+    malformedRecoveryNote: table.malformedRecoveryNote,
+    malformedNegative: table.malformedNegative,
+    malformedNegativeNote: table.malformedNegativeNote,
     negative: table.negative,
     alternateNote: table.alternateNote,
     negativeNote: table.negativeNote,
@@ -877,6 +962,37 @@ for (const benchmarkCase of TOOL_RELIABILITY_CASES) {
     } else {
       check(`${benchmarkCase.id} has a batched-negative parity fixture (redundant-read kind)`, false, benchmarkCase.id);
     }
+  }
+
+  // --- Malformed-action rejection-retry (2026-07-22 gate-2 fix): optional
+  // per case (mandatory for stale-patch-001 -- the case the void was found
+  // on). Turn 1 is a genuinely incomplete/malformed JSON action attempt;
+  // the env must reject-and-retry (not void the case as a premature final
+  // answer), and the rest of the transcript recovers correctly. A negative
+  // that stays malformed until maxTurns must FAIL (the file/answer state
+  // never changes from initial). ---
+  if (answers.malformedRecovery) {
+    const malformedRecovery = evaluateCase(benchmarkCase, answers.malformedRecovery);
+    check(
+      `${benchmarkCase.id} malformed-then-recover transcript passes (${answers.malformedRecoveryNote})`,
+      malformedRecovery.passed,
+      { attempts: answers.malformedRecovery, metrics: malformedRecovery.metrics, events: malformedRecovery.events }
+    );
+  }
+  if (answers.malformedNegative) {
+    const malformedNegative = evaluateCase(benchmarkCase, answers.malformedNegative);
+    check(
+      `${benchmarkCase.id} malformed-every-turn negative control fails (${answers.malformedNegativeNote})`,
+      !malformedNegative.passed,
+      { attempts: answers.malformedNegative, metrics: malformedNegative.metrics, events: malformedNegative.events }
+    );
+  }
+  if (benchmarkCase.id === "toolrel-current-stateful-stale-patch-001") {
+    check(
+      "toolrel-current-stateful-stale-patch-001 has a malformed-then-recover parity fixture (mandatory -- this is the case the 2026-07-22 gate-2 void was found on)",
+      Boolean(answers.malformedRecovery) && Boolean(answers.malformedNegative),
+      { hasRecovery: Boolean(answers.malformedRecovery), hasNegative: Boolean(answers.malformedNegative) }
+    );
   }
 }
 

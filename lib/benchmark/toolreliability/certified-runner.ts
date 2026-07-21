@@ -574,6 +574,14 @@ function patchContext(benchmarkCase: ToolReliabilityCase): string {
 }
 
 function maxTokensForCase(benchmarkCase: ToolReliabilityCase): number {
+  // Stateful cases get the SAME 16384-token reasoning-headroom cap as
+  // GameIQ's DEFAULT_GAMEIQ_MAX_TOKENS (gameiq/types.ts) — a multi-turn
+  // scripted-environment case can legitimately need substantial reasoning
+  // before emitting its action(s)/final answer, and a completion-token cap
+  // is never meant to be a length control (see CLAUDE.md's ToolReliability
+  // conventions): the env's own truncationCharCap is the length discipline
+  // for the truncation-recovery kind specifically.
+  if (benchmarkCase.category === "stateful") return 16384;
   return benchmarkCase.category === "patch" ? 1024 : 512;
 }
 
@@ -593,13 +601,14 @@ export function buildStatefulTurnPrompt(
   return [
     benchmarkCase.prompt,
     [
-      "Available JSON tool actions (emit exactly one per turn):",
+      "Available JSON tool actions - you may respond with one OR SEVERAL JSON tool actions in a single reply when useful; the engine runs every action you send and reports which were served or skipped:",
       '{"action":"read_range","path":"<file path>","startLine":<n>,"lineCount":<n>} - read a bounded slice of an existing file.',
       '{"action":"patch","path":"<file path>","ops":[{"search":"<exact current text>","replace":"<replacement>"}]} - apply exact SEARCH/REPLACE edits to an existing file.',
       '{"action":"append","path":"<file path>","content":"<text>","reset":true|false} - append (or, with reset:true, start) a bounded content chunk.',
       '{"action":"run","command":"<shell command>"} - run a read-only verification command.',
       '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target":"<ref>","element":"<label>"}} - interact with an element from the current page snapshot.',
-      "Once the task is fully complete, reply with a short final plain-text answer instead of a JSON action - that ends your turn loop.",
+      "Keep each individual JSON tool action well-formed and complete - an incomplete or truncated action gets rejected and costs you a turn.",
+      "Once the task is fully complete, reply with a short final plain-text answer instead of any JSON action - that ends your turn loop.",
     ].join("\n"),
     `Canary: ${benchmarkCase.canary}`,
     transcript ? `Transcript so far:${transcript}` : "This is your first turn.",

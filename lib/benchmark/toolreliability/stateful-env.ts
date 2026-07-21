@@ -710,12 +710,29 @@ export function createStatefulEnv(c: StatefulToolReliabilityCase): StatefulEnv {
       const raw = modelOutput ?? "";
 
       // BATCH-AWARE parse: the real inspector returns EVERY parsable action
-      // in document order (not just one). Zero actions = the model's final
-      // free-text answer (mirrors the real engine's "a tool action is an
-      // instruction to the engine, never a completion report" principle —
-      // shouldRequestWorkerFinalOutput/hasWorkerFinalEvidenceResponse).
+      // in document order (not just one), AND — critically — also computes
+      // the real engine's own malformed/incomplete-attempt feedback when it
+      // finds none (via inspectStrictToolActionOutput's looksLikeIncompleteToolAction
+      // fallback, or its own hasIncompleteTrailingActionCandidate check).
+      // Three response classes, mirroring the real engine:
+      //   (a) >=1 parsable action -> a TOOL TURN (handled below).
+      //   (b) zero actions, but `batch.feedback` is set -> the response
+      //       LOOKS LIKE an attempted-but-malformed/truncated action (a
+      //       2026-07-22 live gate showed a real model emit an unterminated
+      //       patch JSON — missing one closing brace — and stop on its own;
+      //       the OLD env silently treated this as a final answer and voided
+      //       the case). The real engine's own rejection text is served
+      //       verbatim, the turn is consumed, NO scheduled event fires (no
+      //       action was actually taken), and the model gets another turn.
+      //   (c) zero actions and no malformed-attempt signal at all -> plain
+      //       prose, the model's genuine final answer (unchanged).
       const batch = inspectStrictToolActionBatchOutput(raw);
       if (batch.actions.length === 0) {
+        if (batch.feedback) {
+          const forcedDoneOnReject = state.turn >= c.maxTurns;
+          if (forcedDoneOnReject) state.done = true;
+          return { renderedResult: batch.feedback, done: forcedDoneOnReject };
+        }
         state.finalAnswerText = raw;
         state.done = true;
         return { renderedResult: "", done: true };
