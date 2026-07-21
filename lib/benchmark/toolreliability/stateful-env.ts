@@ -541,39 +541,60 @@ function processTruncationRecoveryAction(
  * stream that stopped mid-response) and is dropped silently, same as a real
  * cut stream would drop it.
  */
+/** The write-bearing payload size of one action: the actual file content a
+ * model is trying to push in this response, NOT the action's raw
+ * JSON-serialized length (which inflates by roughly 2x per embedded newline
+ * from JSON string-escaping, plus fixed field/quote wrapper overhead — an
+ * artifact of this harness's action encoding that a real single-response
+ * length budget has nothing to do with). */
+function actionWritePayloadLength(action: ArchitectAction): number {
+  if (action.action === "append") return action.content.length;
+  if (action.action === "patch") {
+    return action.ops.reduce((sum, op) => sum + op.search.length + op.replace.length, 0);
+  }
+  return 0;
+}
+
+/**
+ * The truncation cap applies to the WHOLE response's cumulative write
+ * payload (design intent: single-response size discipline), not to one
+ * action's content field checked in isolation — so several smaller writes
+ * batched into one response still can't smuggle an oversized total past the
+ * cap. Walks the batch in order accumulating write-payload size; the first
+ * action that would push the running total over cap is the one that got cut
+ * (real truncated_output message, nothing written for it); anything after it
+ * in the batch never arrived either (mirrors a stream that stopped there).
+ * Non-write actions (reads, etc.) always fit and execute normally regardless
+ * of position.
+ */
 function applyTruncationCap(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  rawOutput: string,
   actions: ArchitectAction[]
 ): { actionsToProcess: ArchitectAction[]; cutNotice: ActionOutcome | null } {
   const cap = c.truncationCharCap;
-  if (cap == null || rawOutput.length <= cap) {
+  if (cap == null) {
     return { actionsToProcess: actions, cutNotice: null };
   }
-  const truncatedPrefix = rawOutput.slice(0, cap);
-  const truncatedBatch = inspectStrictToolActionBatchOutput(truncatedPrefix);
-  const survivingKeys = new Set(truncatedBatch.actions.map((item) => JSON.stringify(item)));
-  const actionsToProcess = actions.filter((item) => survivingKeys.has(JSON.stringify(item)));
-  const cutActions = actions.filter((item) => !survivingKeys.has(JSON.stringify(item)));
-  const firstCutWrite = cutActions.find(
-    (item): item is Extract<ArchitectAction, { action: "append" | "patch" }> =>
-      item.action === "append" || item.action === "patch"
-  );
-  if (!firstCutWrite) {
-    return { actionsToProcess, cutNotice: null };
+  let cumulative = 0;
+  const actionsToProcess: ArchitectAction[] = [];
+  let cutNotice: ActionOutcome | null = null;
+  for (const action of actions) {
+    if (cutNotice) break; // a real stream stops after the cut point.
+    const payload = actionWritePayloadLength(action);
+    if (payload > 0 && cumulative + payload > cap) {
+      if (action.action === "append" || action.action === "patch") {
+        const path = action.path;
+        const hits = (state.truncatedPathHits.get(path) ?? 0) + 1;
+        state.truncatedPathHits.set(path, hits);
+        cutNotice = { label: actionLabel(action), status: "served", result: REAL_TRUNCATED_OUTPUT_MESSAGE(path) };
+      }
+      continue;
+    }
+    cumulative += payload;
+    actionsToProcess.push(action);
   }
-  const path = firstCutWrite.path;
-  const hits = (state.truncatedPathHits.get(path) ?? 0) + 1;
-  state.truncatedPathHits.set(path, hits);
-  return {
-    actionsToProcess,
-    cutNotice: {
-      label: actionLabel(firstCutWrite),
-      status: "served",
-      result: REAL_TRUNCATED_OUTPUT_MESSAGE(path),
-    },
-  };
+  return { actionsToProcess, cutNotice };
 }
 
 function verdictTruncationRecovery(
@@ -746,7 +767,7 @@ export function createStatefulEnv(c: StatefulToolReliabilityCase): StatefulEnv {
       let actionsToProcess = batch.actions;
       let cutNotice: ActionOutcome | null = null;
       if (c.kind === "truncation-recovery") {
-        const capped = applyTruncationCap(c, state, raw, batch.actions);
+        const capped = applyTruncationCap(c, state, batch.actions);
         actionsToProcess = capped.actionsToProcess;
         cutNotice = capped.cutNotice;
       }

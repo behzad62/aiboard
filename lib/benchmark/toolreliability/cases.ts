@@ -1373,6 +1373,30 @@ const latePenaltyEvolved2FixedContent = [
   "}",
 ].join("\n");
 
+// Scheduled events only fire on turns that carry an action (see stateful-
+// env.ts's applyScheduledEvents doc comment) — a model that correctly fixes
+// the rate and then stops BEFORE a scheduled turn's action never triggers
+// that mutation at all, and this is a legitimately correct, complete run
+// (confirmed by the ACTUAL 2026-07-22 live gate: chatgpt:gpt-5.3-codex-spark
+// patched correctly on turn 1, then gave a pure free-text final answer on
+// turn 2 — never reaching turn 3, so neither concurrent mutation ever
+// fired). These are the two earlier legitimate stopping points alongside
+// latePenaltyEvolved2FixedContent (which is what a model that keeps working
+// through both concurrent edits must reach instead).
+const latePenaltyOriginalFixedContent = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  return Math.round(balanceCents * 0.18);",
+  "}",
+].join("\n");
+
+const latePenaltyEvolved1FixedContent = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  // NOTE: penalty rate reviewed 2026-07-21, see docs/billing.md",
+  "  const rate = 0.18;",
+  "  return Math.round(balanceCents * rate);",
+  "}",
+].join("\n");
+
 const statefulStalePatch002: StatefulToolReliabilityCase = {
   id: "toolrel-current-stateful-stale-patch-002",
   category: "stateful",
@@ -1409,7 +1433,14 @@ const statefulStalePatch002: StatefulToolReliabilityCase = {
     },
   ],
   expectedFinalFiles: {
-    "src/billing/late-penalty.ts": { content: latePenaltyEvolved2FixedContent },
+    "src/billing/late-penalty.ts": {
+      content: latePenaltyEvolved2FixedContent,
+      acceptable: [
+        latePenaltyEvolved2FixedContent,
+        latePenaltyEvolved1FixedContent,
+        latePenaltyOriginalFixedContent,
+      ],
+    },
   },
   provenance:
     "Mined class \"Patch SEARCH blocks not matching the current (evolved) file\" — 5 observed occurrences, caught on workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md. This variant chains TWO sequential concurrent mutations (turns 2 and 3) so a model that recovers from only the first is still clobbered by the second.",

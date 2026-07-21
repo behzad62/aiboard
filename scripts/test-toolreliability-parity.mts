@@ -855,6 +855,22 @@ const STATEFUL_ANSWERS: Record<
       "reads each file whole in one shot instead of two bounded partial ranges, plus differently-worded final answer",
     negativeNote:
       "re-requests task-queue.ts lines 45-95 right after lines 40-90 (a 90%+ coverage overlap, not an exact duplicate) — the interval-coverage tracker must catch the nudge",
+    batchedAlternate: [
+      readRangeAction("src/workers/task-queue.ts", 1, 150) +
+        readRangeAction("src/workers/retry-policy.ts", 1, 120) +
+        "Checking both files now.",
+      "The task-queue.ts constant MAX_QUEUE_DEPTH is 64, and retry-policy.ts's RETRY_BACKOFF_MS is 750.",
+    ],
+    batchedAlternateNote: "both file reads batched into one spark-style response with trailing commentary, then a separate final answer",
+    batchedNegative: [
+      readRangeActionWithReason("src/workers/task-queue.ts", 40, 51, "first pass") +
+        readRangeActionWithReason("src/workers/task-queue.ts", 45, 51, "double-checking") +
+        readRangeAction("src/workers/retry-policy.ts", 46, 75) +
+        "Let me confirm before answering.",
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    batchedNegativeNote:
+      "the nudged-overlap duplicate (lines 40-90 then 45-95, non-identical JSON text) occurs WITHIN the same batched response instead of across turns",
   },
   "toolrel-current-stateful-stale-patch-002": {
     alternate: [
@@ -899,6 +915,24 @@ const STATEFUL_ANSWERS: Record<
       "patches immediately without reading first, blindly retries the identical text once more, THEN reads before the final (successful) patch — a different recovery shape than the reference",
     negativeNote:
       "retries the exact same pre-change SEARCH text across BOTH concurrent mutations without ever adapting, so the fix never lands",
+    // Same strategic path as the reference (patch, read, patch, read, patch)
+    // but every turn batches its action with trailing spark-style commentary.
+    batchedAlternate: [
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]) + "Applying the rate change now.",
+      readRangeAction("src/billing/late-penalty.ts", 1, 5) + "Let me confirm the current state.",
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const rate = 0.10;", replace: "  const rate = 0.18;" },
+      ]) + "Retrying with the updated content.",
+      readRangeAction("src/billing/late-penalty.ts", 1, 6) + "Checking what changed this time.",
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const penaltyRate = 0.10;", replace: "  const penaltyRate = 0.18;" },
+      ]) + "Updating to match the latest content.",
+      "Fixed the late penalty rate to 18%. Both concurrent edits are accounted for.",
+    ],
+    batchedAlternateNote:
+      "the same strategic path as the reference, but every turn batches its action with trailing spark-style commentary in the same response",
   },
   "toolrel-current-stateful-stale-ref-001": {
     alternate: [
@@ -929,6 +963,16 @@ const STATEFUL_ANSWERS: Record<
       "deliberately targets one dead ref first (recoverable-once budget), then lands both required refs correctly",
     negativeNote:
       "clicks TWO different dead refs (busting the one-mistake recovery budget) before eventually landing the correct interaction anyway — the budget violation alone fails the case",
+    // Both required clicks batched into ONE response — ref-generation
+    // rotation is processed sequentially per action regardless of turn
+    // boundaries, so this must land exactly like two separate turns.
+    batchedAlternate: [
+      playwrightClickAction("e3", "Open item detail") +
+        playwrightClickAction("e7", "Save changes") +
+        "Opening the item and saving the changes in one go.",
+      "Saved the changes.",
+    ],
+    batchedAlternateNote: "both required clicks batched into one spark-style response with trailing commentary",
   },
   "toolrel-current-stateful-write-scope-001": {
     alternate: [
@@ -955,6 +999,14 @@ const STATEFUL_ANSWERS: Record<
       "writes the in-scope file across two appends (a chunked strategy) instead of one, still landing the exact expected content",
     negativeNote:
       "writes an unsolicited diagnostic helper file outside the declared write scope before also writing the in-scope file correctly — strict scope violation fails the case regardless",
+    batchedAlternate: [
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n", true) +
+        appendToolAction("scripts/build-verify.mjs", "  return true;\n}\n", false) +
+        "Writing the verification helper now.",
+      "Wrote scripts/build-verify.mjs; it matches exactly.",
+    ],
+    batchedAlternateNote:
+      "both write chunks batched into one spark-style response with trailing commentary, then a separate final answer",
   },
   "toolrel-current-stateful-verify-persistence-001": {
     alternate: [
@@ -990,6 +1042,20 @@ const STATEFUL_ANSWERS: Record<
       "reads the file before patching (an extra inspection step the reference skips), with a differently-worded final answer",
     negativeNote:
       "re-runs the identical failing command twice with zero intervening fix, THEN fixes it and ends green anyway — the earlier verbatim repeat alone strictly fails the case (the mined fingerprint-x6 behavior)",
+    // Batches the fix and the re-check into ONE response instead of two
+    // separate turns — verify-persistence's edited/lastRunCommand state
+    // threads sequentially within a batch exactly like across turns.
+    batchedAlternate: [
+      runAction("npm run test:normalize-id") + "Let's see the current state.",
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]) +
+        runAction("npm run test:normalize-id") +
+        "Applying the fix and re-verifying in one step.",
+      "Fixed normalizeId to trim whitespace first; the check now passes.",
+    ],
+    batchedAlternateNote:
+      "batches the patch and the re-check into one spark-style response instead of two separate turns",
   },
 };
 
@@ -1006,10 +1072,13 @@ function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): 
   negative: string[];
   alternateNote: string;
   negativeNote: string;
+  batchedAlternate: string[];
+  batchedAlternateNote: string;
 } {
   const [sourcePath, sourceContent] = Object.entries(benchmarkCase.initialFiles)[0]!;
   const targetPath = Object.keys(benchmarkCase.expectedFinalFiles ?? {})[0]!;
   const third = Math.ceil(sourceContent.length / 3);
+  const half = Math.ceil(sourceContent.length / 2);
   return {
     alternate: [
       readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
@@ -1035,6 +1104,20 @@ function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): 
       "splits the write into three roughly-equal chunks instead of the reference's two, with different chunk boundaries",
     negativeNote:
       "re-emits the entire oversized file a second time instead of switching to a chunked strategy after the first truncation",
+    // Batches the read with the FIRST write chunk into one spark-style
+    // response (the second chunk stays in its own turn — batching BOTH
+    // chunks together would push their COMBINED payload over the cap, which
+    // is the correct "whole response" cap behavior, not a bug to route
+    // around). Half/half split (not thirds) — each half individually still
+    // fits under the cap with a small margin.
+    batchedAlternate: [
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length) +
+        appendToolAction(targetPath, sourceContent.slice(0, half), true) +
+        "Reading the source and starting the copy in one step.",
+      appendToolAction(targetPath, sourceContent.slice(half), false) + "Appending the remaining content.",
+    ],
+    batchedAlternateNote:
+      "batches the read with the first write chunk into one spark-style response instead of two separate turns, using a half/half split",
   };
 }
 
