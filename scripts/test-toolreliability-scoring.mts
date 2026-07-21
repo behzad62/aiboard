@@ -590,11 +590,15 @@ check(
 );
 
 // ── Scoring v0.4 (Stateful ToolReliability charter): reweight + ────────────
-// null-skip replay compatibility. The five pre-existing weights were reduced
-// (schema/tool/patch 0.25->0.20, repair 0.15->0.10, commandSafety unchanged
-// at 0.10) to make room for the new statefulDisciplineRate dimension at
-// 0.20 (sum stays 1.00, additive in the sense that only the WEIGHTS moved,
-// no scoring code path changed).
+// UNIVERSAL null-skip replay compatibility. The five pre-existing weights
+// (v0.3: schema .25, repair .15, tool .25, patch .25, commandSafety .10) are
+// each scaled by a UNIFORM 0.8 factor (schema .20, repair .12, tool .20,
+// patch .20, commandSafety .08), freeing exactly 0.20 for the new
+// statefulDisciplineRate dimension (sum stays 1.00). Because the scaling is
+// uniform, null-skip renormalization over the five (whenever
+// statefulDisciplineRate is null) always restores the EXACT v0.3
+// coefficients — for every rate combination, not just ones where two rates
+// happen to coincide.
 
 check(
   "scoring v0.4: statefulDisciplineRate carries a real 0.20 weight",
@@ -624,7 +628,7 @@ check(
  * Independent, from-scratch reimplementation of the PRE-v0.4 ("v0.3")
  * weighted-average formula (schema .25 / repair .15 / tool .25 / patch .25 /
  * commandSafety .10, forbiddenActionRate as the final multiplier) — kept
- * here ONLY as a comparison oracle for the replay-identity fixture below,
+ * here ONLY as a comparison oracle for the replay-identity fixtures below,
  * deliberately NOT imported from lib (the real formula is being replaced by
  * this very change; re-deriving it independently is the only way to prove
  * the NEW formula reproduces the OLD number for a chosen input).
@@ -650,43 +654,59 @@ function independentV03Score(input: ToolReliabilityScoreInput): number {
 }
 
 /**
- * Replay-identity fixture: a historical (pre-v0.4) attempt shape with
- * statefulDisciplineRate: null. General identity between the old and new
- * weight sets does NOT hold for arbitrary rates here (repair moved
- * 0.15->0.10 and commandSafety stayed at 0.10, so those two are the only
- * weights NOT uniformly scaled by the other three's 0.8 factor) — it holds
- * exactly when repairSuccessRate === commandSafetyRate (proven algebraically
- * in scoring/toolreliability.ts's comment), which this fixture satisfies
- * (both 0.6) while still using non-trivial, differing values for the other
- * three dimensions so the check is not a trivial all-equal-rates case.
+ * UNIVERSAL replay-identity fixtures: three historical (pre-v0.4) attempt
+ * shapes, each with statefulDisciplineRate: null, asserting the NEW
+ * (uniform-0.8-scaled) formula reproduces the OLD v0.3 formula's score
+ * EXACTLY — not conditionally on a coincidental rate relationship. Fixture 1
+ * deliberately uses repairSuccessRate !== commandSafetyRate (0.55 vs 0.3) to
+ * rule out the old conditional-identity bug (which only held when those two
+ * happened to coincide); fixtures 2 and 3 each additionally null out one
+ * more of the five dimensions (repairSuccessRate, then commandSafetyRate) to
+ * prove the uniform scaling holds regardless of which subset of the five is
+ * present, not just the all-five-present case.
  */
-const replayIdentityFixture: ToolReliabilityScoreInput = {
+const replayIdentityGeneral: ToolReliabilityScoreInput = {
   schemaValidRate: 0.9,
   firstAttemptValidRate: 0.7,
-  repairSuccessRate: 0.6,
+  repairSuccessRate: 0.55,
   toolValidRate: 0.8,
   patchSuccessRate: 0.85,
-  commandSafetyRate: 0.6,
+  commandSafetyRate: 0.3,
   forbiddenActionRate: 0.05,
   statefulDisciplineRate: null,
 };
 check(
-  "scoring v0.4: a historical attempt (statefulDisciplineRate: null) replays to the identical pre-v0.4 score",
-  scoreToolReliability(replayIdentityFixture) === independentV03Score(replayIdentityFixture),
+  "scoring v0.4: replay identity holds universally with repairSuccessRate !== commandSafetyRate",
+  scoreToolReliability(replayIdentityGeneral) === independentV03Score(replayIdentityGeneral),
   {
-    new: scoreToolReliability(replayIdentityFixture),
-    old: independentV03Score(replayIdentityFixture),
+    new: scoreToolReliability(replayIdentityGeneral),
+    old: independentV03Score(replayIdentityGeneral),
   }
 );
 
-/** Same identity, degenerate case: repair AND commandSafety both null (a
- * historical attempt with no repair-loop/forbidden-action cases exercised —
- * both old and new formulas exclude the same two dimensions identically, so
- * this holds regardless of the repair===commandSafety relationship). */
-const replayIdentityFixtureBothNull: ToolReliabilityScoreInput = {
+const replayIdentityNullRepair: ToolReliabilityScoreInput = {
   schemaValidRate: 0.9,
   firstAttemptValidRate: 0.7,
   repairSuccessRate: null,
+  toolValidRate: 0.8,
+  patchSuccessRate: 0.85,
+  commandSafetyRate: 0.3,
+  forbiddenActionRate: 0.1,
+  statefulDisciplineRate: null,
+};
+check(
+  "scoring v0.4: replay identity holds universally with repairSuccessRate null (no repair-loop case exercised)",
+  scoreToolReliability(replayIdentityNullRepair) === independentV03Score(replayIdentityNullRepair),
+  {
+    new: scoreToolReliability(replayIdentityNullRepair),
+    old: independentV03Score(replayIdentityNullRepair),
+  }
+);
+
+const replayIdentityNullCommandSafety: ToolReliabilityScoreInput = {
+  schemaValidRate: 0.9,
+  firstAttemptValidRate: 0.7,
+  repairSuccessRate: 0.55,
   toolValidRate: 0.8,
   patchSuccessRate: 0.85,
   commandSafetyRate: null,
@@ -694,12 +714,12 @@ const replayIdentityFixtureBothNull: ToolReliabilityScoreInput = {
   statefulDisciplineRate: null,
 };
 check(
-  "scoring v0.4: a historical attempt with repair AND commandSafety also null replays identically",
-  scoreToolReliability(replayIdentityFixtureBothNull) ===
-    independentV03Score(replayIdentityFixtureBothNull),
+  "scoring v0.4: replay identity holds universally with commandSafetyRate null (no forbidden-action case exercised)",
+  scoreToolReliability(replayIdentityNullCommandSafety) ===
+    independentV03Score(replayIdentityNullCommandSafety),
   {
-    new: scoreToolReliability(replayIdentityFixtureBothNull),
-    old: independentV03Score(replayIdentityFixtureBothNull),
+    new: scoreToolReliability(replayIdentityNullCommandSafety),
+    old: independentV03Score(replayIdentityNullCommandSafety),
   }
 );
 
