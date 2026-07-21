@@ -74,6 +74,27 @@ interface ParityAnswers {
   alternateNote: string;
   /** Human-readable note on what makes the negative control wrong/unsafe. */
   negativeNote: string;
+  /**
+   * Stateful-only, optional: a "spark's style" batched transcript — several
+   * concatenated JSON actions per response plus trailing commentary, mirroring
+   * the real 2026-07-22 live-gate transcripts — that maintains discipline and
+   * MUST PASS. Closes the leak that shipped: the pre-fix env only ever parsed
+   * ONE action out of a batched response, so a batching-unaware fixture could
+   * never have caught the bug.
+   */
+  batchedAlternate?: string[];
+  batchedAlternateNote?: string;
+  /**
+   * Stateful redundant-read only, optional: a batched negative control where
+   * the duplicate/overlapping read occurs WITHIN one response (not across
+   * turns) — MUST FAIL. Uses a non-byte-identical duplicate (a different
+   * `reason` field) so the real engine's own exact-text candidate dedup
+   * (uniqueActionCandidatesInDocumentOrder) doesn't collapse it to one
+   * candidate before the redundancy tracker ever sees it — the interval-
+   * coverage check, not exact-string matching, is what must catch this.
+   */
+  batchedNegative?: string[];
+  batchedNegativeNote?: string;
 }
 
 // --- Tool-action output builders (match ArchitectAction / RunAction shapes
@@ -92,6 +113,21 @@ function readRangeAction(path: string, startLine: number, lineCount: number): st
     lineCount,
     reason: "inspect the target range",
   });
+}
+
+/** Same as readRangeAction but with a caller-chosen `reason` string, so two
+ * requests for the IDENTICAL range still produce non-byte-identical JSON
+ * text — needed to survive the real engine's own exact-text candidate dedup
+ * (uniqueActionCandidatesInDocumentOrder) when constructing a WITHIN-one-
+ * batch duplicate-read negative control; the interval-coverage redundancy
+ * tracker, not exact-string matching, is what must catch it. */
+function readRangeActionWithReason(
+  path: string,
+  startLine: number,
+  lineCount: number,
+  reason: string
+): string {
+  return JSON.stringify({ action: "read_range", path, startLine, lineCount, reason });
 }
 
 function searchAction(query: string): string {
@@ -594,7 +630,16 @@ function patchToolAction(path: string, ops: PatchOp[]): string {
 
 const STATEFUL_ANSWERS: Record<
   string,
-  { alternate: string[]; negative: string[]; alternateNote: string; negativeNote: string }
+  {
+    alternate: string[];
+    negative: string[];
+    alternateNote: string;
+    negativeNote: string;
+    batchedAlternate: string[];
+    batchedAlternateNote: string;
+    batchedNegative?: string[];
+    batchedNegativeNote?: string;
+  }
 > = {
   "toolrel-current-stateful-redundant-read-001": {
     alternate: [
@@ -613,21 +658,45 @@ const STATEFUL_ANSWERS: Record<
       "a single whole-file read instead of two half-file reads, plus differently-worded final answer",
     negativeNote:
       "repeats the exact same read_range request twice (the mined duplicate-tool-batch failure), strict on redundancy regardless of the final guess",
+    // Spark's live-gate style: both non-overlapping reads batched into ONE
+    // response (concatenated, no separator) with trailing commentary, then a
+    // separate final-answer turn. Must PASS — this is the exact shape the
+    // pre-fix env could never score correctly (it only ever saw ONE action
+    // out of the batch).
+    batchedAlternate: [
+      readRangeAction("src/config/limits.ts", 1, 100) +
+        readRangeAction("src/config/limits.ts", 101, 100) +
+        "Let me check both halves of the file to be safe.",
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    batchedAlternateNote:
+      "both non-overlapping reads batched into one spark-style response with trailing commentary, then a separate final answer",
+    // The duplicate/overlapping read happens WITHIN one batched response (not
+    // across turns) — a different `reason` string keeps the two JSON texts
+    // non-identical so the real engine's own exact-text candidate dedup
+    // doesn't collapse them before the interval-coverage tracker sees them.
+    batchedNegative: [
+      readRangeActionWithReason("src/config/limits.ts", 1, 100, "first pass") +
+        readRangeActionWithReason("src/config/limits.ts", 1, 100, "double-checking my read") +
+        "Just confirming before I answer.",
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    batchedNegativeNote:
+      "an overlapping duplicate read_range within the SAME batched response (non-identical JSON text, so only the interval-coverage tracker — not exact-string dedup — catches it)",
   },
   "toolrel-current-stateful-stale-patch-001": {
     alternate: [
-      // Patches immediately from the prompt-shown content (no read first);
-      // this lands BEFORE the scheduled concurrent edit fires (afterModelTurn
-      // 2), so it succeeds, then gets clobbered by the concurrent edit when
-      // turn 2 begins — a genuinely different recovery path (read-after-
-      // clobber instead of read-then-failed-patch) ending on a natural
-      // free-text answer instead of exhausting the turn budget.
+      // Patches immediately from the prompt-shown content (no read first) and
+      // gets it right on the FIRST action-turn, then immediately gives its
+      // final answer. Since scheduled announcements only fire on turns that
+      // carry an action (see stateful-env.ts), the concurrent edit never
+      // triggers at all for this run — a genuinely different (and
+      // legitimately correct) strategy from the reference's read/reject/
+      // recover path: finish fast and correctly before the scheduled event
+      // ever gets a chance to matter. Ends on the original-structure-fixed
+      // content, the OTHER accepted variant in expectedFinalFiles.acceptable.
       patchToolAction("src/pricing/surcharge.ts", [
         { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
-      ]),
-      readRangeAction("src/pricing/surcharge.ts", 1, 5),
-      patchToolAction("src/pricing/surcharge.ts", [
-        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
       ]),
       "Fixed the surcharge rate to 5%.",
     ],
@@ -647,9 +716,27 @@ const STATEFUL_ANSWERS: Record<
       "Applied the surcharge fix.",
     ],
     alternateNote:
-      "patches immediately without reading first, gets clobbered by the concurrent edit, then recovers via a re-read before the second patch",
+      "fixes it correctly in one action-turn and immediately stops, so the scheduled concurrent edit never fires at all (a turn-carrying-zero-actions never triggers it) — ends on the OTHER accepted final state (original structure, fixed)",
     negativeNote:
       "retries the identical pre-change SEARCH text a second time instead of adapting to the concurrent edit, so the fix never lands",
+    // Spark's live-gate style: a batched double-read at turn 1 (harmless
+    // noise for this kind, since redundancy isn't scored here) plus trailing
+    // commentary, then the rejected/recovery patch turns each carry their
+    // own trailing commentary too. Must PASS within maxTurns (4).
+    batchedAlternate: [
+      readRangeAction("src/pricing/surcharge.ts", 1, 3) +
+        readRangeActionWithReason("src/pricing/surcharge.ts", 1, 3, "double-checking before I edit") +
+        "Reviewing the current file before making changes.",
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]) + "Applying the rate change now.",
+      readRangeAction("src/pricing/surcharge.ts", 1, 5) + "Let me see what changed.",
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
+      ]) + "Updating to match the current file.",
+    ],
+    batchedAlternateNote:
+      "every turn batches its action(s) with trailing spark-style commentary in the same response; recovers from the expected rejection within the 4-turn budget",
   },
 };
 
@@ -662,6 +749,10 @@ function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnsw
   return {
     reference,
     alternate: table.alternate,
+    batchedAlternate: table.batchedAlternate,
+    batchedAlternateNote: table.batchedAlternateNote,
+    batchedNegative: table.batchedNegative,
+    batchedNegativeNote: table.batchedNegativeNote,
     negative: table.negative,
     alternateNote: table.alternateNote,
     negativeNote: table.negativeNote,
@@ -737,6 +828,56 @@ for (const benchmarkCase of TOOL_RELIABILITY_CASES) {
     metrics: negative.metrics,
     events: negative.events,
   });
+
+  // --- Batched-response variants (2026-07-22 live-gate fix), STATEFUL cases
+  // only: closes the leak that let the batching bug ship — a stateful case's
+  // parity guard must PASS a spark-style batched-but-disciplined transcript,
+  // and (for redundant-read kinds) must FAIL a batched-duplicate-within-one-
+  // response negative control. A negative control that now passes under
+  // batch semantics is a BLOCKED finding, never something to weaken the env
+  // to paper over. Every other category's turn protocol is unaffected by
+  // this fix (they were never routed through the multi-turn batch parser),
+  // so this section is scoped to `category === "stateful"` only. ---
+  if (benchmarkCase.category !== "stateful") continue;
+
+  if (answers.batchedAlternate) {
+    const batchedAlternate = evaluateCase(benchmarkCase, answers.batchedAlternate);
+    const batchedAlternateIsDistinct =
+      JSON.stringify(answers.batchedAlternate) !== JSON.stringify(answers.reference) &&
+      JSON.stringify(answers.batchedAlternate) !== JSON.stringify(answers.alternate);
+    check(
+      `${benchmarkCase.id} batched alternate is genuinely different text from reference and alternate`,
+      batchedAlternateIsDistinct,
+      { reference: answers.reference, alternate: answers.alternate, batchedAlternate: answers.batchedAlternate }
+    );
+    check(
+      `${benchmarkCase.id} batched (spark-style) alternate passes (${answers.batchedAlternateNote})`,
+      batchedAlternate.passed,
+      { attempts: answers.batchedAlternate, metrics: batchedAlternate.metrics, events: batchedAlternate.events }
+    );
+  } else {
+    check(`${benchmarkCase.id} has a batched-alternate parity fixture`, false, benchmarkCase.id);
+  }
+
+  if (benchmarkCase.category === "stateful" && benchmarkCase.kind === "redundant-read") {
+    if (answers.batchedNegative) {
+      const batchedNegative = evaluateCase(benchmarkCase, answers.batchedNegative);
+      const batchedNegativeIsDistinct =
+        JSON.stringify(answers.batchedNegative) !== JSON.stringify(answers.reference);
+      check(
+        `${benchmarkCase.id} batched negative control is distinct from the reference`,
+        batchedNegativeIsDistinct,
+        { reference: answers.reference, batchedNegative: answers.batchedNegative }
+      );
+      check(
+        `${benchmarkCase.id} batched negative control fails (${answers.batchedNegativeNote})`,
+        !batchedNegative.passed,
+        { attempts: answers.batchedNegative, metrics: batchedNegative.metrics, events: batchedNegative.events }
+      );
+    } else {
+      check(`${benchmarkCase.id} has a batched-negative parity fixture (redundant-read kind)`, false, benchmarkCase.id);
+    }
+  }
 }
 
 check(

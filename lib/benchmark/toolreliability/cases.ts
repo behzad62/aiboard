@@ -1220,6 +1220,22 @@ const surchargeEvolvedFixedContent = [
   "}",
 ].join("\n");
 
+// A model that correctly patches the rate on its FIRST action-turn and then
+// immediately gives its final answer (zero further actions) never triggers
+// the scheduled concurrent edit at all (announcements only fire on turns
+// that carry an action — see stateful-env.ts's applyScheduledEvents doc
+// comment; a model that has already stopped can never see or react to one).
+// That is a legitimately correct, complete run — the concurrent edit simply
+// never had a chance to interact with an already-finished task — so this
+// original-structure-with-the-fix content is an equally accepted final
+// state alongside the evolved-structure one a model that keeps working
+// past the scheduled turn must reach instead.
+const surchargeOriginalFixedContent = [
+  "export function computeSurcharge(amountCents: number): number {",
+  "  return Math.round(amountCents * 0.05);",
+  "}",
+].join("\n");
+
 const statefulStalePatch001: StatefulToolReliabilityCase = {
   id: "toolrel-current-stateful-stale-patch-001",
   category: "stateful",
@@ -1249,7 +1265,10 @@ const statefulStalePatch001: StatefulToolReliabilityCase = {
     },
   ],
   expectedFinalFiles: {
-    "src/pricing/surcharge.ts": { content: surchargeEvolvedFixedContent },
+    "src/pricing/surcharge.ts": {
+      content: surchargeEvolvedFixedContent,
+      acceptable: [surchargeEvolvedFixedContent, surchargeOriginalFixedContent],
+    },
   },
   provenance:
     "Mined class \"Patch SEARCH blocks not matching the current (evolved) file\" — 5 observed occurrences, caught on workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",

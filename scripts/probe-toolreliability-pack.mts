@@ -81,12 +81,16 @@
  * through the REAL certified turn loop with a turn-ORDERED stub (not
  * selfTestStreamChat's single canned response per canary, which cannot
  * express a different response per turn): the case's own authored reference
- * transcript passes, and a transcript that repeats the exact same
- * read_range request (the mined duplicate-tool-batch failure) renders
- * `failed_model`, never `failed_tool_use`; (4) a throwing stub carrying a
- * fake secret asserts the caught error and the written run file are both
- * clean of it. Models run SEQUENTIALLY (never in parallel) -- the ChatGPT
- * account bridge is one subscription, not a pool.
+ * transcript passes; a transcript that repeats the exact same read_range
+ * request (the mined duplicate-tool-batch failure) renders `failed_model`,
+ * never `failed_tool_use`; and (2026-07-22 batching fix) a single BATCHED
+ * response -- several concatenated JSON actions with no separator plus
+ * trailing commentary, spark's real live-gate style -- covering the whole
+ * task in one turn also passes, proving the env parses every action in a
+ * batch instead of just one; (4) a throwing stub carrying a fake secret
+ * asserts the caught error and the written run file are both clean of it.
+ * Models run SEQUENTIALLY (never in parallel) -- the ChatGPT account bridge
+ * is one subscription, not a pool.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1169,6 +1173,34 @@ async function runSelfTest(outDir: string): Promise<void> {
     statefulBadAttempt?.toolReliabilityCasePassFraction?.passed === 0 &&
       statefulBadAttempt?.toolReliabilityCasePassFraction?.total === 1,
     statefulBadAttempt?.toolReliabilityCasePassFraction
+  );
+
+  // 2026-07-22 live-gate fix: a BATCHED response (several concatenated JSON
+  // actions with no separator, plus trailing commentary -- spark's real
+  // style) covering the whole task in one turn must still pass. This is
+  // exactly the shape the pre-fix env could never score correctly (it only
+  // ever parsed ONE action out of a multi-action response via the
+  // single-action parseArchitectAction) -- proves the fix, not just that the
+  // single-action path still works.
+  const statefulBatchedTranscript = [
+    JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 1, lineCount: 100 }) +
+      JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 101, lineCount: 100 }) +
+      "Let me check both halves of the file to be safe.",
+    "MAX_RETRY_BUDGET is 137.",
+  ];
+  const statefulBatchedPass = await runSelfTestPassWithStreamChat({
+    passLabel: "stateful-batched",
+    cases: [statefulCase],
+    streamChat: orderedSelfTestStreamChat(statefulBatchedTranscript),
+    outDir,
+  });
+  const statefulBatchedAttempt = statefulBatchedPass.attempts[0];
+  check(
+    "self-test stateful: a batched (spark-style) response covering the whole task in one turn passes",
+    statefulBatchedAttempt?.status === "passed" &&
+      statefulBatchedAttempt.toolReliabilityCasePassFraction?.passed === 1 &&
+      statefulBatchedAttempt.toolReliabilityCasePassFraction?.total === 1,
+    statefulBatchedAttempt
   );
 
   // ── Pass 4: secret scrub check ───────────────────────────────────────────

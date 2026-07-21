@@ -13,12 +13,23 @@
  * stateful branch, which replays exactly this way.
  *
  * REUSE REAL MACHINERY, never a parallel reimplementation:
- *   - model turns are parsed with the real Build action parser,
- *     `parseArchitectAction` (lib/orchestrator/build.ts) — the same parser
- *     `scripts/test-parse-action.mts` exercises.
+ *   - model turns are parsed with the real BATCH-AWARE Build action inspector,
+ *     `inspectStrictToolActionBatchOutput` (lib/orchestrator/build.ts ~4610) —
+ *     NOT the single-action `parseArchitectAction`. A 2026-07-22 live gate
+ *     (chatgpt:gpt-5.3-codex-spark) proved real models batch several JSON
+ *     actions per response (concatenated `{"action":...}{"action":...}`, with
+ *     trailing commentary); the single-action parser silently picked ONE
+ *     action out of the batch (frequently the wrong one) and discarded the
+ *     rest — e.g. a redundant-read case scored "no read ever occurred" despite
+ *     six read_range actions in the model's first response, because the
+ *     parser latched onto a trailing `run` action instead. See git history for
+ *     the mined transcripts and the diagnostic replay that proved this.
  *   - redundant reads are flagged by the real `createToolCallTracker` /
  *     `isRedundantToolCall` (build.ts ~4865/~4983) — interval-coverage based,
- *     so nudging startLine/lineCount cannot dodge the guard.
+ *     so nudging startLine/lineCount cannot dodge the guard. This now also
+ *     catches duplicates WITHIN one batched response, not just across turns,
+ *     since each action in a batch is recorded into the tracker as it is
+ *     processed, in order.
  *   - patches apply via the real `applyEditOps` (lib/artifacts/extract.ts).
  *   - final-content comparison reuses the real `normalizePatchContent`
  *     (./runner.ts) — the SAME comparator the `patch` category uses.
@@ -26,16 +37,29 @@
  *     per-function comments below for exactly which real message is mirrored
  *     and why: the patch "did NOT match the current file content" message,
  *     the file_writer "WRITE REJECTED" message, the "duplicate tool request
- *     (already delivered)" redundancy-skip reason, and the "Output was cut
- *     off mid-block" truncation message — all copied verbatim from their
- *     real call sites so a case never becomes a divergent second copy of the
- *     mechanism it is supposed to be testing).
+ *     (already delivered)" redundancy-skip reason, the "Output was cut off
+ *     mid-block" truncation message, and the "TOOL BATCH RESULT" / Served: /
+ *     Skipped: / Results: rendering shape from
+ *     `lib/orchestrator/build-tool-scheduler.ts`'s `packToolBatchResult` —
+ *     all copied verbatim/in-shape from their real call sites so a case never
+ *     becomes a divergent second copy of the mechanism it is supposed to be
+ *     testing).
+ *
+ * TURN PROTOCOL (batch-aware): a response is parsed via
+ * `inspectStrictToolActionBatchOutput`. A response containing at least one
+ * parsable tool action is a TOOL TURN — every action in the batch is
+ * processed, in document order, against the shared env state, and any
+ * accompanying free text is commentary, NOT a final answer (mirrors the real
+ * engine's principle behind `shouldRequestWorkerFinalOutput`/
+ * `hasWorkerFinalEvidenceResponse`: a tool action is an instruction to the
+ * engine, never a completion report — only a response with ZERO parsable
+ * actions is treated as the model's final answer).
  */
 import { applyEditOps } from "@/lib/artifacts/extract";
 import {
   createToolCallTracker,
+  inspectStrictToolActionBatchOutput,
   isRedundantToolCall,
-  parseArchitectAction,
   recordToolCall,
   type ArchitectAction,
 } from "@/lib/orchestrator/build";
@@ -119,6 +143,64 @@ function renderReadRange(
   };
 }
 
+/** One action's outcome within a batch: served (executed, whatever the
+ * result) or skipped (a SCHEDULING decision — redundancy, out-of-scope,
+ * unknown path, or an action type not applicable to this case's kind). A
+ * patch/click that executed but failed to match/land is still SERVED (its
+ * rejection message IS the result), matching the real engine's own
+ * served-vs-skipped distinction (build-tool-scheduler.ts). */
+interface ActionOutcome {
+  label: string;
+  status: "served" | "skipped";
+  result?: string;
+  reason?: string;
+}
+
+function actionLabel(action: ArchitectAction): string {
+  switch (action.action) {
+    case "read_range":
+      return `read_range ${action.path}:${action.startLine}-${action.startLine + Math.max(1, action.lineCount) - 1}`;
+    case "read":
+      return `read ${action.paths.join(", ")}`;
+    case "patch":
+      return `patch ${action.path}`;
+    case "append":
+      return `append ${action.path}`;
+    case "run":
+      return `run ${action.command}`;
+    case "tool":
+      return `tool ${action.server}.${action.tool}`;
+    default:
+      return action.action;
+  }
+}
+
+/**
+ * Renders a batch of served/skipped action outcomes in the real engine's
+ * "TOOL BATCH RESULT" shape — mirrors `packToolBatchResult`
+ * (lib/orchestrator/build-tool-scheduler.ts): a Served: list, a Skipped:
+ * list (each with its reason), then a Results: section with each served
+ * action's full output under a `--- label ---` header. Used uniformly for
+ * every tool turn (including single-action turns) so the rendered shape a
+ * case's fixtures see is byte-for-byte the same shape the real engine
+ * produces, not an ad hoc single-line format.
+ */
+function renderToolBatchResult(outcomes: ActionOutcome[]): string {
+  const served = outcomes.filter((item) => item.status === "served");
+  const skipped = outcomes.filter((item) => item.status === "skipped");
+  const lines: string[] = ["TOOL BATCH RESULT", "", "Served:"];
+  lines.push(...(served.length ? served.map((item) => `- ${item.label}`) : ["- none"]));
+  lines.push("", "Skipped:");
+  lines.push(
+    ...(skipped.length ? skipped.map((item) => `- ${item.label}: ${item.reason}`) : ["- none"])
+  );
+  lines.push("", "Results:");
+  for (const item of served) {
+    lines.push(`\n--- ${item.label} ---\n${item.result ?? ""}`);
+  }
+  return lines.join("\n");
+}
+
 interface EnvState {
   files: Map<string, string>;
   turn: number;
@@ -147,6 +229,20 @@ interface EnvState {
   lastRunCommand: string | null;
 }
 
+/**
+ * Scheduled env mutations (stale-patch's concurrent-edit announcements) only
+ * fire on TOOL turns, never on what turns out to be the model's terminal
+ * free-text turn. This is a fairness fix found by the same 2026-07-22 live
+ * gate: firing (and silently overwriting an already-applied fix) on a turn
+ * where the model has already said "done" gives the model no chance to ever
+ * see the announcement or react to it — the turn loop simply ends. A real
+ * concurrent-edit coordination message only matters to a worker who is still
+ * taking further actions; one who already finished and reported success has
+ * nothing left to read it. Gating on "this turn has a parsable action" keeps
+ * the intended difficulty (a model whose FIRST real action lands on/after
+ * the scheduled turn still gets the rejection + recovery) while removing the
+ * only-possible-if-the-model-never-sees-it unfairness.
+ */
 function applyScheduledEvents(
   c: StatefulToolReliabilityCase,
   state: EnvState,
@@ -163,43 +259,63 @@ function applyScheduledEvents(
   return announcements;
 }
 
-function stepRedundantRead(
+function processGenericRead(state: EnvState, action: ArchitectAction): ActionOutcome {
+  if (action.action === "read_range") {
+    const label = actionLabel(action);
+    const content = state.files.get(action.path);
+    if (content == null) {
+      return { label, status: "skipped", reason: `unknown path ${action.path}` };
+    }
+    const { rendered } = renderReadRange(action.path, content, action.startLine, action.lineCount);
+    return { label, status: "served", result: rendered };
+  }
+  if (action.action === "read") {
+    const path = action.paths[0];
+    const label = actionLabel(action);
+    const content = path ? state.files.get(path) : undefined;
+    if (!path || content == null) {
+      return { label, status: "skipped", reason: `unknown path ${path ?? ""}` };
+    }
+    return { label, status: "served", result: `--- ${path} ---\n${content}` };
+  }
+  return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
+}
+
+function processRedundantReadAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
+  action: ArchitectAction
+): ActionOutcome {
   if (action.action !== "read_range") {
     return {
-      renderedResult: "Action ignored: this task only reads and reports; use read_range.",
-      done: false,
+      label: actionLabel(action),
+      status: "skipped",
+      reason: "this task only reads and reports; use read_range",
     };
   }
-  const path = action.path;
-  const content = state.files.get(path);
+  const label = actionLabel(action);
+  const content = state.files.get(action.path);
   if (content == null) {
-    return { renderedResult: `read_range failed: unknown path ${path}`, done: false };
+    return { label, status: "skipped", reason: `unknown path ${action.path}` };
   }
   if (isRedundantToolCall(state.tracker, action)) {
+    // Strict on redundancy regardless of whether the duplicate came from a
+    // separate turn or from within THIS SAME batched response — the tracker
+    // is updated per-action as the batch is processed in order, so an
+    // overlapping second request later in the same response is caught here
+    // exactly like a cross-turn repeat.
     state.anyRedundantRead = true;
-    return {
-      renderedResult: `TOOL CALL SKIPPED: ${REAL_REDUNDANT_SKIP_REASON}. No new content was returned.`,
-      done: false,
-    };
+    return { label, status: "skipped", reason: REAL_REDUNDANT_SKIP_REASON };
   }
   const { rendered, deliveredStart, deliveredEnd } = renderReadRange(
-    path,
+    action.path,
     content,
     action.startLine,
     action.lineCount
   );
   recordToolCall(state.tracker, action, { startLine: deliveredStart, endLine: deliveredEnd });
   state.targetRangesCovered.push({ start: deliveredStart, end: deliveredEnd });
-  return { renderedResult: rendered, done: false };
+  return { label, status: "served", result: rendered };
 }
 
 function verdictRedundantRead(
@@ -234,49 +350,30 @@ function verdictRedundantRead(
   return { passed, reason, kindChecks };
 }
 
-function stepStalePatch(
+function processStalePatchAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
+  action: ArchitectAction
+): ActionOutcome {
   if (action.action === "read_range" || action.action === "read") {
-    const path = action.action === "read_range" ? action.path : action.paths[0];
-    const content = path ? state.files.get(path) : undefined;
-    if (!path || content == null) {
-      return { renderedResult: `read failed: unknown path ${path ?? ""}`, done: false };
-    }
-    if (action.action === "read_range") {
-      const { rendered } = renderReadRange(path, content, action.startLine, action.lineCount);
-      return { renderedResult: rendered, done: false };
-    }
-    return { renderedResult: `--- ${path} ---\n${content}`, done: false };
+    return processGenericRead(state, action);
   }
   if (action.action === "patch") {
     const path = action.path;
+    const label = actionLabel(action);
     const current = state.files.get(path);
     if (current == null) {
-      return { renderedResult: `Patch to ${path} skipped — the file doesn't exist.`, done: false };
+      return { label, status: "skipped", reason: "the file doesn't exist" };
     }
     const applied = applyEditOps(current, action.ops);
     if (applied.failed > 0) {
       state.hadRejectedPatch = true;
-      return {
-        renderedResult: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed),
-        done: false,
-      };
+      return { label, status: "served", result: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed) };
     }
     state.files.set(path, applied.content);
-    return {
-      renderedResult: `Patch ${path}: ${applied.applied} applied, ${applied.failed} failed`,
-      done: false,
-    };
+    return { label, status: "served", result: `Patch ${path}: ${applied.applied} applied, ${applied.failed} failed` };
   }
-  return { renderedResult: "Action ignored: this task expects read/patch actions.", done: false };
+  return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
 }
 
 function verdictStalePatch(
@@ -297,25 +394,21 @@ function verdictStalePatch(
   return { passed, reason, kindChecks };
 }
 
-function stepStaleRef(
+function processStaleRefAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
+  action: ArchitectAction
+): ActionOutcome {
   if (action.action !== "tool" || action.server.toLowerCase() !== "playwright") {
-    return { renderedResult: "Action ignored: this task expects a playwright tool action.", done: false };
+    return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
   }
   const generations = c.snapshotPlan?.generations ?? [];
   const current = generations[state.refGeneration];
   const requestedRef = (action.args?.target as string | undefined) ?? "";
+  const label = `${action.tool} ref=${requestedRef}`;
   if (!current || !(requestedRef in current.refs)) {
     state.staleRefHits += 1;
-    return { renderedResult: REAL_STALE_REF_MESSAGE, done: false };
+    return { label, status: "served", result: REAL_STALE_REF_MESSAGE };
   }
   // A valid current-generation ref: the interaction lands, and (mirroring a
   // page-changing action) the snapshot rotates to the next generation.
@@ -324,8 +417,9 @@ function stepStaleRef(
   if (landedRequired) state.requiredInteractionLanded = true;
   if (state.refGeneration < generations.length - 1) state.refGeneration += 1;
   return {
-    renderedResult: `Clicked ${current.refs[requestedRef]} (ref ${requestedRef}). Page state updated — take a new snapshot before your next interaction.`,
-    done: false,
+    label,
+    status: "served",
+    result: `Clicked ${current.refs[requestedRef]} (ref ${requestedRef}). Page state updated — take a new snapshot before your next interaction.`,
   };
 }
 
@@ -343,49 +437,36 @@ function verdictStaleRef(state: EnvState): StatefulEnvVerdict {
   return { passed, reason, kindChecks };
 }
 
-function stepWriteScope(
+function processWriteScopeAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
+  action: ArchitectAction
+): ActionOutcome {
   const scope = c.writeScope ?? [];
   if (action.action === "patch" || action.action === "append") {
     const path = action.path;
+    const label = actionLabel(action);
     if (!scope.includes(path)) {
       state.wroteOutsideScope = true;
-      return { renderedResult: REAL_WRITE_REJECTED_MESSAGE(c.id, path, scope), done: false };
+      return { label, status: "served", result: REAL_WRITE_REJECTED_MESSAGE(c.id, path, scope) };
     }
     if (action.action === "patch") {
       const current = state.files.get(path) ?? "";
       const applied = applyEditOps(current, action.ops);
       if (applied.failed > 0) {
-        return {
-          renderedResult: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed),
-          done: false,
-        };
+        return { label, status: "served", result: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed) };
       }
       state.files.set(path, applied.content);
-      return { renderedResult: `Patch ${path}: ${applied.applied} applied, 0 failed`, done: false };
+      return { label, status: "served", result: `Patch ${path}: ${applied.applied} applied, 0 failed` };
     }
     const existing = action.reset ? "" : state.files.get(path) ?? "";
     state.files.set(path, existing + action.content);
-    return { renderedResult: `Append ${path}: +${action.content.length} bytes`, done: false };
+    return { label, status: "served", result: `Append ${path}: +${action.content.length} bytes` };
   }
   if (action.action === "read_range" || action.action === "read") {
-    const path = action.action === "read_range" ? action.path : action.paths[0];
-    const content = path ? state.files.get(path) : undefined;
-    if (!path || content == null) return { renderedResult: `read failed: unknown path ${path ?? ""}`, done: false };
-    if (action.action === "read_range") {
-      return { renderedResult: renderReadRange(path, content, action.startLine, action.lineCount).rendered, done: false };
-    }
-    return { renderedResult: `--- ${path} ---\n${content}`, done: false };
+    return processGenericRead(state, action);
   }
-  return { renderedResult: "Action ignored: this task expects read/patch/append actions.", done: false };
+  return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
 }
 
 function verdictWriteScope(
@@ -413,48 +494,86 @@ function verdictWriteScope(
   return { passed, reason, kindChecks };
 }
 
-function stepTruncationRecovery(
+function processTruncationRecoveryAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
-  const cap = c.truncationCharCap ?? Number.POSITIVE_INFINITY;
+  action: ArchitectAction
+): ActionOutcome {
   if (action.action === "append") {
     const path = action.path;
-    if (action.content.length > cap) {
-      const hits = (state.truncatedPathHits.get(path) ?? 0) + 1;
-      state.truncatedPathHits.set(path, hits);
-      return { renderedResult: REAL_TRUNCATED_OUTPUT_MESSAGE(path), done: false };
-    }
+    const label = actionLabel(action);
     const existing = action.reset ? "" : state.files.get(path) ?? "";
     state.files.set(path, existing + action.content);
-    return { renderedResult: `Append ${path}: +${action.content.length} bytes${action.reset ? " (reset first)" : ""}`, done: false };
+    return {
+      label,
+      status: "served",
+      result: `Append ${path}: +${action.content.length} bytes${action.reset ? " (reset first)" : ""}`,
+    };
   }
   if (action.action === "patch") {
     const path = action.path;
+    const label = actionLabel(action);
     const current = state.files.get(path) ?? "";
     const applied = applyEditOps(current, action.ops);
     if (applied.failed > 0) {
-      return { renderedResult: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed), done: false };
+      return { label, status: "served", result: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed) };
     }
     state.files.set(path, applied.content);
-    return { renderedResult: `Patch ${path}: ${applied.applied} applied, 0 failed`, done: false };
+    return { label, status: "served", result: `Patch ${path}: ${applied.applied} applied, 0 failed` };
   }
   if (action.action === "read_range" || action.action === "read") {
-    const path = action.action === "read_range" ? action.path : action.paths[0];
-    const content = path ? state.files.get(path) : undefined;
-    if (!path || content == null) return { renderedResult: `read failed: unknown path ${path ?? ""}`, done: false };
-    if (action.action === "read_range") {
-      return { renderedResult: renderReadRange(path, content, action.startLine, action.lineCount).rendered, done: false };
-    }
-    return { renderedResult: `--- ${path} ---\n${content}`, done: false };
+    return processGenericRead(state, action);
   }
-  return { renderedResult: "Action ignored: this task expects read/patch/append actions.", done: false };
+  return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
+}
+
+/**
+ * The truncation cap applies to the WHOLE raw response (single-response size
+ * discipline), not to one action's content field in isolation. Simulated by
+ * re-parsing the batch from the response truncated to `cap` characters (the
+ * same real batch inspector, `inspectStrictToolActionBatchOutput`) and
+ * diffing against the full-response parse: any action present in BOTH parses
+ * fully fit before the truncation point and executes normally; the first
+ * write-type action (append/patch) present in the full parse but missing
+ * from the truncated parse is the one whose JSON never closed before the cut
+ * — it gets the real truncated_output message and nothing is written for it;
+ * anything after that in the full parse never arrived at all (mirrors a
+ * stream that stopped mid-response) and is dropped silently, same as a real
+ * cut stream would drop it.
+ */
+function applyTruncationCap(
+  c: StatefulToolReliabilityCase,
+  state: EnvState,
+  rawOutput: string,
+  actions: ArchitectAction[]
+): { actionsToProcess: ArchitectAction[]; cutNotice: ActionOutcome | null } {
+  const cap = c.truncationCharCap;
+  if (cap == null || rawOutput.length <= cap) {
+    return { actionsToProcess: actions, cutNotice: null };
+  }
+  const truncatedPrefix = rawOutput.slice(0, cap);
+  const truncatedBatch = inspectStrictToolActionBatchOutput(truncatedPrefix);
+  const survivingKeys = new Set(truncatedBatch.actions.map((item) => JSON.stringify(item)));
+  const actionsToProcess = actions.filter((item) => survivingKeys.has(JSON.stringify(item)));
+  const cutActions = actions.filter((item) => !survivingKeys.has(JSON.stringify(item)));
+  const firstCutWrite = cutActions.find(
+    (item): item is Extract<ArchitectAction, { action: "append" | "patch" }> =>
+      item.action === "append" || item.action === "patch"
+  );
+  if (!firstCutWrite) {
+    return { actionsToProcess, cutNotice: null };
+  }
+  const path = firstCutWrite.path;
+  const hits = (state.truncatedPathHits.get(path) ?? 0) + 1;
+  state.truncatedPathHits.set(path, hits);
+  return {
+    actionsToProcess,
+    cutNotice: {
+      label: actionLabel(firstCutWrite),
+      status: "served",
+      result: REAL_TRUNCATED_OUTPUT_MESSAGE(path),
+    },
+  };
 }
 
 function verdictTruncationRecovery(
@@ -481,24 +600,20 @@ function verdictTruncationRecovery(
   return { passed, reason, kindChecks };
 }
 
-function stepVerifyPersistence(
+function processVerifyPersistenceAction(
   c: StatefulToolReliabilityCase,
   state: EnvState,
-  action: ArchitectAction | null,
-  rawOutput: string
-): StatefulEnvStepResult {
-  if (!action) {
-    state.finalAnswerText = rawOutput;
-    return { renderedResult: "", done: true };
-  }
+  action: ArchitectAction
+): ActionOutcome {
   const plan = c.verifyPlan;
   if (action.action === "patch" || action.action === "append") {
     const path = action.path;
+    const label = actionLabel(action);
     if (action.action === "patch") {
       const current = state.files.get(path) ?? "";
       const applied = applyEditOps(current, action.ops);
       if (applied.failed > 0) {
-        return { renderedResult: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed), done: false };
+        return { label, status: "served", result: REAL_PATCH_MISMATCH_MESSAGE(path, applied.applied, applied.failed) };
       }
       state.files.set(path, applied.content);
     } else {
@@ -507,9 +622,10 @@ function stepVerifyPersistence(
     }
     state.editedSinceLastRun = true;
     state.lastRunCommand = null;
-    return { renderedResult: `Edit applied to ${path}.`, done: false };
+    return { label, status: "served", result: `Edit applied to ${path}.` };
   }
   if (action.action === "run" && plan) {
+    const label = actionLabel(action);
     const isVerbatimRepeat =
       state.lastRunCommand === action.command.trim() && !state.editedSinceLastRun;
     if (isVerbatimRepeat) state.verbatimRepeatViolation = true;
@@ -521,18 +637,12 @@ function stepVerifyPersistence(
     state.lastRunWasGreen = holds;
     state.lastRunCommand = action.command.trim();
     state.editedSinceLastRun = false;
-    return { renderedResult: holds ? plan.greenOutput : plan.redOutput, done: false };
+    return { label, status: "served", result: holds ? plan.greenOutput : plan.redOutput };
   }
   if (action.action === "read_range" || action.action === "read") {
-    const path = action.action === "read_range" ? action.path : action.paths[0];
-    const content = path ? state.files.get(path) : undefined;
-    if (!path || content == null) return { renderedResult: `read failed: unknown path ${path ?? ""}`, done: false };
-    if (action.action === "read_range") {
-      return { renderedResult: renderReadRange(path, content, action.startLine, action.lineCount).rendered, done: false };
-    }
-    return { renderedResult: `--- ${path} ---\n${content}`, done: false };
+    return processGenericRead(state, action);
   }
-  return { renderedResult: "Action ignored: this task expects read/patch/append/run actions.", done: false };
+  return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
 }
 
 function verdictVerifyPersistence(state: EnvState): StatefulEnvVerdict {
@@ -547,6 +657,27 @@ function verdictVerifyPersistence(state: EnvState): StatefulEnvVerdict {
       ? "Passed: the flagged file was edited before re-running, and the check ended green."
       : "Failed: the check never ended green.";
   return { passed, reason, kindChecks };
+}
+
+function processAction(
+  c: StatefulToolReliabilityCase,
+  state: EnvState,
+  action: ArchitectAction
+): ActionOutcome {
+  switch (c.kind) {
+    case "redundant-read":
+      return processRedundantReadAction(c, state, action);
+    case "stale-patch":
+      return processStalePatchAction(c, state, action);
+    case "stale-ref":
+      return processStaleRefAction(c, state, action);
+    case "write-scope":
+      return processWriteScopeAction(c, state, action);
+    case "truncation-recovery":
+      return processTruncationRecoveryAction(c, state, action);
+    case "verify-persistence":
+      return processVerifyPersistenceAction(c, state, action);
+  }
 }
 
 export function createStatefulEnv(c: StatefulToolReliabilityCase): StatefulEnv {
@@ -576,40 +707,43 @@ export function createStatefulEnv(c: StatefulToolReliabilityCase): StatefulEnv {
     step(modelOutput: string): StatefulEnvStepResult {
       if (state.done) return { renderedResult: "", done: true };
       state.turn += 1;
-      const announcements = applyScheduledEvents(c, state, state.turn);
-      const action = parseArchitectAction(modelOutput ?? "");
+      const raw = modelOutput ?? "";
 
-      let result: StatefulEnvStepResult;
-      switch (c.kind) {
-        case "redundant-read":
-          result = stepRedundantRead(c, state, action, modelOutput);
-          break;
-        case "stale-patch":
-          result = stepStalePatch(c, state, action, modelOutput);
-          break;
-        case "stale-ref":
-          result = stepStaleRef(c, state, action, modelOutput);
-          break;
-        case "write-scope":
-          result = stepWriteScope(c, state, action, modelOutput);
-          break;
-        case "truncation-recovery":
-          result = stepTruncationRecovery(c, state, action, modelOutput);
-          break;
-        case "verify-persistence":
-          result = stepVerifyPersistence(c, state, action, modelOutput);
-          break;
+      // BATCH-AWARE parse: the real inspector returns EVERY parsable action
+      // in document order (not just one). Zero actions = the model's final
+      // free-text answer (mirrors the real engine's "a tool action is an
+      // instruction to the engine, never a completion report" principle —
+      // shouldRequestWorkerFinalOutput/hasWorkerFinalEvidenceResponse).
+      const batch = inspectStrictToolActionBatchOutput(raw);
+      if (batch.actions.length === 0) {
+        state.finalAnswerText = raw;
+        state.done = true;
+        return { renderedResult: "", done: true };
       }
 
-      const forcedDone = !result.done && state.turn >= c.maxTurns;
-      const finalDone = result.done || forcedDone;
-      if (finalDone) state.done = true;
+      // Scheduled mutations only fire on tool turns (see applyScheduledEvents'
+      // doc comment) — a turn that turns out to be the final answer never
+      // reaches here, so this is safe to run unconditionally now.
+      const announcements = applyScheduledEvents(c, state, state.turn);
 
-      const rendered =
-        announcements.length > 0
-          ? [...announcements, result.renderedResult].filter(Boolean).join("\n")
-          : result.renderedResult;
-      return { renderedResult: rendered, done: finalDone };
+      let actionsToProcess = batch.actions;
+      let cutNotice: ActionOutcome | null = null;
+      if (c.kind === "truncation-recovery") {
+        const capped = applyTruncationCap(c, state, raw, batch.actions);
+        actionsToProcess = capped.actionsToProcess;
+        cutNotice = capped.cutNotice;
+      }
+
+      const outcomes = actionsToProcess.map((action) => processAction(c, state, action));
+      if (cutNotice) outcomes.push(cutNotice);
+      const rendered = renderToolBatchResult(outcomes);
+
+      const forcedDone = state.turn >= c.maxTurns;
+      if (forcedDone) state.done = true;
+
+      const finalRendered =
+        announcements.length > 0 ? [...announcements, rendered].join("\n") : rendered;
+      return { renderedResult: finalRendered, done: forcedDone };
     },
     verdict(): StatefulEnvVerdict {
       switch (c.kind) {
