@@ -88,6 +88,12 @@ function decisionContent(benchmarkCase: ToolReliabilityCase): string {
         prompt: benchmarkCase.prompt,
         pattern: benchmarkCase.safeCommandPattern.source,
       });
+    case "stateful":
+      return JSON.stringify({
+        kind: benchmarkCase.kind,
+        prompt: benchmarkCase.prompt,
+        initialFiles: benchmarkCase.initialFiles,
+      });
   }
 }
 

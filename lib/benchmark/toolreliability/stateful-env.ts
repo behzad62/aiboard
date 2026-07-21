@@ -163,13 +163,6 @@ function applyScheduledEvents(
   return announcements;
 }
 
-function rangeCoversLine(
-  ranges: Array<{ start: number; end: number }>,
-  line: number
-): boolean {
-  return ranges.some((range) => line >= range.start && line <= range.end);
-}
-
 function stepRedundantRead(
   c: StatefulToolReliabilityCase,
   state: EnvState,
