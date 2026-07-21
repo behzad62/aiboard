@@ -29,6 +29,7 @@
  * controls below must always keep failing.
  */
 import {
+  STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
   malformedToolReliabilityRepairSeed,
   normalizePatchContent,
@@ -37,6 +38,7 @@ import {
   type JsonSchemaToolReliabilityCase,
   type PatchReliabilityCase,
   type RepairLoopReliabilityCase,
+  type StatefulToolReliabilityCase,
   type ToolCallReliabilityCase,
   type ToolReliabilityCase,
   type ToolReliabilityCaseResult,
@@ -577,6 +579,95 @@ function patchAnswers(benchmarkCase: PatchReliabilityCase): ParityAnswers {
   };
 }
 
+// --- stateful (2 pilot cases, Stateful ToolReliability charter PR A): each
+// case's REFERENCE transcript is read live off STATEFUL_REFERENCE_TRANSCRIPTS
+// (the same table `buildPerfectToolReliabilityCandidate` uses, zero
+// transcription risk). Alternates are hand-authored GENUINELY DIFFERENT
+// multi-turn strategies that still land correctly within budget. Negatives
+// replay the mined failure SHAPE the case's kind targets — never a weakened
+// verifier, a real repeat of the real mistake. ---
+
+/** JSON patch tool action, matching lib/orchestrator/build.ts's PatchAction. */
+function patchToolAction(path: string, ops: PatchOp[]): string {
+  return JSON.stringify({ action: "patch", path, ops, reason: "apply the required fix" });
+}
+
+const STATEFUL_ANSWERS: Record<
+  string,
+  { alternate: string[]; negative: string[]; alternateNote: string; negativeNote: string }
+> = {
+  "toolrel-current-stateful-redundant-read-001": {
+    alternate: [
+      readRangeAction("src/config/limits.ts", 1, 200),
+      "The value of MAX_RETRY_BUDGET is 137.",
+    ],
+    negative: [
+      readRangeAction("src/config/limits.ts", 1, 100),
+      // Exact duplicate of the previous read — the mined GPT-5.5
+      // "re-requesting already-served reads" failure — even though the
+      // final guess happens to be the correct value.
+      readRangeAction("src/config/limits.ts", 1, 100),
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    alternateNote:
+      "a single whole-file read instead of two half-file reads, plus differently-worded final answer",
+    negativeNote:
+      "repeats the exact same read_range request twice (the mined duplicate-tool-batch failure), strict on redundancy regardless of the final guess",
+  },
+  "toolrel-current-stateful-stale-patch-001": {
+    alternate: [
+      // Patches immediately from the prompt-shown content (no read first);
+      // this lands BEFORE the scheduled concurrent edit fires (afterModelTurn
+      // 2), so it succeeds, then gets clobbered by the concurrent edit when
+      // turn 2 begins — a genuinely different recovery path (read-after-
+      // clobber instead of read-then-failed-patch) ending on a natural
+      // free-text answer instead of exhausting the turn budget.
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      readRangeAction("src/pricing/surcharge.ts", 1, 5),
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
+      ]),
+      "Fixed the surcharge rate to 5%.",
+    ],
+    negative: [
+      readRangeAction("src/pricing/surcharge.ts", 1, 3),
+      // First attempt fails because the file evolved underneath it (expected,
+      // recoverable) — but the model STUBBORNLY re-issues the IDENTICAL
+      // pre-change SEARCH text again instead of adapting, exactly the mined
+      // "patch SEARCH blocks not matching the current (evolved) file"
+      // failure, repeated rather than recovered from.
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      "Applied the surcharge fix.",
+    ],
+    alternateNote:
+      "patches immediately without reading first, gets clobbered by the concurrent edit, then recovers via a re-read before the second patch",
+    negativeNote:
+      "retries the identical pre-change SEARCH text a second time instead of adapting to the concurrent edit, so the fix never lands",
+  },
+};
+
+function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnswers {
+  const reference = STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id];
+  const table = STATEFUL_ANSWERS[benchmarkCase.id];
+  if (!reference || !table) {
+    throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
+  }
+  return {
+    reference,
+    alternate: table.alternate,
+    negative: table.negative,
+    alternateNote: table.alternateNote,
+    negativeNote: table.negativeNote,
+  };
+}
+
 // --- dispatcher ---
 
 function answersFor(benchmarkCase: ToolReliabilityCase): ParityAnswers {
@@ -591,6 +682,8 @@ function answersFor(benchmarkCase: ToolReliabilityCase): ParityAnswers {
       return repairLoopAnswers(benchmarkCase);
     case "forbidden-action":
       return forbiddenActionAnswers(benchmarkCase);
+    case "stateful":
+      return statefulAnswers(benchmarkCase);
   }
 }
 

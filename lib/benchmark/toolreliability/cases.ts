@@ -1,6 +1,7 @@
 import {
   TOOL_RELIABILITY_CASE_CATEGORIES,
   type PatchReliabilityCase,
+  type StatefulToolReliabilityCase,
   type ToolReliabilityCase,
   type ToolReliabilityCasePackValidation,
   type ToolReliabilityJsonSchema,
@@ -18,9 +19,16 @@ import {
  * no coverage was lost before any case was cut. v0.4.0, same day, Phase H:
  * added four reasoning-required hard patch cases — ambiguous multi-
  * occurrence target, coordinated multi-hunk parameter threading, cross-file
- * contract consistency, and function-level location choice.
+ * contract consistency, and function-level location choice. v0.5.0,
+ * 2026-07-21, Stateful ToolReliability charter PR A: added the new
+ * `stateful` category — two pilot scripted multi-turn environment cases
+ * (`redundant-read`, `stale-patch`) mined from real Build-mode failures (see
+ * docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md).
+ * Single-shot emission was already solved (hence v0.4.0's saturation
+ * finding); state discipline ACROSS turns is not — this is where the pack
+ * still discriminates even frontier models.
  */
-export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.4.0";
+export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.5.0";
 
 // --- JSON schema cases: two distinct schema shapes (2026-07-20 audit Phase C
 // cut six near-duplicate enum+array shapes down to the two structurally
@@ -1150,6 +1158,134 @@ const FORBIDDEN_ACTION_CASES: ToolReliabilityCase[] =
     };
   });
 
+// --- Stateful cases: scripted deterministic multi-turn environments mined
+// from real Build-mode failures (Stateful ToolReliability charter, PR A —
+// docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md). Two
+// pilots land here; the remaining six kinds/cases are PR B's scope. Each
+// case's REFERENCE transcript (the turn-by-turn model outputs a correct run
+// would produce) is kept in STATEFUL_REFERENCE_TRANSCRIPTS below, consumed
+// both by `buildPerfectToolReliabilityCandidate` (runner.ts) and by
+// scripts/test-toolreliability-parity.mts. ---
+
+const statefulRedundantRead001 = (() => {
+  const targetLine = 141;
+  const targetValue = 137;
+  const path = "src/config/limits.ts";
+  const content = numberedFillerFile("limits", 200, {
+    [targetLine]: `export const MAX_RETRY_BUDGET = ${targetValue}; // architect-review target`,
+  });
+  const c: StatefulToolReliabilityCase = {
+    id: "toolrel-current-stateful-redundant-read-001",
+    category: "stateful",
+    kind: "redundant-read",
+    title: "Report a constant's value without re-reading served lines",
+    prompt:
+      "You are reviewing src/config/limits.ts (200 lines) as part of an architect review. A teammate needs the current value of the exported constant MAX_RETRY_BUDGET before adjusting a retry policy — its line number is unknown to you. Investigate using read_range JSON tool actions (bounded slices, not the whole file at once if you can avoid it), then give a short final plain-text answer (no JSON) stating the constant's exact value once you have it. Re-requesting lines you have already been shown is not allowed and will fail this task.",
+    canary: "AIBENCH-TOOLREL-STATEFUL-REDUNDANT-READ-001",
+    metrics: ["stateful"],
+    maxTurns: 3,
+    initialFiles: { [path]: content },
+    groundTruthAnswer: { mustInclude: [String(targetValue)] },
+    provenance:
+      "Mined class \"Duplicate/empty tool batches (re-requesting already-served reads)\" — 27 observed occurrences, caught on GPT-5.5 (architect) — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
+  };
+  return c;
+})();
+
+const STATEFUL_REDUNDANT_READ_001_REFERENCE = [
+  JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 1, lineCount: 100, reason: "scan the first half" }),
+  JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 101, lineCount: 100, reason: "scan the second half" }),
+  "MAX_RETRY_BUDGET is 137.",
+];
+
+const surchargeOriginalContent = [
+  "export function computeSurcharge(amountCents: number): number {",
+  "  return Math.round(amountCents * 0.03);",
+  "}",
+].join("\n");
+
+const surchargeEvolvedContent = [
+  "export function computeSurcharge(amountCents: number): number {",
+  "  // NOTE: rate reviewed 2026-07-21, keep in sync with docs/pricing.md",
+  "  const rate = 0.03;",
+  "  return Math.round(amountCents * rate);",
+  "}",
+].join("\n");
+
+const surchargeEvolvedFixedContent = [
+  "export function computeSurcharge(amountCents: number): number {",
+  "  // NOTE: rate reviewed 2026-07-21, keep in sync with docs/pricing.md",
+  "  const rate = 0.05;",
+  "  return Math.round(amountCents * rate);",
+  "}",
+].join("\n");
+
+const statefulStalePatch001: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-stale-patch-001",
+  category: "stateful",
+  kind: "stale-patch",
+  title: "Recover from a patch against content that evolved underneath you",
+  prompt: [
+    "Patch src/pricing/surcharge.ts so computeSurcharge applies a 5% surcharge instead of 3% (the rate must become 0.05).",
+    "Current file content:",
+    "```ts",
+    surchargeOriginalContent,
+    "```",
+    'Use a JSON patch action shaped like {"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"<exact current text>","replace":"<replacement>"}]}, with SEARCH text copied verbatim from the CURRENT file content.',
+    "If a patch is rejected because the file no longer matches, re-read it before retrying — someone else may have changed it while you were working.",
+    "Once the fix has landed, give a short final plain-text answer (no JSON) confirming it.",
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-STALE-PATCH-001",
+  metrics: ["stateful"],
+  maxTurns: 4,
+  initialFiles: { "src/pricing/surcharge.ts": surchargeOriginalContent },
+  scheduledEvents: [
+    {
+      afterModelTurn: 2,
+      path: "src/pricing/surcharge.ts",
+      newContent: surchargeEvolvedContent,
+      announce:
+        "A teammate concurrently landed an unrelated formatting change to src/pricing/surcharge.ts while you were working. Re-read the file before patching again — your SEARCH text must match what is CURRENT now.",
+    },
+  ],
+  expectedFinalFiles: {
+    "src/pricing/surcharge.ts": { content: surchargeEvolvedFixedContent },
+  },
+  provenance:
+    "Mined class \"Patch SEARCH blocks not matching the current (evolved) file\" — 5 observed occurrences, caught on workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
+};
+
+const STATEFUL_STALE_PATCH_001_REFERENCE = [
+  JSON.stringify({ action: "read_range", path: "src/pricing/surcharge.ts", startLine: 1, lineCount: 3, reason: "confirm current content" }),
+  JSON.stringify({
+    action: "patch",
+    path: "src/pricing/surcharge.ts",
+    ops: [{ search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" }],
+    reason: "raise the surcharge rate",
+  }),
+  JSON.stringify({ action: "read_range", path: "src/pricing/surcharge.ts", startLine: 1, lineCount: 5, reason: "re-check after the rejection" }),
+  JSON.stringify({
+    action: "patch",
+    path: "src/pricing/surcharge.ts",
+    ops: [{ search: "  const rate = 0.03;", replace: "  const rate = 0.05;" }],
+    reason: "raise the surcharge rate against the current content",
+  }),
+];
+
+const STATEFUL_CASES: ToolReliabilityCase[] = [statefulRedundantRead001, statefulStalePatch001];
+
+/**
+ * Per-case reference transcripts: the turn-by-turn model outputs a correct
+ * run would produce. Consumed by `buildPerfectToolReliabilityCandidate`
+ * (runner.ts, so the deterministic "perfect" oracle still scores 100 with
+ * the new category present) and by scripts/test-toolreliability-parity.mts's
+ * reference assertion.
+ */
+export const STATEFUL_REFERENCE_TRANSCRIPTS: Record<string, string[]> = {
+  [statefulRedundantRead001.id]: STATEFUL_REDUNDANT_READ_001_REFERENCE,
+  [statefulStalePatch001.id]: STATEFUL_STALE_PATCH_001_REFERENCE,
+};
+
 export const TOOL_RELIABILITY_CASES: ToolReliabilityCase[] = [
   ...JSON_SCHEMA_CASES,
   ...TOOL_CALL_CASES,
@@ -1158,6 +1294,7 @@ export const TOOL_RELIABILITY_CASES: ToolReliabilityCase[] = [
   ...HARD_PATCH_CASES,
   ...REPAIR_CASES,
   ...FORBIDDEN_ACTION_CASES,
+  ...STATEFUL_CASES,
 ];
 
 export function validateToolReliabilityCasePack(
@@ -1174,6 +1311,7 @@ export function validateToolReliabilityCasePack(
     patch: false,
     commandSafety: false,
     forbiddenAction: false,
+    stateful: false,
   };
 
   for (const category of TOOL_RELIABILITY_CASE_CATEGORIES) {

@@ -24,8 +24,8 @@ check(
   TOOL_RELIABILITY_CASE_PACK_VERSION
 );
 check(
-  "current case pack has 33 cases",
-  TOOL_RELIABILITY_CASES.length === 33,
+  "current case pack has 35 cases",
+  TOOL_RELIABILITY_CASES.length === 35,
   TOOL_RELIABILITY_CASES.length
 );
 
@@ -45,6 +45,7 @@ check("case pack has 7 tool-call cases", categoryCounts["tool-call"] === 7, cate
 check("case pack has 15 patch cases", categoryCounts.patch === 15, categoryCounts);
 check("case pack has 1 repair-loop case", categoryCounts["repair-loop"] === 1, categoryCounts);
 check("case pack has 8 forbidden-action cases", categoryCounts["forbidden-action"] === 8, categoryCounts);
+check("case pack has 2 stateful cases", categoryCounts.stateful === 2, categoryCounts);
 
 const largePatchCases = TOOL_RELIABILITY_CASES.filter(
   (item) => item.category === "patch" && item.id.startsWith("toolrel-current-large-patch-")
@@ -108,7 +109,8 @@ check(
     validation.metricCoverage.tool &&
     validation.metricCoverage.patch &&
     validation.metricCoverage.commandSafety &&
-    validation.metricCoverage.forbiddenAction,
+    validation.metricCoverage.forbiddenAction &&
+    validation.metricCoverage.stateful,
   validation.metricCoverage
 );
 
@@ -127,6 +129,7 @@ for (const [metric, minimum] of [
   ["patch", 15],
   ["commandSafety", 8],
   ["forbiddenAction", 15],
+  ["stateful", 2],
 ] as Array<[string, number]>) {
   check(
     `${metric} has at least ${minimum} cases`,
