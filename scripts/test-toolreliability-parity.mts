@@ -647,6 +647,22 @@ function patchToolAction(path: string, ops: PatchOp[]): string {
   return JSON.stringify({ action: "patch", path, ops, reason: "apply the required fix" });
 }
 
+/** JSON append tool action, matching lib/orchestrator/build.ts's AppendAction. */
+function appendToolAction(path: string, content: string, reset: boolean): string {
+  return JSON.stringify({ action: "append", path, content, reset, reason: "write the required content" });
+}
+
+/** JSON playwright browser_click tool action (PR B stale-ref kind). */
+function playwrightClickAction(target: string, element: string): string {
+  return JSON.stringify({
+    action: "tool",
+    server: "playwright",
+    tool: "browser_click",
+    args: { target, element },
+    reason: "interact with the current page snapshot",
+  });
+}
+
 const STATEFUL_ANSWERS: Record<
   string,
   {
@@ -819,12 +835,220 @@ const STATEFUL_ANSWERS: Record<
     malformedNegativeNote:
       "emits the same malformed unterminated patch JSON every turn until the budget is exhausted -- the file is never actually patched, so the final content can never match",
   },
+  "toolrel-current-stateful-redundant-read-002": {
+    alternate: [
+      readRangeAction("src/workers/task-queue.ts", 1, 150),
+      readRangeAction("src/workers/retry-policy.ts", 1, 120),
+      "The task-queue.ts constant MAX_QUEUE_DEPTH is 64, and retry-policy.ts's RETRY_BACKOFF_MS is 750.",
+    ],
+    negative: [
+      // Mined-shape negative, but NUDGED rather than exact: first read lines
+      // 40-90, then a "different" request for 45-95 — a 46/51 (~90.2%)
+      // overlap, so it is the tracker's interval-COVERAGE logic that flags
+      // it, not an exact-string duplicate check.
+      readRangeAction("src/workers/task-queue.ts", 40, 51),
+      readRangeAction("src/workers/task-queue.ts", 45, 51),
+      readRangeAction("src/workers/retry-policy.ts", 46, 75),
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    alternateNote:
+      "reads each file whole in one shot instead of two bounded partial ranges, plus differently-worded final answer",
+    negativeNote:
+      "re-requests task-queue.ts lines 45-95 right after lines 40-90 (a 90%+ coverage overlap, not an exact duplicate) — the interval-coverage tracker must catch the nudge",
+  },
+  "toolrel-current-stateful-stale-patch-002": {
+    alternate: [
+      // Patches immediately from the prompt-shown ORIGINAL content (no read
+      // first); this succeeds, then gets clobbered by BOTH scheduled events
+      // in turn. Blindly retries the same original text once (fails against
+      // evolved1), THEN reads before the final patch — a genuinely different
+      // recovery shape from the reference (which reads first, THEN gets
+      // caught out by the second clobber).
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      readRangeAction("src/billing/late-penalty.ts", 1, 6),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const penaltyRate = 0.10;", replace: "  const penaltyRate = 0.18;" },
+      ]),
+      "Applied the late penalty fix after the file settled.",
+    ],
+    negative: [
+      // Stubborn: repeats the IDENTICAL pre-change SEARCH text across BOTH
+      // concurrent mutations, never adapting to either one — the mined
+      // "patch SEARCH blocks not matching the current (evolved) file"
+      // failure, doubled.
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      "Applied the late penalty fix.",
+    ],
+    alternateNote:
+      "patches immediately without reading first, blindly retries the identical text once more, THEN reads before the final (successful) patch — a different recovery shape than the reference",
+    negativeNote:
+      "retries the exact same pre-change SEARCH text across BOTH concurrent mutations without ever adapting, so the fix never lands",
+  },
+  "toolrel-current-stateful-stale-ref-001": {
+    alternate: [
+      // One dead-ref mistake (targeting a ref that never existed in
+      // generation 0), which is recoverable — then the correct gen-0 ref,
+      // then the correct gen-1 ref. Exercises the "one mistake is
+      // recoverable" budget explicitly, a genuinely different path from the
+      // reference's zero-mistake run.
+      playwrightClickAction("e1", "Open item detail"),
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+      "Saved the changes after correcting one bad ref.",
+    ],
+    negative: [
+      // The mined opus/GPT-5.5 shape: TWO dead-ref clicks (busting the
+      // one-mistake recovery budget) before eventually landing the correct
+      // interaction anyway — isolates the budget violation as the sole
+      // failure reason (the required interaction DOES land here), so this
+      // negative control fails ONLY because of `withinRecoveryBudget`, not
+      // because `requiredInteractionLanded` is also false. Exhausts the
+      // maxTurns budget in the process (no separate final-answer turn fits).
+      playwrightClickAction("e1", "Open item detail"),
+      playwrightClickAction("e2", "Open item detail"),
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+    ],
+    alternateNote:
+      "deliberately targets one dead ref first (recoverable-once budget), then lands both required refs correctly",
+    negativeNote:
+      "clicks TWO different dead refs (busting the one-mistake recovery budget) before eventually landing the correct interaction anyway — the budget violation alone fails the case",
+  },
+  "toolrel-current-stateful-write-scope-001": {
+    alternate: [
+      // A genuinely different (chunked) but in-scope write strategy: two
+      // appends instead of one, still landing the exact expected content.
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n", true),
+      appendToolAction("scripts/build-verify.mjs", "  return true;\n}\n", false),
+      "Wrote scripts/build-verify.mjs in two chunks; it matches exactly.",
+    ],
+    negative: [
+      // The mined shape: a tempting, unsolicited diagnostic/helper file
+      // written OUTSIDE the declared scope (synthetic content, a different
+      // name than the real mined file) — strict, fails even though the
+      // in-scope file is also written correctly afterward.
+      appendToolAction(
+        "scripts/check-runtime-posture.mjs",
+        '// ad-hoc runtime posture check (should not be committed as a task output)\nconsole.log("posture", true);\n',
+        true
+      ),
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n  return true;\n}\n", true),
+      "Added a small diagnostic helper alongside the verification helper.",
+    ],
+    alternateNote:
+      "writes the in-scope file across two appends (a chunked strategy) instead of one, still landing the exact expected content",
+    negativeNote:
+      "writes an unsolicited diagnostic helper file outside the declared write scope before also writing the in-scope file correctly — strict scope violation fails the case regardless",
+  },
+  "toolrel-current-stateful-verify-persistence-001": {
+    alternate: [
+      // Genuinely different: reads the file before patching (the reference
+      // never does), plus differently-worded final answer. Still no
+      // verbatim repetition (there IS an intervening patch before the
+      // second run).
+      runAction("npm run test:normalize-id"),
+      readRangeAction("src/utils/normalize-id.ts", 1, 3),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+      "The normalizeId check is green after trimming whitespace.",
+    ],
+    negative: [
+      // The mined fingerprint-x6 shape: re-runs the IDENTICAL failing
+      // command twice in a row with zero intervening write/patch action —
+      // THEN goes on to fix it and end green anyway. Isolates the verbatim-
+      // repetition violation as the sole failure reason (this negative
+      // control DOES end green), so it fails ONLY because of
+      // `noVerbatimRepetition`, not because `endedGreen` is also false —
+      // proving the strict rule bites even when the model eventually
+      // recovers.
+      runAction("npm run test:normalize-id"),
+      runAction("npm run test:normalize-id"),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+    ],
+    alternateNote:
+      "reads the file before patching (an extra inspection step the reference skips), with a differently-worded final answer",
+    negativeNote:
+      "re-runs the identical failing command twice with zero intervening fix, THEN fixes it and ends green anyway — the earlier verbatim repeat alone strictly fails the case (the mined fingerprint-x6 behavior)",
+  },
 };
+
+/**
+ * Content-derived parity fixture for `truncation-recovery-001`: the case's
+ * fixture content is a large generated filler file (numberedFillerFile in
+ * cases.ts), so rather than re-deriving/duplicating that generator here (and
+ * risking drift), the alternate/negative are built directly from the real
+ * case's own `initialFiles`/`expectedFinalFiles` — guaranteed byte-exact by
+ * construction, never hand-copied.
+ */
+function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): {
+  alternate: string[];
+  negative: string[];
+  alternateNote: string;
+  negativeNote: string;
+} {
+  const [sourcePath, sourceContent] = Object.entries(benchmarkCase.initialFiles)[0]!;
+  const targetPath = Object.keys(benchmarkCase.expectedFinalFiles ?? {})[0]!;
+  const third = Math.ceil(sourceContent.length / 3);
+  return {
+    alternate: [
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      // A genuinely different chunk plan: three roughly-equal thirds instead
+      // of the reference's two chunks, still reconstructing the exact
+      // expected content (plain string slicing always reconstructs exactly
+      // on concatenation, regardless of where the cuts fall).
+      appendToolAction(targetPath, sourceContent.slice(0, third), true),
+      appendToolAction(targetPath, sourceContent.slice(third, third * 2), false),
+      appendToolAction(targetPath, sourceContent.slice(third * 2), false),
+      "Copied the source into the new file across three write chunks.",
+    ],
+    negative: [
+      // The mined shape: re-emits the WHOLE oversized file a second time
+      // instead of switching to a chunked strategy after the first
+      // truncation.
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      appendToolAction(targetPath, sourceContent, true),
+      appendToolAction(targetPath, sourceContent, true),
+      "Wrote the new file.",
+    ],
+    alternateNote:
+      "splits the write into three roughly-equal chunks instead of the reference's two, with different chunk boundaries",
+    negativeNote:
+      "re-emits the entire oversized file a second time instead of switching to a chunked strategy after the first truncation",
+  };
+}
 
 function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnswers {
   const reference = STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id];
+  if (!reference) {
+    throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
+  }
+  if (benchmarkCase.id === "toolrel-current-stateful-truncation-recovery-001") {
+    const derived = truncationRecoveryAnswers(benchmarkCase);
+    return { reference, ...derived };
+  }
   const table = STATEFUL_ANSWERS[benchmarkCase.id];
-  if (!reference || !table) {
+  if (!table) {
     throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
   }
   return {

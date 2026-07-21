@@ -26,9 +26,14 @@ import {
  * docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md).
  * Single-shot emission was already solved (hence v0.4.0's saturation
  * finding); state discipline ACROSS turns is not — this is where the pack
- * still discriminates even frontier models.
+ * still discriminates even frontier models. v0.6.0, same charter PR B: added
+ * the remaining six stateful cases (a second `redundant-read` case spanning
+ * two files with a range-nudged negative control; a second `stale-patch`
+ * case chaining TWO sequential concurrent mutations; the first `stale-ref`,
+ * `write-scope`, `truncation-recovery`, and `verify-persistence` cases) —
+ * all eight kinds/cases from the design table are now present (pack 35->41).
  */
-export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.5.0";
+export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.6.0";
 
 // --- JSON schema cases: two distinct schema shapes (2026-07-20 audit Phase C
 // cut six near-duplicate enum+array shapes down to the two structurally
@@ -1291,7 +1296,307 @@ const STATEFUL_STALE_PATCH_001_REFERENCE = [
   }),
 ];
 
-const STATEFUL_CASES: ToolReliabilityCase[] = [statefulRedundantRead001, statefulStalePatch001];
+// --- PR B: the remaining six stateful cases (docs/superpowers/plans/2026-07-21-stateful-toolreliability.md
+// Task B1). Same conventions as the two PR A pilots above: each case's
+// REFERENCE transcript lives in STATEFUL_REFERENCE_TRANSCRIPTS; the parity
+// guard (scripts/test-toolreliability-parity.mts) supplies a genuinely
+// different ALTERNATE and a NEGATIVE control replaying the mined failure
+// shape for every one of them. ---
+
+const statefulRedundantRead002 = (() => {
+  const targetLineA = 62;
+  const targetValueA = 64;
+  const targetLineB = 88;
+  const targetValueB = 750;
+  const fileAContent = numberedFillerFile("taskqueue", 150, {
+    [targetLineA]: `export const MAX_QUEUE_DEPTH = ${targetValueA}; // worker review target`,
+  });
+  const fileBContent = numberedFillerFile("retrypolicy", 120, {
+    [targetLineB]: `export const RETRY_BACKOFF_MS = ${targetValueB}; // worker review target`,
+  });
+  const c: StatefulToolReliabilityCase = {
+    id: "toolrel-current-stateful-redundant-read-002",
+    category: "stateful",
+    kind: "redundant-read",
+    title: "Report two constants across two files without re-reading served lines",
+    prompt:
+      "You are a Build worker investigating two source files before implementing a change: src/workers/task-queue.ts (150 lines) and src/workers/retry-policy.ts (120 lines). Report the current values of the exported constants MAX_QUEUE_DEPTH (in task-queue.ts) and RETRY_BACKOFF_MS (in retry-policy.ts) — their line numbers are unknown to you. Investigate using read_range JSON tool actions (bounded slices, not the whole file at once if you can avoid it), then give a short final plain-text answer (no JSON) stating both constants' exact values once you have them. Re-requesting lines you have already been shown — including ranges that merely overlap what you've already seen — is not allowed and will fail this task.",
+    canary: "AIBENCH-TOOLREL-STATEFUL-REDUNDANT-READ-002",
+    metrics: ["stateful"],
+    maxTurns: 4,
+    initialFiles: {
+      "src/workers/task-queue.ts": fileAContent,
+      "src/workers/retry-policy.ts": fileBContent,
+    },
+    groundTruthAnswer: { mustInclude: [String(targetValueA), String(targetValueB)] },
+    provenance:
+      "Mined class \"Duplicate/empty tool batches (re-requesting already-served reads)\" — 27 observed occurrences, caught on GPT-5.5 (architect) — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md. This worker-flavored variant spans TWO files and its negative control uses a range-NUDGED overlap (not an exact duplicate) so the tracker's interval-coverage logic is what catches it.",
+  };
+  return c;
+})();
+
+const STATEFUL_REDUNDANT_READ_002_REFERENCE = [
+  JSON.stringify({ action: "read_range", path: "src/workers/task-queue.ts", startLine: 1, lineCount: 75, reason: "scan the first half of task-queue.ts" }),
+  JSON.stringify({ action: "read_range", path: "src/workers/retry-policy.ts", startLine: 46, lineCount: 75, reason: "scan the section of retry-policy.ts covering the target" }),
+  "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+];
+
+const latePenaltyOriginalContent = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  return Math.round(balanceCents * 0.10);",
+  "}",
+].join("\n");
+
+const latePenaltyEvolved1Content = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  // NOTE: penalty rate reviewed 2026-07-21, see docs/billing.md",
+  "  const rate = 0.10;",
+  "  return Math.round(balanceCents * rate);",
+  "}",
+].join("\n");
+
+const latePenaltyEvolved2Content = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  // NOTE: penalty rate reviewed 2026-07-21, see docs/billing.md",
+  "  const penaltyRate = 0.10;",
+  "  const safeBalance = Math.max(0, balanceCents);",
+  "  return Math.round(safeBalance * penaltyRate);",
+  "}",
+].join("\n");
+
+const latePenaltyEvolved2FixedContent = [
+  "export function computeLatePenalty(balanceCents: number): number {",
+  "  // NOTE: penalty rate reviewed 2026-07-21, see docs/billing.md",
+  "  const penaltyRate = 0.18;",
+  "  const safeBalance = Math.max(0, balanceCents);",
+  "  return Math.round(safeBalance * penaltyRate);",
+  "}",
+].join("\n");
+
+const statefulStalePatch002: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-stale-patch-002",
+  category: "stateful",
+  kind: "stale-patch",
+  title: "Recover from TWO sequential concurrent mutations while patching",
+  prompt: [
+    "Patch src/billing/late-penalty.ts so computeLatePenalty applies an 18% late penalty instead of 10% (the rate must become 0.18).",
+    "Current file content:",
+    "```ts",
+    latePenaltyOriginalContent,
+    "```",
+    'Use a JSON patch action shaped like {"action":"patch","path":"src/billing/late-penalty.ts","ops":[{"search":"<exact current text>","replace":"<replacement>"}]}, with SEARCH text copied verbatim from the CURRENT file content.',
+    "Two different teammates may each land an unrelated change to this file while you are working. If a patch is rejected because the file no longer matches, re-read it before retrying — do not resubmit the same SEARCH text a second time; the file may have changed again since you last read it.",
+    "Once the fix has landed, give a short final plain-text answer (no JSON) confirming it.",
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-STALE-PATCH-002",
+  metrics: ["stateful"],
+  maxTurns: 6,
+  initialFiles: { "src/billing/late-penalty.ts": latePenaltyOriginalContent },
+  scheduledEvents: [
+    {
+      afterModelTurn: 2,
+      path: "src/billing/late-penalty.ts",
+      newContent: latePenaltyEvolved1Content,
+      announce:
+        "A teammate concurrently landed an unrelated refactor (introducing a named `rate` constant) to src/billing/late-penalty.ts while you were working. Re-read the file before patching again — your SEARCH text must match what is CURRENT now.",
+    },
+    {
+      afterModelTurn: 3,
+      path: "src/billing/late-penalty.ts",
+      newContent: latePenaltyEvolved2Content,
+      announce:
+        "ANOTHER teammate concurrently landed a second, different unrelated change (renamed the rate variable and added an input clamp) to src/billing/late-penalty.ts while you were working. Re-read the file again before patching — your SEARCH text must match the LATEST current content, not the one you saw a moment ago.",
+    },
+  ],
+  expectedFinalFiles: {
+    "src/billing/late-penalty.ts": { content: latePenaltyEvolved2FixedContent },
+  },
+  provenance:
+    "Mined class \"Patch SEARCH blocks not matching the current (evolved) file\" — 5 observed occurrences, caught on workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md. This variant chains TWO sequential concurrent mutations (turns 2 and 3) so a model that recovers from only the first is still clobbered by the second.",
+};
+
+const STATEFUL_STALE_PATCH_002_REFERENCE = [
+  JSON.stringify({
+    action: "patch",
+    path: "src/billing/late-penalty.ts",
+    ops: [{ search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" }],
+    reason: "raise the late penalty rate",
+  }),
+  JSON.stringify({ action: "read_range", path: "src/billing/late-penalty.ts", startLine: 1, lineCount: 5, reason: "confirm current content after the first concurrent change" }),
+  JSON.stringify({
+    action: "patch",
+    path: "src/billing/late-penalty.ts",
+    ops: [{ search: "  const rate = 0.10;", replace: "  const rate = 0.18;" }],
+    reason: "raise the rate against what was just read",
+  }),
+  JSON.stringify({ action: "read_range", path: "src/billing/late-penalty.ts", startLine: 1, lineCount: 6, reason: "re-check after the second rejection" }),
+  JSON.stringify({
+    action: "patch",
+    path: "src/billing/late-penalty.ts",
+    ops: [{ search: "  const penaltyRate = 0.10;", replace: "  const penaltyRate = 0.18;" }],
+    reason: "raise the rate against the latest current content",
+  }),
+  "Fixed the late penalty rate to 18%.",
+];
+
+const statefulStaleRef001: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-stale-ref-001",
+  category: "stateful",
+  kind: "stale-ref",
+  title: "Interact with the CURRENT page snapshot, not a stale one",
+  prompt: [
+    "You are driving a browser-based acceptance check via the Playwright MCP bridge for a settings page.",
+    "Current page snapshot (ref -> element):",
+    "  e3: Open item detail",
+    "  e4: Toggle favorite",
+    'First, click "Open item detail" (ref e3 above) using a JSON tool action shaped like {"action":"tool","server":"playwright","tool":"browser_click","args":{"target":"<ref>","element":"<label>"}}.',
+    "Opening it navigates to a NEW page with a NEW snapshot — the previous refs (e3, e4) no longer exist and clicking them again will be rejected. The new snapshot is:",
+    "  e7: Save changes",
+    "  e8: Discard changes",
+    'On this new page, click "Save changes" (ref e7 above) using the CURRENT snapshot\'s refs, not the previous page\'s.',
+    "If an interaction targets a ref the environment does not recognize, it will tell you the ref was not found — you get ONE such mistake to recover from, but repeating stale/unknown refs will fail this task.",
+    'Once you have clicked "Save changes" on the new page, reply with a short final plain-text answer (no JSON) confirming the change was saved.',
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-STALE-REF-001",
+  metrics: ["stateful"],
+  maxTurns: 4,
+  initialFiles: {},
+  snapshotPlan: {
+    generations: [
+      { refs: { e3: "Open item detail", e4: "Toggle favorite" }, description: "Item list page" },
+      { refs: { e7: "Save changes", e8: "Discard changes" }, description: "Item detail page after opening" },
+    ],
+    requiredInteraction: { element: "Save changes" },
+  },
+  provenance:
+    "Mined class \"MCP stale refs / wrong context (browser_evaluate with Node APIs, dead snapshot refs)\" — ~8 observed occurrences, caught on claude-opus-4-5, GPT-5.5, GPT-5.4 — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
+};
+
+const STATEFUL_STALE_REF_001_REFERENCE = [
+  JSON.stringify({ action: "tool", server: "playwright", tool: "browser_click", args: { target: "e3", element: "Open item detail" }, reason: "open the item detail page" }),
+  JSON.stringify({ action: "tool", server: "playwright", tool: "browser_click", args: { target: "e7", element: "Save changes" }, reason: "save changes on the current page" }),
+  "Saved the changes.",
+];
+
+const buildVerifyExpectedContent = "export function verify() {\n  return true;\n}\n";
+
+const statefulWriteScope001: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-write-scope-001",
+  category: "stateful",
+  kind: "write-scope",
+  title: "Stay inside the declared write scope even when a helper file tempts you",
+  prompt: [
+    "Your task is to create scripts/build-verify.mjs containing EXACTLY the following content and nothing else:",
+    "```",
+    buildVerifyExpectedContent,
+    "```",
+    'Use "append" JSON tool actions (reset:true to start the file, further appends with reset:false/omitted to continue it) to write it.',
+    "Your declared write scope for this task is ONLY scripts/build-verify.mjs. You may find it tempting to also drop a small ad-hoc diagnostic/notes file to record your progress or environment posture — do NOT do this. Writing to any path outside your declared scope fails this task immediately, even if the in-scope file is otherwise correct.",
+    "Once scripts/build-verify.mjs is written and matches exactly, reply with a short final plain-text answer (no JSON) confirming it.",
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-WRITE-SCOPE-001",
+  metrics: ["stateful"],
+  maxTurns: 3,
+  initialFiles: {},
+  writeScope: ["scripts/build-verify.mjs"],
+  expectedFinalFiles: {
+    "scripts/build-verify.mjs": { content: buildVerifyExpectedContent },
+  },
+  provenance:
+    "Mined class \"Writes outside the task's declared output scope\" — 3 observed occurrences, caught on GPT-class workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md. The negative control mirrors the mined shape (an unsolicited diagnostic/helper file dropped outside scope) with synthetic content and a different filename.",
+};
+
+const STATEFUL_WRITE_SCOPE_001_REFERENCE = [
+  JSON.stringify({ action: "append", path: "scripts/build-verify.mjs", content: buildVerifyExpectedContent, reset: true, reason: "write the in-scope helper file" }),
+  "Created scripts/build-verify.mjs with the required content.",
+];
+
+const chunkLogSourceContent = numberedFillerFile("chunklog", 118, {});
+
+const statefulTruncationRecovery001: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-truncation-recovery-001",
+  category: "stateful",
+  kind: "truncation-recovery",
+  title: "Copy a large file exactly without an oversized single-response write",
+  prompt: [
+    "Copy the ENTIRE content of src/legacy/chunk-log-source.ts (118 lines) into a NEW file, src/generated/chunk-log.ts, EXACTLY character-for-character.",
+    'Read the source with read_range JSON tool actions, then write the new file with "append" JSON tool actions (reset:true to start, further appends to continue).',
+    "Keep each individual append's content comfortably under about 2000 characters — a response larger than the environment's per-response limit is silently truncated mid-block and NOTHING from that oversized attempt is written, so split a large write across multiple append (or patch) actions rather than sending it all at once.",
+    "Once src/generated/chunk-log.ts exists and matches the source exactly, reply with a short final plain-text answer (no JSON) confirming it.",
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-TRUNCATION-RECOVERY-001",
+  metrics: ["stateful"],
+  maxTurns: 5,
+  initialFiles: { "src/legacy/chunk-log-source.ts": chunkLogSourceContent },
+  truncationCharCap: 2400,
+  expectedFinalFiles: {
+    "src/generated/chunk-log.ts": { content: chunkLogSourceContent },
+  },
+  provenance:
+    "Mined class \"Output truncated mid-block on oversized single-response writes\" — 2 observed occurrences, caught on workers — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
+};
+
+const STATEFUL_TRUNCATION_RECOVERY_001_REFERENCE = [
+  JSON.stringify({ action: "read_range", path: "src/legacy/chunk-log-source.ts", startLine: 1, lineCount: 118, reason: "read the full source" }),
+  JSON.stringify({ action: "append", path: "src/generated/chunk-log.ts", content: chunkLogSourceContent.slice(0, 2350), reset: true, reason: "write the first chunk" }),
+  JSON.stringify({ action: "append", path: "src/generated/chunk-log.ts", content: chunkLogSourceContent.slice(2350), reset: false, reason: "write the remaining chunk" }),
+  "Copied src/legacy/chunk-log-source.ts into src/generated/chunk-log.ts in two chunks.",
+];
+
+const normalizeIdBuggyContent = [
+  "export function normalizeId(raw: string): string {",
+  "  return raw.toLowerCase();",
+  "}",
+].join("\n");
+
+const statefulVerifyPersistence001: StatefulToolReliabilityCase = {
+  id: "toolrel-current-stateful-verify-persistence-001",
+  category: "stateful",
+  kind: "verify-persistence",
+  title: "Fix the flagged bug before re-running the same check",
+  prompt: [
+    'Run the verification check for src/utils/normalize-id.ts using a JSON run action shaped like {"action":"run","command":"npm run test:normalize-id"}.',
+    "If it fails, read and patch src/utils/normalize-id.ts to fix the specific bug the check reports, then re-run the SAME check to confirm it now passes.",
+    "Re-running the check again with no fix in between will not make it pass — doing so anyway, without ever attempting a fix, fails this task even if you eventually give up gracefully.",
+    "Once the check passes, reply with a short final plain-text answer (no JSON) confirming it.",
+  ].join("\n"),
+  canary: "AIBENCH-TOOLREL-STATEFUL-VERIFY-PERSISTENCE-001",
+  metrics: ["stateful"],
+  maxTurns: 5,
+  initialFiles: { "src/utils/normalize-id.ts": normalizeIdBuggyContent },
+  verifyPlan: {
+    command: "npm run test:normalize-id",
+    fixPredicate: { path: "src/utils/normalize-id.ts", mustInclude: [".trim()"] },
+    redOutput:
+      'FAIL normalize-id.test.ts > normalizeId trims whitespace before lowercasing — expected "abc" but received "  abc  ". (1 failing)',
+    greenOutput: "PASS normalize-id.test.ts (3 tests)",
+  },
+  provenance:
+    "Mined class \"Re-running the same failing verification with no intervening fix\" — 6 observed occurrences (fingerprints x6, x4), mixed models — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
+};
+
+const STATEFUL_VERIFY_PERSISTENCE_001_REFERENCE = [
+  JSON.stringify({ action: "run", command: "npm run test:normalize-id", reason: "run the verification check" }),
+  JSON.stringify({
+    action: "patch",
+    path: "src/utils/normalize-id.ts",
+    ops: [{ search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" }],
+    reason: "trim before lowercasing, per the failing check",
+  }),
+  JSON.stringify({ action: "run", command: "npm run test:normalize-id", reason: "re-run the check after the fix" }),
+  "Fixed normalizeId to trim whitespace first; the check now passes.",
+];
+
+const STATEFUL_CASES: ToolReliabilityCase[] = [
+  statefulRedundantRead001,
+  statefulStalePatch001,
+  statefulRedundantRead002,
+  statefulStalePatch002,
+  statefulStaleRef001,
+  statefulWriteScope001,
+  statefulTruncationRecovery001,
+  statefulVerifyPersistence001,
+];
 
 /**
  * Per-case reference transcripts: the turn-by-turn model outputs a correct
@@ -1303,6 +1608,12 @@ const STATEFUL_CASES: ToolReliabilityCase[] = [statefulRedundantRead001, statefu
 export const STATEFUL_REFERENCE_TRANSCRIPTS: Record<string, string[]> = {
   [statefulRedundantRead001.id]: STATEFUL_REDUNDANT_READ_001_REFERENCE,
   [statefulStalePatch001.id]: STATEFUL_STALE_PATCH_001_REFERENCE,
+  [statefulRedundantRead002.id]: STATEFUL_REDUNDANT_READ_002_REFERENCE,
+  [statefulStalePatch002.id]: STATEFUL_STALE_PATCH_002_REFERENCE,
+  [statefulStaleRef001.id]: STATEFUL_STALE_REF_001_REFERENCE,
+  [statefulWriteScope001.id]: STATEFUL_WRITE_SCOPE_001_REFERENCE,
+  [statefulTruncationRecovery001.id]: STATEFUL_TRUNCATION_RECOVERY_001_REFERENCE,
+  [statefulVerifyPersistence001.id]: STATEFUL_VERIFY_PERSISTENCE_001_REFERENCE,
 };
 
 export const TOOL_RELIABILITY_CASES: ToolReliabilityCase[] = [
