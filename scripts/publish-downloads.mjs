@@ -69,6 +69,10 @@ async function publishNativeRunner() {
   addDirectory(zip, skills, "skills");
 
   const tsxVersion = pinnedVersion(rootPackage.devDependencies?.tsx, "tsx");
+  const typescriptVersion = pinnedVersion(
+    rootPackage.devDependencies?.typescript,
+    "typescript"
+  );
   const playwrightVersion = pinnedVersion(
     rootPackage.dependencies?.playwright ?? rootPackage.devDependencies?.playwright ?? rootPackage.devDependencies?.["@playwright/test"],
     "playwright"
@@ -87,6 +91,7 @@ async function publishNativeRunner() {
     dependencies: {
       playwright: playwrightVersion,
       tsx: tsxVersion,
+      typescript: typescriptVersion,
     },
   };
   zip.file("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, { date: new Date(0), createFolders: false });

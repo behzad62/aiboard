@@ -87,7 +87,12 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
         scripts?: Record<string, string>;
         dependencies?: Record<string, string>;
       };
-      const rootPackageJson = JSON.parse(read("package.json")) as { license?: string };
+      const rootPackageJson = JSON.parse(read("package.json")) as {
+        license?: string;
+        devDependencies?: Record<string, string>;
+      };
+      const expectedTypeScriptVersion = rootPackageJson.devDependencies?.typescript
+        ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
       check(`${path} uses the root package license`, packageJson.license === rootPackageJson.license);
       check(`${path} requires Node.js 24.18.0 or newer`, packageJson.engines?.node === ">=24.18.0");
       check(`${path} starts src/cli.ts`, packageJson.scripts?.start === "tsx src/cli.ts");
@@ -97,6 +102,11 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       );
       check(`${path} includes tsx`, typeof packageJson.dependencies?.tsx === "string");
       check(`${path} includes Playwright`, typeof packageJson.dependencies?.playwright === "string");
+      check(
+        `${path} pins TypeScript from the root package`,
+        packageJson.dependencies?.typescript === expectedTypeScriptVersion,
+        packageJson.dependencies
+      );
     }
 
     if (licenseFile) {
