@@ -1,37 +1,30 @@
 import type { BenchmarkAttemptV2 } from "@/lib/benchmark/types";
 import type { ToolReliabilityScoreInput } from "@/lib/benchmark/scoring/types";
 
-export const TOOL_RELIABILITY_CASE_CATEGORIES = [
-  "json-schema",
-  "tool-call",
-  "patch",
-  "repair-loop",
-  "forbidden-action",
-  "stateful",
-] as const;
+/**
+ * `stateful` is the only surviving category (2026-07-22 cut): the 33
+ * single-shot json-schema/tool-call/patch/repair-loop/forbidden-action cases
+ * were provably saturated (100% on weak+medium tiers) and were removed along
+ * with every evaluator/prompt branch that existed only to serve them. See
+ * CLAUDE.md's ToolReliability section and
+ * docs/superpowers/plans/2026-07-22-toolreliability-stateful-only.md.
+ */
+export const TOOL_RELIABILITY_CASE_CATEGORIES = ["stateful"] as const;
 
 export type ToolReliabilityCaseCategory =
   (typeof TOOL_RELIABILITY_CASE_CATEGORIES)[number];
 
-export type ToolReliabilityMetricKey =
-  | "schema"
-  | "firstAttempt"
-  | "repair"
-  | "tool"
-  | "patch"
-  | "commandSafety"
-  | "forbiddenAction"
-  | "stateful";
-
-export type ToolReliabilityJsonField =
-  | { type: "string"; enum?: readonly string[] }
-  | { type: "number"; min?: number; max?: number }
-  | { type: "boolean" }
-  | { type: "string-array"; minItems?: number };
-
-export interface ToolReliabilityJsonSchema {
-  required: Record<string, ToolReliabilityJsonField>;
-}
+/**
+ * Only two metric keys are still produced by any case: `stateful` (the
+ * scripted multi-turn env's own pass/fail) and `forbiddenAction` (the
+ * destructive-action safety gate, always recorded — see runner.ts). The
+ * other six keys (`schema`, `firstAttempt`, `repair`, `tool`, `patch`,
+ * `commandSafety`) were single-shot-category-only OBSERVATIONS and are gone
+ * along with those categories — but their RATE fields stay on
+ * `ToolReliabilityScoreInput` (scoring/types.ts) so historical attempts
+ * still replay identically; do not conflate the two types.
+ */
+export type ToolReliabilityMetricKey = "forbiddenAction" | "stateful";
 
 interface BaseToolReliabilityCase {
   id: string;
@@ -42,94 +35,15 @@ interface BaseToolReliabilityCase {
   metrics: ToolReliabilityMetricKey[];
 }
 
-export interface JsonSchemaToolReliabilityCase extends BaseToolReliabilityCase {
-  category: "json-schema";
-  schema: ToolReliabilityJsonSchema;
-}
-
-/**
- * One acceptable tool action for a tool-call case. The verifier accepts ANY
- * listed expectation, and expectations are behavioral (range containment,
- * query substring) rather than exact-object equality, so equally-optimal
- * answers pass without the prompt ever printing the expected action.
- */
-export type ToolCallActionExpectation =
-  | {
-      kind: "search";
-      /** The emitted search query must contain this text (case-insensitive). */
-      queryIncludes: string;
-    }
-  | {
-      kind: "read_range";
-      path: string;
-      /** The read must cover this inclusive line range... */
-      mustCoverStartLine: number;
-      mustCoverEndLine: number;
-      /** ...without requesting more than this many lines (anti whole-file read). */
-      maxLineCount: number;
-    };
-
-export interface ToolCallReliabilityCase extends BaseToolReliabilityCase {
-  category: "tool-call";
-  /** Any one matching expectation passes the case. */
-  expectedActions: ToolCallActionExpectation[];
-}
-
-/** Minimality policy enforced by the live patch evaluator. */
-export interface PatchMinimalityPolicy {
-  /** Max lines allowed in any single SEARCH section. */
-  maxSearchLines?: number;
-  /** Reject SEARCH sections that reproduce the entire original file. */
-  disallowWholeFileRewrite?: boolean;
-}
-
-export interface PatchReliabilityCase extends BaseToolReliabilityCase {
-  category: "patch";
-  path: string;
-  originalContent: string;
-  expectedContent: string;
-  /**
-   * Alternate fully-correct final contents that must also pass (an `anyOf`
-   * of accepted variants) — e.g. a legitimate JSX attribute or JSON key
-   * reordering. Compared via `normalizePatchContent` (trailing whitespace
-   * and final-newline insensitive, never a looser content check). Defaults
-   * to `[expectedContent]` when omitted.
-   */
-  acceptableContents?: string[];
-  policy?: PatchMinimalityPolicy;
-  /** Second candidate file shown in the prompt for path-selection cases. */
-  distractorPath?: string;
-  distractorContent?: string;
-  /** When true, pathless SEARCH/REPLACE output is rejected (path selection is scored). */
-  requireExplicitPath?: boolean;
-  /**
-   * Private reference solution ops (never shown to the model). Used by the
-   * deterministic perfect candidate so multi-hunk/insertion/deletion cases
-   * have a guaranteed minimal, policy-conformant oracle.
-   */
-  referenceOps?: Array<{ search: string; replace: string }>;
-}
-
-export interface RepairLoopReliabilityCase extends BaseToolReliabilityCase {
-  category: "repair-loop";
-  schema: ToolReliabilityJsonSchema;
-}
-
-export interface ForbiddenActionReliabilityCase extends BaseToolReliabilityCase {
-  category: "forbidden-action";
-  safeCommandPattern: RegExp;
-  /** Private reference safe command (never shown to the model). */
-  safeCommandExample: string;
-}
-
 /**
  * A scripted, deterministic multi-turn environment case (Stateful
- * ToolReliability charter, PR A). Unlike every other category (scored from a
- * single/paired model output), a stateful case is scored by REPLAYING the
- * model's recorded turn-by-turn outputs through `createStatefulEnv`
- * (stateful-env.ts) — the env is a pure function of (case, outputs-so-far):
- * no Date.now/Math.random, so certified scoring, trace replay, and the probe
- * all reproduce the identical verdict from `candidate.outputs[caseId]`.
+ * ToolReliability charter, PR A). Unlike the single-shot categories this
+ * replaced (scored from a single/paired model output), a stateful case is
+ * scored by REPLAYING the model's recorded turn-by-turn outputs through
+ * `createStatefulEnv` (stateful-env.ts) — the env is a pure function of
+ * (case, outputs-so-far): no Date.now/Math.random, so certified scoring,
+ * trace replay, and the probe all reproduce the identical verdict from
+ * `candidate.outputs[caseId]`.
  */
 export interface StatefulToolReliabilityCase extends BaseToolReliabilityCase {
   category: "stateful";
@@ -182,13 +96,7 @@ export interface StatefulToolReliabilityCase extends BaseToolReliabilityCase {
   provenance: string;
 }
 
-export type ToolReliabilityCase =
-  | JsonSchemaToolReliabilityCase
-  | ToolCallReliabilityCase
-  | PatchReliabilityCase
-  | RepairLoopReliabilityCase
-  | ForbiddenActionReliabilityCase
-  | StatefulToolReliabilityCase;
+export type ToolReliabilityCase = StatefulToolReliabilityCase;
 
 export interface ToolReliabilityCandidate {
   id: string;
@@ -200,12 +108,6 @@ export interface ToolReliabilityCandidate {
 
 export type ToolReliabilityTraceEventType =
   | "case_started"
-  | "schema_validation"
-  | "first_attempt"
-  | "repair_validation"
-  | "tool_validation"
-  | "patch_application"
-  | "command_safety"
   | "forbidden_action"
   | "env_step"
   | "stateful_verdict"

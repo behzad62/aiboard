@@ -11,22 +11,15 @@ import {
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
-  buildPerfectToolReliabilityCandidate,
-  runToolReliabilityPack,
+  STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
-  type ToolReliabilityCandidate,
 } from "../lib/benchmark/toolreliability";
 import {
-  deriveSoloTeamComposition,
   deriveTeamComposition,
   runCertifiedTeamIq,
 } from "../lib/benchmark/teamiq";
-import type { CertifiedRunContext } from "../lib/benchmark/certified/run-context";
-import type {
-  BenchmarkCaseV2,
-  BenchmarkTeamCompositionRole,
-} from "../lib/benchmark/types";
-import type { ChatParams, StreamChunk, StructuredOutputFormat } from "../lib/providers/base";
+import type { BenchmarkCaseV2, BenchmarkTeamCompositionRole } from "../lib/benchmark/types";
+import type { ChatParams, StreamChunk } from "../lib/providers/base";
 
 let failures = 0;
 
@@ -37,31 +30,6 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   );
 }
 
-function makeTeamIqContext(
-  runId: string,
-  caseIds: string[],
-  teamCompositionIds: string[]
-): CertifiedRunContext {
-  return {
-    runId,
-    mode: "certified",
-    track: "teamiq",
-    harnessProfile: "raw-single-model",
-    suiteId: "suite-certified-teamiq",
-    startedAt: "2026-06-28T13:00:00.000Z",
-    caseIds,
-    teamCompositionIds,
-    modelBudget: {},
-    recordAttempt: async () => {},
-    recordVerifier: async () => {},
-    recordArtifact: async () => {},
-    recordTrace: async () => {},
-    recordEvent: async () => {},
-    recordToolCall: async () => {},
-    recordFailure: async () => {},
-  };
-}
-
 const now = "2026-06-28T13:00:00.000Z";
 const caseV2: BenchmarkCaseV2 = {
   id: "teamiq-toolreliability-current-pack",
@@ -69,14 +37,14 @@ const caseV2: BenchmarkCaseV2 = {
   track: "teamiq",
   title: "TeamIQ over ToolReliability current pack",
   description:
-    "TeamIQ benchmark using deterministic ToolReliability tasks as the scored substrate.",
+    "TeamIQ benchmark using deterministic stateful ToolReliability tasks as the scored substrate.",
   difficulty: "medium",
   tags: ["teamiq", "toolreliability"],
   caseVersion: "0.1.0",
   createdAt: now,
   updatedAt: now,
   prompt: {
-    userRequest: "Run solo baselines and a model team over ToolReliability cases.",
+    userRequest: "Run solo baselines and a model team over stateful ToolReliability cases.",
   },
   environment: {
     type: "browser",
@@ -88,7 +56,7 @@ const caseV2: BenchmarkCaseV2 = {
   },
   budget: {
     maxUsd: 1,
-    maxModelCalls: 100,
+    maxModelCalls: 200,
   },
   scoring: {
     scoringVersion: "teamiq-toolreliability-current",
@@ -132,29 +100,64 @@ const team = deriveTeamComposition({
   roles,
 });
 
-const perfectOutputs = buildPerfectToolReliabilityCandidate().outputs;
+// Two small stateful cases (few turns each) keep this test's per-turn x
+// per-role call multiplication cheap while still exercising a multi-turn
+// case (redundant-read, 3 reference turns) and a shorter one (write-scope,
+// 2 reference turns).
 const selectedCases = [
-  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "json-schema"),
-  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "tool-call"),
-  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "patch"),
-  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "repair-loop"),
-  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.category === "forbidden-action"),
-].filter((benchmarkCase): benchmarkCase is (typeof TOOL_RELIABILITY_CASES)[number] =>
-  Boolean(benchmarkCase)
-);
-const outputByCase = new Map(
-  selectedCases.flatMap((benchmarkCase) =>
-    (perfectOutputs[benchmarkCase.id] ?? []).map((output, index) => [
-      `${benchmarkCase.canary}:${index}`,
-      output,
-    ])
-  )
-);
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.kind === "redundant-read")!,
+  TOOL_RELIABILITY_CASES.find((benchmarkCase) => benchmarkCase.kind === "write-scope")!,
+];
+
 const callsByProvider = new Map<string, number>();
 const capturedCalls: Array<{
   providerId: string;
+  caseId: string;
   params: Pick<ChatParams, "messages" | "structuredOutput">;
 }> = [];
+
+/**
+ * Which reference-transcript entry a call should answer with, derived
+ * PURELY from that call's own prompt text — never from shared mutable
+ * state. `buildStatefulTurnPrompt` folds the transcript-so-far into every
+ * turn's prompt as `Turn N - you replied:` markers (one per completed
+ * turn), and each COMPOSITION (a solo baseline or the main team) builds its
+ * own transcript from scratch per case (`runTeamIqToolReliabilityAttempt`'s
+ * `transcript` variable) -- so counting those markers in THIS prompt gives
+ * the correct next-turn index for THIS composition's progress on THIS case,
+ * with zero risk of one composition's turn count leaking into another's (a
+ * shared/global counter would collide the moment solo baselines and the
+ * main team both work the same case ids in one run, which they do here).
+ */
+function referenceTurnIndex(prompt: string): number {
+  return (prompt.match(/Turn \d+ - you replied:/g) ?? []).length;
+}
+
+/**
+ * Every physical call whose output actually becomes the case's scored
+ * per-turn output (a solo team's one-and-only role call — its prompt says
+ * "Your role: single (single)" per `deriveSoloTeamComposition` — or a
+ * multi-role team's SYNTHESIS call) draws the correct reference-transcript
+ * entry for its turn. `CertifiedModelStream`'s mock signature is only
+ * `{providerId, params}` (no participantId), so team/solo/role attribution
+ * is read from the PROMPT TEXT itself, exactly like the real harness's own
+ * prompt-shape distinctions. Non-scored role calls (the other members of a
+ * multi-role team, whose raw output is discarded once synthesis picks the
+ * team's one turn answer) get an inert placeholder.
+ */
+function scoredTurnOutput(benchmarkCase: { id: string }, prompt: string): string | undefined {
+  if (!isScoredTurnCall(prompt)) return undefined;
+  const reference = STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id] ?? [];
+  return reference[referenceTurnIndex(prompt)];
+}
+
+function isScoredTurnCall(prompt: string): boolean {
+  return prompt.includes("Synthesize the team's outputs") || prompt.includes("Your role: single (single)");
+}
+
+function findCaseByCanary(prompt: string): (typeof selectedCases)[number] | undefined {
+  return selectedCases.find((benchmarkCase) => prompt.includes(benchmarkCase.canary));
+}
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
@@ -183,33 +186,19 @@ const summary = await runCertifiedBenchmark({
       },
       streamChat: async function* ({ providerId, params }): AsyncIterable<StreamChunk> {
         callsByProvider.set(providerId, (callsByProvider.get(providerId) ?? 0) + 1);
+        const prompt = params.messages.map((message) => message.content).join("\n");
+        const benchmarkCase = findCaseByCanary(prompt);
         capturedCalls.push({
           providerId,
+          caseId: benchmarkCase?.id ?? "",
           params: {
             messages: params.messages,
             structuredOutput: params.structuredOutput,
           },
         });
-        const prompt = params.messages.map((message) => message.content).join("\n");
-        const caseCanary = selectedCases.find((benchmarkCase) =>
-          prompt.includes(benchmarkCase.canary)
-        )?.canary;
-        // The genuine repair round carries the team's own previous output plus
-        // parser feedback ("Previous invalid answer:" / "Parser feedback:").
-        // Attempt 0 (no such markers) returns the malformed first output; the
-        // repair round returns the valid JSON at index 1.
-        const repairAttempt =
-          prompt.includes("Parser feedback:") &&
-          prompt.includes("Previous invalid answer:")
-            ? 1
-            : 0;
-        yield {
-          type: "token",
-          content:
-            outputByCase.get(`${caseCanary}:${repairAttempt}`) ??
-            outputByCase.get(`${caseCanary}:0`) ??
-            "{}",
-        };
+        const content =
+          (benchmarkCase && scoredTurnOutput(benchmarkCase, prompt)) ?? "Investigating the current state.";
+        yield { type: "token", content };
         yield { type: "done" };
       },
     }),
@@ -224,22 +213,6 @@ const soloAttempts = attempts.filter(
 );
 const teamAttempt = attempts.find((attempt) => attempt.teamCompositionId === team.id);
 const teamVerifier = verifiers.find((verifier) => verifier.attemptId === teamAttempt?.id);
-
-function promptForCase(caseCategory: string): {
-  prompt: string;
-  structuredOutput?: StructuredOutputFormat;
-} {
-  const benchmarkCase = selectedCases.find((item) => item.category === caseCategory);
-  const captured = capturedCalls.find((call) =>
-    call.params.messages.some((message) =>
-      benchmarkCase ? message.content.includes(benchmarkCase.canary) : false
-    )
-  );
-  return {
-    prompt: captured?.params.messages.map((message) => message.content).join("\n") ?? "",
-    structuredOutput: captured?.params.structuredOutput,
-  };
-}
 
 check(
   "certified TeamIQ run completes",
@@ -272,81 +245,60 @@ check(
     teamAttempt.verifiedQuality === 1,
   teamAttempt
 );
-// Each round costs one call per role plus one synthesis call. Non-repair cases
-// run a single round; the repair-loop case runs a second (repair) round because
-// its genuine first attempt is malformed.
-const repairCaseCount = selectedCases.filter(
-  (benchmarkCase) => benchmarkCase.category === "repair-loop"
-).length;
-const expectedTeamTraceCount = (roles.length + 1) * (selectedCases.length + repairCaseCount);
-check(
-  "certified TeamIQ records traces for solo and team calls",
-  bundle.traces.length >
-    selectedCases.length * roles.length &&
-    teamAttempt?.traceIds.length === expectedTeamTraceCount,
-  { traceCount: bundle.traces.length, expectedTeamTraceCount, teamAttempt }
+
+// Expected TEAM call count, by formula (not filtered from capturedCalls,
+// since the mock's signature carries no participantId to distinguish team
+// calls from the solo-baseline calls this same run also makes): every turn
+// of every case costs (roles.length + 1) physical calls for this 3-role
+// team (one per role, plus one synthesis call), and the number of turns a
+// case takes equals its reference transcript's length (each entry is
+// exactly one physical turn — see stateful-env.ts; the final entry is
+// always the free-text answer that sets `done`).
+const expectedTeamCallCount = selectedCases.reduce(
+  (sum, benchmarkCase) =>
+    sum + (STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id]?.length ?? 0) * (roles.length + 1),
+  0
 );
-const jsonCall = promptForCase("json-schema");
 check(
-  "certified TeamIQ states the JSON schema in the prompt without provider enforcement",
-  jsonCall.prompt.includes("Required JSON schema:") &&
-    jsonCall.prompt.includes('"decision"') &&
-    jsonCall.structuredOutput === undefined,
-  jsonCall
+  "certified TeamIQ records one trace per physical team model call, matching the per-turn x per-role formula",
+  teamAttempt?.traceIds.length === expectedTeamCallCount && bundle.traces.length >= expectedTeamCallCount,
+  { traceCount: bundle.traces.length, expectedTeamCallCount, teamAttempt }
 );
-const toolCall = promptForCase("tool-call");
+
+// The prompt contract for every stateful case is the SAME generic tool-
+// action protocol (buildStatefulTurnPrompt) — no per-case JSON schema is
+// ever stated, and no provider structured-output enforcement is ever
+// requested (mirrors the solo turn loop's own stateful branch). This is the
+// honest stateful-pack replacement for the old json-schema/tool-call/patch/
+// forbidden-action per-category prompt-shape assertions, which no longer
+// have anything to assert against post-cut.
 check(
-  "certified TeamIQ documents the tool-action grammar without leaking the expected action",
-  toolCall.prompt.includes("Available JSON tool actions:") &&
-    toolCall.prompt.includes("read_range") &&
-    !toolCall.prompt.includes("Expected JSON tool action:"),
-  toolCall.prompt
+  "certified TeamIQ states the stateful action-protocol contract in the prompt, never a per-case JSON schema",
+  capturedCalls.length > 0 &&
+    capturedCalls.every((call) => {
+      const prompt = call.params.messages.map((message) => message.content).join("\n");
+      return (
+        prompt.includes("Available JSON tool actions") &&
+        !prompt.includes("Required JSON schema:")
+      );
+    }),
+  capturedCalls.map((call) => call.params.messages.map((message) => message.content).join("\n").slice(0, 200))
 );
-const patchCall = promptForCase("patch");
 check(
-  "certified TeamIQ reuses current ToolReliability patch grammar and structured output",
-  patchCall.prompt.includes("Accepted patch response formats:") &&
-    patchCall.prompt.includes("<<<<<<< SEARCH") &&
-    patchCall.structuredOutput?.name === "toolreliability_patch",
-  patchCall
+  "certified TeamIQ never requests provider structured-output enforcement on stateful turns",
+  capturedCalls.every((call) => call.params.structuredOutput === undefined),
+  capturedCalls.map((call) => call.params.structuredOutput)
 );
-const repairCase = selectedCases.find(
-  (benchmarkCase) => benchmarkCase.category === "repair-loop"
-)!;
-const repairFirstOutput = outputByCase.get(`${repairCase.canary}:0`) ?? "";
-const repairRoundCalls = capturedCalls.filter(
-  (call) =>
-    call.params.messages.some((message) =>
-      message.content.includes(repairCase.canary)
-    ) &&
-    call.params.messages.some(
-      (message) =>
-        message.content.includes("Previous invalid answer:") &&
-        message.content.includes("Parser feedback:")
+check(
+  "certified TeamIQ carries every case's canary into its prompts",
+  selectedCases.every((benchmarkCase) =>
+    capturedCalls.some((call) =>
+      call.params.messages.some((message) => message.content.includes(benchmarkCase.canary))
     )
+  ),
+  selectedCases.map((item) => item.canary)
 );
-const repairRoundPrompt =
-  repairRoundCalls[0]?.params.messages.map((message) => message.content).join("\n") ??
-  "";
-check(
-  "certified TeamIQ runs a genuine repair round carrying the team's own failed output",
-  // A repair round only happens because attempt 0 (the team's own output) was
-  // malformed; the repair prompt echoes that exact failed output plus feedback.
-  repairRoundCalls.length > 0 &&
-    repairRoundPrompt.includes("Previous invalid answer:") &&
-    repairRoundPrompt.includes("Parser feedback:") &&
-    repairRoundPrompt.includes(repairFirstOutput) &&
-    repairRoundCalls.every((call) => call.params.structuredOutput === undefined),
-  { repairRoundCount: repairRoundCalls.length, repairRoundPrompt }
-);
-const forbiddenCall = promptForCase("forbidden-action");
-check(
-  "certified TeamIQ describes the run-action shape without printing an allowed command",
-  forbiddenCall.prompt.includes('"action":"run"') &&
-    !forbiddenCall.prompt.includes("Allowed safe verification action:") &&
-    !forbiddenCall.prompt.includes('"command":"npm test"'),
-  forbiddenCall.prompt
-);
+
 check(
   "certified TeamIQ model traces are keyed to individual ToolReliability cases",
   teamAttempt?.traceIds.every((traceId) => {
@@ -376,10 +328,14 @@ check(
   Object.fromEntries(callsByProvider)
 );
 
+// --- Multi-turn mechanics: a multi-role team makes exactly one synthesis
+// call PER TURN (not once per case), stopping as soon as the env reports
+// done -- proving the turn loop actually iterates rather than collapsing
+// a multi-turn case into a single round. ---
+
 __resetBenchmarkStoreForTests();
-const synthesisCase = selectedCases.find(
-  (benchmarkCase) => benchmarkCase.category === "json-schema"
-)!;
+const synthesisCase = TOOL_RELIABILITY_CASES.find((item) => item.kind === "write-scope")!;
+const synthesisReferenceTurns = (STATEFUL_REFERENCE_TRANSCRIPTS[synthesisCase.id] ?? []).length;
 const twoRoleTeam = deriveTeamComposition({
   name: "Synthesis required team",
   roles: roles.slice(0, 2),
@@ -412,13 +368,11 @@ const synthesisSummary = await runCertifiedBenchmark({
       streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
         synthesisModelCalls++;
         const prompt = params.messages.map((message) => message.content).join("\n");
-        const isSynthesis = prompt.includes("Synthesize the team outputs");
+        const isSynthesis = prompt.includes("Synthesize the team's outputs");
         if (isSynthesis) synthesisPrompts++;
         yield {
           type: "token",
-          content: isSynthesis
-            ? outputByCase.get(`${synthesisCase.canary}:0`) ?? "{}"
-            : JSON.stringify({ member: "not the final answer" }),
+          content: scoredTurnOutput(synthesisCase, prompt) ?? "Reviewing the task.",
         };
         yield { type: "done" };
       },
@@ -428,127 +382,17 @@ const synthesisAttempt = (await listBenchmarkAttemptsV2()).find(
   (attempt) => attempt.runId === synthesisSummary.runId
 );
 check(
-  "multi-role TeamIQ adds one synthesis model call per case",
-  synthesisModelCalls === twoRoleTeam.roles.length + 1 && synthesisPrompts === 1,
-  { synthesisModelCalls, synthesisPrompts }
+  "multi-role TeamIQ adds exactly one synthesis call PER TURN, matching the case's reference turn count",
+  synthesisPrompts === synthesisReferenceTurns &&
+    synthesisModelCalls === (twoRoleTeam.roles.length + 1) * synthesisReferenceTurns,
+  { synthesisModelCalls, synthesisPrompts, synthesisReferenceTurns }
 );
 check(
-  "multi-role TeamIQ scores the synthesized answer, not a member output",
+  "multi-role TeamIQ scores the synthesized transcript, not a member's raw output",
   synthesisAttempt?.status === "passed" &&
-    synthesisAttempt.modelCalls === twoRoleTeam.roles.length + 1,
+    synthesisAttempt.modelCalls === (twoRoleTeam.roles.length + 1) * synthesisReferenceTurns,
   synthesisAttempt
 );
-
-// Genuine repair flow through the TeamIQ path: attempt 0 is the team's OWN
-// output. When it fails post-hoc validation the team gets exactly one repair
-// round that echoes its own failed output plus the parser feedback, and the
-// runner labels firstAttemptSource='model' (not 'seeded').
-{
-  const repairCase = selectedCases.find(
-    (benchmarkCase) => benchmarkCase.category === "repair-loop"
-  )!;
-  const repairPerfect = perfectOutputs[repairCase.id] ?? [];
-  const validRepair = repairPerfect[repairPerfect.length - 1] ?? "{}";
-  const soloTeam = deriveSoloTeamComposition({
-    modelId: "openai:gpt-solo-repair",
-    providerId: "openai",
-    displayName: "GPT Solo Repair",
-    temperature: 0,
-  });
-  const repairUserPrompts: string[] = [];
-  let repairCallIndex = 0;
-  const responses = ["totally not json", validRepair];
-  const genuineAttempts = await runCertifiedTeamIq({
-    context: makeTeamIqContext("run-teamiq-genuine-repair", [repairCase.id], [soloTeam.id]),
-    teamCompositions: [soloTeam],
-    task: { kind: "toolreliability", casePack: [repairCase] },
-    includeSoloBaselines: false,
-    pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
-    streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
-      repairUserPrompts.push(
-        params.messages.find((message) => message.role === "user")?.content ?? ""
-      );
-      yield { type: "token", content: responses[repairCallIndex++] ?? "{}" };
-      yield { type: "done" };
-    },
-  });
-  check(
-    "TeamIQ genuine repair round echoes the team's own failed output plus parser feedback",
-    repairUserPrompts.length === 2 &&
-      !repairUserPrompts[0].includes("Previous invalid answer:") &&
-      repairUserPrompts[1].includes("Previous invalid answer:") &&
-      repairUserPrompts[1].includes("totally not json") &&
-      repairUserPrompts[1].includes("Parser feedback:"),
-    repairUserPrompts.map((prompt) => prompt.slice(0, 300))
-  );
-  check(
-    "TeamIQ genuine repair flow passes with exactly two model calls",
-    genuineAttempts[0]?.status === "passed" &&
-      genuineAttempts[0].toolReliabilityScore === 100 &&
-      genuineAttempts[0].modelCalls === 2,
-    genuineAttempts[0]
-  );
-  // Re-run the pack over the exact outputs TeamIQ produced (its own malformed
-  // first answer, then the valid repair) to confirm the runner labels the
-  // first attempt 'model' rather than 'seeded'.
-  const genuineCandidate: ToolReliabilityCandidate = {
-    id: "teamiq-genuine-repair-candidate",
-    teamCompositionId: soloTeam.id,
-    outputs: { [repairCase.id]: ["totally not json", validRepair] },
-  };
-  const genuineResult = runToolReliabilityPack(genuineCandidate, [repairCase]);
-  const genuineEvents = genuineResult.caseResults[0]?.events ?? [];
-  check(
-    "TeamIQ genuine repair labels firstAttemptSource='model'",
-    genuineResult.caseResults[0]?.passed === true &&
-      genuineEvents.every(
-        (event) =>
-          event.details?.firstAttemptSource === undefined ||
-          event.details.firstAttemptSource === "model"
-      ) &&
-      genuineEvents.some((event) => event.details?.firstAttemptSource === "model"),
-    genuineEvents.map((event) => ({
-      type: event.type,
-      firstAttemptSource: event.details?.firstAttemptSource,
-    }))
-  );
-}
-
-// No-repair-needed flow through the TeamIQ path: a genuinely valid first
-// attempt is scored on a single model call with no repair round.
-{
-  const repairCase = selectedCases.find(
-    (benchmarkCase) => benchmarkCase.category === "repair-loop"
-  )!;
-  const repairPerfect = perfectOutputs[repairCase.id] ?? [];
-  const validFirst = repairPerfect[repairPerfect.length - 1] ?? "{}";
-  const soloTeam = deriveSoloTeamComposition({
-    modelId: "openai:gpt-solo-clean",
-    providerId: "openai",
-    displayName: "GPT Solo Clean",
-    temperature: 0,
-  });
-  let noRepairCalls = 0;
-  const noRepairAttempts = await runCertifiedTeamIq({
-    context: makeTeamIqContext("run-teamiq-no-repair", [repairCase.id], [soloTeam.id]),
-    teamCompositions: [soloTeam],
-    task: { kind: "toolreliability", casePack: [repairCase] },
-    includeSoloBaselines: false,
-    pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
-    streamChat: async function* (): AsyncIterable<StreamChunk> {
-      noRepairCalls++;
-      yield { type: "token", content: validFirst };
-      yield { type: "done" };
-    },
-  });
-  check(
-    "TeamIQ no-repair-needed flow scores a valid first attempt on a single model call",
-    noRepairCalls === 1 &&
-      noRepairAttempts[0]?.status === "passed" &&
-      noRepairAttempts[0].modelCalls === 1,
-    { noRepairCalls, attempt: noRepairAttempts[0] }
-  );
-}
 
 if (failures === 0) {
   console.log("PASS");

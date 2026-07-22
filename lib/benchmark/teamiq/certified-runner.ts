@@ -16,18 +16,16 @@ import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
 import type { ReasoningEffort } from "@/lib/db/schema";
 import {
+  buildStatefulTurnPrompt,
+  createStatefulEnv,
   runToolReliabilityPack,
+  type StatefulToolReliabilityCase,
   type ToolReliabilityCandidate,
   type ToolReliabilityCase,
   type ToolReliabilityCaseResult,
   type ToolReliabilityTraceEvent,
 } from "@/lib/benchmark/toolreliability";
-import {
-  buildCertifiedToolReliabilityPrompt,
-  certifiedToolReliabilityStructuredOutputForCase,
-  type ToolReliabilityRepairContext,
-} from "@/lib/benchmark/toolreliability/certified-runner";
-import { validateToolReliabilityJsonOutput } from "@/lib/benchmark/toolreliability";
+import { TOOL_RELIABILITY_STATEFUL_MAX_TOKENS } from "@/lib/benchmark/toolreliability/certified-runner";
 import {
   diagnoseToolReliabilityCaseResult,
   summarizeToolReliabilityDiagnostics,
@@ -162,6 +160,16 @@ async function expandTeamIqCompositions(
   return [...solos, ...teams];
 }
 
+/**
+ * Drives one stateful ToolReliability case end to end for a team: mirrors
+ * the SOLO turn loop (toolreliability/certified-runner.ts's
+ * runCertifiedToolReliabilityAttempt) but each "model call" for a turn is a
+ * full TEAM round (`runTeamRound`) instead of a single model call — every
+ * team role answers the turn, and (for multi-role teams) a synthesis call
+ * picks the team's one turn output. `caseOutputs` collects exactly one
+ * output per turn, in order, so `runToolReliabilityPack` replays it
+ * identically to how the solo path replays its own turn-by-turn outputs.
+ */
 async function runTeamIqToolReliabilityAttempt(
   input: RunCertifiedTeamIqInput,
   team: BenchmarkTeamComposition,
@@ -174,42 +182,23 @@ async function runTeamIqToolReliabilityAttempt(
   for (const benchmarkCase of casePack) {
     throwIfCertifiedRunAborted(input.signal);
     const caseOutputs: string[] = [];
-    // Genuine repair loop: attempt 0 is the team's OWN real output. Only if it
-    // fails post-hoc validation does the team get one repair round that carries
-    // its own failed output plus the specific parser feedback. This mirrors the
-    // solo ToolReliability path so TeamIQ repair scores measure recovery from
-    // the team's own failed output rather than from a seeded constant.
-    const firstOutput = await runTeamRound({
-      input,
-      team,
-      benchmarkCase,
-      attemptId,
-      attemptIndex: 0,
-      calls,
-    });
-    caseOutputs.push(firstOutput);
-
-    if (benchmarkCase.category === "repair-loop") {
-      const firstValidation = validateToolReliabilityJsonOutput(
-        firstOutput,
-        benchmarkCase.schema
-      );
-      if (!firstValidation.valid) {
-        throwIfCertifiedRunAborted(input.signal);
-        const repairOutput = await runTeamRound({
-          input,
-          team,
-          benchmarkCase,
-          attemptId,
-          attemptIndex: 1,
-          calls,
-          repairContext: {
-            previousOutput: firstOutput,
-            feedback: firstValidation.message,
-          },
-        });
-        caseOutputs.push(repairOutput);
-      }
+    const env = createStatefulEnv(benchmarkCase);
+    let transcript = "";
+    for (let turn = 0; turn < benchmarkCase.maxTurns; turn++) {
+      throwIfCertifiedRunAborted(input.signal);
+      const output = await runTeamRound({
+        input,
+        team,
+        benchmarkCase,
+        attemptId,
+        turn,
+        transcript,
+        calls,
+      });
+      caseOutputs.push(output);
+      const stepResult = env.step(output);
+      transcript += `\n\nTurn ${turn + 1} - you replied:\n${output}\n\nTurn ${turn + 1} - tool result:\n${stepResult.renderedResult}`;
+      if (stepResult.done) break;
     }
     outputs[benchmarkCase.id] = caseOutputs;
   }
@@ -269,50 +258,45 @@ async function runTeamIqToolReliabilityAttempt(
 }
 
 /**
- * Runs one full team round for a single case at the given attemptIndex and
- * returns the team's final output for that round (synthesized answer for
- * multi-role teams, preferred-role output otherwise). All per-call latency /
- * token / cost bookkeeping is appended to `calls`. When `repairContext` is
- * supplied it is threaded into both the per-role and synthesis prompts so the
- * repair round carries the team's own previous output plus parser feedback.
+ * Runs one full team round for a single TURN of a stateful case and returns
+ * the team's final output for that turn (synthesized answer for multi-role
+ * teams, preferred-role output otherwise). All per-call latency/token/cost
+ * bookkeeping is appended to `calls`. Mirrors the solo turn loop's per-turn
+ * `buildStatefulTurnPrompt(benchmarkCase, transcript)` call — every role
+ * (and the synthesis call) sees the SAME rendered transcript-so-far, so a
+ * team's per-turn behavior is directly comparable to a solo model's.
  */
 async function runTeamRound(params: {
   input: RunCertifiedTeamIqInput;
   team: BenchmarkTeamComposition;
-  benchmarkCase: ToolReliabilityCase;
+  benchmarkCase: StatefulToolReliabilityCase;
   attemptId: string;
-  attemptIndex: number;
+  turn: number;
+  transcript: string;
   calls: TeamIqParticipantCall[];
-  repairContext?: ToolReliabilityRepairContext;
 }): Promise<string> {
-  const { input, team, benchmarkCase, attemptId, attemptIndex, calls, repairContext } =
-    params;
+  const { input, team, benchmarkCase, attemptId, turn, transcript, calls } = params;
   const roleOutputs: string[] = [];
   for (const role of team.roles) {
     const call = await callCertifiedModel({
       model: selectedModelForRole(role),
       system:
-        "You are participating in a certified TeamIQ benchmark. Return only the requested benchmark answer.",
-      user: teamIqToolReliabilityPrompt({
+        "You are participating in a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+      user: teamIqStatefulTurnPrompt({
         team,
         role,
         benchmarkCase,
-        attemptIndex,
+        transcript,
         previousOutputs: roleOutputs,
-        repairContext,
       }),
-      maxTokens: input.maxTokens ?? role.maxTokens ?? 512,
+      maxTokens: input.maxTokens ?? role.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
       temperature: 0,
       reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
-      structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
-        benchmarkCase,
-        attemptIndex
-      ),
       allowInvalidStructuredOutput: true,
       context: input.context,
       caseId: benchmarkCase.id,
       attemptId,
-      participantId: `${team.id}:${role.slot}`,
+      participantId: `${team.id}:${role.slot}:turn${turn}`,
       pricing: input.pricing,
       streamChat: input.streamChat,
       signal: input.signal,
@@ -325,26 +309,21 @@ async function runTeamRound(params: {
     const synthesisCall = await callCertifiedModel({
       model: selectedModelForRole(synthesisRole),
       system:
-        "You are the final synthesizer for a certified TeamIQ benchmark. Return only the requested benchmark answer.",
-      user: teamIqToolReliabilitySynthesisPrompt({
+        "You are the final synthesizer for a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+      user: teamIqStatefulSynthesisPrompt({
         team,
         benchmarkCase,
-        attemptIndex,
+        transcript,
         roleOutputs,
-        repairContext,
       }),
-      maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? 512,
+      maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
       temperature: 0,
       reasoningEffort: certifiedReasoningEffort(synthesisRole.reasoningEffort),
-      structuredOutput: certifiedToolReliabilityStructuredOutputForCase(
-        benchmarkCase,
-        attemptIndex
-      ),
       allowInvalidStructuredOutput: true,
       context: input.context,
       caseId: benchmarkCase.id,
       attemptId,
-      participantId: `${team.id}:${synthesisRole.slot}:synthesis`,
+      participantId: `${team.id}:${synthesisRole.slot}:synthesis:turn${turn}`,
       pricing: input.pricing,
       streamChat: input.streamChat,
       signal: input.signal,
@@ -371,19 +350,14 @@ function certifiedReasoningEffort(
     : undefined;
 }
 
-function teamIqToolReliabilityPrompt(input: {
+function teamIqStatefulTurnPrompt(input: {
   team: BenchmarkTeamComposition;
   role: BenchmarkTeamCompositionRole;
-  benchmarkCase: ToolReliabilityCase;
-  attemptIndex: number;
+  benchmarkCase: StatefulToolReliabilityCase;
+  transcript: string;
   previousOutputs: string[];
-  repairContext?: ToolReliabilityRepairContext;
 }): string {
-  const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
-    input.benchmarkCase,
-    input.attemptIndex,
-    input.repairContext
-  );
+  const benchmarkPrompt = buildStatefulTurnPrompt(input.benchmarkCase, input.transcript);
   const collaborationNote =
     input.previousOutputs.length > 0
       ? `\n\nEarlier team outputs this turn:\n${input.previousOutputs.join("\n---\n")}`
@@ -400,18 +374,13 @@ function teamIqToolReliabilityPrompt(input: {
     .join("\n");
 }
 
-function teamIqToolReliabilitySynthesisPrompt(input: {
+function teamIqStatefulSynthesisPrompt(input: {
   team: BenchmarkTeamComposition;
-  benchmarkCase: ToolReliabilityCase;
-  attemptIndex: number;
+  benchmarkCase: StatefulToolReliabilityCase;
+  transcript: string;
   roleOutputs: string[];
-  repairContext?: ToolReliabilityRepairContext;
 }): string {
-  const benchmarkPrompt = buildCertifiedToolReliabilityPrompt(
-    input.benchmarkCase,
-    input.attemptIndex,
-    input.repairContext
-  );
+  const benchmarkPrompt = buildStatefulTurnPrompt(input.benchmarkCase, input.transcript);
   const memberOutputs = input.team.roles
     .map((role, index) =>
       [
@@ -423,8 +392,8 @@ function teamIqToolReliabilitySynthesisPrompt(input: {
   return [
     `Team: ${input.team.name}`,
     input.team.strategy ? `Strategy: ${input.team.strategy}` : null,
-    "Synthesize the team outputs into one final answer.",
-    "Return only the benchmark answer that satisfies the contract below; do not explain the synthesis.",
+    "Synthesize the team's outputs into ONE final answer for THIS TURN.",
+    "Return only the JSON tool action(s) or final plain-text answer that satisfies the contract below; do not explain the synthesis.",
     benchmarkPrompt,
     "Team member outputs:",
     memberOutputs,
@@ -543,12 +512,7 @@ function toolCallTracesForResult(
 }
 
 function isToolEvidenceEvent(event: ToolReliabilityTraceEvent): boolean {
-  return (
-    event.type === "tool_validation" ||
-    event.type === "patch_application" ||
-    event.type === "command_safety" ||
-    event.type === "forbidden_action"
-  );
+  return event.type === "forbidden_action";
 }
 
 function toolTraceStatus(

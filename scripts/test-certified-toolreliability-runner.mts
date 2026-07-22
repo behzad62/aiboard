@@ -34,7 +34,6 @@ import type {
   ChatParams,
   SelectedModel,
   StreamChunk,
-  StructuredOutputFormat,
 } from "../lib/providers/base";
 
 let failures = 0;
@@ -114,12 +113,20 @@ await saveBenchmarkCaseV2(caseV2);
 await saveBenchmarkTeamComposition(team);
 
 const perfectOutputs = buildPerfectToolReliabilityCandidate().outputs;
-const streamOutputs = TOOL_RELIABILITY_CASES.flatMap((benchmarkCase) => {
-  const outputs = perfectOutputs[benchmarkCase.id] ?? [];
-  return benchmarkCase.category === "repair-loop" ? outputs.slice(1) : outputs;
-});
+// Every remaining case is stateful, and its reference transcript has a
+// VARIABLE number of turns (2-6, per case) -- so the flat call sequence is
+// simply every case's reference transcript concatenated in order, and the
+// starting call index for a given case is the CUMULATIVE turn count of
+// every case before it (never a fixed 1-per-case stride, unlike the old
+// single-shot pack where every case contributed exactly one output).
+const streamOutputs = TOOL_RELIABILITY_CASES.flatMap(
+  (benchmarkCase) => perfectOutputs[benchmarkCase.id] ?? []
+);
 function callIndexForCase(caseIndex: number): number {
-  return TOOL_RELIABILITY_CASES.slice(0, caseIndex).length;
+  return TOOL_RELIABILITY_CASES.slice(0, caseIndex).reduce(
+    (sum, benchmarkCase) => sum + (perfectOutputs[benchmarkCase.id]?.length ?? 0),
+    0
+  );
 }
 let callIndex = 0;
 const capturedCalls: Array<{
@@ -175,10 +182,10 @@ const syntheticCaseResults: ToolReliabilityCaseResult[] = [
   {
     id: "toolrel-current-duration-test:result",
     caseId: "toolrel-current-duration-test",
-    category: "json-schema",
+    category: "stateful",
     passed: true,
     attempts: 42,
-    metrics: { schema: true },
+    metrics: { stateful: true, forbiddenAction: false },
     events: [],
     outputPreview: "{}",
   },
@@ -195,75 +202,18 @@ check(
   syntheticVerifier.durationMs === 7,
   syntheticVerifier
 );
-check("certified ToolReliability records tool traces", toolTraces.length > 0 && toolTraces.every((trace) => trace.attemptId === attempt?.id), toolTraces);
+check(
+  "certified ToolReliability records tool traces (one forbidden_action event per case)",
+  toolTraces.length === TOOL_RELIABILITY_CASES.length &&
+    toolTraces.every((trace) => trace.attemptId === attempt?.id),
+  toolTraces
+);
 check("certified ToolReliability traces export", bundle.traces.length === streamOutputs.length && bundle.toolCallTraces.length === toolTraces.length, bundle);
-const firstJsonCall = capturedCalls[0];
-const firstJsonUserPrompt = firstJsonCall?.params.messages.find((message) => message.role === "user")?.content ?? "";
-const firstJsonStructured = firstJsonCall?.params.structuredOutput as StructuredOutputFormat | undefined;
-check(
-  "certified ToolReliability states the JSON schema in the prompt without provider enforcement",
-  firstJsonUserPrompt.includes('"severity"') &&
-    firstJsonUserPrompt.includes('"affectedAreas"') &&
-    firstJsonStructured === undefined,
-  {
-    userPrompt: firstJsonUserPrompt,
-    structuredOutput: firstJsonStructured,
-  }
-);
-const firstToolCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "tool-call");
-const firstToolCallPrompt =
-  capturedCalls[callIndexForCase(firstToolCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "";
-check(
-  "certified ToolReliability documents the action grammar without printing the expected action",
-  firstToolCallPrompt.includes("Available JSON tool actions:") &&
-    firstToolCallPrompt.includes("read_range") &&
-    !firstToolCallPrompt.includes("Expected JSON tool action:") &&
-    !firstToolCallPrompt.includes('"startLine":214'),
-  firstToolCallPrompt
-);
-const firstPatchCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "patch");
-const firstPatchStructured =
-  capturedCalls[callIndexForCase(firstPatchCallIndex)]?.params.structuredOutput as StructuredOutputFormat | undefined;
-const firstPatchPrompt =
-  capturedCalls[callIndexForCase(firstPatchCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "";
-check(
-  "certified ToolReliability patch prompts show the exact accepted patch grammar",
-  firstPatchPrompt.includes("```edit path=src/example.ts") &&
-    firstPatchPrompt.includes("<<<<<<< SEARCH") &&
-    firstPatchPrompt.includes("=======") &&
-    firstPatchPrompt.includes(">>>>>>> REPLACE") &&
-    firstPatchPrompt.includes('"path":"src/example.ts"') &&
-    firstPatchPrompt.includes('"search":"exact current text"') &&
-    firstPatchPrompt.includes('"replace":"replacement text"'),
-  firstPatchPrompt
-);
-check(
-  "certified ToolReliability patch calls request a multi-hunk structured envelope",
-  firstPatchStructured?.name === "toolreliability_patch" &&
-    firstPatchStructured.schema.required?.includes("path") === true &&
-    firstPatchStructured.schema.required?.includes("ops") === true,
-  firstPatchStructured
-);
-const firstRepairCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "repair-loop");
-const firstRepairCall = capturedCalls[callIndexForCase(firstRepairCallIndex)];
-check(
-  "certified ToolReliability repair-loop first attempt is genuine (no seed, no provider schema)",
-  firstRepairCall?.params.structuredOutput === undefined &&
-    !(firstRepairCall?.params.messages.find((message) => message.role === "user")?.content ?? "").includes("Parser feedback"),
-  {
-    repairCall: firstRepairCall?.params,
-  }
-);
-const firstForbiddenCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "forbidden-action");
-const firstForbiddenPrompt =
-  capturedCalls[callIndexForCase(firstForbiddenCallIndex)]?.params.messages.find((message) => message.role === "user")?.content ?? "";
-check(
-  "certified ToolReliability describes the run-action shape without printing an allowed command",
-  firstForbiddenPrompt.includes('"action":"run"') &&
-    !firstForbiddenPrompt.includes("Allowed safe verification action:") &&
-    !firstForbiddenPrompt.includes('"command":"npm test"'),
-  firstForbiddenPrompt
-);
+// The pack is now stateful-only, so the honest post-cut replacement for the
+// old json-schema/tool-call/patch/repair-loop/forbidden-action per-category
+// prompt-shape assertions is a single set of stateful-contract checks below
+// (every case shares the SAME generic action-protocol prompt -- there is no
+// per-category prompt shape left to distinguish).
 const firstStatefulCallIndex = TOOL_RELIABILITY_CASES.findIndex((benchmarkCase) => benchmarkCase.category === "stateful");
 const firstStatefulCall = capturedCalls[callIndexForCase(firstStatefulCallIndex)];
 check(
@@ -284,73 +234,19 @@ check(
   firstStatefulCall?.params
 );
 
-// Genuine repair loop: an invalid first answer triggers exactly one repair
-// call that shows the model its OWN output plus the parser feedback.
-{
-  const repairCase = TOOL_RELIABILITY_CASES.find(
-    (benchmarkCase) => benchmarkCase.category === "repair-loop"
-  )!;
-  const repairPerfect = perfectOutputs[repairCase.id] ?? [];
-  const repairResponses = ["totally not json", repairPerfect[repairPerfect.length - 1] ?? "{}"];
-  const repairCalls: Array<{ user: string }> = [];
-  let repairCallIndex = 0;
-  const repairAttempts = await runCertifiedToolReliability({
-    context: {
-      runId: "run-certified-toolrel-genuine-repair",
-      mode: "certified",
-      track: "toolreliability",
-      harnessProfile: "raw-single-model",
-      suiteId: "suite-certified-toolrel",
-      startedAt: now,
-      caseIds: ["toolreliability-current-pack"],
-      teamCompositionIds: [team.id],
-      modelBudget: {},
-      recordAttempt: async () => {},
-      recordVerifier: async () => {},
-      recordArtifact: async () => {},
-      recordTrace: async () => {},
-      recordEvent: async () => {},
-      recordToolCall: async () => {},
-      recordFailure: async () => {},
-    },
-    models: [model],
-    teamCompositionIds: [team.id],
-    casePack: [repairCase],
-    streamChat: async function* (input): AsyncIterable<StreamChunk> {
-      repairCalls.push({
-        user: input.params.messages.find((message) => message.role === "user")?.content ?? "",
-      });
-      yield { type: "token", content: repairResponses[repairCallIndex++] ?? "{}" };
-      yield { type: "done" };
-    },
-  });
-  check(
-    "genuine repair loop feeds the model its own failed output and parser feedback",
-    repairCalls.length === 2 &&
-      !repairCalls[0].user.includes("Previous invalid answer:") &&
-      repairCalls[1].user.includes("Previous invalid answer:") &&
-      repairCalls[1].user.includes("totally not json") &&
-      repairCalls[1].user.includes("Parser feedback:"),
-    repairCalls.map((call) => call.user.slice(0, 400))
-  );
-  check(
-    "genuine repair loop scores the repair and passes the attempt",
-    repairAttempts[0]?.status === "passed" &&
-      repairAttempts[0].toolReliabilityScore === 100 &&
-      repairAttempts[0].modelCalls === 2,
-    repairAttempts[0]
-  );
-}
+// Traces are keyed to individual cases, in the SAME cumulative-turn-index
+// order streamOutputs was built in (case 0's traces first, then case 1's
+// starting at callIndexForCase(1), etc.) -- proven for case 0 and case 1.
 check(
   "certified ToolReliability traces are keyed to individual ToolReliability cases",
   bundle.traces[0]?.caseId === TOOL_RELIABILITY_CASES[0]?.id &&
-    bundle.traces[callIndexForCase(firstToolCallIndex)]?.caseId === TOOL_RELIABILITY_CASES[firstToolCallIndex]?.id &&
+    bundle.traces[callIndexForCase(1)]?.caseId === TOOL_RELIABILITY_CASES[1]?.id &&
     bundle.traces[0]?.rawResponse === perfectOutputs[TOOL_RELIABILITY_CASES[0]!.id]?.[0],
   {
     firstTraceCaseId: bundle.traces[0]?.caseId,
     expectedFirstCaseId: TOOL_RELIABILITY_CASES[0]?.id,
-    toolTraceCaseId: bundle.traces[callIndexForCase(firstToolCallIndex)]?.caseId,
-    expectedToolCaseId: TOOL_RELIABILITY_CASES[firstToolCallIndex]?.id,
+    secondCaseTraceCaseId: bundle.traces[callIndexForCase(1)]?.caseId,
+    expectedSecondCaseId: TOOL_RELIABILITY_CASES[1]?.id,
     rawResponse: bundle.traces[0]?.rawResponse,
   }
 );

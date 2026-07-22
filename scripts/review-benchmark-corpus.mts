@@ -76,13 +76,9 @@ for (const pack of gamePacks) {
 
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack validates", toolValidation.valid, toolValidation);
-// 41 = the 33 single-shot floor cases + the 8 mined `stateful` cases (#89/#90).
-check("ToolReliability has 41 distinct cases", TOOL_RELIABILITY_CASES.length === 41, TOOL_RELIABILITY_CASES.length);
-check(
-  "ToolReliability has 5 large-file patch cases",
-  TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 5,
-  TOOL_RELIABILITY_CASES.map((item) => item.id)
-);
+// 8 = the mined `stateful` cases alone (2026-07-22 cut removed the 33
+// saturated single-shot cases, #89/#90's floor, entirely).
+check("ToolReliability has 8 distinct cases", TOOL_RELIABILITY_CASES.length === 8, TOOL_RELIABILITY_CASES.length);
 for (const category of TOOL_RELIABILITY_CASE_CATEGORIES) {
   check(
     `ToolReliability ${category} has at least 1 case`,

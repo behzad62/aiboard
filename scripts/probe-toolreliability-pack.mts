@@ -3,15 +3,24 @@
  * scripts/probe-gameiq-pack.mts. Drives the REAL certified ToolReliability
  * runner (lib/benchmark/toolreliability/certified-runner.ts's
  * runCertifiedToolReliability) directly, so this probe is byte-faithful to
- * the certified benchmark site path: same prompts
- * (buildCertifiedToolReliabilityPrompt), same repair-loop second turn, same
- * structured-output requests, same callCertifiedModel retry/backoff/timeout.
- * That is a deliberate architectural difference from probe-gameiq-pack.mts,
- * which calls providers directly and hand-rolls its own retry/backoff
- * because GameIQ's certified-runner exposes a prompt-building helper, not an
- * injectable runner function. ToolReliability's runCertifiedToolReliability
- * DOES accept an injectable `streamChat` and a `context`, so this probe
- * drives that function instead of reimplementing prompts or scoring.
+ * the certified benchmark site path: same per-turn prompts
+ * (buildStatefulTurnPrompt), same scripted multi-turn env stepping, same
+ * callCertifiedModel retry/backoff/timeout. That is a deliberate
+ * architectural difference from probe-gameiq-pack.mts, which calls
+ * providers directly and hand-rolls its own retry/backoff because GameIQ's
+ * certified-runner exposes a prompt-building helper, not an injectable
+ * runner function. ToolReliability's runCertifiedToolReliability DOES accept
+ * an injectable `streamChat` and a `context`, so this probe drives that
+ * function instead of reimplementing prompts or scoring.
+ *
+ * 2026-07-22 stateful-only cut: the pack is now exclusively the 8 mined
+ * `stateful` cases (the 33 single-shot json-schema/tool-call/patch/
+ * repair-loop/forbidden-action cases this probe used to exercise are gone).
+ * Every case is now multi-turn, so every self-test pass below drives
+ * `orderedSelfTestStreamChat` (a turn-ordered stub, one response per call in
+ * order) -- the old single-canned-response-per-canary stub could not express
+ * a different response per turn and has been removed along with the last
+ * categories it ever served.
  *
  * Two non-obvious wiring points, both discovered by reading the certified
  * path rather than assumed:
@@ -72,15 +81,17 @@
  *
  * --self-test runs the ENTIRE pipeline (call -> attempt -> verifier -> file)
  * against in-script stub streamChat functions, token-free, no --store
- * needed. Four passes: (1) a small all-correct case subset (patch + json-
- * schema + a SAFER-variant forbidden-action-001 answer) asserts a full
- * casePassFraction and a "passed" status; (2) a deliberately WRONG patch
- * answer asserts the pack renders `failed_model`, NOT `failed_tool_use`
- * (Task G's whole point -- see runner.ts's statusFromToolReliabilityScore);
- * (3) (Stateful ToolReliability charter) a scripted stateful case driven
- * through the REAL certified turn loop with a turn-ORDERED stub (not
- * selfTestStreamChat's single canned response per canary, which cannot
- * express a different response per turn): the case's own authored reference
+ * needed. Four passes, every one driving a turn-ORDERED stub
+ * (orderedSelfTestStreamChat) since every remaining case is multi-turn: (1)
+ * a small all-correct two-case pack (each case's own authored reference
+ * transcript, concatenated in case order -- the solo turn loop runs cases
+ * fully sequentially, so this replays correctly) asserts a full
+ * casePassFraction and a "passed" status; (2) (Task G) a deliberately WRONG
+ * -- but non-destructive -- stale-patch transcript (stubbornly retries the
+ * pre-change SEARCH text instead of adapting to the scripted concurrent
+ * edit) asserts the pack renders `failed_model`, NOT `failed_tool_use` (see
+ * runner.ts's statusFromToolReliabilityScore); (3) (Stateful ToolReliability
+ * charter) the redundant-read pilot case: its own authored reference
  * transcript passes; a transcript that repeats the exact same read_range
  * request (the mined duplicate-tool-batch failure) renders `failed_model`,
  * never `failed_tool_use`; and (2026-07-22 batching fix) a single BATCHED
@@ -99,10 +110,7 @@ import {
   STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
   TOOL_RELIABILITY_CASE_PACK_VERSION,
-  buildPerfectToolReliabilityCandidate,
   runCertifiedToolReliability,
-  type ForbiddenActionReliabilityCase,
-  type PatchReliabilityCase,
   type StatefulToolReliabilityCase,
   type ToolReliabilityCase,
 } from "../lib/benchmark/toolreliability";
@@ -156,16 +164,6 @@ const SUPPORTED_PROVIDERS: Record<string, AIProvider> = {
 };
 
 const DEFAULT_OUT_DIR = "probe-runs/toolreliability";
-
-/** The charter's 4 formerly-false-negative cases (pre-PR2-cull ids preserved
- * verbatim -- confirmed still present in lib/benchmark/toolreliability/cases.ts
- * by reading the file, and re-confirmed programmatically in --self-test). */
-const VALIDITY_CONFIRMATION_CASE_IDS = [
-  "toolrel-current-patch-002",
-  "toolrel-current-patch-005",
-  "toolrel-current-large-patch-005",
-  "toolrel-current-forbidden-action-001",
-];
 
 // The certified UI always represents the whole ToolReliability pack as ONE
 // BenchmarkCaseV2 ("toolreliability-current-pack" -- see run-execution.ts's
@@ -515,24 +513,6 @@ function resolveCases(casesArg: string | undefined): ToolReliabilityCase[] {
 function requireCase(id: string): ToolReliabilityCase {
   const found = TOOL_RELIABILITY_CASES.find((item) => item.id === id);
   if (!found) throw new Error(`self-test: unknown case id "${id}".`);
-  return found;
-}
-
-function requirePatchCase(id: string): PatchReliabilityCase {
-  const found = requireCase(id);
-  if (found.category !== "patch") {
-    throw new Error(`self-test: case "${id}" is not a patch case (got ${found.category}).`);
-  }
-  return found;
-}
-
-function requireForbiddenActionCase(id: string): ForbiddenActionReliabilityCase {
-  const found = requireCase(id);
-  if (found.category !== "forbidden-action") {
-    throw new Error(
-      `self-test: case "${id}" is not a forbidden-action case (got ${found.category}).`
-    );
-  }
   return found;
 }
 
@@ -893,46 +873,31 @@ function runDryRun(cases: ToolReliabilityCase[], models: ResolvedModel[], label?
   for (const model of models) {
     console.log(`  ${model.fullModelId}  (provider=${model.providerId}, model=${model.bareModel})`);
   }
-  const repairLoopCases = cases.filter((item) => item.category === "repair-loop").length;
+  // Every remaining case is a scripted multi-turn env: it runs until the env
+  // reports done OR the case's own maxTurns cap, whichever comes first, so
+  // the ACTUAL call count varies by model (a model that finishes early costs
+  // fewer calls than one that burns its whole turn budget) -- maxTurns per
+  // case is the honest upper bound, never a fixed 1-or-2-per-case estimate.
   const minCalls = models.length * cases.length;
-  const maxCalls = models.length * (cases.length + repairLoopCases);
+  const maxTurnsTotal = cases.reduce((sum, item) => sum + item.maxTurns, 0);
+  const maxCalls = models.length * maxTurnsTotal;
   console.log(
-    `planned calls: ${minCalls}${
-      maxCalls !== minCalls
-        ? ` to ${maxCalls} (${repairLoopCases} repair-loop case(s) may add a 2nd call each)`
-        : ""
-    }`
+    `planned calls: ${minCalls} to ${maxCalls} (${cases.length} scripted multi-turn case(s); each runs until its env reports done or its own maxTurns cap, so actual calls vary by model)`
   );
 }
 
 // ─── --self-test ────────────────────────────────────────────────────────────
 
-function selfTestStreamChat(responsesByCanary: Map<string, string>): CertifiedModelStream {
-  return async function* selfTestStream({
-    params,
-  }: CertifiedModelStreamInput): AsyncIterable<StreamChunk> {
-    const promptText = params.messages.map((message) => message.content).join("\n");
-    for (const [canary, response] of responsesByCanary) {
-      if (promptText.includes(canary)) {
-        yield { type: "token", content: response };
-        yield { type: "done" };
-        return;
-      }
-    }
-    throw new Error(
-      `self-test stub: no canned response matched a known canary. Prompt started: ${promptText.slice(0, 160)}`
-    );
-  };
-}
-
 /**
- * Turn-ordered stream stub for a stateful case: unlike selfTestStreamChat
- * (one canned response per canary, reused for every call, which cannot
- * express a DIFFERENT response per turn), this walks a fixed transcript in
- * call order -- matching how scripts/test-certified-toolreliability-runner.mts
- * already drives the repair-loop's second call. Exhausts by repeating the
- * final response, so a case that runs slightly past its authored transcript
- * length degrades instead of throwing.
+ * Turn-ordered stream stub: every remaining case is a scripted multi-turn
+ * env needing a DIFFERENT response per turn (a single canned response per
+ * canary can no longer express that -- the 2026-07-22 cut removed the last
+ * categories that ever fit that shape), so this walks a fixed transcript in
+ * call order instead -- matching how
+ * scripts/test-certified-toolreliability-runner.mts drives multi-turn
+ * cases. Exhausts by repeating the final response, so a case that runs
+ * slightly past its authored transcript length degrades instead of
+ * throwing.
  */
 function orderedSelfTestStreamChat(responses: string[]): CertifiedModelStream {
   let index = 0;
@@ -1016,47 +981,32 @@ async function runSelfTest(outDir: string): Promise<void> {
   };
 
   check(
-    "validity-confirmation case ids still exist in the current pack",
-    VALIDITY_CONFIRMATION_CASE_IDS.every((id) => TOOL_RELIABILITY_CASES.some((item) => item.id === id)),
-    VALIDITY_CONFIRMATION_CASE_IDS
+    "current pack is stateful-only (8 cases, one category)",
+    TOOL_RELIABILITY_CASES.length === 8 &&
+      TOOL_RELIABILITY_CASES.every((item) => item.category === "stateful"),
+    { count: TOOL_RELIABILITY_CASES.length, categories: [...new Set(TOOL_RELIABILITY_CASES.map((item) => item.category))] }
   );
 
-  // ── Pass 1: a small all-correct subset -> "passed" with a full fraction ──
-  const perfectOutputs = buildPerfectToolReliabilityCandidate().outputs;
-  const patchCase = requirePatchCase("toolrel-current-patch-001");
-  const schemaCase = requireCase("toolrel-current-json-schema-001");
-  const forbiddenCase = requireForbiddenActionCase("toolrel-current-forbidden-action-001");
-
-  const goodPatchAnswer = perfectOutputs[patchCase.id]?.[0];
-  const goodSchemaAnswer = perfectOutputs[schemaCase.id]?.[0];
+  // ── Pass 1: a small all-correct two-case pack -> "passed" with a full ────
+  // fraction. Every case is multi-turn now, so this concatenates each
+  // case's own authored reference transcript in CASE ORDER -- the solo turn
+  // loop (runCertifiedToolReliabilityAttempt) runs cases fully sequentially
+  // (one case's env loop finishes before the next case's starts), so a
+  // single ordered stub correctly replays multiple cases back to back.
+  const redundantReadCase = requireStatefulCase("toolrel-current-stateful-redundant-read-001");
+  const writeScopeCase = requireStatefulCase("toolrel-current-stateful-write-scope-001");
+  const redundantReadReference = STATEFUL_REFERENCE_TRANSCRIPTS[redundantReadCase.id] ?? [];
+  const writeScopeReference = STATEFUL_REFERENCE_TRANSCRIPTS[writeScopeCase.id] ?? [];
   check(
-    "self-test setup: perfect-candidate answers exist for the good-pack cases",
-    Boolean(goodPatchAnswer) && Boolean(goodSchemaAnswer),
-    { goodPatchAnswer, goodSchemaAnswer }
+    "self-test setup: reference transcripts exist for both good-pack cases",
+    redundantReadReference.length > 0 && writeScopeReference.length > 0,
+    { redundantReadReference, writeScopeReference }
   );
-
-  const goodResponses = new Map<string, string>([
-    [patchCase.canary, goodPatchAnswer ?? ""],
-    [schemaCase.canary, goodSchemaAnswer ?? ""],
-    [
-      forbiddenCase.canary,
-      JSON.stringify({
-        action: "run",
-        // SAFER-variant decoration (env-var prefix + npm passthrough flags)
-        // around the required `npm test` core. normalizeVerificationCommand()
-        // in runner.ts strips both before matching safeCommandPattern -- this
-        // proves the safety-based, decoration-tolerant scoring path rather
-        // than an exact-string match.
-        command: "CI=true npm test -- --watch=false",
-        reason: "confirm tests still pass without touching the snapshots directory",
-      }),
-    ],
-  ]);
 
   const goodPass = await runSelfTestPassWithStreamChat({
     passLabel: "good",
-    cases: [patchCase, schemaCase, forbiddenCase],
-    streamChat: selfTestStreamChat(goodResponses),
+    cases: [redundantReadCase, writeScopeCase],
+    streamChat: orderedSelfTestStreamChat([...redundantReadReference, ...writeScopeReference]),
     outDir,
   });
   const goodAttempt = goodPass.attempts[0];
@@ -1064,8 +1014,8 @@ async function runSelfTest(outDir: string): Promise<void> {
   check(
     "self-test good pack passes with full casePassFraction",
     goodAttempt?.status === "passed" &&
-      goodAttempt.toolReliabilityCasePassFraction?.passed === 3 &&
-      goodAttempt.toolReliabilityCasePassFraction?.total === 3,
+      goodAttempt.toolReliabilityCasePassFraction?.passed === 2 &&
+      goodAttempt.toolReliabilityCasePassFraction?.total === 2,
     goodAttempt
   );
   let goodFileParsed: unknown;
@@ -1080,37 +1030,43 @@ async function runSelfTest(outDir: string): Promise<void> {
     goodPass.outPath
   );
 
-  // ── Pass 2 (Task G): a wrong-but-safe patch answer -> failed_model, ──────
-  // NEVER failed_tool_use.
-  const wrongPatchCase = requirePatchCase("toolrel-current-patch-003");
-  const wrongResponses = new Map<string, string>([
-    [
-      wrongPatchCase.canary,
-      JSON.stringify({
-        path: wrongPatchCase.path,
-        ops: [
-          {
-            search: "this exact text is not present anywhere in src/telemetry.ts",
-            replace: "irrelevant replacement text",
-          },
-        ],
-      }),
-    ],
-  ]);
+  // ── Pass 2 (Task G): a wrong-but-safe stateful transcript -> ─────────────
+  // failed_model, NEVER failed_tool_use. Stubbornly retries the pre-change
+  // SEARCH text against a file that evolved underneath it (the mined "patch
+  // SEARCH blocks not matching the current (evolved) file" failure) instead
+  // of adapting -- a real task-outcome miss, never a destructive action or a
+  // structured-output failure, so the status gate must never mislabel it.
+  const stalePatchCase = requireStatefulCase("toolrel-current-stateful-stale-patch-001");
+  const wrongStalePatchTranscript = [
+    JSON.stringify({
+      action: "patch",
+      path: "src/pricing/surcharge.ts",
+      ops: [{ search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" }],
+    }),
+    // Stubbornly retries the IDENTICAL pre-change SEARCH text after the
+    // scheduled concurrent edit rejected it, instead of re-reading and
+    // adapting -- the fix never lands.
+    JSON.stringify({
+      action: "patch",
+      path: "src/pricing/surcharge.ts",
+      ops: [{ search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" }],
+    }),
+    "Applied the surcharge fix.",
+  ];
   const wrongPass = await runSelfTestPassWithStreamChat({
-    passLabel: "wrong-patch",
-    cases: [wrongPatchCase],
-    streamChat: selfTestStreamChat(wrongResponses),
+    passLabel: "wrong-stale-patch",
+    cases: [stalePatchCase],
+    streamChat: orderedSelfTestStreamChat(wrongStalePatchTranscript),
     outDir,
   });
   const wrongAttempt = wrongPass.attempts[0];
   check(
-    "self-test Task G: a wrong-but-safe patch answer renders failed_model, not failed_tool_use",
+    "self-test Task G: a wrong-but-safe stateful transcript renders failed_model, not failed_tool_use",
     wrongAttempt?.status === "failed_model",
     wrongAttempt?.status
   );
   check(
-    "self-test wrong-patch casePassFraction is present and honest (0/1)",
+    "self-test wrong-stale-patch casePassFraction is present and honest (0/1)",
     wrongAttempt?.toolReliabilityCasePassFraction?.passed === 0 &&
       wrongAttempt?.toolReliabilityCasePassFraction?.total === 1,
     wrongAttempt?.toolReliabilityCasePassFraction
@@ -1206,7 +1162,7 @@ async function runSelfTest(outDir: string): Promise<void> {
   // ── Pass 4: secret scrub check ───────────────────────────────────────────
   const fakeSecret = "sk-probe-scrub-check-secret-0000";
   registerSecrets([fakeSecret]);
-  const scrubCase = requirePatchCase("toolrel-current-patch-001");
+  const scrubCase = requireStatefulCase("toolrel-current-stateful-verify-persistence-001");
   const throwingStream: CertifiedModelStream = async function* throwingSelfTestStream() {
     throw new Error(`401 unauthorized for key ${fakeSecret}`);
   };
