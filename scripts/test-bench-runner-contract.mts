@@ -1,5 +1,5 @@
 /* Certified bench runner contract checks (run: npx tsx scripts/test-bench-runner-contract.mts) */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -180,6 +180,20 @@ try {
   check("prepare creates an attempt workspace", prepared.status === 200 && attemptId.length > 0, prepared);
 
   const attemptRoot = String(prepared.data.root ?? "");
+  check(
+    "prepare uses a bounded attempt workspace directory name",
+    attemptRoot.split(/[\\/]/).at(-1)!.length <= 32 && !attemptRoot.endsWith(attemptId),
+    { attemptId, attemptRoot }
+  );
+  const attemptGitRoot = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: attemptRoot,
+    encoding: "utf8",
+  });
+  check(
+    "prepare makes the attempt workspace an independent Git repository root",
+    attemptGitRoot.status === 0 && resolve(attemptGitRoot.stdout.trim()) === resolve(attemptRoot),
+    { status: attemptGitRoot.status, stdout: attemptGitRoot.stdout, stderr: attemptGitRoot.stderr }
+  );
   const oracleHidden = await access(join(attemptRoot, "case-meta.json")).then(
     () => false,
     () => true
@@ -193,6 +207,12 @@ try {
       managedStart.data.attemptId === attemptId &&
       /^http:\/\/127\.0\.0\.1:\d+$/.test(String(managedStart.data.url ?? "")) &&
       String(managedStart.data.token ?? "").length >= 16,
+    managedStart
+  );
+  check(
+    "managed attempt runner uses a bounded state directory name",
+    String(managedStart.data.statePath ?? "").split(/[\\/]/).at(-1)!.length <= 32 &&
+      !String(managedStart.data.statePath ?? "").endsWith(attemptId),
     managedStart
   );
   const managedStatus = await request(baseUrl, "/bench/attempt-runner/status", token, { attemptId });
@@ -241,7 +261,7 @@ try {
 
   const compatBase = `/bench/compat/${attemptId}`;
   const compatHealth = await request(baseUrl, `${compatBase}/health`, token);
-  check("compat health exposes prepared attempt as runner", compatHealth.status === 200 && compatHealth.data.ok === true && String(compatHealth.data.dir).includes(attemptId), compatHealth);
+  check("compat health exposes prepared attempt as runner", compatHealth.status === 200 && compatHealth.data.ok === true && resolve(String(compatHealth.data.dir)) === resolve(attemptRoot), compatHealth);
   const compatLs = await request(baseUrl, `${compatBase}/ls`, token);
   check("compat ls lists prepared attempt files", compatLs.status === 200 && Array.isArray(compatLs.data.files) && (compatLs.data.files as string[]).includes("input.txt"), compatLs);
   const compatRead = await request(baseUrl, `${compatBase}/read`, token, { path: "input.txt" });

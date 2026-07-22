@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { exec, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -200,7 +200,7 @@ async function route(pathname, body) {
 }
 
 async function routeCompat(attemptId, endpoint, body) {
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
   switch (endpoint) {
     case "/health":
@@ -279,7 +279,7 @@ async function prepare(body) {
   const attemptId = requestedAttemptId
     ? validateAttemptId(requestedAttemptId)
     : `${sanitizeId(caseId)}-${Date.now()}-${randomBytes(4).toString("hex")}`;
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   if (existsSync(attemptRoot)) {
     throw new HttpError(409, "Bench attempt workspace already exists.");
   }
@@ -333,8 +333,30 @@ async function prepare(body) {
 
   meta.snapshot = await snapshotFiles(attemptRoot);
   meta.hiddenFiles = await hideOracleFiles(attemptRoot, meta.snapshot);
+  await initializeAttemptRepository(attemptRoot);
   await saveMeta(attemptRoot, meta);
   return { attemptId, caseId, root: attemptRoot };
+}
+
+function initializeAttemptRepository(attemptRoot) {
+  return new Promise((resolveInit, rejectInit) => {
+    const child = spawn("git", ["init", "-b", "main"], {
+      cwd: attemptRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-16 * 1024);
+    });
+    child.once("error", (error) =>
+      rejectInit(new HttpError(500, `Could not initialize attempt Git repository: ${error.message}`))
+    );
+    child.once("exit", (code) => {
+      if (code === 0) resolveInit();
+      else rejectInit(new HttpError(500, `Could not initialize attempt Git repository: ${stderr.trim()}`));
+    });
+  });
 }
 
 async function patchFile(attemptRoot, body) {
@@ -481,17 +503,17 @@ async function runVerifier(attemptRoot, meta, body) {
 async function cleanup(body) {
   const attemptId = requiredString(body, "attemptId");
   await stopAttemptRunner({ attemptId });
-  const attemptRoot = resolveSafeChild(root, attemptId);
-  const statePath = resolveSafeChild(runnerStateRoot, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
+  const statePath = runnerStatePath(attemptId);
   await rm(attemptRoot, { recursive: true, force: true });
   await rm(statePath, { recursive: true, force: true });
-  await rm(metaPath(attemptId), { force: true });
+  await rm(metaPath(basename(attemptRoot)), { force: true });
   return { removed: true };
 }
 
 async function startAttemptRunner(body) {
   const attemptId = validateAttemptId(requiredString(body, "attemptId"));
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   await readMeta(attemptRoot);
   if (!runnerV2Launcher) {
     throw new HttpError(503, "Managed Runner V2 is unavailable; configure --runner-v2-dir.");
@@ -499,7 +521,7 @@ async function startAttemptRunner(body) {
   const existing = managedAttemptRunners.get(attemptId);
   if (existing?.child.exitCode === null) return managedRunnerResult(existing, true);
 
-  const statePath = resolveSafeChild(runnerStateRoot, attemptId);
+  const statePath = runnerStatePath(attemptId);
   await rm(statePath, { recursive: true, force: true });
   await mkdir(statePath, { recursive: true });
   const token = randomBytes(32).toString("hex");
@@ -534,13 +556,13 @@ async function statusAttemptRunner(body) {
   const attemptId = validateAttemptId(requiredString(body, "attemptId"));
   const managed = managedAttemptRunners.get(attemptId);
   if (!managed) {
-    const attemptRoot = resolveSafeChild(root, attemptId);
+    const attemptRoot = attemptWorkspacePath(attemptId);
     await readMeta(attemptRoot);
     return {
       attemptId,
       running: false,
       projectPath: attemptRoot,
-      statePath: resolveSafeChild(runnerStateRoot, attemptId),
+      statePath: runnerStatePath(attemptId),
     };
   }
   return managedRunnerResult(managed, managed.child.exitCode === null && !managed.exited);
@@ -555,9 +577,19 @@ async function stopAttemptRunner(body) {
     : {
         attemptId,
         running: false,
-        projectPath: resolveSafeChild(root, attemptId),
-        statePath: resolveSafeChild(runnerStateRoot, attemptId),
+        projectPath: attemptWorkspacePath(attemptId),
+        statePath: runnerStatePath(attemptId),
       };
+}
+
+function runnerStatePath(attemptId) {
+  const digest = createHash("sha256").update(validateAttemptId(attemptId)).digest("hex").slice(0, 24);
+  return resolveSafeChild(runnerStateRoot, digest);
+}
+
+function attemptWorkspacePath(attemptId) {
+  const digest = createHash("sha256").update(validateAttemptId(attemptId)).digest("hex").slice(0, 24);
+  return resolveSafeChild(root, digest);
 }
 
 function managedRunnerResult(managed, running) {
@@ -574,7 +606,7 @@ function managedRunnerResult(managed, running) {
 
 async function withAttempt(body, action) {
   const attemptId = requiredString(body, "attemptId");
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
   return action({ attemptRoot, meta });
 }

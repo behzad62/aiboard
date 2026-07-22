@@ -160,7 +160,7 @@ export async function runNativeWorkBenchBuild(
         budgetLimits,
         benchmark: {
           attemptId: input.attemptId,
-          allowedCommands: [...input.allowedCommands],
+          allowedCommands: uniqueStrings([...input.allowedCommands, "git diff --check"]),
           hiddenPaths: [...WORKBENCH_HIDDEN_PATHS],
           protectedPaths: [...WORKBENCH_PROTECTED_PATHS],
         },
@@ -174,6 +174,8 @@ export async function runNativeWorkBenchBuild(
     );
 
     const eligibleRuntimes = new Set(configuredRuntimeIds);
+    let automaticResumeCount = 0;
+    const automaticResumeLimit = Math.max(10, budgetLimits.maxModelCalls ?? 100);
     for (;;) {
       throwIfAborted(input.signal);
       const [run, projection] = await Promise.all([
@@ -207,6 +209,16 @@ export async function runNativeWorkBenchBuild(
             nativeRunId,
             runtimeId,
             `workbench-architect-handoff:${nativeRunId}:${runtimeId}`
+          );
+          continue;
+        }
+        if (automaticResumeCount < automaticResumeLimit) {
+          automaticResumeCount++;
+          await dependencies.commandNativeRun(
+            connection,
+            nativeRunId,
+            "resume",
+            `workbench-auto-resume:${nativeRunId}:${automaticResumeCount}`
           );
           continue;
         }
@@ -414,6 +426,8 @@ function workBenchObjective(input: NativeWorkBenchBuildInput): string {
     input.case.prompt.userRequest,
     input.case.prompt.publicContext,
     "Modify only the prepared fixture. The deterministic verifier decides correctness.",
+    "Create exactly one implementation task that performs the requested edit and its task-level evidence; do not split inspection, editing, verification, or completion into separate tasks.",
+    "For task-level durable evidence, run exactly `git diff --check`; the official WorkBench verifier runs after integration.",
   ]
     .filter(Boolean)
     .join("\n\n");

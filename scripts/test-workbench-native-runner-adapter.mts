@@ -203,12 +203,14 @@ const result = await runNativeWorkBenchBuild(
       calls.push("create-build");
       createdBuild = input as unknown as Record<string, unknown>;
     },
-    commandNativeRun: async () => { calls.push("start-build"); },
+    commandNativeRun: async (_connection, _runId, command) => { calls.push(`${command}-build`); },
     getNativeRun: async () => ({ state: "running" }) as never,
     getNativeBuild: async () => {
       projectionReads++;
       return projectionReads === 1
         ? ({ status: "running", runtime: { architect: {} } } as never)
+        : projectionReads <= 7
+          ? ({ status: "paused", runtime: { architect: {} } } as never)
         : ({
             status: "paused",
             runtime: { architect: {} },
@@ -247,13 +249,25 @@ assert.deepEqual(calls, [
   "configure",
   "create-build",
   "start-build",
+  "resume-build",
+  "resume-build",
+  "resume-build",
+  "resume-build",
+  "resume-build",
+  "resume-build",
   "apply-handoff",
   "stop-child",
 ]);
 const benchmarkPolicy = ((createdBuild?.build as Record<string, unknown>)?.benchmark ?? {}) as {
+  allowedCommands?: string[];
   hiddenPaths?: string[];
   protectedPaths?: string[];
 };
+assert.match(
+  String((createdBuild?.build as Record<string, unknown>)?.objective ?? ""),
+  /exactly one implementation task/i
+);
+assert.ok(benchmarkPolicy.allowedCommands?.includes("git diff --check"));
 assert.ok(benchmarkPolicy.hiddenPaths?.includes("case-meta.json"));
 assert.ok(benchmarkPolicy.protectedPaths?.includes("verifier.mjs"));
 assert.equal(result.modelCalls, 1);

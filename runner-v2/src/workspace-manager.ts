@@ -465,7 +465,7 @@ function safeName(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "item";
+    .slice(0, 12) || "item";
   const hash = createHash("sha256").update(value).digest("hex").slice(0, 10);
   return `${readable}-${hash}`;
 }

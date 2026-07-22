@@ -112,6 +112,35 @@ test("committing an unchanged task produces a typed mechanical error", async () 
   }
 });
 
+test("long run and task identifiers use bounded worktree and branch segments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-bounded-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "baseline",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: `run-${"long-identifier-".repeat(12)}`,
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await manager.createTaskWorkspace(
+      `task-${"long-identifier-".repeat(12)}`
+    );
+    assert.ok(workspace.path.split(/[\\/]/).at(-1)!.length <= 24);
+    assert.ok(workspace.branch.length <= 80);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("retries use fresh worktrees based on the current integration revision", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-retries-"));
   const project = join(root, "project");
