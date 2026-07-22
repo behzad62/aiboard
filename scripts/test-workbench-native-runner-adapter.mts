@@ -264,6 +264,21 @@ const result = await runNativeWorkBenchBuild(
               pauseReason: { reason: "model_ended_without_lifecycle:" },
               runtime: { architect: {} },
             } as never)
+          : projectionReads === 3
+            ? ({
+                status: "paused",
+                pauseReason: {
+                  reason: "worker_model_ended_without_lifecycle",
+                  taskId: "T1",
+                },
+                runtime: { architect: {} },
+              } as never)
+            : projectionReads === 4
+              ? ({
+                  status: "paused",
+                  pauseReason: { reason: "model_ended_without_lifecycle:" },
+                  runtime: { architect: {} },
+                } as never)
         : ({
             status: "paused",
             runtime: { architect: {} },
@@ -285,6 +300,8 @@ assert.deepEqual(calls, [
   "configure",
   "create-build",
   "start-build",
+  "continue-build",
+  "continue-build",
   "continue-build",
   "apply-handoff",
   "stop-child",
@@ -372,7 +389,8 @@ try {
         return ({
           status: "paused",
           pauseReason: {
-            reason: "protocol_error:A lifecycle tool call must be the only tool call in its model turn.",
+            reason: "worker_model_ended_without_lifecycle",
+            taskId: "T1",
           },
           runtime: { architect: {} },
         } as never);
@@ -387,12 +405,17 @@ try {
   failure = error;
 }
 assert.ok(failure instanceof NativeWorkBenchExecutionError);
-assert.equal(failure.certifiedStatus, "failed_tool_use");
-assert.equal(failure.certifiedCode, "invalid_lifecycle_batch");
+assert.equal(failure.certifiedStatus, "failed_model");
+assert.equal(failure.certifiedCode, "model_ended_without_lifecycle");
 assert.equal(failure.buildResult?.inputTokens, 120);
 assert.equal(failure.buildResult?.modelCalls, 1);
-assert.equal(failureProjectionReads, 2);
-assert.deepEqual(failureCalls, ["start-build", "continue-build", "stop-child"]);
+assert.equal(failureProjectionReads, 3);
+assert.deepEqual(failureCalls, [
+  "start-build",
+  "continue-build",
+  "continue-build",
+  "stop-child",
+]);
 assert.equal(failureTraces.length, 1);
 assert.equal(failureTools.length, 2);
 assert.equal(failureArtifacts.length, 1);

@@ -236,7 +236,10 @@ export async function runNativeWorkBenchBuild(
           );
           continue;
         }
-        const disposition = nativePauseDisposition(projection.pauseReason?.reason);
+        const disposition = nativePauseDisposition(
+          projection.pauseReason?.reason,
+          projection.pauseReason?.taskId
+        );
         const continuationCount = continuationCounts.get(disposition.key) ?? 0;
         if (disposition.action === "continue" && continuationCount < disposition.limit) {
           continuationCounts.set(disposition.key, continuationCount + 1);
@@ -309,7 +312,10 @@ interface NativePauseDisposition {
   message: string;
 }
 
-export function nativePauseDisposition(reason: string | undefined): NativePauseDisposition {
+export function nativePauseDisposition(
+  reason: string | undefined,
+  taskId?: string
+): NativePauseDisposition {
   const normalized = reason?.trim() ?? "";
   if (normalized.startsWith("budget_exhausted:")) {
     return pauseFailure("failed_budget", "budget_exhausted", normalized);
@@ -334,13 +340,20 @@ export function nativePauseDisposition(reason: string | undefined): NativePauseD
       message: `Runner V2 lifecycle protocol repair was exhausted: ${normalized}`,
     };
   }
-  if (
-    normalized.startsWith("model_ended_without_lifecycle:") ||
-    normalized.startsWith("worker_model_ended_without_lifecycle")
-  ) {
+  if (normalized.startsWith("model_ended_without_lifecycle:")) {
     return {
       action: "continue",
-      key: "model-lifecycle-repair",
+      key: "architect-model-lifecycle-repair",
+      limit: 2,
+      certifiedStatus: "failed_model",
+      certifiedCode: "model_ended_without_lifecycle",
+      message: `Model did not produce a lifecycle decision after bounded recovery: ${normalized}`,
+    };
+  }
+  if (normalized.startsWith("worker_model_ended_without_lifecycle")) {
+    return {
+      action: "continue",
+      key: `worker-model-lifecycle-repair:${taskId?.trim() || "unknown-task"}`,
       limit: 2,
       certifiedStatus: "failed_model",
       certifiedCode: "model_ended_without_lifecycle",

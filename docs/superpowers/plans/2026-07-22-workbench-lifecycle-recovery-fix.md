@@ -25,7 +25,7 @@
 - Consumes: `runNativeWorkBenchBuild` and mocked native build projections.
 - Produces: a regression sequence with independent Architect and worker pauses followed by project handoff.
 
-- [ ] Extend the success-path projection sequence with Architect, worker `T1`, then Architect lifecycle pauses.
+- [x] Extend the success-path projection sequence with Architect, worker `T1`, then Architect lifecycle pauses.
 
 Use projections equivalent to:
 
@@ -38,7 +38,7 @@ Use projections equivalent to:
 
 Assert that three `continue-build` calls occur before `apply-handoff`.
 
-- [ ] Run `npx tsx scripts/test-workbench-native-runner-adapter.mts` and confirm it fails before project handoff because the shared recovery key is exhausted.
+- [x] Run `npx tsx scripts/test-workbench-native-runner-adapter.mts` and confirm it fails before project handoff because the shared recovery key is exhausted.
 
 ### Task 2: Scope lifecycle recovery keys
 
@@ -49,8 +49,8 @@ Assert that three `continue-build` calls occur before `apply-handoff`.
 - Consumes: pause reason and optional paused task identifier.
 - Produces: `architect-model-lifecycle-repair` or `worker-model-lifecycle-repair:<taskId>` continuation keys.
 
-- [ ] Pass `projection.pauseReason?.taskId` into `nativePauseDisposition`.
-- [ ] Return owner/task-scoped keys for no-lifecycle pauses while keeping limit `2`.
+- [x] Pass `projection.pauseReason?.taskId` into `nativePauseDisposition`.
+- [x] Return owner/task-scoped keys for no-lifecycle pauses while keeping limit `2`.
 
 Implement the key split as:
 
@@ -66,7 +66,7 @@ if (normalized.startsWith("worker_model_ended_without_lifecycle")) {
 }
 ```
 
-- [ ] Run the focused regression and confirm it passes.
+- [x] Run the focused regression and confirm it passes.
 
 ### Task 3: Verify, publish, and restart
 
@@ -78,7 +78,7 @@ if (normalized.startsWith("worker_model_ended_without_lifecycle")) {
 - Consumes: repository verification and publish scripts.
 - Produces: a rebuilt app and Runner V2 package ready for the certified rerun.
 
-- [ ] Run the focused test, WorkBench benchmark tests, Runner V2 tests, lint, and typecheck.
+- [x] Run the focused test, WorkBench benchmark tests, Runner V2 tests, lint, and typecheck.
 
 Run:
 
@@ -90,6 +90,6 @@ npm run lint
 npx tsc --noEmit
 ```
 
-- [ ] Build the app with the dev server stopped, then restore it.
-- [ ] Copy the rebuilt Runner V2 bundle into `WorkBenchTest` and restart the bench runner.
-- [ ] Commit the fix and restart the 19-case GPT-5.4 Mini WorkBench run in Chrome.
+- [x] Build the app with the dev server stopped, then restore it.
+- [x] Confirm the rebuilt Runner V2 bundle is unchanged and keep the healthy `WorkBenchTest` runner running.
+- [x] Commit the fix and restart the 19-case GPT-5.4 Mini WorkBench run in Chrome.
