@@ -1,6 +1,6 @@
 /* Certified bench runner contract checks (run: npx tsx scripts/test-bench-runner-contract.mts) */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,12 @@ try {
   const health = await waitForHealth(baseUrl, token);
   check("runner binds as bench service", health.ok === true && health.host === "127.0.0.1" && health.mcp === false, health);
   check("runner reports isolated runs root", String(health.root).endsWith(".aiboard-bench\\runs") || String(health.root).endsWith(".aiboard-bench/runs"), health);
+  const managedHealth = health.runnerV2 as Record<string, unknown> | undefined;
+  check(
+    "runner reports managed Runner V2 readiness",
+    managedHealth?.ready === true && typeof managedHealth.source === "string",
+    health
+  );
 
   const unauthorized = await request(baseUrl, "/bench/health", null);
   check("runner requires token for health", unauthorized.status === 401, unauthorized);
@@ -166,11 +172,44 @@ try {
     allowedCommands: [command, "node verifier.js"],
     files: {
       "input.txt": "hello\n",
+      "case-meta.json": "{\"private\":\"oracle\"}",
       "verifier.js": "const fs=require('fs'); fs.writeFileSync('verifier-result.json', JSON.stringify({passed:true, score:1, summary:'ok', assertions:[{id:'file', label:'file exists', passed:fs.existsSync('input.txt'), weight:1}]})); console.log('verifier complete');",
     },
   });
   const attemptId = String(prepared.data.attemptId ?? "");
   check("prepare creates an attempt workspace", prepared.status === 200 && attemptId.length > 0, prepared);
+
+  const attemptRoot = String(prepared.data.root ?? "");
+  const oracleHidden = await access(join(attemptRoot, "case-meta.json")).then(
+    () => false,
+    () => true
+  );
+  check("prepare removes hidden oracle material from model workspace", oracleHidden, { attemptRoot });
+
+  const managedStart = await request(baseUrl, "/bench/attempt-runner/start", token, { attemptId });
+  check(
+    "managed attempt runner starts on an ephemeral loopback URL",
+    managedStart.status === 200 &&
+      managedStart.data.attemptId === attemptId &&
+      /^http:\/\/127\.0\.0\.1:\d+$/.test(String(managedStart.data.url ?? "")) &&
+      String(managedStart.data.token ?? "").length >= 16,
+    managedStart
+  );
+  const managedStatus = await request(baseUrl, "/bench/attempt-runner/status", token, { attemptId });
+  check("managed attempt runner reports running", managedStatus.status === 200 && managedStatus.data.running === true, managedStatus);
+  const nativeHealthResponse = await fetch(`${managedStart.data.url}/v2/health`, {
+    headers: { authorization: `Bearer ${managedStart.data.token}` },
+  });
+  const nativeHealth = await nativeHealthResponse.json() as Record<string, unknown>;
+  check(
+    "managed child is bound to the prepared attempt workspace",
+    nativeHealthResponse.status === 200 && nativeHealth.projectPath === attemptRoot,
+    nativeHealth
+  );
+  const managedStop = await request(baseUrl, "/bench/attempt-runner/stop", token, { attemptId });
+  check("managed attempt runner stops idempotently", managedStop.status === 200 && managedStop.data.running === false, managedStop);
+  const managedStopAgain = await request(baseUrl, "/bench/attempt-runner/stop", token, { attemptId });
+  check("managed attempt runner duplicate stop is harmless", managedStopAgain.status === 200 && managedStopAgain.data.running === false, managedStopAgain);
 
   const tree = await request(baseUrl, "/bench/read-tree", token, { attemptId });
   check("read-tree lists fixture files", tree.status === 200 && Array.isArray(tree.data.files) && (tree.data.files as string[]).includes("input.txt"), tree);
@@ -300,7 +339,12 @@ try {
     timeoutSeconds: 10,
   });
   const tamperVerify = await request(baseUrl, "/bench/run-verifier", token, { attemptId: tamperAttempt });
-  check("run-verifier rejects a run where a protected harness file was modified", tamperVerify.status === 409, tamperVerify);
+  const restoredCaseMeta = await readFile(join(String(tamperPrepared.data.root), "case-meta.json"), "utf8");
+  check(
+    "run-verifier restores canonical hidden harness material before scoring",
+    tamperVerify.status === 200 && restoredCaseMeta.includes("IMPORTANT"),
+    { tamperVerify, restoredCaseMeta }
+  );
   await request(baseUrl, "/bench/cleanup", token, { attemptId: tamperAttempt });
 
   const verifier = await request(baseUrl, "/bench/run-verifier", token, { attemptId });

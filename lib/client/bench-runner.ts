@@ -15,6 +15,23 @@ export interface BenchRunnerHealth {
   root?: string;
   mcp?: boolean;
   error?: string;
+  runnerV2?: {
+    ready: boolean;
+    source?: string;
+    nodeVersion?: string;
+    error?: string;
+  };
+}
+
+export interface ManagedAttemptRunnerResult {
+  attemptId: string;
+  running: boolean;
+  url?: string;
+  token?: string;
+  projectPath: string;
+  statePath: string;
+  pid?: number | null;
+  nodeVersion?: string;
 }
 
 export interface PrepareBenchCaseInput {
@@ -116,6 +133,27 @@ export function prepareBenchCase(
   input: PrepareBenchCaseInput
 ): Promise<PrepareBenchCaseResult> {
   return requestJson(config, "/bench/prepare", input);
+}
+
+export function startManagedAttemptRunner(
+  config: BenchRunnerConfig,
+  input: BenchAttemptInput
+): Promise<ManagedAttemptRunnerResult> {
+  return requestJson(config, "/bench/attempt-runner/start", input);
+}
+
+export function getManagedAttemptRunner(
+  config: BenchRunnerConfig,
+  input: BenchAttemptInput
+): Promise<ManagedAttemptRunnerResult> {
+  return requestJson(config, "/bench/attempt-runner/status", input);
+}
+
+export function stopManagedAttemptRunner(
+  config: BenchRunnerConfig,
+  input: BenchAttemptInput
+): Promise<ManagedAttemptRunnerResult> {
+  return requestJson(config, "/bench/attempt-runner/stop", input);
 }
 
 export function readBenchTree(
