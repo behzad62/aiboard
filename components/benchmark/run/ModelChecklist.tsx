@@ -1,6 +1,7 @@
 "use client";
 
 import type { SelectedModel } from "@/lib/providers/base";
+import { migrateFullModelId } from "@/lib/providers/model-id-migration";
 
 // Promoted from CertifiedRunPanel's GameIqModelChecklist (2026-07-17 benchmark
 // UX overhaul, Task 4 Step 4) into the ONE model-selection widget used for
@@ -18,9 +19,13 @@ export function readPersistedModelChecklistSelection(): string[] {
     const raw = window.localStorage.getItem(MODEL_CHECKLIST_STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string")
-      : [];
+    if (!Array.isArray(parsed)) return [];
+    const modelIds = parsed.filter((id): id is string => typeof id === "string");
+    const migrated = modelIds.map(migrateFullModelId);
+    if (migrated.some((id, index) => id !== modelIds[index])) {
+      persistModelChecklistSelection(migrated);
+    }
+    return migrated;
   } catch {
     return [];
   }

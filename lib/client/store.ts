@@ -67,6 +67,7 @@ import {
   normalizeModelStat,
   type ModelStatDelta,
 } from "@/lib/client/model-stats";
+import { migrateClientStoreModelSelections } from "@/lib/client/model-selection-migration";
 
 export interface ClientStore {
   userSettings: UserSettings;
@@ -484,8 +485,10 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
 
 function commitLoadedStore(generation: number, loaded: ClientStore): void {
   if (generation !== initGeneration || memory) return;
-  memory = loaded;
+  const migration = migrateClientStoreModelSelections(loaded);
+  memory = migration.store;
   notifyReady();
+  if (migration.changed) schedulePersist();
 }
 
 async function loadDiscussionStoreFields(base: ClientStore): Promise<ClientStore> {
@@ -1593,7 +1596,7 @@ export function deleteAttachmentRecord(id: string): void {
 /** Replace the whole store (used by the one-time import from the server). */
 export function replaceStore(data: Partial<ClientStore>): void {
   initGeneration++;
-  memory = hydrateStore(data);
+  memory = migrateClientStoreModelSelections(hydrateStore(data)).store;
   notifyReady();
   schedulePersist();
 }
@@ -1723,7 +1726,7 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   }
   persistDirty = false;
   initGeneration++;
-  memory = hydrateStore(data);
+  memory = migrateClientStoreModelSelections(hydrateStore(data)).store;
   adapter = null;
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
@@ -1770,10 +1773,13 @@ export async function __loadClientStoreFromAdapterForTests(
       ? JSON.parse(await unwrap(parseEnvelope(raw)!))
       : JSON.parse(raw)
     : {};
-  memory = await loadDiscussionStoreFields(
+  const loaded = await loadDiscussionStoreFields(
     hydrateStore(stripBenchmarkStoreFields(persisted))
   );
+  const migration = migrateClientStoreModelSelections(loaded);
+  memory = migration.store;
   notifyReady();
+  if (migration.changed) schedulePersist();
   return { needsPassphrase: false };
 }
 
@@ -1895,9 +1901,17 @@ async function switchClientStoreAdapter(
   const loaded = await loadDiscussionStoreFields(
     hydrateStore(stripBenchmarkStoreFields(persisted))
   );
-  memory = mergeBenchmarkStoreFields(loaded, benchmarkData);
+  const migration = migrateClientStoreModelSelections(
+    mergeBenchmarkStoreFields(loaded, benchmarkData)
+  );
+  memory = migration.store;
   notifyReady();
-  if (hadLegacyBenchmarkData || hadLegacyDiscussionData || raw === null) {
+  if (
+    migration.changed ||
+    hadLegacyBenchmarkData ||
+    hadLegacyDiscussionData ||
+    raw === null
+  ) {
     schedulePersist();
   }
   return { loadedExisting: true, needsPassphrase: false };
