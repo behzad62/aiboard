@@ -72,26 +72,38 @@
  *
  * --self-test runs the ENTIRE pipeline (call -> attempt -> verifier -> file)
  * against in-script stub streamChat functions, token-free, no --store
- * needed. Three passes: (1) a small all-correct case subset (patch + json-
+ * needed. Four passes: (1) a small all-correct case subset (patch + json-
  * schema + a SAFER-variant forbidden-action-001 answer) asserts a full
  * casePassFraction and a "passed" status; (2) a deliberately WRONG patch
  * answer asserts the pack renders `failed_model`, NOT `failed_tool_use`
  * (Task G's whole point -- see runner.ts's statusFromToolReliabilityScore);
- * (3) a throwing stub carrying a fake secret asserts the caught error and
- * the written run file are both clean of it. Models run SEQUENTIALLY (never
- * in parallel) -- the ChatGPT account bridge is one subscription, not a
- * pool.
+ * (3) (Stateful ToolReliability charter) a scripted stateful case driven
+ * through the REAL certified turn loop with a turn-ORDERED stub (not
+ * selfTestStreamChat's single canned response per canary, which cannot
+ * express a different response per turn): the case's own authored reference
+ * transcript passes; a transcript that repeats the exact same read_range
+ * request (the mined duplicate-tool-batch failure) renders `failed_model`,
+ * never `failed_tool_use`; and (2026-07-22 batching fix) a single BATCHED
+ * response -- several concatenated JSON actions with no separator plus
+ * trailing commentary, spark's real live-gate style -- covering the whole
+ * task in one turn also passes, proving the env parses every action in a
+ * batch instead of just one; (4) a throwing stub carrying a fake secret
+ * asserts the caught error and the written run file are both clean of it.
+ * Models run SEQUENTIALLY (never in parallel) -- the ChatGPT account bridge
+ * is one subscription, not a pool.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
   TOOL_RELIABILITY_CASE_PACK_VERSION,
   buildPerfectToolReliabilityCandidate,
   runCertifiedToolReliability,
   type ForbiddenActionReliabilityCase,
   type PatchReliabilityCase,
+  type StatefulToolReliabilityCase,
   type ToolReliabilityCase,
 } from "../lib/benchmark/toolreliability";
 import type {
@@ -524,6 +536,14 @@ function requireForbiddenActionCase(id: string): ForbiddenActionReliabilityCase 
   return found;
 }
 
+function requireStatefulCase(id: string): StatefulToolReliabilityCase {
+  const found = requireCase(id);
+  if (found.category !== "stateful") {
+    throw new Error(`self-test: case "${id}" is not a stateful case (got ${found.category}).`);
+  }
+  return found;
+}
+
 // ─── minimal in-memory CertifiedRunContext ─────────────────────────────────
 // Structurally mirrors createCertifiedRunContext in
 // lib/benchmark/certified/run-persistence.ts (Maps keyed by id + a
@@ -905,10 +925,29 @@ function selfTestStreamChat(responsesByCanary: Map<string, string>): CertifiedMo
   };
 }
 
-async function runSelfTestPass(input: {
+/**
+ * Turn-ordered stream stub for a stateful case: unlike selfTestStreamChat
+ * (one canned response per canary, reused for every call, which cannot
+ * express a DIFFERENT response per turn), this walks a fixed transcript in
+ * call order -- matching how scripts/test-certified-toolreliability-runner.mts
+ * already drives the repair-loop's second call. Exhausts by repeating the
+ * final response, so a case that runs slightly past its authored transcript
+ * length degrades instead of throwing.
+ */
+function orderedSelfTestStreamChat(responses: string[]): CertifiedModelStream {
+  let index = 0;
+  return async function* orderedSelfTestStream(): AsyncIterable<StreamChunk> {
+    const content = responses[Math.min(index, responses.length - 1)] ?? "";
+    index += 1;
+    yield { type: "token", content };
+    yield { type: "done" };
+  };
+}
+
+async function runSelfTestPassWithStreamChat(input: {
   passLabel: string;
   cases: ToolReliabilityCase[];
-  responsesByCanary: Map<string, string>;
+  streamChat: CertifiedModelStream;
   outDir: string;
 }): Promise<{ attempts: BenchmarkAttemptV2[]; context: PersistentCertifiedRunContext; outPath: string }> {
   const runId = `probe-toolreliability-selftest-${slug(input.passLabel)}-${Date.now()}`;
@@ -934,7 +973,7 @@ async function runSelfTestPass(input: {
     models: [model],
     teamCompositionIds: [team.id],
     casePack: input.cases,
-    streamChat: selfTestStreamChat(input.responsesByCanary),
+    streamChat: input.streamChat,
   });
   await persistReturnedAttempts(context, attempts);
   const completedAt = new Date().toISOString();
@@ -1014,10 +1053,10 @@ async function runSelfTest(outDir: string): Promise<void> {
     ],
   ]);
 
-  const goodPass = await runSelfTestPass({
+  const goodPass = await runSelfTestPassWithStreamChat({
     passLabel: "good",
     cases: [patchCase, schemaCase, forbiddenCase],
-    responsesByCanary: goodResponses,
+    streamChat: selfTestStreamChat(goodResponses),
     outDir,
   });
   const goodAttempt = goodPass.attempts[0];
@@ -1058,10 +1097,10 @@ async function runSelfTest(outDir: string): Promise<void> {
       }),
     ],
   ]);
-  const wrongPass = await runSelfTestPass({
+  const wrongPass = await runSelfTestPassWithStreamChat({
     passLabel: "wrong-patch",
     cases: [wrongPatchCase],
-    responsesByCanary: wrongResponses,
+    streamChat: selfTestStreamChat(wrongResponses),
     outDir,
   });
   const wrongAttempt = wrongPass.attempts[0];
@@ -1077,7 +1116,94 @@ async function runSelfTest(outDir: string): Promise<void> {
     wrongAttempt?.toolReliabilityCasePassFraction
   );
 
-  // ── Pass 3: secret scrub check ───────────────────────────────────────────
+  // ── Pass 3 (Stateful ToolReliability charter): a scripted stateful case ──
+  // through the REAL certified turn loop (runCertifiedToolReliability's
+  // stateful branch), not the single-shot selfTestStreamChat -- a stateful
+  // case needs a DIFFERENT response per turn, so this drives an ordered
+  // stub that walks a fixed transcript in call order instead of matching on
+  // canary. (1) the case's own authored reference transcript
+  // (STATEFUL_REFERENCE_TRANSCRIPTS) passes with a full casePassFraction;
+  // (2) a transcript that repeats the exact same read_range request (the
+  // mined "duplicate tool batch" failure this pilot case targets) renders
+  // failed_model, never failed_tool_use -- stateful misses are reasoning
+  // failures, not the malformed-tool-call arm.
+  const statefulCase = requireStatefulCase("toolrel-current-stateful-redundant-read-001");
+  const statefulReferenceTranscript = STATEFUL_REFERENCE_TRANSCRIPTS[statefulCase.id];
+  check(
+    "self-test setup: a reference transcript exists for the stateful pilot case",
+    Array.isArray(statefulReferenceTranscript) && statefulReferenceTranscript.length > 0,
+    statefulReferenceTranscript
+  );
+  const statefulGoodPass = await runSelfTestPassWithStreamChat({
+    passLabel: "stateful-reference",
+    cases: [statefulCase],
+    streamChat: orderedSelfTestStreamChat(statefulReferenceTranscript ?? []),
+    outDir,
+  });
+  const statefulGoodAttempt = statefulGoodPass.attempts[0];
+  check(
+    "self-test stateful: the reference transcript passes with a full casePassFraction",
+    statefulGoodAttempt?.status === "passed" &&
+      statefulGoodAttempt.toolReliabilityCasePassFraction?.passed === 1 &&
+      statefulGoodAttempt.toolReliabilityCasePassFraction?.total === 1,
+    statefulGoodAttempt
+  );
+
+  const statefulDuplicateReadTranscript = [
+    JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 1, lineCount: 100 }),
+    // Exact duplicate of the previous read -- the mined GPT-5.5
+    // "re-requesting already-served reads" failure this pilot case targets.
+    JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 1, lineCount: 100 }),
+    "MAX_RETRY_BUDGET is 137.",
+  ];
+  const statefulBadPass = await runSelfTestPassWithStreamChat({
+    passLabel: "stateful-duplicate-read",
+    cases: [statefulCase],
+    streamChat: orderedSelfTestStreamChat(statefulDuplicateReadTranscript),
+    outDir,
+  });
+  const statefulBadAttempt = statefulBadPass.attempts[0];
+  check(
+    "self-test stateful: a duplicate-read transcript renders failed_model, not failed_tool_use",
+    statefulBadAttempt?.status === "failed_model",
+    statefulBadAttempt?.status
+  );
+  check(
+    "self-test stateful: duplicate-read casePassFraction is present and honest (0/1)",
+    statefulBadAttempt?.toolReliabilityCasePassFraction?.passed === 0 &&
+      statefulBadAttempt?.toolReliabilityCasePassFraction?.total === 1,
+    statefulBadAttempt?.toolReliabilityCasePassFraction
+  );
+
+  // 2026-07-22 live-gate fix: a BATCHED response (several concatenated JSON
+  // actions with no separator, plus trailing commentary -- spark's real
+  // style) covering the whole task in one turn must still pass. This is
+  // exactly the shape the pre-fix env could never score correctly (it only
+  // ever parsed ONE action out of a multi-action response via the
+  // single-action parseArchitectAction) -- proves the fix, not just that the
+  // single-action path still works.
+  const statefulBatchedTranscript = [
+    JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 1, lineCount: 100 }) +
+      JSON.stringify({ action: "read_range", path: "src/config/limits.ts", startLine: 101, lineCount: 100 }) +
+      "Let me check both halves of the file to be safe.",
+    "MAX_RETRY_BUDGET is 137.",
+  ];
+  const statefulBatchedPass = await runSelfTestPassWithStreamChat({
+    passLabel: "stateful-batched",
+    cases: [statefulCase],
+    streamChat: orderedSelfTestStreamChat(statefulBatchedTranscript),
+    outDir,
+  });
+  const statefulBatchedAttempt = statefulBatchedPass.attempts[0];
+  check(
+    "self-test stateful: a batched (spark-style) response covering the whole task in one turn passes",
+    statefulBatchedAttempt?.status === "passed" &&
+      statefulBatchedAttempt.toolReliabilityCasePassFraction?.passed === 1 &&
+      statefulBatchedAttempt.toolReliabilityCasePassFraction?.total === 1,
+    statefulBatchedAttempt
+  );
+
+  // ── Pass 4: secret scrub check ───────────────────────────────────────────
   const fakeSecret = "sk-probe-scrub-check-secret-0000";
   registerSecrets([fakeSecret]);
   const scrubCase = requirePatchCase("toolrel-current-patch-001");

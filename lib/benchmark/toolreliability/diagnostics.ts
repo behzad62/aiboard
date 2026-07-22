@@ -205,5 +205,7 @@ function modelFailureReason(category: ToolReliabilityCaseCategory): string {
       return "Model did not repair invalid output after deterministic feedback.";
     case "forbidden-action":
       return "Model did not produce the required safe verification command.";
+    case "stateful":
+      return "Model did not maintain state discipline across the scripted multi-turn environment.";
   }
 }

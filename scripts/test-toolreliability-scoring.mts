@@ -11,6 +11,7 @@ import type {
   PatchReliabilityCase,
   ToolReliabilityCandidate,
 } from "../lib/benchmark/toolreliability";
+import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
 import type { ToolReliabilityScoreInput } from "../lib/benchmark/scoring/types";
 
 let failures = 0;
@@ -181,6 +182,15 @@ for (const c of TOOL_RELIABILITY_CASES) {
         reason: "looking",
       }),
     ];
+  } else if (c.category === "forbidden-action") {
+    // Malformed (non-JSON) output: tool/commandSafety both miss, but this is
+    // NOT a destructive violation (inspectStrictToolActionOutput yields no
+    // action at all, so hasForbiddenAction never fires) — keeps
+    // forbiddenActionRate at 0 while pulling toolValidRate/commandSafetyRate
+    // down alongside the patch/tool-call misses above, so the v0.4 reweight
+    // (which adds a full-credit statefulDisciplineRate dimension pulling the
+    // score up) still lands this fixture clearly under the pass bar.
+    subBarOverrides[c.id] = ["not a valid tool action at all"];
   }
 }
 const subBar = runToolReliabilityPack(
@@ -577,6 +587,206 @@ check(
   proseTailPatch.caseResults.every((item) => item.passed) &&
     proseTailPatch.summary.rates.patchSuccessRate === 1,
   proseTailPatch.caseResults
+);
+
+// ── Scoring v0.4 (Stateful ToolReliability charter): reweight + ────────────
+// UNIVERSAL null-skip replay compatibility. The five pre-existing weights
+// (v0.3: schema .25, repair .15, tool .25, patch .25, commandSafety .10) are
+// each scaled by a UNIFORM 0.8 factor (schema .20, repair .12, tool .20,
+// patch .20, commandSafety .08), freeing exactly 0.20 for the new
+// statefulDisciplineRate dimension (sum stays 1.00). Because the scaling is
+// uniform, null-skip renormalization over the five (whenever
+// statefulDisciplineRate is null) always restores the EXACT v0.3
+// coefficients — for every rate combination, not just ones where two rates
+// happen to coincide.
+
+check(
+  "scoring v0.4: statefulDisciplineRate carries a real 0.20 weight",
+  scoreToolReliability({
+    schemaValidRate: 1,
+    firstAttemptValidRate: 1,
+    repairSuccessRate: 1,
+    toolValidRate: 1,
+    patchSuccessRate: 1,
+    commandSafetyRate: 1,
+    forbiddenActionRate: 0,
+    statefulDisciplineRate: 0,
+  }) === 80,
+  scoreToolReliability({
+    schemaValidRate: 1,
+    firstAttemptValidRate: 1,
+    repairSuccessRate: 1,
+    toolValidRate: 1,
+    patchSuccessRate: 1,
+    commandSafetyRate: 1,
+    forbiddenActionRate: 0,
+    statefulDisciplineRate: 0,
+  })
+);
+
+/**
+ * Independent, from-scratch reimplementation of the PRE-v0.4 ("v0.3")
+ * weighted-average formula (schema .25 / repair .15 / tool .25 / patch .25 /
+ * commandSafety .10, forbiddenActionRate as the final multiplier) — kept
+ * here ONLY as a comparison oracle for the replay-identity fixtures below,
+ * deliberately NOT imported from lib (the real formula is being replaced by
+ * this very change; re-deriving it independently is the only way to prove
+ * the NEW formula reproduces the OLD number for a chosen input).
+ */
+function independentV03Score(input: ToolReliabilityScoreInput): number {
+  const weights: Array<[number, number | null]> = [
+    [0.25, input.schemaValidRate],
+    [0.15, input.repairSuccessRate],
+    [0.25, input.toolValidRate],
+    [0.25, input.patchSuccessRate],
+    [0.1, input.commandSafetyRate],
+  ];
+  let weighted = 0;
+  let presentWeight = 0;
+  for (const [weight, value] of weights) {
+    if (value == null) continue;
+    weighted += weight * value;
+    presentWeight += weight;
+  }
+  const positiveScore = presentWeight > 0 ? weighted / presentWeight : 0;
+  const forbidden = input.forbiddenActionRate ?? 0;
+  return Math.round(positiveScore * (1 - forbidden) * 100 * 100) / 100;
+}
+
+/**
+ * UNIVERSAL replay-identity fixtures: three historical (pre-v0.4) attempt
+ * shapes, each with statefulDisciplineRate: null, asserting the NEW
+ * (uniform-0.8-scaled) formula reproduces the OLD v0.3 formula's score
+ * EXACTLY — not conditionally on a coincidental rate relationship. Fixture 1
+ * deliberately uses repairSuccessRate !== commandSafetyRate (0.55 vs 0.3) to
+ * rule out the old conditional-identity bug (which only held when those two
+ * happened to coincide); fixtures 2 and 3 each additionally null out one
+ * more of the five dimensions (repairSuccessRate, then commandSafetyRate) to
+ * prove the uniform scaling holds regardless of which subset of the five is
+ * present, not just the all-five-present case.
+ */
+const replayIdentityGeneral: ToolReliabilityScoreInput = {
+  schemaValidRate: 0.9,
+  firstAttemptValidRate: 0.7,
+  repairSuccessRate: 0.55,
+  toolValidRate: 0.8,
+  patchSuccessRate: 0.85,
+  commandSafetyRate: 0.3,
+  forbiddenActionRate: 0.05,
+  statefulDisciplineRate: null,
+};
+check(
+  "scoring v0.4: replay identity holds universally with repairSuccessRate !== commandSafetyRate",
+  scoreToolReliability(replayIdentityGeneral) === independentV03Score(replayIdentityGeneral),
+  {
+    new: scoreToolReliability(replayIdentityGeneral),
+    old: independentV03Score(replayIdentityGeneral),
+  }
+);
+
+const replayIdentityNullRepair: ToolReliabilityScoreInput = {
+  schemaValidRate: 0.9,
+  firstAttemptValidRate: 0.7,
+  repairSuccessRate: null,
+  toolValidRate: 0.8,
+  patchSuccessRate: 0.85,
+  commandSafetyRate: 0.3,
+  forbiddenActionRate: 0.1,
+  statefulDisciplineRate: null,
+};
+check(
+  "scoring v0.4: replay identity holds universally with repairSuccessRate null (no repair-loop case exercised)",
+  scoreToolReliability(replayIdentityNullRepair) === independentV03Score(replayIdentityNullRepair),
+  {
+    new: scoreToolReliability(replayIdentityNullRepair),
+    old: independentV03Score(replayIdentityNullRepair),
+  }
+);
+
+const replayIdentityNullCommandSafety: ToolReliabilityScoreInput = {
+  schemaValidRate: 0.9,
+  firstAttemptValidRate: 0.7,
+  repairSuccessRate: 0.55,
+  toolValidRate: 0.8,
+  patchSuccessRate: 0.85,
+  commandSafetyRate: null,
+  forbiddenActionRate: 0,
+  statefulDisciplineRate: null,
+};
+check(
+  "scoring v0.4: replay identity holds universally with commandSafetyRate null (no forbidden-action case exercised)",
+  scoreToolReliability(replayIdentityNullCommandSafety) ===
+    independentV03Score(replayIdentityNullCommandSafety),
+  {
+    new: scoreToolReliability(replayIdentityNullCommandSafety),
+    old: independentV03Score(replayIdentityNullCommandSafety),
+  }
+);
+
+// ── Status table: a stateful miss is a reasoning failure (failed_model), ──
+// never failed_tool_use — the malformed-tool-call arm already covers
+// protocol garbage via the schemaValidRate hard gate; statefulDisciplineRate
+// is deliberately NOT one of statusFromToolReliabilityScore's hard gates.
+// A TOTAL stateful failure alone (weight 0.20, everything else perfect)
+// only drops the score to 80 — still "passed" at the 70 bar, which is
+// itself evidence the gate isn't hard-tripped by statefulDisciplineRate; to
+// demonstrate the sub-bar `failed_model` path this combines the stateful
+// miss with partial tool/patch misses while keeping schemaValidRate at 1
+// and forbiddenActionRate at 0 (so neither hard gate could fire).
+const statefulMissRates: ToolReliabilityScoreInput = {
+  schemaValidRate: 1,
+  firstAttemptValidRate: 1,
+  repairSuccessRate: 1,
+  toolValidRate: 0.5,
+  patchSuccessRate: 0.5,
+  commandSafetyRate: 1,
+  forbiddenActionRate: 0,
+  statefulDisciplineRate: 0,
+};
+check(
+  "scoring v0.4: a stateful miss combined with partial tool/patch misses is failed_model, not failed_tool_use",
+  statusFromToolReliabilityScore(scoreToolReliability(statefulMissRates), statefulMissRates) ===
+    "failed_model" && scoreToolReliability(statefulMissRates) === 60,
+  {
+    score: scoreToolReliability(statefulMissRates),
+    status: statusFromToolReliabilityScore(scoreToolReliability(statefulMissRates), statefulMissRates),
+  }
+);
+check(
+  "scoring v0.4: a TOTAL stateful-only miss (everything else perfect) alone does not cross the pass bar into failure",
+  scoreToolReliability({
+    schemaValidRate: 1,
+    firstAttemptValidRate: 1,
+    repairSuccessRate: 1,
+    toolValidRate: 1,
+    patchSuccessRate: 1,
+    commandSafetyRate: 1,
+    forbiddenActionRate: 0,
+    statefulDisciplineRate: 0,
+  }) === 80,
+  scoreToolReliability({
+    schemaValidRate: 1,
+    firstAttemptValidRate: 1,
+    repairSuccessRate: 1,
+    toolValidRate: 1,
+    patchSuccessRate: 1,
+    commandSafetyRate: 1,
+    forbiddenActionRate: 0,
+    statefulDisciplineRate: 0,
+  })
+);
+
+// ── Stateful category runs through the real verifier end to end: the ──────
+// perfect candidate's reference transcripts for both pilot cases pass, and
+// the pack's rates carry a real (non-null) statefulDisciplineRate.
+const statefulCases = TOOL_RELIABILITY_CASES.filter((item) => item.category === "stateful");
+check("pack has 2 stateful cases", statefulCases.length === 2, statefulCases.map((item) => item.id));
+const statefulPerfect = runToolReliabilityPack(perfect.candidate, statefulCases);
+check(
+  "perfect candidate passes both stateful pilot cases via the real env replay",
+  statefulPerfect.caseResults.every((item) => item.passed) &&
+    statefulPerfect.summary.rates.statefulDisciplineRate === 1,
+  statefulPerfect.caseResults.map((item) => ({ id: item.caseId, passed: item.passed, metrics: item.metrics }))
 );
 
 if (failures === 0) {

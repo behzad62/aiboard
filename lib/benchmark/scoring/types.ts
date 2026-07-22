@@ -48,6 +48,13 @@ export interface ToolReliabilityScoreInput {
   patchSuccessRate: number | null;
   commandSafetyRate: number | null;
   forbiddenActionRate: number | null;
+  /**
+   * Fraction of stateful (scripted multi-turn environment) cases passed.
+   * Null when no stateful cases ran (e.g. a historical pre-v0.5 attempt) —
+   * the null-skip renormalization in `scoreToolReliability` means such
+   * attempts replay to the identical score they always had.
+   */
+  statefulDisciplineRate: number | null;
 }
 
 export type TeamLiftLabel =

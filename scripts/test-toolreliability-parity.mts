@@ -29,6 +29,7 @@
  * controls below must always keep failing.
  */
 import {
+  STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
   malformedToolReliabilityRepairSeed,
   normalizePatchContent,
@@ -37,6 +38,7 @@ import {
   type JsonSchemaToolReliabilityCase,
   type PatchReliabilityCase,
   type RepairLoopReliabilityCase,
+  type StatefulToolReliabilityCase,
   type ToolCallReliabilityCase,
   type ToolReliabilityCase,
   type ToolReliabilityCaseResult,
@@ -72,6 +74,46 @@ interface ParityAnswers {
   alternateNote: string;
   /** Human-readable note on what makes the negative control wrong/unsafe. */
   negativeNote: string;
+  /**
+   * Stateful-only, optional: a "spark's style" batched transcript — several
+   * concatenated JSON actions per response plus trailing commentary, mirroring
+   * the real 2026-07-22 live-gate transcripts — that maintains discipline and
+   * MUST PASS. Closes the leak that shipped: the pre-fix env only ever parsed
+   * ONE action out of a batched response, so a batching-unaware fixture could
+   * never have caught the bug.
+   */
+  batchedAlternate?: string[];
+  batchedAlternateNote?: string;
+  /**
+   * Stateful redundant-read only, optional: a batched negative control where
+   * the duplicate/overlapping read occurs WITHIN one response (not across
+   * turns) — MUST FAIL. Uses a non-byte-identical duplicate (a different
+   * `reason` field) so the real engine's own exact-text candidate dedup
+   * (uniqueActionCandidatesInDocumentOrder) doesn't collapse it to one
+   * candidate before the redundancy tracker ever sees it — the interval-
+   * coverage check, not exact-string matching, is what must catch this.
+   */
+  batchedNegative?: string[];
+  batchedNegativeNote?: string;
+  /**
+   * Stateful-only, optional: a 2026-07-22 gate-2 fix. Turn 1 is a genuinely
+   * malformed/incomplete JSON action attempt (for stale-patch-001, spark's
+   * OWN recorded unterminated patch JSON, missing one closing brace); the
+   * env must recognize this as an attempted-but-malformed action (reusing
+   * the real engine's own detection/message), consume the turn WITHOUT
+   * firing any scheduled event, and give the model a real second chance —
+   * the rest of the transcript then recovers and completes correctly. MUST
+   * PASS within the case's own maxTurns (no maxTurns bump).
+   */
+  malformedRecovery?: string[];
+  malformedRecoveryNote?: string;
+  /**
+   * Stateful-only, optional: emits malformed JSON every turn until maxTurns
+   * (never a real action) — MUST FAIL (the final state never changes from
+   * initial, so it can never match any accepted content/answer).
+   */
+  malformedNegative?: string[];
+  malformedNegativeNote?: string;
 }
 
 // --- Tool-action output builders (match ArchitectAction / RunAction shapes
@@ -90,6 +132,21 @@ function readRangeAction(path: string, startLine: number, lineCount: number): st
     lineCount,
     reason: "inspect the target range",
   });
+}
+
+/** Same as readRangeAction but with a caller-chosen `reason` string, so two
+ * requests for the IDENTICAL range still produce non-byte-identical JSON
+ * text — needed to survive the real engine's own exact-text candidate dedup
+ * (uniqueActionCandidatesInDocumentOrder) when constructing a WITHIN-one-
+ * batch duplicate-read negative control; the interval-coverage redundancy
+ * tracker, not exact-string matching, is what must catch it. */
+function readRangeActionWithReason(
+  path: string,
+  startLine: number,
+  lineCount: number,
+  reason: string
+): string {
+  return JSON.stringify({ action: "read_range", path, startLine, lineCount, reason });
 }
 
 function searchAction(query: string): string {
@@ -577,6 +634,216 @@ function patchAnswers(benchmarkCase: PatchReliabilityCase): ParityAnswers {
   };
 }
 
+// --- stateful (2 pilot cases, Stateful ToolReliability charter PR A): each
+// case's REFERENCE transcript is read live off STATEFUL_REFERENCE_TRANSCRIPTS
+// (the same table `buildPerfectToolReliabilityCandidate` uses, zero
+// transcription risk). Alternates are hand-authored GENUINELY DIFFERENT
+// multi-turn strategies that still land correctly within budget. Negatives
+// replay the mined failure SHAPE the case's kind targets — never a weakened
+// verifier, a real repeat of the real mistake. ---
+
+/** JSON patch tool action, matching lib/orchestrator/build.ts's PatchAction. */
+function patchToolAction(path: string, ops: PatchOp[]): string {
+  return JSON.stringify({ action: "patch", path, ops, reason: "apply the required fix" });
+}
+
+const STATEFUL_ANSWERS: Record<
+  string,
+  {
+    alternate: string[];
+    negative: string[];
+    alternateNote: string;
+    negativeNote: string;
+    batchedAlternate: string[];
+    batchedAlternateNote: string;
+    batchedNegative?: string[];
+    batchedNegativeNote?: string;
+    malformedRecovery?: string[];
+    malformedRecoveryNote?: string;
+    malformedNegative?: string[];
+    malformedNegativeNote?: string;
+  }
+> = {
+  "toolrel-current-stateful-redundant-read-001": {
+    alternate: [
+      readRangeAction("src/config/limits.ts", 1, 200),
+      "The value of MAX_RETRY_BUDGET is 137.",
+    ],
+    negative: [
+      readRangeAction("src/config/limits.ts", 1, 100),
+      // Exact duplicate of the previous read — the mined GPT-5.5
+      // "re-requesting already-served reads" failure — even though the
+      // final guess happens to be the correct value.
+      readRangeAction("src/config/limits.ts", 1, 100),
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    alternateNote:
+      "a single whole-file read instead of two half-file reads, plus differently-worded final answer",
+    negativeNote:
+      "repeats the exact same read_range request twice (the mined duplicate-tool-batch failure), strict on redundancy regardless of the final guess",
+    // Spark's live-gate style: both non-overlapping reads batched into ONE
+    // response (concatenated, no separator) with trailing commentary, then a
+    // separate final-answer turn. Must PASS — this is the exact shape the
+    // pre-fix env could never score correctly (it only ever saw ONE action
+    // out of the batch).
+    batchedAlternate: [
+      readRangeAction("src/config/limits.ts", 1, 100) +
+        readRangeAction("src/config/limits.ts", 101, 100) +
+        "Let me check both halves of the file to be safe.",
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    batchedAlternateNote:
+      "both non-overlapping reads batched into one spark-style response with trailing commentary, then a separate final answer",
+    // The duplicate/overlapping read happens WITHIN one batched response (not
+    // across turns) — a different `reason` string keeps the two JSON texts
+    // non-identical so the real engine's own exact-text candidate dedup
+    // doesn't collapse them before the interval-coverage tracker sees them.
+    batchedNegative: [
+      readRangeActionWithReason("src/config/limits.ts", 1, 100, "first pass") +
+        readRangeActionWithReason("src/config/limits.ts", 1, 100, "double-checking my read") +
+        "Just confirming before I answer.",
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    batchedNegativeNote:
+      "an overlapping duplicate read_range within the SAME batched response (non-identical JSON text, so only the interval-coverage tracker — not exact-string dedup — catches it)",
+    // 2026-07-22 gate-2 fix: turn 1 is a genuinely malformed/incomplete
+    // read_range attempt (truncated mid-value, no closing brace) that the
+    // env must recognize as an ATTEMPTED action (not a final answer),
+    // reject with the real engine's own message, and give the model
+    // another turn — with room to spare within maxTurns (3) by covering the
+    // whole file in ONE batched read on the recovery turn.
+    malformedRecovery: [
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      readRangeAction("src/config/limits.ts", 1, 200),
+      "MAX_RETRY_BUDGET is 137.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete read_range attempt (no closing brace); after the rejection, one batched whole-file read plus the final answer complete the case within the 3-turn budget",
+    // Malformed every turn until maxTurns (3) -- never a real action, so no
+    // read ever happens.
+    malformedNegative: [
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/config/limits.ts","startLine":1,"lineCount"',
+    ],
+    malformedNegativeNote:
+      "emits the same truncated/incomplete action every turn until the budget is exhausted -- no read ever actually happens, so the case cannot pass",
+  },
+  "toolrel-current-stateful-stale-patch-001": {
+    alternate: [
+      // Patches immediately from the prompt-shown content (no read first) and
+      // gets it right on the FIRST action-turn, then immediately gives its
+      // final answer. Since scheduled announcements only fire on turns that
+      // carry an action (see stateful-env.ts), the concurrent edit never
+      // triggers at all for this run — a genuinely different (and
+      // legitimately correct) strategy from the reference's read/reject/
+      // recover path: finish fast and correctly before the scheduled event
+      // ever gets a chance to matter. Ends on the original-structure-fixed
+      // content, the OTHER accepted variant in expectedFinalFiles.acceptable.
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      "Fixed the surcharge rate to 5%.",
+    ],
+    negative: [
+      readRangeAction("src/pricing/surcharge.ts", 1, 3),
+      // First attempt fails because the file evolved underneath it (expected,
+      // recoverable) — but the model STUBBORNLY re-issues the IDENTICAL
+      // pre-change SEARCH text again instead of adapting, exactly the mined
+      // "patch SEARCH blocks not matching the current (evolved) file"
+      // failure, repeated rather than recovered from.
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      "Applied the surcharge fix.",
+    ],
+    alternateNote:
+      "fixes it correctly in one action-turn and immediately stops, so the scheduled concurrent edit never fires at all (a turn-carrying-zero-actions never triggers it) — ends on the OTHER accepted final state (original structure, fixed)",
+    negativeNote:
+      "retries the identical pre-change SEARCH text a second time instead of adapting to the concurrent edit, so the fix never lands",
+    // Spark's live-gate style: a batched double-read at turn 1 (harmless
+    // noise for this kind, since redundancy isn't scored here) plus trailing
+    // commentary, then the rejected/recovery patch turns each carry their
+    // own trailing commentary too. Must PASS within maxTurns (4).
+    batchedAlternate: [
+      readRangeAction("src/pricing/surcharge.ts", 1, 3) +
+        readRangeActionWithReason("src/pricing/surcharge.ts", 1, 3, "double-checking before I edit") +
+        "Reviewing the current file before making changes.",
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]) + "Applying the rate change now.",
+      readRangeAction("src/pricing/surcharge.ts", 1, 5) + "Let me see what changed.",
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
+      ]) + "Updating to match the current file.",
+    ],
+    batchedAlternateNote:
+      "every turn batches its action(s) with trailing spark-style commentary in the same response; recovers from the expected rejection within the 4-turn budget",
+    // 2026-07-22 gate-2 VOID FIX: turn 1 is spark's OWN recorded output,
+    // VERBATIM, from probe-runs/toolreliability/probe-toolreliability-
+    // stateful-gate2-spark-chatgpt-gpt-5.3-codex-spark.json (252 output
+    // tokens; the model stopped on its own with one closing brace missing
+    // from the top-level action object). The old env saw zero parsable
+    // actions and voided the case as a premature final answer; the fixed
+    // env recognizes this as an attempted-but-malformed patch, serves the
+    // real engine's rejection text, and gives the model a real second
+    // chance. The recovery then follows the SAME 4-turn shape as the
+    // reference (the malformed turn simply takes the place of the
+    // reference's opening exploratory read, which was never load-bearing):
+    // patch-against-original (turn 2, mutation fires, rejected), read
+    // (turn 3), patch-against-evolved (turn 4, succeeds) -- fits exactly
+    // within maxTurns (4).
+    malformedRecovery: [
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  return Math.round(amountCents * 0.03);", replace: "  return Math.round(amountCents * 0.05);" },
+      ]),
+      readRangeAction("src/pricing/surcharge.ts", 1, 5),
+      patchToolAction("src/pricing/surcharge.ts", [
+        { search: "  const rate = 0.03;", replace: "  const rate = 0.05;" },
+      ]),
+    ],
+    malformedRecoveryNote:
+      "turn 1 is spark's OWN recorded unterminated patch JSON (missing one closing brace) from the gate-2 void; after the rejection, the SAME recovery shape as the reference completes within the 4-turn budget",
+    // Malformed every turn until maxTurns (4) -- the file is never touched,
+    // so the final state can never match either accepted variant.
+    malformedNegative: [
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+      '{"action":"patch","path":"src/pricing/surcharge.ts","ops":[{"search":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.03);\\n}","replace":"export function computeSurcharge(amountCents: number): number {\\n  return Math.round(amountCents * 0.05);\\n}"}]',
+    ],
+    malformedNegativeNote:
+      "emits the same malformed unterminated patch JSON every turn until the budget is exhausted -- the file is never actually patched, so the final content can never match",
+  },
+};
+
+function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnswers {
+  const reference = STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id];
+  const table = STATEFUL_ANSWERS[benchmarkCase.id];
+  if (!reference || !table) {
+    throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
+  }
+  return {
+    reference,
+    alternate: table.alternate,
+    batchedAlternate: table.batchedAlternate,
+    batchedAlternateNote: table.batchedAlternateNote,
+    batchedNegative: table.batchedNegative,
+    batchedNegativeNote: table.batchedNegativeNote,
+    malformedRecovery: table.malformedRecovery,
+    malformedRecoveryNote: table.malformedRecoveryNote,
+    malformedNegative: table.malformedNegative,
+    malformedNegativeNote: table.malformedNegativeNote,
+    negative: table.negative,
+    alternateNote: table.alternateNote,
+    negativeNote: table.negativeNote,
+  };
+}
+
 // --- dispatcher ---
 
 function answersFor(benchmarkCase: ToolReliabilityCase): ParityAnswers {
@@ -591,6 +858,8 @@ function answersFor(benchmarkCase: ToolReliabilityCase): ParityAnswers {
       return repairLoopAnswers(benchmarkCase);
     case "forbidden-action":
       return forbiddenActionAnswers(benchmarkCase);
+    case "stateful":
+      return statefulAnswers(benchmarkCase);
   }
 }
 
@@ -644,6 +913,87 @@ for (const benchmarkCase of TOOL_RELIABILITY_CASES) {
     metrics: negative.metrics,
     events: negative.events,
   });
+
+  // --- Batched-response variants (2026-07-22 live-gate fix), STATEFUL cases
+  // only: closes the leak that let the batching bug ship — a stateful case's
+  // parity guard must PASS a spark-style batched-but-disciplined transcript,
+  // and (for redundant-read kinds) must FAIL a batched-duplicate-within-one-
+  // response negative control. A negative control that now passes under
+  // batch semantics is a BLOCKED finding, never something to weaken the env
+  // to paper over. Every other category's turn protocol is unaffected by
+  // this fix (they were never routed through the multi-turn batch parser),
+  // so this section is scoped to `category === "stateful"` only. ---
+  if (benchmarkCase.category !== "stateful") continue;
+
+  if (answers.batchedAlternate) {
+    const batchedAlternate = evaluateCase(benchmarkCase, answers.batchedAlternate);
+    const batchedAlternateIsDistinct =
+      JSON.stringify(answers.batchedAlternate) !== JSON.stringify(answers.reference) &&
+      JSON.stringify(answers.batchedAlternate) !== JSON.stringify(answers.alternate);
+    check(
+      `${benchmarkCase.id} batched alternate is genuinely different text from reference and alternate`,
+      batchedAlternateIsDistinct,
+      { reference: answers.reference, alternate: answers.alternate, batchedAlternate: answers.batchedAlternate }
+    );
+    check(
+      `${benchmarkCase.id} batched (spark-style) alternate passes (${answers.batchedAlternateNote})`,
+      batchedAlternate.passed,
+      { attempts: answers.batchedAlternate, metrics: batchedAlternate.metrics, events: batchedAlternate.events }
+    );
+  } else {
+    check(`${benchmarkCase.id} has a batched-alternate parity fixture`, false, benchmarkCase.id);
+  }
+
+  if (benchmarkCase.category === "stateful" && benchmarkCase.kind === "redundant-read") {
+    if (answers.batchedNegative) {
+      const batchedNegative = evaluateCase(benchmarkCase, answers.batchedNegative);
+      const batchedNegativeIsDistinct =
+        JSON.stringify(answers.batchedNegative) !== JSON.stringify(answers.reference);
+      check(
+        `${benchmarkCase.id} batched negative control is distinct from the reference`,
+        batchedNegativeIsDistinct,
+        { reference: answers.reference, batchedNegative: answers.batchedNegative }
+      );
+      check(
+        `${benchmarkCase.id} batched negative control fails (${answers.batchedNegativeNote})`,
+        !batchedNegative.passed,
+        { attempts: answers.batchedNegative, metrics: batchedNegative.metrics, events: batchedNegative.events }
+      );
+    } else {
+      check(`${benchmarkCase.id} has a batched-negative parity fixture (redundant-read kind)`, false, benchmarkCase.id);
+    }
+  }
+
+  // --- Malformed-action rejection-retry (2026-07-22 gate-2 fix): optional
+  // per case (mandatory for stale-patch-001 -- the case the void was found
+  // on). Turn 1 is a genuinely incomplete/malformed JSON action attempt;
+  // the env must reject-and-retry (not void the case as a premature final
+  // answer), and the rest of the transcript recovers correctly. A negative
+  // that stays malformed until maxTurns must FAIL (the file/answer state
+  // never changes from initial). ---
+  if (answers.malformedRecovery) {
+    const malformedRecovery = evaluateCase(benchmarkCase, answers.malformedRecovery);
+    check(
+      `${benchmarkCase.id} malformed-then-recover transcript passes (${answers.malformedRecoveryNote})`,
+      malformedRecovery.passed,
+      { attempts: answers.malformedRecovery, metrics: malformedRecovery.metrics, events: malformedRecovery.events }
+    );
+  }
+  if (answers.malformedNegative) {
+    const malformedNegative = evaluateCase(benchmarkCase, answers.malformedNegative);
+    check(
+      `${benchmarkCase.id} malformed-every-turn negative control fails (${answers.malformedNegativeNote})`,
+      !malformedNegative.passed,
+      { attempts: answers.malformedNegative, metrics: malformedNegative.metrics, events: malformedNegative.events }
+    );
+  }
+  if (benchmarkCase.id === "toolrel-current-stateful-stale-patch-001") {
+    check(
+      "toolrel-current-stateful-stale-patch-001 has a malformed-then-recover parity fixture (mandatory -- this is the case the 2026-07-22 gate-2 void was found on)",
+      Boolean(answers.malformedRecovery) && Boolean(answers.malformedNegative),
+      { hasRecovery: Boolean(answers.malformedRecovery), hasNegative: Boolean(answers.malformedNegative) }
+    );
+  }
 }
 
 check(

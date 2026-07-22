@@ -15,12 +15,14 @@ import {
   inspectStrictToolActionOutput,
   type ArchitectAction,
 } from "@/lib/orchestrator/build";
-import { TOOL_RELIABILITY_CASES } from "./cases";
+import { STATEFUL_REFERENCE_TRANSCRIPTS, TOOL_RELIABILITY_CASES } from "./cases";
+import { createStatefulEnv } from "./stateful-env";
 import type {
   ForbiddenActionReliabilityCase,
   JsonSchemaToolReliabilityCase,
   PatchReliabilityCase,
   RepairLoopReliabilityCase,
+  StatefulToolReliabilityCase,
   ToolCallActionExpectation,
   ToolCallReliabilityCase,
   ToolReliabilityCandidate,
@@ -163,6 +165,9 @@ function evaluateToolReliabilityCase(
       break;
     case "forbidden-action":
       evaluateForbiddenActionCase(benchmarkCase, attempts, metrics, events);
+      break;
+    case "stateful":
+      evaluateStatefulCase(benchmarkCase, attempts, metrics, events);
       break;
   }
 
@@ -558,6 +563,47 @@ function evaluateForbiddenActionCase(
   );
 }
 
+/**
+ * Replays a stateful case's recorded turn outputs through a FRESH
+ * `createStatefulEnv` instance — the env is pure, so this reproduces the
+ * identical verdict the certified turn loop computed live (certified-runner.ts)
+ * from `candidate.outputs[caseId]` alone. No metric other than `stateful` is
+ * set (stateful cases are scored on that single dimension; there is no
+ * separate single-shot "firstAttempt" concept for a multi-turn case).
+ */
+function evaluateStatefulCase(
+  benchmarkCase: StatefulToolReliabilityCase,
+  attempts: string[],
+  metrics: ToolReliabilityMetricObservations,
+  events: ToolReliabilityTraceEvent[]
+): void {
+  const env = createStatefulEnv(benchmarkCase);
+  for (const output of attempts) {
+    const stepResult = env.step(output ?? "");
+    events.push(
+      event(
+        benchmarkCase.id,
+        "env_step",
+        "skipped",
+        preview(stepResult.renderedResult),
+        { done: stepResult.done }
+      )
+    );
+    if (stepResult.done) break;
+  }
+  const verdict = env.verdict();
+  metrics.stateful = verdict.passed;
+  events.push(
+    event(
+      benchmarkCase.id,
+      "stateful_verdict",
+      verdict.passed ? "passed" : "failed",
+      verdict.reason,
+      { kindChecks: verdict.kindChecks, kind: benchmarkCase.kind }
+    )
+  );
+}
+
 function classifyPatchFailure(input: {
   edit: ExtractedEdit | undefined;
   applied: ReturnType<typeof applyEditOps> | null;
@@ -902,6 +948,7 @@ function summarizeToolReliability(
     patchSuccessRate: rate(caseResults, "patch", true),
     commandSafetyRate: rate(caseResults, "commandSafety", true),
     forbiddenActionRate: rate(caseResults, "forbiddenAction", true),
+    statefulDisciplineRate: rate(caseResults, "stateful", true),
   };
 
   return {
@@ -1188,6 +1235,8 @@ function perfectOutputsForCase(benchmarkCase: ToolReliabilityCase): string[] {
           reason: "run deterministic verification",
         }),
       ];
+    case "stateful":
+      return STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id] ?? [];
   }
 }
 
