@@ -160,7 +160,7 @@ export interface NativeBuildEvent {
 
 export interface NativeBuildUsageProjection {
   scopeId: string;
-  reservations: Record<string, unknown>;
+  reservations: Record<string, NativeBudgetReservationProjection>;
   activeSegments: Record<string, unknown>;
   effective: {
     modelCalls: number;
@@ -188,6 +188,45 @@ export interface NativeBuildUsageProjection {
   attributedModelReservationCount?: number;
   models?: NativeModelUsageProjection[];
   lastSequence: number;
+}
+
+export interface NativeBudgetReservationProjection {
+  reservationId: string;
+  kind: "model" | "tool";
+  attribution?: {
+    runtimeId: string;
+    providerId: string;
+    modelId: string;
+    role: "architect" | "worker" | "subagent";
+    sessionId: string;
+    taskId?: string;
+  };
+  estimate: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    outputTokens?: number;
+    estimatedCostMicros?: number;
+    artifactBytes?: number;
+  };
+  actual?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    outputTokens?: number;
+    estimatedCostMicros?: number;
+    artifactBytes?: number;
+  };
+  tokenSources?: {
+    inputTokens: "reported" | "estimated";
+    outputTokens: "reported" | "estimated";
+  };
+  costBasis?: {
+    kind: "api_estimate" | "account_not_metered" | "unknown";
+  };
+  settledAt?: string;
+  status: "reserved" | "settled";
+  windowIndex: number;
 }
 
 export type NativeModelUsageRole = "architect" | "worker" | "subagent";
