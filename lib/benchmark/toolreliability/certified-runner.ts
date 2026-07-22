@@ -1,6 +1,8 @@
 import {
   callCertifiedModel,
   throwIfCertifiedRunAborted,
+  type CertifiedModelCallAttemptUsage,
+  type CertifiedModelCallResult,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
@@ -47,6 +49,12 @@ export interface RunCertifiedToolReliabilityInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  /**
+   * Backoff between transient-failure retries, passed straight through to
+   * `callCertifiedModel` (default `DEFAULT_RETRY_DELAYS_MS`, 2s/8s). Tests
+   * pass `[0, 0]` to exercise the retry path without waiting out the backoff.
+   */
+  retryDelaysMs?: number[];
 }
 
 export async function runCertifiedToolReliability(
@@ -81,14 +89,25 @@ async function runCertifiedToolReliabilityAttempt(
 ): Promise<BenchmarkAttemptV2> {
   const attemptId = `toolrel-attempt:${input.context.runId}:${input.teamCompositionId}:${input.model.modelId}`;
   const caseId = input.context.caseIds[0] ?? "toolreliability-current-pack";
-  const calls: Array<{
-    traceId: string;
-    latencyMs: number;
-    inputTokens: number;
-    outputTokens: number;
-    estimatedUsd: number | null;
-  }> = [];
+  const calls: CertifiedModelCallAttemptUsage[] = [];
   const outputs: ToolReliabilityCandidate["outputs"] = {};
+
+  /**
+   * Records every PHYSICAL model call the provider billed for: the attempt
+   * that answered, plus any transient attempts retried away beneath it (a
+   * dead stream still costs its input tokens). Counting only the answer
+   * under-reports `modelCalls`, tokens and cost whenever a retry fires.
+   */
+  const recordCall = (call: CertifiedModelCallResult): void => {
+    for (const retried of call.retryAttempts ?? []) calls.push(retried);
+    calls.push({
+      traceId: call.traceId,
+      latencyMs: call.latencyMs,
+      inputTokens: call.inputTokens,
+      outputTokens: call.outputTokens,
+      estimatedUsd: call.estimatedUsd,
+    });
+  };
 
   for (const benchmarkCase of input.casePack) {
     throwIfCertifiedRunAborted(input.signal);
@@ -115,14 +134,9 @@ async function runCertifiedToolReliabilityAttempt(
         pricing: input.pricing,
         streamChat: input.streamChat,
         signal: input.signal,
+        retryDelaysMs: input.retryDelaysMs,
       });
-      calls.push({
-        traceId: call.traceId,
-        latencyMs: call.latencyMs,
-        inputTokens: call.inputTokens,
-        outputTokens: call.outputTokens,
-        estimatedUsd: call.estimatedUsd,
-      });
+      recordCall(call);
       return call.rawResponse;
     };
 
@@ -154,14 +168,13 @@ async function runCertifiedToolReliabilityAttempt(
           pricing: input.pricing,
           streamChat: input.streamChat,
           signal: input.signal,
+          retryDelaysMs: input.retryDelaysMs,
         });
-        calls.push({
-          traceId: call.traceId,
-          latencyMs: call.latencyMs,
-          inputTokens: call.inputTokens,
-          outputTokens: call.outputTokens,
-          estimatedUsd: call.estimatedUsd,
-        });
+        recordCall(call);
+        // One turn consumes one OUTPUT, however many physical calls it took:
+        // a transient attempt is retried away inside `callCertifiedModel` and
+        // never reaches the env, so `caseOutputs` stays a clean turn-by-turn
+        // transcript that replays to the identical verdict (runner.ts).
         caseOutputs.push(call.rawResponse);
         const stepResult = env.step(call.rawResponse);
         transcript += `\n\nTurn ${turn + 1} - you replied:\n${call.rawResponse}\n\nTurn ${turn + 1} - tool result:\n${stepResult.renderedResult}`;

@@ -58,11 +58,37 @@ export const DEFAULT_RETRY_DELAYS_MS: number[] = [2_000, 8_000];
  */
 export class CertifiedProviderError extends Error {
   readonly classification: ProviderFailureClass;
-  constructor(message: string, classification: ProviderFailureClass) {
+  /**
+   * Trace id + billed usage of the physical attempt that failed. A retried
+   * attempt still costs real tokens, so `callCertifiedModel` carries these
+   * forward on the eventual success (as `retryAttempts`) — without them a
+   * caller that sums the returned result under-reports both call count and
+   * cost by exactly the attempts that were retried away.
+   */
+  readonly attemptUsage?: CertifiedModelCallAttemptUsage;
+  constructor(
+    message: string,
+    classification: ProviderFailureClass,
+    attemptUsage?: CertifiedModelCallAttemptUsage
+  ) {
     super(message);
     this.name = "CertifiedProviderError";
     this.classification = classification;
+    this.attemptUsage = attemptUsage;
   }
+}
+
+/**
+ * One physical model call's traced cost. Reported for the failed attempts of
+ * a retried call so callers can account for every call the provider billed,
+ * not only the attempt that returned an answer.
+ */
+export interface CertifiedModelCallAttemptUsage {
+  traceId: string;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number | null;
 }
 
 export interface CertifiedModelStreamInput {
@@ -140,6 +166,13 @@ export interface CertifiedModelCallResult {
   outputAudioTokens?: number;
   providerCost?: number;
   providerCostUnit?: "usd" | "credits" | "unknown";
+  /**
+   * The transient attempts that failed before this one succeeded, oldest
+   * first — empty when the call succeeded on its first try. The provider
+   * billed these, so a caller totalling model calls or cost must add them to
+   * the fields above rather than counting this result as one call.
+   */
+  retryAttempts?: CertifiedModelCallAttemptUsage[];
 }
 
 /**
@@ -437,7 +470,13 @@ async function callCertifiedModelOnce(
     // the original error) so message-text consumers — `statusForRunError` in
     // run-engine.ts and `isProviderFailureMessage` — keep matching exactly
     // what they always have.
-    throw new CertifiedProviderError(message, classifyProviderFailure(message));
+    throw new CertifiedProviderError(message, classifyProviderFailure(message), {
+      traceId,
+      latencyMs,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd: trace.estimatedUsd ?? null,
+    });
   }
 }
 
@@ -461,6 +500,7 @@ export async function callCertifiedModel(
   input: CallCertifiedModelInput
 ): Promise<CertifiedModelCallResult> {
   const delays = input.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const retryAttempts: CertifiedModelCallAttemptUsage[] = [];
   let lastError: unknown;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
@@ -469,14 +509,19 @@ export async function callCertifiedModel(
     }
     throwIfCertifiedRunAborted(input.signal);
     try {
-      return await callCertifiedModelOnce({ ...input, attemptNumber: attempt + 1 });
+      const result = await callCertifiedModelOnce({
+        ...input,
+        attemptNumber: attempt + 1,
+      });
+      return retryAttempts.length > 0 ? { ...result, retryAttempts } : result;
     } catch (error) {
       lastError = error;
       if (error instanceof CertifiedBudgetExceededError) throw error;
       const transient =
         error instanceof CertifiedProviderError && error.classification === "transient";
       if (!transient) throw error;
-      // transient: fall through and loop for the next attempt.
+      // transient: record what this attempt already cost, then loop.
+      if (error.attemptUsage) retryAttempts.push(error.attemptUsage);
     }
   }
   throw lastError;
