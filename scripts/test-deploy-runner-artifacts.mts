@@ -97,6 +97,7 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       );
       check(`${path} includes tsx`, typeof packageJson.dependencies?.tsx === "string");
       check(`${path} includes Playwright`, typeof packageJson.dependencies?.playwright === "string");
+      check(`${path} includes TypeScript`, typeof packageJson.dependencies?.typescript === "string");
     }
 
     if (licenseFile) {
