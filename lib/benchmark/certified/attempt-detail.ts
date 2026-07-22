@@ -13,13 +13,8 @@ import { explainCertifiedFailureStatus } from "@/lib/benchmark/failures";
 import { isScoredCertifiedAttempt } from "@/lib/benchmark/metrics";
 import type {
   ToolReliabilityAccountability,
-  ToolReliabilityCaseDiagnosis,
   ToolReliabilityDiagnosticSummary,
 } from "@/lib/benchmark/toolreliability/diagnostics";
-import {
-  TOOL_RELIABILITY_CASE_CATEGORIES,
-  type ToolReliabilityCaseCategory,
-} from "@/lib/benchmark/toolreliability/types";
 import type { CertifiedRunSummary } from "./run-status";
 
 const TOOL_RELIABILITY_ACCOUNTABILITIES = [
@@ -31,9 +26,29 @@ const TOOL_RELIABILITY_ACCOUNTABILITIES = [
 const TOOL_RELIABILITY_ACCOUNTABILITY_SET = new Set<string>(
   TOOL_RELIABILITY_ACCOUNTABILITIES
 );
-const TOOL_RELIABILITY_CASE_CATEGORY_SET = new Set<string>(
-  TOOL_RELIABILITY_CASE_CATEGORIES
-);
+
+/**
+ * DISPLAY-layer shape for a persisted (JSON-parsed) diagnostic case: `category`
+ * is a plain `string`, NOT the live `ToolReliabilityCaseCategory` union.
+ * `parseToolReliabilityDiagnosticCases` parses UNTRUSTED persisted verifier
+ * JSON that may have been written by an OLDER pack version (e.g. a
+ * pre-2026-07-22 attempt carrying "json-schema"/"patch"/"tool-call"/
+ * "repair-loop"/"forbidden-action" — categories the live pack no longer has
+ * at all) — rejecting anything outside the CURRENT live category set would
+ * silently blank out ToolReliability diagnostics for every historical
+ * attempt the moment a category is cut, which is exactly the kind of replay
+ * regression this cut must not cause. `toolReliabilityCategoryLabel`
+ * (certified-runner.ts) already treats category as a generic string with a
+ * fallback default for the same reason — this mirrors that convention.
+ */
+interface ParsedToolReliabilityCaseDiagnosis {
+  caseId: string;
+  category: string;
+  passed: boolean;
+  accountability: ToolReliabilityAccountability;
+  reason: string;
+  evidence: string;
+}
 
 export interface AttemptDetailViewModelInput {
   summary: CertifiedRunSummary | null;
@@ -73,7 +88,7 @@ export interface AttemptDetailViewModel {
   };
   toolReliabilityDiagnostics?: {
     summary: ToolReliabilityDiagnosticSummary;
-    cases: ToolReliabilityCaseDiagnosis[];
+    cases: ParsedToolReliabilityCaseDiagnosis[];
     accountabilityRows: Array<{
       accountability: ToolReliabilityAccountability;
       label: string;
@@ -87,7 +102,7 @@ export interface AttemptDetailViewModel {
     }>;
     topReasons: Array<{ reason: string; count: number }>;
     failedCases: Array<
-      ToolReliabilityCaseDiagnosis & {
+      ParsedToolReliabilityCaseDiagnosis & {
         categoryLabel: string;
         accountabilityLabel: string;
         modelResponses: Array<{
@@ -419,15 +434,15 @@ function parseTopReasons(
 
 function parseToolReliabilityDiagnosticCases(
   value: unknown
-): ToolReliabilityCaseDiagnosis[] | undefined {
+): ParsedToolReliabilityCaseDiagnosis[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const cases: ToolReliabilityCaseDiagnosis[] = [];
+  const cases: ParsedToolReliabilityCaseDiagnosis[] = [];
 
   for (const item of value) {
     if (!isRecord(item)) return undefined;
     if (
       !isString(item.caseId) ||
-      !isToolReliabilityCaseCategory(item.category) ||
+      !isString(item.category) ||
       typeof item.passed !== "boolean" ||
       !isToolReliabilityAccountability(item.accountability) ||
       !isString(item.reason) ||
@@ -446,12 +461,6 @@ function parseToolReliabilityDiagnosticCases(
   }
 
   return cases;
-}
-
-function isToolReliabilityCaseCategory(
-  value: unknown
-): value is ToolReliabilityCaseCategory {
-  return isString(value) && TOOL_RELIABILITY_CASE_CATEGORY_SET.has(value);
 }
 
 function isToolReliabilityAccountability(

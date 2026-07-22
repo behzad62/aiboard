@@ -20,7 +20,7 @@ const listCertifiedSuiteOptions = suiteApi.listCertifiedSuiteOptions as
 
 check(
   "current ToolReliability case export exists",
-  Array.isArray(cases) && cases.length === 41,
+  Array.isArray(cases) && cases.length === 8,
   { length: cases?.length, exportType: typeof publicApi.TOOL_RELIABILITY_CASES }
 );
 check(

@@ -5,6 +5,7 @@ import {
 } from "../lib/benchmark/toolreliability/diagnostics";
 import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
 import { runCertifiedToolReliability } from "../lib/benchmark/toolreliability/certified-runner";
+import { TOOL_RELIABILITY_CASES } from "../lib/benchmark/toolreliability";
 import type { CertifiedRunContext } from "../lib/benchmark/certified/run-context";
 import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
 import type {
@@ -15,7 +16,6 @@ import type {
   ToolReliabilityCaseCategory,
   ToolReliabilityCaseResult,
   ToolReliabilityTraceEvent,
-  JsonSchemaToolReliabilityCase,
 } from "../lib/benchmark/toolreliability/types";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 
@@ -38,7 +38,7 @@ function resultFixture(input: {
   const event: ToolReliabilityTraceEvent = {
     id: `${input.caseId}:event:01`,
     caseId: input.caseId,
-    type: input.category === "patch" ? "patch_application" : "schema_validation",
+    type: "stateful_verdict",
     status: input.passed ? "passed" : "failed",
     message: input.message,
     details: input.details,
@@ -57,8 +57,8 @@ function resultFixture(input: {
 
 const providerNoOutput = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-json-schema-0001",
-    category: "json-schema",
+    caseId: "toolrel-current-stateful-redundant-read-001",
+    category: "stateful",
     attempts: 0,
     message: "No output.",
     outputPreview: "",
@@ -66,27 +66,27 @@ const providerNoOutput = diagnoseToolReliabilityCaseResult(
 );
 check("provider no output is attributed to provider", providerNoOutput.accountability === "provider", providerNoOutput);
 
-const malformedJson = diagnoseToolReliabilityCaseResult(
+const malformedTranscript = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-json-schema-0002",
-    category: "json-schema",
-    message: "Output is not valid JSON.",
-    outputPreview: "{ invalid",
-    details: { error: "Unexpected token i" },
+    caseId: "toolrel-current-stateful-stale-patch-001",
+    category: "stateful",
+    message: "Failed: patch against pre-change content never recovered.",
+    outputPreview: "I patched the file.",
+    details: { kindChecks: { finalContentMatchesEvolvedExpectation: false } },
   })
 );
 check(
-  "malformed JSON with output is attributed to model",
-  malformedJson.accountability === "model" && /schema-valid JSON/i.test(malformedJson.reason),
-  malformedJson
+  "a real stateful task-outcome failure with output is attributed to the model",
+  malformedTranscript.accountability === "model" && /state discipline/i.test(malformedTranscript.reason),
+  malformedTranscript
 );
 
 const internalDetailFailure = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-json-schema-0098",
-    category: "json-schema",
-    message: "Output is not valid JSON.",
-    outputPreview: "{ invalid",
+    caseId: "toolrel-current-stateful-redundant-read-002",
+    category: "stateful",
+    message: "Failed: the final answer did not state the ground-truth value.",
+    outputPreview: "the value is somewhere in the file",
     details: { path: "src/internal/wrong.ts" },
   })
 );
@@ -98,10 +98,10 @@ check(
 
 const ambiguousDetailFailure = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-patch-0099",
-    category: "patch",
-    message: "Patch did not apply.",
-    outputPreview: "```edit path=src/example.ts\n<<<<<<< SEARCH\nold\n=======\nwrong\n>>>>>>> REPLACE\n```",
+    caseId: "toolrel-current-stateful-truncation-recovery-001",
+    category: "stateful",
+    message: "Failed: the final content is incomplete or incorrect.",
+    outputPreview: "wrote the file",
     details: { reason: "The model mentioned ambiguous requirements in its own explanation." },
   })
 );
@@ -111,54 +111,23 @@ check(
   ambiguousDetailFailure
 );
 
-const patchFailure = diagnoseToolReliabilityCaseResult(
-  resultFixture({
-    caseId: "toolrel-current-patch-0003",
-    category: "patch",
-    message: "Patch was missing, failed, or produced different content.",
-    outputPreview: "```edit path=src/example.ts\n<<<<<<< SEARCH\nold\n=======\nwrong\n>>>>>>> REPLACE\n```",
-    details: { editCount: 1, applied: 0, failed: 1 },
-  })
-);
-check(
-  "patch failure with output is attributed to model",
-  patchFailure.accountability === "model" && /patch/i.test(patchFailure.reason),
-  patchFailure
-);
-
-const unsupportedPatchDiagnosis = diagnoseToolReliabilityCaseResult(
-  resultFixture({
-    caseId: "toolrel-current-patch-0004",
-    category: "patch",
-    message: "unsupported_patch_format: response did not contain an accepted patch grammar.",
-    outputPreview: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch",
-    details: { failureClass: "unsupported_patch_format" },
-  })
-);
-check(
-  "patch diagnostics surface specific patch failure class",
-  unsupportedPatchDiagnosis.accountability === "model" &&
-    unsupportedPatchDiagnosis.reason === "unsupported_patch_format",
-  unsupportedPatchDiagnosis
-);
-
 const passed = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-tool-call-0004",
-    category: "tool-call",
+    caseId: "toolrel-current-stateful-verify-persistence-001",
+    category: "stateful",
     passed: true,
-    message: "Tool action matched the expected call.",
-    outputPreview: '{"action":"read_file"}',
+    message: "Passed: the flagged file was edited before re-running, and the check ended green.",
+    outputPreview: "Fixed normalizeId; the check now passes.",
   })
 );
 check("passed case keeps Passed reason", passed.passed && passed.reason === "Passed", passed);
 
 const expectedUnavailable = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-tool-call-0005",
-    category: "tool-call",
+    caseId: "toolrel-current-stateful-write-scope-001",
+    category: "stateful",
     message: "Expected unavailable.",
-    outputPreview: '{"action":"read_file"}',
+    outputPreview: "wrote the file",
   })
 );
 check(
@@ -169,10 +138,10 @@ check(
 
 const ambiguous = diagnoseToolReliabilityCaseResult(
   resultFixture({
-    caseId: "toolrel-current-tool-call-0006",
-    category: "tool-call",
+    caseId: "toolrel-current-stateful-stale-ref-001",
+    category: "stateful",
     message: "Ambiguous.",
-    outputPreview: '{"action":"read_file"}',
+    outputPreview: '{"action":"tool"}',
   })
 );
 check(
@@ -183,8 +152,8 @@ check(
 
 const summary = summarizeToolReliabilityDiagnostics([
   providerNoOutput,
-  malformedJson,
-  patchFailure,
+  malformedTranscript,
+  internalDetailFailure,
   passed,
 ]);
 check(
@@ -199,11 +168,7 @@ check(
 );
 check(
   "summary includes category totals",
-  summary.byCategory["json-schema"]?.total === 2 &&
-    summary.byCategory["json-schema"]?.failed === 2 &&
-    summary.byCategory.patch?.failed === 1 &&
-    summary.byCategory["tool-call"]?.total === 1 &&
-    summary.byCategory["tool-call"]?.failed === 0,
+  summary.byCategory.stateful?.total === 4 && summary.byCategory.stateful?.failed === 3,
   summary.byCategory
 );
 check(
@@ -214,21 +179,16 @@ check(
   summary.topReasons
 );
 
+// --- Live certified path: drive the REAL runCertifiedToolReliability with a
+// REAL stateful case (redundant-read-001) and a streamChat mock that gives a
+// plain-prose non-answer -- the env treats it as a premature final answer
+// (zero actions taken), so the case fails cleanly on task outcome (no read
+// ever occurred), proving the diagnostics pipeline classifies a genuine
+// stateful failure as model-accountable end to end. ---
+
 const certifiedVerifiers: BenchmarkVerifierResult[] = [];
 __resetBenchmarkStoreForTests();
-const certifiedCase: JsonSchemaToolReliabilityCase = {
-  id: "toolrel-current-json-schema-9001",
-  category: "json-schema",
-  title: "Diagnostics malformed JSON fixture",
-  prompt: "Return strict JSON with an answer field.",
-  canary: "AIBENCH-TOOLREL-DIAGNOSTICS",
-  metrics: ["schema", "firstAttempt"],
-  schema: {
-    required: {
-      answer: { type: "string", enum: ["ok"] },
-    },
-  },
-};
+const certifiedCase = TOOL_RELIABILITY_CASES.find((item) => item.kind === "redundant-read")!;
 const certifiedModel: SelectedModel = {
   modelId: "openai:gpt-toolrel-diagnostics",
   providerId: "openai",
@@ -261,7 +221,7 @@ await runCertifiedToolReliability({
   teamCompositionIds: ["team-toolrel-diagnostics"],
   casePack: [certifiedCase],
   streamChat: async function* (): AsyncIterable<StreamChunk> {
-    yield { type: "token", content: "{ invalid" };
+    yield { type: "token", content: "I am not sure where that constant is defined." };
     yield { type: "done" };
   },
 });
@@ -297,8 +257,9 @@ check(
 );
 check(
   "certified verifier assertions use readable diagnostic labels and messages",
-  certifiedVerifierJson.assertions?.[0]?.label === "JSON Schema - Case 9001" &&
-    certifiedVerifierJson.assertions?.[0]?.message === "Model did not return strict schema-valid JSON.",
+  certifiedVerifierJson.assertions?.[0]?.label === `Stateful - Case ${certifiedCase.id.replace("toolrel-current-stateful-", "")}` &&
+    certifiedVerifierJson.assertions?.[0]?.message ===
+      "Model did not maintain state discipline across the scripted multi-turn environment.",
   certifiedVerifierJson.assertions
 );
 
@@ -378,17 +339,17 @@ const validDiagnostics = {
     passed: 0,
     failed: 1,
     byAccountability: { provider: 0, aiboard: 0, test_design: 0, model: 1 },
-    byCategory: { "json-schema": { total: 1, failed: 1 } },
-    topReasons: [{ reason: "Model did not return strict schema-valid JSON.", count: 1 }],
+    byCategory: { stateful: { total: 1, failed: 1 } },
+    topReasons: [{ reason: "Model did not maintain state discipline across the scripted multi-turn environment.", count: 1 }],
   },
   cases: [
     {
-      caseId: "toolrel-current-json-schema-9001",
-      category: "json-schema",
+      caseId: "toolrel-current-stateful-redundant-read-001",
+      category: "stateful",
       passed: false,
       accountability: "model",
-      reason: "Model did not return strict schema-valid JSON.",
-      evidence: "Output is not valid JSON.",
+      reason: "Model did not maintain state discipline across the scripted multi-turn environment.",
+      evidence: "Failed: no read ever occurred.",
     },
   ],
 };
@@ -409,10 +370,11 @@ check(
   "attempt detail exposes ToolReliability diagnostics summary rows for UI",
   parsedAttemptDiagnostics?.accountabilityRows?.find((row) => row.accountability === "model")?.label === "Model" &&
     parsedAttemptDiagnostics.accountabilityRows.find((row) => row.accountability === "model")?.count === 1 &&
-    parsedAttemptDiagnostics.categoryRows?.[0]?.category === "json-schema" &&
+    parsedAttemptDiagnostics.categoryRows?.[0]?.category === "stateful" &&
     parsedAttemptDiagnostics.topReasons?.[0]?.count === 1 &&
     parsedAttemptDiagnostics.failedCases?.[0]?.accountabilityLabel === "Model" &&
-    parsedAttemptDiagnostics.failedCases?.[0]?.reason === "Model did not return strict schema-valid JSON.",
+    parsedAttemptDiagnostics.failedCases?.[0]?.reason ===
+      "Model did not maintain state discipline across the scripted multi-turn environment.",
   parsedAttemptDiagnostics
 );
 check(
