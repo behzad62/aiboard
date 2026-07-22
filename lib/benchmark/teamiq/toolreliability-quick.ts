@@ -4,28 +4,36 @@ import {
 } from "@/lib/benchmark/toolreliability";
 
 /**
- * Fixed six-case TeamIQ sample: one case per category plus a second patch
- * case, deliberately picked for diversity — a schema shape the repair case
- * does not reuse, a batch-dedup tool decision, both disambiguation patch
- * kinds (duplicate context + repeated block with minimality policy), and the
- * chained-command safety temptation.
+ * Three-case TeamIQ sample (2026-07-22, stateful-only cut): the pack is now
+ * exclusively the 8 mined `stateful` cases, so the old six-case "one per
+ * single-shot category" sample no longer has anything to sample from — those
+ * 6 hard-pinned ids (json-schema-001 / tool-call-008 / patch-005 /
+ * large-patch-002 / repair-loop-001 / forbidden-action-003) were deleted
+ * along with their categories, and `requiredCase` THROWS at module load for
+ * any id that no longer resolves — this is exactly why the cut broke TeamIQ.
  *
- * 2026-07-20 audit Phase C renumbered/reseeded several ToolReliability
- * cases when cutting saturated duplicates (see cases.ts); the ids below were
- * updated to the surviving cases with equivalent roles: json-schema-004
- * (bugTriageSchema, enum+minItems) survived as json-schema-001, and
- * repair-loop-002 (reviewSchema) was replaced by the single reseeded
- * repair-loop-001 (canaryDeploySchema) survivor — still "a schema shape the
- * repair case does not reuse" since no kept json-schema case shares its
- * shape.
+ * The replacement sample spans three distinct failure families —
+ * `redundant-read` (duplicate/overlapping reads across turns),
+ * `stale-patch` (recovering from a patch rejected by a concurrent edit), and
+ * `verify-persistence` (not re-running an unfixed check verbatim) — picked
+ * for the SAME diversity goal the old sample had, now expressed across
+ * stateful kinds instead of single-shot categories.
+ *
+ * Budget rationale for capping the sample at 3 (not the full 8): stateful
+ * cases are inherently multi-turn (3-6 turns per the design), so a TeamIQ
+ * attempt now makes roles+synthesis calls PER TURN, not once per case (the
+ * old single-shot cases needed exactly one round of calls each). The
+ * all-modes suite multiplies this by 5 strategy teams plus solo baselines
+ * per model. Running all 8 stateful cases there (each up to 6 turns, each
+ * turn a full team round) would be structurally unfinishable inside the
+ * suite's model-call budget — the same "unfinishable" constraint that
+ * originally capped the old sample at a representative subset, now sized
+ * down further to keep the PER-TURN multiplication in budget.
  */
 const QUICK_CASE_IDS = [
-  "toolrel-current-json-schema-001",
-  "toolrel-current-tool-call-008",
-  "toolrel-current-patch-005",
-  "toolrel-current-large-patch-002",
-  "toolrel-current-repair-loop-001",
-  "toolrel-current-forbidden-action-003",
+  "toolrel-current-stateful-redundant-read-001",
+  "toolrel-current-stateful-stale-patch-001",
+  "toolrel-current-stateful-verify-persistence-001",
 ] as const;
 
 export const TEAMIQ_TOOL_RELIABILITY_QUICK_CASES: ToolReliabilityCase[] =
@@ -35,7 +43,8 @@ export const TEAMIQ_TOOL_RELIABILITY_QUICK_CASES: ToolReliabilityCase[] =
  * The "all modes" TeamIQ suite runs the SAME quick sample across every team
  * strategy composition. Running the full pack there is structurally
  * unfinishable inside the suite's model-call budget (5 strategy teams x
- * roles+synthesis calls per case, plus solo baselines).
+ * roles+synthesis calls PER TURN of each stateful case, plus solo
+ * baselines).
  */
 export const TEAMIQ_TOOL_RELIABILITY_ALL_MODES_CASES: ToolReliabilityCase[] =
   TEAMIQ_TOOL_RELIABILITY_QUICK_CASES;

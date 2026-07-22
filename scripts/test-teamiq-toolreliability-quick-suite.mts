@@ -2,7 +2,6 @@
 import { TEAMIQ_TOOL_RELIABILITY_QUICK_CASES } from "../lib/benchmark/teamiq";
 import {
   TOOL_RELIABILITY_CASES,
-  TOOL_RELIABILITY_CASE_CATEGORIES,
 } from "../lib/benchmark/toolreliability";
 
 let failures = 0;
@@ -18,8 +17,8 @@ const currentCaseIds = new Set(TOOL_RELIABILITY_CASES.map((benchmarkCase) => ben
 const quickCaseIds = TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.map(
   (benchmarkCase) => benchmarkCase.id
 );
-const quickCategories = new Set(
-  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.map((benchmarkCase) => benchmarkCase.category)
+const quickKinds = new Set(
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.map((benchmarkCase) => benchmarkCase.kind)
 );
 
 check(
@@ -32,36 +31,28 @@ check(
   new Set(quickCaseIds).size === quickCaseIds.length,
   quickCaseIds
 );
-// Stateful ToolReliability charter (PR A): the new `stateful` category is
-// deliberately EXCLUDED from this fixed sample. Its cases are scripted
-// multi-turn environments (3-6 turns each) mined specifically for the
-// certified ToolReliability track's own turn loop; folding one into the
-// TeamIQ quick sample would multiply every strategy composition's model-call
-// budget by that case's turn count for no discriminating value here (the
-// quick sample's whole point is ONE cheap single-shot representative per
-// category). TeamIQ stateful-case integration is a candidate for a later
-// charter, not this one.
-const categoriesExpectedInQuickSuite = TOOL_RELIABILITY_CASE_CATEGORIES.filter(
-  (category) => category !== "stateful"
+// 2026-07-22 stateful-only cut: the pack is now EXCLUSIVELY the `stateful`
+// category (the single-shot categories the quick sample used to draw one
+// representative from are gone), so this suite's exclusion of `stateful`
+// flips -- it is now the ONLY thing there is to sample. Kept at 3 (not all
+// 8) for the same budget reason the old sample was capped: stateful cases
+// are multi-turn, so a TeamIQ attempt makes roles+synthesis calls PER TURN
+// (see toolreliability-quick.ts's budget-rationale comment) -- running the
+// full pack across every strategy composition plus solo baselines would be
+// structurally unfinishable inside the suite's model-call budget.
+check(
+  "TeamIQ ToolReliability quick suite samples exactly the stateful category",
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.every((benchmarkCase) => benchmarkCase.category === "stateful"),
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.map((item) => item.category)
 );
 check(
-  "TeamIQ ToolReliability quick suite samples every non-stateful category",
-  categoriesExpectedInQuickSuite.every((category) => quickCategories.has(category)) &&
-    !quickCategories.has("stateful"),
-  {
-    expected: categoriesExpectedInQuickSuite,
-    actual: Array.from(quickCategories),
-  }
+  "TeamIQ ToolReliability quick suite spans three distinct stateful failure families",
+  quickKinds.has("redundant-read") && quickKinds.has("stale-patch") && quickKinds.has("verify-persistence"),
+  Array.from(quickKinds)
 );
 check(
-  "TeamIQ ToolReliability quick suite includes standard and large patch cases",
-  quickCaseIds.some((caseId) => caseId.startsWith("toolrel-current-patch-")) &&
-    quickCaseIds.some((caseId) => caseId.startsWith("toolrel-current-large-patch-")),
-  quickCaseIds
-);
-check(
-  "TeamIQ ToolReliability quick suite stays small enough for browser acceptance",
-  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.length === categoriesExpectedInQuickSuite.length + 1,
+  "TeamIQ ToolReliability quick suite stays small enough for per-turn team-call budget (3 cases, not the full 8)",
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.length === 3,
   quickCaseIds
 );
 
