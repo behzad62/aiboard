@@ -21,24 +21,24 @@ export interface CatalogModel {
 export const MODEL_CATALOG: CatalogModel[] = [
   // OpenAI — https://developers.openai.com/api/docs/models
   {
-    id: "gpt-5.6",
-    name: "GPT-5.6",
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
     providerId: "openai",
-    description: "Latest frontier model for coding and professional work",
+    description: "Frontier model for complex professional work",
     capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
-    id: "gpt-5.6-pro",
-    name: "GPT-5.6 Pro",
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
     providerId: "openai",
-    description: "Highest-intelligence GPT-5.6 variant for complex tasks",
+    description: "GPT-5.6 model that balances intelligence and cost",
     capabilities: { image: true, document: true, audio: false, video: false },
   },
   {
-    id: "gpt-5.6-mini",
-    name: "GPT-5.6 Mini",
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
     providerId: "openai",
-    description: "Cost-optimized GPT-5.6 variant for fast responses",
+    description: "GPT-5.6 model optimized for cost-sensitive workloads",
     capabilities: { image: true, document: true, audio: false, video: false },
     validationCandidate: true,
   },
@@ -88,6 +88,30 @@ export const MODEL_CATALOG: CatalogModel[] = [
 
   // ChatGPT account-backed models - served through the local account-provider
   // runner, but represented as normal provider catalog entries in the app.
+  {
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Flagship GPT-5.6 account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Balanced GPT-5.6 account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
+  {
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna (ChatGPT)",
+    providerId: "chatgpt",
+    description:
+      "Efficient GPT-5.6 account model through the local account-provider runner",
+    capabilities: { image: true, document: true, audio: false, video: false },
+  },
   {
     id: "gpt-5.5",
     name: "GPT-5.5 (ChatGPT)",

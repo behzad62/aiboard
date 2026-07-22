@@ -148,7 +148,7 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
 };
 
 export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> = {
-  "openai:gpt-5.6": {
+  "openai:gpt-5.6-sol": {
     contextWindowTokens: 1_050_000,
     maxOutputTokens: 128_000,
     buildOutputReserveTokens: 128_000,
@@ -156,21 +156,21 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     promptCaching: true,
     recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
-  "openai:gpt-5.6-pro": {
+  "openai:gpt-5.6-terra": {
     contextWindowTokens: 1_050_000,
     maxOutputTokens: 128_000,
     buildOutputReserveTokens: 128_000,
     longContextQuality: "excellent",
     promptCaching: true,
-    recommendedBuildRoles: ["architect", "reviewer", "summary"],
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
-  "openai:gpt-5.6-mini": {
-    contextWindowTokens: 400_000,
+  "openai:gpt-5.6-luna": {
+    contextWindowTokens: 1_050_000,
     maxOutputTokens: 128_000,
     buildOutputReserveTokens: 128_000,
-    longContextQuality: "good",
+    longContextQuality: "excellent",
     promptCaching: true,
-    recommendedBuildRoles: ["worker", "reviewer", "summary"],
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "openai:gpt-5.5": {
     contextWindowTokens: 1_050_000,
@@ -219,6 +219,30 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     longContextQuality: "good",
     promptCaching: true,
     recommendedBuildRoles: ["worker", "reviewer", "summary"],
+  },
+  "chatgpt:gpt-5.6-sol": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "chatgpt:gpt-5.6-terra": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "chatgpt:gpt-5.6-luna": {
+    contextWindowTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    buildOutputReserveTokens: 128_000,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "chatgpt:gpt-5.5": {
     contextWindowTokens: 1_050_000,

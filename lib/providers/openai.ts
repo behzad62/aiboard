@@ -103,7 +103,10 @@ async function* streamOpenAIResponses(
     };
   const input = buildOpenAIResponsesInput(params, caps);
 
-  const reasoningValue = openAIReasoningEffort(params.reasoningEffort ?? "default");
+  const reasoningValue = openAIReasoningEffort(
+    params.reasoningEffort ?? "default",
+    params.model
+  );
   const structuredOutputField = openAIResponsesTextFormatField(
     params.structuredOutput
   );

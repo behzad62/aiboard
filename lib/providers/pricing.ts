@@ -19,35 +19,29 @@ export interface ModelPricing {
 const VERIFIED_AT = "2026-06-10";
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
-  [formatModelId("openai", "gpt-5.6")]: {
-    inputUsdPer1M: 2.5,
-    cachedInputUsdPer1M: 0.25,
-    outputUsdPer1M: 15,
-    notes:
-      "Mapped to GPT-5.6 Terra tier from OpenAI pricing (family middle tier).",
-    sourceLabel: "OpenAI pricing",
-    sourceUrl: "https://developers.openai.com/api/docs/pricing",
-    verifiedAt: "2026-07-10",
-  },
-  [formatModelId("openai", "gpt-5.6-pro")]: {
+  [formatModelId("openai", "gpt-5.6-sol")]: {
     inputUsdPer1M: 5,
     cachedInputUsdPer1M: 0.5,
     outputUsdPer1M: 30,
-    notes:
-      "Mapped to GPT-5.6 Sol tier from OpenAI pricing (family highest tier).",
     sourceLabel: "OpenAI pricing",
     sourceUrl: "https://developers.openai.com/api/docs/pricing",
-    verifiedAt: "2026-07-10",
+    verifiedAt: "2026-07-22",
   },
-  [formatModelId("openai", "gpt-5.6-mini")]: {
+  [formatModelId("openai", "gpt-5.6-terra")]: {
+    inputUsdPer1M: 2.5,
+    cachedInputUsdPer1M: 0.25,
+    outputUsdPer1M: 15,
+    sourceLabel: "OpenAI pricing",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-07-22",
+  },
+  [formatModelId("openai", "gpt-5.6-luna")]: {
     inputUsdPer1M: 1,
     cachedInputUsdPer1M: 0.1,
     outputUsdPer1M: 6,
-    notes:
-      "Mapped to GPT-5.6 Luna tier from OpenAI pricing (family lowest-cost tier).",
     sourceLabel: "OpenAI pricing",
     sourceUrl: "https://developers.openai.com/api/docs/pricing",
-    verifiedAt: "2026-07-10",
+    verifiedAt: "2026-07-22",
   },
   [formatModelId("openai", "gpt-5.5")]: {
     inputUsdPer1M: 5,
@@ -96,6 +90,37 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceLabel: "OpenAI pricing",
     sourceUrl: "https://developers.openai.com/api/docs/pricing",
     verifiedAt: VERIFIED_AT,
+  },
+
+  [formatModelId("chatgpt", "gpt-5.6-sol")]: {
+    inputUsdPer1M: 5,
+    cachedInputUsdPer1M: 0.5,
+    outputUsdPer1M: 30,
+    notes:
+      "Equivalent OpenAI API reference pricing for comparison; this is not ChatGPT billing.",
+    sourceLabel: "OpenAI pricing reference",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-07-22",
+  },
+  [formatModelId("chatgpt", "gpt-5.6-terra")]: {
+    inputUsdPer1M: 2.5,
+    cachedInputUsdPer1M: 0.25,
+    outputUsdPer1M: 15,
+    notes:
+      "Equivalent OpenAI API reference pricing for comparison; this is not ChatGPT billing.",
+    sourceLabel: "OpenAI pricing reference",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-07-22",
+  },
+  [formatModelId("chatgpt", "gpt-5.6-luna")]: {
+    inputUsdPer1M: 1,
+    cachedInputUsdPer1M: 0.1,
+    outputUsdPer1M: 6,
+    notes:
+      "Equivalent OpenAI API reference pricing for comparison; this is not ChatGPT billing.",
+    sourceLabel: "OpenAI pricing reference",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-07-22",
   },
 
   [formatModelId("anthropic", "claude-fable-5")]: {

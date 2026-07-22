@@ -63,8 +63,9 @@ const chatGptAccountModelIds = MODEL_CATALOG.filter(
   (model) => model.providerId === "chatgpt"
 ).map((model) => model.id);
 check(
-  "ChatGPT catalog excludes models rejected by the account runner",
-  !chatGptAccountModelIds.some((modelId) => modelId.startsWith("gpt-5.6")),
+  "ChatGPT catalog exposes the live-verified GPT-5.6 family",
+  JSON.stringify(chatGptAccountModelIds.filter((modelId) => modelId.startsWith("gpt-5.6"))) ===
+    JSON.stringify(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]),
   chatGptAccountModelIds
 );
 const chatGptCodexSpark = MODEL_CATALOG.find(
@@ -77,8 +78,17 @@ check(
   chatGptCodexSpark?.capabilities
 );
 check(
-  "model context excludes stale ChatGPT 5.6 entries rejected by the account runner",
-  !Object.keys(MODEL_CONTEXT_PROFILES).some((modelId) => modelId.startsWith("chatgpt:gpt-5.6")),
+  "model context includes every live-verified ChatGPT 5.6 model",
+  JSON.stringify(
+    Object.keys(MODEL_CONTEXT_PROFILES).filter((modelId) =>
+      modelId.startsWith("chatgpt:gpt-5.6")
+    )
+  ) ===
+    JSON.stringify([
+      "chatgpt:gpt-5.6-sol",
+      "chatgpt:gpt-5.6-terra",
+      "chatgpt:gpt-5.6-luna",
+    ]),
   Object.keys(MODEL_CONTEXT_PROFILES).filter((modelId) => modelId.startsWith("chatgpt:gpt-5.6"))
 );
 

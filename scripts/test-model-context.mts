@@ -155,6 +155,29 @@ check(
   gpt55
 );
 
+for (const providerId of ["openai", "chatgpt"] as const) {
+  for (const modelId of [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+  ] as const) {
+    const profile = resolveModelContextProfile(modelId, providerId);
+    check(
+      `${providerId} ${modelId} uses the GPT-5.6 long-context Build budget`,
+      profile.contextWindowTokens === 1_050_000 &&
+        profile.maxOutputTokens === 128_000 &&
+        profile.buildOutputReserveTokens === 128_000 &&
+        profile.effectiveBuildInputCeilingTokens === 922_000 &&
+        profile.longContextQuality === "excellent" &&
+        profile.promptCaching === true &&
+        profile.recommendedBuildRoles?.join(",") ===
+          "architect,worker,reviewer,summary" &&
+        profile.source === "registry",
+      profile
+    );
+  }
+}
+
 const chatGpt55 = resolveModelContextProfile("gpt-5.5", "chatgpt");
 check(
   "ChatGPT GPT-5.5 account profile uses long-context Build budget",

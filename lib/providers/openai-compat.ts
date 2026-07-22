@@ -286,7 +286,7 @@ export async function* streamOpenAICompatibleChat(
   // the pinned SDK's narrower enum type.
   const reasoningValue =
     providerId === "openai"
-      ? openAIReasoningEffort(params.reasoningEffort ?? "default")
+      ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
       : providerId === "openrouter"
         ? openRouterReasoningEffort(
             params.reasoningEffort ?? "default",

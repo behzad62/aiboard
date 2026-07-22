@@ -194,6 +194,14 @@ async function stopRunner(): Promise<void> {
 try {
   await waitForRunner();
 
+  const healthResponse = await fetch(`${baseUrl}/health`);
+  const health = await healthResponse.json();
+  check(
+    "GPT-5.6-capable account-provider runner reports version 17",
+    healthResponse.ok && health.version === 17,
+    health
+  );
+
   const response = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
     method: "POST",
     headers,
@@ -264,19 +272,20 @@ try {
   );
 
   const reasoningCases = [
-    { input: "default", expected: undefined },
-    { input: "none", expected: "none" },
-    { input: "low", expected: "low" },
-    { input: "medium", expected: "medium" },
-    { input: "high", expected: "high" },
-    { input: "max", expected: "xhigh" },
+    { model: "gpt-5.5", input: "default", expected: undefined },
+    { model: "gpt-5.5", input: "none", expected: "none" },
+    { model: "gpt-5.5", input: "low", expected: "low" },
+    { model: "gpt-5.5", input: "medium", expected: "medium" },
+    { model: "gpt-5.5", input: "high", expected: "high" },
+    { model: "gpt-5.5", input: "max", expected: "xhigh" },
+    { model: "gpt-5.6-sol", input: "max", expected: "max" },
   ];
   for (const reasoningCase of reasoningCases) {
     const effortResponse = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "gpt-5.5",
+        model: reasoningCase.model,
         reasoningEffort: reasoningCase.input,
         messages: [{ role: "user", content: "Reply with exactly: ok" }],
       }),
@@ -284,13 +293,13 @@ try {
     const effortData = await effortResponse.json();
     const effortCaptured = capturedRequests.at(-1);
     check(
-      `ChatGPT ${reasoningCase.input} reasoning request returns HTTP 200`,
+      `ChatGPT ${reasoningCase.model} ${reasoningCase.input} reasoning request returns HTTP 200`,
       effortResponse.ok,
       effortData
     );
     check(
       reasoningCase.expected
-        ? `runner forwards ChatGPT ${reasoningCase.input} reasoning effort`
+        ? `runner forwards ChatGPT ${reasoningCase.model} ${reasoningCase.input} reasoning effort`
         : "runner omits ChatGPT default reasoning effort",
       reasoningCase.expected
         ? JSON.stringify(effortCaptured?.body.reasoning) ===

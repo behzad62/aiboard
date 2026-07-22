@@ -5,7 +5,8 @@ import type { ReasoningEffort } from "../db/schema";
 /**
  * Maps the app's unified reasoning-effort level to each provider's native
  * parameter. Sources (verified 2026-07-02):
- *  - OpenAI GPT-5 family `reasoning_effort`: none|low|medium|high|xhigh (default medium)
+ *  - OpenAI GPT-5.6 `reasoning_effort`: none|low|medium|high|xhigh|max;
+ *    older GPT-5 models use xhigh as their maximum (default medium)
  *  - Anthropic `output_config.effort`: low|medium|high|xhigh|max (default high);
  *    Opus 4.5 supports effort plus manual `thinking.budget_tokens`, but not
  *    adaptive thinking or max effort; Haiku 4.5 does NOT support effort.
@@ -17,7 +18,10 @@ import type { ReasoningEffort } from "../db/schema";
  */
 
 /** OpenAI / OpenRouter `reasoning_effort` string, or null to omit. */
-export function openAIReasoningEffort(effort: ReasoningEffort): string | null {
+export function openAIReasoningEffort(
+  effort: ReasoningEffort,
+  model = ""
+): string | null {
   switch (effort) {
     case "none":
       return "none";
@@ -28,7 +32,9 @@ export function openAIReasoningEffort(effort: ReasoningEffort): string | null {
     case "high":
       return "high";
     case "max":
-      return "xhigh";
+      return model.trim().toLowerCase().startsWith("gpt-5.6")
+        ? "max"
+        : "xhigh";
     default:
       return null;
   }
