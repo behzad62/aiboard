@@ -79,7 +79,7 @@ for (const pack of listGameIqScenarioPacks()) {
 
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack covers required metrics", toolValidation.valid, toolValidation);
-check("ToolReliability canonical pack has 35 cases", TOOL_RELIABILITY_CASES.length === 35, TOOL_RELIABILITY_CASES.length);
+check("ToolReliability canonical pack has 41 cases", TOOL_RELIABILITY_CASES.length === 41, TOOL_RELIABILITY_CASES.length);
 check(
   "ToolReliability canonical pack has 5 large patch cases",
   TOOL_RELIABILITY_CASES.filter((item) => item.id.startsWith("toolrel-current-large-patch-")).length === 5

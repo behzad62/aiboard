@@ -777,13 +777,14 @@ check(
 );
 
 // ── Stateful category runs through the real verifier end to end: the ──────
-// perfect candidate's reference transcripts for both pilot cases pass, and
-// the pack's rates carry a real (non-null) statefulDisciplineRate.
+// perfect candidate's reference transcripts for all eight cases pass (the two
+// PR A pilots plus PR B's remaining six), and the pack's rates carry a real
+// (non-null) statefulDisciplineRate.
 const statefulCases = TOOL_RELIABILITY_CASES.filter((item) => item.category === "stateful");
-check("pack has 2 stateful cases", statefulCases.length === 2, statefulCases.map((item) => item.id));
+check("pack has 8 stateful cases", statefulCases.length === 8, statefulCases.map((item) => item.id));
 const statefulPerfect = runToolReliabilityPack(perfect.candidate, statefulCases);
 check(
-  "perfect candidate passes both stateful pilot cases via the real env replay",
+  "perfect candidate passes all eight stateful cases via the real env replay",
   statefulPerfect.caseResults.every((item) => item.passed) &&
     statefulPerfect.summary.rates.statefulDisciplineRate === 1,
   statefulPerfect.caseResults.map((item) => ({ id: item.caseId, passed: item.passed, metrics: item.metrics }))

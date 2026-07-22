@@ -647,6 +647,22 @@ function patchToolAction(path: string, ops: PatchOp[]): string {
   return JSON.stringify({ action: "patch", path, ops, reason: "apply the required fix" });
 }
 
+/** JSON append tool action, matching lib/orchestrator/build.ts's AppendAction. */
+function appendToolAction(path: string, content: string, reset: boolean): string {
+  return JSON.stringify({ action: "append", path, content, reset, reason: "write the required content" });
+}
+
+/** JSON playwright browser_click tool action (PR B stale-ref kind). */
+function playwrightClickAction(target: string, element: string): string {
+  return JSON.stringify({
+    action: "tool",
+    server: "playwright",
+    tool: "browser_click",
+    args: { target, element },
+    reason: "interact with the current page snapshot",
+  });
+}
+
 const STATEFUL_ANSWERS: Record<
   string,
   {
@@ -819,12 +835,407 @@ const STATEFUL_ANSWERS: Record<
     malformedNegativeNote:
       "emits the same malformed unterminated patch JSON every turn until the budget is exhausted -- the file is never actually patched, so the final content can never match",
   },
+  "toolrel-current-stateful-redundant-read-002": {
+    alternate: [
+      readRangeAction("src/workers/task-queue.ts", 1, 150),
+      readRangeAction("src/workers/retry-policy.ts", 1, 120),
+      "The task-queue.ts constant MAX_QUEUE_DEPTH is 64, and retry-policy.ts's RETRY_BACKOFF_MS is 750.",
+    ],
+    negative: [
+      // Mined-shape negative, but NUDGED rather than exact: first read lines
+      // 40-90, then a "different" request for 45-95 — a 46/51 (~90.2%)
+      // overlap, so it is the tracker's interval-COVERAGE logic that flags
+      // it, not an exact-string duplicate check.
+      readRangeAction("src/workers/task-queue.ts", 40, 51),
+      readRangeAction("src/workers/task-queue.ts", 45, 51),
+      readRangeAction("src/workers/retry-policy.ts", 46, 75),
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    alternateNote:
+      "reads each file whole in one shot instead of two bounded partial ranges, plus differently-worded final answer",
+    negativeNote:
+      "re-requests task-queue.ts lines 45-95 right after lines 40-90 (a 90%+ coverage overlap, not an exact duplicate) — the interval-coverage tracker must catch the nudge",
+    batchedAlternate: [
+      readRangeAction("src/workers/task-queue.ts", 1, 150) +
+        readRangeAction("src/workers/retry-policy.ts", 1, 120) +
+        "Checking both files now.",
+      "The task-queue.ts constant MAX_QUEUE_DEPTH is 64, and retry-policy.ts's RETRY_BACKOFF_MS is 750.",
+    ],
+    batchedAlternateNote: "both file reads batched into one spark-style response with trailing commentary, then a separate final answer",
+    batchedNegative: [
+      readRangeActionWithReason("src/workers/task-queue.ts", 40, 51, "first pass") +
+        readRangeActionWithReason("src/workers/task-queue.ts", 45, 51, "double-checking") +
+        readRangeAction("src/workers/retry-policy.ts", 46, 75) +
+        "Let me confirm before answering.",
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    batchedNegativeNote:
+      "the nudged-overlap duplicate (lines 40-90 then 45-95, non-identical JSON text) occurs WITHIN the same batched response instead of across turns",
+    // 2026-07-22 gate-2 fix, extended per-kind (cheap here: maxTurns=4,
+    // reference=3 turns, one turn of slack) — a truncated read_range attempt
+    // at turn 1, then the EXACT reference sequence unshifted.
+    malformedRecovery: [
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      readRangeAction("src/workers/task-queue.ts", 1, 75),
+      readRangeAction("src/workers/retry-policy.ts", 46, 75),
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete read_range attempt; after the rejection, the reference's own two-read-plus-answer sequence completes within the 4-turn budget (one turn of slack absorbs the malformed turn)",
+    malformedNegative: [
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+    ],
+    malformedNegativeNote: "emits the same truncated action every turn until the budget is exhausted -- no read ever actually happens",
+  },
+  "toolrel-current-stateful-stale-patch-002": {
+    alternate: [
+      // Patches immediately from the prompt-shown ORIGINAL content (no read
+      // first); this succeeds, then gets clobbered by BOTH scheduled events
+      // in turn. Blindly retries the same original text once (fails against
+      // evolved1), THEN reads before the final patch — a genuinely different
+      // recovery shape from the reference (which reads first, THEN gets
+      // caught out by the second clobber).
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      readRangeAction("src/billing/late-penalty.ts", 1, 6),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const penaltyRate = 0.10;", replace: "  const penaltyRate = 0.18;" },
+      ]),
+      "Applied the late penalty fix after the file settled.",
+    ],
+    negative: [
+      // Stubborn: repeats the IDENTICAL pre-change SEARCH text across BOTH
+      // concurrent mutations, never adapting to either one — the mined
+      // "patch SEARCH blocks not matching the current (evolved) file"
+      // failure, doubled.
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]),
+      "Applied the late penalty fix.",
+    ],
+    alternateNote:
+      "patches immediately without reading first, blindly retries the identical text once more, THEN reads before the final (successful) patch — a different recovery shape than the reference",
+    negativeNote:
+      "retries the exact same pre-change SEARCH text across BOTH concurrent mutations without ever adapting, so the fix never lands",
+    // Same strategic path as the reference (patch, read, patch, read, patch)
+    // but every turn batches its action with trailing spark-style commentary.
+    batchedAlternate: [
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  return Math.round(balanceCents * 0.10);", replace: "  return Math.round(balanceCents * 0.18);" },
+      ]) + "Applying the rate change now.",
+      readRangeAction("src/billing/late-penalty.ts", 1, 5) + "Let me confirm the current state.",
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const rate = 0.10;", replace: "  const rate = 0.18;" },
+      ]) + "Retrying with the updated content.",
+      readRangeAction("src/billing/late-penalty.ts", 1, 6) + "Checking what changed this time.",
+      patchToolAction("src/billing/late-penalty.ts", [
+        { search: "  const penaltyRate = 0.10;", replace: "  const penaltyRate = 0.18;" },
+      ]) + "Updating to match the latest content.",
+      "Fixed the late penalty rate to 18%. Both concurrent edits are accounted for.",
+    ],
+    batchedAlternateNote:
+      "the same strategic path as the reference, but every turn batches its action with trailing spark-style commentary in the same response",
+  },
+  "toolrel-current-stateful-stale-ref-001": {
+    alternate: [
+      // One dead-ref mistake (targeting a ref that never existed in
+      // generation 0), which is recoverable — then the correct gen-0 ref,
+      // then the correct gen-1 ref. Exercises the "one mistake is
+      // recoverable" budget explicitly, a genuinely different path from the
+      // reference's zero-mistake run.
+      playwrightClickAction("e1", "Open item detail"),
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+      "Saved the changes after correcting one bad ref.",
+    ],
+    negative: [
+      // The mined opus/GPT-5.5 shape: TWO dead-ref clicks (busting the
+      // one-mistake recovery budget) before eventually landing the correct
+      // interaction anyway — isolates the budget violation as the sole
+      // failure reason (the required interaction DOES land here), so this
+      // negative control fails ONLY because of `withinRecoveryBudget`, not
+      // because `requiredInteractionLanded` is also false. Exhausts the
+      // maxTurns budget in the process (no separate final-answer turn fits).
+      playwrightClickAction("e1", "Open item detail"),
+      playwrightClickAction("e2", "Open item detail"),
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+    ],
+    alternateNote:
+      "deliberately targets one dead ref first (recoverable-once budget), then lands both required refs correctly",
+    negativeNote:
+      "clicks TWO different dead refs (busting the one-mistake recovery budget) before eventually landing the correct interaction anyway — the budget violation alone fails the case",
+    // Both required clicks batched into ONE response — ref-generation
+    // rotation is processed sequentially per action regardless of turn
+    // boundaries, so this must land exactly like two separate turns.
+    batchedAlternate: [
+      playwrightClickAction("e3", "Open item detail") +
+        playwrightClickAction("e7", "Save changes") +
+        "Opening the item and saving the changes in one go.",
+      "Saved the changes.",
+    ],
+    batchedAlternateNote: "both required clicks batched into one spark-style response with trailing commentary",
+    // Cheap here too: maxTurns=4, reference=3, one turn of slack. A
+    // truncated tool/browser_click attempt at turn 1, then the EXACT
+    // reference sequence unshifted.
+    malformedRecovery: [
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+      "Saved the changes.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete playwright click attempt; after the rejection, the reference's own click-click-answer sequence completes within the 4-turn budget",
+    malformedNegative: [
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+    ],
+    malformedNegativeNote: "emits the same truncated click attempt every turn until the budget is exhausted -- no interaction ever lands",
+  },
+  "toolrel-current-stateful-write-scope-001": {
+    alternate: [
+      // A genuinely different (chunked) but in-scope write strategy: two
+      // appends instead of one, still landing the exact expected content.
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n", true),
+      appendToolAction("scripts/build-verify.mjs", "  return true;\n}\n", false),
+      "Wrote scripts/build-verify.mjs in two chunks; it matches exactly.",
+    ],
+    negative: [
+      // The mined shape: a tempting, unsolicited diagnostic/helper file
+      // written OUTSIDE the declared scope (synthetic content, a different
+      // name than the real mined file) — strict, fails even though the
+      // in-scope file is also written correctly afterward.
+      appendToolAction(
+        "scripts/check-runtime-posture.mjs",
+        '// ad-hoc runtime posture check (should not be committed as a task output)\nconsole.log("posture", true);\n',
+        true
+      ),
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n  return true;\n}\n", true),
+      "Added a small diagnostic helper alongside the verification helper.",
+    ],
+    alternateNote:
+      "writes the in-scope file across two appends (a chunked strategy) instead of one, still landing the exact expected content",
+    negativeNote:
+      "writes an unsolicited diagnostic helper file outside the declared write scope before also writing the in-scope file correctly — strict scope violation fails the case regardless",
+    batchedAlternate: [
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n", true) +
+        appendToolAction("scripts/build-verify.mjs", "  return true;\n}\n", false) +
+        "Writing the verification helper now.",
+      "Wrote scripts/build-verify.mjs; it matches exactly.",
+    ],
+    batchedAlternateNote:
+      "both write chunks batched into one spark-style response with trailing commentary, then a separate final answer",
+    // Cheap here too: maxTurns=3, reference=2, one turn of slack. A
+    // truncated append attempt at turn 1, then the EXACT reference sequence
+    // unshifted (write-scope's strict violation logic is untouched --
+    // nothing was actually written by the malformed turn, so it cannot
+    // trip the out-of-scope check).
+    malformedRecovery: [
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n  return true;\n}\n", true),
+      "Created scripts/build-verify.mjs with the required content.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete append attempt; after the rejection, the reference's own single-shot append-plus-answer sequence completes within the 3-turn budget",
+    malformedNegative: [
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+    ],
+    malformedNegativeNote: "emits the same truncated append attempt every turn until the budget is exhausted -- the file is never created",
+  },
+  "toolrel-current-stateful-verify-persistence-001": {
+    alternate: [
+      // Genuinely different: reads the file before patching (the reference
+      // never does), plus differently-worded final answer. Still no
+      // verbatim repetition (there IS an intervening patch before the
+      // second run).
+      runAction("npm run test:normalize-id"),
+      readRangeAction("src/utils/normalize-id.ts", 1, 3),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+      "The normalizeId check is green after trimming whitespace.",
+    ],
+    negative: [
+      // The mined fingerprint-x6 shape: re-runs the IDENTICAL failing
+      // command twice in a row with zero intervening write/patch action —
+      // THEN goes on to fix it and end green anyway. Isolates the verbatim-
+      // repetition violation as the sole failure reason (this negative
+      // control DOES end green), so it fails ONLY because of
+      // `noVerbatimRepetition`, not because `endedGreen` is also false —
+      // proving the strict rule bites even when the model eventually
+      // recovers.
+      runAction("npm run test:normalize-id"),
+      runAction("npm run test:normalize-id"),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+    ],
+    alternateNote:
+      "reads the file before patching (an extra inspection step the reference skips), with a differently-worded final answer",
+    negativeNote:
+      "re-runs the identical failing command twice with zero intervening fix, THEN fixes it and ends green anyway — the earlier verbatim repeat alone strictly fails the case (the mined fingerprint-x6 behavior)",
+    // Batches the fix and the re-check into ONE response instead of two
+    // separate turns — verify-persistence's edited/lastRunCommand state
+    // threads sequentially within a batch exactly like across turns.
+    batchedAlternate: [
+      runAction("npm run test:normalize-id") + "Let's see the current state.",
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]) +
+        runAction("npm run test:normalize-id") +
+        "Applying the fix and re-verifying in one step.",
+      "Fixed normalizeId to trim whitespace first; the check now passes.",
+    ],
+    batchedAlternateNote:
+      "batches the patch and the re-check into one spark-style response instead of two separate turns",
+    // Cheap here too: maxTurns=5, reference=4, one turn of slack. A
+    // truncated run attempt at turn 1, then the EXACT reference sequence
+    // unshifted (verify-persistence's strict verbatim-repetition logic is
+    // untouched -- the malformed turn never sets lastRunCommand, since no
+    // real run action was ever parsed).
+    malformedRecovery: [
+      '{"action":"run","command":"npm run test:normalize',
+      runAction("npm run test:normalize-id"),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+      "Fixed normalizeId to trim whitespace first; the check now passes.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete run attempt; after the rejection, the reference's own red/fix/green/answer sequence completes within the 5-turn budget",
+    malformedNegative: [
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+    ],
+    malformedNegativeNote: "emits the same truncated run attempt every turn until the budget is exhausted -- the check never actually runs or gets fixed",
+  },
 };
+
+/**
+ * Content-derived parity fixture for `truncation-recovery-001`: the case's
+ * fixture content is a large generated filler file (numberedFillerFile in
+ * cases.ts), so rather than re-deriving/duplicating that generator here (and
+ * risking drift), the alternate/negative are built directly from the real
+ * case's own `initialFiles`/`expectedFinalFiles` — guaranteed byte-exact by
+ * construction, never hand-copied.
+ */
+function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): {
+  alternate: string[];
+  negative: string[];
+  alternateNote: string;
+  negativeNote: string;
+  batchedAlternate: string[];
+  batchedAlternateNote: string;
+  malformedRecovery: string[];
+  malformedRecoveryNote: string;
+  malformedNegative: string[];
+  malformedNegativeNote: string;
+} {
+  const [sourcePath, sourceContent] = Object.entries(benchmarkCase.initialFiles)[0]!;
+  const targetPath = Object.keys(benchmarkCase.expectedFinalFiles ?? {})[0]!;
+  const third = Math.ceil(sourceContent.length / 3);
+  const half = Math.ceil(sourceContent.length / 2);
+  return {
+    alternate: [
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      // A genuinely different chunk plan: three roughly-equal thirds instead
+      // of the reference's two chunks, still reconstructing the exact
+      // expected content (plain string slicing always reconstructs exactly
+      // on concatenation, regardless of where the cuts fall).
+      appendToolAction(targetPath, sourceContent.slice(0, third), true),
+      appendToolAction(targetPath, sourceContent.slice(third, third * 2), false),
+      appendToolAction(targetPath, sourceContent.slice(third * 2), false),
+      "Copied the source into the new file across three write chunks.",
+    ],
+    negative: [
+      // The mined shape: re-emits the WHOLE oversized file a second time
+      // instead of switching to a chunked strategy after the first
+      // truncation.
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      appendToolAction(targetPath, sourceContent, true),
+      appendToolAction(targetPath, sourceContent, true),
+      "Wrote the new file.",
+    ],
+    alternateNote:
+      "splits the write into three roughly-equal chunks instead of the reference's two, with different chunk boundaries",
+    negativeNote:
+      "re-emits the entire oversized file a second time instead of switching to a chunked strategy after the first truncation",
+    // Batches the read with the FIRST write chunk into one spark-style
+    // response (the second chunk stays in its own turn — batching BOTH
+    // chunks together would push their COMBINED payload over the cap, which
+    // is the correct "whole response" cap behavior, not a bug to route
+    // around). Half/half split (not thirds) — each half individually still
+    // fits under the cap with a small margin.
+    batchedAlternate: [
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length) +
+        appendToolAction(targetPath, sourceContent.slice(0, half), true) +
+        "Reading the source and starting the copy in one step.",
+      appendToolAction(targetPath, sourceContent.slice(half), false) + "Appending the remaining content.",
+    ],
+    batchedAlternateNote:
+      "batches the read with the first write chunk into one spark-style response instead of two separate turns, using a half/half split",
+    // Cheap here too: maxTurns=5, reference=4, one turn of slack. A
+    // truncated append attempt at turn 1 (rejected, nothing written, no
+    // truncatedPathHits recorded -- the malformed-detection branch returns
+    // before any truncation-cap accounting runs), then a read plus a clean
+    // half/half chunked write (each half individually fits under the cap).
+    malformedRecovery: [
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      appendToolAction(targetPath, sourceContent.slice(0, half), true),
+      appendToolAction(targetPath, sourceContent.slice(half), false),
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete append attempt; after the rejection, a read plus a clean half/half chunked write reconstructs the exact expected content within the 5-turn budget",
+    malformedNegative: [
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+    ],
+    malformedNegativeNote:
+      "emits the same truncated append attempt every turn until the budget is exhausted -- the target file is never created",
+  };
+}
 
 function statefulAnswers(benchmarkCase: StatefulToolReliabilityCase): ParityAnswers {
   const reference = STATEFUL_REFERENCE_TRANSCRIPTS[benchmarkCase.id];
+  if (!reference) {
+    throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
+  }
+  if (benchmarkCase.id === "toolrel-current-stateful-truncation-recovery-001") {
+    const derived = truncationRecoveryAnswers(benchmarkCase);
+    return { reference, ...derived };
+  }
   const table = STATEFUL_ANSWERS[benchmarkCase.id];
-  if (!reference || !table) {
+  if (!table) {
     throw new Error(`no stateful parity fixture for ${benchmarkCase.id}`);
   }
   return {
