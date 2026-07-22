@@ -326,6 +326,11 @@ try {
     },
     "invalid_harness"
   );
+  check(
+    "failed WorkBench attempts retain their prepared workspace",
+    !buildCrashRunner.requests.some((request) => request.path === "/bench/cleanup"),
+    buildCrashRunner.requests
+  );
 } finally {
   await buildCrashRunner.stop();
 }

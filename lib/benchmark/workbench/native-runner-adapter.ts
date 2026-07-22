@@ -61,6 +61,18 @@ export interface NativeWorkBenchDependencies {
   wait: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
+export class NativeWorkBenchExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly runnerProjectPath: string,
+    readonly runnerStatePath: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "NativeWorkBenchExecutionError";
+  }
+}
+
 const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
   startManagedAttemptRunner,
   stopManagedAttemptRunner,
@@ -217,6 +229,16 @@ export async function runNativeWorkBenchBuild(
       runnerProjectPath: managed.projectPath,
       runnerStatePath: managed.statePath,
     };
+  } catch (error) {
+    if (managed) {
+      throw new NativeWorkBenchExecutionError(
+        error instanceof Error ? error.message : String(error),
+        managed.projectPath,
+        managed.statePath,
+        { cause: error }
+      );
+    }
+    throw error;
   } finally {
     if (managed) {
       await dependencies.stopManagedAttemptRunner(input.runner, {

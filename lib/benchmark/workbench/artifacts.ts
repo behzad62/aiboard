@@ -52,3 +52,24 @@ export function createWorkBenchLogArtifact(input: {
     createdAt: input.createdAt,
   });
 }
+
+export function createWorkBenchRetainedStateArtifact(input: {
+  id: string;
+  attemptId: string;
+  caseId: string;
+  projectPath: string;
+  statePath: string;
+  createdAt?: string;
+}): BenchmarkArtifact {
+  return createJsonArtifact({
+    id: input.id,
+    attemptId: input.attemptId,
+    caseId: input.caseId,
+    label: "Retained WorkBench Runner V2 state",
+    content: {
+      projectPath: input.projectPath,
+      statePath: input.statePath,
+    },
+    createdAt: input.createdAt,
+  });
+}

@@ -75,12 +75,12 @@ import {
   getWorkBenchCasePack,
   normalizeWorkBenchModelSelection,
   runCertifiedWorkBench,
-  runWorkBenchBuild,
   workBenchCaseToBenchmarkCaseV2,
   workBenchHarnessProfileForRoleMode,
   workBenchRoleCount,
   type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
+import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
@@ -294,11 +294,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             teamCompositionIds: [primaryTeam.id],
             teamCompositions: [primaryTeam],
             signal: options?.signal,
-            runBuild: (buildInput) =>
-              runWorkBenchBuild({
-                ...buildInput,
-                context,
-                models: workBenchSelectedModels,
+          runBuild: (buildInput) =>
+            runNativeWorkBenchBuild({
+              ...buildInput,
+              context,
+              models: workBenchSelectedModels,
                 teamComposition: primaryTeam,
               }),
           });
