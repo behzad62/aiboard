@@ -149,8 +149,8 @@ const trendDashboard = buildBenchmarkDashboardData({
   benchmarkFailures: [],
 });
 check(
-  "trend quality is mean participant outcome on 0-100 scale",
-  Math.abs((trendDashboard.trendRows[0]?.quality ?? 0) - 50) < 1e-6,
+  "legacy game and build evidence does not create trend rows",
+  trendDashboard.trendRows.length === 0,
   trendDashboard.trendRows
 );
 
@@ -207,11 +207,8 @@ const badOutputModel = buildBadOutputDashboard.models.find(
   (model) => model.modelId === "model:bad-output-only"
 );
 check(
-  "build badOutput is not triple-counted as schema, tool, and verifier failures",
-  badOutputModel?.buildBadOutput === 1 &&
-    badOutputModel.schemaInvalid === 0 &&
-    badOutputModel.toolInvalid === 0 &&
-    badOutputModel.verifierFailures === 0,
+  "legacy buildStats do not create dashboard model scores",
+  badOutputModel === undefined,
   badOutputModel
 );
 
@@ -229,18 +226,13 @@ const redCodenamesModel = codenamesDashboard.models.find(
 );
 const codenamesHeadToHead = codenamesDashboard.headToHeadRows[0];
 check(
-  "codenames red model recorded a team win",
-  redCodenamesModel?.wins === 1 && redCodenamesModel?.losses === 0,
+  "legacy game matches do not create dashboard model scores",
+  redCodenamesModel === undefined,
   redCodenamesModel
 );
 check(
-  "codenames head-to-head row credits the winning team model",
-  codenamesDashboard.headToHeadRows.length === 1 &&
-    codenamesHeadToHead?.games === 1 &&
-    ((codenamesHeadToHead.modelA === "model:red-team" &&
-      codenamesHeadToHead.modelAWins === 1) ||
-      (codenamesHeadToHead.modelB === "model:red-team" &&
-        codenamesHeadToHead.modelBWins === 1)),
+  "legacy game matches do not create head-to-head rows",
+  codenamesHeadToHead === undefined && codenamesDashboard.headToHeadRows.length === 0,
   codenamesDashboard.headToHeadRows
 );
 
@@ -263,14 +255,9 @@ const evidenceDashboard = buildBenchmarkDashboardData({
 });
 const cappedEvidence = evidenceDashboard.evidenceByModel[evidenceModelId] ?? [];
 check(
-  "evidence is capped per model",
-  cappedEvidence.length <= 50,
+  "legacy build checkpoints do not create dashboard evidence",
+  cappedEvidence.length === 0,
   cappedEvidence.length
-);
-check(
-  "evidence cap retains newest items",
-  cappedEvidence.some((item) => item.timestamp === "2026-07-01T00:59:00.000Z"),
-  cappedEvidence.map((item) => item.timestamp)
 );
 
 const lift = scoreTeamLift({
