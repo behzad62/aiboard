@@ -16,10 +16,8 @@ import { createNativeProviderConfig } from "@/lib/client/native-build-engine";
 import type {
   NativeBuildAuditExport,
   NativeBuildObservability,
-  NativeBuildProjection,
   NativeBuildUsageProjection,
   NativeProviderConfig,
-  NativeRunProjection,
   NativeRunnerConnection,
 } from "@/lib/client/runner-v2";
 import {
