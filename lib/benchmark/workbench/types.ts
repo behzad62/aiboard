@@ -158,6 +158,8 @@ export interface WorkBenchBuildExecutionResult {
   toolCalls?: number;
   validToolCalls?: number;
   durationMs?: number;
+  runnerProjectPath?: string;
+  runnerStatePath?: string;
 }
 
 export interface WorkBenchExecutionInput {

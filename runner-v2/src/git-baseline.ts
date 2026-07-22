@@ -66,10 +66,12 @@ export async function captureGitBaseline(
   let inspection = await inspectRepository(projectPath, execute);
   let initializedRepository = false;
 
-  if (!inspection.repository) {
+  if (!inspection.repository || !inspection.headRevision) {
     await addDefaultIgnoreRules(projectPath);
-    await execute({ cwd: projectPath, args: ["init", "-b", "main"] });
     initializedRepository = true;
+  }
+  if (!inspection.repository) {
+    await execute({ cwd: projectPath, args: ["init", "-b", "main"] });
     inspection = await inspectRepository(projectPath, execute);
   }
   if (!inspection.repository || !inspection.root) {

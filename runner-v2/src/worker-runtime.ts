@@ -79,6 +79,9 @@ export interface RunWorkerTaskOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  allowedCommands?: readonly string[];
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 export interface WorkerTaskResult {
@@ -137,6 +140,8 @@ export async function runWorkerTask(
     artifacts: options.artifacts,
     repository,
     diagnostics: typescript,
+    ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
+    ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) {
     broker.register(tool);
   }
@@ -145,7 +150,11 @@ export async function runWorkerTask(
   }
   for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
   for (const tool of createSessionTools(options.sessions)) broker.register(tool);
-  for (const tool of createProcessTools()) broker.register(tool);
+  for (const tool of createProcessTools({
+    ...(options.allowedCommands
+      ? { allowedCommands: options.allowedCommands }
+      : {}),
+  })) broker.register(tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {
       broker.register(tool);
@@ -161,6 +170,9 @@ export async function runWorkerTask(
       ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
       taskId: options.taskId,
       clock,
+      ...(options.allowedCommands
+        ? { allowedCommands: options.allowedCommands }
+        : {}),
     })) broker.register(tool);
   }
   if (options.mcpManager) {
@@ -175,6 +187,7 @@ export async function runWorkerTask(
       artifacts: options.artifacts,
       taskId: options.taskId,
       clock,
+      ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
     })) broker.register(tool);
   }
   if (options.skillCatalog) {
@@ -222,6 +235,11 @@ export async function runWorkerTask(
     ...(options.managedProcesses
       ? { managedProcesses: options.managedProcesses }
       : {}),
+    ...(options.allowedCommands
+      ? { allowedCommands: options.allowedCommands }
+      : {}),
+    ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
+    ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

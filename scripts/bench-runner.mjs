@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -26,7 +26,13 @@ const token = optionValue(options.token) ?? process.env.AIBOARD_BENCH_TOKEN ?? r
 const root = resolve(optionValue(options.root) ?? join(process.cwd(), ".aiboard-bench", "runs"));
 const fixtureRootOption = optionValue(options["fixture-root"]);
 const fixtureRoot = fixtureRootOption ? resolve(fixtureRootOption) : null;
+const runnerV2DirectoryOption = optionValue(options["runner-v2-dir"]);
 const appOrigins = parseAppOrigins(optionValues(options["app-origin"]));
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const attemptMetaRoot = join(root, ".attempt-meta");
+const runnerStateRoot = join(root, ".runner-v2-state");
+const managedAttemptRunners = new Map();
+const runnerV2Launcher = discoverRunnerV2(runnerV2DirectoryOption);
 
 if (!isLoopbackHost(host)) {
   console.error("bench-runner refuses to bind non-loopback hosts.");
@@ -38,6 +44,8 @@ if (!Number.isInteger(port) || port <= 0 || port > 65535) {
 }
 
 await mkdir(root, { recursive: true });
+await mkdir(attemptMetaRoot, { recursive: true });
+await mkdir(runnerStateRoot, { recursive: true });
 
 const server = createServer(async (req, res) => {
   try {
@@ -84,6 +92,19 @@ server.listen(port, host, () => {
   );
 });
 
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void Promise.all(
+      [...managedAttemptRunners.values()].map((managed) => terminateChild(managed.child))
+    ).finally(() => server.close(() => {
+      process.exitCode = signal === "SIGINT" ? 130 : 0;
+    }));
+  });
+}
+
 async function route(pathname, body) {
   const compat = parseCompatRoute(pathname);
   if (compat) return routeCompat(compat.attemptId, compat.endpoint, body);
@@ -98,6 +119,13 @@ async function route(pathname, body) {
         port,
         root,
         mcp: false,
+        runnerV2: runnerV2Launcher
+          ? { ready: true, source: runnerV2Launcher.source }
+          : {
+              ready: false,
+              error:
+                "Runner V2 was not found. Pass --runner-v2-dir or place aiboard-runner-v2 beside bench-runner.mjs.",
+            },
       };
     case "/bench/prepare":
       return prepare(body);
@@ -151,13 +179,28 @@ async function route(pathname, body) {
       });
     case "/bench/cleanup":
       return cleanup(body);
+    case "/bench/attempt-runner/start":
+      return startAttemptRunner(body);
+    case "/bench/attempt-runner/status":
+      return statusAttemptRunner(body);
+    case "/bench/attempt-runner/restore-oracle":
+      return withAttempt(body, async ({ attemptRoot, meta }) => {
+        const liveRunner = managedAttemptRunners.get(meta.attemptId);
+        if (!liveRunner || liveRunner.child.exitCode !== null) {
+          throw new HttpError(409, "Runner V2 must be running before oracle restoration.");
+        }
+        await restoreOracleFiles(attemptRoot, meta);
+        return { attemptId: meta.attemptId, restored: true };
+      });
+    case "/bench/attempt-runner/stop":
+      return stopAttemptRunner(body);
     default:
       throw new HttpError(404, "Unknown bench endpoint.");
   }
 }
 
 async function routeCompat(attemptId, endpoint, body) {
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
   switch (endpoint) {
     case "/health":
@@ -236,7 +279,7 @@ async function prepare(body) {
   const attemptId = requestedAttemptId
     ? validateAttemptId(requestedAttemptId)
     : `${sanitizeId(caseId)}-${Date.now()}-${randomBytes(4).toString("hex")}`;
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   if (existsSync(attemptRoot)) {
     throw new HttpError(409, "Bench attempt workspace already exists.");
   }
@@ -289,8 +332,31 @@ async function prepare(body) {
   }
 
   meta.snapshot = await snapshotFiles(attemptRoot);
+  meta.hiddenFiles = await hideOracleFiles(attemptRoot, meta.snapshot);
+  await initializeAttemptRepository(attemptRoot);
   await saveMeta(attemptRoot, meta);
   return { attemptId, caseId, root: attemptRoot };
+}
+
+function initializeAttemptRepository(attemptRoot) {
+  return new Promise((resolveInit, rejectInit) => {
+    const child = spawn("git", ["init", "-b", "main"], {
+      cwd: attemptRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-16 * 1024);
+    });
+    child.once("error", (error) =>
+      rejectInit(new HttpError(500, `Could not initialize attempt Git repository: ${error.message}`))
+    );
+    child.once("exit", (code) => {
+      if (code === 0) resolveInit();
+      else rejectInit(new HttpError(500, `Could not initialize attempt Git repository: ${stderr.trim()}`));
+    });
+  });
 }
 
 async function patchFile(attemptRoot, body) {
@@ -395,6 +461,11 @@ async function searchFiles(attemptRoot, body) {
 }
 
 async function runVerifier(attemptRoot, meta, body) {
+  const liveRunner = managedAttemptRunners.get(meta.attemptId);
+  if (liveRunner?.child.exitCode === null) {
+    throw new HttpError(409, "Runner V2 must stop before verifier execution.");
+  }
+  await restoreOracleFiles(attemptRoot, meta);
   const command = optionalString(body, "command") ?? meta.verifierCommand;
   if (!command) throw new HttpError(400, "No verifier command configured.");
   assertAllowedCommand(meta, command);
@@ -431,21 +502,118 @@ async function runVerifier(attemptRoot, meta, body) {
 
 async function cleanup(body) {
   const attemptId = requiredString(body, "attemptId");
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  await stopAttemptRunner({ attemptId });
+  const attemptRoot = attemptWorkspacePath(attemptId);
+  const statePath = runnerStatePath(attemptId);
   await rm(attemptRoot, { recursive: true, force: true });
+  await rm(statePath, { recursive: true, force: true });
+  await rm(metaPath(basename(attemptRoot)), { force: true });
   return { removed: true };
+}
+
+async function startAttemptRunner(body) {
+  const attemptId = validateAttemptId(requiredString(body, "attemptId"));
+  const attemptRoot = attemptWorkspacePath(attemptId);
+  await readMeta(attemptRoot);
+  if (!runnerV2Launcher) {
+    throw new HttpError(503, "Managed Runner V2 is unavailable; configure --runner-v2-dir.");
+  }
+  const existing = managedAttemptRunners.get(attemptId);
+  if (existing?.child.exitCode === null) return managedRunnerResult(existing, true);
+
+  const statePath = runnerStatePath(attemptId);
+  await rm(statePath, { recursive: true, force: true });
+  await mkdir(statePath, { recursive: true });
+  const token = randomBytes(32).toString("hex");
+  const invocation = runnerV2Invocation(runnerV2Launcher, attemptRoot, statePath, token);
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: runnerV2Launcher.directory,
+    windowsHide: true,
+    shell: process.platform === "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const started = await waitForRunnerV2Startup(child, 45_000).catch(async (error) => {
+    await terminateChild(child);
+    throw error;
+  });
+  const managed = {
+    attemptId,
+    child,
+    url: started.url,
+    token,
+    projectPath: attemptRoot,
+    statePath,
+    nodeVersion: started.nodeVersion,
+  };
+  managedAttemptRunners.set(attemptId, managed);
+  child.once("exit", () => {
+    if (managedAttemptRunners.get(attemptId) === managed) managed.exited = true;
+  });
+  return managedRunnerResult(managed, true);
+}
+
+async function statusAttemptRunner(body) {
+  const attemptId = validateAttemptId(requiredString(body, "attemptId"));
+  const managed = managedAttemptRunners.get(attemptId);
+  if (!managed) {
+    const attemptRoot = attemptWorkspacePath(attemptId);
+    await readMeta(attemptRoot);
+    return {
+      attemptId,
+      running: false,
+      projectPath: attemptRoot,
+      statePath: runnerStatePath(attemptId),
+    };
+  }
+  return managedRunnerResult(managed, managed.child.exitCode === null && !managed.exited);
+}
+
+async function stopAttemptRunner(body) {
+  const attemptId = validateAttemptId(requiredString(body, "attemptId"));
+  const managed = managedAttemptRunners.get(attemptId);
+  if (managed) await terminateChild(managed.child);
+  return managed
+    ? managedRunnerResult(managed, false)
+    : {
+        attemptId,
+        running: false,
+        projectPath: attemptWorkspacePath(attemptId),
+        statePath: runnerStatePath(attemptId),
+      };
+}
+
+function runnerStatePath(attemptId) {
+  const digest = createHash("sha256").update(validateAttemptId(attemptId)).digest("hex").slice(0, 24);
+  return resolveSafeChild(runnerStateRoot, digest);
+}
+
+function attemptWorkspacePath(attemptId) {
+  const digest = createHash("sha256").update(validateAttemptId(attemptId)).digest("hex").slice(0, 24);
+  return resolveSafeChild(root, digest);
+}
+
+function managedRunnerResult(managed, running) {
+  return {
+    attemptId: managed.attemptId,
+    running,
+    ...(running ? { url: managed.url, token: managed.token } : {}),
+    projectPath: managed.projectPath,
+    statePath: managed.statePath,
+    pid: managed.child.pid ?? null,
+    ...(managed.nodeVersion ? { nodeVersion: managed.nodeVersion } : {}),
+  };
 }
 
 async function withAttempt(body, action) {
   const attemptId = requiredString(body, "attemptId");
-  const attemptRoot = resolveSafeChild(root, attemptId);
+  const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
   return action({ attemptRoot, meta });
 }
 
 async function readMeta(attemptRoot) {
   try {
-    const content = await readFile(join(attemptRoot, META_FILE), "utf8");
+    const content = await readFile(metaPath(basename(attemptRoot)), "utf8");
     const parsed = JSON.parse(content);
     if (!isRecord(parsed)) throw new Error("metadata must be an object");
     return parsed;
@@ -455,7 +623,11 @@ async function readMeta(attemptRoot) {
 }
 
 async function saveMeta(attemptRoot, meta) {
-  await writeFile(join(attemptRoot, META_FILE), JSON.stringify(meta, null, 2), "utf8");
+  await writeFile(metaPath(basename(attemptRoot)), JSON.stringify(meta, null, 2), "utf8");
+}
+
+function metaPath(attemptId) {
+  return resolveSafeChild(attemptMetaRoot, `${validateAttemptId(attemptId)}.json`);
 }
 
 function runCommand(command, cwd, timeoutSeconds) {
@@ -509,6 +681,26 @@ async function snapshotFiles(attemptRoot) {
   return snapshot;
 }
 
+async function hideOracleFiles(attemptRoot, snapshot) {
+  const hiddenFiles = {};
+  for (const [relPath, content] of Object.entries(snapshot)) {
+    if (!isModelHiddenWorkspaceFile(relPath)) continue;
+    hiddenFiles[relPath] = content;
+    await rm(resolveSafePath(attemptRoot, relPath), { force: true });
+  }
+  return hiddenFiles;
+}
+
+async function restoreOracleFiles(attemptRoot, meta) {
+  const hiddenFiles = isRecord(meta.hiddenFiles) ? meta.hiddenFiles : {};
+  for (const [relPath, content] of Object.entries(hiddenFiles)) {
+    if (typeof content !== "string") continue;
+    const file = resolveSafePath(attemptRoot, relPath);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, content, "utf8");
+  }
+}
+
 async function createDiff(attemptRoot, before) {
   const after = await snapshotFiles(attemptRoot);
   const paths = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
@@ -541,7 +733,7 @@ function prefixLines(content, prefix) {
 async function walk(dir, onFile) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name === META_FILE) continue;
+    if (entry.name === META_FILE || entry.name === ".git") continue;
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       await walk(fullPath, onFile);
@@ -549,6 +741,124 @@ async function walk(dir, onFile) {
       await onFile(fullPath);
     }
   }
+}
+
+function discoverRunnerV2(explicitDirectory) {
+  const candidates = [
+    ...(explicitDirectory ? [{ directory: resolve(explicitDirectory), source: "explicit" }] : []),
+    { directory: join(scriptDirectory, "aiboard-runner-v2"), source: "sibling" },
+    { directory: resolve(scriptDirectory, ".."), source: "repository" },
+  ];
+  for (const candidate of candidates) {
+    const repositoryCli = join(candidate.directory, "runner-v2", "src", "cli.ts");
+    const distributionCli = join(candidate.directory, "src", "cli.ts");
+    if (existsSync(repositoryCli)) {
+      return { ...candidate, cli: "runner-v2/src/cli.ts" };
+    }
+    if (existsSync(distributionCli)) {
+      return { ...candidate, cli: "src/cli.ts" };
+    }
+  }
+  return null;
+}
+
+function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {
+  return {
+    command: "npx",
+    args: [
+      "-y",
+      "node@24.18.0",
+      "node_modules/tsx/dist/cli.mjs",
+      launcher.cli,
+      "--project",
+      projectPath,
+      "--state-dir",
+      statePath,
+      "--port",
+      "0",
+      "--token",
+      runnerToken,
+    ],
+  };
+}
+
+function waitForRunnerV2Startup(child, timeoutMs) {
+  return new Promise((resolveStartup, rejectStartup) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("exit", onExit);
+      if (error) rejectStartup(error);
+      else resolveStartup(value);
+    };
+    const onStdout = (chunk) => {
+      stdout += String(chunk);
+      const lines = stdout.split(/\r?\n/);
+      stdout = lines.pop() ?? "";
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (isRecord(parsed) && typeof parsed.url === "string") {
+            finish(null, parsed);
+            return;
+          }
+        } catch {
+          // Runner V2's startup contract is one JSON line; ignore unrelated npx output.
+        }
+      }
+    };
+    const onStderr = (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-16 * 1024);
+    };
+    const onExit = (code) =>
+      finish(new HttpError(502, `Runner V2 exited during startup (${code}): ${stderr.trim()}`));
+    const timeout = setTimeout(
+      () => finish(new HttpError(504, `Runner V2 startup timed out: ${stderr.trim()}`)),
+      timeoutMs
+    );
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.once("exit", onExit);
+  });
+}
+
+function terminateChild(child) {
+  if (process.platform === "win32" && child.pid && child.exitCode === null) {
+    return new Promise((resolveStop) => {
+      const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      killer.once("error", () => resolveStop());
+      killer.once("exit", () => resolveStop());
+    });
+  }
+  return new Promise((resolveStop) => {
+    if (child.exitCode !== null || child.killed) {
+      resolveStop();
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(force);
+      resolveStop();
+    };
+    child.once("exit", finish);
+    child.kill("SIGTERM");
+    const force = setTimeout(() => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      finish();
+    }, 5_000);
+    force.unref();
+  });
 }
 
 async function copyFixtureTree(source, target) {

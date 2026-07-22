@@ -7,6 +7,7 @@ import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
+  createWorkBenchRetainedStateArtifact,
   createWorkBenchVerifierArtifact,
 } from "./artifacts";
 import { parseVerifierResult } from "./verifier";
@@ -26,6 +27,7 @@ export async function executeWorkBenchVerifierOnly(
   const harnessProfile = input.harnessProfile ?? "aiboard-build-multi-worker";
   let attemptId = input.attemptId;
   let prepared = false;
+  let cleanupEligible = false;
 
   if (!input.runBuild) {
     return createFailedWorkBenchAttempt(input, {
@@ -81,6 +83,7 @@ export async function executeWorkBenchVerifierOnly(
         status: failure.status,
         code: failure.code,
         message: errorMessage(error),
+        retainedPaths: retainedRunnerPaths(error),
       });
     }
 
@@ -230,6 +233,7 @@ export async function executeWorkBenchVerifierOnly(
       promptSetVersion: "workbench-prompts-v0.1",
       scoringVersion: input.case.scoring.scoringVersion,
     };
+    cleanupEligible = attempt.status === "passed";
     return { attempt, verifierResult, parsedVerifierResult, score, artifacts };
   } catch (error) {
     const failure = classifyPrepareFailure(error);
@@ -243,7 +247,7 @@ export async function executeWorkBenchVerifierOnly(
       message: errorMessage(error),
     });
   } finally {
-    if (prepared && input.cleanup !== false) {
+    if (prepared && cleanupEligible && input.cleanup !== false) {
       await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);
     }
   }
@@ -258,6 +262,7 @@ interface FailedWorkBenchAttemptContext {
   code?: string;
   message?: string;
   buildResult?: Partial<WorkBenchBuildExecutionResult>;
+  retainedPaths?: { projectPath: string; statePath: string };
 }
 
 export function createFailedWorkBenchAttempt(
@@ -281,6 +286,20 @@ export function createFailedWorkBenchAttempt(
     content: message,
     createdAt: completedAt,
   });
+  const retainedArtifact = context.retainedPaths
+    ? createWorkBenchRetainedStateArtifact({
+        id: `${attemptId}:runner-v2-retained-state`,
+        attemptId,
+        caseId: input.case.id,
+        projectPath: context.retainedPaths.projectPath,
+        statePath: context.retainedPaths.statePath,
+        createdAt: completedAt,
+      })
+    : null;
+  const failureArtifactIds = [
+    logArtifact.id,
+    ...(retainedArtifact ? [retainedArtifact.id] : []),
+  ];
   const verifierResult: BenchmarkVerifierResult = {
     id: `${attemptId}:verifier`,
     attemptId,
@@ -315,7 +334,7 @@ export function createFailedWorkBenchAttempt(
         message,
       },
     ],
-    artifactIds: [logArtifact.id],
+    artifactIds: failureArtifactIds,
   };
   const score = scoreWorkBenchAttempt({
     verifierScore: 0,
@@ -352,7 +371,7 @@ export function createFailedWorkBenchAttempt(
     toolCalls: context.buildResult?.toolCalls ?? input.toolCalls ?? 0,
     durationMs,
     verifierResultId: verifierResult.id,
-    artifactIds: [logArtifact.id],
+    artifactIds: failureArtifactIds,
     traceIds: context.buildResult?.traceIds ?? [],
     failureIds: [`${attemptId}:failure:${code}`],
     harnessVersion: "workbench-runner-v0.1",
@@ -364,8 +383,22 @@ export function createFailedWorkBenchAttempt(
     verifierResult,
     parsedVerifierResult: parseVerifierResult("", verifierResult.resultJson),
     score,
-    artifacts: [logArtifact],
+    artifacts: [logArtifact, ...(retainedArtifact ? [retainedArtifact] : [])],
   };
+}
+
+function retainedRunnerPaths(
+  error: unknown
+): { projectPath: string; statePath: string } | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as {
+    runnerProjectPath?: unknown;
+    runnerStatePath?: unknown;
+  };
+  return typeof value.runnerProjectPath === "string" &&
+    typeof value.runnerStatePath === "string"
+    ? { projectPath: value.runnerProjectPath, statePath: value.runnerStatePath }
+    : undefined;
 }
 
 function scaleToolReliabilityScore(value: number | null): number | undefined {

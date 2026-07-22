@@ -75,12 +75,12 @@ import {
   getWorkBenchCasePack,
   normalizeWorkBenchModelSelection,
   runCertifiedWorkBench,
-  runWorkBenchBuild,
   workBenchCaseToBenchmarkCaseV2,
   workBenchHarnessProfileForRoleMode,
   workBenchRoleCount,
   type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
+import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
@@ -294,11 +294,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             teamCompositionIds: [primaryTeam.id],
             teamCompositions: [primaryTeam],
             signal: options?.signal,
-            runBuild: (buildInput) =>
-              runWorkBenchBuild({
-                ...buildInput,
-                context,
-                models: workBenchSelectedModels,
+          runBuild: (buildInput) =>
+            runNativeWorkBenchBuild({
+              ...buildInput,
+              context,
+              models: workBenchSelectedModels,
                 teamComposition: primaryTeam,
               }),
           });
@@ -1036,7 +1036,16 @@ async function checkBenchRunnerForLeg(
     return { ok: false, error: "Bench runner not configured." };
   }
   const health = await checkBenchRunner(config);
-  return { ok: health.ok, error: health.error };
+  if (!health.ok) return { ok: false, error: health.error };
+  if (!health.runnerV2?.ready) {
+    return {
+      ok: false,
+      error:
+        health.runnerV2?.error ??
+        "Managed Runner V2 is unavailable; configure --runner-v2-dir.",
+    };
+  }
+  return { ok: true };
 }
 
 interface PresetLegResult {

@@ -7,6 +7,7 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 
 interface ProcessInput {
   command?: string;
@@ -22,6 +23,7 @@ export interface ProcessToolsOptions {
   maxOutputBytes?: number;
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
+  allowedCommands?: readonly string[];
 }
 
 export function createProcessTools(
@@ -63,7 +65,8 @@ export function createProcessTools(
         context,
         maxOutputBytes,
         defaultTimeoutMs,
-        maximumTimeoutMs
+        maximumTimeoutMs,
+        options.allowedCommands
       ),
   };
   return [tool as NativeTool<unknown>];
@@ -113,10 +116,17 @@ async function executeProcess(
   context: ToolExecutionContext,
   maxOutputBytes: number,
   defaultTimeoutMs: number,
-  maximumTimeoutMs: number
+  maximumTimeoutMs: number,
+  allowedCommands: readonly string[] | undefined
 ): Promise<ToolExecutionOutput> {
   if (!context.workspacePath) {
     return processError("workspace_required", "Process tool requires a workspace.");
+  }
+  if (!isBenchmarkCommandAllowed(input, allowedCommands)) {
+    return processError(
+      "benchmark_command_denied",
+      "Command is not allowlisted for this WorkBench attempt."
+    );
   }
   const invocation = commandInvocation(input);
   const cwd = resolve(context.workspacePath, input.cwd ?? ".");

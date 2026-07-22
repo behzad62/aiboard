@@ -70,7 +70,7 @@ async function publishNativeRunner() {
 
   const tsxVersion = pinnedVersion(rootPackage.devDependencies?.tsx, "tsx");
   const typescriptVersion = pinnedVersion(
-    rootPackage.devDependencies?.typescript,
+    rootPackage.devDependencies?.typescript ?? rootPackage.dependencies?.typescript,
     "typescript"
   );
   const playwrightVersion = pinnedVersion(

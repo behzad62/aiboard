@@ -164,7 +164,7 @@ export async function runNativeBuildDiscussion(
   await configureNativeProviders(
     connection,
     configuredRuntimeIds.map((runtimeId, index) =>
-      providerConfig(runtimeId, discussion, index)
+      createNativeProviderConfig(runtimeId, index, discussion.reasoningEffort)
     )
   );
   if (!runId) {
@@ -411,10 +411,10 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function providerConfig(
+export function createNativeProviderConfig(
   runtimeId: string,
-  discussion: Discussion,
-  priority: number
+  priority: number,
+  reasoningEffort?: string | null
 ): NativeProviderConfig {
   const { providerId, model } = parseModelId(runtimeId);
   const pricing = nativePricingMicros(
@@ -486,8 +486,8 @@ function providerConfig(
     inputCapabilities: nativeInputCapabilities(inputCapabilities),
     priority,
     ...pricing,
-    ...(discussion.reasoningEffort && discussion.reasoningEffort !== "default"
-      ? { reasoningEffort: discussion.reasoningEffort }
+    ...(reasoningEffort && reasoningEffort !== "default"
+      ? { reasoningEffort }
       : {}),
     ...(native.transport === "openai-compatible"
       ? { protocol: nativeProviderProtocol(providerId, model) }

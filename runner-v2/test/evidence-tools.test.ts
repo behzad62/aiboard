@@ -160,6 +160,40 @@ test("evidence commands declare arbitrary process execution as an external effec
   }
 });
 
+test("benchmark evidence policy rejects commands outside the exact allowlist", async () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  try {
+    const registry = new ToolRegistry();
+    for (const tool of createEvidenceTools({
+      store,
+      artifacts,
+      taskId: "task_a",
+      allowedCommands: [`${process.execPath} --version`],
+    })) registry.register(tool);
+    const result = await registry.invoke(
+      {
+        type: "tool_call",
+        callId: "denied",
+        name: "run_evidence_command",
+        arguments: {
+          label: "denied",
+          command: process.execPath,
+          args: ["-e", "console.log('no')"],
+          cwd: ".",
+        },
+      },
+      workerContext(fixture.workspace)
+    );
+    assert.equal(result.isError, true);
+    assert.equal(result.error?.code, "benchmark_command_denied");
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
 function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
   const registry = new ToolRegistry();
   for (const tool of createEvidenceTools({

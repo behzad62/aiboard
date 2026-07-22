@@ -77,6 +77,7 @@ interface CreateRunBody {
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
+    benchmark?: NativeBuildSpec["benchmark"];
   };
 }
 
@@ -340,6 +341,16 @@ export class ControlServer {
             permissionProfile: body.permissionProfile,
             runPolicy: body.build.runPolicy,
             budgetLimits: { ...body.build.budgetLimits },
+            ...(body.build.benchmark
+              ? {
+                  benchmark: {
+                    attemptId: body.build.benchmark.attemptId,
+                    allowedCommands: [...body.build.benchmark.allowedCommands],
+                    hiddenPaths: [...body.build.benchmark.hiddenPaths],
+                    protectedPaths: [...body.build.benchmark.protectedPaths],
+                  },
+                }
+              : {}),
             createdAt: projection.createdAt,
             idempotencyKey: `build:${body.idempotencyKey}`,
           });
@@ -891,6 +902,24 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
   } catch {
     invalidBody();
   }
+  if (body.benchmark !== undefined) {
+    if (
+      !body.benchmark ||
+      !isNonEmptyString(body.benchmark.attemptId) ||
+      !Array.isArray(body.benchmark.allowedCommands) ||
+      body.benchmark.allowedCommands.some((command) => !isNonEmptyString(command)) ||
+      new Set(body.benchmark.allowedCommands.map((command) => command.trim())).size !==
+        body.benchmark.allowedCommands.length ||
+      !isUniqueNonEmptyStringArray(body.benchmark.hiddenPaths) ||
+      !isUniqueNonEmptyStringArray(body.benchmark.protectedPaths)
+    ) invalidBody();
+  }
+}
+
+function isUniqueNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.every((entry) => isNonEmptyString(entry)) &&
+    new Set(value.map((entry) => entry.trim())).size === value.length;
 }
 
 function redactProviderConfig(config: RunnerProviderConfig) {

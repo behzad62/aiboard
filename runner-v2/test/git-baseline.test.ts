@@ -134,6 +134,35 @@ test("non-repository bootstrap creates an initial safe baseline without global i
   }
 });
 
+test("unborn repository bootstrap creates HEAD and applies safe ignore defaults", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-baseline-unborn-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "app.ts"), "export const ready = true;\n");
+  writeFileSync(join(project, ".env.local"), "TOKEN=secret\n");
+
+  try {
+    await runGit({ cwd: project, args: ["init", "-b", "main"] });
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_unborn",
+    });
+    assert.equal(baseline.initializedRepository, true);
+    assert.equal(await gitText(project, ["rev-parse", "HEAD"]), baseline.revision);
+    const paths = (
+      await gitText(project, ["ls-tree", "-r", "--name-only", "HEAD"])
+    ).split("\n");
+    assert.equal(paths.includes("app.ts"), true);
+    assert.equal(paths.includes(".gitignore"), true);
+    assert.equal(paths.includes(".env.local"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();
 }

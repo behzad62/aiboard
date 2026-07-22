@@ -99,6 +99,36 @@ test("project-autonomous mode cannot run arbitrary executables without approval"
   }
 });
 
+test("benchmark process policy permits only exact allowlisted invocations", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-benchmark-"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace });
+  for (const tool of createProcessTools({
+    allowedCommands: [`${process.execPath} --version`, "echo approved"],
+  })) broker.register(tool);
+  try {
+    const allowed = await invoke(broker, "allowed", {
+      command: process.execPath,
+      args: ["--version"],
+    });
+    assert.equal(allowed.isError, false);
+
+    const denied = await invoke(broker, "denied", {
+      command: process.execPath,
+      args: ["-e", "console.log('not allowlisted')"],
+    });
+    assert.equal(denied.isError, true);
+    assert.equal(denied.error?.code, "benchmark_command_denied");
+
+    const shellAllowed = await invoke(broker, "shell-allowed", {
+      shell: process.platform === "win32" ? "cmd" : "bash",
+      script: "echo approved",
+    });
+    assert.equal(shellAllowed.isError, false);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 function brokerWithProcesses(workspace: string): ToolBroker {
   const broker = new ToolBroker({
     permissionProfile: "full",

@@ -260,7 +260,8 @@ export function CertifiedRunPanel({
       Boolean(
         workBenchRunnerUrl.trim() &&
           workBenchRunnerToken.trim() &&
-          workBenchRunnerHealth?.ok
+          workBenchRunnerHealth?.ok &&
+          workBenchRunnerHealth?.runnerV2?.ready
       ),
     certification,
   });
@@ -269,7 +270,8 @@ export function CertifiedRunPanel({
   const workBenchRunnerReady = Boolean(
     workBenchRunnerUrl.trim() &&
       workBenchRunnerToken.trim() &&
-      workBenchRunnerHealth?.ok
+      workBenchRunnerHealth?.ok &&
+      workBenchRunnerHealth?.runnerV2?.ready
   );
   const focusedPreset =
     BENCHMARK_PRESETS.find((preset) => preset.id === focusedPresetId) ??
@@ -710,8 +712,10 @@ export function CertifiedRunPanel({
       });
       setWorkBenchRunnerHealth(health);
       setMessage(
-        health.ok
-          ? "Bench runner connected."
+        health.ok && health.runnerV2?.ready
+          ? "Bench Runner and managed Runner V2 are ready."
+          : health.ok
+            ? health.runnerV2?.error ?? "Bench Runner connected, but managed Runner V2 is unavailable."
           : health.error ?? "Bench runner check failed."
       );
     } finally {

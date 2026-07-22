@@ -4,6 +4,13 @@ import { assertBudgetLimits } from "./budget-policy.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
+export interface NativeBuildBenchmarkPolicy {
+  attemptId: string;
+  allowedCommands: string[];
+  hiddenPaths: string[];
+  protectedPaths: string[];
+}
+
 export interface NativeBuildSpec {
   version: 1;
   runId: string;
@@ -17,6 +24,7 @@ export interface NativeBuildSpec {
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
+  benchmark?: NativeBuildBenchmarkPolicy;
 }
 
 export interface BuildSpecStore {
@@ -53,6 +61,34 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     throw new Error("Build spec run policy is invalid.");
   }
   assertBudgetLimits(spec.budgetLimits);
+  if (spec.benchmark) {
+    if (!spec.benchmark.attemptId.trim()) {
+      throw new Error("Build spec benchmark attempt identity is incomplete.");
+    }
+    if (
+      !Array.isArray(spec.benchmark.allowedCommands) ||
+      spec.benchmark.allowedCommands.some(
+        (command) => typeof command !== "string" || !command.trim()
+      )
+    ) {
+      throw new Error("Build spec benchmark commands must be non-empty strings.");
+    }
+    const normalized = spec.benchmark.allowedCommands.map((command) => command.trim());
+    if (new Set(normalized).size !== normalized.length) {
+      throw new Error("Build spec contains a duplicate benchmark command.");
+    }
+    for (const [label, paths] of [
+      ["hidden", spec.benchmark.hiddenPaths],
+      ["protected", spec.benchmark.protectedPaths],
+    ] as const) {
+      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !path.trim())) {
+        throw new Error(`Build spec benchmark ${label} paths must be non-empty strings.`);
+      }
+      if (new Set(paths.map((path) => path.trim())).size !== paths.length) {
+        throw new Error(`Build spec contains a duplicate benchmark ${label} path.`);
+      }
+    }
+  }
 }
 
 export function assertBuildRunPolicyLimits(
@@ -97,5 +133,15 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     ...spec,
     workerRuntimeIds: [...spec.workerRuntimeIds],
     budgetLimits: { ...spec.budgetLimits },
+    ...(spec.benchmark
+      ? {
+          benchmark: {
+            attemptId: spec.benchmark.attemptId,
+            allowedCommands: [...spec.benchmark.allowedCommands],
+            hiddenPaths: [...spec.benchmark.hiddenPaths],
+            protectedPaths: [...spec.benchmark.protectedPaths],
+          },
+        }
+      : {}),
   };
 }
