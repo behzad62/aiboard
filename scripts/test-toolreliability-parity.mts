@@ -871,6 +871,24 @@ const STATEFUL_ANSWERS: Record<
     ],
     batchedNegativeNote:
       "the nudged-overlap duplicate (lines 40-90 then 45-95, non-identical JSON text) occurs WITHIN the same batched response instead of across turns",
+    // 2026-07-22 gate-2 fix, extended per-kind (cheap here: maxTurns=4,
+    // reference=3 turns, one turn of slack) — a truncated read_range attempt
+    // at turn 1, then the EXACT reference sequence unshifted.
+    malformedRecovery: [
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      readRangeAction("src/workers/task-queue.ts", 1, 75),
+      readRangeAction("src/workers/retry-policy.ts", 46, 75),
+      "MAX_QUEUE_DEPTH is 64 and RETRY_BACKOFF_MS is 750.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete read_range attempt; after the rejection, the reference's own two-read-plus-answer sequence completes within the 4-turn budget (one turn of slack absorbs the malformed turn)",
+    malformedNegative: [
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+      '{"action":"read_range","path":"src/workers/task-queue.ts","startLine":1,"lineCount"',
+    ],
+    malformedNegativeNote: "emits the same truncated action every turn until the budget is exhausted -- no read ever actually happens",
   },
   "toolrel-current-stateful-stale-patch-002": {
     alternate: [
@@ -973,6 +991,24 @@ const STATEFUL_ANSWERS: Record<
       "Saved the changes.",
     ],
     batchedAlternateNote: "both required clicks batched into one spark-style response with trailing commentary",
+    // Cheap here too: maxTurns=4, reference=3, one turn of slack. A
+    // truncated tool/browser_click attempt at turn 1, then the EXACT
+    // reference sequence unshifted.
+    malformedRecovery: [
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      playwrightClickAction("e3", "Open item detail"),
+      playwrightClickAction("e7", "Save changes"),
+      "Saved the changes.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete playwright click attempt; after the rejection, the reference's own click-click-answer sequence completes within the 4-turn budget",
+    malformedNegative: [
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+      '{"action":"tool","server":"playwright","tool":"browser_click","args":{"target"',
+    ],
+    malformedNegativeNote: "emits the same truncated click attempt every turn until the budget is exhausted -- no interaction ever lands",
   },
   "toolrel-current-stateful-write-scope-001": {
     alternate: [
@@ -1007,6 +1043,24 @@ const STATEFUL_ANSWERS: Record<
     ],
     batchedAlternateNote:
       "both write chunks batched into one spark-style response with trailing commentary, then a separate final answer",
+    // Cheap here too: maxTurns=3, reference=2, one turn of slack. A
+    // truncated append attempt at turn 1, then the EXACT reference sequence
+    // unshifted (write-scope's strict violation logic is untouched --
+    // nothing was actually written by the malformed turn, so it cannot
+    // trip the out-of-scope check).
+    malformedRecovery: [
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      appendToolAction("scripts/build-verify.mjs", "export function verify() {\n  return true;\n}\n", true),
+      "Created scripts/build-verify.mjs with the required content.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete append attempt; after the rejection, the reference's own single-shot append-plus-answer sequence completes within the 3-turn budget",
+    malformedNegative: [
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+      '{"action":"append","path":"scripts/build-verify.mjs","content":"export function verify',
+    ],
+    malformedNegativeNote: "emits the same truncated append attempt every turn until the budget is exhausted -- the file is never created",
   },
   "toolrel-current-stateful-verify-persistence-001": {
     alternate: [
@@ -1056,6 +1110,30 @@ const STATEFUL_ANSWERS: Record<
     ],
     batchedAlternateNote:
       "batches the patch and the re-check into one spark-style response instead of two separate turns",
+    // Cheap here too: maxTurns=5, reference=4, one turn of slack. A
+    // truncated run attempt at turn 1, then the EXACT reference sequence
+    // unshifted (verify-persistence's strict verbatim-repetition logic is
+    // untouched -- the malformed turn never sets lastRunCommand, since no
+    // real run action was ever parsed).
+    malformedRecovery: [
+      '{"action":"run","command":"npm run test:normalize',
+      runAction("npm run test:normalize-id"),
+      patchToolAction("src/utils/normalize-id.ts", [
+        { search: "  return raw.toLowerCase();", replace: "  return raw.trim().toLowerCase();" },
+      ]),
+      runAction("npm run test:normalize-id"),
+      "Fixed normalizeId to trim whitespace first; the check now passes.",
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete run attempt; after the rejection, the reference's own red/fix/green/answer sequence completes within the 5-turn budget",
+    malformedNegative: [
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+      '{"action":"run","command":"npm run test:normalize',
+    ],
+    malformedNegativeNote: "emits the same truncated run attempt every turn until the budget is exhausted -- the check never actually runs or gets fixed",
   },
 };
 
@@ -1074,6 +1152,10 @@ function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): 
   negativeNote: string;
   batchedAlternate: string[];
   batchedAlternateNote: string;
+  malformedRecovery: string[];
+  malformedRecoveryNote: string;
+  malformedNegative: string[];
+  malformedNegativeNote: string;
 } {
   const [sourcePath, sourceContent] = Object.entries(benchmarkCase.initialFiles)[0]!;
   const targetPath = Object.keys(benchmarkCase.expectedFinalFiles ?? {})[0]!;
@@ -1118,6 +1200,28 @@ function truncationRecoveryAnswers(benchmarkCase: StatefulToolReliabilityCase): 
     ],
     batchedAlternateNote:
       "batches the read with the first write chunk into one spark-style response instead of two separate turns, using a half/half split",
+    // Cheap here too: maxTurns=5, reference=4, one turn of slack. A
+    // truncated append attempt at turn 1 (rejected, nothing written, no
+    // truncatedPathHits recorded -- the malformed-detection branch returns
+    // before any truncation-cap accounting runs), then a read plus a clean
+    // half/half chunked write (each half individually fits under the cap).
+    malformedRecovery: [
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      readRangeAction(sourcePath, 1, sourceContent.split("\n").length),
+      appendToolAction(targetPath, sourceContent.slice(0, half), true),
+      appendToolAction(targetPath, sourceContent.slice(half), false),
+    ],
+    malformedRecoveryNote:
+      "turn 1 is a truncated/incomplete append attempt; after the rejection, a read plus a clean half/half chunked write reconstructs the exact expected content within the 5-turn budget",
+    malformedNegative: [
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+      `{"action":"append","path":"${targetPath}","content":"export const filler`,
+    ],
+    malformedNegativeNote:
+      "emits the same truncated append attempt every turn until the budget is exhausted -- the target file is never created",
   };
 }
 
