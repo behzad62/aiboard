@@ -27,6 +27,18 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
+function withLineEnding(
+  files: Record<string, string>,
+  lineEnding: "\r\n" | "\r"
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, content]) => [
+      path,
+      content.replace(/\r\n?|\n/g, lineEnding),
+    ])
+  );
+}
+
 function runRuntimeVerifier(
   challenge: WorkBenchChallenge,
   files: Record<string, string>
@@ -100,9 +112,24 @@ for (const kind of [
 }
 
 for (const challenge of currentChallenges) {
+  const crlfReferenceFiles = withLineEnding(challenge.referenceFiles, "\r\n");
+  const crReferenceFiles = withLineEnding(challenge.referenceFiles, "\r");
+  const crlfNegativeFiles = withLineEnding(challenge.negativeControlFiles, "\r\n");
   const reference = runWorkBenchChallengeVerifier({
     challenge,
     files: challenge.referenceFiles,
+  });
+  const crlfReference = runWorkBenchChallengeVerifier({
+    challenge,
+    files: crlfReferenceFiles,
+  });
+  const crReference = runWorkBenchChallengeVerifier({
+    challenge,
+    files: crReferenceFiles,
+  });
+  const crlfNegative = runWorkBenchChallengeVerifier({
+    challenge,
+    files: crlfNegativeFiles,
   });
   const negative = runWorkBenchChallengeVerifier({
     challenge,
@@ -122,6 +149,10 @@ for (const challenge of currentChallenges) {
     challenge,
     challenge.referenceFiles
   );
+  const runtimeCrlfReference = runRuntimeVerifier(
+    challenge,
+    crlfReferenceFiles
+  );
   const runtimeNegative = runRuntimeVerifier(
     challenge,
     challenge.negativeControlFiles
@@ -134,6 +165,40 @@ for (const challenge of currentChallenges) {
     `${challenge.id} reference solution passes`,
     reference.passed && reference.score === 1,
     reference
+  );
+  check(
+    `${challenge.id} verifier ignores CRLF-only checkout changes`,
+    crlfReference.passed && crlfReference.score === 1,
+    crlfReference
+  );
+  check(
+    `${challenge.id} runtime verifier ignores CRLF-only checkout changes`,
+    runtimeCrlfReference.passed === true && runtimeCrlfReference.score === 1,
+    runtimeCrlfReference
+  );
+  if (!challenge.verifier.behavioralChecks?.length) {
+    const runtimeCrReference = runRuntimeVerifier(
+      challenge,
+      crReferenceFiles
+    );
+    check(
+      `${challenge.id} verifier ignores bare-CR-only checkout changes`,
+      crReference.passed && crReference.score === 1,
+      crReference
+    );
+    check(
+      `${challenge.id} runtime verifier ignores bare-CR-only checkout changes`,
+      runtimeCrReference.passed === true && runtimeCrReference.score === 1,
+      runtimeCrReference
+    );
+  }
+  check(
+    `${challenge.id} CRLF normalization does not accept the negative control`,
+    !crlfNegative.passed &&
+      crlfNegative.assertions.some(
+        (assertion) => assertion.id !== "diff:max-changed-lines" && !assertion.passed
+      ),
+    crlfNegative
   );
   check(
     `${challenge.id} alternate correct solution differs from the reference`,

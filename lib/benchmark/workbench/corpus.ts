@@ -963,9 +963,11 @@ function totalChangedLines(baseFiles, currentFiles) {
 }
 
 function changedLines(left, right) {
-  if (left === right) return 0;
-  const leftLines = left.split("\n");
-  const rightLines = right.split("\n");
+  const normalizedLeft = left.replace(/\r\n?/g, "\n");
+  const normalizedRight = right.replace(/\r\n?/g, "\n");
+  if (normalizedLeft === normalizedRight) return 0;
+  const leftLines = normalizedLeft.split("\n");
+  const rightLines = normalizedRight.split("\n");
   const lcs = lcsLength(leftLines, rightLines);
   return (leftLines.length - lcs) + (rightLines.length - lcs);
 }
