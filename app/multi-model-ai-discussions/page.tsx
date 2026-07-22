@@ -1,35 +1,36 @@
-import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_NAME, SITE_URL } from "@/lib/site";
+import {
+  SITE_NAME,
+  articleJsonLd,
+  jsonLdScriptProps,
+  pageMetadata,
+} from "@/lib/site";
 
-export const metadata: Metadata = {
+const PATH = "/multi-model-ai-discussions";
+const DESCRIPTION =
+  "Run structured multi-model AI discussions where GPT, Claude, Gemini, and local models critique each other before a judge model synthesizes the answer.";
+
+export const metadata = pageMetadata({
   title: "Multi-Model AI Discussions",
-  description:
-    "Use AI Board to run structured multi-model AI discussions where GPT, Claude, Gemini, OpenRouter models, and local models critique each other before a judge model synthesizes the final answer.",
-  alternates: { canonical: "/multi-model-ai-discussions" },
-  openGraph: {
-    title: `Multi-Model AI Discussions | ${SITE_NAME}`,
-    description:
-      "Run structured conversations between multiple AI models and synthesize a stronger final answer.",
-    url: "/multi-model-ai-discussions",
-  },
-};
+  description: DESCRIPTION,
+  path: PATH,
+  ogType: "article",
+  ogDescription:
+    "Run structured conversations between multiple AI models and synthesize a stronger final answer.",
+});
 
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "Article",
+const jsonLd = articleJsonLd({
   headline: "Multi-Model AI Discussions",
-  description: metadata.description,
-  url: `${SITE_URL}/multi-model-ai-discussions`,
-};
+  description: DESCRIPTION,
+  path: PATH,
+  datePublished: "2026-06-17",
+  dateModified: "2026-06-17",
+});
 
 export default function MultiModelAiDiscussionsPage() {
   return (
     <article className="mx-auto max-w-3xl space-y-10">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <script {...jsonLdScriptProps(jsonLd)} />
       <header className="space-y-3">
         <p className="text-sm font-medium text-primary">AI Board workflow</p>
         <h1 className="font-display text-3xl font-semibold tracking-tight">

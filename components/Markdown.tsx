@@ -92,6 +92,7 @@ const components: Components = {
       alt={alt ?? ""}
       title={title}
       loading="lazy"
+      decoding="async"
     />
   ),
   // Tables need a scroll container so wide markdown tables never blow out layout.
