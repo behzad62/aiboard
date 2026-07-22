@@ -1763,28 +1763,6 @@ function summarizeBenchmarkImport(
   );
   countById(result, "failures", current.benchmarkFailures ?? [], bundle.failures);
   countById(result, "traces", current.benchmarkTraces ?? [], bundle.traces);
-  countById(
-    result,
-    "gameMatches",
-    current.gameMatchRecords ?? [],
-    bundle.sourceEvidence?.gameMatches ?? []
-  );
-  countByKeyPreferNewer(
-    result,
-    "buildCheckpoints",
-    current.buildCheckpoints ?? [],
-    bundle.sourceEvidence?.buildCheckpoints ?? [],
-    (checkpoint) => checkpoint.discussionId,
-    (checkpoint) => checkpoint.updatedAt
-  );
-  countByKeyPreferNewer(
-    result,
-    "modelStats",
-    current.modelStats ?? [],
-    bundle.sourceEvidence?.buildStats ?? [],
-    (stat) => stat.modelId,
-    (stat) => stat.updatedAt
-  );
   countById(result, "caseV2", current.benchmarkCaseV2 ?? [], bundle.caseV2);
   countById(
     result,
@@ -1845,25 +1823,6 @@ function countByKey<T>(
   const existing = new Set(current.map(keyFor));
   for (const item of incoming) {
     incrementImportCount(result, category, existing.has(keyFor(item)) ? "updated" : "added");
-  }
-}
-
-function countByKeyPreferNewer<T>(
-  result: BenchmarkImportResult,
-  category: string,
-  current: T[],
-  incoming: T[],
-  keyFor: (item: T) => string,
-  tsFor: (item: T) => string
-): void {
-  const existing = new Map(current.map((item) => [keyFor(item), item]));
-  for (const item of incoming) {
-    const currentItem = existing.get(keyFor(item));
-    if (!currentItem) {
-      incrementImportCount(result, category, "added");
-    } else if (tsFor(item) >= tsFor(currentItem)) {
-      incrementImportCount(result, category, "updated");
-    }
   }
 }
 

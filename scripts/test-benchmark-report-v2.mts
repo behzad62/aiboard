@@ -292,7 +292,7 @@ await importBenchmarkReportBundleV2({
   },
 });
 check(
-  "stale modelStats not clobbered",
+  "legacy modelStats source evidence is ignored",
   __exportBenchmarkStoreForTests().modelStats?.find((stat) => stat.modelId === "openai:gpt-merge")?.updatedAt ===
     "2026-06-30T00:00:00.000Z",
   __exportBenchmarkStoreForTests().modelStats
@@ -306,14 +306,14 @@ const newerModelStatsImport = await importBenchmarkReportBundleV2({
   },
 });
 check(
-  "newer modelStats replaces older local",
+  "newer legacy modelStats source evidence is ignored",
   __exportBenchmarkStoreForTests().modelStats?.find((stat) => stat.modelId === "openai:gpt-merge")?.updatedAt ===
-    "2026-07-01T00:00:00.000Z",
+    "2026-06-30T00:00:00.000Z",
   __exportBenchmarkStoreForTests().modelStats
 );
 check(
-  "modelStats import reports an existing record update",
-  (newerModelStatsImport?.updatedCount ?? 0) >= 1,
+  "ignored modelStats source evidence is not reported as an update",
+  (newerModelStatsImport?.updatedByCategory.modelStats ?? 0) === 0,
   newerModelStatsImport
 );
 
@@ -328,12 +328,12 @@ await importBenchmarkReportBundleV2({
   },
 });
 check(
-  "stale buildCheckpoint not clobbered",
+  "legacy buildCheckpoint source evidence is ignored",
   __exportBenchmarkStoreForTests().buildCheckpoints?.find((item) => item.discussionId === "discussion-merge")?.updatedAt ===
     "2026-06-30T00:00:00.000Z",
   __exportBenchmarkStoreForTests().buildCheckpoints
 );
-await importBenchmarkReportBundleV2({
+const newerBuildCheckpointImport = await importBenchmarkReportBundleV2({
   ...bundle,
   sourceEvidence: {
     gameMatches: [],
@@ -342,10 +342,15 @@ await importBenchmarkReportBundleV2({
   },
 });
 check(
-  "newer buildCheckpoint replaces older local",
+  "newer legacy buildCheckpoint source evidence is ignored",
   __exportBenchmarkStoreForTests().buildCheckpoints?.find((item) => item.discussionId === "discussion-merge")?.updatedAt ===
-    "2026-07-01T00:00:00.000Z",
+    "2026-06-30T00:00:00.000Z",
   __exportBenchmarkStoreForTests().buildCheckpoints
+);
+check(
+  "ignored buildCheckpoint source evidence is not reported as an update",
+  (newerBuildCheckpointImport?.updatedByCategory.buildCheckpoints ?? 0) === 0,
+  newerBuildCheckpointImport
 );
 
 const certified = buildCertifiedBenchmarkDashboardData({
