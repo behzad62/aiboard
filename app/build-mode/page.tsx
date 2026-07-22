@@ -1,35 +1,31 @@
-import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_NAME, SITE_URL } from "@/lib/site";
+import { articleJsonLd, jsonLdScriptProps, pageMetadata } from "@/lib/site";
 
-export const metadata: Metadata = {
+const PATH = "/build-mode";
+const DESCRIPTION =
+  "Build mode turns a judge model into an architect that plans coding tasks, assigns worker models, reviews their output, and writes files locally.";
+
+export const metadata = pageMetadata({
   title: "Build Mode",
-  description:
-    "AI Board Build mode turns a judge model into an architect that plans coding tasks, assigns worker models, reviews their output, and writes files through a local-first workflow.",
-  alternates: { canonical: "/build-mode" },
-  openGraph: {
-    title: `Build Mode | ${SITE_NAME}`,
-    description:
-      "Use multiple AI models as an architect-and-worker team for coding tasks.",
-    url: "/build-mode",
-  },
-};
+  description: DESCRIPTION,
+  path: PATH,
+  ogType: "article",
+  ogDescription:
+    "Use multiple AI models as an architect-and-worker team for coding tasks.",
+});
 
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "Article",
+const jsonLd = articleJsonLd({
   headline: "Build Mode",
-  description: metadata.description,
-  url: `${SITE_URL}/build-mode`,
-};
+  description: DESCRIPTION,
+  path: PATH,
+  datePublished: "2026-06-17",
+  dateModified: "2026-07-13",
+});
 
 export default function BuildModePage() {
   return (
     <article className="mx-auto max-w-3xl space-y-10">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <script {...jsonLdScriptProps(jsonLd)} />
       <header className="space-y-3">
         <p className="text-sm font-medium text-primary">AI Board workflow</p>
         <h1 className="font-display text-3xl font-semibold tracking-tight">

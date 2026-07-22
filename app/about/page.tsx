@@ -1,17 +1,49 @@
-import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_CONTACT_EMAIL, SITE_GITHUB_URL, SITE_NAME } from "@/lib/site";
+import {
+  SITE_CONTACT_EMAIL,
+  SITE_GITHUB_URL,
+  SITE_NAME,
+  faqJsonLd,
+  jsonLdScriptProps,
+  pageMetadata,
+} from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata = pageMetadata({
   title: "About",
   description:
-    "How AI Board works: multi-model panel, debate, specialist, and build modes; judge synthesis; and a local-first design where your API keys never leave your browser.",
-  alternates: { canonical: "/about" },
-};
+    "How AI Board works: panel, debate, specialist, and build modes; judge synthesis; and a local-first design where your API keys never leave your browser.",
+  path: "/about",
+});
+
+// Rendered below AND emitted as FAQPage JSON-LD — Google requires the answer
+// text to be visible on the page, so both come from this one array.
+const FAQ = [
+  {
+    question: "Is it free?",
+    answer:
+      "The app itself is free and open source. You pay your AI providers directly for the tokens the discussion uses; the app shows a cost estimate before you start.",
+  },
+  {
+    question: "Which API keys do I need?",
+    answer:
+      "At least one provider key (OpenAI, Anthropic, Google, or OpenRouter) — two or more models make discussions worthwhile. Local models via Ollama or LM Studio need no key at all.",
+  },
+  {
+    question: "Can I use it offline?",
+    answer:
+      "The app loads as a static site, but discussions need network access to reach the AI providers — unless you use only local models on your own machine.",
+  },
+  {
+    question: "Can I use my ChatGPT subscription instead of an API key?",
+    answer:
+      "Yes. Connect a ChatGPT Plus/Pro or GitHub Copilot account through the local account runner and its models appear alongside your API-key models — in discussions, in Build mode, and in the games. Rate limits and availability are governed by your provider account.",
+  },
+];
 
 export default function AboutPage() {
   return (
     <article className="mx-auto max-w-3xl space-y-10">
+      <script {...jsonLdScriptProps(faqJsonLd(FAQ))} />
       <header>
         <h1 className="font-display text-3xl font-semibold tracking-tight">
           About {SITE_NAME}
@@ -85,6 +117,34 @@ export default function AboutPage() {
       </section>
 
       <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">
+          Use an AI account you already pay for
+        </h2>
+        <p>
+          If you subscribe to ChatGPT Plus/Pro or GitHub Copilot, you can point{" "}
+          {SITE_NAME} at that account instead of entering per-token API keys. A
+          small account runner runs on your machine, you authorize it once with
+          OpenAI or GitHub, and the app talks to it over localhost — the login
+          stays in a file on your computer.
+        </p>
+        <p>
+          A connected account works everywhere the app uses models: discussions,
+          Build mode, and the{" "}
+          <Link href="/games" className="underline hover:text-foreground">
+            games
+          </Link>
+          . That last one is the fun part — you can play chess, Connect Four,
+          Battleship, Codenames, or Fireworks against GPT-5.5, or sit out and
+          watch two models play each other.
+        </p>
+        <p>
+          This draws on your account&apos;s own entitlement, so rate limits,
+          model availability, and behavior are set by OpenAI or GitHub rather
+          than by {SITE_NAME}.
+        </p>
+      </section>
+
+      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Contact</h2>
         <p>
           For feedback, bug reports, privacy questions, or collaboration,
@@ -147,30 +207,12 @@ export default function AboutPage() {
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">FAQ</h2>
         <dl className="space-y-4">
-          <div>
-            <dt className="font-semibold">Is it free?</dt>
-            <dd className="text-muted-foreground">
-              The app itself is free and open source. You pay your AI
-              providers directly for the tokens the discussion uses; the app
-              shows a cost estimate before you start.
-            </dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Which API keys do I need?</dt>
-            <dd className="text-muted-foreground">
-              At least one provider key (OpenAI, Anthropic, Google, or
-              OpenRouter) — two or more models make discussions worthwhile.
-              Local models via Ollama or LM Studio need no key at all.
-            </dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Can I use it offline?</dt>
-            <dd className="text-muted-foreground">
-              The app loads as a static site, but discussions need network
-              access to reach the AI providers — unless you use only local
-              models on your own machine.
-            </dd>
-          </div>
+          {FAQ.map((entry) => (
+            <div key={entry.question}>
+              <dt className="font-semibold">{entry.question}</dt>
+              <dd className="text-muted-foreground">{entry.answer}</dd>
+            </div>
+          ))}
         </dl>
       </section>
 

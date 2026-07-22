@@ -1,35 +1,36 @@
-import type { Metadata } from "next";
 import Link from "next/link";
-import { SITE_NAME, SITE_URL } from "@/lib/site";
+import {
+  SITE_NAME,
+  articleJsonLd,
+  jsonLdScriptProps,
+  pageMetadata,
+} from "@/lib/site";
 
-export const metadata: Metadata = {
+const PATH = "/ai-debate-tool";
+const DESCRIPTION =
+  "Use AI Board as an AI debate tool: assign models opposing positions, surface trade-offs, and let a judge model produce a balanced final answer.";
+
+export const metadata = pageMetadata({
   title: "AI Debate Tool",
-  description:
-    "Use AI Board as an AI debate tool: assign models opposing positions, surface trade-offs, and let a judge model produce a balanced final answer.",
-  alternates: { canonical: "/ai-debate-tool" },
-  openGraph: {
-    title: `AI Debate Tool | ${SITE_NAME}`,
-    description:
-      "Use multiple AI models to argue competing positions before synthesizing the best answer.",
-    url: "/ai-debate-tool",
-  },
-};
+  description: DESCRIPTION,
+  path: PATH,
+  ogType: "article",
+  ogDescription:
+    "Use multiple AI models to argue competing positions before synthesizing the best answer.",
+});
 
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "Article",
+const jsonLd = articleJsonLd({
   headline: "AI Debate Tool",
-  description: metadata.description,
-  url: `${SITE_URL}/ai-debate-tool`,
-};
+  description: DESCRIPTION,
+  path: PATH,
+  datePublished: "2026-06-17",
+  dateModified: "2026-06-17",
+});
 
 export default function AiDebateToolPage() {
   return (
     <article className="mx-auto max-w-3xl space-y-10">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <script {...jsonLdScriptProps(jsonLd)} />
       <header className="space-y-3">
         <p className="text-sm font-medium text-primary">AI Board workflow</p>
         <h1 className="font-display text-3xl font-semibold tracking-tight">

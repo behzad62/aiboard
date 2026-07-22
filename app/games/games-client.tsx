@@ -1,23 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { GamePicker } from "@/components/games/GamePicker";
-import { getGameCatalog } from "@/lib/games/catalog";
+import { getGameCatalog, getGameDescriptor } from "@/lib/games/catalog";
 import { listGameSessions } from "@/lib/games/core/session-store";
 import type { GameSessionRecord } from "@/lib/games/core/types";
-import { BattleshipGameClient } from "./battleship-game-client";
-import { ChessGameClient } from "./chess-game-client";
-import { CodenamesGameClient } from "./codenames-game-client";
-import { ConnectFourGameClient } from "./connect-four-game-client";
-import { FireworksGameClient } from "./fireworks-game-client";
-
-type SelectedGame =
-  | "picker"
-  | "chess"
-  | "connect-four"
-  | "battleship"
-  | "codenames"
-  | "fireworks";
 
 const ACTIVE_SESSION_STATUSES = new Set<GameSessionRecord["status"]>([
   "active",
@@ -25,7 +13,7 @@ const ACTIVE_SESSION_STATUSES = new Set<GameSessionRecord["status"]>([
 ]);
 
 export function GamesClient() {
-  const [selectedGame, setSelectedGame] = useState<SelectedGame>("picker");
+  const router = useRouter();
   const [resumableSessions, setResumableSessions] = useState<GameSessionRecord[]>(
     []
   );
@@ -38,48 +26,18 @@ export function GamesClient() {
   }, []);
 
   useEffect(() => {
-    if (selectedGame === "picker") {
-      void loadResumableSessions();
-    }
-  }, [loadResumableSessions, selectedGame]);
-
-  const handleBackToGames = useCallback(() => {
-    setSelectedGame("picker");
-  }, []);
-
-  if (selectedGame === "chess") {
-    return <ChessGameClient onBackToGames={handleBackToGames} />;
-  }
-
-  if (selectedGame === "connect-four") {
-    return <ConnectFourGameClient onBackToGames={handleBackToGames} />;
-  }
-
-  if (selectedGame === "battleship") {
-    return <BattleshipGameClient onBackToGames={handleBackToGames} />;
-  }
-
-  if (selectedGame === "codenames") {
-    return <CodenamesGameClient onBackToGames={handleBackToGames} />;
-  }
-
-  if (selectedGame === "fireworks") {
-    return <FireworksGameClient onBackToGames={handleBackToGames} />;
-  }
+    void loadResumableSessions();
+  }, [loadResumableSessions]);
 
   return (
     <GamePicker
       games={getGameCatalog()}
       resumableSessions={resumableSessions}
       onSelectGame={(gameId) => {
-        if (
-          gameId === "chess" ||
-          gameId === "connect-four" ||
-          gameId === "battleship" ||
-          gameId === "codenames" ||
-          gameId === "fireworks"
-        ) {
-          setSelectedGame(gameId);
+        // Each game is a real route now, so it gets its own URL, its own title
+        // and description, and a working browser back button.
+        if (getGameDescriptor(gameId)) {
+          router.push(`/games/${gameId}`);
         }
       }}
     />

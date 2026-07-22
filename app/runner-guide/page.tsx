@@ -1,11 +1,12 @@
-import type { Metadata } from "next";
 import Link from "next/link";
+import { pageMetadata } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata = pageMetadata({
   title: "Runner V2 guide",
-  description: "Start and connect the mandatory native Runner V2 agent kernel for AI Board Build mode.",
-  alternates: { canonical: "/runner-guide" },
-};
+  description:
+    "Install, start, and connect the native Runner V2 agent kernel that AI Board Build mode uses for real file, Git, and shell access.",
+  path: "/runner-guide",
+});
 
 export default function RunnerGuidePage() {
   return (

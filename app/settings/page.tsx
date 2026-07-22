@@ -1,11 +1,14 @@
-import type { Metadata } from "next";
 import SettingsClient from "./settings-client";
+import { pageMetadata } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata = pageMetadata({
   title: "Settings",
+  description:
+    "Configure provider API keys, models, pricing, defaults, storage, and encryption for AI Board. Everything stays in your browser.",
+  path: "/settings",
   // Per-user configuration page — nothing useful for search engines.
-  robots: { index: false },
-};
+  noindex: true,
+});
 
 export default function SettingsPage() {
   return <SettingsClient />;
