@@ -197,7 +197,11 @@ export class NativeBuildFactory {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       managedProcesses: this.managedProcesses,
       ...(spec.benchmark
-        ? { allowedCommands: spec.benchmark.allowedCommands }
+        ? {
+            allowedCommands: spec.benchmark.allowedCommands,
+            hiddenPaths: spec.benchmark.hiddenPaths,
+            protectedPaths: spec.benchmark.protectedPaths,
+          }
         : {}),
     });
     const architectDriver = new NativeArchitectRuntime({
@@ -217,7 +221,11 @@ export class NativeBuildFactory {
       objective: spec.objective,
       runPolicy: spec.runPolicy,
       ...(spec.benchmark
-        ? { allowedCommands: spec.benchmark.allowedCommands }
+        ? {
+            allowedCommands: spec.benchmark.allowedCommands,
+            hiddenPaths: spec.benchmark.hiddenPaths,
+            protectedPaths: spec.benchmark.protectedPaths,
+          }
         : {}),
       budgetLedger,
       modelCostEstimators,

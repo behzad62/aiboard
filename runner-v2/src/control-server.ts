@@ -346,6 +346,8 @@ export class ControlServer {
                   benchmark: {
                     attemptId: body.build.benchmark.attemptId,
                     allowedCommands: [...body.build.benchmark.allowedCommands],
+                    hiddenPaths: [...body.build.benchmark.hiddenPaths],
+                    protectedPaths: [...body.build.benchmark.protectedPaths],
                   },
                 }
               : {}),
@@ -907,9 +909,17 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
       !Array.isArray(body.benchmark.allowedCommands) ||
       body.benchmark.allowedCommands.some((command) => !isNonEmptyString(command)) ||
       new Set(body.benchmark.allowedCommands.map((command) => command.trim())).size !==
-        body.benchmark.allowedCommands.length
+        body.benchmark.allowedCommands.length ||
+      !isUniqueNonEmptyStringArray(body.benchmark.hiddenPaths) ||
+      !isUniqueNonEmptyStringArray(body.benchmark.protectedPaths)
     ) invalidBody();
   }
+}
+
+function isUniqueNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.every((entry) => isNonEmptyString(entry)) &&
+    new Set(value.map((entry) => entry.trim())).size === value.length;
 }
 
 function redactProviderConfig(config: RunnerProviderConfig) {

@@ -73,26 +73,30 @@ test("native Build specs validate and clone benchmark command policy", () => {
     benchmark: {
       attemptId: "attempt_1",
       allowedCommands: ["npm test", "node verifier.mjs"],
+      hiddenPaths: ["case-meta.json"],
+      protectedPaths: ["case-meta.json", "verifier.mjs"],
     },
   };
   assert.doesNotThrow(() => validateBuildSpec(benchmarkSpec));
   assert.throws(
     () => validateBuildSpec({
       ...benchmarkSpec,
-      benchmark: { attemptId: "", allowedCommands: ["npm test"] },
+      benchmark: { ...benchmarkSpec.benchmark!, attemptId: "" },
     }),
     /benchmark attempt/i
   );
   assert.throws(
     () => validateBuildSpec({
       ...benchmarkSpec,
-      benchmark: { attemptId: "attempt_1", allowedCommands: ["npm test", "npm test"] },
+      benchmark: { ...benchmarkSpec.benchmark!, allowedCommands: ["npm test", "npm test"] },
     }),
     /duplicate benchmark command/i
   );
   const cloned = cloneBuildSpec(benchmarkSpec);
   cloned.benchmark!.allowedCommands.push("npm lint");
+  cloned.benchmark!.hiddenPaths.push("secret.json");
   assert.deepEqual(benchmarkSpec.benchmark!.allowedCommands, ["npm test", "node verifier.mjs"]);
+  assert.deepEqual(benchmarkSpec.benchmark!.hiddenPaths, ["case-meta.json"]);
 });
 
 test("native Build specs recover exactly and idempotently", () => {

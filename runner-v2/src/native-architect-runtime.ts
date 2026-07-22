@@ -90,6 +90,8 @@ export interface NativeArchitectRuntimeOptions {
   mcpManager?: McpManager;
   runPolicy?: NativeBuildRunPolicy;
   allowedCommands?: readonly string[];
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -194,6 +196,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     for (const tool of createFilesystemTools({
       artifacts: this.options.artifacts,
       repository,
+      ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
+      ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
     })) {
       if (tool.definition.readOnly) extras.register(tool);
     }

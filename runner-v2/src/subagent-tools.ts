@@ -67,6 +67,8 @@ export interface SubagentToolsOptions {
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
   allowedCommands?: readonly string[];
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 export function createSubagentTools(
@@ -165,6 +167,8 @@ function spawnSubagentTool(
         artifacts: options.artifacts,
         repository,
         diagnostics: typescript,
+        ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
+        ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
       }
@@ -214,6 +218,7 @@ function spawnSubagentTool(
           artifacts: options.artifacts,
           taskId: options.taskId,
           clock,
+          ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
         })) broker.register(tool);
       }
       if (options.skillCatalog) {

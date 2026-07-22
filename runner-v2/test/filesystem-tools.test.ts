@@ -482,6 +482,61 @@ test("diagnostic failures never roll back a successful atomic mutation", async (
   }
 });
 
+test("benchmark filesystem policy hides oracle files and protects verifier assets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-benchmark-policy-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "case-meta.json"), '{"secret":true}\n');
+  writeFileSync(join(workspace, "verifier.mjs"), "export default true;\n");
+  writeFileSync(join(workspace, "visible.txt"), "public\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({
+    permissionProfile: "project",
+    workspacePath: workspace,
+    artifacts,
+  });
+  for (const tool of createFilesystemTools({
+    artifacts,
+    repository: new RepositoryIntelligence(),
+    hiddenPaths: ["case-meta.json"],
+    protectedPaths: ["case-meta.json", "verifier.mjs"],
+  })) broker.register(tool);
+
+  try {
+    const listing = await invoke(broker, "list", "fs.list", { path: ".", maxDepth: 2 });
+    assert.equal(listing.isError, false);
+    assert.doesNotMatch(JSON.stringify(json(listing)), /case-meta\.json/);
+    assert.match(JSON.stringify(json(listing)), /visible\.txt/);
+
+    const search = await invoke(broker, "search", "fs.search", {
+      path: ".",
+      pattern: "secret",
+    });
+    assert.equal(search.isError, false);
+    assert.deepEqual(searchPaths(search), []);
+
+    const hiddenRead = await invoke(broker, "read_hidden", "fs.read", {
+      path: "case-meta.json",
+    });
+    assert.equal(hiddenRead.isError, true);
+    assert.match(text(hiddenRead), /benchmark_hidden_path/);
+
+    for (const [index, [name, input]] of ([
+      ["fs.write", { path: "verifier.mjs", content: "tampered\n" }],
+      ["fs.delete", { path: "verifier.mjs" }],
+      ["fs.move", { source: "verifier.mjs", destination: "moved.mjs" }],
+      ["fs.move", { source: "visible.txt", destination: "case-meta.json" }],
+    ] as const).entries()) {
+      const denied = await invoke(broker, `denied_${index}`, name, input);
+      assert.equal(denied.isError, true, `${name} should be denied`);
+      assert.match(text(denied), /benchmark_protected_path/);
+    }
+    assert.equal(readFileSync(join(workspace, "verifier.mjs"), "utf8"), "export default true;\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function brokerWithFilesystem(
   workspace: string,
   artifacts: ArtifactStore,

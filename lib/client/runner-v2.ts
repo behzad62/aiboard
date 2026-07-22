@@ -73,6 +73,8 @@ export interface CreateNativeBuildInput {
     benchmark?: {
       attemptId: string;
       allowedCommands: string[];
+      hiddenPaths: string[];
+      protectedPaths: string[];
     };
   };
 }

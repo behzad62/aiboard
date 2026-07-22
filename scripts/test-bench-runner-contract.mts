@@ -206,6 +206,16 @@ try {
     nativeHealthResponse.status === 200 && nativeHealth.projectPath === attemptRoot,
     nativeHealth
   );
+  const restored = await request(baseUrl, "/bench/attempt-runner/restore-oracle", token, { attemptId });
+  const restoredOracle = await access(join(attemptRoot, "case-meta.json")).then(
+    () => true,
+    () => false
+  );
+  check(
+    "managed bridge restores verifier oracle only after Runner V2 starts",
+    restored.status === 200 && restored.data.restored === true && restoredOracle,
+    restored
+  );
   const managedStop = await request(baseUrl, "/bench/attempt-runner/stop", token, { attemptId });
   check("managed attempt runner stops idempotently", managedStop.status === 200 && managedStop.data.running === false, managedStop);
   const managedStopAgain = await request(baseUrl, "/bench/attempt-runner/stop", token, { attemptId });

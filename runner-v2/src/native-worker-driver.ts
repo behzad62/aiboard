@@ -67,6 +67,8 @@ export interface NativeWorkerDriverOptions {
   modelCostBases?: ReadonlyMap<string, ModelCostBasisSnapshot>;
   clock?: () => string;
   allowedCommands?: readonly string[];
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -207,6 +209,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.allowedCommands
           ? { allowedCommands: this.options.allowedCommands }
           : {}),
+        ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
+        ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
         ...(this.options.browserBackend
           ? { browserBackend: this.options.browserBackend }
           : {}),

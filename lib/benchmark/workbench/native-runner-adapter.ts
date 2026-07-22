@@ -8,6 +8,7 @@ import { createJsonArtifact } from "@/lib/benchmark/artifacts";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import {
   startManagedAttemptRunner,
+  restoreManagedAttemptOracle,
   stopManagedAttemptRunner,
   type ManagedAttemptRunnerResult,
 } from "@/lib/client/bench-runner";
@@ -36,6 +37,18 @@ import type { SelectedModel } from "@/lib/providers/base";
 import type { WorkBenchBuildAdapterInput } from "./build-adapter";
 import type { WorkBenchBuildExecutionResult } from "./types";
 
+const WORKBENCH_HIDDEN_PATHS = [
+  "case-meta.json",
+  "negative-control.json",
+  "reference-solution.md",
+  ".bench-run.json",
+];
+const WORKBENCH_PROTECTED_PATHS = [
+  ...WORKBENCH_HIDDEN_PATHS,
+  "verifier.mjs",
+  "verifier-result.json",
+];
+
 export interface NativeWorkBenchBuildInput extends WorkBenchBuildAdapterInput {
   context: CertifiedRunContext;
   models: SelectedModel[];
@@ -44,6 +57,7 @@ export interface NativeWorkBenchBuildInput extends WorkBenchBuildAdapterInput {
 
 export interface NativeWorkBenchDependencies {
   startManagedAttemptRunner: typeof startManagedAttemptRunner;
+  restoreManagedAttemptOracle: typeof restoreManagedAttemptOracle;
   stopManagedAttemptRunner: typeof stopManagedAttemptRunner;
   getNativeRunnerHealth: typeof getNativeRunnerHealth;
   createProviderConfigs: (
@@ -75,6 +89,7 @@ export class NativeWorkBenchExecutionError extends Error {
 
 const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
   startManagedAttemptRunner,
+  restoreManagedAttemptOracle,
   stopManagedAttemptRunner,
   getNativeRunnerHealth,
   createProviderConfigs: (runtimeIds, reasoningEffort) =>
@@ -115,6 +130,9 @@ export async function runNativeWorkBenchBuild(
     if (health.projectPath !== managed.projectPath) {
       throw new Error("Managed Runner V2 project path does not match the prepared attempt.");
     }
+    await dependencies.restoreManagedAttemptOracle(input.runner, {
+      attemptId: input.attemptId,
+    });
     const roleMapping = nativeWorkBenchRoles(input.teamComposition, input.models);
     const configuredRuntimeIds = uniqueStrings([
       roleMapping.architectRuntimeId,
@@ -145,6 +163,8 @@ export async function runNativeWorkBenchBuild(
         benchmark: {
           attemptId: input.attemptId,
           allowedCommands: [...input.allowedCommands],
+          hiddenPaths: [...WORKBENCH_HIDDEN_PATHS],
+          protectedPaths: [...WORKBENCH_PROTECTED_PATHS],
         },
       },
     });

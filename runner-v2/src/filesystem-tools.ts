@@ -30,6 +30,8 @@ export interface FilesystemToolsOptions {
   maxReadBytes?: number;
   maxEntries?: number;
   maxSearchMatches?: number;
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 type Input = Record<string, unknown>;
@@ -70,6 +72,9 @@ export function createFilesystemTools(
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
+        if (matchesPolicyPath(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
         const bytes = await readFile(path);
         const hash = sha256(bytes);
         const baseMetadata = {
@@ -187,6 +192,9 @@ export function createFilesystemTools(
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
+        if (matchesPolicyPath(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
         const details = await lstat(path);
         return {
           content: [
@@ -235,8 +243,11 @@ export function createFilesystemTools(
             return true;
           }, context.signal);
         }
-        entries.sort((left, right) => left.path.localeCompare(right.path));
-        return { content: [json({ entries, truncated: entries.length >= maxEntries })], isError: false };
+        const visibleEntries = entries.filter(
+          (entry) => !matchesNormalizedPolicyPath(entry.path, options.hiddenPaths)
+        );
+        visibleEntries.sort((left, right) => left.path.localeCompare(right.path));
+        return { content: [json({ entries: visibleEntries, truncated: entries.length >= maxEntries })], isError: false };
       },
     },
     {
@@ -263,6 +274,7 @@ export function createFilesystemTools(
         const matches: Array<{ path: string; line: number; column: number; text: string }> = [];
         const searchFile = async (path: string): Promise<boolean> => {
           if (matches.length >= limit) return false;
+          if (matchesPolicyPath(context, path, options.hiddenPaths)) return true;
           const bytes = await readFile(path);
           if (!isUtf8Text(bytes)) return true;
           const lines = decodeText(bytes).split(/\r?\n/);
@@ -324,6 +336,9 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
           if (input.createDirectories === true) await mkdir(dirname(path), { recursive: true });
           const conflict = await checkExpected(context, path, input.expectedSha256);
           if (conflict) return conflict;
@@ -344,6 +359,9 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
           const bytes = await readFile(path);
           if (sha256(bytes) !== input.expectedSha256) {
             return revisionConflict(
@@ -398,6 +416,12 @@ export function createFilesystemTools(
         await mutate(async () => {
           const source = toolPath(context, input.source as string);
           const destination = toolPath(context, input.destination as string);
+          if (matchesPolicyPath(context, source, options.protectedPaths)) {
+            return protectedPathError(context, source);
+          }
+          if (matchesPolicyPath(context, destination, options.protectedPaths)) {
+            return protectedPathError(context, destination);
+          }
           if (input.createDirectories === true) await mkdir(dirname(destination), { recursive: true });
           await rename(source, destination);
           return {
@@ -417,6 +441,9 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
           await rm(path, { recursive: input.recursive === true, force: false });
           return { content: [json({ path: displayPath(context, path), deleted: true })], isError: false };
         }),
@@ -717,6 +744,52 @@ function toolPath(context: ToolExecutionContext, path: string): string {
 function displayPath(context: ToolExecutionContext, path: string): string {
   const value = context.workspacePath ? relative(context.workspacePath, path) : path;
   return (value || ".").split(sep).join("/");
+}
+
+function normalizePolicyPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+}
+
+function matchesNormalizedPolicyPath(
+  path: string,
+  policyPaths: readonly string[] | undefined,
+): boolean {
+  const candidate = normalizePolicyPath(path);
+  return (policyPaths ?? []).some((policyPath) => {
+    const protectedPath = normalizePolicyPath(policyPath);
+    if (!protectedPath.includes("/")) {
+      return candidate.split("/").includes(protectedPath);
+    }
+    return candidate === protectedPath || candidate.startsWith(`${protectedPath}/`);
+  });
+}
+
+function matchesPolicyPath(
+  context: ToolExecutionContext,
+  path: string,
+  policyPaths: readonly string[] | undefined,
+): boolean {
+  return matchesNormalizedPolicyPath(displayPath(context, path), policyPaths);
+}
+
+function hiddenPathError(
+  context: ToolExecutionContext,
+  path: string,
+): ToolExecutionOutput {
+  return error(
+    "benchmark_hidden_path",
+    `benchmark_hidden_path: ${displayPath(context, path)} is unavailable to benchmark agents.`,
+  );
+}
+
+function protectedPathError(
+  context: ToolExecutionContext,
+  path: string,
+): ToolExecutionOutput {
+  return error(
+    "benchmark_protected_path",
+    `benchmark_protected_path: ${displayPath(context, path)} cannot be modified by benchmark agents.`,
+  );
 }
 
 async function walk(

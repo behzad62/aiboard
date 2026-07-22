@@ -34,6 +34,11 @@ export interface ManagedAttemptRunnerResult {
   nodeVersion?: string;
 }
 
+export interface RestoreAttemptOracleResult {
+  attemptId: string;
+  restored: boolean;
+}
+
 export interface PrepareBenchCaseInput {
   attemptId?: string;
   caseId: string;
@@ -147,6 +152,13 @@ export function getManagedAttemptRunner(
   input: BenchAttemptInput
 ): Promise<ManagedAttemptRunnerResult> {
   return requestJson(config, "/bench/attempt-runner/status", input);
+}
+
+export function restoreManagedAttemptOracle(
+  config: BenchRunnerConfig,
+  input: BenchAttemptInput
+): Promise<RestoreAttemptOracleResult> {
+  return requestJson(config, "/bench/attempt-runner/restore-oracle", input);
 }
 
 export function stopManagedAttemptRunner(

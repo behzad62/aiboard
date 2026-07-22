@@ -80,6 +80,8 @@ export interface RunWorkerTaskOptions {
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
   allowedCommands?: readonly string[];
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
 }
 
 export interface WorkerTaskResult {
@@ -138,6 +140,8 @@ export async function runWorkerTask(
     artifacts: options.artifacts,
     repository,
     diagnostics: typescript,
+    ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
+    ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) {
     broker.register(tool);
   }
@@ -183,6 +187,7 @@ export async function runWorkerTask(
       artifacts: options.artifacts,
       taskId: options.taskId,
       clock,
+      ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
     })) broker.register(tool);
   }
   if (options.skillCatalog) {
@@ -233,6 +238,8 @@ export async function runWorkerTask(
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
+    ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
+    ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;

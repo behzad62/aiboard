@@ -183,6 +183,15 @@ async function route(pathname, body) {
       return startAttemptRunner(body);
     case "/bench/attempt-runner/status":
       return statusAttemptRunner(body);
+    case "/bench/attempt-runner/restore-oracle":
+      return withAttempt(body, async ({ attemptRoot, meta }) => {
+        const liveRunner = managedAttemptRunners.get(meta.attemptId);
+        if (!liveRunner || liveRunner.child.exitCode !== null) {
+          throw new HttpError(409, "Runner V2 must be running before oracle restoration.");
+        }
+        await restoreOracleFiles(attemptRoot, meta);
+        return { attemptId: meta.attemptId, restored: true };
+      });
     case "/bench/attempt-runner/stop":
       return stopAttemptRunner(body);
     default:

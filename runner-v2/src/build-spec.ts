@@ -7,6 +7,8 @@ export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 export interface NativeBuildBenchmarkPolicy {
   attemptId: string;
   allowedCommands: string[];
+  hiddenPaths: string[];
+  protectedPaths: string[];
 }
 
 export interface NativeBuildSpec {
@@ -75,6 +77,17 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     if (new Set(normalized).size !== normalized.length) {
       throw new Error("Build spec contains a duplicate benchmark command.");
     }
+    for (const [label, paths] of [
+      ["hidden", spec.benchmark.hiddenPaths],
+      ["protected", spec.benchmark.protectedPaths],
+    ] as const) {
+      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !path.trim())) {
+        throw new Error(`Build spec benchmark ${label} paths must be non-empty strings.`);
+      }
+      if (new Set(paths.map((path) => path.trim())).size !== paths.length) {
+        throw new Error(`Build spec contains a duplicate benchmark ${label} path.`);
+      }
+    }
   }
 }
 
@@ -125,6 +138,8 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
           benchmark: {
             attemptId: spec.benchmark.attemptId,
             allowedCommands: [...spec.benchmark.allowedCommands],
+            hiddenPaths: [...spec.benchmark.hiddenPaths],
+            protectedPaths: [...spec.benchmark.protectedPaths],
           },
         }
       : {}),

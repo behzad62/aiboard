@@ -136,6 +136,7 @@ const recordedTraces: unknown[] = [];
 const recordedTools: unknown[] = [];
 const recordedArtifacts: unknown[] = [];
 let projectionReads = 0;
+let createdBuild: Record<string, unknown> | undefined;
 const result = await runNativeWorkBenchBuild(
   {
     attemptId: "attempt_1",
@@ -177,6 +178,10 @@ const result = await runNativeWorkBenchBuild(
         statePath: "C:\\runner-state",
       };
     },
+    restoreManagedAttemptOracle: async () => {
+      calls.push("restore-oracle");
+      return { attemptId: "attempt_1", restored: true };
+    },
     stopManagedAttemptRunner: async () => {
       calls.push("stop-child");
       return {
@@ -194,7 +199,10 @@ const result = await runNativeWorkBenchBuild(
     }),
     createProviderConfigs: () => [{ runtimeId: "chatgpt:gpt-5.4-mini" }] as never,
     configureNativeProviders: async () => { calls.push("configure"); },
-    createNativeBuild: async () => { calls.push("create-build"); },
+    createNativeBuild: async (_connection, input) => {
+      calls.push("create-build");
+      createdBuild = input as unknown as Record<string, unknown>;
+    },
     commandNativeRun: async () => { calls.push("start-build"); },
     getNativeRun: async () => ({ state: "running" }) as never,
     getNativeBuild: async () => {
@@ -235,12 +243,19 @@ const result = await runNativeWorkBenchBuild(
 );
 assert.deepEqual(calls, [
   "start-child",
+  "restore-oracle",
   "configure",
   "create-build",
   "start-build",
   "apply-handoff",
   "stop-child",
 ]);
+const benchmarkPolicy = ((createdBuild?.build as Record<string, unknown>)?.benchmark ?? {}) as {
+  hiddenPaths?: string[];
+  protectedPaths?: string[];
+};
+assert.ok(benchmarkPolicy.hiddenPaths?.includes("case-meta.json"));
+assert.ok(benchmarkPolicy.protectedPaths?.includes("verifier.mjs"));
 assert.equal(result.modelCalls, 1);
 assert.equal(result.toolCalls, 2);
 assert.equal(result.validToolCalls, 1);
