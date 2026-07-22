@@ -70,6 +70,7 @@ export type AgentLoopResult =
       status: "suspended";
       reason: AgentSuspensionReason;
       error?: string;
+      errorCode?: string;
       providerError?: {
         name?: string;
         status?: number;
@@ -151,27 +152,46 @@ export async function runAgentLoop(
       : []
   );
   if (pendingCalls.length > 0) {
+    let rejectedLifecycleBatch = false;
     try {
       options.registry.assertUniqueCallIds(pendingCalls, seenCallIds);
       assertLifecycleBatch(pendingCalls, options.registry);
     } catch (error) {
-      return suspended(
-        "protocol_error",
-        initialTurns,
-        messages,
-        error instanceof Error ? error.message : String(error)
-      );
+      if (isInvalidLifecycleBatch(error)) {
+        const checkpointError = await rejectLifecycleBatch(
+          pendingCalls,
+          error,
+          options,
+          messages,
+          initialTurns,
+          seenCallIds,
+          nextId
+        );
+        if (checkpointError) return checkpointError;
+        rejectedLifecycleBatch = true;
+      } else {
+        return suspended(
+          "protocol_error",
+          initialTurns,
+          messages,
+          error instanceof Error ? error.message : String(error),
+          undefined,
+          protocolErrorCode(error)
+        );
+      }
     }
-    for (const call of pendingCalls) seenCallIds.add(call.callId);
-    const pendingResult = await executeToolCalls(
-      pendingCalls,
-      options,
-      messages,
-      initialTurns,
-      seenCallIds,
-      nextId
-    );
-    if (pendingResult) return pendingResult;
+    if (!rejectedLifecycleBatch) {
+      for (const call of pendingCalls) seenCallIds.add(call.callId);
+      const pendingResult = await executeToolCalls(
+        pendingCalls,
+        options,
+        messages,
+        initialTurns,
+        seenCallIds,
+        nextId
+      );
+      if (pendingResult) return pendingResult;
+    }
   }
 
   const initialStallResult = await enforceReadOnlyStall(
@@ -224,7 +244,9 @@ export async function runAgentLoop(
         "protocol_error",
         turnNumber,
         messages,
-        "Provider returned an invalid native turn."
+        "Provider returned an invalid native turn.",
+        undefined,
+        "invalid_provider_turn"
       );
     }
     messages.push({
@@ -256,11 +278,25 @@ export async function runAgentLoop(
       options.registry.assertUniqueCallIds(calls, seenCallIds);
       assertLifecycleBatch(calls, options.registry);
     } catch (error) {
+      if (isInvalidLifecycleBatch(error)) {
+        const checkpointError = await rejectLifecycleBatch(
+          calls,
+          error,
+          options,
+          messages,
+          turnNumber,
+          seenCallIds,
+          nextId
+        );
+        if (checkpointError) return checkpointError;
+      }
       return suspended(
         "protocol_error",
         turnNumber,
         messages,
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
+        undefined,
+        protocolErrorCode(error)
       );
     }
     for (const call of calls) seenCallIds.add(call.callId);
@@ -290,6 +326,36 @@ export async function runAgentLoop(
     if (stallResult) return stallResult;
   }
   return suspended("turn_limit", finalTurn, messages);
+}
+
+function isInvalidLifecycleBatch(error: unknown): error is AgentProtocolError {
+  return error instanceof AgentProtocolError && error.code === "invalid_lifecycle_batch";
+}
+
+async function rejectLifecycleBatch(
+  calls: readonly ToolCallBlock[],
+  error: AgentProtocolError,
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  seenCallIds: Set<string>,
+  nextId: () => string
+): Promise<AgentLoopResult | null> {
+  for (const call of calls) {
+    seenCallIds.add(call.callId);
+    messages.push({
+      id: `tool_${nextId()}`,
+      role: "tool",
+      content: {
+        callId: call.callId,
+        toolName: call.name,
+        content: [{ type: "text", text: error.message }],
+        isError: true,
+        error: { code: error.code, message: error.message },
+      },
+    });
+  }
+  return await checkpoint(options, messages, turns, seenCallIds);
 }
 
 async function executeToolCalls(
@@ -873,7 +939,8 @@ function suspended(
     status?: number;
     code?: string;
     retryAfterMs?: number;
-  }
+  },
+  errorCode?: string
 ): AgentLoopResult {
   return {
     status: "suspended",
@@ -882,9 +949,14 @@ function suspended(
     ...(providerError && Object.keys(providerError).length > 0
       ? { providerError }
       : {}),
+    ...(errorCode ? { errorCode } : {}),
     turns,
     messages,
   };
+}
+
+function protocolErrorCode(error: unknown): string {
+  return error instanceof AgentProtocolError ? error.code : "protocol_error";
 }
 
 function providerErrorDetails(error: unknown) {

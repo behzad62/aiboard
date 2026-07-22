@@ -335,6 +335,55 @@ try {
   await buildCrashRunner.stop();
 }
 
+const typedBuildFailureRunner = await startCanonicalAttemptRunner("typed-build-failure-attempt");
+try {
+  const typedFailure = await expectStructuredFailure(
+    "typed lifecycle protocol failure",
+    {
+      case: caseRecord,
+      runner: { url: typedBuildFailureRunner.url, token: typedBuildFailureRunner.token },
+      attemptId: "attempt-typed-build-failure",
+      runId: "run-typed-build-failure",
+      teamCompositionId: "team-fixture",
+      cleanup: true,
+      runBuild: async () => {
+        throw Object.assign(new Error("Lifecycle protocol repair was exhausted."), {
+          certifiedStatus: "failed_tool_use",
+          certifiedCode: "invalid_lifecycle_batch",
+          runnerProjectPath: "C:\\retained-project",
+          runnerStatePath: "C:\\retained-state",
+          buildResult: {
+            traceIds: ["trace-protocol-failure"],
+            artifactIds: ["audit-protocol-failure"],
+            modelCalls: 3,
+            toolCalls: 7,
+            validToolCalls: 5,
+            inputTokens: 12_345,
+            outputTokens: 678,
+          },
+        });
+      },
+    },
+    "failed_tool_use"
+  );
+  check(
+    "typed build failure preserves usage metrics",
+    typedFailure?.attempt.modelCalls === 3 &&
+      typedFailure.attempt.toolCalls === 7 &&
+      typedFailure.attempt.inputTokens === 12_345 &&
+      typedFailure.attempt.outputTokens === 678,
+    typedFailure?.attempt
+  );
+  check(
+    "typed build failure preserves trace and audit references",
+    typedFailure?.attempt.traceIds.includes("trace-protocol-failure") === true &&
+      typedFailure.attempt.artifactIds.includes("audit-protocol-failure") === true,
+    typedFailure?.attempt
+  );
+} finally {
+  await typedBuildFailureRunner.stop();
+}
+
 const providerFailureRunner = await startCanonicalAttemptRunner("provider-failure-attempt");
 try {
   await expectStructuredFailure(

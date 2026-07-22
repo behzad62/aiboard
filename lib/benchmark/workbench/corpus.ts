@@ -193,8 +193,8 @@ function workBenchCaseForChallenge(
       maxWallClockSeconds: 900,
       maxModelCalls: 60,
       maxToolCalls: 180,
-      maxInputTokens: 350000,
-      maxOutputTokens: 100000,
+      maxInputTokens: 3500000,
+      maxOutputTokens: 1000000,
     },
     scoring: {
       scoringVersion: "certified-workbench-current",

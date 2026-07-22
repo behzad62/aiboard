@@ -57,7 +57,7 @@ export interface RunProjection {
   stopReason?: string;
 }
 
-export type RunCommand = "start" | "pause" | "resume" | "stop";
+export type RunCommand = "start" | "pause" | "resume" | "continue" | "stop";
 
 export function assertRunEvent(value: RunEvent): void {
   if (!value.eventId) throw new Error("eventId is required");

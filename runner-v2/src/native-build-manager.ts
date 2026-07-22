@@ -202,6 +202,16 @@ export class NativeBuildManager implements BuildControlPlane {
     );
   }
 
+  async continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
+    if (!this.options.specs.get(runId).benchmark) {
+      throw new Error("Non-renewing continuation is restricted to benchmark Builds.");
+    }
+    const handle = this.require(runId);
+    return await this.withRuntimeActivity(async () =>
+      handle.runtime.continue(idempotencyKey)
+    );
+  }
+
   async selectArchitectHandoff(
     runId: string,
     runtimeId: string,

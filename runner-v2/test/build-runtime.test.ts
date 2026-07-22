@@ -431,9 +431,13 @@ test("fresh native Builds expose an empty projection and obey durable user pause
       clock: () => "2026-07-12T00:00:00.000Z",
     });
     assert.equal(runtime.projection().planRevision, 0);
-    assert.equal(runtime.pause("user", "pause:1").status, "paused");
+    const paused = runtime.pause("user", "pause:1");
+    assert.equal(paused.status, "paused");
+    assert.deepEqual(paused.pauseReason, { reason: "user" });
     assert.equal((await runtime.step()).status, "paused");
-    assert.equal(runtime.resume("resume:1").status, "running");
+    const resumed = runtime.resume("resume:1");
+    assert.equal(resumed.status, "running");
+    assert.equal(resumed.pauseReason, undefined);
     assert.deepEqual(
       runtime.events().map((event) => event.type),
       ["run.policy_configured", "run.paused", "run.resumed"]
@@ -473,6 +477,40 @@ test("each explicit paused Resume renews exactly one budget window", () => {
       "budget-window:resume:budget",
       "budget-window:resume:user",
     ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("benchmark continuation resumes without renewing the budget window", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-budget-continue-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const renewals: string[] = [];
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_budget_continue",
+      store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      runPolicy: "budgeted",
+      renewBudgetWindow: (idempotencyKey) => renewals.push(idempotencyKey),
+    });
+    runtime.pause("protocol_error:invalid_lifecycle_batch", "pause:protocol");
+    const projection = runtime.continue("continue:protocol");
+    assert.equal(projection.status, "running");
+    assert.equal(projection.pauseReason, undefined);
+    assert.deepEqual(renewals, []);
+    assert.throws(
+      () => runtime.continue("continue:not-paused"),
+      /requires a paused Build/
+    );
+    assert.equal(runtime.projection().status, "running");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

@@ -231,6 +231,7 @@ test("duplicate call IDs suspend before the repeated tool executes", async () =>
   });
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "protocol_error");
+  if (result.status === "suspended") assert.equal(result.errorCode, "duplicate_call_id");
   assert.equal(executions, 1);
 });
 
@@ -765,6 +766,118 @@ test("restart executes a persisted pending tool call before another model turn",
     ),
     true
   );
+});
+
+test("an invalid lifecycle batch is durably rejected before resume", async () => {
+  let reads = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content", () => reads++));
+  registry.register(submitTool());
+  const first = await runAgentLoop({
+    model: new ScriptedModel([{
+      blocks: [
+        {
+          type: "tool_call",
+          callId: "invalid_submit",
+          name: "submit_task",
+          arguments: { changeSetId: "must_not_execute" },
+        },
+        {
+          type: "tool_call",
+          callId: "invalid_read",
+          name: "read_file",
+          arguments: {},
+        },
+      ],
+      stopReason: "tool_calls",
+    }]),
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(first.status, "suspended");
+  assert.equal(first.reason, "protocol_error");
+  if (first.status === "suspended") {
+    assert.equal(first.errorCode, "invalid_lifecycle_batch");
+  }
+  assert.equal(reads, 0);
+  assert.deepEqual(
+    first.messages
+      .filter((message) => message.role === "tool")
+      .map((message) =>
+        typeof message.content === "object" && !Array.isArray(message.content)
+          ? [message.content.callId, message.content.error?.code]
+          : []
+      ),
+    [
+      ["invalid_submit", "invalid_lifecycle_batch"],
+      ["invalid_read", "invalid_lifecycle_batch"],
+    ]
+  );
+
+  const resumedModel = new ScriptedModel([{
+    blocks: [{
+      type: "tool_call",
+      callId: "valid_submit",
+      name: "submit_task",
+      arguments: { changeSetId: "changeset_after_protocol_repair" },
+    }],
+    stopReason: "tool_calls",
+  }]);
+  const resumed = await runAgentLoop({
+    model: resumedModel,
+    registry,
+    context: context(),
+    initialMessages: first.messages,
+  });
+  assert.equal(resumed.status, "submitted");
+  assert.equal(resumedModel.requests.length, 1);
+  assert.equal(reads, 0);
+});
+
+test("restart quarantines a legacy pending invalid lifecycle batch", async () => {
+  let reads = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content", () => reads++));
+  registry.register(submitTool());
+  const model = new ScriptedModel([{
+    blocks: [{
+      type: "tool_call",
+      callId: "replacement_submit",
+      name: "submit_task",
+      arguments: { changeSetId: "changeset_legacy_recovered" },
+    }],
+    stopReason: "tool_calls",
+  }]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages: [
+      ...initialMessages,
+      {
+        id: "assistant_legacy_invalid",
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            callId: "legacy_submit",
+            name: "submit_task",
+            arguments: { changeSetId: "must_not_execute" },
+          },
+          {
+            type: "tool_call",
+            callId: "legacy_read",
+            name: "read_file",
+            arguments: {},
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(result.status, "submitted");
+  assert.equal(model.requests.length, 1);
+  assert.equal(reads, 0);
 });
 
 test("checkpoint failure suspends before a newly proposed tool side effect", async () => {

@@ -147,10 +147,24 @@ export class BuildRuntime {
   }
 
   resume(idempotencyKey: string): SchedulerProjection {
+    return this.resumeInternal(idempotencyKey, true);
+  }
+
+  continue(idempotencyKey: string): SchedulerProjection {
+    return this.resumeInternal(idempotencyKey, false);
+  }
+
+  private resumeInternal(
+    idempotencyKey: string,
+    renewBudgetWindow: boolean
+  ): SchedulerProjection {
     this.ensureInitialized();
     const projection = this.projection();
     if (projection.status === "completed") {
       throw new Error("A completed Build cannot be resumed.");
+    }
+    if (!renewBudgetWindow && projection.status !== "paused") {
+      throw new Error("A benchmark continuation requires a paused Build.");
     }
     if (projection.projectHandoff?.status === "requested") {
       throw new Error(
@@ -158,7 +172,11 @@ export class BuildRuntime {
       );
     }
     const occurredAt = this.clock();
-    if (projection.status === "paused" && this.runPolicy === "budgeted") {
+    if (
+      renewBudgetWindow &&
+      projection.status === "paused" &&
+      this.runPolicy === "budgeted"
+    ) {
       this.renewBudgetWindow?.(`budget-window:${idempotencyKey}`, occurredAt);
     }
     this.store.append({

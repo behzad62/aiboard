@@ -24,6 +24,7 @@ export interface BuildControlPlane {
   activate(runId: string): void;
   pause(runId: string, reason: string, idempotencyKey: string): Promise<SchedulerProjection>;
   resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection>;
+  continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection>;
   selectArchitectHandoff(
     runId: string,
     runtimeId: string,
@@ -127,6 +128,10 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
 
   async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
     return this.require(runId).resume(idempotencyKey);
+  }
+
+  async continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
+    return this.require(runId).continue(idempotencyKey);
   }
 
   async selectArchitectHandoff(

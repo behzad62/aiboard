@@ -603,8 +603,10 @@ test("native Build projections and pump controls are runner-owned API routes", a
     lastSequence: 1,
   };
   let projectHandoffChoice = "";
+  let benchmarkContinuations = 0;
+  let buildStatus: "running" | "paused" = "running";
   const builds = {
-    projection: () => projection,
+    projection: () => ({ ...projection, status: buildStatus }),
     events: () => [],
     transcript: (runId: string, afterSequence = 0) => {
       if (runId !== "run_1") throw new Error(`Unknown build runtime ${runId}.`);
@@ -716,8 +718,19 @@ test("native Build projections and pump controls are runner-owned API routes", a
       action: `max:${maxSteps ?? 100}`,
     }),
     activate: () => undefined,
-    pause: () => ({ ...projection, status: "paused" }),
-    resume: () => projection,
+    pause: () => {
+      buildStatus = "paused";
+      return { ...projection, status: buildStatus };
+    },
+    resume: () => {
+      buildStatus = "running";
+      return { ...projection, status: buildStatus };
+    },
+    continue: () => {
+      benchmarkContinuations += 1;
+      buildStatus = "running";
+      return { ...projection, status: buildStatus };
+    },
     selectArchitectHandoff: () => projection,
     selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
@@ -879,6 +892,46 @@ test("native Build projections and pump controls are runner-owned API routes", a
       authorized({ method: "POST", body: JSON.stringify({ maxSteps: 12 }) })
     );
     assert.equal((await json(pump)).action, "max:12");
+
+    const invalidContinue = await fetch(
+      `${url}/v2/runs/run_1/commands`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          command: "continue",
+          idempotencyKey: "continue:not-paused",
+        }),
+      })
+    );
+    assert.equal(invalidContinue.status, 409);
+    assert.equal(supervisor.getRun("run_1").state, "running");
+    assert.equal(buildStatus, "running");
+    assert.equal(benchmarkContinuations, 0);
+
+    const pause = await fetch(
+      `${url}/v2/runs/run_1/commands`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          command: "pause",
+          idempotencyKey: "pause:benchmark-repair",
+          reason: "protocol_error:invalid_lifecycle_batch",
+        }),
+      })
+    );
+    assert.equal(pause.status, 200);
+    const continued = await fetch(
+      `${url}/v2/runs/run_1/commands`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          command: "continue",
+          idempotencyKey: "continue:benchmark-repair",
+        }),
+      })
+    );
+    assert.equal(continued.status, 200);
+    assert.equal(benchmarkContinuations, 1);
 
     const handoff = await fetch(
       `${url}/v2/runs/run_1/build/project-handoff`,

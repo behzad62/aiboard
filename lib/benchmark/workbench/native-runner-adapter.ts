@@ -3,6 +3,7 @@ import type {
   BenchmarkModelCallTrace,
   BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
+  CertifiedAttemptStatus,
 } from "@/lib/benchmark/types";
 import { createJsonArtifact } from "@/lib/benchmark/artifacts";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
@@ -78,10 +79,32 @@ export class NativeWorkBenchExecutionError extends Error {
     message: string,
     readonly runnerProjectPath: string,
     readonly runnerStatePath: string,
-    options?: ErrorOptions
+    options?: ErrorOptions & {
+      certifiedStatus?: CertifiedAttemptStatus;
+      certifiedCode?: string;
+      buildResult?: Partial<WorkBenchBuildExecutionResult>;
+    }
   ) {
     super(message, options);
     this.name = "NativeWorkBenchExecutionError";
+    this.certifiedStatus = options?.certifiedStatus;
+    this.certifiedCode = options?.certifiedCode;
+    this.buildResult = options?.buildResult;
+  }
+
+  readonly certifiedStatus?: CertifiedAttemptStatus;
+  readonly certifiedCode?: string;
+  readonly buildResult?: Partial<WorkBenchBuildExecutionResult>;
+}
+
+class NativeWorkBenchRunFailure extends Error {
+  constructor(
+    readonly certifiedStatus: CertifiedAttemptStatus,
+    readonly certifiedCode: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "NativeWorkBenchRunFailure";
   }
 }
 
@@ -112,6 +135,8 @@ export async function runNativeWorkBenchBuild(
   const startedMs = Date.now();
   let managed: ManagedAttemptRunnerResult | undefined;
   let audit: NativeBuildAuditExport | undefined;
+  let connection: NativeRunnerConnection | undefined;
+  let nativeRunId: string | undefined;
   try {
     throwIfAborted(input.signal);
     managed = await dependencies.startManagedAttemptRunner(input.runner, {
@@ -120,7 +145,7 @@ export async function runNativeWorkBenchBuild(
     if (!managed.running || !managed.url || !managed.token) {
       throw new Error("Bench Runner did not return a live managed Runner V2 connection.");
     }
-    const connection: NativeRunnerConnection = {
+    connection = {
       url: managed.url,
       token: managed.token,
     };
@@ -143,7 +168,7 @@ export async function runNativeWorkBenchBuild(
       connection,
       dependencies.createProviderConfigs(configuredRuntimeIds)
     );
-    const nativeRunId = safeNativeId(`workbench-${input.attemptId}`);
+    nativeRunId = safeNativeId(`workbench-${input.attemptId}`);
     const budgetLimits = nativeBudgetLimits(input);
     await dependencies.createNativeBuild(connection, {
       runId: nativeRunId,
@@ -174,8 +199,7 @@ export async function runNativeWorkBenchBuild(
     );
 
     const eligibleRuntimes = new Set(configuredRuntimeIds);
-    let automaticResumeCount = 0;
-    const automaticResumeLimit = Math.max(10, budgetLimits.maxModelCalls ?? 100);
+    const continuationCounts = new Map<string, number>();
     for (;;) {
       throwIfAborted(input.signal);
       const [run, projection] = await Promise.all([
@@ -212,60 +236,58 @@ export async function runNativeWorkBenchBuild(
           );
           continue;
         }
-        if (automaticResumeCount < automaticResumeLimit) {
-          automaticResumeCount++;
+        const disposition = nativePauseDisposition(projection.pauseReason?.reason);
+        const continuationCount = continuationCounts.get(disposition.key) ?? 0;
+        if (disposition.action === "continue" && continuationCount < disposition.limit) {
+          continuationCounts.set(disposition.key, continuationCount + 1);
           await dependencies.commandNativeRun(
             connection,
             nativeRunId,
-            "resume",
-            `workbench-auto-resume:${nativeRunId}:${automaticResumeCount}`
+            "continue",
+            `workbench-auto-continue:${nativeRunId}:${disposition.key}:${continuationCount + 1}`
           );
           continue;
         }
-        throw new Error("Runner V2 paused without a deterministic WorkBench handoff.");
+        throw new NativeWorkBenchRunFailure(
+          disposition.certifiedStatus,
+          disposition.certifiedCode,
+          disposition.message
+        );
       }
       await dependencies.wait(500, input.signal);
     }
 
     audit = await dependencies.getNativeBuildAudit(connection, nativeRunId);
-    const traces = mapNativeUsageToBenchmarkTraces({
-      attemptId: input.attemptId,
-      runId: input.runId,
-      caseId: input.case.id,
-      usage: audit.usage,
-    });
-    const toolTraces = mapNativeToolsToBenchmarkTraces({
-      attemptId: input.attemptId,
-      caseId: input.case.id,
-      tools: audit.observability.tools,
-    });
-    const auditArtifact = nativeAuditArtifact(input, audit);
-    await Promise.all([
-      ...traces.map((trace) => input.context.recordTrace(trace)),
-      ...toolTraces.map((trace) => input.context.recordToolCall(trace)),
-      input.context.recordArtifact(auditArtifact),
-    ]);
-    const lifetime = audit.usage.lifetime ?? audit.usage.effective;
-    return {
-      traceIds: traces.map((trace) => trace.id),
-      artifactIds: [auditArtifact.id],
-      costUsd: nativeCostUsd(audit.usage),
-      inputTokens: lifetime.inputTokens,
-      outputTokens: lifetime.outputTokens,
-      modelCalls: traces.length,
-      toolCalls: toolTraces.length,
-      validToolCalls: toolTraces.filter((trace) => trace.status === "ok").length,
-      durationMs: Math.max(0, Date.now() - startedMs),
-      runnerProjectPath: managed.projectPath,
-      runnerStatePath: managed.statePath,
-    };
+    return await recordNativeAudit(input, audit, managed, startedMs);
   } catch (error) {
     if (managed) {
+      let buildResult: Partial<WorkBenchBuildExecutionResult> | undefined;
+      if (connection && nativeRunId) {
+        try {
+          audit ??= await dependencies.getNativeBuildAudit(connection, nativeRunId);
+          buildResult = nativeAuditResult(input, audit, managed, startedMs);
+          try {
+            await recordNativeAudit(input, audit, managed, startedMs);
+          } catch {
+            // The original Runner failure stays authoritative; audit-derived metrics remain attached.
+          }
+        } catch {
+          // Preserve the original failure when the Runner audit itself is unavailable.
+        }
+      }
+      const metadata = nativeFailureMetadata(error);
       throw new NativeWorkBenchExecutionError(
         error instanceof Error ? error.message : String(error),
         managed.projectPath,
         managed.statePath,
-        { cause: error }
+        {
+          cause: error,
+          ...(metadata.certifiedStatus
+            ? { certifiedStatus: metadata.certifiedStatus }
+            : {}),
+          ...(metadata.certifiedCode ? { certifiedCode: metadata.certifiedCode } : {}),
+          ...(buildResult ? { buildResult } : {}),
+        }
       );
     }
     throw error;
@@ -276,6 +298,183 @@ export async function runNativeWorkBenchBuild(
       });
     }
   }
+}
+
+interface NativePauseDisposition {
+  action: "continue" | "fail";
+  key: string;
+  limit: number;
+  certifiedStatus: CertifiedAttemptStatus;
+  certifiedCode: string;
+  message: string;
+}
+
+export function nativePauseDisposition(reason: string | undefined): NativePauseDisposition {
+  const normalized = reason?.trim() ?? "";
+  if (normalized.startsWith("budget_exhausted:")) {
+    return pauseFailure("failed_budget", "budget_exhausted", normalized);
+  }
+  if (normalized === "task_attempt_budget") {
+    return pauseFailure("failed_budget", "task_attempt_budget", normalized);
+  }
+  if (normalized.startsWith("protocol_error:")) {
+    const protocolCode = nativeProtocolErrorCode(normalized);
+    if (protocolCode === "invalid_provider_turn") {
+      return pauseFailure("failed_model", protocolCode, normalized);
+    }
+    if (protocolCode !== "invalid_lifecycle_batch") {
+      return pauseFailure("failed_tool_use", protocolCode, normalized);
+    }
+    return {
+      action: "continue",
+      key: "protocol-repair",
+      limit: 1,
+      certifiedStatus: "failed_tool_use",
+      certifiedCode: "invalid_lifecycle_batch",
+      message: `Runner V2 lifecycle protocol repair was exhausted: ${normalized}`,
+    };
+  }
+  if (
+    normalized.startsWith("model_ended_without_lifecycle:") ||
+    normalized.startsWith("worker_model_ended_without_lifecycle")
+  ) {
+    return {
+      action: "continue",
+      key: "model-lifecycle-repair",
+      limit: 2,
+      certifiedStatus: "failed_model",
+      certifiedCode: "model_ended_without_lifecycle",
+      message: `Model did not produce a lifecycle decision after bounded recovery: ${normalized}`,
+    };
+  }
+  if (normalized === "autonomous_pump_error") {
+    return {
+      action: "continue",
+      key: "autonomous-pump-recovery",
+      limit: 4,
+      certifiedStatus: "invalid_harness",
+      certifiedCode: "autonomous_pump_error",
+      message: "Runner V2 autonomous pump remained paused after bounded recovery.",
+    };
+  }
+  if (normalized.startsWith("provider_error:")) {
+    return pauseFailure("provider_unavailable", "provider_unavailable", normalized);
+  }
+  if (/^(max_tokens|turn_limit|read_only_stall|repeated_evidence_failure):/.test(normalized)) {
+    return pauseFailure("failed_model", "model_lifecycle_failed", normalized);
+  }
+  return pauseFailure(
+    "invalid_harness",
+    normalized ? "unrecognized_runner_pause" : "runner_pause_reason_missing",
+    normalized || "Runner V2 paused without a structured reason."
+  );
+}
+
+function nativeProtocolErrorCode(reason: string): string {
+  const code = reason.slice("protocol_error:".length).split(":", 1)[0]?.trim();
+  if (code === "invalid_lifecycle_batch") return code;
+  if (code === "duplicate_call_id") return code;
+  if (code === "invalid_call_id") return code;
+  if (code === "invalid_provider_turn") return code;
+  if (/lifecycle tool call must be the only tool call/i.test(reason)) {
+    return "invalid_lifecycle_batch";
+  }
+  return "protocol_error";
+}
+
+function pauseFailure(
+  certifiedStatus: CertifiedAttemptStatus,
+  certifiedCode: string,
+  reason: string
+): NativePauseDisposition {
+  return {
+    action: "fail",
+    key: certifiedCode,
+    limit: 0,
+    certifiedStatus,
+    certifiedCode,
+    message: `Runner V2 paused: ${reason}`,
+  };
+}
+
+function nativeFailureMetadata(error: unknown): {
+  certifiedStatus?: CertifiedAttemptStatus;
+  certifiedCode?: string;
+} {
+  if (error instanceof NativeWorkBenchRunFailure) {
+    return {
+      certifiedStatus: error.certifiedStatus,
+      certifiedCode: error.certifiedCode,
+    };
+  }
+  if (error instanceof NativeWorkBenchExecutionError) {
+    return {
+      certifiedStatus: error.certifiedStatus,
+      certifiedCode: error.certifiedCode,
+    };
+  }
+  return {};
+}
+
+async function recordNativeAudit(
+  input: NativeWorkBenchBuildInput,
+  audit: NativeBuildAuditExport,
+  managed: ManagedAttemptRunnerResult,
+  startedMs: number
+): Promise<WorkBenchBuildExecutionResult> {
+  const result = nativeAuditResult(input, audit, managed, startedMs);
+  const traces = mapNativeUsageToBenchmarkTraces({
+    attemptId: input.attemptId,
+    runId: input.runId,
+    caseId: input.case.id,
+    usage: audit.usage,
+  });
+  const toolTraces = mapNativeToolsToBenchmarkTraces({
+    attemptId: input.attemptId,
+    caseId: input.case.id,
+    tools: audit.observability.tools,
+  });
+  const auditArtifact = nativeAuditArtifact(input, audit);
+  await Promise.all([
+    ...traces.map((trace) => input.context.recordTrace(trace)),
+    ...toolTraces.map((trace) => input.context.recordToolCall(trace)),
+    input.context.recordArtifact(auditArtifact),
+  ]);
+  return result;
+}
+
+function nativeAuditResult(
+  input: NativeWorkBenchBuildInput,
+  audit: NativeBuildAuditExport,
+  managed: ManagedAttemptRunnerResult,
+  startedMs: number
+): WorkBenchBuildExecutionResult {
+  const traces = mapNativeUsageToBenchmarkTraces({
+    attemptId: input.attemptId,
+    runId: input.runId,
+    caseId: input.case.id,
+    usage: audit.usage,
+  });
+  const toolTraces = mapNativeToolsToBenchmarkTraces({
+    attemptId: input.attemptId,
+    caseId: input.case.id,
+    tools: audit.observability.tools,
+  });
+  const auditArtifact = nativeAuditArtifact(input, audit);
+  const lifetime = audit.usage.lifetime ?? audit.usage.effective;
+  return {
+    traceIds: traces.map((trace) => trace.id),
+    artifactIds: [auditArtifact.id],
+    costUsd: nativeCostUsd(audit.usage),
+    inputTokens: lifetime.inputTokens,
+    outputTokens: lifetime.outputTokens,
+    modelCalls: traces.length,
+    toolCalls: toolTraces.length,
+    validToolCalls: toolTraces.filter((trace) => trace.status === "ok").length,
+    durationMs: Math.max(0, Date.now() - startedMs),
+    runnerProjectPath: managed.projectPath,
+    runnerStatePath: managed.statePath,
+  };
 }
 
 export function mapNativeUsageToBenchmarkTraces(input: {

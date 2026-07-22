@@ -125,6 +125,10 @@ export interface SchedulerProjection {
   runId: string;
   runPolicy?: NativeBuildRunPolicy;
   status: "running" | "paused" | "completed";
+  pauseReason?: {
+    reason: string;
+    taskId?: string;
+  };
   planRevision: number;
   tasks: Record<string, BuildTask>;
   guidance: Record<string, GuidanceProjection>;
@@ -460,15 +464,27 @@ export function reduceSchedulerEvent(
     }
     case "run.paused":
       next.status = "paused";
+      if (typeof event.payload.reason === "string" && event.payload.reason) {
+        next.pauseReason = {
+          reason: event.payload.reason,
+          ...(typeof event.payload.taskId === "string"
+            ? { taskId: event.payload.taskId }
+            : {}),
+        };
+      } else {
+        delete next.pauseReason;
+      }
       break;
     case "run.resumed":
       next.status = "running";
+      delete next.pauseReason;
       break;
     case "run.completed":
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may complete a scheduler run.");
       }
       next.status = "completed";
+      delete next.pauseReason;
       break;
     case "project.handoff_requested": {
       if (event.actor.role !== "architect") {
@@ -497,6 +513,7 @@ export function reduceSchedulerEvent(
         options: ["keep_integration_branch", "apply_to_project"],
       };
       next.status = "paused";
+      delete next.pauseReason;
       break;
     }
     case "project.handoff_selected": {
@@ -530,6 +547,7 @@ export function reduceSchedulerEvent(
         ...(typeof projectRevision === "string" ? { projectRevision } : {}),
       };
       next.status = "completed";
+      delete next.pauseReason;
       break;
     }
     case "provider.health_changed": {
@@ -610,6 +628,7 @@ export function reduceSchedulerEvent(
         },
       };
       next.status = "paused";
+      delete next.pauseReason;
       break;
     }
     case "architect.handoff_selected": {
@@ -623,6 +642,7 @@ export function reduceSchedulerEvent(
       }
       next.runtime.architect = { runtimeId };
       next.status = "running";
+      delete next.pauseReason;
       break;
     }
   }

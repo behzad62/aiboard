@@ -15,6 +15,7 @@ import {
   type WorkBenchChallenge,
 } from "../lib/benchmark/workbench/challenges";
 import {
+  listWorkBenchCaseOptions,
   listWorkBenchChallenges,
   WORKBENCH_VERIFIER,
 } from "../lib/benchmark/workbench/corpus";
@@ -73,6 +74,19 @@ check(
 );
 
 const currentChallenges = listWorkBenchChallenges();
+for (const { case: challengeCase } of listWorkBenchCaseOptions()) {
+  check(
+    `${challengeCase.id} uses the expanded token safety caps`,
+    challengeCase.budget.maxInputTokens === 3_500_000 &&
+      challengeCase.budget.maxOutputTokens === 1_000_000,
+    challengeCase.budget
+  );
+  check(
+    `${challengeCase.id} keeps the model and tool safety caps`,
+    challengeCase.budget.maxModelCalls === 60 && challengeCase.budget.maxToolCalls === 180,
+    challengeCase.budget
+  );
+}
 const kinds = new Set(currentChallenges.map((item) => item.kind));
 for (const kind of [
   "large-file-surgical-patch",

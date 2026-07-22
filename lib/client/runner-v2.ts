@@ -117,6 +117,10 @@ export interface NativeReviewProjection {
 export interface NativeBuildProjection {
   runId: string;
   status: "running" | "paused" | "completed";
+  pauseReason?: {
+    reason: string;
+    taskId?: string;
+  };
   runPolicy?: BuildRunPolicy;
   planRevision: number;
   tasks: Record<string, NativeBuildTask>;
@@ -507,7 +511,7 @@ export async function createNativeBuild(
 export async function commandNativeRun(
   connection: NativeRunnerConnection,
   runId: string,
-  command: "start" | "pause" | "resume" | "stop",
+  command: "start" | "pause" | "resume" | "continue" | "stop",
   idempotencyKey: string,
   reason?: string,
   fetchImpl: typeof fetch = fetch

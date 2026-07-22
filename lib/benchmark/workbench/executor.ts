@@ -83,6 +83,7 @@ export async function executeWorkBenchVerifierOnly(
         status: failure.status,
         code: failure.code,
         message: errorMessage(error),
+        buildResult: buildResultFromError(error),
         retainedPaths: retainedRunnerPaths(error),
       });
     }
@@ -297,9 +298,10 @@ export function createFailedWorkBenchAttempt(
       })
     : null;
   const failureArtifactIds = [
+    ...(context.buildResult?.artifactIds ?? []),
     logArtifact.id,
     ...(retainedArtifact ? [retainedArtifact.id] : []),
-  ];
+  ].filter((id, index, values) => values.indexOf(id) === index);
   const verifierResult: BenchmarkVerifierResult = {
     id: `${attemptId}:verifier`,
     attemptId,
@@ -401,6 +403,16 @@ function retainedRunnerPaths(
     : undefined;
 }
 
+function buildResultFromError(
+  error: unknown
+): Partial<WorkBenchBuildExecutionResult> | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const buildResult = (error as { buildResult?: unknown }).buildResult;
+  return buildResult && typeof buildResult === "object"
+    ? buildResult as Partial<WorkBenchBuildExecutionResult>
+    : undefined;
+}
+
 function scaleToolReliabilityScore(value: number | null): number | undefined {
   return value == null ? undefined : round(value * 100);
 }
@@ -454,6 +466,8 @@ function classifyPrepareFailure(error: unknown): { status: CertifiedAttemptStatu
 }
 
 function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus; code: string } {
+  const typed = typedBuildFailure(error);
+  if (typed) return typed;
   const message = errorMessage(error).toLowerCase();
   if (/abort|cancel/.test(message)) {
     return { status: "aborted_user", code: "aborted_user" };
@@ -468,6 +482,36 @@ function classifyBuildFailure(error: unknown): { status: CertifiedAttemptStatus;
     return { status: "failed_tool_use", code: "tool_execution_failed" };
   }
   return { status: "invalid_harness", code: "workbench_build_failed" };
+}
+
+function typedBuildFailure(
+  error: unknown
+): { status: CertifiedAttemptStatus; code: string } | null {
+  if (!error || typeof error !== "object") return null;
+  const value = error as {
+    certifiedStatus?: unknown;
+    certifiedCode?: unknown;
+  };
+  const statuses = new Set<CertifiedAttemptStatus>([
+    "failed_model",
+    "failed_tool_use",
+    "failed_budget",
+    "provider_unavailable",
+    "invalid_harness",
+    "invalid_environment",
+    "invalid_case",
+    "aborted_user",
+  ]);
+  if (
+    typeof value.certifiedStatus !== "string" ||
+    !statuses.has(value.certifiedStatus as CertifiedAttemptStatus) ||
+    typeof value.certifiedCode !== "string" ||
+    !value.certifiedCode.trim()
+  ) return null;
+  return {
+    status: value.certifiedStatus as CertifiedAttemptStatus,
+    code: sanitizeFailureCode(value.certifiedCode),
+  };
 }
 
 function failureSummaryForStatus(status: CertifiedAttemptStatus): string {

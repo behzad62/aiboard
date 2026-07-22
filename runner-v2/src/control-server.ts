@@ -133,6 +133,7 @@ export class ControlServer {
   private readonly mcp?: ControlServerOptions["mcp"];
   private readonly permissions?: SqlitePermissionStore;
   private readonly streams = new Set<ServerResponse>();
+  private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
 
   constructor(options: ControlServerOptions) {
@@ -648,6 +649,27 @@ export class ControlServer {
   }
 
   private async applyCommand(runId: string, body: CommandBody) {
+    return await this.serializeRunCommand(runId, async () =>
+      await this.applyCommandInside(runId, body)
+    );
+  }
+
+  private async applyCommandInside(runId: string, body: CommandBody) {
+    if (body.command === "continue") {
+      const builds = this.requireBuilds();
+      const run = this.supervisor.getRun(runId);
+      const build = builds.projection(runId);
+      if (run.state !== "paused" || build.status !== "paused") {
+        throw new HttpError(
+          409,
+          "run_not_paused",
+          "Benchmark continuation requires both the run and Build projections to be paused."
+        );
+      }
+      await builds.continue(runId, `build:${body.idempotencyKey}`);
+      builds.activate(runId);
+      return this.supervisor.resume(runId, body.idempotencyKey);
+    }
     const projection = (() => {
       switch (body.command) {
       case "start":
@@ -688,6 +710,21 @@ export class ControlServer {
       }
     }
     return projection;
+  }
+
+  private async serializeRunCommand<T>(runId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.commandTails.get(runId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.commandTails.set(runId, tail);
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (this.commandTails.get(runId) === tail) this.commandTails.delete(runId);
+    }
   }
 
   private openEventStream(
@@ -943,7 +980,7 @@ function redactProviderConfig(config: RunnerProviderConfig) {
 function assertCommandBody(body: CommandBody): void {
   if (!body || typeof body !== "object") invalidBody();
   if (!isNonEmptyString(body.idempotencyKey)) invalidBody();
-  if (!(["start", "pause", "resume", "stop"] as unknown[]).includes(body.command)) {
+  if (!(["start", "pause", "resume", "continue", "stop"] as unknown[]).includes(body.command)) {
     invalidBody();
   }
   if (body.reason !== undefined && typeof body.reason !== "string") invalidBody();

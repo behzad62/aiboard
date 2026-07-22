@@ -304,7 +304,9 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const reason =
       result.status === "suspended"
-        ? `${result.reason}:${result.error ?? ""}`
+        ? result.reason === "protocol_error"
+          ? `${result.reason}:${result.errorCode ?? "protocol_error"}:${result.error ?? ""}`
+          : `${result.reason}:${result.error ?? ""}`
         : `unexpected_architect_lifecycle:${result.status}`;
     this.options.schedulerStore.append({
       runId: request.runId,
