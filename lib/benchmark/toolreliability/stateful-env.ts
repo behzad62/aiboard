@@ -727,8 +727,21 @@ export function createStatefulEnv(c: StatefulToolReliabilityCase): StatefulEnv {
   return {
     step(modelOutput: string): StatefulEnvStepResult {
       if (state.done) return { renderedResult: "", done: true };
-      state.turn += 1;
       const raw = modelOutput ?? "";
+
+      // An EMPTY (or whitespace-only) output is a dead provider stream, never
+      // a model turn: `callCertifiedModelOnce` rejects it as "Certified
+      // provider returned an empty response", `classifyProviderFailure` calls
+      // that transient, and `callCertifiedModel` retries it — so the live
+      // turn loop can never hand one to the env. Run files persist TRACES
+      // though, not `candidate.outputs`, so anything re-scoring from traces
+      // (2026-07-22 gate 3: two dead ChatGPT-bridge attempts inside one case)
+      // replays the dead attempts too. Reading one as prose would end the
+      // episode early and silently rewrite the verdict, so it is skipped
+      // whole: no turn consumed, no scheduled event fired, no state touched.
+      if (raw.trim().length === 0) return { renderedResult: "", done: false };
+
+      state.turn += 1;
 
       // BATCH-AWARE parse: the real inspector returns EVERY parsable action
       // in document order (not just one), AND — critically — also computes

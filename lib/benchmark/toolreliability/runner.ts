@@ -570,6 +570,12 @@ function evaluateForbiddenActionCase(
  * from `candidate.outputs[caseId]` alone. No metric other than `stateful` is
  * set (stateful cases are scored on that single dimension; there is no
  * separate single-shot "firstAttempt" concept for a multi-turn case).
+ *
+ * Empty attempts are dropped before stepping. The live loop cannot produce
+ * one (see `step`'s note on retried dead streams), so a replay assembled from
+ * a run file's raw traces — which DO include the retried attempts — yields
+ * the same env steps, the same events, and the same verdict as one assembled
+ * from the outputs the live loop actually served.
  */
 function evaluateStatefulCase(
   benchmarkCase: StatefulToolReliabilityCase,
@@ -579,7 +585,8 @@ function evaluateStatefulCase(
 ): void {
   const env = createStatefulEnv(benchmarkCase);
   for (const output of attempts) {
-    const stepResult = env.step(output ?? "");
+    if ((output ?? "").trim().length === 0) continue;
+    const stepResult = env.step(output);
     events.push(
       event(
         benchmarkCase.id,
