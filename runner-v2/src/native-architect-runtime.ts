@@ -89,6 +89,7 @@ export interface NativeArchitectRuntimeOptions {
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
   runPolicy?: NativeBuildRunPolicy;
+  allowedCommands?: readonly string[];
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {

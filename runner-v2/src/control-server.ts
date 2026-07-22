@@ -77,6 +77,7 @@ interface CreateRunBody {
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
+    benchmark?: NativeBuildSpec["benchmark"];
   };
 }
 
@@ -340,6 +341,14 @@ export class ControlServer {
             permissionProfile: body.permissionProfile,
             runPolicy: body.build.runPolicy,
             budgetLimits: { ...body.build.budgetLimits },
+            ...(body.build.benchmark
+              ? {
+                  benchmark: {
+                    attemptId: body.build.benchmark.attemptId,
+                    allowedCommands: [...body.build.benchmark.allowedCommands],
+                  },
+                }
+              : {}),
             createdAt: projection.createdAt,
             idempotencyKey: `build:${body.idempotencyKey}`,
           });
@@ -890,6 +899,16 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     assertBuildRunPolicyLimits(body.runPolicy, body.budgetLimits);
   } catch {
     invalidBody();
+  }
+  if (body.benchmark !== undefined) {
+    if (
+      !body.benchmark ||
+      !isNonEmptyString(body.benchmark.attemptId) ||
+      !Array.isArray(body.benchmark.allowedCommands) ||
+      body.benchmark.allowedCommands.some((command) => !isNonEmptyString(command)) ||
+      new Set(body.benchmark.allowedCommands.map((command) => command.trim())).size !==
+        body.benchmark.allowedCommands.length
+    ) invalidBody();
   }
 }
 

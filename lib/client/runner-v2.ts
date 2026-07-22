@@ -70,6 +70,10 @@ export interface CreateNativeBuildInput {
       maxEstimatedCostMicros?: number;
       maxActiveMs?: number;
     };
+    benchmark?: {
+      attemptId: string;
+      allowedCommands: string[];
+    };
   };
 }
 

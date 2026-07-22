@@ -196,6 +196,9 @@ export class NativeBuildFactory {
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       managedProcesses: this.managedProcesses,
+      ...(spec.benchmark
+        ? { allowedCommands: spec.benchmark.allowedCommands }
+        : {}),
     });
     const architectDriver = new NativeArchitectRuntime({
       schedulerStore,
@@ -213,6 +216,9 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       objective: spec.objective,
       runPolicy: spec.runPolicy,
+      ...(spec.benchmark
+        ? { allowedCommands: spec.benchmark.allowedCommands }
+        : {}),
       budgetLedger,
       modelCostEstimators,
       modelCostBases,

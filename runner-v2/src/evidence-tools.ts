@@ -10,6 +10,7 @@ import type {
 import type { ArtifactStore } from "./artifact-store.js";
 import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
 import { runGit } from "./git-command.js";
+import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 
 interface RunEvidenceInput {
   label: string;
@@ -27,6 +28,7 @@ export interface EvidenceToolsOptions {
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
   clock?: () => string;
+  allowedCommands?: readonly string[];
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -65,6 +67,12 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
     }),
     execute: async (input, context) => {
       if (!context.workspacePath) return failure("workspace_required", "Evidence command requires a workspace.");
+      if (!isBenchmarkCommandAllowed(input, options.allowedCommands)) {
+        return failure(
+          "benchmark_command_denied",
+          "Command is not allowlisted for this WorkBench attempt."
+        );
+      }
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
         const startedAt = clock();

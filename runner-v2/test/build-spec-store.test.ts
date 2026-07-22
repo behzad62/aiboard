@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
+  cloneBuildSpec,
   validateBuildSpec,
   type NativeBuildSpec,
 } from "../src/build-spec.js";
@@ -64,6 +65,34 @@ test("native Build specs enforce policy-specific limit shapes", () => {
       }),
     /Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs/
   );
+});
+
+test("native Build specs validate and clone benchmark command policy", () => {
+  const benchmarkSpec: NativeBuildSpec = {
+    ...validSpec,
+    benchmark: {
+      attemptId: "attempt_1",
+      allowedCommands: ["npm test", "node verifier.mjs"],
+    },
+  };
+  assert.doesNotThrow(() => validateBuildSpec(benchmarkSpec));
+  assert.throws(
+    () => validateBuildSpec({
+      ...benchmarkSpec,
+      benchmark: { attemptId: "", allowedCommands: ["npm test"] },
+    }),
+    /benchmark attempt/i
+  );
+  assert.throws(
+    () => validateBuildSpec({
+      ...benchmarkSpec,
+      benchmark: { attemptId: "attempt_1", allowedCommands: ["npm test", "npm test"] },
+    }),
+    /duplicate benchmark command/i
+  );
+  const cloned = cloneBuildSpec(benchmarkSpec);
+  cloned.benchmark!.allowedCommands.push("npm lint");
+  assert.deepEqual(benchmarkSpec.benchmark!.allowedCommands, ["npm test", "node verifier.mjs"]);
 });
 
 test("native Build specs recover exactly and idempotently", () => {

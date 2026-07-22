@@ -66,6 +66,7 @@ export interface SubagentToolsOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  allowedCommands?: readonly string[];
 }
 
 export function createSubagentTools(
@@ -172,7 +173,11 @@ function spawnSubagentTool(
       }
       for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
       for (const tool of createSessionTools(options.sessions)) broker.register(tool);
-      if (!readOnly) for (const tool of createProcessTools()) broker.register(tool);
+      if (!readOnly) for (const tool of createProcessTools({
+        ...(options.allowedCommands
+          ? { allowedCommands: options.allowedCommands }
+          : {}),
+      })) broker.register(tool);
       if (!readOnly && options.managedProcesses) {
         for (const tool of createManagedProcessTools(options.managedProcesses)) {
           broker.register(tool);
@@ -188,6 +193,9 @@ function spawnSubagentTool(
           ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
           taskId: options.taskId,
           clock,
+          ...(options.allowedCommands
+            ? { allowedCommands: options.allowedCommands }
+            : {}),
         })) broker.register(tool);
       }
       if (!readOnly && options.mcpManager) {
