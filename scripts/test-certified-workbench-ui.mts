@@ -487,6 +487,18 @@ check(
   runnerStatusSource
 );
 check(
+  "WorkBench runner panel reports managed Runner V2 readiness and setup",
+  runnerStatusSource.includes("Managed Runner V2") &&
+    runnerStatusSource.includes("runnerV2") &&
+    runnerStatusSource.includes("--runner-v2-dir"),
+  runnerStatusSource
+);
+check(
+  "certified WorkBench readiness requires the managed Runner V2 capability",
+  certifiedRunPanelSource.includes("workBenchRunnerHealth?.runnerV2?.ready"),
+  certifiedRunPanelSource
+);
+check(
   "selected Full certified preset links the bench runner download",
   presetCardsSource.includes('preset.id === "full-certified" && focused') &&
     presetCardsSource.includes('href="/bench-runner.mjs"') &&

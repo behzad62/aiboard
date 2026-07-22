@@ -23,12 +23,20 @@ export function WorkBenchRunnerStatus({
   onTokenChange: (value: string) => void;
   onCheck: () => void;
 }) {
-  const statusText = health
+  const benchStatusText = health
     ? health.ok
-      ? `Runner ready${health.root ? `: ${health.root}` : ""}`
+      ? `Bench Runner ready${health.root ? `: ${health.root}` : ""}`
       : health.error ?? "Runner check failed"
-    : "Runner not checked";
-  const StatusIcon = health?.ok ? CheckCircle2 : health ? XCircle : RefreshCw;
+    : "Bench Runner not checked";
+  const managedReady = health?.ok && health.runnerV2?.ready === true;
+  const managedStatusText = !health
+    ? "Managed Runner V2 not checked"
+    : managedReady
+      ? `Managed Runner V2 ready${health.runnerV2?.source ? ` (${health.runnerV2.source})` : ""}`
+      : health.runnerV2?.error ??
+        "Managed Runner V2 unavailable. Restart bench-runner with --runner-v2-dir C:\\path\\to\\aiboard-runner-v2.";
+  const BenchStatusIcon = health?.ok ? CheckCircle2 : health ? XCircle : RefreshCw;
+  const ManagedStatusIcon = managedReady ? CheckCircle2 : health ? XCircle : RefreshCw;
 
   return (
     <div className="rounded-md border p-3">
@@ -70,9 +78,15 @@ export function WorkBenchRunnerStatus({
           </Button>
         </div>
       </div>
-      <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-        <StatusIcon className={health?.ok ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
-        <span className="min-w-0 break-words">{statusText}</span>
+      <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <BenchStatusIcon className={health?.ok ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
+          <span className="min-w-0 break-words">{benchStatusText}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <ManagedStatusIcon className={managedReady ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
+          <span className="min-w-0 break-words">{managedStatusText}</span>
+        </div>
       </div>
     </div>
   );
