@@ -31,7 +31,7 @@ const structuredOutput: StructuredOutputFormat = {
 const searchableModels: Array<{ providerId: string; model: string }> = [
   { providerId: "openai", model: "gpt-5.5" },
   { providerId: "anthropic", model: "claude-opus-4-8" },
-  { providerId: "google", model: "gemini-3.5-flash" },
+  { providerId: "google", model: "gemini-3.6-flash" },
   { providerId: "openrouter", model: "qwen/qwen3.7-max" },
   { providerId: "chatgpt", model: "gpt-5.4" },
   { providerId: "github-copilot", model: "gemini-3.5-flash" },
@@ -148,9 +148,9 @@ check(
 
 check(
   "current Gemini models use googleSearch grounding",
-  JSON.stringify(googleWebSearchTools("gemini-3.5-flash", true)) ===
+  JSON.stringify(googleWebSearchTools("gemini-3.6-flash", true)) ===
     JSON.stringify([{ googleSearch: {} }]),
-  googleWebSearchTools("gemini-3.5-flash", true)
+  googleWebSearchTools("gemini-3.6-flash", true)
 );
 
 check(

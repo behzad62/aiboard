@@ -137,6 +137,18 @@ check(
   geminiThinkingConfig("gemini-3.5-flash", "none", 4096)
 );
 check(
+  "Gemini 3.6 low maps to its lowest supported medium thinking level",
+  json(geminiThinkingConfig("gemini-3.6-flash", "low", 4096)) ===
+    json({ thinkingLevel: "MEDIUM" }),
+  geminiThinkingConfig("gemini-3.6-flash", "low", 4096)
+);
+check(
+  "Gemini 3.6 max maps to high thinking",
+  json(geminiThinkingConfig("gemini-3.6-flash", "max", 4096)) ===
+    json({ thinkingLevel: "HIGH" }),
+  geminiThinkingConfig("gemini-3.6-flash", "max", 4096)
+);
+check(
   "Gemini 3 Pro off maps to its lowest supported thinking level",
   json(geminiThinkingConfig("gemini-3.1-pro-preview", "none", 4096)) ===
     json({ thinkingLevel: "LOW" }),

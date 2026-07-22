@@ -290,9 +290,9 @@ export const PROVIDER_DEFINITIONS = {
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
-      temperatureLabel: "Temperature is sent",
+      temperatureLabel: "Model-dependent",
       temperatureNote:
-        "The app passes the effort-level temperature to Gemini generationConfig.",
+        "Gemini 3.6 Flash omits deprecated sampling parameters; older Gemini models receive the effort-level temperature in generationConfig.",
       promptCachingLabel: "Implicit prompt caching enabled",
       promptCachingNote:
         "Gemini 2.5 and newer models cache repeated prefixes automatically. Cache hits still depend on matching large shared prefixes and model-specific minimum token thresholds.",

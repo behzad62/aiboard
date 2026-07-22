@@ -251,6 +251,10 @@ function geminiThinkingLevel(
   effort: ReasoningEffort
 ): string | null {
   const normalized = model.toLowerCase();
+  if (normalized === "gemini-3.6-flash") {
+    if (effort === "default") return null;
+    return effort === "high" || effort === "max" ? "HIGH" : "MEDIUM";
+  }
   const proSupportsOnlyLowHigh =
     normalized.includes("pro") && !normalized.startsWith("gemini-3.5-");
 

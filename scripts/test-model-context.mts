@@ -189,6 +189,21 @@ check(
   chatGpt55
 );
 
+const gemini36Flash = resolveModelContextProfile("gemini-3.6-flash", "google");
+check(
+  "Google Gemini 3.6 Flash uses the documented long-context Build budget",
+  gemini36Flash.contextWindowTokens === 1_048_576 &&
+    gemini36Flash.maxOutputTokens === 65_536 &&
+    gemini36Flash.buildOutputReserveTokens === 65_536 &&
+    gemini36Flash.effectiveBuildInputCeilingTokens === 983_040 &&
+    gemini36Flash.longContextQuality === "excellent" &&
+    gemini36Flash.promptCaching === true &&
+    gemini36Flash.recommendedBuildRoles?.join(",") ===
+      "architect,worker,reviewer,summary" &&
+    gemini36Flash.source === "registry",
+  gemini36Flash
+);
+
 const gpt54Mini = resolveModelContextProfile("gpt-5.4-mini", "openai");
 check(
   "OpenAI GPT-5.4 Mini profile uses current documented context and max output",

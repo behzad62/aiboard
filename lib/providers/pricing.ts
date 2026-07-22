@@ -161,6 +161,15 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     verifiedAt: VERIFIED_AT,
   },
 
+  [formatModelId("google", "gemini-3.6-flash")]: {
+    inputUsdPer1M: 1.5,
+    cachedInputUsdPer1M: 0.15,
+    outputUsdPer1M: 7.5,
+    notes: "Google standard paid pricing; output includes thinking tokens. Search grounding and other tools are charged separately.",
+    sourceLabel: "Google Gemini API pricing",
+    sourceUrl: "https://ai.google.dev/gemini-api/docs/pricing",
+    verifiedAt: "2026-07-22",
+  },
   [formatModelId("google", "gemini-3.5-flash")]: {
     inputUsdPer1M: 1.5,
     cachedInputUsdPer1M: 0.15,

@@ -98,6 +98,11 @@ check(
   null
 );
 check(
+  "Google Gemini 3.6 Flash supports reasoning effort",
+  providerSupportsReasoning("google:gemini-3.6-flash"),
+  null
+);
+check(
   "GitHub Copilot GPT models support reasoning effort",
   providerSupportsReasoning("github-copilot:gpt-5.4"),
   null
@@ -249,7 +254,7 @@ check(
 );
 check(
   "Gemini models expose provider-hosted Build tools",
-  providerSupportsHostedBuildToolsFeature("google", "gemini-3.5-flash"),
+  providerSupportsHostedBuildToolsFeature("google", "gemini-3.6-flash"),
   null
 );
 check(

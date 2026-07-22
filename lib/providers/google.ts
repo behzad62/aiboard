@@ -99,6 +99,14 @@ export function googleHostedBuildToolConfig(
   };
 }
 
+export function googleSamplingConfig(
+  model: string,
+  temperature: number | undefined
+): Pick<GenerateContentConfig, "temperature"> {
+  if (model.trim().toLowerCase() === "gemini-3.6-flash") return {};
+  return { temperature: temperature ?? 0.7 };
+}
+
 function chatRoleToGeminiRole(role: "system" | "user" | "assistant"): string {
   return role === "assistant" ? "model" : "user";
 }
@@ -174,7 +182,7 @@ export const googleProvider: AIProvider = {
       );
       const generationConfig: GenerateContentConfig = {
         maxOutputTokens: params.maxTokens ?? 1500,
-        temperature: params.temperature ?? 0.7,
+        ...googleSamplingConfig(params.model, params.temperature),
         ...(thinking
           ? {
               thinkingConfig:

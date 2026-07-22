@@ -348,6 +348,14 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     promptCaching: true,
     recommendedBuildRoles: ["worker", "summary"],
   },
+  "google:gemini-3.6-flash": {
+    contextWindowTokens: 1_048_576,
+    maxOutputTokens: 65_536,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "excellent",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
   "google:gemini-3.5-flash": {
     contextWindowTokens: 1_048_576,
     maxOutputTokens: 65_536,

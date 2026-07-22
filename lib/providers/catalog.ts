@@ -228,12 +228,19 @@ export const MODEL_CATALOG: CatalogModel[] = [
 
   // Google — https://ai.google.dev/gemini-api/docs/models
   {
+    id: "gemini-3.6-flash",
+    name: "Gemini 3.6 Flash",
+    providerId: "google",
+    description: "Stable frontier-speed model for agentic and multimodal work",
+    capabilities: { image: true, document: true, audio: true, video: true },
+    validationCandidate: true,
+  },
+  {
     id: "gemini-3.5-flash",
     name: "Gemini 3.5 Flash",
     providerId: "google",
     description: "Latest fast multimodal model",
     capabilities: { image: true, document: true, audio: true, video: true },
-    validationCandidate: true,
   },
   {
     id: "gemini-3.1-pro-preview",
