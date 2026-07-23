@@ -24,6 +24,7 @@ interface CliOptions {
   port: number;
   token: string;
   mcpServers: McpServerSpec[];
+  allowOrigins: string[];
 }
 
 interface RunnerResources {
@@ -41,7 +42,12 @@ async function main(): Promise<void> {
   let resources: RunnerResources | undefined;
   try {
     assertSupportedNodeVersion(process.versions.node);
-    const options = parseArguments(process.argv.slice(2));
+    const args = process.argv.slice(2);
+    if (isHelpRequested(args)) {
+      printHelp();
+      return;
+    }
+    const options = parseArguments(args);
     await assertDirectory(options.projectPath, "project");
     if (isInside(options.projectPath, options.stateDirectory)) {
       throw new Error(
@@ -103,6 +109,7 @@ async function main(): Promise<void> {
       builds,
       buildProvisioner: builds,
       providerConfigs,
+      allowedOrigins: options.allowOrigins,
       runnerInfo: {
         projectPath: options.projectPath,
         nodeVersion: process.versions.node,
@@ -132,19 +139,20 @@ async function main(): Promise<void> {
     await builds.recover();
     const address = await server.start(options.port);
 
-    process.stdout.write(
-      `${JSON.stringify({
-        protocolVersion: PROTOCOL_VERSION,
-        url: address.url,
-        token: options.token,
-        tokenHint: options.token.slice(-6),
-        pid: process.pid,
-        projectPath: options.projectPath,
-        stateDirectory: options.stateDirectory,
-        gitVersion: git.version,
-        mcp: mcpManager.status(),
-      })}\n`
-    );
+    const readiness = {
+      protocolVersion: PROTOCOL_VERSION,
+      url: address.url,
+      token: options.token,
+      tokenHint: options.token.slice(-6),
+      pid: process.pid,
+      projectPath: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      gitVersion: git.version,
+      mcp: mcpManager.status(),
+      allowOrigins: options.allowOrigins,
+    };
+    process.stdout.write(`${JSON.stringify(readiness)}\n`);
+    writeReadableStartupSummary(readiness);
 
     let shuttingDown = false;
     const shutdown = (signal: NodeJS.Signals) => {
@@ -189,19 +197,25 @@ function syncAutonomousBuildLifecycle(
   }
 }
 
+function isHelpRequested(args: string[]): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
   const mcpServers: McpServerSpec[] = [];
-  for (let index = 0; index < args.length; index += 2) {
+  const allowOrigins: string[] = [];
+  const allowOriginSet = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
-    const value = args[index + 1];
-    if (!flag?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`invalid_arguments: Expected a value after ${flag ?? "argument"}.`);
-    }
-    if (!["--project", "--state-dir", "--port", "--token", "--mcp"].includes(flag)) {
-      throw new Error(`invalid_arguments: Unknown option ${flag}.`);
+    if (!flag?.startsWith("--")) {
+      throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
     }
     if (flag === "--mcp") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error("invalid_arguments: Expected value after --mcp.");
+      }
       const separator = value.indexOf("=");
       if (separator < 1 || !value.slice(separator + 1).trim()) {
         throw new Error("invalid_arguments: --mcp must be name=command.");
@@ -210,7 +224,29 @@ function parseArguments(args: string[]): CliOptions {
         name: value.slice(0, separator).trim(),
         command: value.slice(separator + 1).trim(),
       });
+      index += 1;
       continue;
+    }
+    if (flag === "--allow-origin") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error("invalid_arguments: Expected value after --allow-origin.");
+      }
+      for (const origin of parseAllowOriginValue(value)) {
+        if (!allowOriginSet.has(origin)) {
+          allowOriginSet.add(origin);
+          allowOrigins.push(origin);
+        }
+      }
+      index += 1;
+      continue;
+    }
+    if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
+      throw new Error(`invalid_arguments: Unknown option ${flag}.`);
+    }
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`invalid_arguments: Expected a value after ${flag}.`);
     }
     if (values.has(flag)) {
       throw new Error(`invalid_arguments: Duplicate option ${flag}.`);
@@ -229,7 +265,96 @@ function parseArguments(args: string[]): CliOptions {
   if (token.length < 16) {
     throw new Error("invalid_arguments: --token must contain at least 16 characters.");
   }
-  return { projectPath, stateDirectory, port, token, mcpServers };
+  return {
+    projectPath,
+    stateDirectory,
+    port,
+    token,
+    mcpServers,
+    allowOrigins,
+  };
+}
+
+function parseAllowOriginValue(raw: string): string[] {
+  const entries = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (entries.length === 0) {
+    throw new Error("invalid_arguments: --allow-origin requires at least one origin.");
+  }
+  return entries.map((entry) => {
+    try {
+      return new URL(entry).origin;
+    } catch {
+      throw new Error(
+        `invalid_arguments: --allow-origin value "${entry}" is not a valid origin URL.`
+      );
+    }
+  });
+}
+
+function printHelp(): void {
+  const usage = [
+    "AI Board Runner V2",
+    "",
+    "Usage:",
+    "  npm run runner:v2 -- --project <abs-path> --state-dir <abs-path> --port <port> [options]",
+    "",
+    "Options:",
+    "  --project <path>        Absolute path to the project directory. (required)",
+    "  --state-dir <path>      Absolute path to runner state. Must be outside project. (required)",
+    "  --port <number>         TCP port to bind (0 = random). Default 0.",
+    "  --token <string>        Authentication token. Auto-generated if omitted.",
+    "  --mcp <name=command>    Register MCP server; can be repeated.",
+    "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
+    "                         Defaults to loopback origins + https://aiboard.me.",
+    "  --help, -h              Show this help text.",
+    "",
+    "Examples:",
+    "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --port 8787",
+    "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me",
+    "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me,https://127.0.0.1:8787",
+    "",
+  ];
+  process.stdout.write(`${usage.join("\n")}\n`);
+}
+
+function writeReadableStartupSummary(
+  readiness: {
+    protocolVersion: number;
+    url: string;
+    tokenHint: string;
+    pid: number;
+    projectPath: string;
+    stateDirectory: string;
+    gitVersion: string;
+    mcp: unknown[];
+    allowOrigins: string[];
+  }
+): void {
+  const lines = [
+    "Runner V2 started",
+    `  Protocol   : ${readiness.protocolVersion}`,
+    `  URL        : ${readiness.url}`,
+    `  Token hint : ...${readiness.tokenHint}`,
+    `  PID        : ${readiness.pid}`,
+    `  Project    : ${readiness.projectPath}`,
+    `  State      : ${readiness.stateDirectory}`,
+    `  Git        : ${readiness.gitVersion}`,
+    `  MCP servers: ${readiness.mcp.length}`,
+  ];
+  if (readiness.allowOrigins.length > 0) {
+    lines.push("  Allowed CORS origins:");
+    for (const origin of readiness.allowOrigins) {
+      lines.push(`    - ${origin}`);
+    }
+  } else {
+    lines.push("  Allowed CORS origins:");
+    lines.push("    - loopback (127.0.0.1, localhost)");
+    lines.push("    - https://aiboard.me");
+  }
+  process.stderr.write(`${lines.join("\n")}\n`);
 }
 
 function requiredAbsolutePath(values: Map<string, string>, flag: string): string {

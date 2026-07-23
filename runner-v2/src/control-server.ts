@@ -28,6 +28,7 @@ import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>(["https://aiboard.me"]);
 
 export interface ControlServerOptions {
   supervisor: RunSupervisor;
@@ -44,6 +45,7 @@ export interface ControlServerOptions {
   runnerInfo?: { projectPath: string; nodeVersion: string };
   mcp?: Pick<McpManager, "status">;
   permissions?: SqlitePermissionStore;
+  allowedOrigins?: string[];
 }
 
 export interface RunBootstrapInput {
@@ -132,6 +134,7 @@ export class ControlServer {
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
   private readonly permissions?: SqlitePermissionStore;
+  private readonly allowedOrigins: ReadonlySet<string>;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -149,6 +152,7 @@ export class ControlServer {
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
     this.permissions = options.permissions;
+    this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -201,7 +205,7 @@ export class ControlServer {
     response: ServerResponse
   ): Promise<void> {
     try {
-      setCommonHeaders(request, response);
+      setCommonHeaders(request, response, this.allowedOrigins);
       if (request.method === "OPTIONS") {
         response.statusCode = 204;
         response.end();
@@ -841,35 +845,67 @@ function hasBearerToken(header: string | undefined, expected: string): boolean {
 
 function setCommonHeaders(
   request: IncomingMessage,
-  response: ServerResponse
+  response: ServerResponse,
+  allowedOrigins: ReadonlySet<string>
 ): void {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  const origin = request.headers.origin;
-  if (origin) {
-    if (!isLoopbackOrigin(origin)) {
-      throw new HttpError(403, "origin_not_allowed", "Runner V2 accepts browser requests only from loopback origins.");
+  const originHeader = request.headers.origin;
+  if (originHeader) {
+    const normalizedOrigin = normalizeOrigin(originHeader);
+    if (!normalizedOrigin || !isAllowedBrowserOrigin(normalizedOrigin, allowedOrigins)) {
+      throw new HttpError(
+        403,
+        "origin_not_allowed",
+        "Runner V2 accepts browser requests only from loopback origins, unless explicitly allowed."
+      );
     }
-    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Access-Control-Allow-Origin", normalizedOrigin);
     response.setHeader("Vary", "Origin");
   }
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
 }
 
-function isLoopbackOrigin(origin: string): boolean {
+function normalizeOrigin(value: string): string | undefined {
   try {
-    const url = new URL(origin);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
-      url.pathname === "/" &&
-      !url.username &&
-      !url.password
-    );
+    return new URL(value).origin;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function isAllowedBrowserOrigin(
+  normalizedOrigin: string,
+  allowedOrigins: ReadonlySet<string>
+): boolean {
+  if (isLoopbackOrigin(normalizedOrigin)) {
+    return true;
+  }
+  return allowedOrigins.has(normalizedOrigin);
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  const url = new URL(origin);
+  return (
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    url.pathname === "/" &&
+    !url.username &&
+    !url.password
+  );
+}
+
+function buildAllowedOriginSet(allowedOrigins?: string[]): ReadonlySet<string> {
+  const resolved = new Set<string>(ALLOWED_RUNNER_EXTRA_ORIGINS);
+  if (!allowedOrigins) return resolved;
+  for (const origin of allowedOrigins) {
+    const normalized = normalizeOrigin(origin);
+    if (normalized) {
+      resolved.add(normalized);
+    }
+  }
+  return resolved;
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {

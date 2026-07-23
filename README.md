@@ -41,6 +41,14 @@ Build mode has no browser execution fallback. Start the native kernel with its s
 npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787
 ```
 
+Use `--allow-origin` to permit remote runner calls from your UI host (repeatable, comma-separated list supported), for example:
+
+```bash
+npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787 --allow-origin https://aiboard.me
+```
+
+Run `npm run runner:v2 -- --help` to see the full argument list.
+
 Runner V2 prints a local URL and a new control token. Paste both into Build setup. The runner owns the Git baseline, isolated task workspaces, task-level commits, durable agent sessions, native tools, evidence, integration, and recovery.
 
 Guarded access requires approval for destructive or external effects. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. Final project handoff always pauses for the user in both profiles.
